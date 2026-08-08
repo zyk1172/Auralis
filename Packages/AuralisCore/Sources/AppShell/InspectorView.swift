@@ -95,7 +95,7 @@ struct InspectorView: View {
                 metadataField("年份", original: model.currentTrack.year.map(String.init) ?? "未知", suggested: nil)
                 Divider()
                 Text("技术参数").font(.caption.weight(.semibold)).foregroundStyle(theme.colorTokens.secondaryText.color)
-                metadataRow("音频格式", value: model.currentTrack.sourceInfo.codec ?? "未知")
+                metadataRow("音频格式", value: model.currentTrack.effectiveCodec?.uppercased() ?? "未知")
                 metadataRow("码率", value: model.currentTrack.sourceInfo.bitRate.map { "\($0) kbps" } ?? "未知")
                 metadataRow("采样率", value: model.currentTrack.sourceInfo.sampleRate.map { "\($0) Hz" } ?? "未知")
                 metadataRow("位深", value: model.currentTrack.sourceInfo.bitDepth.map { "\($0) bit" } ?? "未知")
@@ -184,7 +184,7 @@ struct InspectorView: View {
 
     private var sourceDescription: String {
         let info = model.currentTrack.sourceInfo
-        return "\(info.codec ?? "未知") · \(info.bitDepth.map { "\($0)-bit" } ?? "未知") · \(info.sampleRate.map { "\($0 / 1_000) kHz" } ?? "未知") · \(info.bitRate.map { "\($0 / 1_000) kbps" } ?? "未知")"
+        return "\(info.normalizedCodec?.uppercased() ?? "未知") · \(info.bitDepth.map { "\($0)-bit" } ?? "未知") · \(info.sampleRate.map { "\($0 / 1_000) kHz" } ?? "未知") · \(info.bitRate.map { "\($0 / 1_000) kbps" } ?? "未知")"
     }
 
     private var decodeDescription: String {

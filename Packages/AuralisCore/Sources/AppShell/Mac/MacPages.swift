@@ -35,7 +35,7 @@ struct MacSongTable: View {
             }
             .width(50)
             TableColumn("格式") { track in
-                if let codec = track.sourceInfo.codec, !codec.isEmpty {
+                if let codec = track.sourceInfo.normalizedCodec, !codec.isEmpty {
                     Text(codec.uppercased()).font(.caption2)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }

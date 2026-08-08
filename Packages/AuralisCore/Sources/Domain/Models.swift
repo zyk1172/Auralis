@@ -118,6 +118,14 @@ public struct AudioSourceInfo: Codable, Hashable, Sendable {
         self.bitRate = bitRate
         self.channelCount = channelCount
     }
+
+    /// 服务器返回的格式描述（suffix 或 MIME）规整为短名：小写并去掉 "audio/" 前缀。
+    /// 例如 "audio/mpeg" → "mpeg"、"FLAC" → "flac"；空值返回 nil。
+    public var normalizedCodec: String? {
+        guard let raw = codec, !raw.isEmpty else { return nil }
+        let lower = raw.lowercased().trimmingCharacters(in: .whitespaces)
+        return lower.hasPrefix("audio/") ? String(lower.dropFirst("audio/".count)) : lower
+    }
 }
 
 public struct Track: Codable, Hashable, Sendable, Identifiable {
@@ -178,6 +186,20 @@ public struct Track: Codable, Hashable, Sendable, Identifiable {
         self.artworkKey = artworkKey
         self.sourceInfo = sourceInfo
         self.streamURL = streamURL
+    }
+
+    /// 实际播放/解码的格式（考虑服务器转码与本地缓存）：
+    /// - 远程流且流地址带 `format` 参数（蜂窝转码 / 码率限制）→ 返回该转码格式；
+    /// - 本地缓存文件（streamURL 为 file URL）→ 返回原始格式（缓存的是原始文件）；
+    /// - 其它情况 → 返回原始格式。
+    public var effectiveCodec: String? {
+        if let streamURL, !streamURL.isFileURL,
+           let components = URLComponents(url: streamURL, resolvingAgainstBaseURL: false),
+           let format = components.queryItems?.first(where: { $0.name == "format" })?.value,
+           !format.isEmpty {
+            return format.lowercased()
+        }
+        return sourceInfo.normalizedCodec
     }
 }
 

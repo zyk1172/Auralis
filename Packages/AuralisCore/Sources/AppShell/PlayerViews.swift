@@ -466,7 +466,7 @@ struct NowPlayingView: View {
 
     private var bottomInfo: some View {
         HStack(spacing: AuralisSpacing.medium) {
-            Label(model.currentTrack.sourceInfo.codec ?? "未知", systemImage: "waveform")
+            Label(model.currentTrack.effectiveCodec?.uppercased() ?? "未知", systemImage: "waveform")
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             Spacer()

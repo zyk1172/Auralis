@@ -134,7 +134,7 @@ struct MacInspector: View {
     private func qualityContent(_ track: Track) -> some View {
         let info = track.sourceInfo
         return Form {
-            LabeledContent("格式", value: info.codec?.uppercased() ?? "未知")
+            LabeledContent("格式", value: track.effectiveCodec?.uppercased() ?? "未知")
             LabeledContent("码率", value: info.bitRate.map { "\($0) kbps" } ?? "未知")
             LabeledContent("采样率", value: info.sampleRate.map { "\($0) Hz" } ?? "未知")
             LabeledContent("位深", value: info.bitDepth.map { "\($0) bit" } ?? "未知")
