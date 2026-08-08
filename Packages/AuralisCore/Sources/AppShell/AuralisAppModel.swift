@@ -64,8 +64,11 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var serverAuthenticationFailed = false
     @Published public private(set) var serverCapabilities = ServerCapabilities()
     @Published public private(set) var catalog: LibraryCatalog
-    /// 已加载的服务器封面缓存，键为 "封面Key@像素尺寸"。
-    @Published public private(set) var artworkImages: [String: PlatformImage] = [:]
+    /// 已加载的服务器封面缓存（独立 @Observable 存储，键为 "serverID|封面Key@像素尺寸"）。
+    /// 故意不放进 @Published：封面按需加载完成时写 @Published 会触发包括首页在内的所有
+    /// model 观察者整体重算，滚动时大量封面陆续到达形成刷新风暴，导致上下滑动卡顿与
+    /// "cannot add handler … dropping" 日志刷屏。独立存储只刷新真正读取封面的视图。
+    let artworkStore = ArtworkStore()
     /// 循环模式，持久化到 UserDefaults。
     @Published public var repeatMode: RepeatMode {
         didSet {
@@ -143,6 +146,14 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var loadingPlaylistIDs: Set<PlaylistID> = []
     /// 随机音乐（首页「随机音乐」货架）：资料库载入时随机采样一次，避免界面频繁重排。
     @Published public private(set) var randomTracks: [Track] = []
+    /// 首页「收藏 / 最常听 / 最近播放 / 最近添加」货架快照。
+    /// 只在数据真正变化时刷新（资料库同步 / 播放记录 / 收藏切换），
+    /// 避免滚动等场景下每次 body 重算都全库过滤 + 排序一遍——大曲库时
+    /// 这是首页上下滑动卡顿的重要来源之一。
+    @Published public private(set) var homeFavoriteTracks: [Track] = []
+    @Published public private(set) var homeMostPlayedTracks: [Track] = []
+    @Published public private(set) var homeRecentlyPlayedTracks: [Track] = []
+    @Published public private(set) var homeRecentlyAddedTracks: [Track] = []
     /// 流派详情从服务器按需拉取的歌曲（本地按曲目标签筛选为空时回退到服务器）。
     @Published public private(set) var genreTracks: [Track]? = nil
     /// 当前正在按流派从服务器加载的流派；为 nil 表示没有进行中的加载。
@@ -203,7 +214,6 @@ public final class AuralisAppModel: ObservableObject {
     private var lyricsInFlight: Set<TrackID> = []
     private var lyricsUnavailable: Set<TrackID> = []
     private var artworkInFlight: Set<String> = []
-    private var artworkUnavailable: Set<String> = []
     /// 限制同时进行的封面网络请求数，避免服务器不可达时一次性发起几十条
     /// 挂起请求、淹没网络与控制台。
     private let artworkLimiter = ArtworkConcurrencyLimiter(max: 6)
@@ -810,7 +820,7 @@ public final class AuralisAppModel: ObservableObject {
         guard let key = currentTrack.artworkKey else { return nil }
         // Now Playing 只需要一张中等尺寸封面
         for size in [620, 284, 264, 96] {
-            if let image = artworkImages[artworkCacheKey(key, size)] {
+            if let image = artworkStore.image(forKey: artworkCacheKey(key, size)) {
                 #if os(macOS)
                 if let tiff = image.tiffRepresentation,
                    let rep = NSBitmapImageRep(data: tiff),
@@ -1212,6 +1222,8 @@ public final class AuralisAppModel: ObservableObject {
             defaults.set(recentRaw, forKey: Self.recentlyPlayedDefaultsKey)
             defaults.set(trackID, forKey: Self.lastTrackDefaultsKey)
         }
+        // 播放次数 / 最近播放变化后刷新首页「最常听 / 最近播放」快照。
+        refreshHomeSnapshots()
     }
 
     // MARK: - Playback session persistence
@@ -1295,6 +1307,21 @@ public final class AuralisAppModel: ObservableObject {
     public var recentlyAddedTracks: [Track] {
         let added = libraryAddedAt
         return catalog.tracks.sorted {
+            (added[$0.id] ?? .distantPast) > (added[$1.id] ?? .distantPast)
+        }
+    }
+
+    /// 刷新首页货架快照。保持与旧计算属性一致的过滤 / 排序语义。
+    private func refreshHomeSnapshots() {
+        homeFavoriteTracks = catalog.tracks.filter(\.isFavorite)
+        homeMostPlayedTracks = catalog.tracks
+            .filter { (playCounts[$0.id] ?? 0) > 0 }
+            .sorted { (playCounts[$0.id] ?? 0) > (playCounts[$1.id] ?? 0) }
+        homeRecentlyPlayedTracks = recentlyPlayedIDs.compactMap { id in
+            catalog.tracks.first(where: { $0.id == id })
+        }
+        let added = libraryAddedAt
+        homeRecentlyAddedTracks = catalog.tracks.sorted {
             (added[$0.id] ?? .distantPast) > (added[$1.id] ?? .distantPast)
         }
     }
@@ -1682,13 +1709,12 @@ public final class AuralisAppModel: ObservableObject {
         catalog = .empty
         queue = []
         playbackPosition = 0
-        artworkImages = [:]
+        artworkStore.reset()
         playlistTracks = [:]
         loadingPlaylistIDs = []
         lyricsInFlight = []
         lyricsUnavailable = []
         artworkInFlight = []
-        artworkUnavailable = []
         downloadedTrackIDs = []
         currentTrack = Track(
             id: "placeholder", serverID: "local",
@@ -1744,19 +1770,19 @@ public final class AuralisAppModel: ObservableObject {
     /// 已缓存的封面图；未加载时返回 nil，视图应展示占位封面并调用 loadArtwork。
     public func artworkImage(key: String?, targetPixelSize: Int) -> PlatformImage? {
         guard let key else { return nil }
-        return artworkImages[artworkCacheKey(key, targetPixelSize)]
+        return artworkStore.image(forKey: artworkCacheKey(key, targetPixelSize))
     }
 
     /// 按需从服务器拉取封面并缓存。拉取过（无论成败）的封面不会重复请求。
     public func loadArtwork(key: String?, targetPixelSize: Int) {
         guard let key, !key.isEmpty else { return }
         let cacheKey = artworkCacheKey(key, targetPixelSize)
-        guard artworkImages[cacheKey] == nil,
-              !artworkUnavailable.contains(cacheKey),
+        guard artworkStore.image(forKey: cacheKey) == nil,
+              !artworkStore.isUnavailable(cacheKey),
               !artworkInFlight.contains(cacheKey)
         else { return }
         artworkInFlight.insert(cacheKey)
-        Task { [artworkCache] in
+        Task { [artworkCache, artworkStore] in
             // 第一优先：磁盘缓存。命中就完全不联网——这是「每次打开 App
             // 都要把所有封面重新下一遍」的根治点。
             // 精确尺寸未命中时，回退到「全量缓存」的固定尺寸（512），解码后缩放到目标尺寸，
@@ -1775,7 +1801,7 @@ public final class AuralisAppModel: ObservableObject {
                 } else {
                     displayImage = image
                 }
-                artworkImages[cacheKey] = displayImage ?? image
+                artworkStore.setImage(displayImage ?? image, forKey: cacheKey)
                 if key == currentTrack.artworkKey {
                     mediaIntegration.artworkLoaded(cached, position: playbackPosition, isPlaying: playbackState == .playing)
                 }
@@ -1786,7 +1812,7 @@ public final class AuralisAppModel: ObservableObject {
             artworkInFlight.remove(cacheKey)
             await artworkLimiter.leave()
             if let data, let image = PlatformImage(data: data) {
-                artworkImages[cacheKey] = image
+                artworkStore.setImage(image, forKey: cacheKey)
                 // 落盘，下次冷启动直接命中。
                 await artworkCache.store(data, for: cacheKey)
                 // 封面晚于切歌到达时，补一次 Now Playing 刷新
@@ -1794,14 +1820,14 @@ public final class AuralisAppModel: ObservableObject {
                     mediaIntegration.artworkLoaded(data, position: playbackPosition, isPlaying: playbackState == .playing)
                 }
             } else {
-                artworkUnavailable.insert(cacheKey)
+                artworkStore.markUnavailable(cacheKey)
             }
         }
     }
 
     /// 封面缓存键：**必须包含服务器 ID**，否则两台服务器相同 ID 的封面会在
     /// 磁盘缓存里互相覆盖（P0-4）。内存与磁盘共用同一键，天然按服务器隔离。
-    private func artworkCacheKey(_ key: String, _ targetPixelSize: Int) -> String {
+    func artworkCacheKey(_ key: String, _ targetPixelSize: Int) -> String {
         let serverID = catalog.activeServerID?.rawValue
             ?? (currentTrack.id.rawValue == "placeholder" ? "local" : currentTrack.serverID.rawValue)
         return "\(serverID)|\(key)@\(targetPixelSize)"
@@ -1943,6 +1969,7 @@ public final class AuralisAppModel: ObservableObject {
         catalog.tracks[index].isFavorite.toggle()
         let updated = catalog.tracks[index]
         if currentTrack.id == track.id { currentTrack = updated }
+        refreshHomeSnapshots()
         Task { await connector.setFavorite(trackID: updated.id, isFavorite: updated.isFavorite) }
     }
 
@@ -2324,8 +2351,7 @@ public final class AuralisAppModel: ObservableObject {
             lyricsInFlight = []
             lyricsUnavailable = []
             artworkInFlight = []
-            artworkUnavailable = []
-            artworkImages = [:]
+            artworkStore.reset()
             playlistTracks = [:]
             loadingPlaylistIDs = []
             favoriteAlbumIDs = []
@@ -2333,7 +2359,7 @@ public final class AuralisAppModel: ObservableObject {
         } else {
             // 同库刷新：只清理「本次失败」的负缓存，让新同步进来的曲目有机会重试，
             // 已经拿到的图片与歌词原样保留。
-            artworkUnavailable = []
+            artworkStore.clearUnavailable()
             lyricsUnavailable = []
         }
         // 恢复该服务器的专辑/艺术家收藏集合（首帧进入时从本地读回）。
@@ -2392,6 +2418,8 @@ public final class AuralisAppModel: ObservableObject {
 
         // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
         randomTracks = Array(tracks.shuffled().prefix(18))
+        // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
+        refreshHomeSnapshots()
 
         // 仅在未播放时恢复「上次播放会话」（队列 + 当前曲目 + 进度），
         // 不自动播放，由用户点击播放后从保存的进度继续；
@@ -2575,6 +2603,9 @@ public final class AuralisAppModel: ObservableObject {
            let index = catalog.tracks.firstIndex(where: { $0.id == currentTrack.id }) {
             currentTrack = catalog.tracks[index]
         }
+        if changed {
+            refreshHomeSnapshots()
+        }
     }
 
     /// 把服务器返回的流派并入本地流派（按名称小写归并，计数取较大值）。
@@ -2632,8 +2663,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 清空封面缓存（仅本机文件，服务器不受影响）。
     public func clearArtworkCache() async {
         await artworkCache.clear()
-        artworkImages = [:]
-        artworkUnavailable = []
+        artworkStore.reset()
     }
 
     /// 清空歌词缓存。

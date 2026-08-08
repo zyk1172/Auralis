@@ -26,6 +26,8 @@ extension Image {
 /// 服务器封面视图：已加载时显示真实封面，加载中或服务器没有封面时
 /// 回退到渐变占位组件。按需加载由 AuralisAppModel 统一调度与缓存。
 struct ArtworkView: View {
+    /// 只观察独立封面存储：封面到达只刷新本卡片，不触发首页整体重建。
+    @Environment(ArtworkStore.self) private var artworkStore
     @EnvironmentObject var model: AuralisAppModel
     let title: String
     let artworkKey: String?
@@ -39,7 +41,8 @@ struct ArtworkView: View {
     var body: some View {
         ZStack {
             AuralisArtwork(title: title, colors: colors, size: size, cornerRadius: cornerRadius)
-            if let image = model.artworkImage(key: artworkKey, targetPixelSize: pixelSize) {
+            if let artworkKey,
+               let image = artworkStore.image(forKey: model.artworkCacheKey(artworkKey, pixelSize)) {
                 Image(platformImage: image)
                     .resizable()
                     .scaledToFill()

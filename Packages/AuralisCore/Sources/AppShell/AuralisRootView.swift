@@ -34,6 +34,7 @@ public struct AuralisRootView: View {
 #endif
         }
         .environmentObject(model)
+        .environment(model.artworkStore)
         .environmentObject(themeStore)
         .preferredColorScheme(themeStore.current.colorScheme)
         .tint(themeStore.current.colorTokens.accent.color)

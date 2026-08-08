@@ -110,6 +110,8 @@ final class ArtworkPaletteStore: @unchecked Sendable {
 /// 只读 model 取封面用于取色；动画由 isPlaying 驱动，切歌时颜色随封面平滑过渡。
 struct NowPlayingArtworkGlowView: View {
     @EnvironmentObject var model: AuralisAppModel
+    /// 封面到达时只刷新光效自身，避免触发整个 Now Playing 页 / 首页重建。
+    @Environment(ArtworkStore.self) private var artworkStore
     let isPlaying: Bool
     let artworkKey: String?
     let title: String
@@ -124,7 +126,9 @@ struct NowPlayingArtworkGlowView: View {
         // 与封面同尺寸的“不可见”占位，光效从中心向外扩散，绝不遮挡封面/文字。
         let palette = ArtworkPaletteStore.shared.palette(
             for: artworkKey,
-            image: model.artworkImage(key: artworkKey, targetPixelSize: pixelSize),
+            image: artworkKey.flatMap {
+                artworkStore.image(forKey: model.artworkCacheKey($0, pixelSize))
+            },
             fallbackPrimary: colors.accent.color,
             fallbackSecondary: colors.accentSecondary.color
         )

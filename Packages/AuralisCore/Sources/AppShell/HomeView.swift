@@ -13,8 +13,8 @@ struct HomeView: View {
             LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
                 quickEntries
                 trackShelf("随机音乐", detail: "为你随机挑选 \(model.randomTracks.count) 首", tracks: model.randomTracks, onOpen: { model.browseDestination = .random })
-                trackShelf("最近播放", detail: "\(model.recentlyPlayedTracks.count) 首", tracks: model.recentlyPlayedTracks, onOpen: { model.browseDestination = .recentlyPlayed })
-                trackShelf("最近添加", detail: "\(model.catalog.tracks.count) 首", tracks: Array(model.recentlyAddedTracks.prefix(24)), onOpen: { model.browseDestination = .recentlyAdded })
+                trackShelf("最近播放", detail: "\(model.homeRecentlyPlayedTracks.count) 首", tracks: model.homeRecentlyPlayedTracks, onOpen: { model.browseDestination = .recentlyPlayed })
+                trackShelf("最近添加", detail: "\(model.catalog.tracks.count) 首", tracks: Array(model.homeRecentlyAddedTracks.prefix(24)), onOpen: { model.browseDestination = .recentlyAdded })
                 librarySummary
             }
             .padding(.horizontal, AuralisSpacing.large)
@@ -30,10 +30,10 @@ struct HomeView: View {
             quickEntry(title: "歌单", icon: "music.note.list", count: model.catalog.playlists.count, unit: "个") {
                 model.browseDestination = .playlists
             }
-            quickEntry(title: "收藏", icon: "heart.fill", count: model.favoriteTracks.count, unit: "首") {
+            quickEntry(title: "收藏", icon: "heart.fill", count: model.homeFavoriteTracks.count, unit: "首") {
                 model.browseDestination = .favorites
             }
-            quickEntry(title: "最常听", icon: "play.circle.fill", count: model.mostPlayedTracks.count, unit: "首") {
+            quickEntry(title: "最常听", icon: "play.circle.fill", count: model.homeMostPlayedTracks.count, unit: "首") {
                 model.browseDestination = .mostPlayed
             }
         }
@@ -77,14 +77,15 @@ struct HomeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: AuralisSpacing.medium) {
                         ForEach(tracks) { track in
-                            TrackCardView(track: track, colors: colors)
-                                .frame(width: 132, alignment: .leading)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    Haptics.impact(.light)
-                                    model.queue = tracks
-                                    model.selectAndPlay(track)
-                                }
+                            Button {
+                                model.queue = tracks
+                                model.selectAndPlay(track)
+                            } label: {
+                                TrackCardView(track: track, colors: colors)
+                                    .frame(width: 132, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(HapticPlainButtonStyle())
                         }
                     }
                 }
