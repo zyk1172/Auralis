@@ -1,0 +1,802 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		094EA6B511660FC72EF58C8D /* Domain in Frameworks */ = {isa = PBXBuildFile; productRef = 67F9E818418E7523CD352BE2 /* Domain */; };
+		14D728D1EB7E51853F7DEBF9 /* MacShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 755404A1DB56C96714E863E6 /* MacShortcuts.swift */; };
+		1CCC7D2F778ECB1009DB59A9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 483C81986AF30F3B1A051853 /* Assets.xcassets */; };
+		20F4CEED549B426035A9144A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 483C81986AF30F3B1A051853 /* Assets.xcassets */; };
+		2117506507D83D589008A8AA /* LocalCatalog in Frameworks */ = {isa = PBXBuildFile; productRef = AE74FECA5A40223CCA6415A5 /* LocalCatalog */; };
+		372595B4DCABCC5433A1EB38 /* AppShell in Frameworks */ = {isa = PBXBuildFile; productRef = B3FB2EFF6815905FFD2AB2AB /* AppShell */; };
+		40DCC1B683418F858916EBFC /* AppShell in Frameworks */ = {isa = PBXBuildFile; productRef = F0CB3446F841735CD171E2E4 /* AppShell */; };
+		6A5E78298A041E838463DBC8 /* AuralisMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */; };
+		716A20002937E551C1F3E00A /* AuralisApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C17241D49F118BD819B4F7A /* AuralisApp.swift */; };
+		7F7F375162E4BF60492F26A8 /* NowPlayingWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */; };
+		8E4AD7B00E7328844A3677FE /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 37512AECC1D8665440BBB4DB /* Localizable.xcstrings */; };
+		8F6286DD503BFACACBBB932A /* AuralisLiveActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6FF06C24A19B47FC22F91F /* AuralisLiveActivityBundle.swift */; };
+		B0BAC0654C25C96B9855BDA3 /* AssistantAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C361144E585E27577F3148B /* AssistantAppIntent.swift */; };
+		BA881A4DEC3437888B33B836 /* AppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7FF4CE3EC2EF7AFE5C6F006 /* AppIntents.swift */; };
+		BD942ACA6B5C9F8A539371A9 /* AuralisIntents.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C3A5BF12EF8CDA8D52633540 /* IntentHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBF41918A59E1038580AD9CE /* IntentHandler.swift */; };
+		DE2E4474991E5F09F514D763 /* AssistantAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C361144E585E27577F3148B /* AssistantAppIntent.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2B82B3106159E7EFBDE7BAEE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9781B7718DB1A77237072D1D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A94C23FA70165354CFD55948;
+			remoteInfo = AuralisIntents;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		DA068BDF788BAB2CBC11F6C5 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				BD942ACA6B5C9F8A539371A9 /* AuralisIntents.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		1C17241D49F118BD819B4F7A /* AuralisApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuralisApp.swift; sourceTree = "<group>"; };
+		37512AECC1D8665440BBB4DB /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		483C81986AF30F3B1A051853 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		53A83CD2104106116D511C8B /* Auralis.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Auralis.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AuralisIntents.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuralisMacApp.swift; sourceTree = "<group>"; };
+		6C361144E585E27577F3148B /* AssistantAppIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantAppIntent.swift; sourceTree = "<group>"; };
+		755404A1DB56C96714E863E6 /* MacShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShortcuts.swift; sourceTree = "<group>"; };
+		7B87C44172F90CDF28E3168B /* AuralisCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AuralisCore; path = Packages/AuralisCore; sourceTree = SOURCE_ROOT; };
+		7E92EE0F5FD4F611D1678C3B /* Auralis.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Auralis.entitlements; sourceTree = "<group>"; };
+		81C4189C98077B90973200D9 /* AuralisLiveActivity.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AuralisLiveActivity.entitlements; sourceTree = "<group>"; };
+		8E6FF06C24A19B47FC22F91F /* AuralisLiveActivityBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuralisLiveActivityBundle.swift; sourceTree = "<group>"; };
+		9AA2EE3ADE81172BD503209A /* AuralisLiveActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AuralisLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A609F4CC35198A784C36E9D3 /* AuralisMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AuralisMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA25390D86BDC4807DC0F7CF /* AuralisIntents.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AuralisIntents.entitlements; sourceTree = "<group>"; };
+		DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingWidget.swift; sourceTree = "<group>"; };
+		EBF41918A59E1038580AD9CE /* IntentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentHandler.swift; sourceTree = "<group>"; };
+		F7FF4CE3EC2EF7AFE5C6F006 /* AppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntents.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0998A619A021BB78EE3BB269 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				094EA6B511660FC72EF58C8D /* Domain in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		434E210BB896AFE76A5225BF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				40DCC1B683418F858916EBFC /* AppShell in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8A5EF96D15CE3683D53C14FA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2117506507D83D589008A8AA /* LocalCatalog in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C482B2DCDDBC96CD44D645B0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				372595B4DCABCC5433A1EB38 /* AppShell in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		01D35E0B7E33395DCEF1FD35 /* LiveActivity */ = {
+			isa = PBXGroup;
+			children = (
+				81C4189C98077B90973200D9 /* AuralisLiveActivity.entitlements */,
+				8E6FF06C24A19B47FC22F91F /* AuralisLiveActivityBundle.swift */,
+				DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */,
+			);
+			path = LiveActivity;
+			sourceTree = "<group>";
+		};
+		0561F57DF7CE5D941D5C5A4C /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				483C81986AF30F3B1A051853 /* Assets.xcassets */,
+				6C361144E585E27577F3148B /* AssistantAppIntent.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		14439BC26DEF6E0A744743F0 /* macOS */ = {
+			isa = PBXGroup;
+			children = (
+				69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */,
+				755404A1DB56C96714E863E6 /* MacShortcuts.swift */,
+			);
+			path = macOS;
+			sourceTree = "<group>";
+		};
+		16141DF33A55B5DEAB3F803B /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				7B87C44172F90CDF28E3168B /* AuralisCore */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		537240F55E4B105B80C97A1C /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				37512AECC1D8665440BBB4DB /* Localizable.xcstrings */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		7661C85FE41D3637B3F6239E /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				AA25390D86BDC4807DC0F7CF /* AuralisIntents.entitlements */,
+				EBF41918A59E1038580AD9CE /* IntentHandler.swift */,
+			);
+			path = Intents;
+			sourceTree = "<group>";
+		};
+		AE5D21F5E737E11601AE71A4 = {
+			isa = PBXGroup;
+			children = (
+				FDF4D24E5D9D9257188790F6 /* Apps */,
+				16141DF33A55B5DEAB3F803B /* Packages */,
+				ED8C66EA7071741330E084BF /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B42DEAA690E2E8F278F548EB /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				F7FF4CE3EC2EF7AFE5C6F006 /* AppIntents.swift */,
+				7E92EE0F5FD4F611D1678C3B /* Auralis.entitlements */,
+				1C17241D49F118BD819B4F7A /* AuralisApp.swift */,
+				7661C85FE41D3637B3F6239E /* Intents */,
+				01D35E0B7E33395DCEF1FD35 /* LiveActivity */,
+				537240F55E4B105B80C97A1C /* Resources */,
+			);
+			path = iOS;
+			sourceTree = "<group>";
+		};
+		ED8C66EA7071741330E084BF /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				53A83CD2104106116D511C8B /* Auralis.app */,
+				55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */,
+				9AA2EE3ADE81172BD503209A /* AuralisLiveActivity.appex */,
+				A609F4CC35198A784C36E9D3 /* AuralisMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		FDF4D24E5D9D9257188790F6 /* Apps */ = {
+			isa = PBXGroup;
+			children = (
+				B42DEAA690E2E8F278F548EB /* iOS */,
+				14439BC26DEF6E0A744743F0 /* macOS */,
+				0561F57DF7CE5D941D5C5A4C /* Shared */,
+			);
+			path = Apps;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0AB239630792168B1AA6B2CA /* AuralisMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5B9906AA84A58A664F4181D3 /* Build configuration list for PBXNativeTarget "AuralisMac" */;
+			buildPhases = (
+				53D35D9FA7DADE21E696013D /* Sources */,
+				88F341FB58C63F31AD200866 /* Resources */,
+				434E210BB896AFE76A5225BF /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AuralisMac;
+			packageProductDependencies = (
+				F0CB3446F841735CD171E2E4 /* AppShell */,
+			);
+			productName = AuralisMac;
+			productReference = A609F4CC35198A784C36E9D3 /* AuralisMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		5097797681FF21CB927678CF /* AuralisLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4E428ED26323820823BC41FB /* Build configuration list for PBXNativeTarget "AuralisLiveActivity" */;
+			buildPhases = (
+				4FF1D220B1F5790EE89B91B8 /* Sources */,
+				0998A619A021BB78EE3BB269 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AuralisLiveActivity;
+			packageProductDependencies = (
+				67F9E818418E7523CD352BE2 /* Domain */,
+			);
+			productName = AuralisLiveActivity;
+			productReference = 9AA2EE3ADE81172BD503209A /* AuralisLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		A94C23FA70165354CFD55948 /* AuralisIntents */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3B2BFD843E0B5A3FE83435A4 /* Build configuration list for PBXNativeTarget "AuralisIntents" */;
+			buildPhases = (
+				BD18F981199C4474B18A97FF /* Sources */,
+				8A5EF96D15CE3683D53C14FA /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AuralisIntents;
+			packageProductDependencies = (
+				AE74FECA5A40223CCA6415A5 /* LocalCatalog */,
+			);
+			productName = AuralisIntents;
+			productReference = 55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		D2DFF0647A18535580FA7C69 /* Auralis */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 021D11F0F6833A80E826305B /* Build configuration list for PBXNativeTarget "Auralis" */;
+			buildPhases = (
+				4549530A9FBDB1A8A7845AF2 /* Sources */,
+				739072F9F85BCE8618556328 /* Resources */,
+				C482B2DCDDBC96CD44D645B0 /* Frameworks */,
+				DA068BDF788BAB2CBC11F6C5 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D5728AA079EB4D574B6C3871 /* PBXTargetDependency */,
+			);
+			name = Auralis;
+			packageProductDependencies = (
+				B3FB2EFF6815905FFD2AB2AB /* AppShell */,
+			);
+			productName = Auralis;
+			productReference = 53A83CD2104106116D511C8B /* Auralis.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9781B7718DB1A77237072D1D /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					0AB239630792168B1AA6B2CA = {
+						DevelopmentTeam = JUQXD87P93;
+						ProvisioningStyle = Automatic;
+					};
+					5097797681FF21CB927678CF = {
+						DevelopmentTeam = JUQXD87P93;
+						ProvisioningStyle = Automatic;
+					};
+					A94C23FA70165354CFD55948 = {
+						DevelopmentTeam = JUQXD87P93;
+						ProvisioningStyle = Automatic;
+					};
+					D2DFF0647A18535580FA7C69 = {
+						DevelopmentTeam = JUQXD87P93;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 0B12CD0DAC0F27104E8CA213 /* Build configuration list for PBXProject "Auralis" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = AE5D21F5E737E11601AE71A4;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				1D45BAF8E0F7E7CC6685E91D /* XCLocalSwiftPackageReference "Packages/AuralisCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = ED8C66EA7071741330E084BF /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D2DFF0647A18535580FA7C69 /* Auralis */,
+				A94C23FA70165354CFD55948 /* AuralisIntents */,
+				5097797681FF21CB927678CF /* AuralisLiveActivity */,
+				0AB239630792168B1AA6B2CA /* AuralisMac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		739072F9F85BCE8618556328 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				20F4CEED549B426035A9144A /* Assets.xcassets in Resources */,
+				8E4AD7B00E7328844A3677FE /* Localizable.xcstrings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		88F341FB58C63F31AD200866 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1CCC7D2F778ECB1009DB59A9 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4549530A9FBDB1A8A7845AF2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA881A4DEC3437888B33B836 /* AppIntents.swift in Sources */,
+				DE2E4474991E5F09F514D763 /* AssistantAppIntent.swift in Sources */,
+				716A20002937E551C1F3E00A /* AuralisApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4FF1D220B1F5790EE89B91B8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8F6286DD503BFACACBBB932A /* AuralisLiveActivityBundle.swift in Sources */,
+				7F7F375162E4BF60492F26A8 /* NowPlayingWidget.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		53D35D9FA7DADE21E696013D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B0BAC0654C25C96B9855BDA3 /* AssistantAppIntent.swift in Sources */,
+				6A5E78298A041E838463DBC8 /* AuralisMacApp.swift in Sources */,
+				14D728D1EB7E51853F7DEBF9 /* MacShortcuts.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BD18F981199C4474B18A97FF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C3A5BF12EF8CDA8D52633540 /* IntentHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D5728AA079EB4D574B6C3871 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A94C23FA70165354CFD55948 /* AuralisIntents */;
+			targetProxy = 2B82B3106159E7EFBDE7BAEE /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0073175624FA0075907AB760 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/LiveActivity/AuralisLiveActivity.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/LiveActivity/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisLiveActivity;
+				PRODUCT_NAME = AuralisLiveActivity;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		068008A850550B6D32270B0E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/macOS/AuralisMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/macOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.macos;
+				PRODUCT_NAME = Auralis;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		12A67F8CD441D558B3416F1E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		1AF20D38474850C8A4FCD501 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Auralis.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_LANGUAGE = "zh-Hans";
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios;
+				PRODUCT_NAME = Auralis;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		20C1D8BAE7D8C2EEC0AC17F8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/macOS/AuralisMac.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/macOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.macos;
+				PRODUCT_NAME = Auralis;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		5A867E6F50D41F9849FFA36C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Auralis.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_LANGUAGE = "zh-Hans";
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios;
+				PRODUCT_NAME = Auralis;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		7A8247D64D64CF33092ED8F4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/LiveActivity/AuralisLiveActivity.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/LiveActivity/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisLiveActivity;
+				PRODUCT_NAME = AuralisLiveActivity;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		7DD569CB5211D7BABC15DBCD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Intents/AuralisIntents.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				ENABLE_APP_INTENTS_METADATA_EXTRACTION = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/Intents/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisIntents;
+				PRODUCT_NAME = AuralisIntents;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		88D4D0C2938D47CBF1E7BA2E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		A817C7B78BC9838057FC0391 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/Intents/AuralisIntents.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = JUQXD87P93;
+				ENABLE_APP_INTENTS_METADATA_EXTRACTION = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Apps/iOS/Intents/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auralis.player.ios.AuralisIntents;
+				PRODUCT_NAME = AuralisIntents;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		021D11F0F6833A80E826305B /* Build configuration list for PBXNativeTarget "Auralis" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A867E6F50D41F9849FFA36C /* Debug */,
+				1AF20D38474850C8A4FCD501 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		0B12CD0DAC0F27104E8CA213 /* Build configuration list for PBXProject "Auralis" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				12A67F8CD441D558B3416F1E /* Debug */,
+				88D4D0C2938D47CBF1E7BA2E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3B2BFD843E0B5A3FE83435A4 /* Build configuration list for PBXNativeTarget "AuralisIntents" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A817C7B78BC9838057FC0391 /* Debug */,
+				7DD569CB5211D7BABC15DBCD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4E428ED26323820823BC41FB /* Build configuration list for PBXNativeTarget "AuralisLiveActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0073175624FA0075907AB760 /* Debug */,
+				7A8247D64D64CF33092ED8F4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5B9906AA84A58A664F4181D3 /* Build configuration list for PBXNativeTarget "AuralisMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				068008A850550B6D32270B0E /* Debug */,
+				20C1D8BAE7D8C2EEC0AC17F8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		1D45BAF8E0F7E7CC6685E91D /* XCLocalSwiftPackageReference "Packages/AuralisCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AuralisCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		67F9E818418E7523CD352BE2 /* Domain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Domain;
+		};
+		AE74FECA5A40223CCA6415A5 /* LocalCatalog */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LocalCatalog;
+		};
+		B3FB2EFF6815905FFD2AB2AB /* AppShell */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AppShell;
+		};
+		F0CB3446F841735CD171E2E4 /* AppShell */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AppShell;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 9781B7718DB1A77237072D1D /* Project object */;
+}

@@ -1,0 +1,39 @@
+.build/
+Packages/AuralisCore/.build/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Local environment and credential material. Keep redacted examples tracked.
+.env
+.env.*
+.envrc
+!.env.example
+!.env.*.example
+!.envrc.example
+
+# Developer-only build settings and exported credentials.
+Config/Local*.xcconfig
+Config/*Secret*.xcconfig
+Config/*Private*.xcconfig
+Config/*Credential*.xcconfig
+!Config/*.example.xcconfig
+!Config/*.xcconfig.example
+Config/*Secrets*.plist
+Config/*Secrets*.json
+Config/*Credentials*.plist
+Config/*Credentials*.json
+Config/*Keychain*.json
+!Config/*.example.plist
+!Config/*.example.json
+!Config/*.plist.example
+!Config/*.json.example
+*.credential-export
+*.keychain-export
+*.keychain
+*.keychain-db
+*.p12
+*.pfx
+
+# 开发代理工作记忆（不进入仓库）
+.workbuddy/

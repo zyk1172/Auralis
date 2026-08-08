@@ -1,0 +1,165 @@
+import Domain
+import Foundation
+import LocalCatalog
+
+/// Agent 工具权限分级。
+public enum ToolPermission: String, Codable, Sendable, Hashable {
+    /// 只读：查询本地目录、当前播放状态等，无需确认。
+    case readOnly
+    /// 可逆：收藏、评分、加入队列等，可撤销/可恢复。
+    case reversible
+    /// 破坏性：删除歌单、删除服务器、清空队列等，必须确认。
+    case destructive
+}
+
+/// 工具分组，对应需求中的 Catalog/Playback/Playlist/Annotation/Server。
+public enum ToolGroup: String, Codable, Sendable, Hashable {
+    case catalog
+    case playback
+    case playlist
+    case annotation
+    case server
+}
+
+/// Agent 工具调用。arguments 为已解析的参数字典（值经 Agent 内部编码，不含任何凭据）。
+public struct ToolCall: Codable, Sendable {
+    public let name: String
+    public let arguments: [String: String]
+
+    public init(name: String, arguments: [String: String] = [:]) {
+        self.name = name
+        self.arguments = arguments
+    }
+}
+
+/// 工具执行结果。
+public struct ToolResult: Sendable {
+    public let call: ToolCall
+    public let permission: ToolPermission
+    public let success: Bool
+    public let summary: String
+    public let payload: AgentMessage?
+
+    public init(call: ToolCall, permission: ToolPermission, success: Bool, summary: String, payload: AgentMessage? = nil) {
+        self.call = call
+        self.permission = permission
+        self.success = success
+        self.summary = summary
+        self.payload = payload
+    }
+}
+
+/// Agent 与播放器/服务器/偏好之间的桥接协议。
+/// 所有修改型操作经此协议落到真实播放器与服务器；AppModel 负责实现。
+/// 协议仅引用 Domain 与 LocalCatalog，保持 AgentKit 不依赖 Application。
+public protocol AgentBridge: Sendable {
+    /// 全部方法都是 async：桥接实现通常运行在 @MainActor（播放器状态所在），
+    /// 用 async 让跨隔离域调用在 Swift 6 严格并发下保持安全。
+    var activeServerID: ServerID? { get async }
+    func currentTrack() async -> Track?
+    func currentQueue() async -> [Track]
+
+    // Playback
+    func playTrack(globalID: GlobalID) async
+    func playAlbum(globalID: GlobalID) async
+    func playPlaylist(globalID: GlobalID) async
+    func playRandom() async
+    func pause() async
+    func resume() async
+    func seek(seconds: TimeInterval) async
+    func next() async
+    func previous() async
+    func setShuffle(_ enabled: Bool) async
+    func setRepeatMode(_ mode: RepeatMode) async
+    func setPlaybackRate(_ rate: Float) async
+    /// 设置睡眠定时。mode 取值：off / afterMinutes / afterCurrentTrack / afterCurrentAlbum / afterCurrentQueue。
+    func setSleepTimer(mode: String, minutes: TimeInterval) async
+    func cancelSleepTimer() async
+    /// 返回 (模式, 剩余秒数)。
+    func getSleepTimer() async -> (mode: String, remaining: TimeInterval)
+    func addToQueue(globalID: GlobalID) async
+    func playNext(globalID: GlobalID) async
+    func replaceQueue(globalIDs: [GlobalID]) async
+    func removeFromQueue(at index: Int) async
+    func reorderQueue(from: Int, to: Int) async
+    func clearQueue() async
+    /// 只随机尚未播放的剩余队列。
+    func shuffleRemaining() async
+    /// 把当前队列保存为服务器歌单；成功返回 true。
+    func saveQueueAsPlaylist(name: String) async -> Bool
+
+    // Playlist
+    func createPlaylist(name: String) async -> GlobalID?
+    func renamePlaylist(globalID: GlobalID, name: String) async
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async
+    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async
+    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async
+    func duplicatePlaylist(playlistGID: GlobalID) async
+    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async
+    func deletePlaylist(globalID: GlobalID) async
+
+    // Annotation
+    func likeTrack(globalID: GlobalID) async
+    func unlikeTrack(globalID: GlobalID) async
+    func favoriteAlbum(globalID: GlobalID) async
+    func unfavoriteAlbum(globalID: GlobalID) async
+    func favoriteArtist(globalID: GlobalID) async
+    func unfavoriteArtist(globalID: GlobalID) async
+    func setRating(globalID: GlobalID, rating: Int) async
+    func clearRating(globalID: GlobalID) async
+
+    // Server
+    func listServers() async -> [ServerAccount]
+    func getActiveServer() async -> ServerAccount?
+    func testServerConnection(serverID: ServerID) async -> Bool
+    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> Bool
+    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> Bool
+    func switchServer(serverID: ServerID) async
+    func refreshLibrary() async
+    func getSyncStatus() async -> [CatalogSyncStatus]
+    func removeServer(serverID: ServerID) async
+    /// 在服务器上在线搜索歌曲（HTTP，search3）；本地无结果时使用。未连接或失败返回空数组。
+    func serverSearch(query: String, limit: Int) async -> [Track]
+}
+
+public extension AgentBridge {
+    func serverSearch(query: String, limit: Int) async -> [Track] { [] }
+}
+
+/// 需要用户确认的待定操作。
+public struct PendingConfirmation: Codable, Sendable, Identifiable {
+    public let id: UUID
+    public let toolName: String
+    public let permission: ToolPermission
+    public let title: String
+    public let detail: String
+    public let call: ToolCall
+
+    public init(id: UUID = UUID(), toolName: String, permission: ToolPermission, title: String, detail: String, call: ToolCall) {
+        self.id = id
+        self.toolName = toolName
+        self.permission = permission
+        self.title = title
+        self.detail = detail
+        self.call = call
+    }
+}
+
+/// 一条可撤销的修改型操作记录。
+public struct AgentActionRecord: Codable, Sendable, Identifiable {
+    public let id: UUID
+    public let timestamp: Date
+    public let toolName: String
+    public let permission: ToolPermission
+    public let summary: String
+    public var undone: Bool
+
+    public init(id: UUID = UUID(), timestamp: Date = .now, toolName: String, permission: ToolPermission, summary: String, undone: Bool = false) {
+        self.id = id
+        self.timestamp = timestamp
+        self.toolName = toolName
+        self.permission = permission
+        self.summary = summary
+        self.undone = undone
+    }
+}

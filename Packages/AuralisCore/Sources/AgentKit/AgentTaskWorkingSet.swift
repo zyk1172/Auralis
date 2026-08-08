@@ -1,0 +1,178 @@
+import Domain
+import Foundation
+import LocalCatalog
+
+/// 单条工具调用的诊断轨迹（供操作记录 / 暂停诊断使用，不携带凭据）。
+public struct AgentToolTrace: Codable, Sendable {
+    public let tool: String
+    public let args: [String: String]
+    public let summary: String
+    public let reused: Bool
+    public let at: Date
+
+    public init(tool: String, args: [String: String], summary: String, reused: Bool, at: Date = .now) {
+        self.tool = tool
+        self.args = args
+        self.summary = summary
+        self.reused = reused
+        self.at = at
+    }
+}
+
+/// 单个 Agent Task 的工作集与防“工具调用爆炸”状态机（纯值类型，可独立测试）。
+///
+/// 职责：
+/// 1. **任务级 Tool Result Cache**：同一工具 + 规范化参数再次出现时直接复用结果，
+///    避免重复查询 / 重复写操作（缓存键含 toolName + 排序后的参数）；
+/// 2. **重复调用保护**：搜索类工具连续多次没有新歌曲时，返回明确提示并禁止继续搜索；
+/// 3. **Task Working Set**：累计唯一候选歌曲、已入队歌曲，达到目标后阻止继续搜索；
+/// 4. **诊断统计**：每工具调用次数、缓存命中、唯一歌曲数、最后 N 次调用轨迹。
+public struct AgentTaskWorkingSet: Sendable {
+    /// 唯一候选歌曲（来自所有 trackCards 结果）。
+    public private(set) var uniqueSongIDs: Set<GlobalID> = []
+    /// 已入队 / 已播放的歌曲。
+    public private(set) var queuedSongIDs: Set<GlobalID> = []
+    /// 任务级结果缓存：签名 → 回灌给模型的文本。
+    public private(set) var cache: [String: String] = [:]
+    /// 每工具调用次数。
+    public private(set) var perToolCounts: [String: Int] = [:]
+    /// 缓存命中次数（被复用的调用数）。
+    public private(set) var cacheHits = 0
+    /// 实际执行（非缓存复用）的工具调用次数。
+    public private(set) var executedCalls = 0
+    /// 连续“无新歌曲”的搜索次数。
+    public private(set) var noNewResultsStreak = 0
+    /// 最近若干次调用轨迹（诊断用）。
+    public private(set) var lastTraces: [AgentToolTrace] = []
+    /// 是否已要求模型停止搜索。
+    public private(set) var stopSearching = false
+
+    /// 缓存条数上限（LRU 语义：超出时丢弃最旧）。
+    public static let maxCacheSize = 60
+    /// 连续多少次“无新结果”后提示模型停止搜索。
+    public static let noNewResultsLimit = 3
+    /// 已入队多少首后禁止继续搜索（防止“已经凑够还继续搜”）。
+    public static let queueSatisfiedThreshold = 20
+    /// 允许缓存的只读查询工具（缓存仅限查询，绝不含播放/收藏/评分等可变操作）。
+    public static let cacheableTools: Set<String> = [
+        "library_search", "library_select_tracks", "server_search", "searchTracks",
+        "library_get_song", "library_get_album", "library_get_artist",
+        "getFavorites", "library_get_starred", "getRecentHistory", "library_get_recently_played",
+        "library_get_random_songs", "library_get_most_played", "library_get_recently_added",
+        "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre",
+        "getLeastPlayed", "getDownloadedTracks", "listPlaylists", "library_get_playlist",
+        "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
+    ]
+    /// 受“无新结果”保护约束的搜索类工具（其结果为歌曲清单）。
+    public static let searchTools: Set<String> = [
+        "library_search", "server_search", "searchTracks", "library_select_tracks",
+        "library_get_random_songs", "library_get_tracks_by_genre",
+        "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
+        "getFavorites", "library_get_starred", "getRecentHistory", "library_get_recently_played",
+    ]
+    /// 会向队列写入歌曲的工具（用于工作集统计入队数量）。
+    public static let queueWritingTools: Set<String> = [
+        "queue_replace", "queue_append", "queue_play_next",
+        "playback_play_song", "playback_play_album", "playback_play_artist",
+        "playback_play_playlist", "playback_play_random", "playTrack",
+    ]
+
+    public init() {}
+
+    // MARK: - 签名与缓存
+
+    /// 规范化工具调用签名（工具名 + 排序后的参数，键值做空白折叠）。
+    public static func signature(tool: String, args: [String: String]) -> String {
+        let normalized = args.map { key, value in
+            "\(key)=\(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+        }.sorted().joined(separator: "&")
+        return "\(tool)|\(normalized)"
+    }
+
+    public static func isCacheable(_ tool: String) -> Bool { cacheableTools.contains(tool) }
+    public static func isSearchTool(_ tool: String) -> Bool { searchTools.contains(tool) }
+
+    /// 尝试命中缓存：命中返回 true 并更新统计。
+    public mutating func tryReuse(tool: String, args: [String: String]) -> String? {
+        guard Self.isCacheable(tool) else { return nil }
+        let key = Self.signature(tool: tool, args: args)
+        guard let text = cache[key] else { return nil }
+        cacheHits += 1
+        recordCount(tool)
+        return text
+    }
+
+    /// 记录一次实际执行：写入缓存（仅限可缓存工具）、统计调用次数。
+    public mutating func recordExecution(tool: String, args: [String: String], resultText: String) {
+        if Self.isCacheable(tool) {
+            let key = Self.signature(tool: tool, args: args)
+            cache[key] = resultText
+            if cache.count > Self.maxCacheSize, let oldest = cache.keys.first {
+                cache.removeValue(forKey: oldest)
+            }
+        }
+        executedCalls += 1
+        recordCount(tool)
+    }
+
+    private mutating func recordCount(_ tool: String) {
+        perToolCounts[tool, default: 0] += 1
+    }
+
+    // MARK: - 候选 / 队列工作集
+
+    /// 记录一批候选歌曲，返回“是否全部重复（无新歌）”。
+    @discardableResult
+    public mutating func observeCandidates(_ ids: [GlobalID]) -> Bool {
+        let new = Set(ids).subtracting(uniqueSongIDs)
+        uniqueSongIDs.formUnion(ids)
+        if new.isEmpty {
+            noNewResultsStreak += 1
+        } else {
+            noNewResultsStreak = 0
+        }
+        // 队列已满足目标 或 连续无新结果达到上限 → 停止搜索。
+        if queuedSongIDs.count >= Self.queueSatisfiedThreshold || noNewResultsStreak >= Self.noNewResultsLimit {
+            stopSearching = true
+        }
+        return new.isEmpty
+    }
+
+    /// 记录一次入队 / 播放的歌曲 ID。
+    public mutating func noteQueued(_ ids: [GlobalID]) {
+        queuedSongIDs.formUnion(ids)
+        if queuedSongIDs.count >= Self.queueSatisfiedThreshold {
+            stopSearching = true
+        }
+    }
+
+    /// 从工具参数里解析歌曲 ID 列表（trackIDs / trackID / songIDs / songID）。
+    public static func songIDs(from args: [String: String]) -> [GlobalID] {
+        var result: [GlobalID] = []
+        for key in ["trackIDs", "trackID", "songIDs", "songID"] {
+            guard let raw = args[key] else { continue }
+            for piece in raw.split(separator: ",") {
+                let trimmed = String(piece).trimmingCharacters(in: .whitespaces)
+                if let gid = GlobalID(trimmed) { result.append(gid) }
+            }
+        }
+        return result
+    }
+
+    // MARK: - 轨迹
+
+    public mutating func recordTrace(_ trace: AgentToolTrace) {
+        lastTraces.append(trace)
+        if lastTraces.count > 5 { lastTraces.removeFirst(lastTraces.count - 5) }
+    }
+
+    // MARK: - 诊断
+
+    /// 暂停 / 上限时的诊断摘要。
+    public var diagnosticSummary: String {
+        let sorted = perToolCounts.sorted { $0.value > $1.value }
+        let perTool = sorted.map { "\($0.key) × \($0.value)" }.joined(separator: "；")
+        let traces = lastTraces.map { "\($0.tool)(\($0.args.map { "\($0.key)=\($0.value)" }.joined(separator: ",")))→\($0.summary.prefix(40))" }.joined(separator: " | ")
+        return "总调用 \(executedCalls) 次（缓存命中 \(cacheHits) 次）；\(perTool)；唯一候选歌曲 \(uniqueSongIDs.count) 首；已入队 \(queuedSongIDs.count) 首；最后调用：\(traces)"
+    }
+}

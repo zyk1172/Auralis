@@ -1,0 +1,140 @@
+name: Auralis
+options:
+  bundleIdPrefix: com.auralis.player
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "15.0"
+  xcodeVersion: "27.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    CODE_SIGN_STYLE: Automatic
+packages:
+  AuralisCore:
+    path: Packages/AuralisCore
+targets:
+  Auralis:
+    type: application
+    platform: iOS
+    sources:
+      - path: Apps/iOS
+        excludes:
+          - Info.plist
+          - Intents
+          - LiveActivity
+      - path: Apps/Shared
+    dependencies:
+      - package: AuralisCore
+        product: AppShell
+      - target: AuralisIntents
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios
+        PRODUCT_NAME: Auralis
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Apps/iOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/iOS/Auralis.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_TEAM: "JUQXD87P93"
+        DEVELOPMENT_LANGUAGE: "zh-Hans"
+  AuralisMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Apps/macOS
+        excludes:
+          - Info.plist
+          - AuralisMac.entitlements
+      - path: Apps/Shared
+    dependencies:
+      - package: AuralisCore
+        product: AppShell
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.macos
+        PRODUCT_NAME: Auralis
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Apps/macOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/macOS/AuralisMac.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_TEAM: "JUQXD87P93"
+  AuralisIntents:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Apps/iOS/Intents
+        excludes:
+          - Info.plist
+    dependencies:
+      - package: AuralisCore
+        product: LocalCatalog
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.AuralisIntents
+        ENABLE_APP_INTENTS_METADATA_EXTRACTION: NO
+        PRODUCT_NAME: AuralisIntents
+        INFOPLIST_FILE: Apps/iOS/Intents/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Apps/iOS/Intents/AuralisIntents.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "JUQXD87P93"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        SKIP_INSTALL: NO
+  AuralisLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Apps/iOS/LiveActivity
+        excludes:
+          - Info.plist
+    dependencies:
+      - package: AuralisCore
+        product: Domain
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.AuralisLiveActivity
+        PRODUCT_NAME: AuralisLiveActivity
+        INFOPLIST_FILE: Apps/iOS/LiveActivity/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Apps/iOS/LiveActivity/AuralisLiveActivity.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "JUQXD87P93"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        SKIP_INSTALL: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+schemes:
+  Auralis:
+    build:
+      targets:
+        Auralis: all
+        AuralisLiveActivity: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  AuralisMac:
+    build:
+      targets:
+        AuralisMac: all
+    run:
+      config: Debug
+    archive:
+      config: Release
