@@ -118,6 +118,17 @@ private extension KeyedDecodingContainer {
         return nil
     }
 
+    /// 百分比字段兼容："12.3%" / Double / Int / String("12.3") / 缺失 / null → Double?
+    /// /history 的 progress 是带 % 的展示字符串（如 "12.3%"），/tasks 是原始浮点。
+    func decodePercentDoubleIfPresent(forKey key: Key) throws -> Double? {
+        if let value = try? decode(Double.self, forKey: key) { return value }
+        if let value = try? decode(Int.self, forKey: key) { return Double(value) }
+        if let raw = try? decode(String.self, forKey: key) {
+            return Double(raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "%", with: ""))
+        }
+        return nil
+    }
+
     /// 字符串字段兼容：String / Int / Double / 缺失 / null → String?
     func decodeLooseStringIfPresent(forKey key: Key) throws -> String? {
         if let value = try? decode(String.self, forKey: key) { return value }
@@ -279,13 +290,25 @@ public struct MoviePilotTaskData: Decodable, Sendable {
     public let title: String
     public let site: String?
     public let quality: Int?
+    /// 任务状态：/tasks 为原始英文态（downloading/completed/failed/paused），
+    /// /history 为中文展示态（下载中/已完成/失败/暂停，v0.5.x）。
+    public let status: String?
     public let state: String
     public let progress: Double?
+    public let dlspeed: String?
     public let savePath: String?
+    /// 体积（字节，插件可能是数字或字符串，统一透传为字符串）。
+    public let size: String?
+    public let sizeText: String?
+    public let createTime: String?
+    public let finishTime: String?
 
     enum CodingKeys: String, CodingKey {
-        case hash, title, site, quality, state, progress
+        case hash, title, site, quality, status, state, progress, dlspeed, size
         case savePath = "save_path"
+        case sizeText = "size_text"
+        case createTime = "create_time"
+        case finishTime = "finish_time"
     }
 
     public init(from decoder: Decoder) throws {
@@ -294,9 +317,15 @@ public struct MoviePilotTaskData: Decodable, Sendable {
         title = try c.decode(String.self, forKey: .title)
         site = try c.decodeIfPresent(String.self, forKey: .site)
         quality = try c.decodeLooseIntIfPresent(forKey: .quality)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
         state = try c.decode(String.self, forKey: .state)
-        progress = try c.decodeLooseDoubleIfPresent(forKey: .progress)
+        progress = try c.decodePercentDoubleIfPresent(forKey: .progress)
+        dlspeed = try c.decodeLooseStringIfPresent(forKey: .dlspeed)
         savePath = try c.decodeIfPresent(String.self, forKey: .savePath)
+        size = try c.decodeLooseStringIfPresent(forKey: .size)
+        sizeText = try c.decodeIfPresent(String.self, forKey: .sizeText)
+        createTime = try c.decodeIfPresent(String.self, forKey: .createTime)
+        finishTime = try c.decodeIfPresent(String.self, forKey: .finishTime)
     }
 }
 
@@ -339,6 +368,98 @@ public struct MoviePilotHistoryData: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case tasks
         case liveAvailable = "live_available"
+    }
+}
+
+/// /status 接口：插件状态（目录校验 / 站点 / 筛查与体积上限配置，v0.5.x）。
+public struct MoviePilotStatusData: Decodable, Sendable {
+    public let enabled: Bool?
+    public let musicDir: String?
+    public let dirValid: Bool?
+    public let dirError: String?
+    public let sitesMode: String?
+    public let sites: [MoviePilotSite]?
+    public let requireMusic: Bool?
+    public let preferLossless: Bool?
+    public let minSeeders: Int?
+    /// 单曲体积上限（GB，v0.5.x）。
+    public let maxSizeGB: Double?
+    /// 专辑/合集体积上限（GB，v0.5.x；单曲降级合集后生效）。
+    public let albumMaxSizeGB: Double?
+    public let excludeKeywords: [String]?
+    public let showUncertain: Bool?
+    public let fallbackArtist: Bool?
+    public let singleFallbackAlbum: Bool?
+    public let trackVerify: Bool?
+    public let notifyEnabled: Bool?
+    public let notifyOnSearch: Bool?
+    /// 结果推送地址（插件出站 URL，不暴露给 Agent）。
+    public let notifyURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, sites
+        case musicDir = "music_dir"
+        case dirValid = "dir_valid"
+        case dirError = "dir_error"
+        case sitesMode = "sites_mode"
+        case requireMusic = "require_music"
+        case preferLossless = "prefer_lossless"
+        case minSeeders = "min_seeders"
+        case maxSizeGB = "max_size_gb"
+        case albumMaxSizeGB = "album_max_size_gb"
+        case excludeKeywords = "exclude_keywords"
+        case showUncertain = "show_uncertain"
+        case fallbackArtist = "fallback_artist"
+        case singleFallbackAlbum = "single_fallback_album"
+        case trackVerify = "track_verify"
+        case notifyEnabled = "notify_enabled"
+        case notifyOnSearch = "notify_on_search"
+        case notifyURL = "notify_url"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeLooseBoolIfPresent(forKey: .enabled)
+        musicDir = try c.decodeIfPresent(String.self, forKey: .musicDir)
+        dirValid = try c.decodeLooseBoolIfPresent(forKey: .dirValid)
+        dirError = try c.decodeIfPresent(String.self, forKey: .dirError)
+        sitesMode = try c.decodeIfPresent(String.self, forKey: .sitesMode)
+        sites = try c.decodeIfPresent([MoviePilotSite].self, forKey: .sites)
+        requireMusic = try c.decodeLooseBoolIfPresent(forKey: .requireMusic)
+        preferLossless = try c.decodeLooseBoolIfPresent(forKey: .preferLossless)
+        minSeeders = try c.decodeLooseIntIfPresent(forKey: .minSeeders)
+        maxSizeGB = try c.decodeLooseDoubleIfPresent(forKey: .maxSizeGB)
+        albumMaxSizeGB = try c.decodeLooseDoubleIfPresent(forKey: .albumMaxSizeGB)
+        excludeKeywords = try c.decodeIfPresent([String].self, forKey: .excludeKeywords)
+        showUncertain = try c.decodeLooseBoolIfPresent(forKey: .showUncertain)
+        fallbackArtist = try c.decodeLooseBoolIfPresent(forKey: .fallbackArtist)
+        singleFallbackAlbum = try c.decodeLooseBoolIfPresent(forKey: .singleFallbackAlbum)
+        trackVerify = try c.decodeLooseBoolIfPresent(forKey: .trackVerify)
+        notifyEnabled = try c.decodeLooseBoolIfPresent(forKey: .notifyEnabled)
+        notifyOnSearch = try c.decodeLooseBoolIfPresent(forKey: .notifyOnSearch)
+        notifyURL = try c.decodeIfPresent(String.self, forKey: .notifyURL)
+    }
+}
+
+/// /history/remove、/history/clean 的响应（remove 仅 message；clean 带 before/after 计数）。
+public struct MoviePilotHistoryMutation: Decodable, Sendable {
+    public let message: String?
+    public let before: Int?
+    public let after: Int?
+
+    public init(message: String? = nil, before: Int? = nil, after: Int? = nil) {
+        self.message = message
+        self.before = before
+        self.after = after
+    }
+
+    enum CodingKeys: String, CodingKey { case message, before, after }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        message = try c.decodeIfPresent(String.self, forKey: .message)
+        before = try c.decodeLooseIntIfPresent(forKey: .before)
+        after = try c.decodeLooseIntIfPresent(forKey: .after)
     }
 }
 
@@ -399,12 +520,15 @@ public struct MoviePilotClient: Sendable {
         verifyArtist: String? = nil
     ) async throws -> MoviePilotDownloadData {
         var body: [String: Any] = [:]
+        // 磁力直链走专用 POST /magnet（/download 不接收 magnet 参数，会当作缺失参数失败）。
+        var endpoint = "download"
         if let ref, !ref.isEmpty {
             body["ref"] = ref
         } else if let siteID, let index {
             body["site_id"] = siteID
             body["index"] = index
         } else if let magnet, !magnet.isEmpty {
+            endpoint = "magnet"
             body["magnet"] = magnet
             if let title, !title.isEmpty { body["title"] = title }
         } else {
@@ -413,7 +537,7 @@ public struct MoviePilotClient: Sendable {
         if let maxSizeGB, maxSizeGB > 0 { body["max_size_gb"] = maxSizeGB }
         if let verifySong, !verifySong.isEmpty { body["verify_song"] = verifySong }
         if let verifyArtist, !verifyArtist.isEmpty { body["verify_artist"] = verifyArtist }
-        return try await send(connection, endpoint: "download", body: body)
+        return try await send(connection, endpoint: endpoint, body: body)
     }
 
     /// 查询下载任务。
@@ -441,6 +565,34 @@ public struct MoviePilotClient: Sendable {
         try await send(connection, endpoint: "history")
     }
 
+    /// 查询插件状态：目录校验 / 站点 / 筛查与体积上限配置（供 Agent 判断「未配置 / 目录无效」）。
+    public func status(_ connection: MoviePilotConnection) async throws -> MoviePilotStatusData {
+        try await send(connection, endpoint: "status")
+    }
+
+    /// 移除单条下载历史（如已从下载器删除的孤儿记录，v0.5.5+）。
+    public func historyRemove(_ connection: MoviePilotConnection, hash: String) async throws -> MoviePilotHistoryMutation {
+        let h = hash.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !h.isEmpty else {
+            throw MoviePilotError.invalidConfiguration("缺少 hash")
+        }
+        return try await sendMutation(connection, endpoint: "history/remove", body: ["hash": h])
+    }
+
+    /// 按条件清理下载历史（v0.5.7+）：status 按状态清理、keep 只保留最近 N 条、orphans 清理下载器已不存在的记录。
+    public func historyClean(
+        _ connection: MoviePilotConnection,
+        status: String?,
+        keep: Int?,
+        orphans: Bool?
+    ) async throws -> MoviePilotHistoryMutation {
+        var body: [String: Any] = [:]
+        if let status, !status.isEmpty { body["status"] = status }
+        if let keep { body["keep"] = keep }
+        if let orphans { body["orphans"] = orphans }
+        return try await sendMutation(connection, endpoint: "history/clean", body: body)
+    }
+
     // MARK: - 内部
 
     private struct MoviePilotTasksPayload: Decodable, Sendable {
@@ -459,6 +611,50 @@ public struct MoviePilotClient: Sendable {
         body: [String: Any]? = nil,
         query: [URLQueryItem]? = nil
     ) async throws -> Response {
+        let (data, response) = try await perform(connection, endpoint: endpoint, body: body, query: query)
+        try Self.checkHTTP(response, data: data)
+        do {
+            let envelope = try JSONDecoder().decode(MoviePilotEnvelope<Response>.self, from: data)
+            guard envelope.success, let payload = envelope.data else {
+                throw MoviePilotError.pluginFailed(envelope.message ?? "插件返回失败")
+            }
+            return payload
+        } catch let error as MoviePilotError {
+            throw error
+        } catch {
+            throw MoviePilotError.malformedResponse(error.localizedDescription)
+        }
+    }
+
+    /// 变更新点（/history/remove、/history/clean）：success=true 时 data 可能缺失（仅 message），
+    /// 不能复用 send()（其要求 data 非空），这里只校验 success 并返回 message / data。
+    private func sendMutation(
+        _ connection: MoviePilotConnection,
+        endpoint: String,
+        body: [String: Any]? = nil
+    ) async throws -> MoviePilotHistoryMutation {
+        let (data, response) = try await perform(connection, endpoint: endpoint, body: body, query: nil)
+        try Self.checkHTTP(response, data: data)
+        do {
+            let envelope = try JSONDecoder().decode(MoviePilotEnvelope<MoviePilotHistoryMutation>.self, from: data)
+            guard envelope.success else {
+                throw MoviePilotError.pluginFailed(envelope.message ?? "插件返回失败")
+            }
+            return envelope.data ?? MoviePilotHistoryMutation(message: envelope.message)
+        } catch let error as MoviePilotError {
+            throw error
+        } catch {
+            throw MoviePilotError.malformedResponse(error.localizedDescription)
+        }
+    }
+
+    /// 组装请求并执行；返回原始 data/response 交由各调用方校验与解码。
+    private func perform(
+        _ connection: MoviePilotConnection,
+        endpoint: String,
+        body: [String: Any]?,
+        query: [URLQueryItem]?
+    ) async throws -> (Data, URLResponse) {
         let base = connection.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         var path = Self.apiPath
         if base.hasSuffix(Self.apiPath) {
@@ -486,33 +682,22 @@ public struct MoviePilotClient: Sendable {
         }
         // 未配置 Token 时不发送空鉴权头，让插件返回明确的鉴权错误。
 
-        let data: Data
-        let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            return try await session.data(for: request)
         } catch {
             throw MoviePilotError.transport(error.localizedDescription)
         }
+    }
+
+    /// 非 2xx 响应里插件仍返回统一 envelope（success/message），优先透出真实业务错误。
+    private static func checkHTTP(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            // 插件错误也走统一 envelope（如 401 带 {"success":false,"message":"apikey 校验不通过"}）。
-            // 优先透出真实业务错误让用户可诊断；解析不了再回退到笼统的 HTTP 状态码。
             if let envelope = try? JSONDecoder().decode(MoviePilotErrorEnvelope.self, from: data),
                let message = envelope.message, !message.isEmpty {
                 throw MoviePilotError.pluginFailed(message)
             }
             throw MoviePilotError.transport("HTTP \(status)")
-        }
-        do {
-            let envelope = try JSONDecoder().decode(MoviePilotEnvelope<Response>.self, from: data)
-            guard envelope.success, let payload = envelope.data else {
-                throw MoviePilotError.pluginFailed(envelope.message ?? "插件返回失败")
-            }
-            return payload
-        } catch let error as MoviePilotError {
-            throw error
-        } catch {
-            throw MoviePilotError.malformedResponse(error.localizedDescription)
         }
     }
 }

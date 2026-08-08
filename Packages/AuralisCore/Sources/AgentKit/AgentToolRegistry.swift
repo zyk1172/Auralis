@@ -95,7 +95,7 @@ public enum AgentToolRegistry {
         // MARK: 音乐下载（MoviePilot / MoviePilot）
         .init(name: "music_download", group: .download, permission: .reversible, summary: "从 MoviePilot（MoviePilot）搜索并下载音乐资源",
               parameters: [
-                .init(name: "action", required: true, description: "search=搜索候选 | download=提交下载 | tasks=查询下载任务 | history=查看下载历史"),
+                .init(name: "action", required: true, description: "search=搜索候选 | download=提交下载 | tasks=查询下载任务 | history=查看下载历史 | status=查询插件状态 | history_remove=移除单条历史 | history_clean=按条件清理历史"),
                 .init(name: "artist", required: false, description: "艺人名（search）"),
                 .init(name: "album", required: false, description: "专辑名（search）"),
                 .init(name: "album_aliases", required: false, description: "专辑英文/别名，逗号分隔；中文专辑务必提供（search）"),
@@ -113,7 +113,10 @@ public enum AgentToolRegistry {
                 .init(name: "max_size_gb", required: false, description: "体积上限 GB：把 search 返回的 size_limit_gb 原样传回（download，v0.5.x）"),
                 .init(name: "verify_song", required: false, description: "目标歌曲名：单曲自动下载必传，插件会校验种子确实包含该曲（download）"),
                 .init(name: "verify_artist", required: false, description: "目标艺人名：单曲自动下载配合 verify_song 使用（download）"),
-                .init(name: "status", required: false, description: "任务状态过滤（tasks）"),
+                .init(name: "status", required: false, description: "任务状态过滤（tasks）；清理目标状态 downloading/completed/failed/paused（history_clean）"),
+                .init(name: "hash", required: false, description: "目标下载 hash（history_remove，必传）"),
+                .init(name: "keep", required: false, description: "只保留最近 N 条记录（history_clean）"),
+                .init(name: "orphans", required: false, description: "是否清理下载器已不存在的孤儿记录 true/false（history_clean）"),
               ]),
 
         // MARK: Playlist

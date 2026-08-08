@@ -998,9 +998,11 @@ public struct AgentRunner {
               * album_matched_any==false → **禁止自动下载**，只把候选（站点/质量/大小/做种/相关度/ref）展示给用户，让用户选择或补英文别名后重新搜索；
               * album_matched_any==true → 在 album_matched=true 的候选中选 quality 最高者（相同再比 relevance→seeders），用该条目的 ref 调 action=download；
               * 单曲：PT 站按专辑/艺人建种，单曲名通常搜不到 → 插件会退艺人搜索，album_matched_any 一般为 false，必须展示候选让用户挑，不要自动下载。
-            - action=download（v0.5.x）：把 search 返回的 size_limit_gb 原样作为 max_size_gb 传回；**单曲自动下载必传 verify_song=目标歌曲名、verify_artist=目标艺人名**（插件会解析种子清单确认真的包含该曲，不含则拒绝）。请求体用 ref（hash:id），单曲用 site_id+index 时必须带 max_size_gb。
+            - action=download（v0.5.x）：把 search 返回的 size_limit_gb 原样作为 max_size_gb 传回；**单曲自动下载必传 verify_song=目标歌曲名、verify_artist=目标艺人名**（插件会解析种子清单确认真的包含该曲，不含则拒绝）。请求体用 ref（hash:id），单曲用 site_id+index 时必须带 max_size_gb。成功响应含 content_verified/matched_files/label/status，可据此向用户说明校验结果。
             - action=download 失败（如「种子内容为空/引用已失效」）→ 换该查询的下一个候选 ref 重试 1-2 次；仍失败则如实说明原因。
-            - action=tasks 可查询下载进度；下载完成后提示用户可在下载目录/音乐库看到新资源。
+            - action=tasks 可查询下载进度（status=downloading/completed/failed/paused，progress≥99.9% 或 state=completed 视为完成）；action=history 查看下载历史（含实时状态）。
+            - 不确定插件是否可用时先 action=status：返回「未配置 / 下载目录无效 / 未配置搜索站点」时，给用户可操作提示（去 设置 → 音乐下载 补 MoviePilot 地址与 Token；去 MoviePilot「音乐下载」设置修复下载目录 / 启用搜索站点），**不要继续搜索或下载**；目录无效时插件会返回「音乐下载目录未通过校验」。
+            - 用户要求清理/删除下载记录时：action=history_remove（必传 hash）移除单条；action=history_clean 按条件清理（status=按状态清理、keep=只保留最近 N 条、orphans=清理下载器已不存在的孤儿记录）。
             - 工具返回「未配置」→ 告知用户去 设置 → 音乐下载 填写 MoviePilot 地址与 Token。
 
         ## 对话与工具调用规则

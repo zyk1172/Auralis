@@ -340,6 +340,22 @@ public struct SystemToolExecutor {
                 case "history":
                     let history = await systemService.musicHistory()
                     return Self.musicHistoryResult(call, descriptor, history)
+                case "status":
+                    return Self.musicStatusResult(call, descriptor, await systemService.musicStatus())
+                case "history_remove":
+                    guard let hash = optionalParam(call, "hash"), !hash.isEmpty else {
+                        throw SystemToolError.missingParameter("hash")
+                    }
+                    return Self.musicHistoryMutationResult(call, descriptor, await systemService.musicHistoryRemove(hash: hash))
+                case "history_clean":
+                    return Self.musicHistoryMutationResult(
+                        call, descriptor,
+                        await systemService.musicHistoryClean(
+                            status: optionalParam(call, "status"),
+                            keep: optionalIntParam(call, "keep"),
+                            orphans: optionalBoolParam(call, "orphans")
+                        )
+                    )
                 default:
                     throw SystemToolError.invalidParameter("action", action)
                 }
@@ -432,6 +448,8 @@ public struct SystemToolExecutor {
             if let size = candidate.sizeText ?? candidate.size { parts.append("大小=\(size)") }
             parts.append("做种=\(candidate.seeders)")
             parts.append("相关度=\(candidate.relevance)")
+            if let confidence = candidate.confidence { parts.append("置信=\(confidence)") }
+            if let music = candidate.music { parts.append(music ? "音乐" : "影视") }
             if candidate.albumMatched { parts.append("专辑命中") }
             if let ref = candidate.ref { parts.append("ref=\(ref)") }
             return parts.joined(separator: "，")
@@ -439,9 +457,12 @@ public struct SystemToolExecutor {
         var header = "共 \(result.total) 条候选（丢弃影视/不确定 \(result.droppedVideo + result.droppedUncertain) 条）\(result.albumMatchedAny ? "，已命中目标专辑" : "，未确认命中目标专辑")"
         if let limitGB = result.sizeLimitGB, limitGB > 0 {
             header += "；本次大小上限 \(String(format: "%.1f", limitGB))GB（下载时请原样传回 max_size_gb）"
+        } else if result.sizeLimitApplied {
+            header += "；本次未带出大小上限（下载时不传 max_size_gb）"
         }
         if result.fallbackTried {
             header += "；已退艺人/专辑重搜" + (result.fallbackResolved.map { "（\($0)）" } ?? "")
+            if let album = result.fallbackAlbum, !album.isEmpty { header += " → 命中专辑《\(album)》" }
         }
         if let kind = result.kind, !kind.isEmpty {
             header += "；kind=\(kind)"
@@ -476,7 +497,10 @@ public struct SystemToolExecutor {
         }
         let suffix = history.liveAvailable ? "" : "（下载器状态暂不可用，请以完成回调为准）"
         let text = history.tasks.prefix(20).map { task in
-            "\(task.title)（\(task.state) \(String(format: "%.0f", task.progress))%）\(task.site.map { " · \($0)" } ?? "")"
+            var line = "\(task.title)（\(task.status ?? task.state) \(String(format: "%.0f", task.progress))%）"
+            if let site = task.site, !site.isEmpty { line += " · \(site)" }
+            if let sizeText = task.sizeText, !sizeText.isEmpty { line += " · \(sizeText)" }
+            return line
         }.joined(separator: "\n")
         return .ok(call, descriptor, "下载历史 \(history.tasks.count) 条\(suffix)", .text(text))
     }
@@ -486,9 +510,70 @@ public struct SystemToolExecutor {
             return .ok(call, descriptor, "暂无下载任务", .text("当前没有音乐下载任务"))
         }
         let text = tasks.prefix(20).map { task in
-            "\(task.title)（\(task.state) \(String(format: "%.0f", task.progress))%）\(task.site.map { " · \($0)" } ?? "")"
+            var line = "\(task.title)（\(task.status ?? task.state) \(String(format: "%.0f", task.progress))%）"
+            if let site = task.site, !site.isEmpty { line += " · \(site)" }
+            if let sizeText = task.sizeText, !sizeText.isEmpty { line += " · \(sizeText)" }
+            return line
         }.joined(separator: "\n")
         return .ok(call, descriptor, "下载任务 \(tasks.count) 个", .text(text))
+    }
+
+    private static func musicStatusResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ status: AgentMusicStatus) -> ToolResult {
+        guard status.configured else {
+            return ToolResult(call: call, permission: descriptor.permission, success: false,
+                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MoviePilot 地址与 Token")
+        }
+        if !status.message.isEmpty && status.dirValid != false {
+            // 网络/鉴权类失败：直接透出可操作提示。
+            return ToolResult(call: call, permission: descriptor.permission, success: false,
+                              summary: "查询插件状态失败：\(status.message)")
+        }
+        var parts: [String] = []
+        if let enabled = status.enabled {
+            parts.append("插件\(enabled ? "已启用" : "未启用")")
+        }
+        if let dirValid = status.dirValid {
+            parts.append("下载目录\(dirValid ? "有效" : "无效")")
+        }
+        if let mode = status.sitesMode, !mode.isEmpty { parts.append("站点模式=\(mode)") }
+        if !status.sites.isEmpty {
+            parts.append("搜索站点 \(status.sites.count) 个")
+        } else {
+            parts.append("未配置搜索站点")
+        }
+        if let maxGB = status.maxSizeGB, maxGB > 0 {
+            parts.append("单曲上限 \(String(format: "%.1f", maxGB))GB")
+        }
+        if let albumGB = status.albumMaxSizeGB, albumGB > 0 {
+            parts.append("合辑上限 \(String(format: "%.1f", albumGB))GB")
+        }
+        if let verify = status.trackVerify {
+            parts.append("曲目校验\(verify ? "开" : "关")")
+        }
+        var text = parts.isEmpty ? "插件状态正常" : parts.joined(separator: "；")
+        if status.dirValid == false, let dirError = status.dirError, !dirError.isEmpty {
+            text += "；目录提示：\(dirError)（请到 MoviePilot「音乐下载」设置中修复下载目录后再试）"
+        }
+        if status.dirValid == false || status.sites.isEmpty {
+            text += "；请先修复配置再搜索/下载"
+        }
+        return .ok(call, descriptor, "插件状态", .text(text))
+    }
+
+    private static func musicHistoryMutationResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ result: AgentMusicHistoryMutation) -> ToolResult {
+        guard result.configured else {
+            return ToolResult(call: call, permission: descriptor.permission, success: false,
+                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MoviePilot 地址与 Token")
+        }
+        if result.success {
+            var text = result.message.isEmpty ? "操作成功" : result.message
+            if let before = result.before, let after = result.after {
+                text += "（\(before) → \(after) 条）"
+            }
+            return .ok(call, descriptor, "操作成功", .text(text))
+        }
+        return ToolResult(call: call, permission: descriptor.permission, success: false,
+                          summary: "操作失败：\(result.message.isEmpty ? "未知原因" : result.message)")
     }
 
     private static func parseGlobalID(_ call: ToolCall, _ key: String) throws -> GlobalID {

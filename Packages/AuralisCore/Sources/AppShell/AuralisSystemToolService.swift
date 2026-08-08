@@ -572,8 +572,10 @@ public final class AuralisSystemToolService: AgentSystemService {
                 droppedUncertain: data.droppedUncertain ?? 0,
                 fallbackTried: data.fallbackTried ?? false,
                 fallbackResolved: data.fallbackResolved,
+                fallbackAlbum: data.fallbackAlbum,
                 kind: data.kind,
                 sizeLimitGB: data.sizeLimitGB,
+                sizeLimitApplied: data.sizeLimitApplied ?? false,
                 candidates: (data.results ?? []).map(Self.musicCandidate)
             )
         } catch {
@@ -603,7 +605,10 @@ public final class AuralisSystemToolService: AgentSystemService {
                 hash: data.hash,
                 savePath: data.savePath,
                 status: data.status,
-                contentVerified: data.contentVerified
+                contentVerified: data.contentVerified,
+                matchedFiles: data.matchedFiles,
+                label: data.label,
+                sizeText: data.sizeText
             )
         } catch {
             return AgentMusicDownloadResult(configured: true, message: error.localizedDescription)
@@ -619,16 +624,7 @@ public final class AuralisSystemToolService: AgentSystemService {
             return AgentMusicHistoryResult(
                 configured: true,
                 liveAvailable: data.liveAvailable ?? false,
-                tasks: (data.tasks ?? []).map {
-                    AgentMusicTask(
-                        hash: $0.hash,
-                        title: $0.title,
-                        site: $0.site,
-                        state: $0.state,
-                        progress: $0.progress ?? 0,
-                        savePath: $0.savePath
-                    )
-                }
+                tasks: (data.tasks ?? []).map(Self.musicTask)
             )
         } catch {
             return AgentMusicHistoryResult(configured: true, liveAvailable: false)
@@ -639,18 +635,70 @@ public final class AuralisSystemToolService: AgentSystemService {
         guard let connection = await movipNoteConnection() else { return [] }
         do {
             let tasks = try await MoviePilotClient().tasks(connection, status: status)
-            return tasks.map {
-                AgentMusicTask(
-                    hash: $0.hash,
-                    title: $0.title,
-                    site: $0.site,
-                    state: $0.state,
-                    progress: $0.progress ?? 0,
-                    savePath: $0.savePath
-                )
-            }
+            return tasks.map(Self.musicTask)
         } catch {
             return []
+        }
+    }
+
+    public func musicStatus() async -> AgentMusicStatus {
+        guard let connection = await movipNoteConnection() else {
+            return AgentMusicStatus(configured: false, message: "音乐下载（MoviePilot）未配置")
+        }
+        do {
+            let data = try await MoviePilotClient().status(connection)
+            return AgentMusicStatus(
+                configured: true,
+                enabled: data.enabled,
+                musicDir: data.musicDir,
+                dirValid: data.dirValid,
+                dirError: data.dirError,
+                sitesMode: data.sitesMode,
+                sites: (data.sites ?? []).map { AgentMusicSiteInfo(id: $0.id, name: $0.name) },
+                requireMusic: data.requireMusic,
+                preferLossless: data.preferLossless,
+                minSeeders: data.minSeeders,
+                maxSizeGB: data.maxSizeGB,
+                albumMaxSizeGB: data.albumMaxSizeGB,
+                singleFallbackAlbum: data.singleFallbackAlbum,
+                trackVerify: data.trackVerify
+            )
+        } catch {
+            return AgentMusicStatus(configured: true, message: error.localizedDescription)
+        }
+    }
+
+    public func musicHistoryRemove(hash: String) async -> AgentMusicHistoryMutation {
+        guard let connection = await movipNoteConnection() else {
+            return AgentMusicHistoryMutation(configured: false, message: "音乐下载（MoviePilot）未配置")
+        }
+        do {
+            let result = try await MoviePilotClient().historyRemove(connection, hash: hash)
+            return AgentMusicHistoryMutation(
+                configured: true,
+                success: true,
+                message: result.message ?? "已移除该条下载历史"
+            )
+        } catch {
+            return AgentMusicHistoryMutation(configured: true, message: error.localizedDescription)
+        }
+    }
+
+    public func musicHistoryClean(status: String?, keep: Int?, orphans: Bool?) async -> AgentMusicHistoryMutation {
+        guard let connection = await movipNoteConnection() else {
+            return AgentMusicHistoryMutation(configured: false, message: "音乐下载（MoviePilot）未配置")
+        }
+        do {
+            let result = try await MoviePilotClient().historyClean(connection, status: status, keep: keep, orphans: orphans)
+            return AgentMusicHistoryMutation(
+                configured: true,
+                success: true,
+                message: result.message ?? "下载历史已清理",
+                before: result.before,
+                after: result.after
+            )
+        } catch {
+            return AgentMusicHistoryMutation(configured: true, message: error.localizedDescription)
         }
     }
 
@@ -672,6 +720,8 @@ public final class AuralisSystemToolService: AgentSystemService {
             ref: item.ref,
             siteName: item.siteName,
             title: item.title ?? "未知资源",
+            music: item.music,
+            confidence: item.confidence,
             audioFormat: item.audioFormat,
             qualityLabel: item.qualityLabel,
             quality: item.quality ?? 0,
@@ -681,7 +731,25 @@ public final class AuralisSystemToolService: AgentSystemService {
             sizeText: item.sizeText,
             sizeLimitGB: item.sizeLimitGB,
             seeders: item.seeders ?? 0,
-            grabs: item.grabs ?? 0
+            grabs: item.grabs ?? 0,
+            pubdate: item.pubdate,
+            enclosure: item.enclosure
+        )
+    }
+
+    private static func musicTask(_ item: MoviePilotTaskData) -> AgentMusicTask {
+        AgentMusicTask(
+            hash: item.hash,
+            title: item.title,
+            site: item.site,
+            status: item.status,
+            state: item.state,
+            progress: item.progress ?? 0,
+            dlspeed: item.dlspeed,
+            savePath: item.savePath,
+            sizeText: item.sizeText,
+            createTime: item.createTime,
+            finishTime: item.finishTime
         )
     }
 

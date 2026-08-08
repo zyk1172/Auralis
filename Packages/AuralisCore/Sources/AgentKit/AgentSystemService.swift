@@ -457,9 +457,13 @@ public struct AgentMusicSearchResult: Sendable, Equatable {
     public var droppedUncertain: Int
     public var fallbackTried: Bool
     public var fallbackResolved: String?
+    /// 站点上实际命中的降级专辑（未命中为 nil，v0.5.3+）。
+    public var fallbackAlbum: String?
     public var kind: String?
     /// 本次生效的大小上限（GB，v0.5.x）：下载时原样传回 max_size_gb。
     public var sizeLimitGB: Double?
+    /// 本次是否应用了体积上限（v0.5.x）。
+    public var sizeLimitApplied: Bool
     public var candidates: [AgentMusicCandidate]
 
     public init(
@@ -473,8 +477,10 @@ public struct AgentMusicSearchResult: Sendable, Equatable {
         droppedUncertain: Int = 0,
         fallbackTried: Bool = false,
         fallbackResolved: String? = nil,
+        fallbackAlbum: String? = nil,
         kind: String? = nil,
         sizeLimitGB: Double? = nil,
+        sizeLimitApplied: Bool = false,
         candidates: [AgentMusicCandidate] = []
     ) {
         self.configured = configured
@@ -487,8 +493,10 @@ public struct AgentMusicSearchResult: Sendable, Equatable {
         self.droppedUncertain = droppedUncertain
         self.fallbackTried = fallbackTried
         self.fallbackResolved = fallbackResolved
+        self.fallbackAlbum = fallbackAlbum
         self.kind = kind
         self.sizeLimitGB = sizeLimitGB
+        self.sizeLimitApplied = sizeLimitApplied
         self.candidates = candidates
     }
 }
@@ -499,6 +507,10 @@ public struct AgentMusicCandidate: Sendable, Equatable {
     public var ref: String?
     public var siteName: String?
     public var title: String
+    /// 音乐/影视判别：true 音乐 / false 影视 / nil 不确定（v0.5.x）。
+    public var music: Bool?
+    /// 判别置信度：high / medium / low（v0.5.x）。
+    public var confidence: String?
     public var audioFormat: String?
     public var qualityLabel: String?
     public var quality: Int
@@ -512,12 +524,18 @@ public struct AgentMusicCandidate: Sendable, Equatable {
     public var sizeLimitGB: Double?
     public var seeders: Int
     public var grabs: Int
+    /// 发布时间（v0.5.x）。
+    public var pubdate: String?
+    /// 种子下载链接（v0.5.x）。
+    public var enclosure: String?
 
     public init(
         index: Int,
         ref: String? = nil,
         siteName: String? = nil,
         title: String,
+        music: Bool? = nil,
+        confidence: String? = nil,
         audioFormat: String? = nil,
         qualityLabel: String? = nil,
         quality: Int = 0,
@@ -527,12 +545,16 @@ public struct AgentMusicCandidate: Sendable, Equatable {
         sizeText: String? = nil,
         sizeLimitGB: Double? = nil,
         seeders: Int = 0,
-        grabs: Int = 0
+        grabs: Int = 0,
+        pubdate: String? = nil,
+        enclosure: String? = nil
     ) {
         self.index = index
         self.ref = ref
         self.siteName = siteName
         self.title = title
+        self.music = music
+        self.confidence = confidence
         self.audioFormat = audioFormat
         self.qualityLabel = qualityLabel
         self.quality = quality
@@ -543,6 +565,8 @@ public struct AgentMusicCandidate: Sendable, Equatable {
         self.sizeLimitGB = sizeLimitGB
         self.seeders = seeders
         self.grabs = grabs
+        self.pubdate = pubdate
+        self.enclosure = enclosure
     }
 }
 
@@ -556,6 +580,12 @@ public struct AgentMusicDownloadResult: Sendable, Equatable {
     public var status: String?
     /// 曲目级内容校验结果（v0.5.2+）：true=包含目标歌曲 / false=被拒绝 / nil=整轨无法逐曲校验。
     public var contentVerified: Bool?
+    /// 曲目校验命中的文件清单（v0.5.2+）。
+    public var matchedFiles: [String]?
+    /// 下载标签（如 "音乐,musicdownloader"）。
+    public var label: String?
+    /// 可读体积（如 "362.5 MB"）。
+    public var sizeText: String?
 
     public init(
         configured: Bool = false,
@@ -564,7 +594,10 @@ public struct AgentMusicDownloadResult: Sendable, Equatable {
         hash: String? = nil,
         savePath: String? = nil,
         status: String? = nil,
-        contentVerified: Bool? = nil
+        contentVerified: Bool? = nil,
+        matchedFiles: [String]? = nil,
+        label: String? = nil,
+        sizeText: String? = nil
     ) {
         self.configured = configured
         self.success = success
@@ -573,6 +606,9 @@ public struct AgentMusicDownloadResult: Sendable, Equatable {
         self.savePath = savePath
         self.status = status
         self.contentVerified = contentVerified
+        self.matchedFiles = matchedFiles
+        self.label = label
+        self.sizeText = sizeText
     }
 }
 
@@ -581,17 +617,41 @@ public struct AgentMusicTask: Sendable, Equatable {
     public var hash: String
     public var title: String
     public var site: String?
+    /// 任务状态：/tasks 为原始英文态（downloading/completed/failed/paused），
+    /// /history 为中文展示态（下载中/已完成/失败/暂停，v0.5.x）。
+    public var status: String?
     public var state: String
     public var progress: Double
+    public var dlspeed: String?
     public var savePath: String?
+    public var sizeText: String?
+    public var createTime: String?
+    public var finishTime: String?
 
-    public init(hash: String, title: String, site: String? = nil, state: String, progress: Double = 0, savePath: String? = nil) {
+    public init(
+        hash: String,
+        title: String,
+        site: String? = nil,
+        status: String? = nil,
+        state: String,
+        progress: Double = 0,
+        dlspeed: String? = nil,
+        savePath: String? = nil,
+        sizeText: String? = nil,
+        createTime: String? = nil,
+        finishTime: String? = nil
+    ) {
         self.hash = hash
         self.title = title
         self.site = site
+        self.status = status
         self.state = state
         self.progress = progress
+        self.dlspeed = dlspeed
         self.savePath = savePath
+        self.sizeText = sizeText
+        self.createTime = createTime
+        self.finishTime = finishTime
     }
 }
 
@@ -605,6 +665,96 @@ public struct AgentMusicHistoryResult: Sendable, Equatable {
         self.configured = configured
         self.liveAvailable = liveAvailable
         self.tasks = tasks
+    }
+}
+
+/// 音乐下载站点信息（脱敏：仅 id/name，不含 Cookie / 地址）。
+public struct AgentMusicSiteInfo: Sendable, Equatable {
+    public var id: Int?
+    public var name: String?
+
+    public init(id: Int? = nil, name: String? = nil) {
+        self.id = id
+        self.name = name
+    }
+}
+
+/// 音乐下载插件状态（GET /status，v0.5.x）。
+/// 用于「未配置 / 目录无效 / 没有搜索站点」时给出可操作提示。
+public struct AgentMusicStatus: Sendable, Equatable {
+    public var configured: Bool
+    public var message: String
+    public var enabled: Bool?
+    public var musicDir: String?
+    public var dirValid: Bool?
+    public var dirError: String?
+    public var sitesMode: String?
+    public var sites: [AgentMusicSiteInfo]
+    public var requireMusic: Bool?
+    public var preferLossless: Bool?
+    public var minSeeders: Int?
+    /// 单曲体积上限（GB）。
+    public var maxSizeGB: Double?
+    /// 专辑/合集体积上限（GB；单曲降级合集后生效）。
+    public var albumMaxSizeGB: Double?
+    public var singleFallbackAlbum: Bool?
+    public var trackVerify: Bool?
+
+    public init(
+        configured: Bool = false,
+        message: String = "",
+        enabled: Bool? = nil,
+        musicDir: String? = nil,
+        dirValid: Bool? = nil,
+        dirError: String? = nil,
+        sitesMode: String? = nil,
+        sites: [AgentMusicSiteInfo] = [],
+        requireMusic: Bool? = nil,
+        preferLossless: Bool? = nil,
+        minSeeders: Int? = nil,
+        maxSizeGB: Double? = nil,
+        albumMaxSizeGB: Double? = nil,
+        singleFallbackAlbum: Bool? = nil,
+        trackVerify: Bool? = nil
+    ) {
+        self.configured = configured
+        self.message = message
+        self.enabled = enabled
+        self.musicDir = musicDir
+        self.dirValid = dirValid
+        self.dirError = dirError
+        self.sitesMode = sitesMode
+        self.sites = sites
+        self.requireMusic = requireMusic
+        self.preferLossless = preferLossless
+        self.minSeeders = minSeeders
+        self.maxSizeGB = maxSizeGB
+        self.albumMaxSizeGB = albumMaxSizeGB
+        self.singleFallbackAlbum = singleFallbackAlbum
+        self.trackVerify = trackVerify
+    }
+}
+
+/// 音乐下载历史管理操作结果（/history/remove、/history/clean）。
+public struct AgentMusicHistoryMutation: Sendable, Equatable {
+    public var configured: Bool
+    public var success: Bool
+    public var message: String
+    public var before: Int?
+    public var after: Int?
+
+    public init(
+        configured: Bool = false,
+        success: Bool = false,
+        message: String = "",
+        before: Int? = nil,
+        after: Int? = nil
+    ) {
+        self.configured = configured
+        self.success = success
+        self.message = message
+        self.before = before
+        self.after = after
     }
 }
 
@@ -659,6 +809,12 @@ public protocol AgentSystemService: Sendable {
     func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double?, verifySong: String?, verifyArtist: String?) async -> AgentMusicDownloadResult
     func musicTasks(status: String?) async -> [AgentMusicTask]
     func musicHistory() async -> AgentMusicHistoryResult
+    /// 查询插件状态（目录校验 / 站点 / 筛查与体积上限配置）；未配置或目录无效时给出可操作提示。
+    func musicStatus() async -> AgentMusicStatus
+    /// 移除单条下载历史；返回操作结果。
+    func musicHistoryRemove(hash: String) async -> AgentMusicHistoryMutation
+    /// 按条件清理下载历史（status 按状态清理 / keep 只保留最近 N 条 / orphans 清理孤儿记录）。
+    func musicHistoryClean(status: String?, keep: Int?, orphans: Bool?) async -> AgentMusicHistoryMutation
 
     // 跨会话记忆
     /// 当前已记住的关于主人的信息。
@@ -696,6 +852,18 @@ public extension AgentSystemService {
 
     func musicHistory() async -> AgentMusicHistoryResult {
         AgentMusicHistoryResult(configured: false, liveAvailable: false)
+    }
+
+    func musicStatus() async -> AgentMusicStatus {
+        AgentMusicStatus(configured: false, message: "音乐下载（MoviePilot）未配置")
+    }
+
+    func musicHistoryRemove(hash: String) async -> AgentMusicHistoryMutation {
+        AgentMusicHistoryMutation(configured: false, message: "音乐下载（MoviePilot）未配置")
+    }
+
+    func musicHistoryClean(status: String?, keep: Int?, orphans: Bool?) async -> AgentMusicHistoryMutation {
+        AgentMusicHistoryMutation(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
 
     func agentMemories() async -> [AgentMemoryEntry] { [] }
