@@ -11,6 +11,7 @@ import Testing
 final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     let activeServerIDValue: ServerID?
     private(set) var playedTracks: [GlobalID] = []
+    private(set) var serverPlayedTracks: [GlobalID] = []
     private(set) var likedTracks: [GlobalID] = []
     private(set) var removedServers: [ServerID] = []
     private(set) var deletedPlaylists: [GlobalID] = []
@@ -19,6 +20,8 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
 
     /// 播放类工具的统一返回（默认 true；置 false 可模拟「目标不在目录」）。
     var playResult: Bool = true
+    /// 服务器在线流播回退的返回（默认 true）。
+    var serverPlayResult: Bool = true
 
     init(activeServerID: ServerID? = nil) { self.activeServerIDValue = activeServerID }
 
@@ -28,6 +31,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func currentQueue() -> [Track] { [] }
 
     func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
+    func playServerTrack(globalID: GlobalID) async -> Bool { serverPlayedTracks.append(globalID); return serverPlayResult }
     func playAlbum(globalID: GlobalID) async -> Bool { playResult }
     func playPlaylist(globalID: GlobalID) async -> Bool { playResult }
     func playRandom() {}
@@ -223,19 +227,36 @@ func toolValidationInvalidParameter() async throws {
 
 // MARK: - Track ID authenticity
 
-@Test("Track ID authenticity: bogus ID is rejected")
-func trackIDAuthenticityRejectsBogus() async throws {
+@Test("Track ID authenticity: malformed ID is rejected")
+func trackIDAuthenticityRejectsMalformed() async throws {
     let store = try makeStore()
     try await seed(store, [makeTrack(serverID: "test-server", remoteID: "real-1", title: "Real One")])
     let bridge = MockAgentBridge()
     let result = await AgentToolkit.execute(
-        ToolCall(name: "playTrack", arguments: ["trackID": "test-server:does-not-exist"]),
+        ToolCall(name: "playTrack", arguments: ["trackID": "not-a-valid-gid"]),
         bridge: bridge,
         catalog: store,
         serverID: "test-server"
     )
     #expect(result.success == false)
     #expect(result.summary.contains("不真实或不存在"))
+}
+
+@Test("Track ID authenticity: 本地目录没有但服务器有 → 在线流播回退（不再要求先同步）")
+func trackIDAuthenticityFallsBackToServerStreaming() async throws {
+    let store = try makeStore()
+    try await seed(store, [makeTrack(serverID: "test-server", remoteID: "real-1", title: "Real One")])
+    let bridge = MockAgentBridge()
+    let gid = GlobalID(serverID: "test-server", remoteID: "does-not-exist-locally")
+    let result = await AgentToolkit.execute(
+        ToolCall(name: "playTrack", arguments: ["trackID": gid.description]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "test-server"
+    )
+    #expect(result.success)
+    #expect(result.summary.contains("服务器在线流播"))
+    #expect(bridge.serverPlayedTracks == [gid])
 }
 
 @Test("Track ID authenticity: real ID plays")

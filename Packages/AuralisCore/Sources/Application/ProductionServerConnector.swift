@@ -413,6 +413,21 @@ public actor ProductionServerConnector: ServerConnecting {
         return try? await client.makeDownloadURL(trackID: trackID.rawValue)
     }
 
+    /// 按 ID 从服务器拉取单曲（getSong）并补流地址。
+    /// 供 Agent「服务器曲目直播回退」使用：本地目录尚未同步到这首歌时，也能直接在线流播。
+    public func serverTrack(trackID: TrackID) async -> Track? {
+        guard let client = activeClient else { return nil }
+        do {
+            var track = try await client.song(id: trackID)
+            if track.streamURL == nil {
+                track.streamURL = await Self.makeStreamURL(client: client, trackID: track.id.rawValue, quality: streamQuality)
+            }
+            return track
+        } catch {
+            return nil
+        }
+    }
+
     /// 服务器在线搜索歌曲（search3），返回带流地址的曲目。
     public func serverSearch(query: String, limit: Int) async -> [Track] {
         guard let client = activeClient,

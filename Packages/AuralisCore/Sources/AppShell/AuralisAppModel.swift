@@ -57,6 +57,9 @@ public final class AuralisAppModel: ObservableObject {
     @Published public var isNowPlayingPresented = false
     @Published public var shouldPresentServerSetup = false
     @Published public var browseDestination: BrowseDestination?
+    /// 首页布局偏好（模块显示 / 排序）。持久化到 UserDefaults（HomeLayoutStore），
+    /// App 完全退出重开仍保留；「恢复默认布局」只重置这一份偏好，不删任何数据。
+    @Published public private(set) var homeLayout: HomeLayoutPreference
     @Published public var inspector: InspectorSection = .queue
     @Published public private(set) var serverConnectionState: ServerConnectionViewState = .idle
     /// 服务器认证是否可能已失效（流播放返回 authorizationFailed 时置位，
@@ -154,6 +157,20 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var homeMostPlayedTracks: [Track] = []
     @Published public private(set) var homeRecentlyPlayedTracks: [Track] = []
     @Published public private(set) var homeRecentlyAddedTracks: [Track] = []
+    /// 首页「很久没听」：播放过但较久未播放（快照，见 refreshHomeSnapshots 的规则注释）。
+    @Published public private(set) var homeLongUnplayedTracks: [Track] = []
+    /// 首页「从未播放」：播放次数为 0 且不在播放历史（快照）。
+    @Published public private(set) var homeNeverPlayedTracks: [Track] = []
+    /// 首页「收藏里随便听」：从真实收藏随机采样（刷新时采样一次，换一批时重新采样）。
+    @Published public private(set) var homeFavoriteRandomTracks: [Track] = []
+    /// 首页「最近添加」：近 30 天真正新增的歌曲（数量显示「近30天新增 N 首」，而非全库总数）。
+    @Published public private(set) var homeRecentlyAdded30DaysTracks: [Track] = []
+    /// 首页「常听艺术家 / 常听专辑」：按真实播放次数聚合（仅含播放过的）。
+    @Published public private(set) var homeTopArtists: [Artist] = []
+    @Published public private(set) var homeTopAlbums: [Album] = []
+    /// 常听艺术家 / 常听专辑的累计播放次数（供详情页显示「N 次播放」）。
+    @Published public private(set) var homeTopArtistPlayCounts: [ArtistID: Int] = [:]
+    @Published public private(set) var homeTopAlbumPlayCounts: [AlbumID: Int] = [:]
     /// 流派详情从服务器按需拉取的歌曲（本地按曲目标签筛选为空时回退到服务器）。
     @Published public private(set) var genreTracks: [Track]? = nil
     /// 当前正在按流派从服务器加载的流派；为 nil 表示没有进行中的加载。
@@ -311,6 +328,8 @@ public final class AuralisAppModel: ObservableObject {
         self.repeatMode = RepeatMode(rawValue: defaults.string(forKey: Self.repeatModeDefaultsKey) ?? "") ?? .off
         self.isShuffled = defaults.bool(forKey: Self.shuffleDefaultsKey)
         self.showMiniPlayer = (defaults.object(forKey: Self.showMiniPlayerDefaultsKey) as? Bool) ?? true
+        // 首页布局偏好：无配置时用默认布局，读取时自动归一化并补齐新模块。
+        self.homeLayout = HomeLayoutStore.load(from: defaults)
         // 最近播放按「serverID:trackID」组合键存储；旧格式（纯 trackID，无冒号）无法归属服务器，直接丢弃。
         let storedRecent = defaults.array(forKey: Self.recentlyPlayedDefaultsKey) as? [String] ?? []
         self.recentPlayedKeys = storedRecent.filter { $0.contains(":") }
@@ -1094,6 +1113,82 @@ public final class AuralisAppModel: ObservableObject {
         randomTracks = Array(tracks.shuffled().prefix(18))
     }
 
+
+    // MARK: - 首页布局偏好（可编辑首页）
+
+    /// 开启 / 关闭某个首页模块。只改布局偏好，不删除任何数据 / 缓存 / 播放记录。
+    /// 关闭的模块首页完全不渲染；「用户关闭」与「当前无数据」在渲染层区分：
+    /// 这里只记录用户开关，数据为空时由 HomeView 暂不渲染但保持本配置开启。
+    public func setHomeModuleVisible(_ moduleID: String, isVisible: Bool) {
+        guard HomeModuleRegistry.module(forID: moduleID) != nil else { return }
+        var layout = homeLayout
+        func update(in group: HomeModuleGroup, keyPath: WritableKeyPath<HomeLayoutPreference, [HomeModulePreference]>) {
+            var list = layout[keyPath: keyPath]
+            guard let index = list.firstIndex(where: { $0.moduleID == moduleID }) else { return }
+            list[index].isVisible = isVisible
+            layout[keyPath: keyPath] = list
+        }
+        if HomeModuleRegistry.modules(in: .quickEntry).contains(where: { $0.id.rawValue == moduleID }) {
+            update(in: .quickEntry, keyPath: \.quickEntries)
+        } else {
+            update(in: .content, keyPath: \.contentModules)
+        }
+        homeLayout = layout
+        persistHomeLayout()
+    }
+
+    /// 拖动排序：把分组内 fromOffsets 位置的模块移动到 toOffset。顺序立即生效并持久化。
+    /// 语义与 SwiftUI List.onMove 的 Array.move(fromOffsets:toOffset:) 一致：
+    /// 目标下标按「先移除再插入」调整，避免 onMove 与自实现位移不一致导致排序错乱。
+    public func moveHomeModule(in group: HomeModuleGroup, fromOffsets: IndexSet, toOffset: Int) {
+        var layout = homeLayout
+        switch group {
+        case .quickEntry:
+            layout.quickEntries = Self.reordered(layout.quickEntries, fromOffsets: fromOffsets, toOffset: toOffset)
+        case .content:
+            layout.contentModules = Self.reordered(layout.contentModules, fromOffsets: fromOffsets, toOffset: toOffset)
+        }
+        homeLayout = layout
+        persistHomeLayout()
+    }
+
+    /// 复刻 Array.move(fromOffsets:toOffset:) 的位移语义（不依赖 SwiftUI 扩展，
+    /// 模型层可独立测试）：倒序移除被移动元素，再按调整后的目标下标整体插回。
+    private static func reordered<T>(_ array: [T], fromOffsets: IndexSet, toOffset: Int) -> [T] {
+        guard !fromOffsets.isEmpty else { return array }
+        let moving = array.indices.filter { fromOffsets.contains($0) }
+        let target: Int
+        if let first = moving.first, toOffset > first {
+            target = toOffset - moving.count
+        } else {
+            target = toOffset
+        }
+        var result = array
+        let removed: [T] = moving.reversed().map { result.remove(at: $0) }
+        result.insert(contentsOf: removed.reversed(), at: min(target, result.count))
+        return result
+    }
+
+    /// 恢复默认布局：仅重置首页布局偏好（HomeLayoutStore 键），不删任何数据 / 缓存 / 播放记录。
+    public func resetHomeLayout() {
+        homeLayout = HomeModuleRegistry.defaultPreference()
+        persistHomeLayout()
+    }
+
+    private func persistHomeLayout() {
+        HomeLayoutStore.save(homeLayout, to: defaults)
+    }
+
+    /// 重新采样「收藏里随便听」：只在本机收藏里本地随机，不发网络请求、不重新下载服务器资料。
+    public func regenerateFavoriteRandomMusic() {
+        homeFavoriteRandomTracks = favoriteRandomSample()
+    }
+
+    /// 从真实收藏随机采样 18 首。
+    private func favoriteRandomSample() -> [Track] {
+        Array(catalog.tracks.filter(\.isFavorite).shuffled().prefix(18))
+    }
+
     /// 清除播放错误（供 UI 在展示后调用）。
     /// 播放失败后重试：刷新流地址（若可用）并重新播放当前曲目。
     public func retryPlayback() {
@@ -1283,9 +1378,12 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 按本地播放次数降序的「最常听」。
     public var mostPlayedTracks: [Track] {
-        catalog.tracks
-            .filter { (playCounts[$0.id] ?? 0) > 0 }
-            .sorted { (playCounts[$0.id] ?? 0) > (playCounts[$1.id] ?? 0) }
+        // playCounts 是计算属性（每次访问都要从 playCountStorage 重建字典）；
+        // 先取一次局部快照，避免 filter/sort 的每次比较都重建 → 从 O(n·m) 降到 O(n log n)。
+        let counts = playCounts
+        return catalog.tracks
+            .filter { (counts[$0.id] ?? 0) > 0 }
+            .sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
     }
 
     /// 最近播放（曲目列表，最近在前）。
@@ -1312,18 +1410,73 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 刷新首页货架快照。保持与旧计算属性一致的过滤 / 排序语义。
+    /// 只在数据真正变化时调用（资料库同步 / 播放记录 / 收藏切换 / 服务器收藏合并），
+    /// 不在 body 里做任何 O(n) 计算，避免首页滚动卡顿与重复全表遍历。
+    /// 各模块数据规则：
+    /// - 很久没听：播放过（playCount>0）但不在最近播放历史里。当前只有播放次数与最近播放顺序、
+    ///   没有「每首歌最后播放时间戳」，因此以「不在最近 100 次播放内」（recentlyPlayedIDs 上限 100）
+    ///   作为「较久未播放」的产品定义；按播放次数降序展示（更常听但很久没听的最靠前）。
+    /// - 从未播放：播放次数为 0 且不在播放历史（定义不依赖添加时间；展示排序用入库时间倒序，
+    ///   让「最新入库但还没听过」的排前面）。
+    /// - 最近添加：近 30 天真正新增的歌曲，标题显示「近30天新增 N 首」。
+    /// - 收藏里随便听：从真实收藏随机采样 18 首，刷新时采样一次，换一批时重新采样（不发网络请求）。
+    /// - 常听艺术家 / 常听专辑：按真实播放次数聚合统计，仅包含播放过的。
     private func refreshHomeSnapshots() {
-        homeFavoriteTracks = catalog.tracks.filter(\.isFavorite)
-        homeMostPlayedTracks = catalog.tracks
-            .filter { (playCounts[$0.id] ?? 0) > 0 }
-            .sorted { (playCounts[$0.id] ?? 0) > (playCounts[$1.id] ?? 0) }
-        homeRecentlyPlayedTracks = recentlyPlayedIDs.compactMap { id in
-            catalog.tracks.first(where: { $0.id == id })
-        }
+        let tracks = catalog.tracks
+        let counts = playCounts
+        let recentIDs = recentlyPlayedIDs
+        let recent = Set(recentIDs)
         let added = libraryAddedAt
-        homeRecentlyAddedTracks = catalog.tracks.sorted {
+
+        homeFavoriteTracks = tracks.filter(\.isFavorite)
+        homeMostPlayedTracks = tracks
+            .filter { (counts[$0.id] ?? 0) > 0 }
+            .sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
+        homeRecentlyPlayedTracks = recentIDs.compactMap { id in
+            tracks.first(where: { $0.id == id })
+        }
+        homeRecentlyAddedTracks = tracks.sorted {
             (added[$0.id] ?? .distantPast) > (added[$1.id] ?? .distantPast)
         }
+
+        // 很久没听：播放过但不在最近 100 次播放内（规则见函数注释）。
+        homeLongUnplayedTracks = Array(tracks
+            .filter { (counts[$0.id] ?? 0) > 0 && !recent.contains($0.id) }
+            .sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
+            .prefix(24))
+
+        // 从未播放：播放次数为 0 且不在播放历史；展示排序用入库时间倒序。
+        homeNeverPlayedTracks = Array(tracks
+            .filter { (counts[$0.id] ?? 0) == 0 && !recent.contains($0.id) }
+            .sorted { (added[$0.id] ?? .distantPast) > (added[$1.id] ?? .distantPast) }
+            .prefix(24))
+
+        // 最近添加（近 30 天）。
+        homeRecentlyAdded30DaysTracks = Array(recentlyAddedTracks(inLastDays: 30).prefix(24))
+
+        // 常听艺术家 / 常听专辑：一次遍历聚合，避免每个模块重复全表遍历。
+        var artistTotals: [ArtistID: Int] = [:]
+        var albumTotals: [AlbumID: Int] = [:]
+        for track in tracks {
+            let count = counts[track.id] ?? 0
+            if count > 0 {
+                artistTotals[track.artistID, default: 0] += count
+                albumTotals[track.albumID, default: 0] += count
+            }
+        }
+        homeTopArtistPlayCounts = artistTotals
+        homeTopAlbumPlayCounts = albumTotals
+        homeTopArtists = Array(catalog.artists
+            .filter { (artistTotals[$0.id] ?? 0) > 0 }
+            .sorted { (artistTotals[$0.id] ?? 0, $0.name) > (artistTotals[$1.id] ?? 0, $1.name) }
+            .prefix(24))
+        homeTopAlbums = Array(catalog.albums
+            .filter { (albumTotals[$0.id] ?? 0) > 0 }
+            .sorted { (albumTotals[$0.id] ?? 0, $0.title) > (albumTotals[$1.id] ?? 0, $1.title) }
+            .prefix(24))
+
+        // 收藏里随便听：从真实收藏随机采样一次。
+        homeFavoriteRandomTracks = favoriteRandomSample()
     }
 
     /// 按流派筛选：返回属于指定流派的曲目（名称大小写不敏感）。
@@ -1382,6 +1535,11 @@ public final class AuralisAppModel: ObservableObject {
     /// Track 的 TrackCacheStore 组合键（等价于 GlobalID.description）。
     private func cacheID(for track: Track) -> TrackCacheStore.TrackCacheID {
         TrackCacheStore.TrackCacheID(serverID: track.serverID, trackID: track.id)
+    }
+
+    /// 已下载到本地的曲目（首页「下载」快捷入口与下载浏览页的数据源）。
+    public var downloadedTracks: [Track] {
+        catalog.tracks.filter { downloadedTrackIDs.contains(globalID(for: $0)) }
     }
 
     public func isDownloaded(_ track: Track) -> Bool { downloadedTrackIDs.contains(globalID(for: track)) }
@@ -2827,6 +2985,12 @@ public enum BrowseDestination: Identifiable {
     case random
     case recentlyPlayed
     case recentlyAdded
+    case longUnplayed
+    case neverPlayed
+    case favoriteRandom
+    case topArtists
+    case topAlbums
+    case downloads
     public var id: String {
         switch self {
         case let .album(a): return "album.\(a.id.rawValue)"
@@ -2839,6 +3003,12 @@ public enum BrowseDestination: Identifiable {
         case .random: return "random"
         case .recentlyPlayed: return "recentlyPlayed"
         case .recentlyAdded: return "recentlyAdded"
+        case .longUnplayed: return "longUnplayed"
+        case .neverPlayed: return "neverPlayed"
+        case .favoriteRandom: return "favoriteRandom"
+        case .topArtists: return "topArtists"
+        case .topAlbums: return "topAlbums"
+        case .downloads: return "downloads"
         }
     }
 }

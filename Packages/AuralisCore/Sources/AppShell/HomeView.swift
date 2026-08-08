@@ -3,18 +3,31 @@ import Domain
 import SwiftUI
 import ThemeEngine
 
+/// 首页统一横向卡片度量（需求：左边距/卡片宽/间距/封面比例统一，
+/// 标题最多两行 / 艺术家最多一行 / 尾部截断 / 下一张露出宽度一致）。
+private enum HomeCardMetrics {
+    static let width: CGFloat = 140
+    static let spacing: CGFloat = AuralisSpacing.medium
+}
+
+/// 首页：由模块注册表驱动，不再写死 `if showX` 分支。
+/// - 渲染列表来自用户布局偏好（HomeLayoutStore，UserDefaults 持久化）；
+/// - 关闭的模块完全不渲染、不留空白、不查询数据、不加载封面（从模块列表移除）；
+/// - 开启但当前无数据的模块本次暂不渲染，但用户配置保持开启，数据满足后自动出现。
 struct HomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    @State private var isEditingLayout = false
+
     private var colors: ThemeColors { theme.colorTokens }
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
-                quickEntries
-                trackShelf("随机音乐", detail: "为你随机挑选 \(model.randomTracks.count) 首", tracks: model.randomTracks, onOpen: { model.browseDestination = .random })
-                trackShelf("最近播放", detail: "\(model.homeRecentlyPlayedTracks.count) 首", tracks: model.homeRecentlyPlayedTracks, onOpen: { model.browseDestination = .recentlyPlayed })
-                trackShelf("最近添加", detail: "\(model.catalog.tracks.count) 首", tracks: Array(model.homeRecentlyAddedTracks.prefix(24)), onOpen: { model.browseDestination = .recentlyAdded })
+                quickEntriesSection
+                ForEach(visibleContentModules) { module in
+                    moduleSection(module)
+                }
                 librarySummary
             }
             .padding(.horizontal, AuralisSpacing.large)
@@ -22,76 +35,349 @@ struct HomeView: View {
             .padding(.bottom, AuralisSpacing.large)
         }
         .background(ambientBackground)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isEditingLayout = true
+                } label: {
+                    Text("编辑")
+                        .font(.subheadline)
+                }
+                .buttonStyle(HapticPlainButtonStyle())
+            }
+        }
+        .sheet(isPresented: $isEditingLayout) {
+            HomeLayoutEditView(model: model, theme: theme)
+        }
     }
 
-    /// 歌单 / 收藏 / 最常听 三个等宽入口，严格对称。
-    private var quickEntries: some View {
-        HStack(spacing: AuralisSpacing.medium) {
-            quickEntry(title: "歌单", icon: "music.note.list", count: model.catalog.playlists.count, unit: "个") {
-                model.browseDestination = .playlists
+    // MARK: - 模块可见性（用户开启 + 有数据）
+
+    /// 当前要渲染的快捷入口：按用户配置顺序，关闭的不渲染，开启但无数据也暂不渲染
+    /// （配置保持开启，数据满足后自动出现）。
+    private var visibleQuickModules: [HomeModule] {
+        model.homeLayout.quickEntries
+            .filter { $0.isVisible && Self.moduleHasData(HomeModuleID(rawValue: $0.moduleID), model: model) }
+            .compactMap { HomeModuleRegistry.module(forID: $0.moduleID) }
+    }
+
+    /// 当前要渲染的内容模块：语义同上。
+    private var visibleContentModules: [HomeModule] {
+        model.homeLayout.contentModules
+            .filter { $0.isVisible && Self.moduleHasData(HomeModuleID(rawValue: $0.moduleID), model: model) }
+            .compactMap { HomeModuleRegistry.module(forID: $0.moduleID) }
+    }
+
+    /// 模块当前是否有数据（读取的是已在 refreshHomeSnapshots 算好的快照计数，
+    /// 不在这里做任何全表遍历 / 网络请求 / 封面加载）。
+    private static func moduleHasData(_ moduleID: HomeModuleID?, model: AuralisAppModel) -> Bool {
+        guard let moduleID else { return false }
+        switch moduleID {
+        case .playlists: return model.catalog.playlists.count > 0
+        case .favorites: return model.homeFavoriteTracks.count > 0
+        case .mostPlayed: return model.homeMostPlayedTracks.count > 0
+        case .playHistory: return model.homeRecentlyPlayedTracks.count > 0
+        case .downloads: return model.downloadedTracks.count > 0
+        case .random: return model.randomTracks.count > 0
+        case .recentlyPlayed: return model.homeRecentlyPlayedTracks.count > 0
+        case .recentlyAdded: return model.homeRecentlyAdded30DaysTracks.count > 0
+        case .longUnplayed: return model.homeLongUnplayedTracks.count > 0
+        case .favoriteRandom: return model.homeFavoriteRandomTracks.count > 0
+        case .neverPlayed: return model.homeNeverPlayedTracks.count > 0
+        case .topArtists: return model.homeTopArtists.count > 0
+        case .topAlbums: return model.homeTopAlbums.count > 0
+        }
+    }
+
+    // MARK: - 快捷入口
+
+    @ViewBuilder
+    private var quickEntriesSection: some View {
+        let modules = visibleQuickModules
+        if modules.isEmpty {
+            EmptyView()
+        } else if modules.count <= 3 {
+            // 3 个（或更少）：三等分布局。
+            HStack(spacing: AuralisSpacing.medium) {
+                ForEach(modules) { module in
+                    quickEntryCard(module)
+                        .frame(maxWidth: .infinity)
+                }
             }
-            quickEntry(title: "收藏", icon: "heart.fill", count: model.homeFavoriteTracks.count, unit: "首") {
-                model.browseDestination = .favorites
-            }
-            quickEntry(title: "最常听", icon: "play.circle.fill", count: model.homeMostPlayedTracks.count, unit: "首") {
-                model.browseDestination = .mostPlayed
+        } else {
+            // 4-5 个：横向滚动、统一卡片宽度、露出下一张卡片一部分提示可滚动；
+            // 适度增大卡片高度 / 点击区域 / 内边距 / 图标尺寸（但不做大内容卡）。
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: AuralisSpacing.medium) {
+                    ForEach(modules) { module in
+                        quickEntryCard(module)
+                            .frame(width: 156)
+                    }
+                }
+                .padding(.trailing, AuralisSpacing.medium)
             }
         }
     }
 
-    private func quickEntry(title: String, icon: String, count: Int, unit: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    private func quickEntryCard(_ module: HomeModule) -> some View {
+        Button {
+            openQuickEntry(module)
+        } label: {
             HStack(spacing: AuralisSpacing.small) {
-                Image(systemName: icon)
-                    .font(.title3)
+                Image(systemName: module.icon)
+                    .font(.title2)
                     .foregroundStyle(colors.accent.color)
+                    .frame(width: 30)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(module.title)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(colors.primaryText.color)
-                    Text("\(count) \(unit)")
+                        .lineLimit(1)
+                    Text(quickEntrySubtitle(module))
                         .font(.caption)
                         .foregroundStyle(colors.secondaryText.color)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(AuralisSpacing.medium)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, AuralisSpacing.medium + 4)
+            .padding(.horizontal, AuralisSpacing.medium)
+            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
             .background(colors.surface.color)
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
+            .contentShape(Rectangle())
         }
         .buttonStyle(HapticPlainButtonStyle())
     }
 
-    /// 横向歌曲货架：随机 / 最近播放 / 最近添加 共用。
-    /// onOpen 非空时，标题行右侧显示「详情 ›」按钮，点按进入完整列表。
-    private func trackShelf(_ title: String, detail: String, tracks: [Track], onOpen: (() -> Void)? = nil) -> some View {
-        VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
-            sectionHeader(title, detail: detail, onOpen: onOpen)
-            if tracks.isEmpty {
-                Text("还没有内容，先去音乐库里播放几首吧。")
-                    .font(.subheadline)
-                    .foregroundStyle(colors.secondaryText.color)
-                    .padding(.vertical, AuralisSpacing.small)
-            } else {
+    private func quickEntrySubtitle(_ module: HomeModule) -> String {
+        switch module.id {
+        case .playlists: "\(model.catalog.playlists.count) 个"
+        case .favorites: "\(model.homeFavoriteTracks.count) 首"
+        case .mostPlayed: "\(model.homeMostPlayedTracks.count) 首"
+        case .playHistory: "\(model.homeRecentlyPlayedTracks.count) 首"
+        case .downloads: "\(model.downloadedTracks.count) 首"
+        default: ""
+        }
+    }
+
+    private func openQuickEntry(_ module: HomeModule) {
+        switch module.id {
+        case .playlists: model.browseDestination = .playlists
+        case .favorites: model.browseDestination = .favorites
+        case .mostPlayed: model.browseDestination = .mostPlayed
+        case .playHistory: model.browseDestination = .recentlyPlayed
+        case .downloads: model.browseDestination = .downloads
+        default: break
+        }
+    }
+
+    // MARK: - 内容模块
+
+    @ViewBuilder
+    private func moduleSection(_ module: HomeModule) -> some View {
+        switch module.id {
+        case .random, .recentlyPlayed, .recentlyAdded, .longUnplayed, .favoriteRandom, .neverPlayed:
+            trackShelf(module)
+        case .topArtists:
+            artistShelf(module)
+        case .topAlbums:
+            albumShelf(module)
+        default:
+            EmptyView()
+        }
+    }
+
+    /// 横向歌曲货架：标题行 + 统一横向卡片布局。
+    private func trackShelf(_ module: HomeModule) -> some View {
+        let tracks = trackList(for: module)
+        return VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
+            moduleHeader(module, count: tracks.count)
+            if !tracks.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: AuralisSpacing.medium) {
+                    LazyHStack(spacing: HomeCardMetrics.spacing) {
                         ForEach(tracks) { track in
                             Button {
                                 model.queue = tracks
                                 model.selectAndPlay(track)
                             } label: {
-                                TrackCardView(track: track, colors: colors)
-                                    .frame(width: 132, alignment: .leading)
+                                HomeTrackCard(track: track, colors: colors)
+                                    .frame(width: HomeCardMetrics.width, alignment: .leading)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(HapticPlainButtonStyle())
                         }
                     }
+                    .padding(.trailing, AuralisSpacing.large)
                 }
             }
         }
     }
+
+    /// 常听艺术家：艺术家横向卡片，点卡片进入艺术家详情。
+    private func artistShelf(_ module: HomeModule) -> some View {
+        let artists = model.homeTopArtists
+        return VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
+            moduleHeader(module, count: artists.count)
+            if !artists.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: HomeCardMetrics.spacing) {
+                        ForEach(artists) { artist in
+                            Button {
+                                model.browseDestination = .artist(artist)
+                            } label: {
+                                HomeArtistCard(
+                                    artist: artist,
+                                    playCount: model.homeTopArtistPlayCounts[artist.id] ?? 0,
+                                    colors: colors
+                                )
+                                .frame(width: HomeCardMetrics.width, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(HapticPlainButtonStyle())
+                        }
+                    }
+                    .padding(.trailing, AuralisSpacing.large)
+                }
+            }
+        }
+    }
+
+    /// 常听专辑：专辑横向卡片，点卡片进入专辑详情。
+    private func albumShelf(_ module: HomeModule) -> some View {
+        let albums = model.homeTopAlbums
+        return VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
+            moduleHeader(module, count: albums.count)
+            if !albums.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: HomeCardMetrics.spacing) {
+                        ForEach(albums) { album in
+                            Button {
+                                model.browseDestination = .album(album)
+                            } label: {
+                                HomeAlbumCard(
+                                    album: album,
+                                    playCount: model.homeTopAlbumPlayCounts[album.id] ?? 0,
+                                    colors: colors
+                                )
+                                .frame(width: HomeCardMetrics.width, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(HapticPlainButtonStyle())
+                        }
+                    }
+                    .padding(.trailing, AuralisSpacing.large)
+                }
+            }
+        }
+    }
+
+    private func trackList(for module: HomeModule) -> [Track] {
+        switch module.id {
+        case .random: model.randomTracks
+        case .recentlyPlayed: model.homeRecentlyPlayedTracks
+        case .recentlyAdded: model.homeRecentlyAdded30DaysTracks
+        case .longUnplayed: model.homeLongUnplayedTracks
+        case .favoriteRandom: model.homeFavoriteRandomTracks
+        case .neverPlayed: model.homeNeverPlayedTracks
+        default: []
+        }
+    }
+
+    /// 模块标题行：左侧标题，右侧「数量 / 换一批 / 查看更多」，视觉层级统一。
+    private func moduleHeader(_ module: HomeModule, count: Int) -> some View {
+        HStack {
+            Text(module.title)
+                .font(.title2.bold())
+                .foregroundStyle(colors.primaryText.color)
+            Spacer()
+            trailingControl(module, count: count)
+        }
+    }
+
+    @ViewBuilder
+    private func trailingControl(_ module: HomeModule, count: Int) -> some View {
+        switch module.id {
+        case .random:
+            HStack(spacing: AuralisSpacing.small) {
+                refreshButton {
+                    model.regenerateRandomMusic()
+                }
+                detailButton("\(count) 首") {
+                    model.browseDestination = .random
+                }
+            }
+        case .favoriteRandom:
+            HStack(spacing: AuralisSpacing.small) {
+                refreshButton {
+                    model.regenerateFavoriteRandomMusic()
+                }
+                detailButton("\(count) 首") {
+                    model.browseDestination = .favoriteRandom
+                }
+            }
+        case .recentlyAdded:
+            detailButton("近30天新增 \(count) 首") {
+                model.browseDestination = .recentlyAdded
+            }
+        case .topArtists:
+            detailButton("\(count) 位") {
+                model.browseDestination = .topArtists
+            }
+        case .topAlbums:
+            detailButton("\(count) 张") {
+                model.browseDestination = .topAlbums
+            }
+        default:
+            detailButton("\(count) 首") {
+                openContentModule(module)
+            }
+        }
+    }
+
+    /// 「换一批」：轻量文本按钮，本地重采样，不发网络请求。
+    private func refreshButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.clockwise")
+                Text("换一批")
+            }
+            .font(.caption)
+            .foregroundStyle(colors.secondaryText.color)
+        }
+        .buttonStyle(HapticPlainButtonStyle())
+    }
+
+    /// 「数量 ›」：进入完整列表。
+    private func detailButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(colors.secondaryText.color)
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(colors.secondaryText.color)
+            }
+        }
+        .buttonStyle(HapticPlainButtonStyle())
+    }
+
+    private func openContentModule(_ module: HomeModule) {
+        switch module.id {
+        case .random: model.browseDestination = .random
+        case .recentlyPlayed: model.browseDestination = .recentlyPlayed
+        case .recentlyAdded: model.browseDestination = .recentlyAdded
+        case .longUnplayed: model.browseDestination = .longUnplayed
+        case .favoriteRandom: model.browseDestination = .favoriteRandom
+        case .neverPlayed: model.browseDestination = .neverPlayed
+        case .topArtists: model.browseDestination = .topArtists
+        case .topAlbums: model.browseDestination = .topAlbums
+        default: break
+        }
+    }
+
+    // MARK: - 资料库统计
 
     private var librarySummary: some View {
         HStack(spacing: AuralisSpacing.medium) {
@@ -113,30 +399,6 @@ struct HomeView: View {
         .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
     }
 
-    private func sectionHeader(_ title: String, detail: String, onOpen: (() -> Void)? = nil) -> some View {
-        HStack {
-            Text(title).font(.title2.bold()).foregroundStyle(colors.primaryText.color)
-            Spacer()
-            if let onOpen {
-                Button(action: onOpen) {
-                    HStack(spacing: 2) {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(colors.secondaryText.color)
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundStyle(colors.secondaryText.color)
-                    }
-                }
-                .buttonStyle(HapticPlainButtonStyle())
-            } else {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(colors.secondaryText.color)
-            }
-        }
-    }
-
     private var ambientBackground: some View {
         LinearGradient(
             colors: [colors.background.color, colors.accent.color.opacity(0.12), colors.background.color],
@@ -147,13 +409,14 @@ struct HomeView: View {
     }
 }
 
-private struct TrackCardView: View {
+/// 统一横向歌曲卡片：封面方形、标题最多两行、艺术家最多一行、尾部截断。
+private struct HomeTrackCard: View {
     let track: Track
     let colors: ThemeColors
 
     var body: some View {
         VStack(alignment: .leading, spacing: AuralisSpacing.small) {
-            ArtworkView(title: track.albumTitle, artworkKey: track.artworkKey, colors: colors, size: 132)
+            ArtworkView(title: track.albumTitle, artworkKey: track.artworkKey, colors: colors, size: HomeCardMetrics.width)
             Text(track.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(colors.primaryText.color)
@@ -163,6 +426,53 @@ private struct TrackCardView: View {
                 .font(.caption)
                 .foregroundStyle(colors.secondaryText.color)
                 .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+}
+
+/// 常听艺术家卡片（点卡片进入艺术家详情）。
+private struct HomeArtistCard: View {
+    let artist: Artist
+    let playCount: Int
+    let colors: ThemeColors
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+            ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: colors, size: HomeCardMetrics.width)
+            Text(artist.name)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(colors.primaryText.color)
+                .lineLimit(2)
+                .frame(height: 38, alignment: .top)
+            Text("\(playCount) 次播放")
+                .font(.caption)
+                .foregroundStyle(colors.secondaryText.color)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+}
+
+/// 常听专辑卡片（点卡片进入专辑详情）。
+private struct HomeAlbumCard: View {
+    let album: Album
+    let playCount: Int
+    let colors: ThemeColors
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+            ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: colors, size: HomeCardMetrics.width)
+            Text(album.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(colors.primaryText.color)
+                .lineLimit(2)
+                .frame(height: 38, alignment: .top)
+            Text("\(playCount) 次播放")
+                .font(.caption)
+                .foregroundStyle(colors.secondaryText.color)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 }

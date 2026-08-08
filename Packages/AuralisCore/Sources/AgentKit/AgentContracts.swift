@@ -62,6 +62,9 @@ public protocol AgentBridge: Sendable {
 
     // Playback（返回是否真正开始播放：目标在本地目录且已交给播放引擎）
     func playTrack(globalID: GlobalID) async -> Bool
+    /// 服务器曲目在线流播回退：本地目录尚未同步到这首歌时，按服务器 ID 拉取并直接流播。
+    /// 成功返回 true。默认实现返回 false（未接入服务器流播的桥接层视为不可用）。
+    func playServerTrack(globalID: GlobalID) async -> Bool
     func playAlbum(globalID: GlobalID) async -> Bool
     func playPlaylist(globalID: GlobalID) async -> Bool
     func playRandom() async
@@ -125,6 +128,7 @@ public protocol AgentBridge: Sendable {
 
 public extension AgentBridge {
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
+    func playServerTrack(globalID: GlobalID) async -> Bool { false }
 }
 
 /// 需要用户确认的待定操作。

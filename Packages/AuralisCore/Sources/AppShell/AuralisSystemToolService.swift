@@ -542,7 +542,7 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     // MARK: - 音乐下载（MoviePilot / MoviePilot 插件）
 
-    public func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
+    public func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int, kind: String? = nil) async -> AgentMusicSearchResult {
         guard let connection = await movipNoteConnection() else {
             return AgentMusicSearchResult(configured: false, message: "音乐下载（MoviePilot）未配置")
         }
@@ -556,14 +556,21 @@ public final class AuralisSystemToolService: AgentSystemService {
                 year: year,
                 limit: limit,
                 preferLossless: preferLossless,
-                minSeeders: minSeeders
+                minSeeders: minSeeders,
+                kind: kind
             )
             return AgentMusicSearchResult(
                 configured: true,
                 keyword: data.keyword,
+                searchedSites: data.searchedSites,
                 total: data.total ?? 0,
                 albumMatchedAny: data.albumMatchedAny ?? false,
                 droppedVideo: data.droppedVideo ?? 0,
+                droppedUncertain: data.droppedUncertain ?? 0,
+                fallbackTried: data.fallbackTried ?? false,
+                fallbackResolved: data.fallbackResolved,
+                kind: data.kind,
+                sizeLimitGB: data.sizeLimitGB,
                 candidates: (data.results ?? []).map(Self.musicCandidate)
             )
         } catch {
@@ -571,18 +578,29 @@ public final class AuralisSystemToolService: AgentSystemService {
         }
     }
 
-    public func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
+    public func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double? = nil, verifySong: String? = nil, verifyArtist: String? = nil) async -> AgentMusicDownloadResult {
         guard let connection = await movipNoteConnection() else {
             return AgentMusicDownloadResult(configured: false, message: "音乐下载（MoviePilot）未配置")
         }
         do {
-            let data = try await MoviePilotClient().download(connection, ref: ref, siteID: siteID, index: index, magnet: magnet, title: title)
+            let data = try await MoviePilotClient().download(
+                connection,
+                ref: ref,
+                siteID: siteID,
+                index: index,
+                magnet: magnet,
+                title: title,
+                maxSizeGB: maxSizeGB,
+                verifySong: verifySong,
+                verifyArtist: verifyArtist
+            )
             return AgentMusicDownloadResult(
                 configured: true,
                 success: true,
                 hash: data.hash,
                 savePath: data.savePath,
-                status: data.status
+                status: data.status,
+                contentVerified: data.contentVerified
             )
         } catch {
             return AgentMusicDownloadResult(configured: true, message: error.localizedDescription)
@@ -656,7 +674,10 @@ public final class AuralisSystemToolService: AgentSystemService {
             relevance: item.relevance ?? 0,
             albumMatched: item.albumMatched ?? false,
             size: item.size,
-            seeders: item.seeders ?? 0
+            sizeText: item.sizeText,
+            sizeLimitGB: item.sizeLimitGB,
+            seeders: item.seeders ?? 0,
+            grabs: item.grabs ?? 0
         )
     }
 

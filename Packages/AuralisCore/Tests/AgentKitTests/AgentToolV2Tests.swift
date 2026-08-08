@@ -49,10 +49,10 @@ private final class StubSystemService: AgentSystemService, @unchecked Sendable {
     var musicDownloadOverride: AgentMusicDownloadResult?
     var musicTasksOverride: [AgentMusicTask]?
     var musicHistoryOverride: AgentMusicHistoryResult?
-    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
+    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int, kind: String?) async -> AgentMusicSearchResult {
         musicSearchOverride ?? AgentMusicSearchResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
-    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
+    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double?, verifySong: String?, verifyArtist: String?) async -> AgentMusicDownloadResult {
         musicDownloadOverride ?? AgentMusicDownloadResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
     func musicTasks(status: String?) async -> [AgentMusicTask] {
@@ -725,10 +725,10 @@ private extension ToolResult {
     }
 }
 
-@Suite("播放工具失败上报")
+@Suite("播放工具失败上报与服务器流播回退")
 struct PlaybackToolFailureTests {
-    @Test("播放目标在目录但 bridge 无法播放时返回失败，不再谎报「开始播放」")
-    func playSongReportsFailure() async throws {
+    @Test("本地播放失败时自动回退到服务器在线流播（流媒体播放不要求先同步/下载）")
+    func playSongFallsBackToServerStreaming() async throws {
         let store = try makeV2Store()
         try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "1", title: "七里香")])
         let bridge = MockAgentBridge(activeServerID: "s")
@@ -737,8 +737,41 @@ struct PlaybackToolFailureTests {
             ToolCall(name: "playback_play_song", arguments: ["trackID": "s:1"]),
             bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
         )
+        #expect(result.success)
+        #expect(result.summary.contains("开始播放"))
+        #expect(result.summary.contains("服务器在线流播"))
+        #expect(bridge.serverPlayedTracks.count == 1)
+    }
+
+    @Test("本地目录没有、服务器也拿不到时返回失败并给出可操作指引")
+    func playSongReportsFailureWhenBothFail() async throws {
+        let store = try makeV2Store()
+        let bridge = MockAgentBridge(activeServerID: "s")
+        bridge.serverPlayResult = false
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "playback_play_song", arguments: ["trackID": "s:1"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
+        )
         #expect(!result.success)
         #expect(result.summary.contains("未找到该歌曲"))
+        #expect(result.summary.contains("server_search"))
+        #expect(bridge.playedTracks.isEmpty)
+        #expect(bridge.serverPlayedTracks.count == 1)
+    }
+
+    @Test("本地目录尚未同步时，按服务器 ID 直接流播（不需要先下载/同步）")
+    func playSongStreamsServerTrackNotInCatalog() async throws {
+        let store = try makeV2Store()
+        // 不 seed 任何曲目：trackID 只存在于服务器（模拟 server_search 找到但本地目录没有）。
+        let bridge = MockAgentBridge(activeServerID: "s")
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "playback_play_song", arguments: ["trackID": "s:remote-9"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
+        )
+        #expect(result.success)
+        #expect(result.summary.contains("服务器在线流播"))
+        #expect(bridge.playedTracks.isEmpty)
+        #expect(bridge.serverPlayedTracks == [GlobalID(serverID: "s", remoteID: "remote-9")])
     }
 
     @Test("播放目标存在时正常返回开始播放")

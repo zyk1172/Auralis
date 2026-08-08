@@ -42,6 +42,15 @@ public final class AuralisAgentBridge: AgentBridge {
         return true
     }
 
+    /// 服务器曲目在线流播回退：本地目录还没有这首歌时，按服务器 ID 拉取（getSong + 补流地址）
+    /// 后直接流式播放，不要求先下载/同步。播放是服务器在线流媒体，本地目录只是离线缓存。
+    public func playServerTrack(globalID: GlobalID) async -> Bool {
+        guard let active = model.catalog.activeServerID, active == globalID.serverID else { return false }
+        guard let track = await coordinator.serverTrack(id: TrackID(rawValue: globalID.remoteID)) else { return false }
+        model.selectAndPlay(track)
+        return true
+    }
+
     public func playAlbum(globalID: GlobalID) async -> Bool {
         let tracks = model.catalog.tracks.filter { $0.albumID.rawValue == globalID.remoteID }
         guard !tracks.isEmpty else { return false }

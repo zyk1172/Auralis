@@ -174,6 +174,14 @@ public final class CatalogCoordinator: ObservableObject {
         await store.syncStatus(for: serverID)
     }
 
+    // MARK: - 服务器在线拉取
+
+    /// 按 ID 从服务器拉取单曲（含流地址）：Agent 播放本地目录尚未同步的歌曲时，
+    /// 由 AuralisAgentBridge 走这条路径做「服务器曲目在线流播」。
+    public func serverTrack(id: TrackID) async -> Track? {
+        await connector.serverTrack(trackID: id)
+    }
+
     // MARK: - Cleanup
 
     /// 删除服务器：清理本地目录、下载与会话关联，以及该服务器的磁盘缓存

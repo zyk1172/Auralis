@@ -119,11 +119,17 @@ public struct AgentToolkit {
 
         // MARK: Playback
         case "playTrack":
-            let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            guard await bridge.playTrack(globalID: gid) else {
-                return .fail(call, descriptor, "未找到该歌曲，可能尚未同步到本地目录（可先 server_sync_start 同步，或改用 server_search 在线查找）")
+            let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
+            if (try? await catalog.getTrack(gid)) != nil {
+                if await bridge.playTrack(globalID: gid) {
+                    return .ok(call, descriptor, "开始播放", .actionPreview(title: "播放", detail: gid.description))
+                }
             }
-            return .ok(call, descriptor, "开始播放", .actionPreview(title: "播放", detail: gid.description))
+            // 本地目录尚未同步：走服务器在线流播回退（播放是流媒体，不需要先下载/同步）。
+            if await bridge.playServerTrack(globalID: gid) {
+                return .ok(call, descriptor, "开始播放（服务器在线流播）", .actionPreview(title: "播放", detail: gid.description))
+            }
+            return .fail(call, descriptor, "未找到该歌曲：服务器上不存在该资源或暂时无法获取播放地址（可先用 server_search 在线确认歌名，确属缺失时再考虑 music_download 下载到服务器音乐库）")
         case "playAlbum":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
             guard await bridge.playAlbum(globalID: gid) else {
@@ -632,11 +638,17 @@ public struct AgentToolkit {
             }
             return .ok(call, descriptor, "当前无播放", .text("当前没有正在播放的歌曲"))
         case "playback_play_song":
-            let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            guard await bridge.playTrack(globalID: gid) else {
-                return .fail(call, descriptor, "未找到该歌曲，可能尚未同步到本地目录（可先 server_sync_start 同步，或改用 server_search 在线查找）")
+            let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
+            // 1) 本地目录命中：直接播放（离线缓存优先）。
+            if (try? await catalog.getTrack(gid)) != nil, await bridge.playTrack(globalID: gid) {
+                return .ok(call, descriptor, "开始播放")
             }
-            return .ok(call, descriptor, "开始播放")
+            // 2) 本地未命中：服务器在线流播回退。播放是流媒体，服务器上有歌即可直接播，
+            //    不需要先同步（server_sync_start）也不需要下载。
+            if await bridge.playServerTrack(globalID: gid) {
+                return .ok(call, descriptor, "开始播放（服务器在线流播）")
+            }
+            return .fail(call, descriptor, "未找到该歌曲：服务器上不存在该资源或暂时无法获取播放地址（可先用 server_search 在线确认歌名，确属缺失时再考虑 music_download 下载到服务器音乐库）")
         case "playback_play_album":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
             guard await bridge.playAlbum(globalID: gid) else {
@@ -891,6 +903,16 @@ public struct AgentToolkit {
         let raw = try require(call, key)
         guard let value = Double(raw) else { throw AgentToolError.invalidParameter(key, raw) }
         return value
+    }
+
+    /// 播放专用的宽松解析：只校验 GlobalID 格式与当前服务器归属，不要求本地目录已存在。
+    /// 本地目录没有时由桥接层走「服务器在线流播」回退（播放是流媒体，不要求先同步/下载）。
+    private static func parsePlaybackTrackID(_ call: ToolCall, _ key: String, serverID: ServerID?) throws -> GlobalID {
+        let raw = try require(call, key)
+        guard let gid = GlobalID(raw), serverIDMatches(gid, serverID) else {
+            throw AgentToolError.invalidTrackID(raw)
+        }
+        return gid
     }
 
     private static func requireTrackID(_ call: ToolCall, _ key: String, catalog: LocalCatalogStore, serverID: ServerID?) async throws -> GlobalID {

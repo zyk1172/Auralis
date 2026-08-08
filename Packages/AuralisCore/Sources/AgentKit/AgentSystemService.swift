@@ -450,26 +450,45 @@ public struct AgentMusicSearchResult: Sendable, Equatable {
     public var configured: Bool
     public var message: String
     public var keyword: String?
+    public var searchedSites: [String]?
     public var total: Int
     public var albumMatchedAny: Bool
     public var droppedVideo: Int
+    public var droppedUncertain: Int
+    public var fallbackTried: Bool
+    public var fallbackResolved: String?
+    public var kind: String?
+    /// 本次生效的大小上限（GB，v0.5.x）：下载时原样传回 max_size_gb。
+    public var sizeLimitGB: Double?
     public var candidates: [AgentMusicCandidate]
 
     public init(
         configured: Bool = false,
         message: String = "",
         keyword: String? = nil,
+        searchedSites: [String]? = nil,
         total: Int = 0,
         albumMatchedAny: Bool = false,
         droppedVideo: Int = 0,
+        droppedUncertain: Int = 0,
+        fallbackTried: Bool = false,
+        fallbackResolved: String? = nil,
+        kind: String? = nil,
+        sizeLimitGB: Double? = nil,
         candidates: [AgentMusicCandidate] = []
     ) {
         self.configured = configured
         self.message = message
         self.keyword = keyword
+        self.searchedSites = searchedSites
         self.total = total
         self.albumMatchedAny = albumMatchedAny
         self.droppedVideo = droppedVideo
+        self.droppedUncertain = droppedUncertain
+        self.fallbackTried = fallbackTried
+        self.fallbackResolved = fallbackResolved
+        self.kind = kind
+        self.sizeLimitGB = sizeLimitGB
         self.candidates = candidates
     }
 }
@@ -485,8 +504,14 @@ public struct AgentMusicCandidate: Sendable, Equatable {
     public var quality: Int
     public var relevance: Int
     public var albumMatched: Bool
+    /// 体积（字节字符串，插件可能是数字或字符串，统一透传为字符串）。
     public var size: String?
+    /// 可读体积（如 "303.2 MB"，v0.5.x）。
+    public var sizeText: String?
+    /// 候选级大小上限（GB，个别插件版本带出；通常用搜索顶层 sizeLimitGB）。
+    public var sizeLimitGB: Double?
     public var seeders: Int
+    public var grabs: Int
 
     public init(
         index: Int,
@@ -499,7 +524,10 @@ public struct AgentMusicCandidate: Sendable, Equatable {
         relevance: Int = 0,
         albumMatched: Bool = false,
         size: String? = nil,
-        seeders: Int = 0
+        sizeText: String? = nil,
+        sizeLimitGB: Double? = nil,
+        seeders: Int = 0,
+        grabs: Int = 0
     ) {
         self.index = index
         self.ref = ref
@@ -511,7 +539,10 @@ public struct AgentMusicCandidate: Sendable, Equatable {
         self.relevance = relevance
         self.albumMatched = albumMatched
         self.size = size
+        self.sizeText = sizeText
+        self.sizeLimitGB = sizeLimitGB
         self.seeders = seeders
+        self.grabs = grabs
     }
 }
 
@@ -523,6 +554,8 @@ public struct AgentMusicDownloadResult: Sendable, Equatable {
     public var hash: String?
     public var savePath: String?
     public var status: String?
+    /// 曲目级内容校验结果（v0.5.2+）：true=包含目标歌曲 / false=被拒绝 / nil=整轨无法逐曲校验。
+    public var contentVerified: Bool?
 
     public init(
         configured: Bool = false,
@@ -530,7 +563,8 @@ public struct AgentMusicDownloadResult: Sendable, Equatable {
         message: String = "",
         hash: String? = nil,
         savePath: String? = nil,
-        status: String? = nil
+        status: String? = nil,
+        contentVerified: Bool? = nil
     ) {
         self.configured = configured
         self.success = success
@@ -538,6 +572,7 @@ public struct AgentMusicDownloadResult: Sendable, Equatable {
         self.hash = hash
         self.savePath = savePath
         self.status = status
+        self.contentVerified = contentVerified
     }
 }
 
@@ -616,8 +651,12 @@ public protocol AgentSystemService: Sendable {
     func recentErrors(limit: Int) async -> [AgentErrorRecord]
 
     // 音乐下载（MoviePilot / MoviePilot 插件）
-    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult
-    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult
+    /// - Parameter kind: "single"（单曲，大小上限生效）/ "album" / "auto"（v0.5.x）。
+    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int, kind: String?) async -> AgentMusicSearchResult
+    /// - Parameters:
+    ///   - maxSizeGB: search 返回的 size_limit_gb 原样传回（v0.5.x）。
+    ///   - verifySong / verifyArtist: 单曲自动下载必传（v0.5.2+ 曲目级内容校验）。
+    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double?, verifySong: String?, verifyArtist: String?) async -> AgentMusicDownloadResult
     func musicTasks(status: String?) async -> [AgentMusicTask]
     func musicHistory() async -> AgentMusicHistoryResult
 }
@@ -626,11 +665,11 @@ public protocol AgentSystemService: Sendable {
 // MARK: - 默认实现（未配置 / 不可用）
 
 public extension AgentSystemService {
-    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
+    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int, kind: String?) async -> AgentMusicSearchResult {
         AgentMusicSearchResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
 
-    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
+    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double?, verifySong: String?, verifyArtist: String?) async -> AgentMusicDownloadResult {
         AgentMusicDownloadResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
 

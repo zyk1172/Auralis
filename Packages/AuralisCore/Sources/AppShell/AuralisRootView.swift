@@ -512,9 +512,9 @@ private struct BrowseDetailSheet: View {
             }
             return playlist.trackIDs.compactMap { id in model.catalog.tracks.first { $0.id == id } }
             case .favorites:
-                return model.favoriteTracks
+                return model.homeFavoriteTracks
             case .mostPlayed:
-                return model.mostPlayedTracks
+                return model.homeMostPlayedTracks
             case .playlists:
                 return []
             case let .genre(genre):
@@ -523,9 +523,19 @@ private struct BrowseDetailSheet: View {
             case .random:
                 return model.randomTracks
             case .recentlyPlayed:
-                return model.recentlyPlayedTracks
+                return model.homeRecentlyPlayedTracks
             case .recentlyAdded:
-                return Array(model.recentlyAddedTracks.prefix(200))
+                return Array(model.homeRecentlyAddedTracks.prefix(200))
+            case .longUnplayed:
+                return model.homeLongUnplayedTracks
+            case .neverPlayed:
+                return model.homeNeverPlayedTracks
+            case .favoriteRandom:
+                return model.homeFavoriteRandomTracks
+            case .downloads:
+                return model.downloadedTracks
+            case .topArtists, .topAlbums:
+                return []
         }
     }
 
@@ -541,6 +551,12 @@ private struct BrowseDetailSheet: View {
         case .random: "随机音乐"
         case .recentlyPlayed: "最近播放"
         case .recentlyAdded: "最近添加"
+        case .longUnplayed: "很久没听"
+        case .neverPlayed: "从未播放"
+        case .favoriteRandom: "收藏里随便听"
+        case .topArtists: "常听艺术家"
+        case .topAlbums: "常听专辑"
+        case .downloads: "下载"
         }
     }
 
@@ -556,6 +572,12 @@ private struct BrowseDetailSheet: View {
         case .random: "点右上角「换一批」可重新随机"
         case .recentlyPlayed: "\(tracks.count) 首 · 最近播放过的歌曲"
         case .recentlyAdded: "\(tracks.count) 首 · 最近同步进来的歌曲"
+        case .longUnplayed: "\(tracks.count) 首 · 播放过但最近没听的歌曲"
+        case .neverPlayed: "\(tracks.count) 首 · 还没播放过的歌曲"
+        case .favoriteRandom: "点右上角「换一批」可重新随机"
+        case .topArtists: "按真实播放次数统计的艺术家"
+        case .topAlbums: "按真实播放次数统计的专辑"
+        case .downloads: "\(tracks.count) 首 · 已下载到本地的歌曲"
         }
     }
 
@@ -576,9 +598,9 @@ private struct BrowseDetailSheet: View {
                 #endif
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
-                        if case .random = destination {
+                        if isRandomDestination {
                             Button {
-                                model.regenerateRandomMusic()
+                                regenerateCurrentSample()
                             } label: {
                                 Label("换一批", systemImage: "arrow.clockwise")
                             }
@@ -624,6 +646,10 @@ private struct BrowseDetailSheet: View {
     private var content: some View {
         if case .playlists = destination {
             playlistList
+        } else if case .topArtists = destination {
+            artistList
+        } else if case .topAlbums = destination {
+            albumList
         } else if isGenreLoading {
             ProgressView("正在从服务器加载「\(currentGenreName)」歌曲…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -659,6 +685,12 @@ private struct BrowseDetailSheet: View {
         switch destination {
         case .favorites: "在播放页或歌曲菜单中点心形收藏后，会出现在这里。"
         case .mostPlayed: "播放过的歌曲会按次数统计在这里。"
+        case .longUnplayed: "播放过的歌曲会先出现在「最近播放」，过一段时间没听就会回到这里。"
+        case .neverPlayed: "还没有播放记录时，这里暂时为空。"
+        case .favoriteRandom: "收藏里的歌曲会随机出现在这里。"
+        case .downloads: "下载到本地的歌曲会出现在这里。"
+        case .topArtists: "播放过的歌曲会按艺术家统计在这里。"
+        case .topAlbums: "播放过的歌曲会按专辑统计在这里。"
         default: "这个清单里暂时没有歌曲。"
         }
     }
@@ -739,6 +771,71 @@ private struct BrowseDetailSheet: View {
                     }
                 }
             }
+        }
+        .listStyle(.plain)
+    }
+
+    /// 随机类浏览页（随机音乐 / 收藏里随便听）：右上角「换一批」本地重采样，不发网络请求。
+    private var isRandomDestination: Bool {
+        if case .random = destination { return true }
+        if case .favoriteRandom = destination { return true }
+        return false
+    }
+
+    private func regenerateCurrentSample() {
+        if case .favoriteRandom = destination {
+            model.regenerateFavoriteRandomMusic()
+        } else {
+            model.regenerateRandomMusic()
+        }
+    }
+
+    /// 常听艺术家列表：按真实播放次数降序，点选进入艺术家详情。
+    private var artistList: some View {
+        List(model.homeTopArtists) { artist in
+            Button {
+                dismiss()
+                model.browseDestination = .artist(artist)
+            } label: {
+                HStack(spacing: AuralisSpacing.medium) {
+                    ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: theme.colorTokens, size: 44, cornerRadius: AuralisRadius.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(artist.name)
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                        Text("\(model.homeTopArtistPlayCounts[artist.id] ?? 0) 次播放")
+                            .font(.caption)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+            }
+            .buttonStyle(HapticPlainButtonStyle())
+        }
+        .listStyle(.plain)
+    }
+
+    /// 常听专辑列表：按真实播放次数降序，点选进入专辑详情。
+    private var albumList: some View {
+        List(model.homeTopAlbums) { album in
+            Button {
+                dismiss()
+                model.browseDestination = .album(album)
+            } label: {
+                HStack(spacing: AuralisSpacing.medium) {
+                    ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: theme.colorTokens, size: 44, cornerRadius: AuralisRadius.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(album.title)
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                        Text(album.artistName)
+                            .font(.caption)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            .lineLimit(1)
+                        Text("\(model.homeTopAlbumPlayCounts[album.id] ?? 0) 次播放")
+                            .font(.caption)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+            }
+            .buttonStyle(HapticPlainButtonStyle())
         }
         .listStyle(.plain)
     }

@@ -259,7 +259,8 @@ public struct SystemToolExecutor {
                         year: optionalIntParam(call, "year"),
                         limit: optionalIntParam(call, "limit") ?? 10,
                         preferLossless: optionalBoolParam(call, "prefer_lossless") ?? true,
-                        minSeeders: optionalIntParam(call, "min_seeders") ?? 0
+                        minSeeders: optionalIntParam(call, "min_seeders") ?? 0,
+                        kind: optionalParam(call, "kind")
                     )
                     return Self.musicSearchResult(call, descriptor, result)
                 case "download":
@@ -268,7 +269,10 @@ public struct SystemToolExecutor {
                         siteID: optionalIntParam(call, "site_id"),
                         index: optionalIntParam(call, "index"),
                         magnet: optionalParam(call, "magnet"),
-                        title: optionalParam(call, "title")
+                        title: optionalParam(call, "title"),
+                        maxSizeGB: optionalDoubleParam(call, "max_size_gb"),
+                        verifySong: optionalParam(call, "verify_song"),
+                        verifyArtist: optionalParam(call, "verify_artist")
                     )
                     return Self.musicDownloadResult(call, descriptor, result)
                 case "tasks":
@@ -336,6 +340,11 @@ public struct SystemToolExecutor {
         return value
     }
 
+    private static func optionalDoubleParam(_ call: ToolCall, _ key: String) -> Double? {
+        guard let raw = call.arguments[key], !raw.isEmpty else { return nil }
+        return Double(raw)
+    }
+
     private static func optionalBoolParam(_ call: ToolCall, _ key: String) -> Bool? {
         guard let raw = call.arguments[key] else { return nil }
         switch raw.lowercased() {
@@ -361,14 +370,24 @@ public struct SystemToolExecutor {
         var lines = result.candidates.prefix(10).map { candidate in
             var parts = ["\(candidate.index). [\(candidate.siteName ?? "?")] \(candidate.title)"]
             if let label = candidate.qualityLabel { parts.append("质量=\(label)") }
-            if let size = candidate.size { parts.append("大小=\(size)") }
+            if let size = candidate.sizeText ?? candidate.size { parts.append("大小=\(size)") }
             parts.append("做种=\(candidate.seeders)")
             parts.append("相关度=\(candidate.relevance)")
             if candidate.albumMatched { parts.append("专辑命中") }
             if let ref = candidate.ref { parts.append("ref=\(ref)") }
             return parts.joined(separator: "，")
         }
-        lines.insert("共 \(result.total) 条候选（丢弃影视/不确定 \(result.droppedVideo) 条）\(result.albumMatchedAny ? "，已命中目标专辑" : "，未确认命中目标专辑")", at: 0)
+        var header = "共 \(result.total) 条候选（丢弃影视/不确定 \(result.droppedVideo + result.droppedUncertain) 条）\(result.albumMatchedAny ? "，已命中目标专辑" : "，未确认命中目标专辑")"
+        if let limitGB = result.sizeLimitGB, limitGB > 0 {
+            header += "；本次大小上限 \(String(format: "%.1f", limitGB))GB（下载时请原样传回 max_size_gb）"
+        }
+        if result.fallbackTried {
+            header += "；已退艺人/专辑重搜" + (result.fallbackResolved.map { "（\($0)）" } ?? "")
+        }
+        if let kind = result.kind, !kind.isEmpty {
+            header += "；kind=\(kind)"
+        }
+        lines.insert(header, at: 0)
         return .ok(call, descriptor, "找到 \(result.total) 条候选", .text(lines.joined(separator: "\n")))
     }
 
@@ -378,7 +397,10 @@ public struct SystemToolExecutor {
                               summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MoviePilot 地址与 Token")
         }
         if result.success, let hash = result.hash {
-            let text = "已加入下载：\(hash)（状态 \(result.status ?? "downloading")）\(result.savePath.map { "，保存到 \($0)" } ?? "")"
+            var text = "已加入下载：\(hash)（状态 \(result.status ?? "downloading")）\(result.savePath.map { "，保存到 \($0)" } ?? "")"
+            if let verified = result.contentVerified {
+                text += verified ? "；已确认包含目标歌曲" : "；未确认包含目标歌曲（整轨/无法逐曲校验）"
+            }
             return .ok(call, descriptor, "已开始下载", .text(text))
         }
         return ToolResult(call: call, permission: descriptor.permission, success: false,
