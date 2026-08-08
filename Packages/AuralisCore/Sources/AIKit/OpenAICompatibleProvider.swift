@@ -869,21 +869,33 @@ public struct OpenAICompatibleProvider: AIProvider {
             if let text = object["text"] as? String, !text.isEmpty { return .text(text) }
             return .ignore
         case "response.output_item.done":
-            guard let output = object["output"] as? [String: Any],
-                  (output["type"] as? String) == "function_call",
-                  let id = output["call_id"] as? String,
-                  let name = output["name"] as? String
+            // OpenAI 原生 Responses API 的流式事件把「完整条目」放在 `item` 字段
+            // （`{"type":"response.output_item.done","item":{...}}`），不是 `output`。
+            // 此前只读 `output`，真实 API 的 function_call 永远解析不出来，
+            // 工具调用在流式模式下被整体丢弃 → Agent 只输出文字「我在调用」却没任何动作。
+            // 个别网关/旧实现用 `output`，这里两者都兼容（`item` 优先）。
+            let item = (object["item"] as? [String: Any]) ?? (object["output"] as? [String: Any])
+            guard let item,
+                  (item["type"] as? String) == "function_call",
+                  let id = item["call_id"] as? String,
+                  let name = item["name"] as? String
             else { return .ignore }
-            return .toolCall(AIToolCall(id: id, name: name, arguments: stringify(output["arguments"]) ?? ""))
+            return .toolCall(AIToolCall(id: id, name: name, arguments: stringify(item["arguments"]) ?? ""))
         case "response.completed", "response.incomplete":
             return .done
         case "response.failed":
             return .failed(responseErrorMessage(from: object) ?? "响应流失败")
         case "error":
             return .failed(responseErrorMessage(from: object) ?? "未知错误")
-        case let type? where type.hasPrefix("response.reasoning"):
-            // 思考内容（reasoning）绝不输出给用户。`response.reasoning_text.delta` 的字段也叫
-            // `delta`，若不显式忽略会被下面的默认兜底当成正文增量输出（思考链泄漏）。
+        case let type? where type.hasPrefix("response."):
+            // 其余所有语义事件都不是正文，统一忽略，避免掉进下面的默认兜底：
+            // - response.reasoning_text.delta / reasoning_summary_text.delta 字段也叫 delta，
+            //   是思考链，绝不能输出给用户；
+            // - response.function_call_arguments.delta 字段也叫 delta，是工具参数的
+            //   增量分片，若当正文输出会把参数 JSON 打在聊天里（工具调用仍会因
+            //   output_item.done 解析失败而丢失）；
+            // - response.output_item.added / content_part.* / output_text.done 等
+            //   同样不是用户正文（正文已由 output_text.delta 增量覆盖）。
             return .ignore
         default:
             // 容错：无 type 字段的网关偏差，看到 delta 就当作文本增量。

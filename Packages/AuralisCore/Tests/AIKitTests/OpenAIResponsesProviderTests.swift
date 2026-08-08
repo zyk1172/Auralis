@@ -375,8 +375,9 @@ struct OpenAIResponsesProviderTests {
     }
 
     @Test func parsesOutputItemDoneFunctionCall() {
+        // 真实 OpenAI Responses API：完整条目在 `item` 字段。
         let result = OpenAICompatibleProvider.parseResponsesStreamEvent(
-            #"{"type":"response.output_item.done","output":{"type":"function_call","call_id":"call_x","name":"playTrack","arguments":"{\"trackID\":\"srv:1\"}"}}"#
+            #"{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_x","type":"function_call","call_id":"call_x","name":"playTrack","arguments":"{\"trackID\":\"srv:1\"}"}}"#
         )
         guard case let .toolCall(call) = result else {
             Issue.record("应当解析为 toolCall：\(result)")
@@ -385,6 +386,33 @@ struct OpenAIResponsesProviderTests {
         #expect(call.id == "call_x")
         #expect(call.name == "playTrack")
         #expect(call.arguments.contains("srv:1"))
+    }
+
+    @Test func parsesOutputItemDoneFunctionCallViaLegacyOutputField() {
+        // 兼容个别网关/旧实现把完整条目放在 `output` 字段。
+        let result = OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.output_item.done","output":{"type":"function_call","call_id":"call_y","name":"searchTrack","arguments":"{\"q\":\"夜曲\"}"}}"#
+        )
+        guard case let .toolCall(call) = result else {
+            Issue.record("应当解析为 toolCall：\(result)")
+            return
+        }
+        #expect(call.id == "call_y")
+        #expect(call.name == "searchTrack")
+        #expect(call.arguments.contains("夜曲"))
+    }
+
+    @Test func ignoresFunctionCallArgumentsDelta() {
+        // 工具参数的增量分片绝不能当正文输出（字段也叫 delta，此前会泄漏成聊天正文）。
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.function_call_arguments.delta","item_id":"fc_x","output_index":1,"delta":"{\"q\":\"夜"}"#
+        ) == .ignore)
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.function_call_arguments.done","item_id":"fc_x","output_index":1,"arguments":"{\"q\":\"夜曲\"}"}"#
+        ) == .ignore)
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.output_item.added","output_index":1,"item":{"id":"fc_x","type":"function_call","call_id":"call_x","name":"playTrack"}}"#
+        ) == .ignore)
     }
 
     @Test func parsesCompletedFailedAndErrorEvents() {
@@ -584,7 +612,7 @@ struct OpenAIResponsesNetworkTests {
 
         data: {"type":"response.output_text.delta","delta":"好"}
 
-        data: {"type":"response.output_item.done","output":{"type":"function_call","call_id":"call_1","name":"searchTrack","arguments":"{\\"q\\":\\"夜曲\\"}"}}
+        data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"searchTrack","arguments":"{\\"q\\":\\"夜曲\\"}"}}
 
         data: {"type":"response.completed","response":{"id":"resp_1"}}
 
