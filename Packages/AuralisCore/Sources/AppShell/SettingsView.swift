@@ -356,6 +356,10 @@ struct ServerConnectionSheet: View {
         case failure(String)
     }
     @State private var testResult: TestResultDisplay?
+#if DEBUG
+    @State private var probeResult: LocalNetworkProbeResult?
+    @State private var isProbing = false
+#endif
 
     var body: some View {
         NavigationStack {
@@ -426,6 +430,40 @@ struct ServerConnectionSheet: View {
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
+#if DEBUG
+                Section("本地网络探测（DEBUG）") {
+                    Button {
+                        Task { await runProbe() }
+                    } label: {
+                        if isProbing {
+                            HStack {
+                                ProgressView().controlSize(.small)
+                                Text("正在探测…")
+                            }
+                        } else {
+                            Label("NWConnection 探测", systemImage: "network")
+                        }
+                    }
+                    .disabled(isProbing)
+                    if let probeResult {
+                        LabeledContent("TCP 状态", value: probeResult.state.rawValue)
+                        LabeledContent("unsatisfiedReason", value: probeResult.unsatisfiedReason ?? "—")
+                        if probeResult.isLocalNetworkDenied {
+                            Label("Local Network Privacy: DENIED / BLOCKED", systemImage: "xmark.octagon.fill")
+                                .foregroundStyle(theme.colorTokens.error.color)
+                        } else if probeResult.state == .ready {
+                            Label("Local Network TCP: AVAILABLE", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(theme.colorTokens.success.color)
+                        }
+                        if let err = probeResult.errorDescription, !err.isEmpty {
+                            diagnosticLongValue("错误详情", err)
+                        }
+                        Text("探测时间 \(probeResult.timestamp.formatted(date: .omitted, time: .standard))")
+                            .font(.caption2)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+#endif
                 if let localValidationError {
                     Section("需要处理") {
                         Label(localValidationError, systemImage: "exclamationmark.triangle.fill")
@@ -579,6 +617,26 @@ struct ServerConnectionSheet: View {
             testResult = .failure(ConnectionErrorDescription.describe(error))
         }
     }
+
+#if DEBUG
+    /// 用 NWConnection 对当前输入的服务器地址做 TCP 探测，观察本地网络隐私状态。
+    private func runProbe() async {
+        isProbing = true
+        defer { isProbing = false }
+        let rawURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: rawURL), let host = url.host, !host.isEmpty else {
+            probeResult = LocalNetworkProbeResult(
+                state: .failed,
+                unsatisfiedReason: nil,
+                errorDescription: "无法从服务器地址解析出 Host（示例：http://192.168.2.240:4533）",
+                timestamp: .now
+            )
+            return
+        }
+        let port = UInt16(url.port ?? (url.scheme == "https" ? 443 : 80))
+        probeResult = await LocalNetworkProbe.probe(host: host, port: port)
+    }
+#endif
 
     /// 网络诊断区的「长文本字段」行：标签独占一行、值完整换行显示且可选中复制，
     /// 避免 LabeledContent 的尾随值在 macOS 上被截断。
