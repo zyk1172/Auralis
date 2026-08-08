@@ -373,12 +373,12 @@ public struct OpenAICompatibleProvider: AIProvider {
         ]
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
-            body["tools"] = Self.encodeTools(tools)
+            body["tools"] = Self.encodeResponsesTools(tools)
         }
         return body
     }
 
-    /// 工具定义编码（Chat / Responses 两版共用）：
+    /// 工具定义编码（Chat Completions 版）：
     /// `{"type":"function","function":{name,description,parameters}}`。
     private static func encodeTools(_ tools: [AIToolDefinition]) -> [[String: Any]] {
         tools.map { tool -> [String: Any] in
@@ -389,6 +389,29 @@ public struct OpenAICompatibleProvider: AIProvider {
                 function["parameters"] = object
             }
             return ["type": "function", "function": function]
+        }
+    }
+
+    /// Responses API 工具定义编码：字段**平铺在顶层**。
+    ///
+    /// 注意：OpenAI 原生 Responses API 的工具形状与 Chat Completions 不同——
+    /// Chat 是 `{"type":"function","function":{name,description,parameters}}`，
+    /// Responses 是 `{"type":"function","name":...,"description":...,"parameters":...}`，
+    /// **没有嵌套的 `function` 键**。用 Chat 形状发给 /v1/responses 时服务端会忽略
+    /// 工具定义，模型因此永远不会返回 function_call，表现为「调不动工具」。
+    private static func encodeResponsesTools(_ tools: [AIToolDefinition]) -> [[String: Any]] {
+        tools.map { tool -> [String: Any] in
+            var item: [String: Any] = [
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+            ]
+            if let json = tool.parametersJSON,
+               let data = json.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                item["parameters"] = object
+            }
+            return item
         }
     }
 

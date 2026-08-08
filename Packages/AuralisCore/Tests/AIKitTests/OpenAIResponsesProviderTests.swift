@@ -475,14 +475,15 @@ struct OpenAIResponsesNetworkTests {
         #expect(input[3]["output"] as? String == "找到 1 首")
         #expect(input[4]["role"] as? String == "user")
 
-        // tools 与 Chat 版一致
+        // Responses API 工具字段平铺在顶层（无嵌套 "function" 键），
+        // 与 Chat Completions 的形状不同——这是「Responses 调不动工具」的回归锚点。
         let toolsBody = try #require(object["tools"] as? [[String: Any]])
         #expect(toolsBody.count == 1)
         #expect(toolsBody[0]["type"] as? String == "function")
-        let function = try #require(toolsBody[0]["function"] as? [String: Any])
-        #expect(function["name"] as? String == "searchTrack")
-        #expect(function["description"] as? String == "搜索曲目")
-        #expect(function["parameters"] != nil)
+        #expect(toolsBody[0]["name"] as? String == "searchTrack")
+        #expect(toolsBody[0]["description"] as? String == "搜索曲目")
+        #expect(toolsBody[0]["parameters"] is [String: Any])
+        #expect(toolsBody[0]["function"] == nil)
     }
 
     @Test func completesWithResponsesNonStream() async throws {
