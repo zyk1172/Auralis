@@ -2420,7 +2420,10 @@ public final class AuralisAppModel: ObservableObject {
             account: result.account,
             serverType: result.serverType,
             serverVersion: result.serverVersion,
-            trackCount: result.tracks.count
+            // 用去重后的曲目数：catalog.tracks 是 uniquedTracks(result.tracks)，
+            // 若同步结果含重复 TrackID（旧快照 / 同一首歌在多张专辑），
+            // 用 result.tracks.count 会导致「设置-服务器 已同步」与「音乐库 歌曲数」不一致。
+            trackCount: tracks.count
         )
         // 登记服务器并按需触发首次全量 / 增量目录同步（后台进行，不阻塞 UI）。
         let account = result.account
