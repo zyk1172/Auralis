@@ -227,4 +227,103 @@ struct OpenAICompatibleProviderTests {
         )
         #expect(provider.supportsToolCalling == true)
     }
+
+    // MARK: - Chat 流式 tool_calls 分片拼装
+
+    @Test func parsesToolCallFragmentWithIdNameAndEmptyArguments() {
+        let fragments = OpenAICompatibleProvider.streamToolCallFragments(
+            from: #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"playTrack","arguments":""}}]}}]}"#
+        )
+        #expect(fragments.count == 1)
+        #expect(fragments[0].index == 0)
+        #expect(fragments[0].id == "call_1")
+        #expect(fragments[0].name == "playTrack")
+        #expect(fragments[0].arguments == "")
+    }
+
+    /// arguments 分片：后续 chunk 只有 index + function.arguments，没有 id / name。
+    @Test func parsesArgumentOnlyToolCallFragment() {
+        let fragments = OpenAICompatibleProvider.streamToolCallFragments(
+            from: #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"trackID\":\"srv"}}]}}]}"#
+        )
+        #expect(fragments.count == 1)
+        #expect(fragments[0].index == 0)
+        #expect(fragments[0].id == nil)
+        #expect(fragments[0].name == nil)
+        #expect(fragments[0].arguments == "{\"trackID\":\"srv")
+    }
+
+    /// 同一 index 的多个 fragment 跨 chunk 合并后拼成完整 tool call。
+    @Test func mergesToolCallFragmentsAndAssembles() {
+        var fragments: [Int: OpenAICompatibleProvider.ChatToolCallFragment] = [:]
+        func merge(_ list: [OpenAICompatibleProvider.ChatToolCallFragment]) {
+            for fragment in list {
+                if var existing = fragments[fragment.index] {
+                    if existing.id == nil { existing.id = fragment.id }
+                    if existing.name == nil { existing.name = fragment.name }
+                    existing.arguments += fragment.arguments
+                    fragments[fragment.index] = existing
+                } else {
+                    fragments[fragment.index] = fragment
+                }
+            }
+        }
+        merge(OpenAICompatibleProvider.streamToolCallFragments(
+            from: #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"searchTrack","arguments":""}}]}}]}"#
+        ))
+        merge(OpenAICompatibleProvider.streamToolCallFragments(
+            from: #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\""}}]}}]}"#
+        ))
+        merge(OpenAICompatibleProvider.streamToolCallFragments(
+            from: #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"夜曲\"}"}}]}}]}"#
+        ))
+
+        let calls = OpenAICompatibleProvider.assembleToolCalls(from: fragments)
+        #expect(calls.count == 1)
+        #expect(calls[0].id == "call_1")
+        #expect(calls[0].name == "searchTrack")
+        #expect(calls[0].arguments == "{\"q\":\"夜曲\"}")
+    }
+
+    /// 多个 tool call（不同 index）并行分片：各自独立拼装且按 index 升序返回。
+    @Test func assemblesMultipleToolCallsInIndexOrder() {
+        let fragments: [Int: OpenAICompatibleProvider.ChatToolCallFragment] = [
+            1: .init(index: 1, id: "call_2", name: "playTrack", arguments: "{}"),
+            0: .init(index: 0, id: "call_1", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}"),
+        ]
+        let calls = OpenAICompatibleProvider.assembleToolCalls(from: fragments)
+        #expect(calls.map(\.id) == ["call_1", "call_2"])
+    }
+
+    /// 缺 id 或 name 的异常 fragment 不产出半成品调用。
+    @Test func dropsFragmentsMissingIdentity() {
+        let fragments: [Int: OpenAICompatibleProvider.ChatToolCallFragment] = [
+            0: .init(index: 0, id: nil, name: "searchTrack", arguments: "{}"),
+        ]
+        #expect(OpenAICompatibleProvider.assembleToolCalls(from: fragments).isEmpty)
+    }
+
+    @Test func ignoresChunksWithoutToolCalls() {
+        #expect(OpenAICompatibleProvider.streamToolCallFragments(from: #"{"choices":[{"delta":{"content":"你好"}}]}"#).isEmpty)
+        #expect(OpenAICompatibleProvider.streamToolCallFragments(from: #"{"choices":[{"message":{"content":"hi"}}]}"#).isEmpty)
+        #expect(OpenAICompatibleProvider.streamToolCallFragments(from: "not json").isEmpty)
+    }
+
+    /// 流式 usage：Chat 网关在末尾 chunk 带 `usage`，Responses 挂在 `response.usage` 下。
+    @Test func parsesStreamingUsage() {
+        let chat = OpenAICompatibleProvider.streamUsage(
+            from: #"{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}"#
+        )
+        #expect(chat?.input == 11)
+        #expect(chat?.output == 7)
+
+        let responses = OpenAICompatibleProvider.responsesUsage(
+            from: #"{"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":9}}}"#
+        )
+        #expect(responses?.input == 3)
+        #expect(responses?.output == 9)
+
+        #expect(OpenAICompatibleProvider.streamUsage(from: #"{"choices":[{"delta":{"content":"x"}}]}"#) == nil)
+        #expect(OpenAICompatibleProvider.responsesUsage(from: #"{"type":"response.output_text.delta","delta":"x"}"#) == nil)
+    }
 }

@@ -87,6 +87,9 @@ public final class AgentCoordinator: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var confirmationContinuation: CheckedContinuation<Bool, Never>?
     private var consentContinuation: CheckedContinuation<AIConsentDecision, Never>?
+    /// 当前正在流式输出的 assistant 气泡 id：`.streaming` 增量累加进该消息，
+    /// 直到收到非流式消息（最终文本 / 工具进度 / 卡片等）把它原地定型为止。
+    private var streamingMessageID: UUID?
 
     /// 单次请求带给模型的最大 token 预算（超出时裁剪历史）。
     public static let tokenBudget = 12000
@@ -306,6 +309,9 @@ public final class AgentCoordinator: ObservableObject {
                 case let .error(text):
                     let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !t.isEmpty { blocks.append(t) }
+                case let .streaming(text):
+                    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !t.isEmpty { blocks.append(t) }
                 default:
                     break
                 }
@@ -468,10 +474,67 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
+    /// 接收 Runner 发出的消息。
+    ///
+    /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
+    /// - `.streaming` 增量 → 累加进当前 in-flight 气泡；没有气泡时先新建一条；
+    /// - 非流式消息（最终 `.text` / 工具进度 / 卡片 / 错误等）→ 若存在 in-flight
+    ///   气泡，则**原地替换**该气泡（同一位置，不另起一条），并持久化最终消息。
+    ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     private func receive(_ message: AgentChatMessage, sessionID: UUID) async {
+        // 流式增量：累加进 in-flight 气泡（或在没有气泡时新建一条）。
+        if let delta = Self.streamingDeltaText(from: message) {
+            if let streamingID = streamingMessageID,
+               let index = messages.lastIndex(where: { $0.id == streamingID }) {
+                var existing = messages[index]
+                let accumulated = Self.accumulatedStreamingText(existing) + delta
+                existing = AgentChatMessage(
+                    id: existing.id,
+                    role: .assistant,
+                    messages: [.streaming(accumulated)],
+                    createdAt: existing.createdAt
+                )
+                messages[index] = existing
+            } else {
+                streamingMessageID = message.id
+                messages.append(message)
+            }
+            return
+        }
+
+        // 非流式消息：把 in-flight 气泡原地定型为这条最终消息（同一位置，不另起一条）。
+        if let streamingID = streamingMessageID {
+            streamingMessageID = nil
+            if let index = messages.lastIndex(where: { $0.id == streamingID }) {
+                messages[index] = message
+                await sessionStore.append(message, to: sessionID)
+                await trimHistoryIfNeeded(sessionID: sessionID)
+                return
+            }
+        }
         messages.append(message)
         await sessionStore.append(message, to: sessionID)
         await trimHistoryIfNeeded(sessionID: sessionID)
+    }
+
+    /// 若消息是流式增量消息，返回其增量文本；否则返回 nil。
+    private static func streamingDeltaText(from message: AgentChatMessage) -> String? {
+        guard message.role == .assistant, !message.messages.isEmpty else { return nil }
+        var pieces: [String] = []
+        for item in message.messages {
+            if case let .streaming(text) = item { pieces.append(text) }
+        }
+        guard !pieces.isEmpty else { return nil }
+        return pieces.joined()
+    }
+
+    /// 汇总一条消息里已有的流式文本（用于在 in-flight 气泡上继续累加）。
+    private static func accumulatedStreamingText(_ message: AgentChatMessage) -> String {
+        var pieces: [String] = []
+        for item in message.messages {
+            if case let .streaming(text) = item { pieces.append(text) }
+        }
+        return pieces.joined()
     }
 
     /// token 预算保护：会话过长时保留最近的消息，避免请求被服务端拒绝。

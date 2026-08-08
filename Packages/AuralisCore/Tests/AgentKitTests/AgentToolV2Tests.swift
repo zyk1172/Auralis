@@ -218,7 +218,7 @@ func v2Diagnostics() async throws {
 
 @Suite("队列 v2 工具")
 struct QueueV2Tests {
-    @Test("queue_replace / queue_clear 需要确认且真实执行")
+    @Test("queue_replace 直接执行；queue_clear 仍需确认且两者真实执行")
     func confirmationAndExecution() async throws {
         let store = try makeV2Store()
         let tracks = [
@@ -228,7 +228,9 @@ struct QueueV2Tests {
         try await seedV2(store, tracks)
         let bridge = MockAgentBridge(activeServerID: "s")
 
-        #expect(AgentToolRegistry.descriptor(for: "queue_replace")?.requiresConfirmation == true)
+        // 用户要求「替换队列不需要确认」：queue_replace 直接执行；
+        // 清空队列仍属破坏性操作，保留确认。
+        #expect(AgentToolRegistry.descriptor(for: "queue_replace")?.requiresConfirmation == false)
         #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.requiresConfirmation == true)
 
         let clear = await AgentToolkit.executeV2(

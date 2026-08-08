@@ -92,6 +92,15 @@ public struct AgentRunner {
         }
     }
 
+    /// 一次流式模型生成的结果：累积文本 + 收集到的原生工具调用 + token 用量。
+    /// 与 `AICompletionResponse` 对应，但由 `provider.stream()` 的增量事件拼装而成。
+    private struct StreamOutcome: Sendable {
+        var text = ""
+        var toolCalls: [AIToolCall] = []
+        var inputTokens: Int?
+        var outputTokens: Int?
+    }
+
     /// 执行一次用户请求。
     /// - Parameters:
     ///   - provider: 可用时为 LLM 规划；为 nil 时走本地规则降级。
@@ -216,9 +225,11 @@ public struct AgentRunner {
                 maxTokens: auralisDefaultMaxOutputTokens,
                 tools: nativeMode ? toolDefinitions : nil
             )
-            let response: AICompletionResponse
+            let outcome: StreamOutcome
             do {
-                response = try await completeWithRetry(provider: provider, request: request)
+                outcome = try await streamWithRetry(provider: provider, request: request) { delta in
+                    await Self.emitStreamingDelta(delta, emit: emit)
+                }
             } catch is CancellationError {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                 return
@@ -235,7 +246,9 @@ public struct AgentRunner {
                         tools: nil
                     )
                     do {
-                        response = try await completeWithRetry(provider: provider, request: fallbackRequest)
+                        outcome = try await streamWithRetry(provider: provider, request: fallbackRequest) { delta in
+                            await Self.emitStreamingDelta(delta, emit: emit)
+                        }
                     } catch is CancellationError {
                         await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                         return
@@ -268,17 +281,20 @@ public struct AgentRunner {
             await progress(AgentProgress(
                 toolSteps: toolStepCount,
                 currentStep: "正在理解请求",
-                inputTokens: response.inputTokens,
-                outputTokens: response.outputTokens
+                inputTokens: outcome.inputTokens,
+                outputTokens: outcome.outputTokens
             ))
 
-            // 解析本轮工具调用：原生 tool_calls 优先，文本 ACTION 兜底。
-            let nativeCalls = nativeMode ? (response.toolCalls ?? []) : []
-            let textActions = nativeCalls.isEmpty ? parseActions(from: response.content) : []
+            // 解析本轮工具调用：原生 tool_calls 优先（流式事件收集），文本 ACTION 兜底。
+            let streamedText = outcome.text
+            let nativeCalls = nativeMode ? outcome.toolCalls : []
+            let textActions = nativeCalls.isEmpty ? parseActions(from: streamedText) : []
 
             if nativeCalls.isEmpty && textActions.isEmpty {
                 // 模型已输出最终回答 → 正常终止本轮任务。
-                let reply = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                // 流式收尾：Coordinator 会把 in-flight 流式气泡原地定型为该最终文本，
+                // 不会出现「流式半成品 + 成品」两条重复气泡。
+                let reply = streamedText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !reply.isEmpty else {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("模型这次返回了空内容，已改用本地能力处理。")]))
                     await runOffline(
@@ -298,9 +314,9 @@ public struct AgentRunner {
 
             // 有工具调用：先把 assistant 消息（含 tool_calls）写入对话，再逐条执行回灌。
             if nativeMode, !nativeCalls.isEmpty {
-                conversation.append(AIMessage(role: .assistant, content: response.content, toolCalls: nativeCalls))
+                conversation.append(AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls))
             } else {
-                conversation.append(AIMessage(role: .assistant, content: response.content))
+                conversation.append(AIMessage(role: .assistant, content: streamedText))
             }
 
             // 统一调用视图：原生调用带稳定 id，文本 ACTION 合成 text-N。
@@ -579,6 +595,89 @@ public struct AgentRunner {
         return false
     }
 
+    /// 记录一次流式请求是否已经产出过可见内容。
+    /// 只有「一个 delta 都还没产出就失败」的瞬时故障才值得重试，
+    /// 避免把已经展示给用户的流式文本再打一遍。
+    private actor StreamProgress {
+        private(set) var hasOutput = false
+        func note(_ delta: String) {
+            if !delta.isEmpty { hasOutput = true }
+        }
+    }
+
+    /// 流式生成一轮模型回答：逐 delta 推送增量，同时收集文本与原生工具调用。
+    ///
+    /// 与 `completeWithRetry` 对齐的容错：
+    /// - 瞬时故障（5xx / 429 / 网络抖动 / 空响应 / 截断 JSON）且尚未产出任何 delta → 补一次重试；
+    /// - 单轮超时 / 用户取消 → 不再重试，直接上抛（超时降级到本地能力，取消按「已取消」处理）。
+    private static func streamWithRetry(
+        provider: any AIProvider,
+        request: AICompletionRequest,
+        onDelta: @escaping @Sendable (String) async -> Void
+    ) async throws -> StreamOutcome {
+        let progress = StreamProgress()
+        let consume: (any AIProvider, AICompletionRequest) async throws -> StreamOutcome = { provider, request in
+            try await streamOnce(provider: provider, request: request) { delta in
+                await progress.note(delta)
+                await onDelta(delta)
+            }
+        }
+        do {
+            return try await consume(provider, request)
+        } catch {
+            // 取消 / 超时 / 确定性错误一律不重试，与 completeWithRetry 保持一致。
+            guard Self.isTransientFailure(error), await progress.hasOutput == false else {
+                throw error
+            }
+            try await Task.sleep(nanoseconds: UInt64(transientRetryDelay * 1_000_000_000))
+            return try await consume(provider, request)
+        }
+    }
+
+    /// 单次流式消费（带单轮超时）：遍历 provider 流事件，拼装 `StreamOutcome`。
+    ///
+    /// 取消语义：消费方任务被取消时，`AsyncThrowingStream` 的 for-await 会迅速结束
+    /// （底层 `onTermination` 同步取消网络请求），这里再显式补一个取消检查，
+    /// 把「用户点停止」干净地映射成 `CancellationError`，而不是当作正常收尾继续跑工具。
+    private static func streamOnce(
+        provider: any AIProvider,
+        request: AICompletionRequest,
+        onDelta: @escaping @Sendable (String) async -> Void
+    ) async throws -> StreamOutcome {
+        try await withTimeout(roundTimeout) {
+            var outcome = StreamOutcome()
+            for try await event in provider.stream(request) {
+                if Task.isCancelled { throw CancellationError() }
+                switch event {
+                case .started:
+                    break
+                case let .delta(text):
+                    outcome.text += text
+                    await onDelta(text)
+                case let .toolCall(call):
+                    outcome.toolCalls.append(call)
+                case let .usage(input, output):
+                    outcome.inputTokens = input
+                    outcome.outputTokens = output
+                case .completed:
+                    return outcome
+                }
+            }
+            if Task.isCancelled { throw CancellationError() }
+            return outcome
+        }
+    }
+
+    /// 把一段流式文本增量推给界面：以 `.streaming` 消息发出，
+    /// 由 AgentCoordinator 累加进当前 in-flight 流式气泡。
+    private static func emitStreamingDelta(
+        _ delta: String,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void
+    ) async {
+        guard !delta.isEmpty else { return }
+        await emit(AgentChatMessage(role: .assistant, messages: [.streaming(delta)]))
+    }
+
     // MARK: - Offline rule-based fallback
 
     private static func runOffline(
@@ -785,6 +884,8 @@ public struct AgentRunner {
             return "操作预览：\(title)（\(detail)）"
         case let .error(value):
             return "错误：\(value)"
+        case let .streaming(value):
+            return value
         case .toolProgress, .confirmation:
             return ""
         }
@@ -950,6 +1051,8 @@ public struct AgentRunner {
                     content += "（歌单提案「\(name)」，\(tracks.count) 首）\n"
                 case let .error(text):
                     content += "错误：\(text)\n"
+                case let .streaming(text):
+                    content += text + "\n"
                 default:
                     break
                 }

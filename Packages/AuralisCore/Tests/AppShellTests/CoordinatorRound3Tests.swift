@@ -57,12 +57,28 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
         return AICompletionResponse(model: request.model, content: content)
     }
 
+    /// 流式路径与 `complete` 语义一致：取下一个内容块分段 delta 推送，
+    /// 让 AgentRunner 走真实的流式收尾逻辑（文本 ACTION 协议）。
     func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
-            continuation.yield(.started(model: request.model))
-            continuation.yield(.completed)
-            continuation.finish()
+            let task = Task {
+                let content = remaining.isEmpty ? closing : remaining.removeFirst()
+                continuation.yield(.started(model: request.model))
+                let chunks = Self.splitForStreaming(content)
+                for chunk in chunks {
+                    continuation.yield(.delta(chunk))
+                }
+                continuation.yield(.completed)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private static func splitForStreaming(_ content: String) -> [String] {
+        guard content.count > 2 else { return [content] }
+        let mid = content.index(content.startIndex, offsetBy: content.count / 2)
+        return [String(content[..<mid]), String(content[mid...])]
     }
 }
 

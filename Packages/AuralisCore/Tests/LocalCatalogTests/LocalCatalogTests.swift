@@ -148,3 +148,39 @@ func multiServerRatingIsolation() async throws {
     let hits = try await store.searchTracks(query: "ZZAlphaSong", serverID: "alpha")
     #expect(hits.first?.userRating == 5)
 }
+
+@Test("allAlbums/allArtists read back staged records, scoped per server")
+func allAlbumsAndArtistsRoundTrip() async throws {
+    let store = try makeStore()
+    let serverID: ServerID = "alpha"
+    let artist = Artist(id: "ar-1", serverID: serverID, name: "Artist Alpha", albumCount: 1)
+    let album = Album(
+        id: "al-1", serverID: serverID, artistID: ArtistID(rawValue: "ar-1"),
+        title: "Album One", artistName: "Artist Alpha", year: 2024
+    )
+    let track = makeTrack(serverID: serverID, remoteID: "t1", title: "Song 1")
+    let session = try await store.beginSync(serverID: serverID, mode: .full)
+    try await store.stageArtists([artist], session: session)
+    try await store.stageAlbums([album], session: session)
+    try await store.stageTracks([track], session: session)
+    try await store.completeSync(session, completedAt: .now)
+
+    let albums = try await store.allAlbums(serverID: serverID)
+    #expect(albums.count == 1)
+    #expect(albums.first?.id.rawValue == "al-1")
+    #expect(albums.first?.title == "Album One")
+    #expect(albums.first?.year == 2024)
+
+    let artists = try await store.allArtists(serverID: serverID)
+    #expect(artists.count == 1)
+    #expect(artists.first?.id.rawValue == "ar-1")
+    #expect(artists.first?.name == "Artist Alpha")
+
+    // 多服务器隔离：另一台服务器读不到。
+    #expect(try await store.allAlbums(serverID: "beta").isEmpty)
+    #expect(try await store.allArtists(serverID: "beta").isEmpty)
+
+    // 不带 serverID（nil）时返回全部。
+    #expect(try await store.allAlbums(serverID: nil).count == 1)
+    #expect(try await store.allArtists(serverID: nil).count == 1)
+}

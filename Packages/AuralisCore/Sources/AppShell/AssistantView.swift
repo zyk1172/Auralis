@@ -381,6 +381,21 @@ struct AssistantView: View {
                 .frame(maxWidth: 560, alignment: isUser ? .trailing : .leading)
                 .textSelection(.enabled)
 
+        // 流式输出中的 assistant 文本：增量追加，末尾带呼吸光标示意「正在生成」。
+        case let .streaming(text):
+            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                Text(text.isEmpty ? " " : text)
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                Text("▌")
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .opacity(0.8)
+            }
+            .padding(AuralisSpacing.medium)
+            .background(theme.colorTokens.elevated.color.opacity(0.7))
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .frame(maxWidth: 560, alignment: .leading)
+            .textSelection(.enabled)
+
         case let .trackCards(cards):
             TrackCardList(cards: cards, agent: agent, theme: theme)
 

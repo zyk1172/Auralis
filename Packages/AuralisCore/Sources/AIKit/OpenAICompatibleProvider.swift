@@ -124,6 +124,12 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// Chat Completions 流式（SSE 按 `choices[0].delta` 解析）。
+    ///
+    /// 同时补全原生 tool calling：Chat 流式里 `choices[0].delta.tool_calls`
+    /// 是**分片片段**（同一 `index` 的 id/name/arguments 分散在多个 chunk，
+    /// arguments 需要跨 chunk 拼接），这里按 `index` 合并 fragments，
+    /// 到流结束（`[DONE]` 或自然结束）时统一产出完整 `.toolCall`，
+    /// 保证参数不会因为提前产出而被截断。
     private func chatStream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -131,11 +137,13 @@ public struct OpenAICompatibleProvider: AIProvider {
                     let (bytes, _) = try await performRequestBytes(body: requestBody(request, stream: true))
                     continuation.yield(.started(model: request.model))
                     var parser = SSEParser()
+                    var toolCallFragments: [Int: ChatToolCallFragment] = [:]
                     for try await line in bytes.lines {
                         // URLSession 按行吐出，SSEParser 以空行分块；
                         // 逐行补 "\n" 后再补一个空行切出完整事件。
                         for message in parser.append(Data((line + "\n\n").utf8)) {
                             if message.data == "[DONE]" {
+                                Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
                                 continuation.yield(.completed)
                                 continuation.finish()
                                 return
@@ -143,8 +151,23 @@ public struct OpenAICompatibleProvider: AIProvider {
                             if let delta = Self.streamDelta(from: message.data) {
                                 continuation.yield(.delta(delta))
                             }
+                            if let usage = Self.streamUsage(from: message.data) {
+                                continuation.yield(.usage(input: usage.input, output: usage.output))
+                            }
+                            for fragment in Self.streamToolCallFragments(from: message.data) {
+                                if var existing = toolCallFragments[fragment.index] {
+                                    if existing.id == nil { existing.id = fragment.id }
+                                    if existing.name == nil { existing.name = fragment.name }
+                                    existing.arguments += fragment.arguments
+                                    toolCallFragments[fragment.index] = existing
+                                } else {
+                                    toolCallFragments[fragment.index] = fragment
+                                }
+                            }
                         }
                     }
+                    // 网关不发 [DONE] 也视为正常结束（沿用既有行为），此时同样补发 tool calls。
+                    Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
                     continuation.yield(.completed)
                     continuation.finish()
                 } catch {
@@ -152,6 +175,16 @@ public struct OpenAICompatibleProvider: AIProvider {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// 把按 index 合并好的 tool call fragments 按顺序产出 `.toolCall` 事件。
+    private nonisolated static func yieldAssembledToolCalls(
+        fragments: [Int: ChatToolCallFragment],
+        continuation: AsyncThrowingStream<AIStreamEvent, Error>.Continuation
+    ) {
+        for call in assembleToolCalls(from: fragments) {
+            continuation.yield(.toolCall(call))
         }
     }
 
@@ -182,6 +215,9 @@ public struct OpenAICompatibleProvider: AIProvider {
                             case let .toolCall(call):
                                 continuation.yield(.toolCall(call))
                             case .done:
+                                if let usage = Self.responsesUsage(from: message.data) {
+                                    continuation.yield(.usage(input: usage.input, output: usage.output))
+                                }
                                 continuation.yield(.completed)
                                 continuation.finish()
                                 return
@@ -908,6 +944,86 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
         }
         return sawEvent ? (merged, model, inputTokens, outputTokens) : nil
+    }
+
+    /// Chat Completions 流式 tool_calls 的分片片段。
+    /// 同一 `index` 的多个 chunk 合并成一个 `ChatToolCallFragment`：
+    /// id / name 通常只在首个 chunk 出现，arguments 需要跨 chunk 拼接。
+    struct ChatToolCallFragment: Sendable {
+        let index: Int
+        var id: String?
+        var name: String?
+        var arguments: String
+
+        init(index: Int, id: String? = nil, name: String? = nil, arguments: String = "") {
+            self.index = index
+            self.id = id
+            self.name = name
+            self.arguments = arguments
+        }
+    }
+
+    /// 从 Chat Completions 流式 chunk 提取 usage（多数网关在最后一个 chunk 带 `usage`）。
+    nonisolated static func streamUsage(from data: String) -> (input: Int, output: Int)? {
+        guard let payload = data.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let usage = object["usage"] as? [String: Any]
+        else { return nil }
+        let input = usage["prompt_tokens"] as? Int
+        let output = usage["completion_tokens"] as? Int
+        guard input != nil || output != nil else { return nil }
+        return (input ?? 0, output ?? 0)
+    }
+
+    /// 从 Responses 流式事件提取 usage（挂在 `response.usage` 下）。
+    nonisolated static func responsesUsage(from data: String) -> (input: Int, output: Int)? {
+        guard let payload = data.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let response = object["response"] as? [String: Any],
+              let usage = response["usage"] as? [String: Any]
+        else { return nil }
+        let input = (usage["input_tokens"] as? Int) ?? (usage["prompt_tokens"] as? Int)
+        let output = (usage["output_tokens"] as? Int) ?? (usage["completion_tokens"] as? Int)
+        guard input != nil || output != nil else { return nil }
+        return (input ?? 0, output ?? 0)
+    }
+
+    /// 解析一条 Chat Completions SSE chunk 里的 `choices[0].delta.tool_calls` 分片。
+    /// 结构不认识 / 没有 tool_calls 时返回空数组。
+    nonisolated static func streamToolCallFragments(from data: String) -> [ChatToolCallFragment] {
+        guard let payload = data.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let choices = object["choices"] as? [[String: Any]],
+              let delta = choices.first?["delta"] as? [String: Any],
+              let rawCalls = delta["tool_calls"] as? [[String: Any]]
+        else { return [] }
+        return rawCalls.compactMap { raw -> ChatToolCallFragment? in
+            guard let index = raw["index"] as? Int else { return nil }
+            let id = raw["id"] as? String
+            var name: String?
+            var arguments = ""
+            if let function = raw["function"] as? [String: Any] {
+                name = function["name"] as? String
+                if let args = function["arguments"] as? String {
+                    arguments = args
+                } else if let args = function["arguments"] {
+                    arguments = stringify(args) ?? ""
+                }
+            }
+            return ChatToolCallFragment(index: index, id: id, name: name, arguments: arguments)
+        }
+    }
+
+    /// 把按 index 合并好的 fragments 组装成完整的 `AIToolCall`（按 index 升序）。
+    /// 缺少 id 或 name 的 fragment（异常网关）直接丢弃，不产出半成品调用。
+    nonisolated static func assembleToolCalls(from fragments: [Int: ChatToolCallFragment]) -> [AIToolCall] {
+        fragments.keys.sorted().compactMap { index -> AIToolCall? in
+            guard let fragment = fragments[index],
+                  let id = fragment.id,
+                  let name = fragment.name
+            else { return nil }
+            return AIToolCall(id: id, name: name, arguments: fragment.arguments)
+        }
     }
 
     private nonisolated static func streamDelta(from data: String) -> String? {

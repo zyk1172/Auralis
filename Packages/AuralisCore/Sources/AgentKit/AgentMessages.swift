@@ -16,6 +16,10 @@ public enum AgentMessage: Sendable {
     case actionPreview(title: String, detail: String)
     /// 工具执行进度（透明展示规划过程）。
     case toolProgress(step: String)
+    /// 流式输出中的 assistant 文本增量：同一流式气泡按先后顺序累加，
+    /// 由 AgentCoordinator 合并到「最后一条 in-flight 流式消息」，直到被
+    /// 最终文本 / 工具执行等非流式消息定型为止。
+    case streaming(String)
     /// 错误。
     case error(String)
     /// 需要用户确认的操作。
@@ -24,7 +28,7 @@ public enum AgentMessage: Sendable {
 
 extension AgentMessage: Codable {
     private enum Kind: String, Codable {
-        case text, trackCards, albumCards, playlistProposal, actionPreview, toolProgress, error, confirmation
+        case text, trackCards, albumCards, playlistProposal, actionPreview, toolProgress, error, confirmation, streaming
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -56,6 +60,9 @@ extension AgentMessage: Codable {
         case let .confirmation(value):
             try container.encode(Kind.confirmation, forKey: .type)
             try container.encode(value, forKey: .value)
+        case let .streaming(value):
+            try container.encode(Kind.streaming, forKey: .type)
+            try container.encode(value, forKey: .value)
         }
     }
 
@@ -79,6 +86,7 @@ extension AgentMessage: Codable {
         case .toolProgress: self = .toolProgress(step: try container.decode(String.self, forKey: .value))
         case .error: self = .error(try container.decode(String.self, forKey: .value))
         case .confirmation: self = .confirmation(try container.decode(PendingConfirmation.self, forKey: .value))
+        case .streaming: self = .streaming(try container.decode(String.self, forKey: .value))
         }
     }
 

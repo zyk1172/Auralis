@@ -116,12 +116,30 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
         return AICompletionResponse(model: request.model, content: content)
     }
 
+    /// 流式路径与 `complete` 语义一致：取下一个内容块，分几段 delta 推送，
+    /// 让 AgentRunner 走真实的流式收尾逻辑（文本 ACTION 协议）。
     func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
-            continuation.yield(.started(model: request.model))
-            continuation.yield(.completed)
-            continuation.finish()
+            let task = Task {
+                requests.append(request)
+                let content = remaining.isEmpty ? closing : remaining.removeFirst()
+                continuation.yield(.started(model: request.model))
+                let chunks = Self.splitForStreaming(content)
+                for chunk in chunks {
+                    continuation.yield(.delta(chunk))
+                }
+                continuation.yield(.completed)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// 把一段文本拆成几段增量，模拟真实 SSE 的逐块输出。
+    fileprivate static func splitForStreaming(_ content: String) -> [String] {
+        guard content.count > 2 else { return [content] }
+        let mid = content.index(content.startIndex, offsetBy: content.count / 2)
+        return [String(content[..<mid]), String(content[mid...])]
     }
 }
 
@@ -591,12 +609,37 @@ private final class NativeToolAIProvider: AIProvider, @unchecked Sendable {
         return AICompletionResponse(model: request.model, content: "", finishReason: "tool_calls", toolCalls: calls)
     }
 
+    /// 流式路径与 `complete` 语义一致：有工具调用时逐个产出 `.toolCall`，
+    /// 否则把 closing 文本分段 delta 推送，走真实流式收尾。
     func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
-            continuation.yield(.started(model: request.model))
-            continuation.yield(.completed)
-            continuation.finish()
+            let task = Task {
+                requests.append(request)
+                continuation.yield(.started(model: request.model))
+                guard !remaining.isEmpty else {
+                    for chunk in Self.splitForStreaming(closing) {
+                        continuation.yield(.delta(chunk))
+                    }
+                    continuation.yield(.completed)
+                    continuation.finish()
+                    return
+                }
+                let calls = remaining
+                remaining = []
+                for call in calls {
+                    continuation.yield(.toolCall(call))
+                }
+                continuation.yield(.completed)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private static func splitForStreaming(_ content: String) -> [String] {
+        guard content.count > 2 else { return [content] }
+        let mid = content.index(content.startIndex, offsetBy: content.count / 2)
+        return [String(content[..<mid]), String(content[mid...])]
     }
 }
 
@@ -628,6 +671,191 @@ func nativeToolCallingAssociatesResults() async throws {
     #expect(toolMessage != nil)
     #expect(toolMessage?.content.contains("成功") == true)
 }
+
+// MARK: - 流式输出
+
+/// 只输出分段文本的流式 Provider（无工具调用）。
+private final class StreamingTextAIProvider: AIProvider, @unchecked Sendable {
+    private let chunks: [String]
+    init(chunks: [String]) { self.chunks = chunks }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "stream", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        AICompletionResponse(model: request.model, content: chunks.joined())
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(.started(model: request.model))
+                for chunk in chunks {
+                    continuation.yield(.delta(chunk))
+                }
+                continuation.yield(.completed)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// 先流式输出文本、再产出原生工具调用的 Provider（native 模式）。
+private final class StreamingToolCallAIProvider: AIProvider, @unchecked Sendable {
+    private let calls: [AIToolCall]
+    private let closing: String
+    private(set) var requests: [AICompletionRequest] = []
+    var supportsToolCalling: Bool { true }
+
+    init(toolCalls: [AIToolCall], closing: String = "已处理完成。") {
+        self.calls = toolCalls
+        self.closing = closing
+    }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "stream-tool", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        AICompletionResponse(model: request.model, content: closing)
+    }
+
+    /// 第一轮：分段 delta 文本 + 逐个 `.toolCall`；后续轮次：只输出 closing 文本。
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                requests.append(request)
+                continuation.yield(.started(model: request.model))
+                let first = requests.count == 1
+                if first {
+                    for chunk in ["好的，我", "来搜索这首歌。"] {
+                        continuation.yield(.delta(chunk))
+                    }
+                    for call in calls {
+                        continuation.yield(.toolCall(call))
+                    }
+                } else {
+                    for chunk in ScriptedAIProvider.splitForStreaming(closing) {
+                        continuation.yield(.delta(chunk))
+                    }
+                }
+                continuation.yield(.completed)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// 流式过程中途失败的 Provider：先推一小段文本，再抛错误。
+private final class StreamErrorAIProvider: AIProvider, @unchecked Sendable {
+    let detail: String
+    init(detail: String = "测试错误") { self.detail = detail }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "stream-error", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        throw AIProviderError.malformedResponse(detail: detail, retryable: false)
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(.started(model: request.model))
+                continuation.yield(.delta("部分"))
+                continuation.finish(throwing: AIProviderError.malformedResponse(detail: detail, retryable: false))
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+@Test("Streaming: deltas are emitted and finalized into the final text")
+func streamingEmitsDeltasAndFinalizes() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let provider = StreamingTextAIProvider(chunks: ["你", "好，", "已完成。"])
+
+    await AgentRunner.run(
+        userText: "测试流式",
+        provider: provider,
+        model: "stream-model",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    let all = await collector.all()
+    // 每个 delta 都以 .streaming 增量发出。
+    let streamed = all.flatMap(\.messages).filter { if case .streaming = $0 { return true } else { return false } }
+    #expect(streamed.count == 3)
+    // 收尾时产出最终文本。
+    #expect(await collector.containsText("你好，已完成。"))
+}
+
+@Test("Streaming: tool calls collected from stream are executed and loop continues")
+func streamingToolCallsExecuteAndFinalize() async throws {
+    let store = try makeStore()
+    try await seed(store, [makeTrack(serverID: "test-server", remoteID: "s-1", title: "Stream Song")])
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let gid = GlobalID(serverID: "test-server", remoteID: "s-1")
+    let provider = StreamingToolCallAIProvider(toolCalls: [
+        AIToolCall(id: "call-s", name: "playTrack", arguments: "{\"trackID\":\"\(gid.description)\"}"),
+    ])
+
+    await AgentRunner.run(
+        userText: "播放流式歌曲",
+        provider: provider,
+        model: "stream-tool-model",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    // 流式过程中收集到的 tool call 被真实执行。
+    #expect(await bridge.playedTracks.contains(gid))
+    // 第二轮请求把 tool 结果以 role == .tool + tool_call_id 回灌。
+    let second = provider.requests[1]
+    let toolMessage = second.messages.first { $0.role == .tool && $0.toolCallID == "call-s" }
+    #expect(toolMessage != nil)
+    // 最终回答仍然出现（流式 delta 已被定型为最终文本）。
+    #expect(await collector.containsText("已处理完成。"))
+}
+
+@Test("Streaming: mid-stream error degrades to local fallback with error text")
+func streamingErrorDegradesToLocalFallback() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let provider = StreamErrorAIProvider(detail: "测试错误")
+
+    await AgentRunner.run(
+        userText: "测试失败",
+        provider: provider,
+        model: "stream-error-model",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    #expect(await collector.containsText("AI 服务暂时不可用"))
+    #expect(await collector.containsText("测试错误"))
+    // 兜底路径仍然生效（本地搜索找不到 → 提示）。
+    #expect(await collector.containsText("本地未找到匹配的歌曲") == true)
+}
+
 
 @Test("Tool failure does not terminate the Agent loop")
 func toolFailureDoesNotTerminate() async throws {

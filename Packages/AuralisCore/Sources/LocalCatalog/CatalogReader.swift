@@ -50,6 +50,64 @@ extension LocalCatalogStore {
         return result
     }
 
+    /// 读取指定服务器的全部完整 Album（用于资料库刷新 / 维护，可限制数量）。
+    /// 与 allTracks 同风格：服务器过滤下沉到 SQL，避免多服务器在 LIMIT 时互相截断。
+    public func allAlbums(serverID: ServerID?, limit: Int = 2000) throws -> [Album] {
+        let rows: [[String: SQLiteValue]]
+        if let serverID {
+            rows = try db.query(
+                "SELECT global_id, payload FROM albums WHERE server_id = ? ORDER BY rowid LIMIT ?",
+                [.text(serverID.rawValue), .integer(Int64(limit))]
+            )
+        } else {
+            rows = try db.query(
+                "SELECT global_id, payload FROM albums ORDER BY rowid LIMIT ?",
+                [.integer(Int64(limit))]
+            )
+        }
+        var result: [Album] = []
+        for row in rows {
+            guard let idString = row["global_id"]?.string,
+                  let gid = GlobalID(idString),
+                  let payload = row["payload"]?.string
+            else { continue }
+            if let serverID, gid.serverID != serverID { continue }
+            if let album = try? decode(Album.self, payload) {
+                result.append(album)
+            }
+        }
+        return result
+    }
+
+    /// 读取指定服务器的全部完整 Artist（用于资料库刷新 / 维护，可限制数量）。
+    /// 与 allTracks 同风格：服务器过滤下沉到 SQL，避免多服务器在 LIMIT 时互相截断。
+    public func allArtists(serverID: ServerID?, limit: Int = 2000) throws -> [Artist] {
+        let rows: [[String: SQLiteValue]]
+        if let serverID {
+            rows = try db.query(
+                "SELECT global_id, payload FROM artists WHERE server_id = ? ORDER BY rowid LIMIT ?",
+                [.text(serverID.rawValue), .integer(Int64(limit))]
+            )
+        } else {
+            rows = try db.query(
+                "SELECT global_id, payload FROM artists ORDER BY rowid LIMIT ?",
+                [.integer(Int64(limit))]
+            )
+        }
+        var result: [Artist] = []
+        for row in rows {
+            guard let idString = row["global_id"]?.string,
+                  let gid = GlobalID(idString),
+                  let payload = row["payload"]?.string
+            else { continue }
+            if let serverID, gid.serverID != serverID { continue }
+            if let artist = try? decode(Artist.self, payload) {
+                result.append(artist)
+            }
+        }
+        return result
+    }
+
     public func getTrack(_ globalID: GlobalID) throws -> Track? {
         guard let payload = try trackPayload(globalID) else { return nil }
         return try decode(Track.self, payload)

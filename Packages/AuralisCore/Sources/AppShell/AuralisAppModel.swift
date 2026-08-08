@@ -195,7 +195,9 @@ public final class AuralisAppModel: ObservableObject {
             trackCache: cacheStore,
             lyricsCache: lyricsCache
         )
-        // 同步完成后刷新曲库分类索引文件，让 Agent 始终能读到最新元数据。
+        // 同步完成后刷新曲库分类索引文件，让 Agent 始终能读到最新元数据；
+        // 并把内存目录从本地 SQLite 重建出来，让首页「最近添加」与音乐库立刻反映
+        // 新下载到服务器的曲目（此前只刷索引文件，内存目录要等用户重连/重启 apply() 才更新）。
         coordinator.onSyncCompleted = { [weak self] serverID, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -203,6 +205,7 @@ public final class AuralisAppModel: ObservableObject {
                     serverID: serverID,
                     catalog: self.catalogCoordinator.store
                 )
+                await self.refreshCatalogFromStore(serverID: serverID)
             }
         }
         return coordinator
@@ -2131,9 +2134,13 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 切换曲目的收藏状态，并同步到服务器（star/unstar）。
     public func toggleFavorite(_ track: Track) {
-        guard let index = catalog.tracks.firstIndex(where: { $0.id == track.id }) else { return }
-        catalog.tracks[index].isFavorite.toggle()
-        let updated = catalog.tracks[index]
+        // 曲目可能不在本地目录（例如刚由「服务器在线流播」播放、尚未同步的歌曲）：
+        // 先翻转本地副本，再同步到目录（若在）与服务器，保证播放页红心即时响应。
+        var updated = track
+        updated.isFavorite.toggle()
+        if let index = catalog.tracks.firstIndex(where: { $0.id == track.id }) {
+            catalog.tracks[index].isFavorite = updated.isFavorite
+        }
         if currentTrack.id == track.id { currentTrack = updated }
         refreshHomeSnapshots()
         Task { await connector.setFavorite(trackID: updated.id, isFavorite: updated.isFavorite) }
@@ -2668,6 +2675,103 @@ public final class AuralisAppModel: ObservableObject {
                let index = self.catalog.tracks.firstIndex(where: { $0.id == self.currentTrack.id }) {
                 self.currentTrack = self.catalog.tracks[index]
             }
+        }
+    }
+
+    /// 同步完成后把内存目录从本地 SQLite 重建出来（同库刷新，不切换服务器）。
+    ///
+    /// 后台/增量同步（CatalogCoordinator.backgroundRefresh → startSync(.incremental)）把
+    /// 新下载到服务器的歌写进本地 SQLite 后，这里把目录从 store 读回内存，让首页
+    /// 「最近添加」与音乐库立刻更新，而不是等用户重连/重启（apply()）。
+    /// 逻辑对齐 apply() 的「同库刷新」分支：
+    /// - 保留当前歌词（catalog.lyrics）、playlistTracks 与正在播放的上下文
+    ///   （currentTrack / queue / 进度）不被清掉；
+    /// - 更新 libraryAddedAt（首次见到的曲目记 now，其余保留），并异步持久化到 UserDefaults；
+    /// - 重建 catalog 并调用 refreshHomeSnapshots()。
+    func refreshCatalogFromStore(serverID: ServerID) async {
+        // 防呆：尚未 apply（或已切到其它服务器）时忽略本次刷新。
+        guard catalog.activeServerID == serverID else { return }
+        let store = catalogCoordinator.store
+        let fetchedTracks: [Track]
+        let fetchedAlbums: [Album]
+        let fetchedArtists: [Artist]
+        do {
+            fetchedTracks = try await store.allTracks(serverID: serverID, limit: 20000)
+            fetchedAlbums = try await store.allAlbums(serverID: serverID, limit: 20000)
+            fetchedArtists = try await store.allArtists(serverID: serverID, limit: 20000)
+        } catch {
+            // 读库失败：保持现有目录，等下次同步 / apply() 再试。
+            return
+        }
+        // await 期间用户可能已切换服务器：再校验一次，避免把旧库写回新库。
+        guard catalog.activeServerID == serverID else { return }
+
+        let tracks = uniquedTracks(fetchedTracks)
+        // 同步不落 genres 表，按 apply() 的做法从曲目标签派生。
+        let genres = Dictionary(grouping: tracks.flatMap(\.genres), by: { $0.lowercased() })
+            .map { Genre(name: $0.key, songCount: $0.value.count) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        // 歌单：以 store 为准合并现有 catalog（保留本地尚未同步 / 已加载曲目的歌单）。
+        let playlists = await mergePlaylistsFromStore(serverID: serverID, existing: catalog.playlists)
+
+        catalog = LibraryCatalog(
+            account: catalog.account,
+            artists: fetchedArtists,
+            albums: fetchedAlbums,
+            tracks: tracks,
+            genres: genres,
+            playlists: playlists,
+            history: catalog.history,
+            downloads: catalog.downloads,
+            // 同库刷新：保留已加载的歌词，避免重复请求。
+            lyrics: catalog.lyrics,
+            recommendations: catalog.recommendations
+        )
+        // 同库刷新：只清理「本次失败」的负缓存，已拿到的图片与歌词原样保留
+        // （与 apply() 的非切库分支一致）。
+        artworkStore.clearUnavailable()
+        lyricsUnavailable = []
+
+        // 正在播放上下文原样保留：不碰 currentTrack / queue / playbackPosition / engine。
+
+        // 记录每首曲目首次进入本地目录的时间（仅首次出现时写入），用于「最近添加」。
+        var added = libraryAddedAt
+        let now = Date()
+        for track in tracks where added[track.id] == nil {
+            added[track.id] = now
+        }
+        // 仅保留当前目录内曲目的时间戳，避免无限增长。
+        added = Dictionary(uniqueKeysWithValues: added.filter { id, _ in tracks.contains(where: { $0.id == id }) })
+        libraryAddedAt = added
+        let addedForDefaults = added.reduce(into: [String: Double]()) { $0[$1.key.rawValue] = $1.value.timeIntervalSince1970 }
+        // 异步持久化，避免大资料库时阻塞主线程。
+        Task { @Sendable [defaults] in
+            defaults.set(addedForDefaults, forKey: Self.libraryAddedDefaultsKey)
+        }
+
+        // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
+        refreshHomeSnapshots()
+    }
+
+    /// 以本地 SQLite 歌单为基准合并内存 catalog 歌单：
+    /// store 有曲目顺序时以 store 为准，否则保留内存里已加载的 trackIDs；
+    /// 服务器已删除的歌单随之移除，本地尚未同步的歌单保留。
+    private func mergePlaylistsFromStore(serverID: ServerID, existing: [Playlist]) async -> [Playlist] {
+        let storePlaylists = (try? await catalogCoordinator.store.listPlaylists(serverID: serverID)) ?? []
+        var byID: [PlaylistID: Playlist] = [:]
+        for playlist in existing { byID[playlist.id] = playlist }
+        for summary in storePlaylists {
+            let id = PlaylistID(rawValue: summary.globalID.remoteID)
+            let trackIDs = summary.trackIDs.map { TrackID(rawValue: $0.remoteID) }
+            if var existing = byID[id] {
+                if !trackIDs.isEmpty { existing.trackIDs = trackIDs }
+                byID[id] = existing
+            } else {
+                byID[id] = Playlist(id: id, serverID: serverID, name: summary.name, trackIDs: trackIDs)
+            }
+        }
+        return byID.values.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }
 
