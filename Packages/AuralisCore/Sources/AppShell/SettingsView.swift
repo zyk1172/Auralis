@@ -107,6 +107,7 @@ struct SettingsView: View {
                 Button("配置接口…") { isConfiguringAIProvider = true }
                 #endif
             }
+            MovipNoteSettingsSection()
             SettingsBackupSection(model: model, themeStore: themeStore, theme: theme)
             Section("关于") {
                 LabeledContent("版本", value: "0.3.4")

@@ -4,6 +4,7 @@ import Domain
 import Foundation
 import LocalCatalog
 import Observability
+import SecurityKit
 import RecommendationEngine
 #if os(iOS)
 import AVFAudio
@@ -538,6 +539,101 @@ public final class AuralisSystemToolService: AgentSystemService {
     }
 
     // MARK: - Helpers
+
+    // MARK: - 音乐下载（MovipNote / MoviePilot 插件）
+
+    public func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
+        guard let connection = await movipNoteConnection() else {
+            return AgentMusicSearchResult(configured: false, message: "音乐下载（MovipNote）未配置")
+        }
+        do {
+            let data = try await MovipNoteClient().search(
+                connection,
+                artist: artist,
+                album: album,
+                albumAliases: albumAliases,
+                keyword: keyword,
+                year: year,
+                limit: limit,
+                preferLossless: preferLossless,
+                minSeeders: minSeeders
+            )
+            return AgentMusicSearchResult(
+                configured: true,
+                keyword: data.keyword,
+                total: data.total ?? 0,
+                albumMatchedAny: data.albumMatchedAny ?? false,
+                droppedVideo: data.droppedVideo ?? 0,
+                candidates: (data.results ?? []).map(Self.musicCandidate)
+            )
+        } catch {
+            return AgentMusicSearchResult(configured: true, message: error.localizedDescription)
+        }
+    }
+
+    public func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
+        guard let connection = await movipNoteConnection() else {
+            return AgentMusicDownloadResult(configured: false, message: "音乐下载（MovipNote）未配置")
+        }
+        do {
+            let data = try await MovipNoteClient().download(connection, ref: ref, siteID: siteID, index: index, magnet: magnet, title: title)
+            return AgentMusicDownloadResult(
+                configured: true,
+                success: true,
+                hash: data.hash,
+                savePath: data.savePath,
+                status: data.status
+            )
+        } catch {
+            return AgentMusicDownloadResult(configured: true, message: error.localizedDescription)
+        }
+    }
+
+    public func musicTasks(status: String?) async -> [AgentMusicTask] {
+        guard let connection = await movipNoteConnection() else { return [] }
+        do {
+            let tasks = try await MovipNoteClient().tasks(connection, status: status)
+            return tasks.map {
+                AgentMusicTask(
+                    hash: $0.hash,
+                    title: $0.title,
+                    site: $0.site,
+                    state: $0.state,
+                    progress: $0.progress ?? 0,
+                    savePath: $0.savePath
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
+    /// 读取 MovipNote 连接信息：地址来自 UserDefaults，Token 只从 Keychain 读取。
+    private func movipNoteConnection() async -> MovipNoteConnection? {
+        let settings = MovipNoteSettings()
+        guard let url = settings.normalizedURL else { return nil }
+        var token: String?
+        if let value = try? await KeychainCredentialVault().retrieve(id: MovipNoteSettings.tokenCredentialID) {
+            token = value
+        }
+        return MovipNoteConnection(baseURL: url, token: token)
+    }
+
+    private static func musicCandidate(_ item: MovipNoteCandidate) -> AgentMusicCandidate {
+        AgentMusicCandidate(
+            index: item.index ?? 0,
+            ref: item.ref,
+            siteName: item.siteName,
+            title: item.title ?? "未知资源",
+            audioFormat: item.audioFormat,
+            qualityLabel: item.qualityLabel,
+            quality: item.quality ?? 0,
+            relevance: item.relevance ?? 0,
+            albumMatched: item.albumMatched ?? false,
+            size: item.size,
+            seeders: item.seeders ?? 0
+        )
+    }
 
     private func mostPlayedArtist() -> String? {
         var artistCounts: [String: Int] = [:]

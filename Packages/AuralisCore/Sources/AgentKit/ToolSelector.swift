@@ -23,6 +23,8 @@ public enum ToolSelector {
         "playback_set_shuffle", "playback_set_repeat",
         "queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear",
         "playTrack",
+        // 音乐下载（MovipNote）：用户点播不在库中的歌曲 / 直接要求下载时使用
+        "music_download",
     ]
 
     /// 歌单相关。

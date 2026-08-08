@@ -37,6 +37,7 @@ public enum SystemToolNames {
         "ios_shortcuts_list",
         "diagnostics_playback",
         "diagnostics_get_recent_errors",
+        "music_download",
     ]
 
     public static func contains(_ name: String) -> Bool { all.contains(name) }
@@ -246,6 +247,37 @@ public struct SystemToolExecutor {
                 }
                 let text = records.map { "\(Self.timeText($0.timestamp)) [\($0.category)] \($0.message)" }.joined(separator: "\n")
                 return .ok(call, descriptor, "最近错误 \(records.count) 条", .text(text))
+            case "music_download":
+                let action = (try? require(call, "action"))?.lowercased() ?? ""
+                switch action {
+                case "search":
+                    let result = await systemService.musicSearch(
+                        artist: optionalParam(call, "artist"),
+                        album: optionalParam(call, "album"),
+                        albumAliases: (call.arguments["album_aliases"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+                        keyword: optionalParam(call, "keyword"),
+                        year: optionalIntParam(call, "year"),
+                        limit: optionalIntParam(call, "limit") ?? 10,
+                        preferLossless: optionalBoolParam(call, "prefer_lossless") ?? true,
+                        minSeeders: optionalIntParam(call, "min_seeders") ?? 0
+                    )
+                    return Self.musicSearchResult(call, descriptor, result)
+                case "download":
+                    let result = await systemService.musicDownload(
+                        ref: optionalParam(call, "ref"),
+                        siteID: optionalIntParam(call, "site_id"),
+                        index: optionalIntParam(call, "index"),
+                        magnet: optionalParam(call, "magnet"),
+                        title: optionalParam(call, "title")
+                    )
+                    return Self.musicDownloadResult(call, descriptor, result)
+                case "tasks":
+                    let tasks = await systemService.musicTasks(status: optionalParam(call, "status"))
+                    return Self.musicTasksResult(call, descriptor, tasks)
+                default:
+                    throw SystemToolError.invalidParameter("action", action)
+                }
+
             default:
                 return ToolResult(call: call, permission: descriptor.permission, success: false, summary: "未实现的系统工具：\(call.name)")
             }
@@ -288,6 +320,76 @@ public struct SystemToolExecutor {
             throw SystemToolError.invalidParameter(key, call.arguments[key] ?? "")
         }
         return value
+    }
+
+
+    private static func optionalParam(_ call: ToolCall, _ key: String) -> String? {
+        guard let value = call.arguments[key], !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func optionalIntParam(_ call: ToolCall, _ key: String) -> Int? {
+        guard let raw = call.arguments[key], let value = Int(raw) else { return nil }
+        return value
+    }
+
+    private static func optionalBoolParam(_ call: ToolCall, _ key: String) -> Bool? {
+        guard let raw = call.arguments[key] else { return nil }
+        switch raw.lowercased() {
+        case "true", "1", "yes", "on": return true
+        case "false", "0", "no", "off": return false
+        default: return nil
+        }
+    }
+
+    // MARK: - 音乐下载结果格式化
+
+    private static func musicSearchResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ result: AgentMusicSearchResult) -> ToolResult {
+        guard result.configured else {
+            return ToolResult(call: call, permission: descriptor.permission, success: false,
+                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MovipNote 地址与 Token")
+        }
+        if !result.message.isEmpty && result.total == 0 && result.candidates.isEmpty {
+            return .ok(call, descriptor, "音乐下载搜索失败", .text("搜索失败：\(result.message)"))
+        }
+        guard result.total > 0, !result.candidates.isEmpty else {
+            return .ok(call, descriptor, "没有找到资源", .text("未找到「\(result.keyword ?? "该音乐")」的音乐资源，可换关键词 / 艺人名 / 英文专辑名重试。"))
+        }
+        var lines = result.candidates.prefix(10).map { candidate in
+            var parts = ["\(candidate.index). [\(candidate.siteName ?? "?")] \(candidate.title)"]
+            if let label = candidate.qualityLabel { parts.append("质量=\(label)") }
+            if let size = candidate.size { parts.append("大小=\(size)") }
+            parts.append("做种=\(candidate.seeders)")
+            parts.append("相关度=\(candidate.relevance)")
+            if candidate.albumMatched { parts.append("专辑命中") }
+            if let ref = candidate.ref { parts.append("ref=\(ref)") }
+            return parts.joined(separator: "，")
+        }
+        lines.insert("共 \(result.total) 条候选（丢弃影视/不确定 \(result.droppedVideo) 条）\(result.albumMatchedAny ? "，已命中目标专辑" : "，未确认命中目标专辑")", at: 0)
+        return .ok(call, descriptor, "找到 \(result.total) 条候选", .text(lines.joined(separator: "\n")))
+    }
+
+    private static func musicDownloadResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ result: AgentMusicDownloadResult) -> ToolResult {
+        guard result.configured else {
+            return ToolResult(call: call, permission: descriptor.permission, success: false,
+                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MovipNote 地址与 Token")
+        }
+        if result.success, let hash = result.hash {
+            let text = "已加入下载：\(hash)（状态 \(result.status ?? "downloading")）\(result.savePath.map { "，保存到 \($0)" } ?? "")"
+            return .ok(call, descriptor, "已开始下载", .text(text))
+        }
+        return ToolResult(call: call, permission: descriptor.permission, success: false,
+                          summary: "下载失败：\(result.message.isEmpty ? "未知原因" : result.message)")
+    }
+
+    private static func musicTasksResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ tasks: [AgentMusicTask]) -> ToolResult {
+        guard !tasks.isEmpty else {
+            return .ok(call, descriptor, "暂无下载任务", .text("当前没有音乐下载任务"))
+        }
+        let text = tasks.prefix(20).map { task in
+            "\(task.title)（\(task.state) \(String(format: "%.0f", task.progress))%）\(task.site.map { " · \($0)" } ?? "")"
+        }.joined(separator: "\n")
+        return .ok(call, descriptor, "下载任务 \(tasks.count) 个", .text(text))
     }
 
     private static func parseGlobalID(_ call: ToolCall, _ key: String) throws -> GlobalID {

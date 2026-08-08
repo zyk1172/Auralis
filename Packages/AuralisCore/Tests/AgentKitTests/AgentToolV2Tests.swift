@@ -43,6 +43,20 @@ private final class StubSystemService: AgentSystemService, @unchecked Sendable {
     func listeningSummary() async -> AgentListeningSummary { AgentListeningSummary(totalPlays: 10, uniqueTracks: 4, totalFavorites: 2) }
     func playbackDiagnostics() async -> AgentPlaybackDiagnostics { AgentPlaybackDiagnostics(state: "playing", mediaSource: "server", audioSessionActive: true, queueValid: true, isPlaying: true) }
     func recentErrors(limit: Int) async -> [AgentErrorRecord] { [] }
+
+    // 音乐下载（MovipNote）可配置桩
+    var musicSearchOverride: AgentMusicSearchResult?
+    var musicDownloadOverride: AgentMusicDownloadResult?
+    var musicTasksOverride: [AgentMusicTask]?
+    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
+        musicSearchOverride ?? AgentMusicSearchResult(configured: false, message: "音乐下载（MovipNote）未配置")
+    }
+    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
+        musicDownloadOverride ?? AgentMusicDownloadResult(configured: false, message: "音乐下载（MovipNote）未配置")
+    }
+    func musicTasks(status: String?) async -> [AgentMusicTask] {
+        musicTasksOverride ?? []
+    }
 }
 
 // MARK: - Helpers
@@ -598,5 +612,111 @@ struct GlobalIDServerScopeTests {
             bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
         )
         #expect(ok.success)
+    }
+}
+
+@Suite("音乐下载（MovipNote）工具")
+struct MusicDownloadToolTests {
+    private func makeStoreAndBridge() throws -> (LocalCatalogStore, MockAgentBridge) {
+        (try makeV2Store(), MockAgentBridge(activeServerID: "s"))
+    }
+
+    @Test("未配置时搜索返回明确提示")
+    func searchNotConfigured() async throws {
+        let (store, bridge) = try makeStoreAndBridge()
+        let system = StubSystemService()
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "music_download", arguments: ["action": "search", "artist": "周杰伦", "album": "魔杰座"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+        )
+        #expect(!result.success)
+        #expect(result.summary.contains("未配置"))
+    }
+
+    @Test("搜索命中专辑时返回候选与 album_matched_any")
+    func searchWithCandidates() async throws {
+        let (store, bridge) = try makeStoreAndBridge()
+        let system = StubSystemService()
+        system.musicSearchOverride = AgentMusicSearchResult(
+            configured: true,
+            keyword: "周杰伦 魔杰座",
+            total: 2,
+            albumMatchedAny: true,
+            droppedVideo: 1,
+            candidates: [
+                AgentMusicCandidate(index: 1, ref: "abc1234:1", siteName: "QueenMusic", title: "周杰伦 - 魔杰座 FLAC", qualityLabel: "无损", quality: 90, relevance: 100, albumMatched: true, size: "612.0 MB", seeders: 88),
+                AgentMusicCandidate(index: 2, ref: "def5678:2", siteName: "MTeam", title: "Jay Chou - Capricorn FLAC", qualityLabel: "无损", quality: 90, relevance: 70, albumMatched: true, size: "600.0 MB", seeders: 40),
+            ]
+        )
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "music_download", arguments: ["action": "search", "artist": "周杰伦", "album": "魔杰座", "album_aliases": "Capricorn"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+        )
+        #expect(result.success)
+        #expect(result.summary.contains("2 条候选"))
+        let text = result.payloadText
+        #expect(text.contains("已命中目标专辑"))
+        #expect(text.contains("ref=abc1234:1"))
+        #expect(text.contains("无损"))
+    }
+
+    @Test("专辑未命中时提示不可自动下载")
+    func searchAlbumNotMatched() async throws {
+        let (store, bridge) = try makeStoreAndBridge()
+        let system = StubSystemService()
+        system.musicSearchOverride = AgentMusicSearchResult(
+            configured: true, total: 3, albumMatchedAny: false, candidates: [
+                AgentMusicCandidate(index: 1, ref: "abc1234:1", siteName: "S", title: "某资源 FLAC", quality: 90, relevance: 50, albumMatched: false),
+            ]
+        )
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "music_download", arguments: ["action": "search", "artist": "周杰伦", "album": "魔杰座"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+        )
+        #expect(result.success)
+        #expect(result.payloadText.contains("未确认命中目标专辑"))
+    }
+
+    @Test("下载成功/失败结果格式化")
+    func downloadFormats() async throws {
+        let (store, bridge) = try makeStoreAndBridge()
+        let system = StubSystemService()
+        system.musicDownloadOverride = AgentMusicDownloadResult(configured: true, success: true, hash: "a1b2c3d4", savePath: "/downloads/Music/魔杰座", status: "downloading")
+        let ok = await AgentToolkit.executeV2(
+            ToolCall(name: "music_download", arguments: ["action": "download", "ref": "abc1234:1"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+        )
+        #expect(ok.success)
+        #expect(ok.summary.contains("已开始下载"))
+
+        system.musicDownloadOverride = AgentMusicDownloadResult(configured: true, success: false, message: "下载种子内容为空")
+        let fail = await AgentToolkit.executeV2(
+            ToolCall(name: "music_download", arguments: ["action": "download", "ref": "abc1234:1"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+        )
+        #expect(!fail.success)
+        #expect(fail.summary.contains("下载种子内容为空"))
+    }
+
+    @Test("任务查询格式化")
+    func tasksFormats() async throws {
+        let (store, bridge) = try makeStoreAndBridge()
+        let system = StubSystemService()
+        system.musicTasksOverride = [AgentMusicTask(hash: "h1", title: "周杰伦 - 魔杰座", site: "QueenMusic", state: "downloading", progress: 45.2)]
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "music_download", arguments: ["action": "tasks"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+        )
+        #expect(result.success)
+        #expect(result.summary.contains("1 个"))
+        #expect(result.payloadText.contains("45"))
+    }
+}
+
+private extension ToolResult {
+    /// 提取回传给模型的文本载荷（测试辅助）。
+    var payloadText: String {
+        if case let .text(value) = payload { return value }
+        return ""
     }
 }

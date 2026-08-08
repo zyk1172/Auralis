@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.5 — 2026-08-08
+
+### Added
+
+- Agent 新工具 `music_download`（Music Download）：接入 MovipNote（MoviePilot）音乐下载插件
+  - 设置新增「音乐下载（MovipNote）」区块：服务器地址（UserDefaults）+ 调用 Token（Keychain）+ 连接测试
+  - action=search：跨站搜索音乐资源（音乐/影视判别 + 无损优先排序 + 相关度），返回候选与 `album_matched_any`
+  - action=download：按 ref / site_id+index / magnet 提交下载到 NAS 音乐目录；失败自动提示换候选重试
+  - action=tasks：查询下载进度
+  - 决策规则写入 Agent 提示词：专辑未命中禁止自动下载（只展示候选让用户选）、中文专辑需英文别名、单曲退艺人搜索
+  - 触发场景：用户点播本地/服务器都没有的歌曲、或直接要求下载某歌/专辑
+
 ## 0.3.4 — 2026-08-06
 
 ### Fixed

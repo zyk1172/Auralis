@@ -443,6 +443,123 @@ public enum ToolOutcome: Sendable, Equatable {
 
 /// 系统级 Agent 工具所需的 App / 设备 / 服务器 / 缓存 / 诊断服务抽象。
 /// 由 AppShell 层适配 AuralisAppModel 实现；AgentKit 不依赖 Application。
+// MARK: - 音乐下载（MovipNote / MoviePilot）
+
+/// 音乐下载搜索结果（不含凭据 / 完整地址）。
+public struct AgentMusicSearchResult: Sendable, Equatable {
+    public var configured: Bool
+    public var message: String
+    public var keyword: String?
+    public var total: Int
+    public var albumMatchedAny: Bool
+    public var droppedVideo: Int
+    public var candidates: [AgentMusicCandidate]
+
+    public init(
+        configured: Bool = false,
+        message: String = "",
+        keyword: String? = nil,
+        total: Int = 0,
+        albumMatchedAny: Bool = false,
+        droppedVideo: Int = 0,
+        candidates: [AgentMusicCandidate] = []
+    ) {
+        self.configured = configured
+        self.message = message
+        self.keyword = keyword
+        self.total = total
+        self.albumMatchedAny = albumMatchedAny
+        self.droppedVideo = droppedVideo
+        self.candidates = candidates
+    }
+}
+
+/// 单条音乐资源候选（含用于下载的 ref 引用）。
+public struct AgentMusicCandidate: Sendable, Equatable {
+    public var index: Int
+    public var ref: String?
+    public var siteName: String?
+    public var title: String
+    public var audioFormat: String?
+    public var qualityLabel: String?
+    public var quality: Int
+    public var relevance: Int
+    public var albumMatched: Bool
+    public var size: String?
+    public var seeders: Int
+
+    public init(
+        index: Int,
+        ref: String? = nil,
+        siteName: String? = nil,
+        title: String,
+        audioFormat: String? = nil,
+        qualityLabel: String? = nil,
+        quality: Int = 0,
+        relevance: Int = 0,
+        albumMatched: Bool = false,
+        size: String? = nil,
+        seeders: Int = 0
+    ) {
+        self.index = index
+        self.ref = ref
+        self.siteName = siteName
+        self.title = title
+        self.audioFormat = audioFormat
+        self.qualityLabel = qualityLabel
+        self.quality = quality
+        self.relevance = relevance
+        self.albumMatched = albumMatched
+        self.size = size
+        self.seeders = seeders
+    }
+}
+
+/// 音乐下载提交结果。
+public struct AgentMusicDownloadResult: Sendable, Equatable {
+    public var configured: Bool
+    public var success: Bool
+    public var message: String
+    public var hash: String?
+    public var savePath: String?
+    public var status: String?
+
+    public init(
+        configured: Bool = false,
+        success: Bool = false,
+        message: String = "",
+        hash: String? = nil,
+        savePath: String? = nil,
+        status: String? = nil
+    ) {
+        self.configured = configured
+        self.success = success
+        self.message = message
+        self.hash = hash
+        self.savePath = savePath
+        self.status = status
+    }
+}
+
+/// 音乐下载任务状态。
+public struct AgentMusicTask: Sendable, Equatable {
+    public var hash: String
+    public var title: String
+    public var site: String?
+    public var state: String
+    public var progress: Double
+    public var savePath: String?
+
+    public init(hash: String, title: String, site: String? = nil, state: String, progress: Double = 0, savePath: String? = nil) {
+        self.hash = hash
+        self.title = title
+        self.site = site
+        self.state = state
+        self.progress = progress
+        self.savePath = savePath
+    }
+}
+
 public protocol AgentSystemService: Sendable {
     // App
     func appContext() async -> AgentAppContext
@@ -484,4 +601,24 @@ public protocol AgentSystemService: Sendable {
     func listeningSummary() async -> AgentListeningSummary
     func playbackDiagnostics() async -> AgentPlaybackDiagnostics
     func recentErrors(limit: Int) async -> [AgentErrorRecord]
+
+    // 音乐下载（MovipNote / MoviePilot 插件）
+    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult
+    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult
+    func musicTasks(status: String?) async -> [AgentMusicTask]
+}
+
+
+// MARK: - 默认实现（未配置 / 不可用）
+
+public extension AgentSystemService {
+    func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
+        AgentMusicSearchResult(configured: false, message: "音乐下载（MovipNote）未配置")
+    }
+
+    func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
+        AgentMusicDownloadResult(configured: false, message: "音乐下载（MovipNote）未配置")
+    }
+
+    func musicTasks(status: String?) async -> [AgentMusicTask] { [] }
 }
