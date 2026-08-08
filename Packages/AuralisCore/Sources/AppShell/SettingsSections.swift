@@ -178,3 +178,59 @@ struct CacheManagementSection: View {
 // MARK: - 助手偏好与反馈
 
 /// 结构化偏好设置：场景、重复容忍度、歌单时长，以及推荐反馈的查看与撤销。
+
+// MARK: - 小猫的记忆（AI 助手记忆管理）
+
+/// 设置页「小猫的记忆」区块：查看跨会话记忆与技能、清空记忆。
+/// 记忆与技能由 AI 助手工具（memory_* / skill_*）读写，只存在本机 App Support。
+struct AgentMemoryManagementSection: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+
+    @State private var memories: [AgentMemoryEntry] = []
+    @State private var skills: [AgentSkillEntry] = []
+    @State private var confirmClear = false
+
+    private var store: AgentMemoryStore { model.agentCoordinator.memoryStore }
+
+    var body: some View {
+        Section {
+            if memories.isEmpty {
+                Label("还没有记住关于主人的事情。跟小猫说「我叫XX」「我喜欢XX」，小猫就会记住喵", systemImage: "brain")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            } else {
+                ForEach(memories) { memory in
+                    LabeledContent(memory.key, value: memory.value)
+                }
+            }
+            if !skills.isEmpty {
+                ForEach(skills) { skill in
+                    LabeledContent("技能 · \(skill.name)", value: skill.summary)
+                }
+            }
+            if !memories.isEmpty || !skills.isEmpty {
+                Button("清空全部记忆", role: .destructive) { confirmClear = true }
+            }
+        } header: {
+            Text("小猫的记忆（AI 助手）")
+        } footer: {
+            Text("记忆与技能只存在本机 App Support，不会上传；每次 AI 对话开始时自动注入给小猫，让它跨会话记得你。技能是一段可复用指令，可让小猫用「创建一个技能」存下来。")
+        }
+        .task { reload() }
+        .confirmationDialog("清空小猫的全部记忆？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清空", role: .destructive) {
+                _ = store.clearMemory()
+                reload()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("清空后小猫将不再记得这些信息。技能文件不会被删除。")
+        }
+    }
+
+    private func reload() {
+        memories = store.memories
+        skills = store.skills
+    }
+}

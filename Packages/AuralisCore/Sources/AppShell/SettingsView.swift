@@ -107,6 +107,7 @@ struct SettingsView: View {
                 Button("配置接口…") { isConfiguringAIProvider = true }
                 #endif
             }
+            AgentMemoryManagementSection(model: model, theme: theme)
             MoviePilotSettingsSection()
             SettingsBackupSection(model: model, themeStore: themeStore, theme: theme)
             Section("关于") {

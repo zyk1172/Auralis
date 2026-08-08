@@ -385,6 +385,27 @@ public enum AgentToolRegistry {
         .init(name: "diagnostics_get_recent_errors", group: .catalog, permission: .readOnly, summary: "获取最近脱敏错误记录",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 20")]),
 
+        // MARK: 记忆与技能
+        .init(name: "memory_save", group: .memory, permission: .reversible, summary: "记住关于主人的一条信息（跨会话有效）",
+              parameters: [
+                .init(name: "key", required: true, description: "字段名，如 名字 / 喜欢的歌手 / 生日"),
+                .init(name: "value", required: true, description: "要记住的内容"),
+              ]),
+        .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
+        .init(name: "memory_delete", group: .memory, permission: .reversible, summary: "删除一条记忆",
+              parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")]),
+        .init(name: "memory_clear", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "清空全部记忆（需确认）"),
+        .init(name: "skill_create", group: .memory, permission: .reversible, summary: "创建一段可复用指令（skill 文件），之后可读取使用",
+              parameters: [
+                .init(name: "name", required: true, description: "技能名，简短英文或中文"),
+                .init(name: "instructions", required: true, description: "完整技能指令"),
+              ]),
+        .init(name: "skill_list", group: .memory, permission: .readOnly, summary: "查看已创建的技能列表"),
+        .init(name: "skill_read", group: .memory, permission: .readOnly, summary: "读取某个技能的完整指令",
+              parameters: [.init(name: "name", required: true, description: "技能名")]),
+        .init(name: "skill_delete", group: .memory, permission: .reversible, summary: "删除一个技能",
+              parameters: [.init(name: "name", required: true, description: "技能名")]),
+
     ]
 
     public static func descriptor(for name: String) -> ToolDescriptor? {

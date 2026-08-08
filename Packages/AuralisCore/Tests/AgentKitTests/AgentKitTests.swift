@@ -931,7 +931,9 @@ func toolSelectorLoadsDiagnosticsTools() {
 @Test("ToolSelector never exceeds a bounded tool set")
 func toolSelectorIsBounded() {
     let selected = ToolSelector.select(for: "下一首", all: AgentToolRegistry.all)
-    #expect(selected.count <= 30)
+    // 记忆 / 技能工具（8 个）为跨会话记忆能力常驻开放（主人随时可能报出个人信息），
+    // 因此基础工具集从 ~26 增至 34；仍是远小于全量注册表的有界子集。
+    #expect(selected.count <= 40)
     #expect(selected.count < AgentToolRegistry.all.count)
 }
 

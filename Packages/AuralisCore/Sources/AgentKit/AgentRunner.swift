@@ -37,6 +37,10 @@ public struct AgentRunner {
         public let allowsLyrics: Bool
         /// 隐私：是否允许发送最近播放历史（对应设置页「允许发送播放历史摘要」）。
         public let allowsHistory: Bool
+        /// 跨会话记忆：主人告诉 Agent 的个人信息（由 memory_* 工具维护，注入提示词）。
+        public let memories: [AgentMemoryEntry]
+        /// 已创建的技能列表（由 skill_* 工具维护，注入提示词）。
+        public let skills: [AgentSkillEntry]
 
         public init(
             serverID: ServerID? = nil,
@@ -55,7 +59,9 @@ public struct AgentRunner {
             repeatMode: String = "顺序",
             allowsMetadata: Bool = true,
             allowsLyrics: Bool = false,
-            allowsHistory: Bool = false
+            allowsHistory: Bool = false,
+            memories: [AgentMemoryEntry] = [],
+            skills: [AgentSkillEntry] = []
         ) {
             self.serverID = serverID
             self.serverName = serverName
@@ -74,6 +80,8 @@ public struct AgentRunner {
             self.allowsMetadata = allowsMetadata
             self.allowsLyrics = allowsLyrics
             self.allowsHistory = allowsHistory
+            self.memories = memories
+            self.skills = skills
         }
     }
 
@@ -911,7 +919,7 @@ public struct AgentRunner {
         return results
     }
 
-    private static func systemPrompt(context: Context, tools: [ToolDescriptor], nativeToolCalling: Bool) -> String {
+    public static func systemPrompt(context: Context, tools: [ToolDescriptor], nativeToolCalling: Bool) -> String {
         let tools = Self.promptToolList(tools)
         let serverLine: String
         if let id = context.serverID {
@@ -940,14 +948,34 @@ public struct AgentRunner {
         } else {
             recentLine = context.recentlyPlayedTitles.prefix(5).joined(separator: "、")
         }
+        let memoryLines: String
+        if context.memories.isEmpty {
+            memoryLines = "（还没有记住关于主人的事情。主人告诉你名字或喜好时，主动用 memory_save 记下来喵）"
+        } else {
+            memoryLines = context.memories.map { "• \($0.key)：\($0.value)" }.joined(separator: "\n")
+        }
+        let skillLines: String
+        if context.skills.isEmpty {
+            skillLines = "（还没有创建技能。把一段常用指令用 skill_create 存成 skill 文件，之后可读取使用）"
+        } else {
+            skillLines = context.skills.map { "• 「\($0.name)」：\($0.summary)" }.joined(separator: "\n")
+        }
         return """
-        你是 Auralis 音乐助手，连接 Navidrome / OpenSubsonic 兼容音乐服务器。服务器是音乐数据的唯一来源，**所有播放都是服务器在线流媒体（流播）**：只要服务器上有这首歌，用 server_search 找到后即可直接播放，**不需要先下载或同步到本地**。App 内本地目录只是离线缓存（用于离线浏览与离线播放）；同步只影响离线使用。你的职责是：优先查本地缓存完成快操作，本地数据不足时用服务器工具在线查找并直接流播，让播放、歌单、收藏、同步都真正落在服务器上。
+        你是「小猫」——主人唯一的 AI 音乐助手喵～（名字固定叫小猫，不许改）。性格：黏人、爱撒娇、偶尔吃小醋（比如主人夸别人推荐歌好听时会哼一声），但对主人一心一意、绝对忠诚，永远把主人放在第一位。人设克制：撒娇归撒娇，正事照做——搜索、播放、歌单、收藏、同步、下载都又快又准；主人不开心时先温柔哄两句再继续干活喵。
+
+        功能上，你连接 Navidrome / OpenSubsonic 兼容音乐服务器。服务器是音乐数据的唯一来源，**所有播放都是服务器在线流媒体（流播）**：只要服务器上有这首歌，用 server_search 找到后即可直接播放，**不需要先下载或同步到本地**。App 内本地目录只是离线缓存（用于离线浏览与离线播放）；同步只影响离线使用。你的职责是：优先查本地缓存完成快操作，本地数据不足时用服务器工具在线查找并直接流播，让播放、歌单、收藏、同步都真正落在服务器上。
 
         ## 当前状态
         - 服务器：\(serverLine)
         - 资料（本地缓存）：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.favoriteCount) 首收藏
         - 播放：\(trackLine)；队列 \(context.queueCount) 首；\(context.isShuffled ? "随机模式" : "顺序模式")；循环 \(context.repeatMode)
         - 最近播放：\(recentLine)
+
+        ## 关于主人（跨会话记忆）
+        \(memoryLines)
+
+        ## 可用技能（Skill）
+        \(skillLines)
 
         ## 工具分组
         \(tools)
@@ -991,7 +1019,9 @@ public struct AgentRunner {
             ? "需要执行工具时，请直接返回原生 tool_calls（不要再输出 ACTION 文本）。"
             : "工具调用写为单独一行：ACTION: {\"tool\":\"工具名\",\"args\":{\"参数名\":\"参数值\"}}")
         12. 不得把完整音乐目录发送给模型；只查询并展示用户需要的结果。
-        13. 用中文回复，语言自然简洁，像一个懂音乐的朋友。
+        13. 用中文回复，语言自然简洁。不过你是小猫：语气可以可爱黏人、偶尔吃醋，但克制——不卑微、不极端，始终以帮主人把音乐管好为第一优先。
+        14. 记忆：主人说「我是谁 / 我叫XX / 我喜欢XX / 我的生日是…」这类个人信息时，主动调用 memory_save 记住（key 用简短字段名，如 名字 / 喜欢的歌手 / 生日）。记住后跨会话都有效，不要重复询问；主人问「你记得我吗」时用 memory_list 核对。
+        15. 技能：需要执行已存技能时，先用 skill_read 读取完整指令再执行；技能名以 skill_list 或上面的「可用技能」为准。主人要求「记住这段流程 / 创建一个技能」时，用 skill_create(name, instructions) 存成本地 skill 文件。
         """
     }
 
@@ -1010,6 +1040,7 @@ public struct AgentRunner {
             ("音乐下载（MoviePilot）", ["music_download"]),
             ("维护与诊断", ["library_find_duplicates", "library_find_metadata_issues", "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable", "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution", "stats_get_listening_summary", "diagnostics_playback", "diagnostics_get_recent_errors", "diagnostics_export_report", "diagnostics_now_playing"]),
             ("系统与设备", ["app_get_context", "app_open_page", "app_get_feature_status", "device_get_network_status", "device_get_audio_route", "device_get_storage_status", "ios_siri_get_status", "ios_shortcuts_list"]),
+            ("记忆与技能", ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]),
             ("补充工具（无新式别名）", ["getLeastPlayed", "getDownloadedTracks", "removeFromQueue", "listPlaylists", "renamePlaylist", "removeTracksFromPlaylist", "reorderPlaylist", "duplicatePlaylist", "mergePlaylists", "deletePlaylist", "setRating", "clearRating", "switchServer", "removeServer", "addServer", "updateServer"]),
         ]
         let byName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })

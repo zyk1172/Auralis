@@ -659,6 +659,25 @@ public protocol AgentSystemService: Sendable {
     func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double?, verifySong: String?, verifyArtist: String?) async -> AgentMusicDownloadResult
     func musicTasks(status: String?) async -> [AgentMusicTask]
     func musicHistory() async -> AgentMusicHistoryResult
+
+    // 跨会话记忆
+    /// 当前已记住的关于主人的信息。
+    func agentMemories() async -> [AgentMemoryEntry]
+    /// 保存 / 覆盖一条记忆（key 建议用简短字段名，如 名字 / 喜欢的歌手）。
+    func saveMemory(key: String, value: String) async -> Bool
+    /// 删除一条记忆；不存在返回 false。
+    func deleteMemory(key: String) async -> Bool
+    /// 清空全部记忆；返回删除条数。
+    func clearMemories() async -> Int
+    // 简单技能（skill 文件）
+    /// 当前已创建的技能列表。
+    func agentSkills() async -> [AgentSkillEntry]
+    /// 创建一段可复用指令并落盘；返回落盘后的技能（nil 表示失败）。
+    func createSkill(name: String, instructions: String) async -> AgentSkillEntry?
+    /// 读取某个技能的完整指令；不存在返回 nil。
+    func readSkill(name: String) async -> AgentSkillEntry?
+    /// 删除一个技能；不存在返回 false。
+    func deleteSkill(name: String) async -> Bool
 }
 
 
@@ -678,4 +697,13 @@ public extension AgentSystemService {
     func musicHistory() async -> AgentMusicHistoryResult {
         AgentMusicHistoryResult(configured: false, liveAvailable: false)
     }
+
+    func agentMemories() async -> [AgentMemoryEntry] { [] }
+    func saveMemory(key: String, value: String) async -> Bool { false }
+    func deleteMemory(key: String) async -> Bool { false }
+    func clearMemories() async -> Int { 0 }
+    func agentSkills() async -> [AgentSkillEntry] { [] }
+    func createSkill(name: String, instructions: String) async -> AgentSkillEntry? { nil }
+    func readSkill(name: String) async -> AgentSkillEntry? { nil }
+    func deleteSkill(name: String) async -> Bool { false }
 }

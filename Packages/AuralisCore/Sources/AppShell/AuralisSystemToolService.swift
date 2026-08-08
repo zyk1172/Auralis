@@ -17,9 +17,12 @@ import UIKit
 @MainActor
 public final class AuralisSystemToolService: AgentSystemService {
     private unowned let model: AuralisAppModel
+    /// 跨会话记忆与技能存储（与 AgentCoordinator 共享同一实例）。
+    private let memoryStore: AgentMemoryStore
 
-    public init(model: AuralisAppModel) {
+    public init(model: AuralisAppModel, memoryStore: AgentMemoryStore = AgentMemoryStore()) {
         self.model = model
+        self.memoryStore = memoryStore
     }
 
     // MARK: - App
@@ -651,6 +654,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         }
     }
 
+
     /// 读取 MoviePilot 连接信息：地址来自 UserDefaults，Token 只从 Keychain 读取。
     private func movipNoteConnection() async -> MoviePilotConnection? {
         let settings = MoviePilotSettings()
@@ -742,5 +746,39 @@ public final class AuralisSystemToolService: AgentSystemService {
               let capacity = values.volumeTotalCapacity
         else { return nil }
         return Int64(capacity)
+    }
+
+    // MARK: - 跨会话记忆与技能
+
+    public func agentMemories() async -> [AgentMemoryEntry] {
+        memoryStore.memories
+    }
+
+    public func saveMemory(key: String, value: String) async -> Bool {
+        memoryStore.saveMemory(key: key, value: value)
+    }
+
+    public func deleteMemory(key: String) async -> Bool {
+        memoryStore.deleteMemory(key: key)
+    }
+
+    public func clearMemories() async -> Int {
+        memoryStore.clearMemory()
+    }
+
+    public func agentSkills() async -> [AgentSkillEntry] {
+        memoryStore.skills
+    }
+
+    public func createSkill(name: String, instructions: String) async -> AgentSkillEntry? {
+        memoryStore.createSkill(name: name, instructions: instructions)
+    }
+
+    public func readSkill(name: String) async -> AgentSkillEntry? {
+        memoryStore.readSkill(name: name)
+    }
+
+    public func deleteSkill(name: String) async -> Bool {
+        memoryStore.deleteSkill(name: name)
     }
 }

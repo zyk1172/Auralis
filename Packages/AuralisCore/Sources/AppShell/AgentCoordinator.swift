@@ -81,8 +81,10 @@ public final class AgentCoordinator: ObservableObject {
     private let preferencesStore: PreferencesStore
     /// 长期存活的任务仓库：任务状态落盘，App 重启后标记 interrupted。
     private let taskStore: AgentTaskStore
-    /// 系统服务工具适配：App / 设备 / 服务器 / 缓存 / 统计 / 诊断。
+    /// 系统服务工具适配：App / 设备 / 服务器 / 缓存 / 统计 / 诊断 / 记忆与技能。
     private let systemService: AuralisSystemToolService
+    /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
+    public let memoryStore: AgentMemoryStore
 
     private var runTask: Task<Void, Never>?
     private var confirmationContinuation: CheckedContinuation<Bool, Never>?
@@ -102,8 +104,10 @@ public final class AgentCoordinator: ObservableObject {
         self.model = model
         self.catalog = coordinator.store
         self.bridge = AuralisAgentBridge(model: model, coordinator: coordinator)
-        self.systemService = AuralisSystemToolService(model: model)
         let dir = directory ?? Self.defaultDirectory()
+        let memoryStore = AgentMemoryStore(directory: dir)
+        self.memoryStore = memoryStore
+        self.systemService = AuralisSystemToolService(model: model, memoryStore: memoryStore)
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
@@ -365,7 +369,9 @@ public final class AgentCoordinator: ObservableObject {
             repeatMode: model.repeatMode.title,
             allowsMetadata: permissions.allowsMetadata,
             allowsLyrics: permissions.allowsLyrics,
-            allowsHistory: permissions.allowsPlaybackHistory
+            allowsHistory: permissions.allowsPlaybackHistory,
+            memories: memoryStore.memories,
+            skills: memoryStore.skills
         )
         let bridge = self.bridge
         let catalog = self.catalog

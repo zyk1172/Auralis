@@ -38,6 +38,14 @@ public enum SystemToolNames {
         "diagnostics_playback",
         "diagnostics_get_recent_errors",
         "music_download",
+        "memory_save",
+        "memory_list",
+        "memory_delete",
+        "memory_clear",
+        "skill_create",
+        "skill_list",
+        "skill_read",
+        "skill_delete",
     ]
 
     public static func contains(_ name: String) -> Bool { all.contains(name) }
@@ -128,6 +136,57 @@ public struct SystemToolExecutor {
                 }
                 if status.isStale { text += " · 已过期" }
                 return .ok(call, descriptor, text, .text(text))
+            case "memory_save":
+                let key = try require(call, "key")
+                let value = try require(call, "value")
+                let saved = await systemService.saveMemory(key: key, value: value)
+                return saved
+                    ? .ok(call, descriptor, "已记住：\(key) = \(value)", .text("小猫记住了：\(key) = \(value)（下次会话也记得喵）"))
+                    : .fail(call, descriptor, "保存记忆失败：字段名或内容为空 / 过长")
+            case "memory_list":
+                let memories = await systemService.agentMemories()
+                if memories.isEmpty {
+                    return .ok(call, descriptor, "还没有记住关于主人的信息", .text("记忆是空的。主人告诉小猫名字、喜好等信息后，小猫就会记住喵。"))
+                }
+                let text = memories.map { "\($0.key)：\($0.value)（记于 \(Self.dateText($0.updatedAt))）" }.joined(separator: "\n")
+                return .ok(call, descriptor, "共 \(memories.count) 条记忆", .text(text))
+            case "memory_delete":
+                let key = try require(call, "key")
+                let deleted = await systemService.deleteMemory(key: key)
+                return deleted
+                    ? .ok(call, descriptor, "已忘记：\(key)")
+                    : .fail(call, descriptor, "没有找到要删除的记忆：\(key)")
+            case "memory_clear":
+                let count = await systemService.clearMemories()
+                return .ok(call, descriptor, "已清空 \(count) 条记忆", .text("全部记忆已清空（\(count) 条）。"))
+            case "skill_create":
+                let name = try require(call, "name")
+                let instructions = try require(call, "instructions")
+                if let entry = await systemService.createSkill(name: name, instructions: instructions) {
+                    let text = "技能「\(entry.name)」已保存到本机 skill 文件，之后用 skill_read 读取完整指令即可使用。"
+                    return .ok(call, descriptor, "已创建技能「\(entry.name)」", .text(text))
+                }
+                return .fail(call, descriptor, "创建技能失败：名称或指令为空 / 过长")
+            case "skill_list":
+                let skills = await systemService.agentSkills()
+                if skills.isEmpty {
+                    return .ok(call, descriptor, "还没有创建技能", .text("没有技能。让小猫把一段常用指令用 skill_create 存下来，下次就能直接调用喵。"))
+                }
+                let text = skills.map { "「\($0.name)」：\($0.summary)" }.joined(separator: "\n")
+                return .ok(call, descriptor, "技能 \(skills.count) 个", .text(text))
+            case "skill_read":
+                let name = try require(call, "name")
+                guard let entry = await systemService.readSkill(name: name) else {
+                    return .fail(call, descriptor, "没有找到技能：\(name)")
+                }
+                return .ok(call, descriptor, "技能「\(entry.name)」", .text(entry.instructions))
+            case "skill_delete":
+                let name = try require(call, "name")
+                let deleted = await systemService.deleteSkill(name: name)
+                return deleted
+                    ? .ok(call, descriptor, "已删除技能：\(name)")
+                    : .fail(call, descriptor, "没有找到要删除的技能：\(name)")
+
             case "lyrics_get":
                 let gid = try parseGlobalID(call, "trackID")
                 let result = await systemService.lyrics(for: TrackID(rawValue: gid.remoteID))

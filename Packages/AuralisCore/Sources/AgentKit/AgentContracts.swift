@@ -20,6 +20,7 @@ public enum ToolGroup: String, Codable, Sendable, Hashable {
     case annotation
     case server
     case download
+    case memory
 }
 
 /// Agent 工具调用。arguments 为已解析的参数字典（值经 Agent 内部编码，不含任何凭据）。

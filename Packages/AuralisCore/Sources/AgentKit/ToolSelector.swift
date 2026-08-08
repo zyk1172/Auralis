@@ -25,6 +25,9 @@ public enum ToolSelector {
         "playTrack",
         // 音乐下载（MoviePilot）：用户点播不在库中的歌曲 / 直接要求下载时使用
         "music_download",
+        // 记忆与技能：主人报出个人信息 / 创建、读取 skill 时使用（常驻，保证原生模式可用）
+        "memory_save", "memory_list", "memory_delete", "memory_clear",
+        "skill_create", "skill_list", "skill_read", "skill_delete",
     ]
 
     /// 歌单相关。
@@ -82,6 +85,7 @@ public enum ToolSelector {
         if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error"]) { names += diagnosticsNames }
         if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
         if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
+        if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
 
         var seen = Set<String>()
         let unique = names.filter { seen.insert($0).inserted }
