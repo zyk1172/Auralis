@@ -18,6 +18,8 @@ public final class CatalogCoordinator: ObservableObject {
         case idle
         case running(stage: String, processed: Int)
         case succeeded(tracks: Int, at: Date)
+        /// 快速路径：本地与网络曲目数一致，判定目录已是最新，跳过整库拉取。
+        case upToDate(tracks: Int)
         case failed(String)
         case cancelled
     }
@@ -84,7 +86,7 @@ public final class CatalogCoordinator: ObservableObject {
         let status = await currentStatus(for: account.id)
         // 从未成功同步过 → 首次全量；已同步过 → 增量。
         let mode: LibrarySyncMode = (status?.lastCompletedAt == nil) ? .full : .incremental
-        startSync(serverID: account.id, mode: mode)
+        startSync(serverID: account.id, mode: mode, skipIfUpToDate: true)
     }
 
     // MARK: - Sync control
@@ -102,7 +104,7 @@ public final class CatalogCoordinator: ObservableObject {
     /// 后台刷新入口（iOS BGAppRefresh / macOS 定时器都可调用）。
     public func backgroundRefresh(serverID: ServerID) async {
         guard syncTask == nil else { return }
-        startSync(serverID: serverID, mode: .incremental)
+        startSync(serverID: serverID, mode: .incremental, skipIfUpToDate: true)
         await syncTask?.value
     }
 
@@ -120,15 +122,27 @@ public final class CatalogCoordinator: ObservableObject {
         syncTask?.cancel()
     }
 
-    private func startSync(serverID: ServerID, mode: LibrarySyncMode) {
+    private func startSync(serverID: ServerID, mode: LibrarySyncMode, skipIfUpToDate: Bool = false) {
         guard syncTask == nil else { return }
         syncingServerID = serverID
-        phase = .running(stage: mode == .full ? "首次全量同步" : "增量同步", processed: 0)
+        phase = .running(
+            stage: mode == .full ? "首次全量同步" : (skipIfUpToDate ? "检查本地目录是否最新" : "增量同步"),
+            processed: 0
+        )
 
         syncTask = Task { [store, connector] in
             defer {
                 self.syncTask = nil
                 self.syncingServerID = nil
+            }
+            // 快速路径：增量同步且此前已成功同步过，若本地目录曲目数与网络曲目数一致，
+            // 判定目录已是最新，跳过整库拉取（元数据已在本地 SQLite，无需重复下载）。
+            if mode == .incremental, skipIfUpToDate,
+               let local = try? await store.trackCount(serverID: serverID),
+               let network = await connector.librarySongCount(),
+               local == network {
+                self.phase = .upToDate(tracks: local)
+                return
             }
             guard let synchronizer = await connector.makeSynchronizer(store: store) else {
                 self.phase = .failed("未连接服务器，无法同步目录")

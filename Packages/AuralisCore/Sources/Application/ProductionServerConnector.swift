@@ -402,6 +402,37 @@ public actor ProductionServerConnector: ServerConnecting {
 
     /// 重新获取单曲的带认证播放地址：调用 OpenSubsonic makeStreamURL 刷新（本地拼串，无网络往返）。
     /// 流地址过期（服务器重启 / token 失效）后，播放器用新地址重试。
+    /// 轻量获取服务器音乐库曲目总数：分页 getAlbumList2（500/页）求和 songCount。
+    /// 只拉专辑列表元数据，不逐张专辑拉取曲目，因此比全量同步快得多。
+    /// 服务器不返回 songCount（老版本 Subsonic）或总数异常时返回 nil，表示「无法判断，不跳过同步」。
+    public func librarySongCount() async -> Int? {
+        guard let client = activeClient else { return nil }
+        var total = 0
+        var offset = 0
+        let pageSize = 500
+        var anySongCount = false
+        let maxPages = 500
+        for _ in 0..<maxPages {
+            do {
+                let page = try await client.albums(type: .alphabeticalByName, size: pageSize, offset: offset)
+                if page.isEmpty { break }
+                for album in page {
+                    if let count = album.songCount {
+                        anySongCount = true
+                        total += count
+                    }
+                }
+                if page.count < pageSize { break }
+                offset += pageSize
+            } catch {
+                return nil
+            }
+        }
+        // 服务器未提供任何 songCount 时无法可靠比对，返回 nil 走原有同步逻辑。
+        guard anySongCount, total > 0 else { return nil }
+        return total
+    }
+
     public func refreshStreamURL(trackID: TrackID) async -> URL? {
         guard let client = activeClient else { return nil }
         return await Self.makeStreamURL(client: client, trackID: trackID.rawValue, quality: streamQuality)

@@ -50,6 +50,16 @@ extension LocalCatalogStore {
         return result
     }
 
+    /// 指定服务器本地目录的曲目总数（轻量 COUNT，用于与网络曲目数比对，
+    /// 判断是否需要在启动/回前台时重新拉取整库）。
+    public func trackCount(serverID: ServerID) throws -> Int {
+        let rows = try db.query(
+            "SELECT COUNT(*) AS c FROM tracks WHERE server_id = ?",
+            [.text(serverID.rawValue)]
+        )
+        return Int(rows.first?["c"]?.int ?? 0)
+    }
+
     /// 读取指定服务器的全部完整 Album（用于资料库刷新 / 维护，可限制数量）。
     /// 与 allTracks 同风格：服务器过滤下沉到 SQL，避免多服务器在 LIMIT 时互相截断。
     public func allAlbums(serverID: ServerID?, limit: Int = 2000) throws -> [Album] {

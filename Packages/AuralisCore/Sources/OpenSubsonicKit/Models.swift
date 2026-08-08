@@ -441,7 +441,8 @@ struct OpenSubsonicDomainMapper: Sendable {
             artistName: artistName,
             year: value.year,
             genre: value.genre,
-            artworkKey: value.coverArt
+            artworkKey: value.coverArt,
+            songCount: value.songCount
         )
     }
 

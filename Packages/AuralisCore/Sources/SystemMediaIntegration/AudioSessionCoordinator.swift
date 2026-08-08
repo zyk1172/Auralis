@@ -86,7 +86,7 @@ internal func performAudioSession(
     // 注意：不要用已废弃的 allowBluetoothHFP，搭配 .playback 分类会返回 OSStatus -50（paramErr）。
     if let category {
         do {
-            try session.setCategory(category, mode: mode, options: [.allowAirPlay, .allowBluetooth])
+            try session.setCategory(category, mode: mode, options: [.allowAirPlay, .allowBluetoothHFP])
         } catch {
             // 个别系统/外设组合会拒绝某个选项（OSStatus -50 paramErr）：
             // 降级为不带选项也要把分类配上，避免配置失败影响播放。

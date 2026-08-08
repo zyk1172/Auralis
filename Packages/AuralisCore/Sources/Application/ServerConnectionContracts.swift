@@ -121,6 +121,9 @@ public protocol ServerConnecting: Sendable {
     func serverSearch(query: String, limit: Int) async -> [Track]
     /// 按 ID 从服务器拉取单曲（getSong）并补流地址；本地目录未同步时用于在线流播。未连接或失败返回 nil。
     func serverTrack(trackID: TrackID) async -> Track?
+    /// 轻量获取服务器音乐库的曲目总数（getAlbumList2 各专辑 songCount 求和）。
+    /// 用于启动/回前台时与本地目录曲目数比对：一致则跳过整库拉取。未连接/不支持/失败返回 nil（= 不跳过）。
+    func librarySongCount() async -> Int?
     /// 生成带认证的下载地址（供后台下载任务使用）；未连接或失败返回 nil。
     func downloadURL(trackID: TrackID) async -> URL?
     /// 下载单曲完整音频数据（用于本地缓存）；未连接或失败时返回 nil。
@@ -200,6 +203,7 @@ public extension ServerConnecting {
     func refreshStreamURL(trackID: TrackID) async -> URL? { nil }
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
     func serverTrack(trackID: TrackID) async -> Track? { nil }
+    func librarySongCount() async -> Int? { nil }
     func downloadURL(trackID: TrackID) async -> URL? { nil }
     func downloadData(trackID: TrackID) async -> Data? { nil }
     func addToPlaylist(playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }

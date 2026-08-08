@@ -94,6 +94,9 @@ struct CatalogSyncSection: View {
                 systemImage: "checkmark.circle.fill"
             )
             .foregroundStyle(theme.colorTokens.success.color)
+        case let .upToDate(tracks):
+            Label("目录已是最新 · \(tracks) 首（已用本地缓存，无需拉取）", systemImage: "checkmark.circle")
+                .foregroundStyle(theme.colorTokens.success.color)
         case let .failed(message):
             VStack(alignment: .leading, spacing: 2) {
                 Label("同步失败", systemImage: "exclamationmark.triangle.fill")

@@ -1105,16 +1105,57 @@ public final class AuralisAppModel: ObservableObject {
                 CrashLog.shared.log("播放任务被取消 (CancellationError)")
                 return
             } catch {
-                CrashLog.shared.log("engine.play 失败: \(error)")
-                self.playbackError = error as? PlaybackError
-                switch error as? PlaybackError {
-                case .networkUnavailable: self.lastStopReason = .networkInterrupted
-                case .unsupportedFormat: self.lastStopReason = .decodeFailed
-                case .authorizationFailed:
-                    self.lastStopReason = .serverDisconnected
-                    self.serverAuthenticationFailed = true
-                case .engineFailure: self.lastStopReason = .streamExpired
-                case nil: self.lastStopReason = .unknown
+                // 自动兜底：本地记录的流地址缺失/失效时，先自动从服务器刷新流地址重播一次，
+                // 仍失败再用服务器最新曲目（getSong + 补流地址）在线流播一次；
+                // 都失败才弹出提示。避免「Agent 播放 → 弹『需要重试』→ 手动点重试才正常」。
+                CrashLog.shared.log("engine.play 失败，尝试自动兜底: \(error)")
+                var finalError: Error = error
+                var autoSucceeded = false
+
+                // 尝试 1：刷新流地址后重播。
+                if self.catalog.activeServerID != nil,
+                   let freshURL = await self.connector.refreshStreamURL(trackID: track.id) {
+                    playable.streamURL = freshURL
+                    do {
+                        try await self.engine.play(track: playable)
+                        self.playbackError = nil
+                        CrashLog.shared.log("自动刷新流地址后播放成功")
+                        autoSucceeded = true
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        finalError = error
+                        CrashLog.shared.log("自动刷新流地址后仍失败: \(error)")
+                    }
+                }
+
+                // 尝试 2：直接取服务器最新曲目（含新流地址）在线流播。
+                if !autoSucceeded, self.catalog.activeServerID != nil,
+                   let fresh = await self.connector.serverTrack(trackID: track.id) {
+                    do {
+                        try await self.engine.play(track: fresh)
+                        self.playbackError = nil
+                        CrashLog.shared.log("服务器在线曲目兜底播放成功")
+                        autoSucceeded = true
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        finalError = error
+                        CrashLog.shared.log("服务器在线曲目兜底仍失败: \(error)")
+                    }
+                }
+
+                if !autoSucceeded {
+                    self.playbackError = finalError as? PlaybackError
+                    switch finalError as? PlaybackError {
+                    case .networkUnavailable: self.lastStopReason = .networkInterrupted
+                    case .unsupportedFormat: self.lastStopReason = .decodeFailed
+                    case .authorizationFailed:
+                        self.lastStopReason = .serverDisconnected
+                        self.serverAuthenticationFailed = true
+                    case .engineFailure: self.lastStopReason = .streamExpired
+                    case nil: self.lastStopReason = .unknown
+                    }
                 }
             }
             self.playbackState = await self.engine.state()
@@ -1293,8 +1334,16 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
+    /// 清除播放错误（供 UI 在展示后调用）。
+    /// 注意：`.alert` 的 isPresented 绑定 setter（点外部 / 系统收起）与按钮动作会在
+    /// SwiftUI 视图更新事务内同步执行，此时直接写 `@Published playbackError` 会触发
+    /// "Publishing changes from within view updates is not allowed" 断言。
+    /// 因此把写操作推迟到下一轮 RunLoop，待当前视图更新提交完成后再清除；
+    /// alert 由绑定 getter（playbackError != nil）在下一帧自然收起，无可见差异。
     public func dismissPlaybackError() {
-        playbackError = nil
+        Task { @MainActor in
+            playbackError = nil
+        }
     }
 
     // MARK: - AI 助手输入

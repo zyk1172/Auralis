@@ -82,6 +82,9 @@ public struct Album: Codable, Hashable, Sendable, Identifiable {
     public var year: Int?
     public var genre: String?
     public var artworkKey: String?
+    /// 服务器报告的专辑曲目数（getAlbumList2 的 songCount）。
+    /// 用于轻量比对「网络曲目总数 vs 本地目录曲目数」，判断是否需要重新同步。
+    public var songCount: Int?
 
     public init(
         id: AlbumID,
@@ -91,7 +94,8 @@ public struct Album: Codable, Hashable, Sendable, Identifiable {
         artistName: String,
         year: Int? = nil,
         genre: String? = nil,
-        artworkKey: String? = nil
+        artworkKey: String? = nil,
+        songCount: Int? = nil
     ) {
         self.id = id
         self.serverID = serverID
@@ -101,6 +105,7 @@ public struct Album: Codable, Hashable, Sendable, Identifiable {
         self.year = year
         self.genre = genre
         self.artworkKey = artworkKey
+        self.songCount = songCount
     }
 }
 
