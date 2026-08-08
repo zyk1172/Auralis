@@ -120,15 +120,21 @@ public struct AgentToolkit {
         // MARK: Playback
         case "playTrack":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.playTrack(globalID: gid)
+            guard await bridge.playTrack(globalID: gid) else {
+                return .fail(call, descriptor, "未找到该歌曲，可能尚未同步到本地目录（可先 server_sync_start 同步，或改用 server_search 在线查找）")
+            }
             return .ok(call, descriptor, "开始播放", .actionPreview(title: "播放", detail: gid.description))
         case "playAlbum":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
-            await bridge.playAlbum(globalID: gid)
+            guard await bridge.playAlbum(globalID: gid) else {
+                return .fail(call, descriptor, "未找到该专辑中的可播放歌曲")
+            }
             return .ok(call, descriptor, "播放专辑", .actionPreview(title: "播放专辑", detail: gid.description))
         case "playPlaylist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
-            await bridge.playPlaylist(globalID: gid)
+            guard await bridge.playPlaylist(globalID: gid) else {
+                return .fail(call, descriptor, "未找到该歌单中的可播放歌曲")
+            }
             return .ok(call, descriptor, "播放歌单", .actionPreview(title: "播放歌单", detail: gid.description))
         case "pause":
             await bridge.pause(); return .ok(call, descriptor, "已暂停")
@@ -627,10 +633,16 @@ public struct AgentToolkit {
             return .ok(call, descriptor, "当前无播放", .text("当前没有正在播放的歌曲"))
         case "playback_play_song":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.playTrack(globalID: gid); return .ok(call, descriptor, "开始播放")
+            guard await bridge.playTrack(globalID: gid) else {
+                return .fail(call, descriptor, "未找到该歌曲，可能尚未同步到本地目录（可先 server_sync_start 同步，或改用 server_search 在线查找）")
+            }
+            return .ok(call, descriptor, "开始播放")
         case "playback_play_album":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
-            await bridge.playAlbum(globalID: gid); return .ok(call, descriptor, "开始播放专辑")
+            guard await bridge.playAlbum(globalID: gid) else {
+                return .fail(call, descriptor, "未找到该专辑中的可播放歌曲")
+            }
+            return .ok(call, descriptor, "开始播放专辑")
         case "playback_play_artist":
             let gid = try await requireArtistID(call, "artistID", catalog: catalog, serverID: serverID)
             let summaries = try await catalog.tracksForArtist(gid)
@@ -643,7 +655,10 @@ public struct AgentToolkit {
             await bridge.playRandom(); return .ok(call, descriptor, "已开始随机播放")
         case "playback_play_playlist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
-            await bridge.playPlaylist(globalID: gid); return .ok(call, descriptor, "开始播放歌单")
+            guard await bridge.playPlaylist(globalID: gid) else {
+                return .fail(call, descriptor, "未找到该歌单中的可播放歌曲")
+            }
+            return .ok(call, descriptor, "开始播放歌单")
         case "playback_pause":
             await bridge.pause(); return .ok(call, descriptor, "已暂停")
         case "playback_resume":

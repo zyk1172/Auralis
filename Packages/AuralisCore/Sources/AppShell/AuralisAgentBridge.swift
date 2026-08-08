@@ -36,25 +36,28 @@ public final class AuralisAgentBridge: AgentBridge {
 
     // MARK: - Playback
 
-    public func playTrack(globalID: GlobalID) async {
-        guard let track = resolveTrack(globalID) else { return }
+    public func playTrack(globalID: GlobalID) async -> Bool {
+        guard let track = resolveTrack(globalID) else { return false }
         model.selectAndPlay(track)
+        return true
     }
 
-    public func playAlbum(globalID: GlobalID) async {
+    public func playAlbum(globalID: GlobalID) async -> Bool {
         let tracks = model.catalog.tracks.filter { $0.albumID.rawValue == globalID.remoteID }
-        guard !tracks.isEmpty else { return }
+        guard !tracks.isEmpty else { return false }
         model.queue = tracks
         model.selectAndPlay(tracks[0])
+        return true
     }
 
-    public func playPlaylist(globalID: GlobalID) async {
-        guard let playlist = model.catalog.playlists.first(where: { $0.id.rawValue == globalID.remoteID }) else { return }
+    public func playPlaylist(globalID: GlobalID) async -> Bool {
+        guard let playlist = model.catalog.playlists.first(where: { $0.id.rawValue == globalID.remoteID }) else { return false }
         let ids = Set(playlist.trackIDs)
         let tracks = model.catalog.tracks.filter { ids.contains($0.id) }
-        guard !tracks.isEmpty else { return }
+        guard !tracks.isEmpty else { return false }
         model.queue = tracks
         model.selectAndPlay(tracks[0])
+        return true
     }
 
     public func playRandom() async {

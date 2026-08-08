@@ -17,6 +17,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     private(set) var addedToPlaylist: [(GlobalID, [GlobalID])] = []
     private(set) var createdPlaylistNames: [String] = []
 
+    /// 播放类工具的统一返回（默认 true；置 false 可模拟「目标不在目录」）。
+    var playResult: Bool = true
+
     init(activeServerID: ServerID? = nil) { self.activeServerIDValue = activeServerID }
 
     var activeServerID: ServerID? { activeServerIDValue }
@@ -24,9 +27,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func currentTrack() -> Track? { nil }
     func currentQueue() -> [Track] { [] }
 
-    func playTrack(globalID: GlobalID) { playedTracks.append(globalID) }
-    func playAlbum(globalID: GlobalID) {}
-    func playPlaylist(globalID: GlobalID) {}
+    func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
+    func playAlbum(globalID: GlobalID) async -> Bool { playResult }
+    func playPlaylist(globalID: GlobalID) async -> Bool { playResult }
     func playRandom() {}
     func pause() {}
     func resume() {}

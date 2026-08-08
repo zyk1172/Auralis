@@ -156,7 +156,7 @@ public struct MacSettingsWindow: View {
                 TextField("模型", text: $aiModel)
                 LabeledContent("API Key", value: hasAPIKey ? "已配置 · 存于系统 Keychain" : "未配置")
             }
-            MovipNoteSettingsSection()
+            MoviePilotSettingsSection()
         }
         .formStyle(.grouped)
         .task {

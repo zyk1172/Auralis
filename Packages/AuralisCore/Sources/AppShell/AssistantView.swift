@@ -385,25 +385,7 @@ struct AssistantView: View {
             TrackCardList(cards: cards, agent: agent, theme: theme)
 
         case let .albumCards(cards):
-            VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
-                ForEach(cards) { card in
-                    HStack {
-                        Image(systemName: "square.stack")
-                            .foregroundStyle(theme.colorTokens.accent.color)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(card.title).font(.subheadline)
-                                .foregroundStyle(theme.colorTokens.primaryText.color)
-                            Text(card.artistName).font(.caption2)
-                                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                        }
-                        Spacer()
-                    }
-                    .padding(AuralisSpacing.small)
-                    .background(theme.colorTokens.elevated.color)
-                    .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
-                }
-            }
-            .frame(maxWidth: 560, alignment: .leading)
+            AlbumCardList(cards: cards, theme: theme)
 
         case let .playlistProposal(name, tracks):
             VStack(alignment: .leading, spacing: AuralisSpacing.small) {
@@ -496,15 +478,67 @@ struct AssistantView: View {
 // MARK: - Track cards
 
 /// 结构化歌曲卡片列表。每张卡片都带真实 GlobalTrackID，点击即本地播放。
+/// 结构化歌曲卡片列表：默认只展示前 5 首，超出部分可展开。
+/// 避免搜索结果 / 歌手相关歌曲一次性铺满整个对话。
 private struct TrackCardList: View {
     let cards: [TrackCard]
     @ObservedObject var agent: AgentCoordinator
     let theme: BuiltInTheme
+    @State private var expanded = false
 
     var body: some View {
         VStack(spacing: AuralisSpacing.xSmall) {
-            ForEach(cards) { card in
+            ForEach(expanded ? cards : Array(cards.prefix(5))) { card in
                 TrackCardRow(card: card, agent: agent, theme: theme)
+            }
+            if cards.count > 5 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    Label(expanded ? "收起" : "展开全部（\(cards.count) 首）", systemImage: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+}
+
+/// 专辑卡片列表：默认只展示前 5 张，超出部分可展开。
+private struct AlbumCardList: View {
+    let cards: [AlbumCard]
+    let theme: BuiltInTheme
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
+            ForEach(expanded ? cards : Array(cards.prefix(5))) { card in
+                HStack {
+                    Image(systemName: "square.stack")
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(card.title).font(.subheadline)
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                        Text(card.artistName).font(.caption2)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                    Spacer()
+                }
+                .padding(AuralisSpacing.small)
+                .background(theme.colorTokens.elevated.color)
+                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+            }
+            if cards.count > 5 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    Label(expanded ? "收起" : "展开全部专辑（\(cards.count) 张）", systemImage: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                }
+                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: 560, alignment: .leading)

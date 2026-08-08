@@ -44,18 +44,22 @@ private final class StubSystemService: AgentSystemService, @unchecked Sendable {
     func playbackDiagnostics() async -> AgentPlaybackDiagnostics { AgentPlaybackDiagnostics(state: "playing", mediaSource: "server", audioSessionActive: true, queueValid: true, isPlaying: true) }
     func recentErrors(limit: Int) async -> [AgentErrorRecord] { [] }
 
-    // 音乐下载（MovipNote）可配置桩
+    // 音乐下载（MoviePilot）可配置桩
     var musicSearchOverride: AgentMusicSearchResult?
     var musicDownloadOverride: AgentMusicDownloadResult?
     var musicTasksOverride: [AgentMusicTask]?
+    var musicHistoryOverride: AgentMusicHistoryResult?
     func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
-        musicSearchOverride ?? AgentMusicSearchResult(configured: false, message: "音乐下载（MovipNote）未配置")
+        musicSearchOverride ?? AgentMusicSearchResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
     func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
-        musicDownloadOverride ?? AgentMusicDownloadResult(configured: false, message: "音乐下载（MovipNote）未配置")
+        musicDownloadOverride ?? AgentMusicDownloadResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
     func musicTasks(status: String?) async -> [AgentMusicTask] {
         musicTasksOverride ?? []
+    }
+    func musicHistory() async -> AgentMusicHistoryResult {
+        musicHistoryOverride ?? AgentMusicHistoryResult(configured: false)
     }
 }
 
@@ -615,7 +619,7 @@ struct GlobalIDServerScopeTests {
     }
 }
 
-@Suite("音乐下载（MovipNote）工具")
+@Suite("音乐下载（MoviePilot）工具")
 struct MusicDownloadToolTests {
     private func makeStoreAndBridge() throws -> (LocalCatalogStore, MockAgentBridge) {
         (try makeV2Store(), MockAgentBridge(activeServerID: "s"))
@@ -718,5 +722,61 @@ private extension ToolResult {
     var payloadText: String {
         if case let .text(value) = payload { return value }
         return ""
+    }
+}
+
+@Suite("播放工具失败上报")
+struct PlaybackToolFailureTests {
+    @Test("播放目标在目录但 bridge 无法播放时返回失败，不再谎报「开始播放」")
+    func playSongReportsFailure() async throws {
+        let store = try makeV2Store()
+        try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "1", title: "七里香")])
+        let bridge = MockAgentBridge(activeServerID: "s")
+        bridge.playResult = false
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "playback_play_song", arguments: ["trackID": "s:1"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
+        )
+        #expect(!result.success)
+        #expect(result.summary.contains("未找到该歌曲"))
+    }
+
+    @Test("播放目标存在时正常返回开始播放")
+    func playSongSucceeds() async throws {
+        let store = try makeV2Store()
+        try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "1", title: "七里香")])
+        let bridge = MockAgentBridge(activeServerID: "s")
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "playback_play_song", arguments: ["trackID": "s:1"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
+        )
+        #expect(result.success)
+        #expect(result.summary.contains("开始播放"))
+        #expect(bridge.playedTracks.count == 1)
+    }
+}
+
+@Suite("音乐下载历史工具")
+struct MusicDownloadHistoryTests {
+    @Test("history 返回下载历史")
+    func historyFormats() async throws {
+        let (store, bridge) = try makeV2StoreAndBridge()
+        let system = StubSystemService()
+        system.musicHistoryOverride = AgentMusicHistoryResult(
+            configured: true,
+            liveAvailable: true,
+            tasks: [AgentMusicTask(hash: "h1", title: "周杰伦 - 魔杰座", state: "completed", progress: 100)]
+        )
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "music_download", arguments: ["action": "history"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+        )
+        #expect(result.success)
+        #expect(result.summary.contains("下载历史"))
+        #expect(result.payloadText.contains("completed"))
+    }
+
+    private func makeV2StoreAndBridge() throws -> (LocalCatalogStore, MockAgentBridge) {
+        (try makeV2Store(), MockAgentBridge(activeServerID: "s"))
     }
 }

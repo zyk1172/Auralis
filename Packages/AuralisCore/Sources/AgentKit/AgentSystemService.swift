@@ -443,7 +443,7 @@ public enum ToolOutcome: Sendable, Equatable {
 
 /// 系统级 Agent 工具所需的 App / 设备 / 服务器 / 缓存 / 诊断服务抽象。
 /// 由 AppShell 层适配 AuralisAppModel 实现；AgentKit 不依赖 Application。
-// MARK: - 音乐下载（MovipNote / MoviePilot）
+// MARK: - 音乐下载（MoviePilot / MoviePilot）
 
 /// 音乐下载搜索结果（不含凭据 / 完整地址）。
 public struct AgentMusicSearchResult: Sendable, Equatable {
@@ -560,6 +560,19 @@ public struct AgentMusicTask: Sendable, Equatable {
     }
 }
 
+/// 音乐下载历史（含下载器实时状态是否可用）。
+public struct AgentMusicHistoryResult: Sendable, Equatable {
+    public var configured: Bool
+    public var liveAvailable: Bool
+    public var tasks: [AgentMusicTask]
+
+    public init(configured: Bool = false, liveAvailable: Bool = false, tasks: [AgentMusicTask] = []) {
+        self.configured = configured
+        self.liveAvailable = liveAvailable
+        self.tasks = tasks
+    }
+}
+
 public protocol AgentSystemService: Sendable {
     // App
     func appContext() async -> AgentAppContext
@@ -602,10 +615,11 @@ public protocol AgentSystemService: Sendable {
     func playbackDiagnostics() async -> AgentPlaybackDiagnostics
     func recentErrors(limit: Int) async -> [AgentErrorRecord]
 
-    // 音乐下载（MovipNote / MoviePilot 插件）
+    // 音乐下载（MoviePilot / MoviePilot 插件）
     func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult
     func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult
     func musicTasks(status: String?) async -> [AgentMusicTask]
+    func musicHistory() async -> AgentMusicHistoryResult
 }
 
 
@@ -613,12 +627,16 @@ public protocol AgentSystemService: Sendable {
 
 public extension AgentSystemService {
     func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
-        AgentMusicSearchResult(configured: false, message: "音乐下载（MovipNote）未配置")
+        AgentMusicSearchResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
 
     func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
-        AgentMusicDownloadResult(configured: false, message: "音乐下载（MovipNote）未配置")
+        AgentMusicDownloadResult(configured: false, message: "音乐下载（MoviePilot）未配置")
     }
 
     func musicTasks(status: String?) async -> [AgentMusicTask] { [] }
+
+    func musicHistory() async -> AgentMusicHistoryResult {
+        AgentMusicHistoryResult(configured: false, liveAvailable: false)
+    }
 }

@@ -675,9 +675,12 @@ public struct AgentRunner {
             let q = extractQuery(text, markers: ["播放"]) ?? text
             let hits = await search(q)
             if let first = hits.first {
-                await bridge.playTrack(globalID: first.globalID)
-                await log(AgentActionRecord(toolName: "playTrack", permission: .reversible, summary: "播放《\(first.title)》"))
-                await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("开始播放：\(first.title)")]))
+                if await bridge.playTrack(globalID: first.globalID) {
+                    await log(AgentActionRecord(toolName: "playTrack", permission: .reversible, summary: "播放《\(first.title)》"))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("开始播放：\(first.title)")]))
+                } else {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("未能播放：未找到可播放的歌曲：\(q)")]))
+                }
             } else {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("未找到可播放的歌曲：\(q)")]))
             }
@@ -753,9 +756,13 @@ public struct AgentRunner {
     }
 
     /// 把结构化消息（卡片）转成模型可读的文本，使工具结果中的歌曲清单可见。
+    /// 只把前 5 条清单回传模型（其余用总数概括），避免搜索结果/歌手相关歌曲
+    /// 一次性占据大量上下文、诱导模型整段罗列。
     private static func messageTextForModel(_ message: AgentMessage) -> String {
         let trackLine = { (cards: [TrackCard]) -> String in
-            cards.prefix(30).map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
+            let shown = cards.prefix(5)
+            let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
+            return cards.count > 5 ? "\(list)…等 \(cards.count) 首" : list
         }
         switch message {
         case let .text(value):
@@ -763,7 +770,10 @@ public struct AgentRunner {
         case let .trackCards(cards):
             return "歌曲清单：\(trackLine(cards))"
         case let .albumCards(cards):
-            return "专辑清单：\(cards.prefix(30).map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、"))"
+            let shown = cards.prefix(5)
+            let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
+            let suffix = cards.count > 5 ? "…等 \(cards.count) 张" : ""
+            return "专辑清单：\(list)\(suffix)"
         case let .playlistProposal(name, tracks):
             return "歌单提案「\(name)」：\(trackLine(tracks))"
         case let .actionPreview(title, detail):
@@ -847,7 +857,7 @@ public struct AgentRunner {
         5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首候选（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里挑选。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
         5e. 热门 = 本地热度代理（播放次数/收藏/评分/最近播放），不是互联网排行榜。library_select_tracks 的 popularityProxy 已按此排序；语言标签缺失时会按热度返回候选，请按歌曲名/艺术家判断语言后再挑选。
         5f. 推荐前先了解曲库：先用 library_get_catalog_index 查看流派/语言/年代/歌手构成；需要具体候选时用 library_get_catalog_tracks(category, value, limit) 取该分类的歌曲清单（只含元数据，无歌词/海报）。按用户需求只取相关分类，不要把全部分类一次性拉进对话；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
-        5g. 音乐下载（Music Download / MovipNote）：当用户要求「听/播放」某首歌、某专辑、某艺人作品，而本地库与服务器都找不到该资源；或用户直接要求「下载」某首歌/专辑时，使用 music_download 工具：
+        5g. 音乐下载（Music Download / MoviePilot）：当用户要求「听/播放」某首歌、某专辑、某艺人作品，而本地库与服务器都找不到该资源；或用户直接要求「下载」某首歌/专辑时，使用 music_download 工具：
             - action=search 搜索：可传 artist/album/keyword/year/limit/prefer_lossless/min_seeders；中文专辑务必同时传 album_aliases（专辑英文名/别名，逗号分隔），否则中文标题常对不上 PT 站英文建种名。
             - 决策硬规则（防止下错专辑）：
               * total==0 → 回复「没有找到资源」，建议换关键词/艺人名/英文专辑名；
@@ -856,7 +866,7 @@ public struct AgentRunner {
               * 单曲：PT 站按专辑/艺人建种，单曲名通常搜不到 → 插件会退艺人搜索，album_matched_any 一般为 false，必须展示候选让用户挑，不要自动下载。
             - action=download 失败（如「种子内容为空/引用已失效」）→ 换该查询的下一个候选 ref 重试 1-2 次；仍失败则如实说明原因。
             - action=tasks 可查询下载进度；下载完成后提示用户可在下载目录/音乐库看到新资源。
-            - 工具返回「未配置」→ 告知用户去 设置 → 音乐下载 填写 MovipNote 地址与 Token。
+            - 工具返回「未配置」→ 告知用户去 设置 → 音乐下载 填写 MoviePilot 地址与 Token。
 
         ## 对话与工具调用规则
         6. 你是有记忆的助手：结合本会话历史回答，不要重复询问已知信息。
@@ -890,7 +900,7 @@ public struct AgentRunner {
             ("播放队列", ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]),
             ("歌单与收藏", ["playlist_create", "playlist_add_songs", "favorite_set", "lyrics_get"]),
             ("推荐与下载", ["recommend_by_mood", "recommend_by_constraints", "smart_queue_generate", "media_download_offline", "cache_get_status"]),
-            ("音乐下载（MovipNote）", ["music_download"]),
+            ("音乐下载（MoviePilot）", ["music_download"]),
             ("维护与诊断", ["library_find_duplicates", "library_find_metadata_issues", "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable", "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution", "stats_get_listening_summary", "diagnostics_playback", "diagnostics_get_recent_errors", "diagnostics_export_report", "diagnostics_now_playing"]),
             ("系统与设备", ["app_get_context", "app_open_page", "app_get_feature_status", "device_get_network_status", "device_get_audio_route", "device_get_storage_status", "ios_siri_get_status", "ios_shortcuts_list"]),
             ("补充工具（无新式别名）", ["getLeastPlayed", "getDownloadedTracks", "removeFromQueue", "listPlaylists", "renamePlaylist", "removeTracksFromPlaylist", "reorderPlaylist", "duplicatePlaylist", "mergePlaylists", "deletePlaylist", "setRating", "clearRating", "switchServer", "removeServer", "addServer", "updateServer"]),

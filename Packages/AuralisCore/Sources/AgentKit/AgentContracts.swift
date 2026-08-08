@@ -60,10 +60,10 @@ public protocol AgentBridge: Sendable {
     func currentTrack() async -> Track?
     func currentQueue() async -> [Track]
 
-    // Playback
-    func playTrack(globalID: GlobalID) async
-    func playAlbum(globalID: GlobalID) async
-    func playPlaylist(globalID: GlobalID) async
+    // Playback（返回是否真正开始播放：目标在本地目录且已交给播放引擎）
+    func playTrack(globalID: GlobalID) async -> Bool
+    func playAlbum(globalID: GlobalID) async -> Bool
+    func playPlaylist(globalID: GlobalID) async -> Bool
     func playRandom() async
     func pause() async
     func resume() async

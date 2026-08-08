@@ -92,10 +92,10 @@ public enum AgentToolRegistry {
                            .init(name: "to", required: true, description: "目标索引")]),
         .init(name: "clearQueue", group: .playback, permission: .destructive, requiresConfirmation: true, summary: "清空队列"),
 
-        // MARK: 音乐下载（MovipNote / MoviePilot）
-        .init(name: "music_download", group: .download, permission: .reversible, summary: "从 MovipNote（MoviePilot）搜索并下载音乐资源",
+        // MARK: 音乐下载（MoviePilot / MoviePilot）
+        .init(name: "music_download", group: .download, permission: .reversible, summary: "从 MoviePilot（MoviePilot）搜索并下载音乐资源",
               parameters: [
-                .init(name: "action", required: true, description: "search=搜索候选 | download=提交下载 | tasks=查询下载任务"),
+                .init(name: "action", required: true, description: "search=搜索候选 | download=提交下载 | tasks=查询下载任务 | history=查看下载历史"),
                 .init(name: "artist", required: false, description: "艺人名（search）"),
                 .init(name: "album", required: false, description: "专辑名（search）"),
                 .init(name: "album_aliases", required: false, description: "专辑英文/别名，逗号分隔；中文专辑务必提供（search）"),

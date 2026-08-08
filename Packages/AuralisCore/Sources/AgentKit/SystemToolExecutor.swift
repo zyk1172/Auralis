@@ -274,6 +274,9 @@ public struct SystemToolExecutor {
                 case "tasks":
                     let tasks = await systemService.musicTasks(status: optionalParam(call, "status"))
                     return Self.musicTasksResult(call, descriptor, tasks)
+                case "history":
+                    let history = await systemService.musicHistory()
+                    return Self.musicHistoryResult(call, descriptor, history)
                 default:
                     throw SystemToolError.invalidParameter("action", action)
                 }
@@ -347,7 +350,7 @@ public struct SystemToolExecutor {
     private static func musicSearchResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ result: AgentMusicSearchResult) -> ToolResult {
         guard result.configured else {
             return ToolResult(call: call, permission: descriptor.permission, success: false,
-                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MovipNote 地址与 Token")
+                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MoviePilot 地址与 Token")
         }
         if !result.message.isEmpty && result.total == 0 && result.candidates.isEmpty {
             return .ok(call, descriptor, "音乐下载搜索失败", .text("搜索失败：\(result.message)"))
@@ -372,7 +375,7 @@ public struct SystemToolExecutor {
     private static func musicDownloadResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ result: AgentMusicDownloadResult) -> ToolResult {
         guard result.configured else {
             return ToolResult(call: call, permission: descriptor.permission, success: false,
-                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MovipNote 地址与 Token")
+                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MoviePilot 地址与 Token")
         }
         if result.success, let hash = result.hash {
             let text = "已加入下载：\(hash)（状态 \(result.status ?? "downloading")）\(result.savePath.map { "，保存到 \($0)" } ?? "")"
@@ -380,6 +383,21 @@ public struct SystemToolExecutor {
         }
         return ToolResult(call: call, permission: descriptor.permission, success: false,
                           summary: "下载失败：\(result.message.isEmpty ? "未知原因" : result.message)")
+    }
+
+    private static func musicHistoryResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ history: AgentMusicHistoryResult) -> ToolResult {
+        guard history.configured else {
+            return ToolResult(call: call, permission: descriptor.permission, success: false,
+                              summary: "音乐下载未配置：请在 设置 → 音乐下载 填写 MoviePilot 地址与 Token")
+        }
+        guard !history.tasks.isEmpty else {
+            return .ok(call, descriptor, "暂无下载历史", .text("还没有音乐下载历史"))
+        }
+        let suffix = history.liveAvailable ? "" : "（下载器状态暂不可用，请以完成回调为准）"
+        let text = history.tasks.prefix(20).map { task in
+            "\(task.title)（\(task.state) \(String(format: "%.0f", task.progress))%）\(task.site.map { " · \($0)" } ?? "")"
+        }.joined(separator: "\n")
+        return .ok(call, descriptor, "下载历史 \(history.tasks.count) 条\(suffix)", .text(text))
     }
 
     private static func musicTasksResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ tasks: [AgentMusicTask]) -> ToolResult {

@@ -1,11 +1,25 @@
 # Changelog
 
+## 0.3.6 — 2026-08-08
+
+### Changed
+
+- 音乐下载工具名称更正为 **MoviePilot**（原误写 MovipNote），设置页/提示词/文档统一
+- 「音乐下载」设置页测试连接改用插件 v0.4.8+ 的 `POST /test` 接口，逐项展示：插件启用 / 音乐下载目录 / 搜索站点 / 下载器连接 / 元数据服务
+- `music_download` 工具新增 `action=history`：查询下载历史（含下载器实时状态；不可用时提示以完成回调为准）
+- AI 助手「播放」类工具（playback_play_song/playAlbum/playPlaylist）不再谎报成功：目标不在本地目录/服务器不匹配时返回失败并提示先同步或在线搜索
+
+### Fixed
+
+- AI 助手让播放音乐时「说播放了但实际没播」：桥接方法 playTrack/playAlbum/playPlaylist 改为返回是否真正开始播放，工具结果如实上报
+- AI 助手搜索结果 / 歌手相关歌曲列表占用过大篇幅：对话卡片默认只展示前 5 首（专辑 5 张），超出部分「展开全部」查看；回传给模型的清单同样限量前 5 条 + 总数
+
 ## 0.3.5 — 2026-08-08
 
 ### Added
 
-- Agent 新工具 `music_download`（Music Download）：接入 MovipNote（MoviePilot）音乐下载插件
-  - 设置新增「音乐下载（MovipNote）」区块：服务器地址（UserDefaults）+ 调用 Token（Keychain）+ 连接测试
+- Agent 新工具 `music_download`（Music Download）：接入 MoviePilot（MoviePilot）音乐下载插件
+  - 设置新增「音乐下载（MoviePilot）」区块：服务器地址（UserDefaults）+ 调用 Token（Keychain）+ 连接测试
   - action=search：跨站搜索音乐资源（音乐/影视判别 + 无损优先排序 + 相关度），返回候选与 `album_matched_any`
   - action=download：按 ref / site_id+index / magnet 提交下载到 NAS 音乐目录；失败自动提示换候选重试
   - action=tasks：查询下载进度

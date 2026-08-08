@@ -540,14 +540,14 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     // MARK: - Helpers
 
-    // MARK: - 音乐下载（MovipNote / MoviePilot 插件）
+    // MARK: - 音乐下载（MoviePilot / MoviePilot 插件）
 
     public func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int) async -> AgentMusicSearchResult {
         guard let connection = await movipNoteConnection() else {
-            return AgentMusicSearchResult(configured: false, message: "音乐下载（MovipNote）未配置")
+            return AgentMusicSearchResult(configured: false, message: "音乐下载（MoviePilot）未配置")
         }
         do {
-            let data = try await MovipNoteClient().search(
+            let data = try await MoviePilotClient().search(
                 connection,
                 artist: artist,
                 album: album,
@@ -573,10 +573,10 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?) async -> AgentMusicDownloadResult {
         guard let connection = await movipNoteConnection() else {
-            return AgentMusicDownloadResult(configured: false, message: "音乐下载（MovipNote）未配置")
+            return AgentMusicDownloadResult(configured: false, message: "音乐下载（MoviePilot）未配置")
         }
         do {
-            let data = try await MovipNoteClient().download(connection, ref: ref, siteID: siteID, index: index, magnet: magnet, title: title)
+            let data = try await MoviePilotClient().download(connection, ref: ref, siteID: siteID, index: index, magnet: magnet, title: title)
             return AgentMusicDownloadResult(
                 configured: true,
                 success: true,
@@ -589,10 +589,35 @@ public final class AuralisSystemToolService: AgentSystemService {
         }
     }
 
+    public func musicHistory() async -> AgentMusicHistoryResult {
+        guard let connection = await movipNoteConnection() else {
+            return AgentMusicHistoryResult(configured: false)
+        }
+        do {
+            let data = try await MoviePilotClient().history(connection)
+            return AgentMusicHistoryResult(
+                configured: true,
+                liveAvailable: data.liveAvailable ?? false,
+                tasks: (data.tasks ?? []).map {
+                    AgentMusicTask(
+                        hash: $0.hash,
+                        title: $0.title,
+                        site: $0.site,
+                        state: $0.state,
+                        progress: $0.progress ?? 0,
+                        savePath: $0.savePath
+                    )
+                }
+            )
+        } catch {
+            return AgentMusicHistoryResult(configured: true, liveAvailable: false)
+        }
+    }
+
     public func musicTasks(status: String?) async -> [AgentMusicTask] {
         guard let connection = await movipNoteConnection() else { return [] }
         do {
-            let tasks = try await MovipNoteClient().tasks(connection, status: status)
+            let tasks = try await MoviePilotClient().tasks(connection, status: status)
             return tasks.map {
                 AgentMusicTask(
                     hash: $0.hash,
@@ -608,18 +633,18 @@ public final class AuralisSystemToolService: AgentSystemService {
         }
     }
 
-    /// 读取 MovipNote 连接信息：地址来自 UserDefaults，Token 只从 Keychain 读取。
-    private func movipNoteConnection() async -> MovipNoteConnection? {
-        let settings = MovipNoteSettings()
+    /// 读取 MoviePilot 连接信息：地址来自 UserDefaults，Token 只从 Keychain 读取。
+    private func movipNoteConnection() async -> MoviePilotConnection? {
+        let settings = MoviePilotSettings()
         guard let url = settings.normalizedURL else { return nil }
         var token: String?
-        if let value = try? await KeychainCredentialVault().retrieve(id: MovipNoteSettings.tokenCredentialID) {
+        if let value = try? await KeychainCredentialVault().retrieve(id: MoviePilotSettings.tokenCredentialID) {
             token = value
         }
-        return MovipNoteConnection(baseURL: url, token: token)
+        return MoviePilotConnection(baseURL: url, token: token)
     }
 
-    private static func musicCandidate(_ item: MovipNoteCandidate) -> AgentMusicCandidate {
+    private static func musicCandidate(_ item: MoviePilotCandidate) -> AgentMusicCandidate {
         AgentMusicCandidate(
             index: item.index ?? 0,
             ref: item.ref,
