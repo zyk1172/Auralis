@@ -10,8 +10,8 @@ import Network
 /// 用 NWConnection 直接观察连接状态机，尤其区分：
 /// - `.waiting` + `unsatisfiedReason == .localNetworkDenied` → 本地网络隐私被拦截
 /// - `.ready` → 本地网络 TCP 可达
-struct LocalNetworkProbeResult: Sendable, Equatable {
-    enum State: String, Sendable {
+public struct LocalNetworkProbeResult: Sendable, Equatable {
+    public enum State: String, Sendable {
         case ready = "ready"
         case waiting = "waiting"
         case timedOut = "timedOut"
@@ -19,14 +19,14 @@ struct LocalNetworkProbeResult: Sendable, Equatable {
         case cancelled = "cancelled"
     }
 
-    var state: State
+    public var state: State
     /// 最后一次 `.waiting` 的 unsatisfiedReason 字符串（如 "localNetworkDenied"）。
-    var unsatisfiedReason: String?
-    var errorDescription: String?
-    var timestamp: Date
+    public var unsatisfiedReason: String?
+    public var errorDescription: String?
+    public var timestamp: Date
 
     /// 是否明确被本地网络隐私拦截。
-    var isLocalNetworkDenied: Bool {
+    public var isLocalNetworkDenied: Bool {
         unsatisfiedReason?.contains("localNetworkDenied") == true
     }
 }
@@ -34,11 +34,11 @@ struct LocalNetworkProbeResult: Sendable, Equatable {
 
 #if DEBUG
 /// 仅 DEBUG 的 TCP 连通性 / 本地网络权限探测。
-enum LocalNetworkProbe {
+public enum LocalNetworkProbe {
     /// 对 `host:port` 建立 NWConnection TCP 连接，观察状态机直到 ready / failed /
     /// cancelled / 超时。若期间出现 `.waiting(localNetworkDenied)` 且最终未 ready，
     /// 结果会保留该 unsatisfiedReason，供 UI 明确显示 DENIED / BLOCKED。
-    static func probe(host: String, port: UInt16, timeout: TimeInterval = 10) async -> LocalNetworkProbeResult {
+    public static func probe(host: String, port: UInt16, timeout: TimeInterval = 10) async -> LocalNetworkProbeResult {
         let nwHost = NWEndpoint.Host(host)
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             return LocalNetworkProbeResult(
