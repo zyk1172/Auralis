@@ -449,6 +449,37 @@ struct ServerConnectionSheet: View {
                         Button("复制错误详情") { PlatformPasteboard.copy(message) }
                     }
                 }
+                #if DEBUG
+                if let diag = model.connectionDiagnostics {
+                    Section("网络诊断（DEBUG）") {
+                        LabeledContent("App Bundle ID", value: AppDiagnostics.bundleID)
+                        LabeledContent("Target", value: AppDiagnostics.targetKind)
+                        LabeledContent("App Sandbox", value: AppDiagnostics.isAppSandboxEnabled ? "已启用" : "未启用")
+                        LabeledContent("network.client（出站连接）", value: AppDiagnostics.hasNetworkClientEntitlement ? "存在" : "未检测到（可用 codesign -d --entitlements 复核）")
+                        LabeledContent("NSLocalNetworkUsageDescription", value: (AppDiagnostics.localNetworkUsageDescription?.isEmpty == false) ? "已声明" : "缺失")
+                        LabeledContent("服务器 Host", value: diag.host ?? "—")
+                        LabeledContent("局域网地址", value: diag.isPrivateLAN ? "是" : "否")
+                        LabeledContent("协议", value: diag.scheme?.uppercased() ?? "—")
+                        LabeledContent("测试/连接请求已发出", value: diag.requestAttempted ? "是" : "否")
+                        if let domain = diag.nsErrorDomain {
+                            LabeledContent("NSError domain", value: "\(domain)（code \(diag.nsErrorCode ?? -1)）")
+                        }
+                        if let desc = diag.nsErrorDescription, !desc.isEmpty {
+                            LabeledContent("错误描述", value: desc)
+                        }
+                        if let failing = diag.failingURL, !failing.isEmpty {
+                            LabeledContent("failingURL", value: failing)
+                        }
+                        if let underlying = diag.underlyingError, !underlying.isEmpty {
+                            LabeledContent("underlyingError", value: underlying)
+                        }
+                        LabeledContent("映射结果", value: diag.mappedMessage)
+                        Text("诊断时间 \(diag.timestamp.formatted(date: .omitted, time: .standard))")
+                            .font(.caption2)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+                #endif
             }
             .navigationTitle("添加服务器")
             .toolbar {

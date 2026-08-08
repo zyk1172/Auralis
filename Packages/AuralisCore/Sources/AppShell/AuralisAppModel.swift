@@ -67,6 +67,84 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var serverAuthenticationFailed = false
     @Published public private(set) var serverCapabilities = ServerCapabilities()
     @Published public private(set) var catalog: LibraryCatalog
+    /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
+    @Published public private(set) var connectionDiagnostics: ConnectionDiagnosticsSnapshot?
+
+    /// 连接诊断快照：记录最近一次测试/连接的客观事实，不伪造权限状态。
+    public struct ConnectionDiagnosticsSnapshot: Sendable, Equatable {
+        public let timestamp: Date
+        public let host: String?
+        public let isPrivateLAN: Bool
+        public let scheme: String?
+        public let requestAttempted: Bool
+        public let nsErrorDomain: String?
+        public let nsErrorCode: Int?
+        public let nsErrorDescription: String?
+        public let failingURL: String?
+        public let underlyingError: String?
+        public let mappedMessage: String
+
+        public init(
+            timestamp: Date = .now,
+            host: String?,
+            isPrivateLAN: Bool,
+            scheme: String?,
+            requestAttempted: Bool,
+            nsErrorDomain: String? = nil,
+            nsErrorCode: Int? = nil,
+            nsErrorDescription: String? = nil,
+            failingURL: String? = nil,
+            underlyingError: String? = nil,
+            mappedMessage: String
+        ) {
+            self.timestamp = timestamp
+            self.host = host
+            self.isPrivateLAN = isPrivateLAN
+            self.scheme = scheme
+            self.requestAttempted = requestAttempted
+            self.nsErrorDomain = nsErrorDomain
+            self.nsErrorCode = nsErrorCode
+            self.nsErrorDescription = nsErrorDescription
+            self.failingURL = failingURL
+            self.underlyingError = underlyingError
+            self.mappedMessage = mappedMessage
+        }
+    }
+
+    /// 记录连接诊断快照；DEBUG 下同时输出原始 NSError 层级信息（domain/code/failingURL/underlying）。
+    private func recordConnectionDiagnostics(
+        host: String?, url: URL?, error: Error?, message: String, requestAttempted: Bool
+    ) {
+        let ns = error as NSError?
+        let failing = (error as? URLError)?.failingURL?.absoluteString
+        // URLError 没有公开的 .underlying；从 NSError userInfo 提取底层错误。
+        let underlyingError = ns?.userInfo["NSUnderlyingError"] as? Error
+        let underlying = underlyingError.map {
+            ($0 as? LocalizedError)?.errorDescription ?? $0.localizedDescription
+        }
+        connectionDiagnostics = ConnectionDiagnosticsSnapshot(
+            host: host ?? url?.host,
+            isPrivateLAN: (host ?? url?.host).map(ServerURLPolicy.isPrivateOrLocal) ?? false,
+            scheme: url?.scheme?.lowercased(),
+            requestAttempted: requestAttempted,
+            nsErrorDomain: ns?.domain,
+            nsErrorCode: ns?.code,
+            nsErrorDescription: (error as? LocalizedError)?.errorDescription ?? error?.localizedDescription,
+            failingURL: failing,
+            underlyingError: underlying,
+            mappedMessage: message
+        )
+        #if DEBUG
+        if let error {
+            NSLog("[Auralis] 连接诊断 host=%@ url=%@ domain=%@ code=%ld desc=%@ failingURL=%@ underlying=%@ mapped=%@",
+                  host ?? "?", url?.absoluteString ?? "?", ns?.domain ?? "?", ns?.code ?? -1,
+                  error.localizedDescription, failing ?? "?", underlying ?? "?", message)
+        } else {
+            NSLog("[Auralis] 连接诊断 host=%@ url=%@ 成功 mapped=%@", host ?? "?", url?.absoluteString ?? "?", message)
+        }
+        #endif
+    }
+
     /// 已加载的服务器封面缓存（独立 @Observable 存储，键为 "serverID|封面Key@像素尺寸"）。
     /// 故意不放进 @Published：封面按需加载完成时写 @Published 会触发包括首页在内的所有
     /// model 观察者整体重算，滚动时大量封面陆续到达形成刷新风暴，导致上下滑动卡顿与
@@ -2395,12 +2473,15 @@ public final class AuralisAppModel: ObservableObject {
             }
             guard !result.tracks.isEmpty else { throw ServerConnectionError.emptyLibrary }
             apply(result)
+            recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: nil, message: "连接成功", requestAttempted: true)
         } catch is CancellationError {
             serverConnectionState = .failed(ServerConnectionError.cancelled.localizedDescription)
         } catch {
             // 统一分类错误文案（地址/认证/超时/局域网权限/ATS/非 OpenSubsonic 等），
             // 不把所有失败都显示成笼统的"连接未完成"。
-            serverConnectionState = .failed(ConnectionErrorDescription.describe(error))
+            let message = ConnectionErrorDescription.describe(error)
+            recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: error, message: message, requestAttempted: true)
+            serverConnectionState = .failed(message)
         }
     }
 
@@ -2428,9 +2509,13 @@ public final class AuralisAppModel: ObservableObject {
             if let version = result.serverVersion { parts.append("版本：\(version)") }
             if let api = result.apiVersion { parts.append("协议：\(api)") }
             parts.append("认证成功（\(result.username ?? "当前用户")）")
-            return .success(parts.joined(separator: " · "))
+            let message = parts.joined(separator: " · ")
+            recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: nil, message: message, requestAttempted: true)
+            return .success(message)
         } catch {
-            return .failure(ConnectionErrorDescription.describe(error))
+            let message = ConnectionErrorDescription.describe(error)
+            recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: error, message: message, requestAttempted: true)
+            return .failure(message)
         }
     }
 
