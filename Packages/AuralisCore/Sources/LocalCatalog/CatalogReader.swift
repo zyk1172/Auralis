@@ -379,13 +379,22 @@ extension LocalCatalogStore {
             [.text(gid.description), .text(serverID.rawValue), .text(playlist.id.rawValue),
              .text(playlist.name), .integer(isReadOnly ? 1 : 0), .text(payload), .real(Date().timeIntervalSince1970)]
         )
-        try db.run("DELETE FROM playlist_tracks WHERE playlist_gid = ?", [.text(gid.description)])
-        for (index, trackID) in playlist.trackIDs.enumerated() {
-            let trackGID = GlobalID(serverID: serverID, remoteID: trackID.rawValue)
-            try db.run(
-                "INSERT INTO playlist_tracks (playlist_gid, position, track_gid) VALUES (?, ?, ?)",
-                [.text(gid.description), .integer(Int64(index)), .text(trackGID.description)]
-            )
+        // getPlaylists（复数）只返回歌单壳、不含 entry：此时 playlist.trackIDs 为空。
+        // 若本地已缓存该歌单的曲目（此前 getPlaylist 单数拉取过），保留旧缓存，
+        // 避免「空壳」把已缓存曲目清空（Agent 的 getPlaylist 因此变成空壳歌单）。
+        let existingCount = Int(try db.query(
+            "SELECT COUNT(*) AS c FROM playlist_tracks WHERE playlist_gid = ?",
+            [.text(gid.description)]
+        ).first?["c"]?.int ?? 0)
+        if !playlist.trackIDs.isEmpty || existingCount == 0 {
+            try db.run("DELETE FROM playlist_tracks WHERE playlist_gid = ?", [.text(gid.description)])
+            for (index, trackID) in playlist.trackIDs.enumerated() {
+                let trackGID = GlobalID(serverID: serverID, remoteID: trackID.rawValue)
+                try db.run(
+                    "INSERT INTO playlist_tracks (playlist_gid, position, track_gid) VALUES (?, ?, ?)",
+                    [.text(gid.description), .integer(Int64(index)), .text(trackGID.description)]
+                )
+            }
         }
     }
 

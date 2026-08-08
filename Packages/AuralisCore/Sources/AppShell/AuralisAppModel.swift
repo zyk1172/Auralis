@@ -284,6 +284,8 @@ public final class AuralisAppModel: ObservableObject {
                     catalog: self.catalogCoordinator.store
                 )
                 await self.refreshCatalogFromStore(serverID: serverID)
+                // 同步完成后补缓存歌单曲目，保证 Agent 能读到歌单里的歌。
+                self.cachePlaylistContentsInBackground()
             }
         }
         return coordinator
@@ -1883,6 +1885,36 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
+    private var isCachingPlaylistContents = false
+
+    /// 后台整体缓存歌单曲目（仅元数据）。
+    /// 根因：getPlaylists（复数）只返回歌单壳、不含 entry，导致 Agent 的
+    /// getPlaylist / playback_play_playlist 看到「空壳歌单」。
+    /// 这里对每个「本地还没有曲目的歌单」调 getPlaylist（单数）拉全量曲目，
+    /// 写回内存 catalog + SQLite（playlist_tracks），让 Agent 下次直接看到真实歌曲，
+    /// 无需用户先打开歌单详情。仅补空壳歌单，避免每次启动全量请求。
+    public func cachePlaylistContentsInBackground() {
+        guard !isCachingPlaylistContents else { return }
+        let pending = catalog.playlists.filter { $0.trackIDs.isEmpty }
+        guard !pending.isEmpty else { return }
+        isCachingPlaylistContents = true
+        Task { @MainActor in
+            defer { self.isCachingPlaylistContents = false }
+            for playlist in pending {
+                let tracks = await self.connector.fetchPlaylistTracks(playlistID: playlist.id)
+                guard !tracks.isEmpty else { continue }
+                self.playlistTracks[playlist.id] = tracks
+                if let index = self.catalog.playlists.firstIndex(where: { $0.id == playlist.id }) {
+                    self.catalog.playlists[index].trackIDs = tracks.map(\.id)
+                }
+                let store = self.catalogCoordinator.store
+                let gid = GlobalID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)
+                let trackGIDs = tracks.map { GlobalID(serverID: playlist.serverID, remoteID: $0.id.rawValue) }
+                try? await store.setPlaylistTracks(gid, trackGIDs: trackGIDs)
+            }
+        }
+    }
+
     // MARK: - Annotations
 
     /// 收藏 / 取消收藏专辑（服务器 star / unstar）。
@@ -2947,6 +2979,9 @@ public final class AuralisAppModel: ObservableObject {
                 if let serverID = self.catalog.activeServerID {
                     self.persistServerPlaylists(self.catalog.playlists, serverID: serverID)
                 }
+                // 后台整体缓存歌单曲目（仅元数据），让 Agent 的 getPlaylist 直接看到真实歌曲。
+                // 放在 persist 之后，并配合 upsertPlaylist 的空曲目保留逻辑，避免竞态清空缓存。
+                self.cachePlaylistContentsInBackground()
             }
         }
     }
