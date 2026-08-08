@@ -745,7 +745,10 @@ public struct AgentRunner {
 
         if lower.contains("歌单") {
             let list = (try? await catalog.listPlaylists(serverID: context.serverID)) ?? []
-            await emit(AgentChatMessage(role: .assistant, messages: [.text(list.isEmpty ? "暂无歌单。" : "歌单：\(list.map(\.name).joined(separator: "、"))")]))
+            let text = list.isEmpty
+                ? "暂无歌单。"
+                : "歌单：" + list.map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
+            await emit(AgentChatMessage(role: .assistant, messages: [.text(text)]))
             return
         }
 
@@ -982,7 +985,7 @@ public struct AgentRunner {
 
         ## 服务器优先的操作准则
         1. 数据源是服务器：查询先走本地缓存（快）；本地没有或结果可疑时，先用 server_search 在服务器上在线搜索（server_search 已带播放地址，可直接流播）。不要把「本地没有」直接说成「服务器不存在」；「本地目录没有」≠「不能播放」。
-        2. 播放/收藏/歌单/评分的任何操作，最终都要作用于服务器；参数必须使用当前服务器真实存在的 GlobalID（格式「服务器ID:歌曲ID」）。
+        2. 播放/收藏/歌单/评分的任何操作，最终都要作用于服务器；参数必须使用当前服务器真实存在的 GlobalID（格式「服务器ID:歌曲ID」）。歌单/艺术家 ID 形如「服务器ID:歌单ID」「服务器ID:艺术家ID」；listPlaylists / library_search / searchArtists / searchArtists 返回结果里，名字后括号内的就是该 ID，直接原样传给 playback_play_playlist / playback_play_artist 等，不要自己拼接或臆造。
         3. 播放流程：先 library_search（或 server_search）找到歌曲 → 用返回的 trackID 调 playback_play_song（或 playback_play_album / playback_play_playlist / playback_play_artist）。搜索命中多首时，说明候选并让用户选择，不要随意播放错误的那首。**server_search 找到但本地目录还没有的歌，直接 playback_play_song 播放即可——App 会自动走服务器在线流播，不需要先同步（server_sync_start）也不需要下载。** 同步只影响离线使用，与「现在能不能播放」无关。
         4. 歌单：library_get_playlist 查看歌单内容；playlist_create 创建；playlist_add_songs 添加歌曲；favorite_set 收藏。删除歌单、替换歌单内容等破坏性操作由 Runner 向用户确认。
         5. 同步：用户问「服务器在线吗」用 server_test_connection；问「同步到哪了」用 server_sync_status；要求「同步音乐库」用 server_sync_start。

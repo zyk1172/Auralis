@@ -75,7 +75,8 @@ public struct AgentToolkit {
         case "searchArtists":
             let q = try require(call, "q")
             let list = try await catalog.searchArtists(query: q, serverID: serverID)
-            return .ok(call, descriptor, "找到 \(list.count) 位艺术家", .text("找到 \(list.count) 位艺术家"))
+            let text = list.isEmpty ? "未找到艺术家" : list.prefix(30).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
+            return .ok(call, descriptor, "找到 \(list.count) 位艺术家", .text(text))
         case "getTrack":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             guard let track = try await catalog.getTrack(gid) else {
@@ -176,7 +177,12 @@ public struct AgentToolkit {
         // MARK: Playlist
         case "listPlaylists":
             let list = try await catalog.listPlaylists(serverID: serverID)
-            return .ok(call, descriptor, "歌单 \(list.count) 个", .text("共 \(list.count) 个歌单"))
+            if list.isEmpty {
+                return .ok(call, descriptor, "歌单 0 个", .text("当前没有歌单"))
+            }
+            // 名字后带 GlobalPlaylistID（格式「服务器ID:歌单ID」），供 playback_play_playlist 等直接使用。
+            let text = list.prefix(40).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
+            return .ok(call, descriptor, "歌单 \(list.count) 个", .text("共 \(list.count) 个歌单：\(text)"))
         case "getPlaylist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             guard let (playlist, tracks) = try await catalog.getPlaylist(gid) else {
@@ -328,14 +334,14 @@ public struct AgentToolkit {
             if kind == "artist" || kind == "all" {
                 let artists = try await catalog.searchArtists(query: query, serverID: serverID)
                 if !artists.isEmpty {
-                    return .ok(call, descriptor, "艺术家 \(artists.count) 位", .text(artists.prefix(safeLimit).map(\.name).joined(separator: "、")))
+                    return .ok(call, descriptor, "艺术家 \(artists.count) 位", .text(artists.prefix(safeLimit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")))
                 }
             }
             if kind == "playlist" || kind == "all" {
                 let playlists = try await catalog.listPlaylists(serverID: serverID)
                 let hits = playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
                 if !hits.isEmpty {
-                    return .ok(call, descriptor, "歌单 \(hits.count) 个", .text(hits.prefix(safeLimit).map(\.name).joined(separator: "、")))
+                    return .ok(call, descriptor, "歌单 \(hits.count) 个", .text(hits.prefix(safeLimit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")))
                 }
             }
             return .fail(call, descriptor, "未找到匹配结果")
