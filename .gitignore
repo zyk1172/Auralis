@@ -37,3 +37,6 @@ Config/*Keychain*.json
 
 # 开发代理工作记忆（不进入仓库）
 .workbuddy/
+
+# SQLite 运行期内存库临时文件（测试在包目录生成）
+:memory:*
