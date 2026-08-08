@@ -360,6 +360,20 @@ struct OpenAIResponsesProviderTests {
         #expect(result == .text("你好"))
     }
 
+    @Test func ignoresReasoningDeltaEvents() {
+        // 思考内容绝不输出为正文：reasoning_text.delta 的字段也叫 delta，
+        // 必须被显式忽略（此前会掉进默认兜底被当成正文输出——思考链泄漏）。
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.reasoning_text.delta","item_id":"i1","output_index":0,"content_index":0,"delta":"内部思考"}"#
+        ) == .ignore)
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.reasoning_summary_text.delta","item_id":"i1","output_index":0,"content_index":0,"summary_text":"小结"}"#
+        ) == .ignore)
+        #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
+            #"{"type":"response.reasoning_text.done","item_id":"i1","output_index":0,"content_index":0}"#
+        ) == .ignore)
+    }
+
     @Test func parsesOutputItemDoneFunctionCall() {
         let result = OpenAICompatibleProvider.parseResponsesStreamEvent(
             #"{"type":"response.output_item.done","output":{"type":"function_call","call_id":"call_x","name":"playTrack","arguments":"{\"trackID\":\"srv:1\"}"}}"#
@@ -515,7 +529,7 @@ struct OpenAIResponsesNetworkTests {
         #expect(response.outputTokens == 2)
 
         let object = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
-        #expect(object["max_output_tokens"] as? Int == 8_192)
+        #expect(object["max_output_tokens"] as? Int == auralisDefaultMaxOutputTokens)
         #expect(object["max_tokens"] == nil)
     }
 
@@ -554,7 +568,7 @@ struct OpenAIResponsesNetworkTests {
         #expect(response.content == "好")
 
         let object = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
-        #expect(object["max_tokens"] as? Int == 8_192)
+        #expect(object["max_tokens"] as? Int == auralisDefaultMaxOutputTokens)
         #expect(object["max_output_tokens"] == nil)
         #expect(object["input"] == nil)
         let messages = try #require(object["messages"] as? [[String: Any]])

@@ -407,6 +407,8 @@ struct ServerConnectionSheet: View {
                                 Text(message)
                                     .font(.caption)
                                     .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                    .lineLimit(nil)
+                                    .textSelection(.enabled)
                                 if message.contains("本地网络") {
                                     Button("打开本地网络设置") {
                                         PlatformLocalNetworkSettings.open()
@@ -441,6 +443,8 @@ struct ServerConnectionSheet: View {
                 if case let .failed(message) = model.serverConnectionState {
                     Section("连接失败") {
                         Text(message)
+                            .lineLimit(nil)
+                            .textSelection(.enabled)
                         if message.contains("本地网络") {
                             Button("打开本地网络设置") {
                                 PlatformLocalNetworkSettings.open()
@@ -455,25 +459,37 @@ struct ServerConnectionSheet: View {
                         LabeledContent("App Bundle ID", value: AppDiagnostics.bundleID)
                         LabeledContent("Target", value: AppDiagnostics.targetKind)
                         LabeledContent("App Sandbox", value: AppDiagnostics.isAppSandboxEnabled ? "已启用" : "未启用")
-                        LabeledContent("network.client（出站连接）", value: AppDiagnostics.hasNetworkClientEntitlement ? "存在" : "未检测到（可用 codesign -d --entitlements 复核）")
+                        LabeledContent("network.client（出站连接）") {
+                            Text(AppDiagnostics.hasNetworkClientEntitlement ? "存在" : "未检测到（可用 codesign -d --entitlements 复核）")
+                                .textSelection(.enabled)
+                                .lineLimit(nil)
+                        }
                         LabeledContent("NSLocalNetworkUsageDescription", value: (AppDiagnostics.localNetworkUsageDescription?.isEmpty == false) ? "已声明" : "缺失")
                         LabeledContent("服务器 Host", value: diag.host ?? "—")
                         LabeledContent("局域网地址", value: diag.isPrivateLAN ? "是" : "否")
                         LabeledContent("协议", value: diag.scheme?.uppercased() ?? "—")
                         LabeledContent("测试/连接请求已发出", value: diag.requestAttempted ? "是" : "否")
                         if let domain = diag.nsErrorDomain {
-                            LabeledContent("NSError domain", value: "\(domain)（code \(diag.nsErrorCode ?? -1)）")
+                            LabeledContent("NSError domain") {
+                                Text("\(domain)（code \(diag.nsErrorCode ?? -1)）")
+                                    .textSelection(.enabled)
+                                    .lineLimit(nil)
+                            }
                         }
                         if let desc = diag.nsErrorDescription, !desc.isEmpty {
-                            LabeledContent("错误描述", value: desc)
+                            diagnosticLongValue("错误描述", desc)
                         }
                         if let failing = diag.failingURL, !failing.isEmpty {
-                            LabeledContent("failingURL", value: failing)
+                            diagnosticLongValue("failingURL", failing)
                         }
                         if let underlying = diag.underlyingError, !underlying.isEmpty {
-                            LabeledContent("underlyingError", value: underlying)
+                            diagnosticLongValue("underlyingError", underlying)
                         }
-                        LabeledContent("映射结果", value: diag.mappedMessage)
+                        LabeledContent("映射结果") {
+                            Text(diag.mappedMessage)
+                                .textSelection(.enabled)
+                                .lineLimit(nil)
+                        }
                         Text("诊断时间 \(diag.timestamp.formatted(date: .omitted, time: .standard))")
                             .font(.caption2)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -507,7 +523,10 @@ struct ServerConnectionSheet: View {
             }
         }
 #if os(macOS)
-        .frame(minWidth: 460, minHeight: 520)
+        // macOS 的 sheet 按内容理想高度撑开：表单内容很高（错误提示 / 网络诊断区）时会超过
+        // 屏幕高度，底部被裁掉且 Form 不会滚动。这里给出有界高度（min/ideal/max），让 Form
+        // 在高度不足时内部滚动，长错误信息能完整滚动查看并选中复制。
+        .frame(minWidth: 460, idealWidth: 520, maxWidth: 600, minHeight: 520, idealHeight: 640, maxHeight: 700)
 #endif
         .interactiveDismissDisabled(model.serverConnectionState.isConnecting)
     }
@@ -558,6 +577,21 @@ struct ServerConnectionSheet: View {
             }
         } catch {
             testResult = .failure(ConnectionErrorDescription.describe(error))
+        }
+    }
+
+    /// 网络诊断区的「长文本字段」行：标签独占一行、值完整换行显示且可选中复制，
+    /// 避免 LabeledContent 的尾随值在 macOS 上被截断。
+    private func diagnosticLongValue(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+            Text(value)
+                .font(.caption)
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+                .textSelection(.enabled)
+                .lineLimit(nil)
         }
     }
 }

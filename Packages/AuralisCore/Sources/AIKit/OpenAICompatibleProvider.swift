@@ -881,6 +881,10 @@ public struct OpenAICompatibleProvider: AIProvider {
             return .failed(responseErrorMessage(from: object) ?? "响应流失败")
         case "error":
             return .failed(responseErrorMessage(from: object) ?? "未知错误")
+        case let type? where type.hasPrefix("response.reasoning"):
+            // 思考内容（reasoning）绝不输出给用户。`response.reasoning_text.delta` 的字段也叫
+            // `delta`，若不显式忽略会被下面的默认兜底当成正文增量输出（思考链泄漏）。
+            return .ignore
         default:
             // 容错：无 type 字段的网关偏差，看到 delta 就当作文本增量。
             if let delta = object["delta"] as? String, !delta.isEmpty { return .text(delta) }

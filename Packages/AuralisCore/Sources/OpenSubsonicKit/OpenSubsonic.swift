@@ -235,16 +235,63 @@ extension OpenSubsonicClientError: LocalizedError {
         case let .httpStatus(status):
             return "The OpenSubsonic server returned HTTP \(status)."
         case let .transport(code, host):
-            if code == -1009 {
-                let hostText = host.map { "（\($0)）" } ?? ""
-                return "网络无法连接（错误 -1009）\(hostText)。如果是局域网地址，请到「设置 → 隐私与安全 → 本地网络」允许澜音访问本地网络。"
-            }
-            return "网络请求失败（错误 \(code)）。请检查地址和网络。"
+            // LocalizedError 兜底文案：某些非服务器表单会直接展示 error.localizedDescription。
+            // 服务器添加/连接表单统一走 Application 层 ConnectionErrorDescription，文案以那边为准。
+            return Self.transportErrorDescription(code: code, host: host)
         case let .malformedResponse(detail):
             return "服务器返回的内容无法解析：\(detail)"
         case let .missingPayload(name):
             return "The OpenSubsonic response did not contain \(name)."
         }
+    }
+
+    /// .transport 错误的可读中文文案：区分常见局域网错误（超时 / 找不到主机 /
+    /// 无法连接 / 网络中断 / 网络不可用），并在目标是局域网地址时补充
+    /// 「本地网络」权限与同一网络的排查指引（macOS / iOS 文案各自适配系统设置路径）。
+    private static func transportErrorDescription(code: Int, host: String?) -> String {
+        let hostText = host.map { "（\($0)）" } ?? ""
+        let prefix: String
+        switch code {
+        case -1009:
+            prefix = "网络无法连接（错误 -1009）\(hostText)。请检查网络连接。"
+        case -1001:
+            prefix = "连接超时（错误 -1001）\(hostText)。请检查服务器地址与网络。"
+        case -1003:
+            prefix = "找不到主机（错误 -1003）\(hostText)。请检查服务器地址（IP / 主机名 / .local）。"
+        case -1004:
+            prefix = "无法连接到服务器（错误 -1004）\(hostText)。服务器可能未启动或拒绝连接。"
+        case -1005:
+            prefix = "网络连接中断（错误 -1005）\(hostText)。"
+        default:
+            prefix = "网络请求失败（错误 \(code)）\(hostText)。请检查地址和网络。"
+        }
+        return prefix + Self.localNetworkHint(code: code, host: host)
+    }
+
+    /// 常见局域网错误（-1009 / -1001 / -1003 / -1004 / -1005）且目标是局域网/本机地址时，
+    /// 给出「本地网络」权限与同一网络的排查指引；公共地址保持通用提示，避免把断网误判为权限问题。
+    private static func localNetworkHint(code: Int, host: String?) -> String {
+        let lanCodes: Set<Int> = [-1009, -1001, -1003, -1004, -1005]
+        guard lanCodes.contains(code), let host, Self.isPrivateOrLocal(host: host) else { return "" }
+        #if os(macOS)
+        return "如果是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「澜音」访问本地网络，并确认 Mac 与服务器在同一网络。"
+        #else
+        return "如果是局域网地址（\(host)），请检查 设置 → 隐私与安全 → 本地网络 是否允许「澜音」访问本地网络，并确认设备与服务器在同一网络。"
+        #endif
+    }
+
+    /// 判断 host 是否为本机 / 局域网地址（与 Application 层 ServerURLPolicy 判定一致，
+    /// 但 OpenSubsonicKit 不依赖 Application，因此本地复刻一份最小实现）。
+    private static func isPrivateOrLocal(host: String) -> Bool {
+        let normalized = host.lowercased()
+        if normalized == "localhost" || normalized.hasSuffix(".local") || normalized == "::1" { return true }
+        let octets = normalized.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4, octets.allSatisfy({ 0...255 ~= $0 }) else { return false }
+        if octets[0] == 10 || octets[0] == 127 { return true }
+        if octets[0] == 192 && octets[1] == 168 { return true }
+        if octets[0] == 172 && (16...31).contains(octets[1]) { return true }
+        if octets[0] == 169 && octets[1] == 254 { return true }
+        return false
     }
 }
 

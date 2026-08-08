@@ -23,6 +23,10 @@ struct AssistantView: View {
     @State private var renamingSession: AgentSession?
     @State private var renameText = ""
     @State private var deletingSession: AgentSession?
+    /// 会话批量管理模式：多选后统一删除 / 归档。
+    @State private var isBatchManaging = false
+    @State private var selectedSessionIDs: Set<UUID> = []
+    @State private var confirmBatchDelete = false
     /// 输入框焦点：仅供本页用 @FocusState 管理，以便点击空白 / 拖动 / 发送时收起键盘。
     @FocusState private var assistantInputFocused: Bool
 
@@ -104,6 +108,16 @@ struct AssistantView: View {
         } message: {
             Text("会话及其消息会从本机删除，不影响音乐库与服务器数据。")
         }
+        .alert("删除 \(selectedSessionIDs.count) 个会话？", isPresented: $confirmBatchDelete) {
+            Button("删除", role: .destructive) {
+                let ids = Array(selectedSessionIDs)
+                selectedSessionIDs.removeAll()
+                Task { await agent.delete(ids) }
+            }
+            Button("取消", role: .cancel) { confirmBatchDelete = false }
+        } message: {
+            Text("选中的会话及其消息会从本机删除，不影响音乐库与服务器数据。")
+        }
         // 首次外发确认（B5）：consentGiven 未写入且本次请求要发往真实 Provider 时弹出。
         .alert(
             Text(agent.pendingConsent.map { "允许发送以下内容到「\($0.modelName)」？" } ?? "首次外发确认"),
@@ -139,6 +153,14 @@ struct AssistantView: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .help("新建会话")
+                Button {
+                    isBatchManaging.toggle()
+                    if !isBatchManaging { selectedSessionIDs.removeAll() }
+                } label: {
+                    Image(systemName: isBatchManaging ? "checkmark.circle" : "ellipsis.circle")
+                }
+                .buttonStyle(HapticPlainButtonStyle())
+                .help(isBatchManaging ? "完成批量管理" : "批量管理")
             }
             .padding(.horizontal, AuralisSpacing.medium)
             .padding(.top, AuralisSpacing.medium)
@@ -161,13 +183,52 @@ struct AssistantView: View {
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                 .padding(.horizontal, AuralisSpacing.medium)
 
+            Toggle("显示已归档", isOn: $agent.showArchivedSessions)
+                .toggleStyle(.switch)
+                .font(.caption)
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .padding(.horizontal, AuralisSpacing.medium)
+
             List {
                 ForEach(agent.sessions) { session in
-                    sessionRow(session)
+                    if isBatchManaging {
+                        batchSessionRow(session)
+                    } else {
+                        sessionRow(session)
+                    }
                 }
             }
             .listStyle(.plain)
 
+            if isBatchManaging {
+                HStack(spacing: AuralisSpacing.small) {
+                    Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? "取消全选" : "全选") {
+                        if selectedSessionIDs.count == agent.sessions.count {
+                            selectedSessionIDs.removeAll()
+                        } else {
+                            selectedSessionIDs = Set(agent.sessions.map(\.id))
+                        }
+                    }
+                    .buttonStyle(HapticPlainButtonStyle())
+                    Spacer(minLength: 0)
+                    Button("归档") {
+                        Task {
+                            await agent.archive(Array(selectedSessionIDs))
+                            selectedSessionIDs.removeAll()
+                        }
+                    }
+                    .buttonStyle(HapticBorderedButtonStyle())
+                    .disabled(selectedSessionIDs.isEmpty)
+                    Button("删除", role: .destructive) {
+                        confirmBatchDelete = true
+                    }
+                    .buttonStyle(HapticDestructiveButtonStyle())
+                    .disabled(selectedSessionIDs.isEmpty)
+                }
+                .font(.caption)
+                .padding(.horizontal, AuralisSpacing.medium)
+                .padding(.vertical, AuralisSpacing.small)
+            }
             Divider()
             Button {
                 showsActionLog = true
@@ -223,9 +284,51 @@ struct AssistantView: View {
             Button("清空消息") {
                 Task { await agent.clearMessages(session.id) }
             }
+            if session.isArchived {
+                Button("取消归档") { Task { await agent.unarchive(session.id) } }
+            } else {
+                Button("归档") { Task { await agent.archive(session.id) } }
+            }
             Divider()
             Button("删除", role: .destructive) { deletingSession = session }
         }
+    }
+
+    /// 批量管理模式下的会话行：点击勾选/取消，不切换当前会话。
+    private func batchSessionRow(_ session: AgentSession) -> some View {
+        let isSelected = selectedSessionIDs.contains(session.id)
+        return Button {
+            if isSelected {
+                selectedSessionIDs.remove(session.id)
+            } else {
+                selectedSessionIDs.insert(session.id)
+            }
+        } label: {
+            HStack(spacing: AuralisSpacing.small) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(
+                        isSelected ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.title)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                    Text(session.summary ?? "\(session.messages.count) 条消息")
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(HapticPlainButtonStyle())
+        .listRowBackground(
+            isSelected
+                ? theme.colorTokens.accent.color.opacity(0.16)
+                : (session.id == agent.activeSessionID ? theme.colorTokens.accent.color.opacity(0.10) : Color.clear)
+        )
     }
 
     // MARK: - Conversation
@@ -309,6 +412,14 @@ struct AssistantView: View {
                 .buttonStyle(HapticBorderedButtonStyle())
                 .controlSize(.small)
             }
+            // 新建会话按钮：紧挨「展开会话管理」左侧。
+            Button {
+                Task { await agent.newSession() }
+            } label: {
+                Image(systemName: "square.and.pencil")
+            }
+            .buttonStyle(HapticPlainButtonStyle())
+            .help("新建会话")
             sessionListButton
         }
         .padding(AuralisSpacing.large)

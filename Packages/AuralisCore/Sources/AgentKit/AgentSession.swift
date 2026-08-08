@@ -10,6 +10,7 @@ public struct AgentSession: Codable, Sendable, Identifiable {
     public var createdAt: Date
     public var updatedAt: Date
     public var isPinned: Bool
+    public var isArchived: Bool
     public var serverID: ServerID?
     public var summary: String?
     public var structuredFilters: [String: String]
@@ -21,6 +22,7 @@ public struct AgentSession: Codable, Sendable, Identifiable {
         createdAt: Date = .now,
         updatedAt: Date = .now,
         isPinned: Bool = false,
+        isArchived: Bool = false,
         serverID: ServerID? = nil,
         summary: String? = nil,
         structuredFilters: [String: String] = [:]
@@ -31,9 +33,25 @@ public struct AgentSession: Codable, Sendable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.isPinned = isPinned
+        self.isArchived = isArchived
         self.serverID = serverID
         self.summary = summary
         self.structuredFilters = structuredFilters
+    }
+
+    /// 向后兼容解码：旧持久化数据没有 `isArchived` 键，缺省按未归档处理。
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        messages = try c.decodeIfPresent([AgentChatMessage].self, forKey: .messages) ?? []
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
+        isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        isArchived = try c.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        serverID = try c.decodeIfPresent(ServerID.self, forKey: .serverID)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary)
+        structuredFilters = try c.decodeIfPresent([String: String].self, forKey: .structuredFilters) ?? [:]
     }
 
     public var tokenEstimate: Int {
@@ -105,6 +123,14 @@ public actor SessionStore {
     public func setPinned(_ id: UUID, _ pinned: Bool) {
         guard var session = cache[id] else { return }
         session.isPinned = pinned
+        session.updatedAt = .now
+        cache[id] = session
+        try? persist()
+    }
+
+    public func setArchived(_ id: UUID, _ archived: Bool) {
+        guard var session = cache[id] else { return }
+        session.isArchived = archived
         session.updatedAt = .now
         cache[id] = session
         try? persist()

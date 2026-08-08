@@ -17,7 +17,7 @@ public enum ContextManager {
     /// 按 token 预算裁剪的默认预算。
     /// 面向 100 万 token 上下文模型（如 DeepSeek V4 Flash）设得比较宽，
     /// 长任务（建歌单 → 逐批加歌 → 验证）不会因上下文被过早截断而丢失关键 ID。
-    public static let maxContextTokens = 200_000
+    public static let maxContextTokens = 256_000
 
     /// 裁剪对话：始终保留首条 system；截取末尾若干条。
     /// 若截取后以 `.tool` 消息开头（失去配对的 assistant tool_calls，会被 API 拒绝），

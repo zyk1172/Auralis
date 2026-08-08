@@ -9,7 +9,7 @@ import SecurityKit
 /// 16_384 或 32_768）。取 8_192 作为 App 默认：相比旧值 1_200 大幅提高，
 /// 解决 Agent 长回答被截断的问题；同时不超出常见模型允许的最大输出，
 /// 避免请求被服务端拒绝。模型上下文允许时可在此基础上继续上调。
-public let auralisDefaultMaxOutputTokens = 8_192
+public let auralisDefaultMaxOutputTokens = 256_000
 
 public enum AIProviderHeaderValue: Codable, Hashable, Sendable {
     case literal(String)

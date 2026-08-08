@@ -68,6 +68,8 @@ public final class AgentCoordinator: ObservableObject {
     @Published public private(set) var activeTask: AgentTaskRecord?
     /// 会话列表搜索词。
     @Published public var sessionQuery = "" { didSet { refreshSessionList() } }
+    /// 是否在会话列表里显示已归档会话（默认隐藏）。
+    @Published public var showArchivedSessions = false { didSet { refreshSessionList() } }
     /// 只显示当前服务器的会话。
     @Published public var filtersByActiveServer = false { didSet { refreshSessionList() } }
 
@@ -94,7 +96,7 @@ public final class AgentCoordinator: ObservableObject {
     private var streamingMessageID: UUID?
 
     /// 单次请求带给模型的最大 token 预算（超出时裁剪历史）。
-    public static let tokenBudget = 12000
+    public static let tokenBudget = 256_000
     /// 首次外发确认的持久化标记键（UserDefaults，默认 false）。
     public static let consentGivenDefaultsKey = "auralis.ai.consentGiven"
     /// 设置接口的展示名（与 AIConnectionSettings.makeProvider 的配置名保持一致）。
@@ -191,6 +193,38 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
+    /// 归档会话：从主列表隐藏（isArchived），不删除任何消息。
+    public func archive(_ id: UUID) async {
+        await sessionStore.setArchived(id, true)
+        await reloadSessions()
+    }
+
+    /// 取消归档：会话重新出现在主列表。
+    public func unarchive(_ id: UUID) async {
+        await sessionStore.setArchived(id, false)
+        await reloadSessions()
+    }
+
+    /// 批量归档。
+    public func archive(_ ids: [UUID]) async {
+        for id in ids { await sessionStore.setArchived(id, true) }
+        await reloadSessions()
+    }
+
+    /// 批量删除（会话管理页使用）。若包含当前会话，自动切换到下一个或新建。
+    public func delete(_ ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        for id in ids { await sessionStore.delete(id) }
+        await reloadSessions()
+        if let active = activeSessionID, ids.contains(active) {
+            if let next = sessions.first {
+                await activate(next.id)
+            } else {
+                await newSession()
+            }
+        }
+    }
+
     /// 为会话生成一句话摘要（取首条用户消息，无需调用模型）。
     public func summarizeActiveSession() async {
         guard let id = activeSessionID else { return }
@@ -234,6 +268,9 @@ public final class AgentCoordinator: ObservableObject {
         }
         if filtersByActiveServer, let serverID = model.catalog.activeServerID {
             result = result.filter { $0.serverID == serverID }
+        }
+        if !showArchivedSessions {
+            result = result.filter { !$0.isArchived }
         }
         // 置顶优先，其次按更新时间倒序。
         sessions = result.sorted {
@@ -299,7 +336,7 @@ public final class AgentCoordinator: ObservableObject {
     /// Agent 输出上限已是 8_192 token：中文约 1 字/token、英文约 4 字符/token，
     /// 完整回复约 8k–33k 字符。40_000 字符覆盖完整回复且留足余量，
     /// 不会像旧值 500 字符那样把长回答截断成残句。
-    private static let maxHeadlessReplyCharacters = 40_000
+    private static let maxHeadlessReplyCharacters = 1_000_000
 
     /// 从本轮新增的助手消息中提取最终文本回复（取最后一个非空文本块，控制长度）。
     private static func collectAssistantText(_ messages: ArraySlice<AgentChatMessage>) -> String {
