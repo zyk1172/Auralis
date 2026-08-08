@@ -24,6 +24,7 @@
 		BD942ACA6B5C9F8A539371A9 /* AuralisIntents.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C3A5BF12EF8CDA8D52633540 /* IntentHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBF41918A59E1038580AD9CE /* IntentHandler.swift */; };
 		DE2E4474991E5F09F514D763 /* AssistantAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C361144E585E27577F3148B /* AssistantAppIntent.swift */; };
+		B39FF38BE79D4DD299045F1B /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5AFFF8AE0EC94EC1ABAF99E9 /* AppIntents.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +70,7 @@
 		DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingWidget.swift; sourceTree = "<group>"; };
 		EBF41918A59E1038580AD9CE /* IntentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentHandler.swift; sourceTree = "<group>"; };
 		F7FF4CE3EC2EF7AFE5C6F006 /* AppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntents.swift; sourceTree = "<group>"; };
+		5AFFF8AE0EC94EC1ABAF99E9 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -101,6 +103,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				372595B4DCABCC5433A1EB38 /* AppShell in Frameworks */,
+				B39FF38BE79D4DD299045F1B /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
