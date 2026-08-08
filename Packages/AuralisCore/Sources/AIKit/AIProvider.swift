@@ -2,6 +2,15 @@ import Domain
 import Foundation
 import SecurityKit
 
+/// Agent 单次回复的默认输出 token 上限。
+///
+/// 依据：主流 OpenAI 兼容模型（GPT-4o/4.1、DeepSeek-V3/R1、Qwen、GLM、
+/// Gemini 等）的 `max_output_tokens` 常见上限为 8_192（部分模型为 4_096、
+/// 16_384 或 32_768）。取 8_192 作为 App 默认：相比旧值 1_200 大幅提高，
+/// 解决 Agent 长回答被截断的问题；同时不超出常见模型允许的最大输出，
+/// 避免请求被服务端拒绝。模型上下文允许时可在此基础上继续上调。
+public let auralisDefaultMaxOutputTokens = 8_192
+
 public enum AIProviderHeaderValue: Codable, Hashable, Sendable {
     case literal(String)
     case credential(CredentialID)
@@ -215,7 +224,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         organization: String? = nil,
         project: String? = nil,
         temperature: Double = 0.4,
-        maxTokens: Int = 1_200,
+        maxTokens: Int = auralisDefaultMaxOutputTokens,
         timeout: TimeInterval = 60,
         usesStreaming: Bool = true,
         supportsJSONMode: Bool = false,
@@ -348,7 +357,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         model: String,
         messages: [AIMessage],
         temperature: Double = 0.4,
-        maxTokens: Int = 1_200,
+        maxTokens: Int = auralisDefaultMaxOutputTokens,
         tools: [AIToolDefinition]? = nil
     ) {
         self.model = model
@@ -406,6 +415,10 @@ public struct AIConnectionResult: Codable, Hashable, Sendable {
 public enum AIStreamEvent: Equatable, Sendable {
     case started(model: String)
     case delta(String)
+    /// 流式过程中完成的原生工具调用（来自 Responses API 的
+    /// `response.output_item.done` / Chat 的 `delta.tool_calls`）。
+    /// 复用 `AIToolCall`，不新增重复 DTO。
+    case toolCall(AIToolCall)
     case completed
     case usage(input: Int, output: Int)
 }

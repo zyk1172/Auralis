@@ -313,8 +313,6 @@ struct MacPlaylistPage: View {
                             }
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(playlist.name).font(.body.weight(.medium))
-                                Text("\(playlist.trackIDs.count) 首").font(.caption)
-                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
                             }
                             Spacer()
                         }
@@ -556,8 +554,6 @@ struct MacHomePage: View {
                             .frame(height: 120)
                             Text(playlist.name).font(.subheadline.weight(.medium)).lineLimit(1)
                                 .foregroundStyle(theme.colorTokens.primaryText.color)
-                            Text("\(playlist.trackIDs.count) 首").font(.caption)
-                                .foregroundStyle(theme.colorTokens.secondaryText.color)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())

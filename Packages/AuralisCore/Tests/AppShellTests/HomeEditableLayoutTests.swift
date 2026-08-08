@@ -24,8 +24,9 @@ private func homeTestDefaults(_ name: String) -> UserDefaults {
 func homeModuleDefaultConfigurationMatchesSpec() {
     let quickVisible = HomeModuleRegistry.modules(in: .quickEntry).filter(\.defaultVisible).map(\.id)
     #expect(quickVisible == [.playlists, .favorites, .mostPlayed])
+    // 快捷入口不再提供 播放历史 / 下载（用户要求），因此也没有默认隐藏项。
     let quickHidden = HomeModuleRegistry.modules(in: .quickEntry).filter { !$0.defaultVisible }.map(\.id)
-    #expect(quickHidden == [.playHistory, .downloads])
+    #expect(quickHidden.isEmpty)
 
     let contentVisible = HomeModuleRegistry.modules(in: .content).filter(\.defaultVisible).map(\.id)
     #expect(contentVisible == [.random, .recentlyPlayed, .longUnplayed, .recentlyAdded, .favoriteRandom])
@@ -33,7 +34,7 @@ func homeModuleDefaultConfigurationMatchesSpec() {
     #expect(contentHidden == [.neverPlayed, .topArtists, .topAlbums])
 
     let defaults = HomeModuleRegistry.defaultPreference()
-    #expect(defaults.quickEntries.map(\.moduleID) == ["playlists", "favorites", "mostPlayed", "playHistory", "downloads"])
+    #expect(defaults.quickEntries.map(\.moduleID) == ["playlists", "favorites", "mostPlayed"])
     #expect(defaults.contentModules.map(\.moduleID) == [
         "random", "recentlyPlayed", "longUnplayed", "recentlyAdded",
         "favoriteRandom", "neverPlayed", "topArtists", "topAlbums",
@@ -105,11 +106,16 @@ func quickAndContentGroupsStaySeparated() {
         defaults: defaults,
         storeURL: nil
     )
+    // 快捷入口只注册 歌单/收藏/最常听；播放历史/下载不在注册表（用户要求移除）。
+    #expect(HomeModuleRegistry.module(forID: "playHistory") == nil)
+    #expect(HomeModuleRegistry.module(forID: "downloads") == nil)
     model.moveHomeModule(in: .quickEntry, fromOffsets: IndexSet(integer: 2), toOffset: 0)
-    model.setHomeModuleVisible("playHistory", isVisible: true)
-    #expect(model.homeLayout.quickEntries.map(\.moduleID) == ["mostPlayed", "playlists", "favorites", "playHistory", "downloads"])
+    model.setHomeModuleVisible("favorites", isVisible: false)
+    #expect(model.homeLayout.quickEntries.map(\.moduleID) == ["mostPlayed", "playlists", "favorites"])
+    #expect(model.homeLayout.quickEntries.first { $0.moduleID == "favorites" }?.isVisible == false)
     // 内容模块不受快捷入口改动影响。
     #expect(model.homeLayout.contentModules.map(\.moduleID).first == "random")
+    #expect(model.homeLayout.contentModules.first { $0.moduleID == "random" }?.isVisible == true)
 }
 
 /// 恢复默认布局：只重置首页布局偏好，不碰其它偏好 / 数据（需求 13）。

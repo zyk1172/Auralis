@@ -206,10 +206,14 @@ public struct AgentRunner {
             // 上下文裁剪：防止无限增长导致 API 拒绝或 token 爆预算。
             conversation = ContextManager.trimByTokens(conversation)
 
+            // 显式指定输出上限：Agent 回复必须完整，不受历史默认 1_200 影响。
+            // 8_192 是主流 OpenAI 兼容模型通用的最大输出上限（见
+            // AIKit.auralisDefaultMaxOutputTokens 的注释依据）。
             let request = AICompletionRequest(
                 model: model,
                 messages: conversation,
                 temperature: 0.3,
+                maxTokens: auralisDefaultMaxOutputTokens,
                 tools: nativeMode ? toolDefinitions : nil
             )
             let response: AICompletionResponse
@@ -227,6 +231,7 @@ public struct AgentRunner {
                         model: model,
                         messages: conversation,
                         temperature: 0.3,
+                        maxTokens: auralisDefaultMaxOutputTokens,
                         tools: nil
                     )
                     do {

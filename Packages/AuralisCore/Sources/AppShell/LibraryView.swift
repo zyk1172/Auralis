@@ -266,7 +266,6 @@ struct LibraryView: View {
                                     }
                                 }
                                 Text(playlist.name).font(.headline).lineLimit(1)
-                                Text("\(playlist.trackIDs.count) 首").font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color).lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .foregroundStyle(theme.colorTokens.primaryText.color)

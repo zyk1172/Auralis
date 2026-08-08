@@ -323,7 +323,69 @@ struct PlaylistDTO: Decodable {
     let id: FlexibleString
     let name: String?
     let comment: String?
+    /// Subsonic `playlist` 条目的必填/常用元数据。getPlaylists 的真实歌单由
+    /// Navidrome / gonic / Ampache 等主流实现返回时总是携带这些字段
+    /// （gonic 的 getPlaylists 不含 `duration`），用于识别「分组/文件夹」伪歌单。
+    let songCount: Int?
+    let created: String?
+    let changed: String?
     let entry: [SongDTO]?
+}
+
+extension PlaylistDTO {
+    /// 在整批 `getPlaylists` 条目里，是否应把该条目当作「分组/文件夹」伪歌单过滤掉。
+    ///
+    /// 协议事实：Subsonic 的 `playlist` 条目必含 `songCount`/`duration`/`created`/`changed`
+    /// 等必填字段；「分组/文件夹（playlist folders）」并不是 Subsonic/OpenSubsonic
+    /// 协议的一部分（OpenSubsonic 提案 #14/#75 尚未标准化，Navidrome 亦未实现），
+    /// 标准服务器不会在 `getPlaylists` 里返回它们。但个别服务器/代理会把文件夹当作
+    /// 伪歌单返回，通常表现为：只有 `id`/`name`（缺失真实歌单的必填元数据），或
+    /// 带有歌单字段但没有任何曲目且名称符合文件夹命名。
+    ///
+    /// 过滤规则（保守，优先保真实歌单，尤其用户手动创建的真实空歌单）：
+    /// 1. 结构规则：仅当响应中「确实存在」携带必填元数据的条目（说明服务器按规范给
+    ///    真实歌单带 `songCount`/`created`/`changed`）时才生效——此时三者全缺的条目
+    ///    不是真实歌单，直接丢弃。若整个响应都没有这些字段（极小众服务器只返回
+    ///    id/name/comment），则不适用结构规则，避免误杀真实歌单。
+    /// 2. 命名规则：仅当「没有曲目（entry 缺失/为空 且 songCount<=0）且名称命中文件夹
+    ///    特征词（中文「分组/文件夹」子串；拉丁 folder/group 整词）」时才丢弃，避免
+    ///    误伤带曲目的真实歌单（如 "Group Therapy"）与名称不含特征词的真实空歌单。
+    ///
+    /// 已知局限：若用户恰好把一个「真实空歌单」命名为 分组/文件夹/folder/group，
+    /// 会被当成文件夹过滤——此类名称与文件夹本身无法可靠区分，属保守取舍。
+    static func isFolderLike(_ item: PlaylistDTO, among items: [PlaylistDTO]) -> Bool {
+        let serverEmitsPlaylistMetadata = items.contains {
+            $0.songCount != nil || $0.created != nil || $0.changed != nil
+        }
+        if serverEmitsPlaylistMetadata {
+            let hasNoSongCount = item.songCount == nil
+            let hasNoCreated = item.created == nil
+            let hasNoChanged = item.changed == nil
+            if hasNoSongCount && hasNoCreated && hasNoChanged {
+                return true
+            }
+        }
+        // 命名规则：没有曲目（无 entry 且 songCount<=0）才考虑名称特征，避免误伤带曲目歌单。
+        let hasTracks = !(item.entry?.isEmpty ?? true) || (item.songCount ?? 0) > 0
+        if hasTracks {
+            return false
+        }
+        return Self.matchesFolderName(item.name ?? "")
+    }
+
+    private static func matchesFolderName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.contains("分组") || trimmed.contains("文件夹") {
+            return true
+        }
+        let tokens = trimmed.lowercased().split {
+            !$0.isLetter && !$0.isNumber
+        }
+        return tokens.contains {
+            $0 == "folder" || $0 == "folders" || $0 == "group" || $0 == "groups"
+        }
+    }
 }
 
 struct LyricsDTO: Decodable {

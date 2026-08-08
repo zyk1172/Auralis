@@ -65,7 +65,7 @@ public struct HomeModule: Identifiable, Sendable {
 
 /// 首页模块注册表：所有可选模块的唯一来源。
 /// 默认配置（首次安装 / 无配置时）：
-/// - 快捷入口默认 歌单 / 收藏 / 最常听；默认隐藏 播放历史 / 下载。
+/// - 快捷入口仅 歌单 / 收藏 / 最常听（不提供播放历史 / 下载）。
 /// - 内容模块默认 随机音乐 / 最近播放 / 很久没听 / 最近添加 / 收藏里随便听；
 ///   默认隐藏 从未播放 / 常听艺术家 / 常听专辑。
 public enum HomeModuleRegistry {
@@ -87,17 +87,8 @@ public enum HomeModuleRegistry {
             title: String(localized: "最常听"), icon: "play.circle.fill",
             defaultVisible: true, defaultOrder: 2
         ))
-        modules.append(HomeModule(
-            id: .playHistory, group: .quickEntry,
-            title: String(localized: "播放历史"), icon: "clock.arrow.circlepath",
-            defaultVisible: false, defaultOrder: 3
-        ))
-        modules.append(HomeModule(
-            id: .downloads, group: .quickEntry,
-            title: String(localized: "下载"), icon: "arrow.down.circle.fill",
-            defaultVisible: false, defaultOrder: 4
-        ))
-        // 内容模块（默认顺序 0...7）
+        // 快捷入口仅保留 歌单/收藏/最常听（用户要求：不要播放历史、不要下载；
+        // 一行 3 个，超过自动换行，不做横向滚动）。内容模块默认顺序 0...7。
         modules.append(HomeModule(
             id: .random, group: .content,
             title: String(localized: "随机音乐"), icon: "shuffle",

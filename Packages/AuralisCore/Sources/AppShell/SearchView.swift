@@ -264,9 +264,6 @@ struct SearchView: View {
                                     .foregroundStyle(theme.colorTokens.primaryText.color)
                                     .lineLimit(1)
                                 Spacer()
-                                Text("\(playlist.trackIDs.count) 首")
-                                    .font(.caption)
-                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
                             }
                         }
                         .buttonStyle(HapticPlainButtonStyle())

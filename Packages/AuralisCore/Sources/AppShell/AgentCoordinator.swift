@@ -288,6 +288,12 @@ public final class AgentCoordinator: ObservableObject {
         return Self.collectAssistantText(messages.dropFirst(startCount))
     }
 
+    /// 无界面入口（Siri / 快捷指令）返回给系统调用方的最终文本长度上限。
+    /// Agent 输出上限已是 8_192 token：中文约 1 字/token、英文约 4 字符/token，
+    /// 完整回复约 8k–33k 字符。40_000 字符覆盖完整回复且留足余量，
+    /// 不会像旧值 500 字符那样把长回答截断成残句。
+    private static let maxHeadlessReplyCharacters = 40_000
+
     /// 从本轮新增的助手消息中提取最终文本回复（取最后一个非空文本块，控制长度）。
     private static func collectAssistantText(_ messages: ArraySlice<AgentChatMessage>) -> String {
         var blocks: [String] = []
@@ -306,7 +312,7 @@ public final class AgentCoordinator: ObservableObject {
             }
         }
         guard let last = blocks.last else { return "" }
-        return String(last.prefix(500))
+        return String(last.prefix(Self.maxHeadlessReplyCharacters))
     }
 
     private func startRun(text: String, provider: (any AIProvider)?, sessionID: UUID) {

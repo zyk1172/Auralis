@@ -296,7 +296,13 @@ public final class OpenSubsonicClient: OpenSubsonicServing, Sendable {
         guard let playlists = response.playlists else {
             throw OpenSubsonicClientError.missingPayload("playlists")
         }
-        return (playlists.playlist ?? []).map(mapper.playlist)
+        // 过滤掉服务器把「分组/文件夹」当作伪歌单返回的条目（规则见
+        // PlaylistDTO.isFolderLike），使其不进入歌单列表、不写入本地缓存/SQLite。
+        // 真实歌单（含用户手动创建的空歌单）不受影响。
+        let items = playlists.playlist ?? []
+        return items
+            .filter { !PlaylistDTO.isFolderLike($0, among: items) }
+            .map(mapper.playlist)
     }
 
     public func playlist(id: PlaylistID) async throws -> OpenSubsonicPlaylistDetail {

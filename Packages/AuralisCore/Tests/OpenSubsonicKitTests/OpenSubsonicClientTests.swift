@@ -130,6 +130,43 @@ struct OpenSubsonicClientTests {
         #expect(playlist.tracks.map(\.id) == [TrackID(rawValue: "track-1")])
     }
 
+    @Test("getPlaylists filters folder/group pseudo-playlists but keeps real empty playlists")
+    func playlistFolderFiltering() async throws {
+        let client = try await makeClient()
+
+        // 1) 结构规则：服务器给真实歌单带必填元数据时，只有 id/name 的「分组」被过滤；
+        //    真实空歌单（songCount=0 + created/changed）与带曲目的歌单均保留。
+        MockURLProtocol.reset(stubs: [
+            .response(data: ok(#""playlists":{"playlist":[{"id":"folder-1","name":"我的分组"},{"id":"pl-1","name":"AuditForm2","songCount":0,"duration":0,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"},{"id":"pl-2","name":"Night Drive","songCount":12,"duration":3600,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"}]}"#)),
+        ])
+        #expect(try await client.playlists().map(\.id) == [
+            PlaylistID(rawValue: "pl-1"), PlaylistID(rawValue: "pl-2")
+        ])
+
+        // 2) 命名规则：带歌单元数据但无曲目且名称像文件夹 → 过滤；
+        //    带曲目的 "Group Therapy"（整词 group 命中但 songCount>0）与
+        //    名称不含特征词的真实空歌单 "Chill" 保留。
+        MockURLProtocol.reset(stubs: [
+            .response(data: ok(#""playlists":{"playlist":[{"id":"folder-2","name":"Work Folder","songCount":0,"duration":0,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"},{"id":"pl-3","name":"Group Therapy","songCount":2,"duration":600,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"},{"id":"pl-4","name":"Chill","songCount":0,"duration":0,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"}]}"#)),
+        ])
+        #expect(try await client.playlists().map(\.id) == [
+            PlaylistID(rawValue: "pl-3"), PlaylistID(rawValue: "pl-4")
+        ])
+
+        // 3) 极小众服务器只返回 id/name/comment：不适用结构规则，全部保留，
+        //    仅名称命中文件夹特征词的条目被命名规则过滤。
+        MockURLProtocol.reset(stubs: [
+            .response(data: ok(#""playlists":{"playlist":[{"id":"min-1","name":"Minimal","comment":"c"},{"id":"min-2","name":"分组","comment":"folder"}]}"#)),
+        ])
+        #expect(try await client.playlists().map(\.id) == [PlaylistID(rawValue: "min-1")])
+
+        // 4) 名称像文件夹但确实带曲目 → 视为真实歌单，保留（命名规则不误伤）。
+        MockURLProtocol.reset(stubs: [
+            .response(data: ok(#""playlists":{"playlist":[{"id":"pl-5","name":"分组","songCount":3,"duration":900,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"}]}"#)),
+        ])
+        #expect(try await client.playlists().map(\.id) == [PlaylistID(rawValue: "pl-5")])
+    }
+
     @Test("Playlist creation preserves repeated song IDs and their order")
     func repeatedPlaylistParameters() async throws {
         MockURLProtocol.reset(stubs: [

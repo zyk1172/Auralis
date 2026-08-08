@@ -40,10 +40,15 @@ struct HomeView: View {
                 Button {
                     isEditingLayout = true
                 } label: {
-                    Text("编辑")
-                        .font(.subheadline)
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(colors.accent.color)
+                        .frame(width: 30, height: 30)
+                        .background(colors.surface.color)
+                        .clipShape(Circle())
                 }
                 .buttonStyle(HapticPlainButtonStyle())
+                .accessibilityLabel("编辑首页")
             }
         }
         .sheet(isPresented: $isEditingLayout) {
@@ -94,55 +99,36 @@ struct HomeView: View {
     @ViewBuilder
     private var quickEntriesSection: some View {
         let modules = visibleQuickModules
-        if modules.isEmpty {
-            EmptyView()
-        } else if modules.count <= 3 {
-            // 3 个（或更少）：三等分布局。
-            HStack(spacing: AuralisSpacing.medium) {
+        if !modules.isEmpty {
+            // 一行最多 3 个、超过自动换行（不做横向滚动）。当前注册表仅 歌单/收藏/最常听 三个。
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: AuralisSpacing.medium), count: 3),
+                spacing: AuralisSpacing.medium
+            ) {
                 ForEach(modules) { module in
                     quickEntryCard(module)
-                        .frame(maxWidth: .infinity)
                 }
-            }
-        } else {
-            // 4-5 个：横向滚动、统一卡片宽度、露出下一张卡片一部分提示可滚动；
-            // 适度增大卡片高度 / 点击区域 / 内边距 / 图标尺寸（但不做大内容卡）。
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: AuralisSpacing.medium) {
-                    ForEach(modules) { module in
-                        quickEntryCard(module)
-                            .frame(width: 156)
-                    }
-                }
-                .padding(.trailing, AuralisSpacing.medium)
             }
         }
     }
 
+    /// 快捷入口卡片：纯图标 + 数量（不显示文字标题，避免文字过长被截断）。
     private func quickEntryCard(_ module: HomeModule) -> some View {
         Button {
             openQuickEntry(module)
         } label: {
-            HStack(spacing: AuralisSpacing.small) {
+            VStack(spacing: AuralisSpacing.small) {
                 Image(systemName: module.icon)
-                    .font(.title2)
+                    .font(.title2.weight(.semibold))
                     .foregroundStyle(colors.accent.color)
-                    .frame(width: 30)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(module.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(colors.primaryText.color)
-                        .lineLimit(1)
-                    Text(quickEntrySubtitle(module))
-                        .font(.caption)
-                        .foregroundStyle(colors.secondaryText.color)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
+                    .frame(height: 28)
+                Text(quickEntryCount(module))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(colors.primaryText.color)
+                    .lineLimit(1)
             }
-            .padding(.vertical, AuralisSpacing.medium + 4)
-            .padding(.horizontal, AuralisSpacing.medium)
-            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .padding(.vertical, AuralisSpacing.medium)
             .background(colors.surface.color)
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
             .contentShape(Rectangle())
@@ -150,13 +136,13 @@ struct HomeView: View {
         .buttonStyle(HapticPlainButtonStyle())
     }
 
-    private func quickEntrySubtitle(_ module: HomeModule) -> String {
+    private func quickEntryCount(_ module: HomeModule) -> String {
         switch module.id {
-        case .playlists: "\(model.catalog.playlists.count) 个"
-        case .favorites: "\(model.homeFavoriteTracks.count) 首"
-        case .mostPlayed: "\(model.homeMostPlayedTracks.count) 首"
-        case .playHistory: "\(model.homeRecentlyPlayedTracks.count) 首"
-        case .downloads: "\(model.downloadedTracks.count) 首"
+        case .playlists: "\(model.catalog.playlists.count)"
+        case .favorites: "\(model.homeFavoriteTracks.count)"
+        case .mostPlayed: "\(model.homeMostPlayedTracks.count)"
+        case .playHistory: "\(model.homeRecentlyPlayedTracks.count)"
+        case .downloads: "\(model.downloadedTracks.count)"
         default: ""
         }
     }

@@ -765,9 +765,6 @@ private struct BrowseDetailSheet: View {
                     VStack(alignment: .leading) {
                         Text(playlist.name)
                             .foregroundStyle(theme.colorTokens.primaryText.color)
-                        Text("\(playlist.trackIDs.count) 首")
-                            .font(.caption)
-                            .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
                 }
             }

@@ -61,9 +61,10 @@ extension AIProviderError: LocalizedError {
     }
 }
 
-/// OpenAI Chat Completions 兼容实现：适用于 OpenAI、DeepSeek、通义、
-/// Ollama、LM Studio 及各类中转网关。API Key 只从 Keychain 读取，
-/// 明文不会进入配置、日志或导出。
+/// OpenAI 兼容实现：同时支持 Chat Completions（`/v1/chat/completions`）与
+/// 原生 Responses API（`/v1/responses`），按 apiPath 自动判定、可用配置切换。
+/// 适用于 OpenAI、DeepSeek、通义、Ollama、LM Studio 及各类中转网关。
+/// API Key 只从 Keychain 读取，明文不会进入配置、日志或导出。
 public struct OpenAICompatibleProvider: AIProvider {
     private let configuration: AIProviderConfiguration
     private let credentialVault: any CredentialVault
@@ -107,12 +108,23 @@ public struct OpenAICompatibleProvider: AIProvider {
             body: requestBody(request, stream: false),
             run: { try await session.data(for: $0) },
             transform: { data, _ in
-                try Self.parseCompletion(data: data, fallbackModel: request.model)
+                if usesResponsesAPI {
+                    return try Self.parseResponsesCompletion(data: data, fallbackModel: request.model)
+                }
+                return try Self.parseCompletion(data: data, fallbackModel: request.model)
             }
         )
     }
 
     public func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        if usesResponsesAPI {
+            return responsesStream(request)
+        }
+        return chatStream(request)
+    }
+
+    /// Chat Completions 流式（SSE 按 `choices[0].delta` 解析）。
+    private func chatStream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -133,6 +145,57 @@ public struct OpenAICompatibleProvider: AIProvider {
                             }
                         }
                     }
+                    continuation.yield(.completed)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Responses API 流式：SSE 事件按 `data: {"type":...}` 解析，
+    /// 映射到现有 `AIStreamEvent`：
+    /// - `response.output_text.delta` → `.delta`
+    /// - `response.output_item.done`（function_call）→ `.toolCall`
+    /// - `[DONE]` / `response.completed` / 流自然结束 → `.completed`
+    /// - `response.failed` / `error` → 上抛
+    private func responsesStream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let (bytes, _) = try await performRequestBytes(body: requestBody(request, stream: true))
+                    continuation.yield(.started(model: request.model))
+                    var parser = SSEParser()
+                    for try await line in bytes.lines {
+                        for message in parser.append(Data((line + "\n\n").utf8)) {
+                            if message.data == "[DONE]" {
+                                continuation.yield(.completed)
+                                continuation.finish()
+                                return
+                            }
+                            let parsed = Self.parseResponsesStreamEvent(message.data)
+                            switch parsed {
+                            case let .text(text):
+                                continuation.yield(.delta(text))
+                            case let .toolCall(call):
+                                continuation.yield(.toolCall(call))
+                            case .done:
+                                continuation.yield(.completed)
+                                continuation.finish()
+                                return
+                            case let .failed(detail):
+                                throw AIProviderError.malformedResponse(
+                                    detail: "服务返回错误：\(detail)",
+                                    retryable: false
+                                )
+                            case .ignore:
+                                break
+                            }
+                        }
+                    }
+                    // 网关不发 [DONE] / response.completed 也视为正常结束（沿用 Chat 路径行为）。
                     continuation.yield(.completed)
                     continuation.finish()
                 } catch {
@@ -185,6 +248,21 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     // MARK: - Request building
+
+    /// 是否使用 OpenAI Responses API（POST /v1/responses）格式。
+    ///
+    /// 按 apiPath 自动判定：路径以 `/responses` 结尾（覆盖 baseURL 已含 `/v1`、
+    /// apiPath 只写 `/responses` 的配置），或路径中包含 `/v1/responses`
+    /// （覆盖网关带 `/api/v1/responses` 之类前缀路径的偏差）时走 Responses 格式；
+    /// 否则保持 Chat Completions。
+    static func usesResponsesAPI(apiPath: String) -> Bool {
+        let path = apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.hasSuffix("/responses") || path.contains("/v1/responses")
+    }
+
+    private var usesResponsesAPI: Bool {
+        Self.usesResponsesAPI(apiPath: configuration.apiPath)
+    }
 
     /// 由 baseURL + apiPath 拼出完整接口地址。
     /// 用 `appendingPathComponent` 处理结尾斜杠，避免产出 `//v1/...` 这类
@@ -260,7 +338,16 @@ public struct OpenAICompatibleProvider: AIProvider {
         return request
     }
 
+    /// 请求体总入口：按 apiPath 自动选择 Responses 或 Chat Completions 格式。
     private func requestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
+        if usesResponsesAPI {
+            return responsesRequestBody(request, stream: stream)
+        }
+        return chatRequestBody(request, stream: stream)
+    }
+
+    /// Chat Completions 请求体：`{model, messages, temperature, max_tokens, stream?, tools?}`。
+    private func chatRequestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
         var body: [String: Any] = [
             "model": request.model,
             "messages": request.messages.map(Self.encodeMessage),
@@ -269,20 +356,43 @@ public struct OpenAICompatibleProvider: AIProvider {
         ]
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
-            body["tools"] = tools.map { tool -> [String: Any] in
-                var function: [String: Any] = ["name": tool.name, "description": tool.description]
-                if let json = tool.parametersJSON,
-                   let data = json.data(using: .utf8),
-                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    function["parameters"] = object
-                }
-                return ["type": "function", "function": function]
-            }
+            body["tools"] = Self.encodeTools(tools)
         }
         return body
     }
 
-    /// 按角色编码消息：`.tool` 携带 tool_call_id / name；`.assistant` 携带原生 tool_calls。
+    /// Responses API 请求体：`{model, input:[...], temperature, max_output_tokens, stream?, tools?}`。
+    /// `max_output_tokens` 使用请求的 maxTokens（默认 `auralisDefaultMaxOutputTokens`），
+    /// 与 Chat 版的 `max_tokens` 对齐，避免长回答被截断。
+    private func responsesRequestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": request.model,
+            "input": request.messages.map(Self.encodeResponsesInput),
+            "temperature": request.temperature,
+            "max_output_tokens": request.maxTokens,
+        ]
+        if stream { body["stream"] = true }
+        if let tools = request.tools, !tools.isEmpty {
+            body["tools"] = Self.encodeTools(tools)
+        }
+        return body
+    }
+
+    /// 工具定义编码（Chat / Responses 两版共用）：
+    /// `{"type":"function","function":{name,description,parameters}}`。
+    private static func encodeTools(_ tools: [AIToolDefinition]) -> [[String: Any]] {
+        tools.map { tool -> [String: Any] in
+            var function: [String: Any] = ["name": tool.name, "description": tool.description]
+            if let json = tool.parametersJSON,
+               let data = json.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                function["parameters"] = object
+            }
+            return ["type": "function", "function": function]
+        }
+    }
+
+    /// 按角色编码 Chat 消息：`.tool` 携带 tool_call_id / name；`.assistant` 携带原生 tool_calls。
     private static func encodeMessage(_ message: AIMessage) -> [String: Any] {
         var result: [String: Any] = ["role": message.role.rawValue]
         switch message.role {
@@ -305,6 +415,48 @@ public struct OpenAICompatibleProvider: AIProvider {
             result["content"] = message.content
         }
         return result
+    }
+
+    /// 按 Responses API 规范编码 input item：
+    /// - user/system → `{"type":"message","role":...,"content":[{"type":"input_text","text":...}]}`
+    /// - assistant → `{"type":"message","role":"assistant","content":[
+    ///     {"type":"output_text","text":...}, {"type":"function_call","call_id":...,"name":...,"arguments":"{...}"}, ...
+    ///   ]}`
+    /// - tool → `{"type":"function_call_output","call_id":...,"output":"<文本>"}`
+    ///
+    /// `function_call_output.output` 必须是字符串；调用方若持有结构化结果，
+    /// 应在构造 `AIMessage` 时用 JSON 序列化成字符串传入。
+    static func encodeResponsesInput(_ message: AIMessage) -> [String: Any] {
+        switch message.role {
+        case .user, .system:
+            return [
+                "type": "message",
+                "role": message.role.rawValue,
+                "content": [["type": "input_text", "text": message.content]],
+            ]
+        case .assistant:
+            var content: [[String: Any]] = []
+            if !message.content.isEmpty {
+                content.append(["type": "output_text", "text": message.content])
+            }
+            if let calls = message.toolCalls, !calls.isEmpty {
+                content.append(contentsOf: calls.map { call -> [String: Any] in
+                    [
+                        "type": "function_call",
+                        "call_id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    ]
+                })
+            }
+            return ["type": "message", "role": "assistant", "content": content]
+        case .tool:
+            return [
+                "type": "function_call_output",
+                "call_id": message.toolCallID ?? "",
+                "output": message.content,
+            ]
+        }
     }
 
     private func validate(_ response: URLResponse) throws {
@@ -483,6 +635,244 @@ public struct OpenAICompatibleProvider: AIProvider {
         guard !text.isEmpty else { return "<\(data.count) 字节非文本内容>" }
         let suffix = data.count > limit ? "…（共 \(data.count) 字节）" : ""
         return text + suffix
+    }
+
+    // MARK: - Responses API (POST /v1/responses)
+
+    /// Responses SSE 单事件解析结果。与现有 stream 事件模型对齐：
+    /// `.text` → `.delta`、`.toolCall` → `.toolCall`、`.done` → `.completed`、
+    /// `.failed` → 上抛错误、`.ignore` → 跳过。
+    enum ResponsesStreamParseResult: Equatable, Sendable {
+        case text(String)
+        case toolCall(AIToolCall)
+        case done
+        case failed(String)
+        case ignore
+    }
+
+    /// 宽容解析 Responses API 非流式响应：
+    /// 1. 空响应体 → 判为可重试；
+    /// 2. `{object:"response", output:[...], usage, status}` → 正常路径：
+    ///    文本 = 拼接 output 中 type=="message" 的 content[].text；
+    ///    toolCalls = output 中 type=="function_call"；
+    ///    finishReason = status 映射（completed→"stop" 等）；
+    /// 3. 请求的是非流式，服务端却回了 SSE（`data: {...}`）→ 就地把 delta 拼起来；
+    /// 4. HTTP 200 但 body 里塞了 `{"error": {...}}` → 把服务端原文透出；
+    /// 5. 其余（HTML 错误页、截断 JSON）→ 附响应体前 240 字节，便于定位。
+    static func parseResponsesCompletion(data: Data, fallbackModel: String) throws -> AICompletionResponse {
+        guard !data.isEmpty else {
+            throw AIProviderError.malformedResponse(detail: "服务返回了空响应体", retryable: true)
+        }
+
+        let jsonObject = try? JSONSerialization.jsonObject(with: data)
+
+        if let object = jsonObject as? [String: Any] {
+            if let content = responsesText(from: object) {
+                let usage = object["usage"] as? [String: Any]
+                return AICompletionResponse(
+                    model: object["model"] as? String ?? fallbackModel,
+                    content: content,
+                    reasoning: responsesReasoning(from: object),
+                    inputTokens: (usage?["input_tokens"] as? Int) ?? (usage?["prompt_tokens"] as? Int),
+                    outputTokens: (usage?["output_tokens"] as? Int) ?? (usage?["completion_tokens"] as? Int),
+                    finishReason: finishReason(fromResponses: object),
+                    toolCalls: responsesToolCalls(from: object)
+                )
+            }
+            if let message = errorMessage(from: object) {
+                // 网关把错误塞进 200 响应体：这是服务端的确定性回答，重试无益。
+                throw AIProviderError.malformedResponse(detail: "服务返回错误：\(message)", retryable: false)
+            }
+        }
+
+        // 非流式请求却收到 SSE：把各 chunk 的 delta 拼成完整文本，直接当成功返回。
+        if let aggregated = aggregateResponsesStreamedBody(data) {
+            return AICompletionResponse(
+                model: aggregated.model ?? fallbackModel,
+                content: aggregated.content,
+                inputTokens: aggregated.inputTokens,
+                outputTokens: aggregated.outputTokens
+            )
+        }
+
+        // 合法 JSON 但结构完全不认识 → 服务确实不兼容，重试没意义；
+        // 连 JSON 都不是（HTML 错误页、被截断的响应）→ 多半是网关抖动，允许重试。
+        throw AIProviderError.malformedResponse(
+            detail: bodyPreview(data),
+            retryable: jsonObject == nil
+        )
+    }
+
+    /// 从 Responses 响应的 `output` 数组提取用户可见文本：
+    /// 只拼接 type == "message" 的 content[].text（不含 reasoning 条目，避免泄露思考链）。
+    /// 结构不认识时返回 nil（用于判定格式兼容），output 为空或只有 function_call 时返回 ""。
+    static func responsesText(from object: [String: Any]) -> String? {
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        var parts: [String] = []
+        for item in output where (item["type"] as? String) == "message" {
+            if let content = item["content"] as? String {
+                if !content.isEmpty { parts.append(content) }
+            } else if let content = item["content"] as? [[String: Any]] {
+                parts.append(contentsOf: content.compactMap { $0["text"] as? String })
+            }
+        }
+        return parts.joined()
+    }
+
+    /// 提取 Responses API 的 reasoning 条目（type == "reasoning"）文本，
+    /// 仅内部保存，绝不展示给用户（与 Chat 版 `reasoning_content` 语义一致）。
+    static func responsesReasoning(from object: [String: Any]) -> String? {
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        var parts: [String] = []
+        for item in output where (item["type"] as? String) == "reasoning" {
+            if let summary = item["summary"] as? [[String: Any]] {
+                parts.append(contentsOf: summary.compactMap { $0["text"] as? String })
+            }
+            if let content = item["content"] as? [[String: Any]] {
+                parts.append(contentsOf: content.compactMap { $0["text"] as? String })
+            }
+        }
+        let joined = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? nil : joined
+    }
+
+    /// 解析 Responses 响应 `output` 中的 function_call 条目。
+    static func responsesToolCalls(from object: [String: Any]) -> [AIToolCall]? {
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        let parsed = output.compactMap { item -> AIToolCall? in
+            guard (item["type"] as? String) == "function_call",
+                  let id = item["call_id"] as? String,
+                  let name = item["name"] as? String
+            else { return nil }
+            return AIToolCall(id: id, name: name, arguments: stringify(item["arguments"]) ?? "")
+        }
+        return parsed.isEmpty ? nil : parsed
+    }
+
+    /// Responses 的 finishReason：优先读网关透传的 `finish_reason`，
+    /// 否则把 `status` 映射为 Chat 风格（completed→"stop"、超长截断→"length" 等）。
+    static func finishReason(fromResponses object: [String: Any]) -> String? {
+        if let direct = object["finish_reason"] as? String { return direct }
+        guard let status = object["status"] as? String else { return nil }
+        switch status {
+        case "completed":
+            return "stop"
+        case "incomplete":
+            if let details = object["incomplete_details"] as? [String: Any],
+               (details["reason"] as? String) == "max_output_tokens" {
+                return "length"
+            }
+            return "incomplete"
+        case "failed":
+            return "fail"
+        case "cancelled":
+            return "cancelled"
+        default:
+            return status
+        }
+    }
+
+    /// 把任意值转成 JSON 字符串：已是字符串原样返回；字典/数组等结构化值序列化。
+    /// 用于宽容处理网关把 `function_call.arguments` / `function_call_output.output`
+    /// 直接返回为对象而非字符串的偏差。
+    static func stringify(_ value: Any?) -> String? {
+        if let string = value as? String { return string }
+        guard let value, JSONSerialization.isValidJSONObject([value]),
+              let data = try? JSONSerialization.data(withJSONObject: value)
+        else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// 解析一条 Responses SSE 事件（`data: {"type":...}`）。
+    /// 覆盖 `response.output_text.delta` / `response.output_item.done` /
+    /// `response.completed` / `response.incomplete` / `response.failed` / `error`；
+    /// 无 `type` 但带 `delta` 字段的网关偏差也兜住。
+    static func parseResponsesStreamEvent(_ data: String) -> ResponsesStreamParseResult {
+        guard let payload = data.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        else { return .ignore }
+
+        switch object["type"] as? String {
+        case "response.output_text.delta":
+            if let delta = object["delta"] as? String, !delta.isEmpty { return .text(delta) }
+            if let text = object["text"] as? String, !text.isEmpty { return .text(text) }
+            return .ignore
+        case "response.output_item.done":
+            guard let output = object["output"] as? [String: Any],
+                  (output["type"] as? String) == "function_call",
+                  let id = output["call_id"] as? String,
+                  let name = output["name"] as? String
+            else { return .ignore }
+            return .toolCall(AIToolCall(id: id, name: name, arguments: stringify(output["arguments"]) ?? ""))
+        case "response.completed", "response.incomplete":
+            return .done
+        case "response.failed":
+            return .failed(responseErrorMessage(from: object) ?? "响应流失败")
+        case "error":
+            return .failed(responseErrorMessage(from: object) ?? "未知错误")
+        default:
+            // 容错：无 type 字段的网关偏差，看到 delta 就当作文本增量。
+            if let delta = object["delta"] as? String, !delta.isEmpty { return .text(delta) }
+            return .ignore
+        }
+    }
+
+    /// 提取 Responses SSE 错误事件的错误文本：
+    /// 兼容 `{"error":{...}}`、`{"error":"..."}` 与 `response.failed` 的
+    /// `{"response":{"error":{...}}}` 嵌套结构。
+    static func responseErrorMessage(from object: [String: Any]) -> String? {
+        if let error = object["error"] as? [String: Any] {
+            if let message = error["message"] as? String { return message }
+            if let code = error["code"] as? String { return code }
+            return String(describing: error)
+        }
+        if let error = object["error"] as? String { return error }
+        if let response = object["response"] as? [String: Any],
+           let error = response["error"] as? [String: Any] {
+            if let message = error["message"] as? String { return message }
+            return String(describing: error)
+        }
+        return nil
+    }
+
+    /// 把「本该非流式却返回 Responses SSE」的响应体拼回完整文本。
+    /// 只要至少解析出一个 `data:` 事件就认定成功，避免把普通文本误判成 SSE。
+    static func aggregateResponsesStreamedBody(
+        _ data: Data
+    ) -> (content: String, model: String?, inputTokens: Int?, outputTokens: Int?)? {
+        guard let raw = String(data: data, encoding: .utf8), raw.contains("data:") else { return nil }
+        var merged = ""
+        var model: String?
+        var inputTokens: Int?
+        var outputTokens: Int?
+        var sawEvent = false
+
+        for line in raw.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let payload = trimmed.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { sawEvent = true; continue }
+            guard let chunk = payload.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: chunk) as? [String: Any]
+            else { continue }
+            sawEvent = true
+            // 多数网关把 model / usage 嵌在 `response` 对象里，个别直接放在顶层，都兜住。
+            let response = object["response"] as? [String: Any]
+            if model == nil {
+                model = response?["model"] as? String ?? object["model"] as? String
+            }
+            if let usage = (response?["usage"] as? [String: Any]) ?? (object["usage"] as? [String: Any]) {
+                inputTokens = (usage["input_tokens"] as? Int) ?? (usage["prompt_tokens"] as? Int) ?? inputTokens
+                outputTokens = (usage["output_tokens"] as? Int) ?? (usage["completion_tokens"] as? Int) ?? outputTokens
+            }
+            switch parseResponsesStreamEvent(payload) {
+            case let .text(piece):
+                merged += piece
+            default:
+                break
+            }
+        }
+        return sawEvent ? (merged, model, inputTokens, outputTokens) : nil
     }
 
     private nonisolated static func streamDelta(from data: String) -> String? {

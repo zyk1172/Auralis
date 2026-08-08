@@ -1169,6 +1169,14 @@ public final class AuralisAppModel: ObservableObject {
         return result
     }
 
+    /// 编辑页整组写回首页布局（本地数组为权威，排序与开关一次提交）。
+    /// 编辑页的 List 以本地 @State 数组为数据源，拖动/开关后整组提交，
+    /// 避免 onMove 期间增量写 @Published 与 SwiftUI 集合视图移动事务竞争导致的崩溃。
+    public func replaceHomeLayout(quickEntries: [HomeModulePreference], contentModules: [HomeModulePreference]) {
+        homeLayout = HomeLayoutPreference(quickEntries: quickEntries, contentModules: contentModules)
+        persistHomeLayout()
+    }
+
     /// 恢复默认布局：仅重置首页布局偏好（HomeLayoutStore 键），不删任何数据 / 缓存 / 播放记录。
     public func resetHomeLayout() {
         homeLayout = HomeModuleRegistry.defaultPreference()
