@@ -367,7 +367,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     private func responsesRequestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
         var body: [String: Any] = [
             "model": request.model,
-            "input": request.messages.map(Self.encodeResponsesInput),
+            "input": request.messages.flatMap(Self.encodeResponsesInputItems),
             "temperature": request.temperature,
             "max_output_tokens": request.maxTokens,
         ]
@@ -440,30 +440,39 @@ public struct OpenAICompatibleProvider: AIProvider {
         return result
     }
 
-    /// 按 Responses API 规范编码 input item：
+    /// 按 Responses API 规范编码 input items（一个 AIMessage 可能展开成多个顶层条目）：
     /// - user/system → `{"type":"message","role":...,"content":[{"type":"input_text","text":...}]}`
-    /// - assistant → `{"type":"message","role":"assistant","content":[
-    ///     {"type":"output_text","text":...}, {"type":"function_call","call_id":...,"name":...,"arguments":"{...}"}, ...
-    ///   ]}`
+    /// - assistant 纯文本 → `{"type":"message","role":"assistant","content":[{"type":"output_text","text":...}]}`
+    /// - assistant 工具调用 → **顶层** `{"type":"function_call","call_id":...,"name":...,"arguments":"{...}"}`
+    ///   （必须与 message 条目平级，不能嵌进 content 数组——否则多轮工具调用时
+    ///   Responses API 会因结构非法返回 400，表现为「只能调很少轮次」）
     /// - tool → `{"type":"function_call_output","call_id":...,"output":"<文本>"}`
     ///
     /// `function_call_output.output` 必须是字符串；调用方若持有结构化结果，
     /// 应在构造 `AIMessage` 时用 JSON 序列化成字符串传入。
-    static func encodeResponsesInput(_ message: AIMessage) -> [String: Any] {
+    static func encodeResponsesInputItems(_ message: AIMessage) -> [[String: Any]] {
         switch message.role {
         case .user, .system:
             return [
-                "type": "message",
-                "role": message.role.rawValue,
-                "content": [["type": "input_text", "text": message.content]],
+                [
+                    "type": "message",
+                    "role": message.role.rawValue,
+                    "content": [["type": "input_text", "text": message.content]],
+                ],
             ]
         case .assistant:
-            var content: [[String: Any]] = []
+            var items: [[String: Any]] = []
             if !message.content.isEmpty {
-                content.append(["type": "output_text", "text": message.content])
+                items.append(
+                    [
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [["type": "output_text", "text": message.content]],
+                    ]
+                )
             }
             if let calls = message.toolCalls, !calls.isEmpty {
-                content.append(contentsOf: calls.map { call -> [String: Any] in
+                items.append(contentsOf: calls.map { call -> [String: Any] in
                     [
                         "type": "function_call",
                         "call_id": call.id,
@@ -472,15 +481,18 @@ public struct OpenAICompatibleProvider: AIProvider {
                     ]
                 })
             }
-            return ["type": "message", "role": "assistant", "content": content]
+            return items
         case .tool:
             return [
-                "type": "function_call_output",
-                "call_id": message.toolCallID ?? "",
-                "output": message.content,
+                [
+                    "type": "function_call_output",
+                    "call_id": message.toolCallID ?? "",
+                    "output": message.content,
+                ],
             ]
         }
     }
+
 
     private func validate(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { return }

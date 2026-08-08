@@ -154,7 +154,9 @@ struct OpenAIResponsesProviderTests {
     // MARK: input 编码
 
     @Test func encodesSystemMessageAsInputText() throws {
-        let encoded = OpenAICompatibleProvider.encodeResponsesInput(AIMessage(role: .system, content: "你是音乐助手"))
+        let items = OpenAICompatibleProvider.encodeResponsesInputItems(AIMessage(role: .system, content: "你是音乐助手"))
+        #expect(items.count == 1)
+        let encoded = items[0]
         #expect(encoded["type"] as? String == "message")
         #expect(encoded["role"] as? String == "system")
         let content = try #require(encoded["content"] as? [[String: Any]])
@@ -164,7 +166,9 @@ struct OpenAIResponsesProviderTests {
     }
 
     @Test func encodesUserMessageAsInputText() throws {
-        let encoded = OpenAICompatibleProvider.encodeResponsesInput(AIMessage(role: .user, content: "搜夜曲"))
+        let items = OpenAICompatibleProvider.encodeResponsesInputItems(AIMessage(role: .user, content: "搜夜曲"))
+        #expect(items.count == 1)
+        let encoded = items[0]
         #expect(encoded["role"] as? String == "user")
         let content = try #require(encoded["content"] as? [[String: Any]])
         #expect(content[0]["type"] as? String == "input_text")
@@ -177,17 +181,21 @@ struct OpenAIResponsesProviderTests {
             content: "我来查",
             toolCalls: [AIToolCall(id: "call_1", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}")]
         )
-        let encoded = OpenAICompatibleProvider.encodeResponsesInput(assistant)
-        #expect(encoded["type"] as? String == "message")
-        #expect(encoded["role"] as? String == "assistant")
-        let content = try #require(encoded["content"] as? [[String: Any]])
-        #expect(content.count == 2)
+        // 有文本 → message 条目 + 顶层 function_call 条目（不嵌进 content）。
+        let items = OpenAICompatibleProvider.encodeResponsesInputItems(assistant)
+        #expect(items.count == 2)
+        let message = items[0]
+        #expect(message["type"] as? String == "message")
+        #expect(message["role"] as? String == "assistant")
+        let content = try #require(message["content"] as? [[String: Any]])
+        #expect(content.count == 1)
         #expect(content[0]["type"] as? String == "output_text")
         #expect(content[0]["text"] as? String == "我来查")
-        #expect(content[1]["type"] as? String == "function_call")
-        #expect(content[1]["call_id"] as? String == "call_1")
-        #expect(content[1]["name"] as? String == "searchTrack")
-        #expect(content[1]["arguments"] as? String == "{\"q\":\"夜曲\"}")
+        let call = items[1]
+        #expect(call["type"] as? String == "function_call")
+        #expect(call["call_id"] as? String == "call_1")
+        #expect(call["name"] as? String == "searchTrack")
+        #expect(call["arguments"] as? String == "{\"q\":\"夜曲\"}")
     }
 
     @Test func encodesAssistantWithOnlyToolCallsSkipsEmptyText() throws {
@@ -196,16 +204,19 @@ struct OpenAIResponsesProviderTests {
             content: "",
             toolCalls: [AIToolCall(id: "call_2", name: "playTrack", arguments: "{}")]
         )
-        let encoded = OpenAICompatibleProvider.encodeResponsesInput(assistant)
-        let content = try #require(encoded["content"] as? [[String: Any]])
-        #expect(content.count == 1)
-        #expect(content[0]["type"] as? String == "function_call")
-        #expect(content[0]["name"] as? String == "playTrack")
+        // 无文本 → 只产出顶层 function_call 条目（多轮工具调用合法的结构）。
+        let items = OpenAICompatibleProvider.encodeResponsesInputItems(assistant)
+        #expect(items.count == 1)
+        #expect(items[0]["type"] as? String == "function_call")
+        #expect(items[0]["name"] as? String == "playTrack")
+        #expect(items[0]["call_id"] as? String == "call_2")
     }
 
     @Test func encodesToolResultAsFunctionCallOutput() throws {
         let tool = AIMessage(role: .tool, content: "找到 3 首", toolCallID: "call_1", name: "searchTrack")
-        let encoded = OpenAICompatibleProvider.encodeResponsesInput(tool)
+        let items = OpenAICompatibleProvider.encodeResponsesInputItems(tool)
+        #expect(items.count == 1)
+        let encoded = items[0]
         #expect(encoded["type"] as? String == "function_call_output")
         #expect(encoded["call_id"] as? String == "call_1")
         #expect(encoded["output"] as? String == "找到 3 首")
@@ -460,16 +471,16 @@ struct OpenAIResponsesNetworkTests {
         #expect(object["messages"] == nil)
         #expect(object["stream"] == nil)
 
+        // 多轮工具调用：assistant 的 function_call 必须是顶层条目（不在 content 里）。
         let input = try #require(object["input"] as? [[String: Any]])
         #expect(input.count == 5)
         #expect(input[0]["role"] as? String == "system")
         #expect((input[0]["content"] as? [[String: Any]])?.first?["type"] as? String == "input_text")
         #expect(input[1]["role"] as? String == "user")
-        #expect(input[2]["role"] as? String == "assistant")
-        let assistantContent = try #require(input[2]["content"] as? [[String: Any]])
-        #expect(assistantContent.count == 1)
-        #expect(assistantContent[0]["type"] as? String == "function_call")
-        #expect(assistantContent[0]["call_id"] as? String == "call_1")
+        #expect(input[2]["type"] as? String == "function_call")
+        #expect(input[2]["call_id"] as? String == "call_1")
+        #expect(input[2]["name"] as? String == "searchTrack")
+        #expect(input[2]["arguments"] as? String == "{\"q\":\"夜曲\"}")
         #expect(input[3]["type"] as? String == "function_call_output")
         #expect(input[3]["call_id"] as? String == "call_1")
         #expect(input[3]["output"] as? String == "找到 1 首")
