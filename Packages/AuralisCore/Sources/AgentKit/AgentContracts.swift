@@ -96,7 +96,7 @@ public protocol AgentBridge: Sendable {
     // Playlist
     func createPlaylist(name: String) async -> GlobalID?
     func renamePlaylist(globalID: GlobalID, name: String) async
-    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async
     func duplicatePlaylist(playlistGID: GlobalID) async

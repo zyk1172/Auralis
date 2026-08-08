@@ -168,12 +168,14 @@ public final class AuralisAgentBridge: AgentBridge {
         await model.renamePlaylist(id: PlaylistID(rawValue: globalID.remoteID), to: name)
     }
 
-    public func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async {
-        guard let playlist = model.catalog.playlists.first(where: { $0.id.rawValue == playlistGID.remoteID }) else { return }
+    public func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool {
+        guard let playlist = await playlistValue(playlistGID) else { return false }
+        var added = 0
         for gid in trackGIDs {
-            guard let track = resolveTrack(gid) else { continue }
-            await model.addToPlaylist(playlist, track: track)
+            guard let track = await resolveTrackAnywhere(gid) else { continue }
+            if await model.addToPlaylist(playlist, track: track) { added += 1 }
         }
+        return added > 0
     }
 
     public func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async {
@@ -297,6 +299,34 @@ public final class AuralisAgentBridge: AgentBridge {
     /// 在服务器上在线搜索歌曲（HTTP）：本地没有时由 Agent 调用来获取服务器实时信息。
     public func serverSearch(query: String, limit: Int) async -> [Track] {
         await model.searchOnServerAwaiting(query: query, limit: limit)
+    }
+
+    // MARK: - Playlist / Track resolution
+
+    /// 歌单解析：优先内存 catalog，未加载时从本地目录库（SQLite）按 GlobalID 还原。
+    /// 修复「Agent 在歌单未进内存 catalog 时添加歌曲静默失败」的问题。
+    private func playlistValue(_ gid: GlobalID) async -> Playlist? {
+        if let existing = model.catalog.playlists.first(where: { $0.id.rawValue == gid.remoteID }) {
+            return existing
+        }
+        guard let summary = (try? await catalog.listPlaylists())?.first(where: { $0.globalID == gid }) else {
+            return nil
+        }
+        return Playlist(
+            id: PlaylistID(rawValue: gid.remoteID),
+            serverID: gid.serverID,
+            name: summary.name,
+            trackIDs: summary.trackIDs.map { TrackID(rawValue: $0.remoteID) }
+        )
+    }
+
+    /// 曲目解析：先内存 catalog，未命中再从本地目录库按 GlobalID 取（Agent 查询到的曲目）。
+    private func resolveTrackAnywhere(_ globalID: GlobalID) async -> Track? {
+        if let active = model.catalog.activeServerID, active != globalID.serverID { return nil }
+        if let track = model.catalog.tracks.first(where: { $0.id.rawValue == globalID.remoteID }) {
+            return track
+        }
+        return try? await catalog.getTrack(globalID)
     }
 
     // MARK: - Resolution

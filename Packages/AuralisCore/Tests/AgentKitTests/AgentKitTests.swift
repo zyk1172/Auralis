@@ -63,8 +63,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
         return GlobalID(serverID: "local", remoteID: UUID().uuidString)
     }
     func renamePlaylist(globalID: GlobalID, name: String) {}
-    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) {
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool {
         addedToPlaylist.append((playlistGID, trackGIDs))
+        return true
     }
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) {}
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) {}

@@ -765,9 +765,13 @@ public struct AgentRunner {
             }
             let name = playlistName.isEmpty ? "默认歌单" : playlistName
             if let gid = await bridge.createPlaylist(name: name) {
-                await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: [first.globalID])
-                await log(AgentActionRecord(toolName: "addTracksToPlaylist", permission: .reversible, summary: "把《\(first.title)》加入歌单「\(name)」"))
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("已把《\(first.title)》加入歌单「\(name)」")]))
+                let added = await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: [first.globalID])
+                if added {
+                    await log(AgentActionRecord(toolName: "addTracksToPlaylist", permission: .reversible, summary: "把《\(first.title)》加入歌单「\(name)」"))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("已把《\(first.title)》加入歌单「\(name)」")]))
+                } else {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("加入歌单「\(name)」失败，请稍后重试。")]))
+                }
             } else {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("创建歌单「\(name)」失败，请检查服务器。")]))
             }

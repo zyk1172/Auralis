@@ -1793,13 +1793,22 @@ public final class AuralisAppModel: ObservableObject {
     public func removeFromPlaylist(id: PlaylistID, atIndices indices: [Int]) async -> Bool {
         guard !indices.isEmpty else { return false }
         let succeeded = await connector.removeFromPlaylist(playlistID: id, indices: indices)
-        if succeeded, let index = catalog.playlists.firstIndex(where: { $0.id == id }) {
-            for offset in Set(indices).sorted(by: >)
-            where catalog.playlists[index].trackIDs.indices.contains(offset) {
-                catalog.playlists[index].trackIDs.remove(at: offset)
+        if succeeded {
+            if let index = catalog.playlists.firstIndex(where: { $0.id == id }) {
+                for offset in Set(indices).sorted(by: >)
+                where catalog.playlists[index].trackIDs.indices.contains(offset) {
+                    catalog.playlists[index].trackIDs.remove(at: offset)
+                }
+                if let serverID = catalog.activeServerID {
+                    persistServerPlaylists(catalog.playlists, serverID: serverID)
+                }
             }
-            if let serverID = catalog.activeServerID {
-                persistServerPlaylists(catalog.playlists, serverID: serverID)
+            // 同步刷新歌单详情已加载的曲目缓存，让 UI（滑动删除）立即反映删除结果。
+            if var loaded = playlistTracks[id] {
+                for offset in Set(indices).sorted(by: >) where loaded.indices.contains(offset) {
+                    loaded.remove(at: offset)
+                }
+                playlistTracks[id] = loaded
             }
         }
         return succeeded

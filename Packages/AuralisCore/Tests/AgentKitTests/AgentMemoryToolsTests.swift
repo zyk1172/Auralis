@@ -247,7 +247,7 @@ private struct BridgeStub: AgentBridge {
     func saveQueueAsPlaylist(name: String) async -> Bool { true }
     func createPlaylist(name: String) -> GlobalID? { nil }
     func renamePlaylist(globalID: GlobalID, name: String) {}
-    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) {}
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool { true }
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) {}
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) {}
     func duplicatePlaylist(playlistGID: GlobalID) {}

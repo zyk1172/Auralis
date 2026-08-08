@@ -204,7 +204,9 @@ public struct AgentToolkit {
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids)
+            guard await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids) else {
+                return .fail(call, descriptor, "添加失败：歌单或曲目在本地目录不存在（可能尚未同步），请先 listPlaylists / library_search 确认后重试")
+            }
             return .ok(call, descriptor, "已添加 \(gids.count) 首")
         case "removeTracksFromPlaylist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
@@ -772,7 +774,9 @@ public struct AgentToolkit {
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids)
+            guard await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids) else {
+                return .fail(call, descriptor, "添加失败：歌单或曲目在本地目录不存在（可能尚未同步），请先 listPlaylists / library_search 确认后重试")
+            }
             return .ok(call, descriptor, "已添加 \(gids.count) 首")
 
         // MARK: v2 服务器工具

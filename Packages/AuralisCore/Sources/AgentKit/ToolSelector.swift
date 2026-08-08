@@ -18,6 +18,8 @@ public enum ToolSelector {
         "playback_get_state",
         "playback_play_song", "playback_play_album", "playback_play_artist",
         "playback_play_playlist", "playback_play_random",
+        // 歌单编辑：加歌/删歌必须随时可用（用户点歌单操作时不一定带「歌单」关键词）
+        "playlist_add_songs", "addTracksToPlaylist", "removeTracksFromPlaylist",
         "playback_pause", "playback_resume",
         "playback_next", "playback_previous", "playback_seek",
         "playback_set_shuffle", "playback_set_repeat",

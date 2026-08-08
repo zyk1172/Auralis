@@ -891,6 +891,11 @@ private struct PlaylistTracksView: View {
                                 model.selectAndPlay(track)
                             }
                     }
+                    .onDelete { offsets in
+                        // 滑动删除：把服务器歌单里的对应曲目移除（同步到服务器 + 本地目录）。
+                        let indices = Array(offsets)
+                        Task { _ = await model.removeFromPlaylist(id: playlist.id, atIndices: indices) }
+                    }
                 }
                 .listStyle(.plain)
             }
