@@ -1,4 +1,5 @@
 import AgentKit
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -63,6 +64,32 @@ private final class StubSystemService: AgentSystemService, @unchecked Sendable {
     }
 }
 
+/// V2 文本协议测试专用模型桩：模拟 OpenAI 兼容端未启用原生 tools 时的 ACTION 回合。
+private final class IndexScriptedProvider: AIProvider, @unchecked Sendable {
+    private var batches: [String]
+    init(_ batches: [String]) { self.batches = batches }
+    func testConnection() async -> AIConnectionResult { AIConnectionResult(latency: 0, model: "scripted", message: "ready") }
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        AICompletionResponse(model: request.model, content: batches.isEmpty ? "已处理完成" : batches.removeFirst())
+    }
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(model: request.model))
+            continuation.yield(.delta(batches.isEmpty ? "已处理完成" : batches.removeFirst()))
+            continuation.yield(.completed)
+            continuation.finish()
+        }
+    }
+}
+
+private actor IndexResultCollector {
+    private var texts: [String] = []
+    func record(_ message: AgentChatMessage) {
+        texts += message.messages.compactMap { if case let .text(value) = $0 { value } else { nil } }
+    }
+    func contains(_ text: String) -> Bool { texts.contains { $0.contains(text) } }
+}
+
 // MARK: - Helpers
 
 private func makeV2Store() throws -> LocalCatalogStore {
@@ -89,6 +116,46 @@ private func seedV2(_ store: LocalCatalogStore, _ tracks: [Track]) async throws 
 }
 
 // MARK: - v2 工具执行
+
+@Test("模拟器路径：文本 Agent 能读取、分类并写回推荐索引 V2")
+func recommendationIndexV2TextAgentRoundTrip() async throws {
+    let store = try makeV2Store()
+    let serverID: ServerID = "test-server"
+    try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "v2-index-1", title: "Night Piano")])
+    let gid = GlobalID(serverID: serverID, remoteID: "v2-index-1")
+    let classification = RecommendationIndexV2Classification(
+        id: gid.description,
+        moods: ["平静"], scenes: ["深夜"], energy: 2,
+        tempo: 2, acousticness: 5, danceability: 1,
+        vocals: ["器乐"], textures: ["钢琴"], styles: ["轻音乐"], confidence: 0.96
+    )
+    let itemsJSON = String(decoding: try JSONEncoder().encode([classification]), as: UTF8.self)
+    func action(_ tool: String, _ args: [String: String] = [:]) throws -> String {
+        let payload: [String: Any] = ["tool": tool, "args": args]
+        return "ACTION: " + String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+    }
+    let provider = IndexScriptedProvider([
+        try action("library_index_v2_status"),
+        try action("library_index_v2_next_batch", ["limit": "1"]),
+        try action("library_index_v2_write_batch", ["itemsJSON": itemsJSON]),
+    ])
+    let collector = IndexResultCollector()
+    await AgentRunner.run(
+        userText: "构建推荐索引 V2，只处理一批",
+        provider: provider,
+        model: "scripted-model",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID, currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    #expect(status.indexedTracks == 1)
+    #expect(status.pendingTracks == 0)
+    #expect(try await store.recommendationIndexV2TrackIDs(serverID: serverID, query: "深夜") == [gid])
+    #expect(await collector.contains("已处理完成"))
+}
 
 @Test("v2 playback_play_song executes through bridge")
 func v2PlaySong() async throws {

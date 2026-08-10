@@ -128,11 +128,28 @@ public actor LocalCatalogStore: LibrarySyncStore {
             last_processed_count INTEGER NOT NULL DEFAULT 0,
             next_retry_at REAL
         );
+        CREATE TABLE IF NOT EXISTS recommendation_index_v2_state (
+            global_id TEXT PRIMARY KEY,
+            server_id TEXT NOT NULL,
+            source_hash TEXT NOT NULL,
+            rules_version TEXT NOT NULL,
+            classifier TEXT NOT NULL,
+            classified_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS recommendation_index_v2_tags (
+            global_id TEXT NOT NULL,
+            dimension TEXT NOT NULL,
+            value TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            PRIMARY KEY (global_id, dimension, value)
+        );
         CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(kind UNINDEXED, global_id UNINDEXED, text);
         CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id);
         CREATE INDEX IF NOT EXISTS idx_albums_server ON albums(server_id);
         CREATE INDEX IF NOT EXISTS idx_artists_server ON artists(server_id);
         CREATE INDEX IF NOT EXISTS idx_playlists_server ON playlists(server_id);
+        CREATE INDEX IF NOT EXISTS idx_recommendation_v2_state_server ON recommendation_index_v2_state(server_id);
+        CREATE INDEX IF NOT EXISTS idx_recommendation_v2_tags_dimension_value ON recommendation_index_v2_tags(dimension, value);
         """)
     }
 

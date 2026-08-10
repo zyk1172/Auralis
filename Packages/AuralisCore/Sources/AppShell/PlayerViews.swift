@@ -58,75 +58,68 @@ struct MiniPlayerContent: View {
     var height: CGFloat = 56
 
     private var coverSize: CGFloat { min(42, max(36, height - 14)) }
+    private var displayTitle: String {
+        model.currentTrack.id.rawValue == "placeholder" ? "音乐正在赶来喵" : model.currentTrack.title
+    }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // 主行：封面 + 信息 + 操作，整体在 56pt 内垂直居中
-            HStack(spacing: 0) {
-                // 封面，圆角 8
-                ArtworkView(
-                    title: model.currentTrack.albumTitle,
-                    artworkKey: model.currentTrack.artworkKey,
-                    colors: theme.colorTokens,
-                    size: coverSize,
-                    cornerRadius: 8
-                )
-                .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1)
+        // 迷你播放条只保留封面、曲目信息与播放控制；进度仅在“正在播放”完整页提供。
+        HStack(spacing: 0) {
+            ArtworkView(
+                title: model.currentTrack.albumTitle,
+                artworkKey: model.currentTrack.artworkKey,
+                colors: theme.colorTokens,
+                size: coverSize,
+                cornerRadius: 8
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1)
 
-                // 歌曲信息，最多一行，尾部截断
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(model.currentTrack.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(theme.colorTokens.primaryText.color)
-                        .lineLimit(1)
-                    Text(model.currentTrack.artistName)
-                        .font(.caption)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                        .lineLimit(1)
-                }
-                .padding(.leading, 12)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(accessibilityPlaybackLabel)
-
-                Spacer(minLength: 8)
-
-                // 上一首 / 播放(暂停) / 下一首，点击区域 ≥ 44×44，三者等权对称
-                HStack(spacing: 4) {
-                    Button(action: model.previous) {
-                        Image(systemName: "backward.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(minWidth: 44, minHeight: 44)
-                            .foregroundStyle(theme.colorTokens.primaryText.color)
-                    }
-                    .disabled(!model.hasPrevious)
-                    .accessibilityLabel("上一首")
-
-                    Button(action: model.togglePlayback) {
-                        Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(minWidth: 44, minHeight: 44)
-                            .foregroundStyle(theme.colorTokens.primaryText.color)
-                    }
-                    .accessibilityLabel(model.playbackState == .playing ? "暂停" : "播放")
-
-                    Button(action: model.next) {
-                        Image(systemName: "forward.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(minWidth: 44, minHeight: 44)
-                            .foregroundStyle(theme.colorTokens.primaryText.color)
-                    }
-                    .disabled(!model.hasNext)
-                    .accessibilityLabel("下一首")
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                    .lineLimit(1)
+                Text(model.currentTrack.artistName)
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 12)
-            .frame(maxHeight: .infinity)
+            .padding(.leading, 12)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityPlaybackLabel)
 
-            // 顶部 2pt 进度条，作为覆盖层不挤压主行垂直居中
-            progressLine
-                .padding(.horizontal, 12)
-                .padding(.top, 4)
+            Spacer(minLength: 8)
+
+            HStack(spacing: 4) {
+                Button(action: model.previous) {
+                    Image(systemName: "backward.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                }
+                .disabled(!model.hasPrevious)
+                .accessibilityLabel("上一首")
+
+                Button(action: model.togglePlayback) {
+                    Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                }
+                .accessibilityLabel(model.playbackState == .playing ? "暂停" : "播放")
+
+                Button(action: model.next) {
+                    Image(systemName: "forward.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                }
+                .disabled(!model.hasNext)
+                .accessibilityLabel("下一首")
+            }
         }
+        .padding(.horizontal, 12)
+        .frame(maxHeight: .infinity)
     }
 
     /// VoiceOver 播放状态描述：歌曲 + 艺术家 + 播放状态。
@@ -140,19 +133,47 @@ struct MiniPlayerContent: View {
         return "\(model.currentTrack.title)，\(model.currentTrack.artistName)，\(state)"
     }
 
-    /// 胶囊内部顶部的 2pt 进度条，不超出卡片。
-    private var progressLine: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(theme.colorTokens.separator.color.opacity(0.35))
-                Capsule()
-                    .fill(theme.colorTokens.accent.color)
-                    .frame(width: max(0, proxy.size.width * model.playbackProgress))
+}
+
+/// 紧凑 Dock 内的播放内容。与展开态共用真实播放状态与操作，但缩为单行，
+/// 让首页入口和 AI 助手入口保持独立的圆形触控区域。
+struct CompactMiniPlayerContent: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+
+    private var title: String {
+        model.currentTrack.id.rawValue == "placeholder" ? "音乐正在赶来喵" : model.currentTrack.title
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ArtworkView(
+                title: model.currentTrack.albumTitle,
+                artworkKey: model.currentTrack.artworkKey,
+                colors: theme.colorTokens,
+                size: 36,
+                cornerRadius: 8
+            )
+
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            Button(action: model.togglePlayback) {
+                Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 42, height: 44)
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(model.playbackState == .playing ? "暂停" : "播放")
+
         }
-        .frame(height: 2)
-        .accessibilityHidden(true)
+        .padding(.horizontal, 10)
+        .frame(maxHeight: .infinity)
     }
 }
 

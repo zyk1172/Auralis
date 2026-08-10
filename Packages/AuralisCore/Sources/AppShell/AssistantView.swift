@@ -4,6 +4,12 @@ import Domain
 import SwiftUI
 import ThemeEngine
 
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
 /// AI 助手主界面：左侧会话列表，右侧结构化消息流。
 ///
 /// 交互要点：
@@ -12,6 +18,10 @@ import ThemeEngine
 /// - 未配置或大模型不可用时，如实提示「AI 服务暂时不可用」，不谎称已切到本地模式；
 ///   本地搜索与播放不依赖大模型，照常可用。
 struct AssistantView: View {
+    /// 末尾锚点必须是独立视图：最后一条消息在流式输出时高度会变化，而其 id 不变。
+    /// 用稳定的底部锚点滚动，才能始终贴住最新工具进度和回复结尾。
+    private static let conversationEndID = "assistant-conversation-end"
+
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
 
@@ -19,6 +29,7 @@ struct AssistantView: View {
     @AppStorage("auralis.ai.enabled") private var aiEnabled = true
     @State private var showsSessionList = true
     @State private var showsSessionListSheet = false
+    @State private var showsLibrarySearch = false
     @State private var showsActionLog = false
     @State private var renamingSession: AgentSession?
     @State private var renameText = ""
@@ -30,6 +41,7 @@ struct AssistantView: View {
     /// 输入框焦点：仅供本页用 @FocusState 管理，以便点击空白 / 拖动 / 发送时收起键盘。
     @FocusState private var assistantInputFocused: Bool
 
+    @EnvironmentObject private var bottomDockScroll: BottomDockScrollCoordinator
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     init(model: AuralisAppModel, theme: BuiltInTheme) {
@@ -66,21 +78,6 @@ struct AssistantView: View {
         }
         .background(theme.colorTokens.background.color)
         .task { await agent.bootstrap() }
-        .confirmationDialog(
-            agent.pendingConfirmation?.title ?? "确认操作",
-            isPresented: Binding(
-                get: { agent.pendingConfirmation != nil },
-                set: { if !$0 { agent.rejectConfirmation() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("确认执行", role: .destructive) { agent.approveConfirmation() }
-            Button("取消", role: .cancel) { agent.rejectConfirmation() }
-        } message: {
-            if let pending = agent.pendingConfirmation {
-                Text("\(pending.detail)\n此操作为\(permissionLabel(pending.permission))，请确认。")
-            }
-        }
         .alert("重命名会话", isPresented: Binding(
             get: { renamingSession != nil },
             set: { if !$0 { renamingSession = nil } }
@@ -136,6 +133,17 @@ struct AssistantView: View {
         .sheet(isPresented: $showsActionLog) {
             ActionLogSheet(agent: agent, theme: theme)
         }
+        .sheet(isPresented: $showsLibrarySearch) {
+            NavigationStack {
+                SearchView(model: model, theme: theme)
+                    .navigationTitle("搜索音乐库")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .onChange(of: model.shouldPresentAssistantSearch) { _, shouldPresent in
+            presentAssistantSearchIfNeeded()
+        }
+        .onAppear { presentAssistantSearchIfNeeded() }
     }
 
     // MARK: - Session sidebar
@@ -348,17 +356,29 @@ struct AssistantView: View {
                             messageRow(message).id(message.id)
                         }
                         if agent.isRunning { runningIndicator }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.conversationEndID)
                     }
                     .padding(AuralisSpacing.large)
                     // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
                     .onTapGesture { assistantInputFocused = false }
                 }
+                .reportsBottomDockScroll()
                 // 向下拖动聊天列表时交互式收起键盘。
                 .scrollDismissesKeyboard(.immediately)
+                // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
+                .onAppear { scrollConversationToEnd(proxy, animated: false) }
+                .onChange(of: agent.activeSessionID) { _, _ in
+                    scrollConversationToEnd(proxy, animated: false)
+                }
                 .onChange(of: agent.messages.count) { _, _ in
-                    if let last = agent.messages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
+                    scrollConversationToEnd(proxy, animated: true)
+                }
+                // 流式文字与工具进度通常替换同一条消息，消息数量不变；监听发布事件
+                // 并延后一帧，等新高度完成布局后再贴到底部。
+                .onReceive(agent.objectWillChange) { _ in
+                    scrollConversationToEnd(proxy, animated: false)
                 }
             }
         }
@@ -370,7 +390,10 @@ struct AssistantView: View {
         // 键盘关闭时输入框底边停在距安全区底 8pt 处（即主菜单栏上方 8pt）；
         // 键盘打开时输入框底边停在距键盘顶 8pt 处。输入框宽度/高度/圆角始终不变。
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            DockAssistantInputBar(model: model, theme: theme, focus: $assistantInputFocused)
+            DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: $assistantInputFocused)
+                // 收拢态时输入栏进入底部导航栏的中间槽位；左右保留给首页和 AI 入口。
+                // 展开态维持完整宽度，位于四个一级入口上方。
+                .padding(.horizontal, 64 * bottomDockScroll.collapseProgress)
                 // 键盘关闭时：主菜单栏是独立的底部 overlay（忽略键盘），会覆盖在屏幕最底，
                 // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
                 // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
@@ -379,7 +402,7 @@ struct AssistantView: View {
                     .bottom,
                     assistantInputFocused
                         ? AuralisSpacing.small
-                        : (dockSpacing + bottomBarHeight + dockBottomPadding)
+                        : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - bottomDockScroll.collapseProgress)
                 )
         }
         #else
@@ -388,6 +411,18 @@ struct AssistantView: View {
             inputBar
         }
         #endif
+    }
+
+    private func scrollConversationToEnd(_ proxy: ScrollViewProxy, animated: Bool) {
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(Self.conversationEndID, anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo(Self.conversationEndID, anchor: .bottom)
+            }
+        }
     }
 
     private var header: some View {
@@ -412,14 +447,22 @@ struct AssistantView: View {
                 .buttonStyle(HapticBorderedButtonStyle())
                 .controlSize(.small)
             }
-            // 新建会话按钮：紧挨「展开会话管理」左侧。
-            Button {
+            // 新建会话按钮：与会话列表使用同一固定图标容器，避免 SF Symbol
+            // 的不同字形边界造成两枚按钮视觉上高低不齐。
+            assistantHeaderIconButton(
+                symbol: "square.and.pencil",
+                accessibilityLabel: "新建会话",
+                help: "新建会话"
+            ) {
                 Task { await agent.newSession() }
-            } label: {
-                Image(systemName: "square.and.pencil")
             }
-            .buttonStyle(HapticPlainButtonStyle())
-            .help("新建会话")
+            assistantHeaderIconButton(
+                symbol: "magnifyingglass",
+                accessibilityLabel: "搜索音乐库",
+                help: "搜索音乐库（兜底）"
+            ) {
+                showsLibrarySearch = true
+            }
             sessionListButton
         }
         .padding(AuralisSpacing.large)
@@ -427,32 +470,54 @@ struct AssistantView: View {
     }
 
     private var sessionListButton: some View {
-        Button {
+        assistantHeaderIconButton(
+            symbol: "sidebar.leading",
+            accessibilityLabel: "会话列表",
+            help: "会话列表"
+        ) {
             if horizontalSizeClass == .compact {
                 showsSessionListSheet = true
             } else {
                 withAnimation { showsSessionList.toggle() }
             }
-        } label: {
-            Image(systemName: "sidebar.leading")
         }
-        .buttonStyle(HapticPlainButtonStyle())
-        .accessibilityLabel("会话列表")
     }
 
+    private func presentAssistantSearchIfNeeded() {
+        guard model.shouldPresentAssistantSearch else { return }
+        model.shouldPresentAssistantSearch = false
+        showsLibrarySearch = true
+    }
+
+    /// 统一助手标题栏图标按钮的字形框和点击框。SF Symbol 的实际绘制边界不同，
+    /// 若直接并排放置，虽然 HStack 以中心对齐，墨迹中心仍会显得上下偏移。
+    private func assistantHeaderIconButton(
+        symbol: String,
+        accessibilityLabel: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 19, weight: .medium))
+                // 先统一符号的光学画布，再统一 44pt 点击区域。
+                .frame(width: 24, height: 24, alignment: .center)
+                .frame(width: 44, height: 44, alignment: .center)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HapticPlainButtonStyle())
+        .accessibilityLabel(accessibilityLabel)
+        .help(help)
+    }
+
+    @ViewBuilder
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
-            Text("试试这样说").font(.headline)
-                .foregroundStyle(theme.colorTokens.primaryText.color)
-            FlowChips(
-                titles: ["播放周杰伦", "找几首适合深夜的歌", "我的收藏有哪些", "把当前这首加入队列", "推荐和现在这首相似的"],
-                theme: theme
-            ) { model.assistantDraft = $0 }
-            if !model.catalog.isConnected {
-                Label("尚未连接服务器，本地目录为空", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.warning.color)
-            }
+        // 空会话不再展示常驻示例词，避免在用户尚未输入前占用首屏空间。
+        // 仅在确实无法读取音乐库时保留必要的状态说明。
+        if !model.catalog.isConnected {
+            Label("尚未连接服务器，本地目录为空", systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(theme.colorTokens.warning.color)
         }
     }
 
@@ -484,18 +549,41 @@ struct AssistantView: View {
     private func messageBody(_ item: AgentMessage, isUser: Bool) -> some View {
         switch item {
         case let .text(text):
-            Text(text)
-                .padding(AuralisSpacing.medium)
-                .foregroundStyle(theme.colorTokens.primaryText.color)
-                .background(isUser ? theme.colorTokens.accent.color.opacity(0.22) : theme.colorTokens.elevated.color)
-                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
-                .frame(maxWidth: 560, alignment: isUser ? .trailing : .leading)
-                .textSelection(.enabled)
+            VStack(alignment: isUser ? .trailing : .leading, spacing: AuralisSpacing.small) {
+                ChatMarkdownContent(source: text)
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                    .textSelection(.enabled)
+
+                // 不依赖系统的分享/拖放路径：复制时只向剪贴板写入 String，
+                // 粘贴到 Mac 或其他 App 时就是文本而不是附件文件。
+                if !isUser {
+                    Button {
+                        AssistantTextPasteboard.copy(text)
+                    } label: {
+                        Label("复制", systemImage: "doc.on.doc")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .accessibilityLabel("复制 AI 回复文本")
+                }
+            }
+            .padding(AuralisSpacing.medium)
+            .background(isUser ? theme.colorTokens.accent.color.opacity(0.22) : theme.colorTokens.elevated.color)
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .frame(maxWidth: 560, alignment: isUser ? .trailing : .leading)
+            .contextMenu {
+                Button {
+                    AssistantTextPasteboard.copy(text)
+                } label: {
+                    Label("复制文本", systemImage: "doc.on.doc")
+                }
+            }
 
         // 流式输出中的 assistant 文本：增量追加，末尾带呼吸光标示意「正在生成」。
         case let .streaming(text):
-            HStack(alignment: .lastTextBaseline, spacing: 2) {
-                Text(text.isEmpty ? " " : text)
+            HStack(alignment: .bottom, spacing: 2) {
+                ChatMarkdownContent(source: text.isEmpty ? " " : text)
                     .foregroundStyle(theme.colorTokens.primaryText.color)
                 Text("▌")
                     .foregroundStyle(theme.colorTokens.accent.color)
@@ -598,6 +686,116 @@ struct AssistantView: View {
         case .reversible: "可撤销操作"
         case .destructive: "破坏性操作（不可自动恢复）"
         }
+    }
+}
+
+/// 助手回答一律作为纯文本复制，避免 `ShareLink` / 文本拖放将长消息导出为文件。
+private enum AssistantTextPasteboard {
+    static func copy(_ text: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+}
+
+// MARK: - Markdown message content
+
+/// 以有限、稳定的 Markdown 子集渲染聊天内容。
+/// 标题、列表和段落分别布局，避免把长篇回答挤成一整块普通文字。
+private struct ChatMarkdownContent: View {
+    private enum Block {
+        case heading(level: Int, text: String)
+        case bullet(marker: String, text: String)
+        case paragraph(String)
+    }
+
+    let source: String
+
+    var body: some View {
+        let blocks = Self.parse(source)
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(blocks.indices, id: \.self) { index in
+                blockView(blocks[index])
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: Block) -> some View {
+        switch block {
+        case let .heading(level, text):
+            richText(text)
+                .font(level == 1 ? .title3.weight(.bold) : .headline.weight(.semibold))
+                .padding(.top, level == 1 ? 2 : 0)
+        case let .bullet(marker, text):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(marker)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 15, alignment: .trailing)
+                richText(text)
+                    .lineSpacing(2)
+            }
+        case let .paragraph(text):
+            richText(text)
+                .lineSpacing(3)
+        }
+    }
+
+    /// 保留行内强调、链接和代码；流式时遇到不完整 Markdown 则显示原文。
+    private func richText(_ source: String) -> Text {
+        guard let attributed = try? AttributedString(
+            markdown: source,
+            options: .init(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)
+        ) else {
+            return Text(source)
+        }
+        return Text(attributed)
+    }
+
+    private static func parse(_ source: String) -> [Block] {
+        var blocks: [Block] = []
+        var paragraphLines: [String] = []
+
+        func flushParagraph() {
+            let text = paragraphLines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { blocks.append(.paragraph(text)) }
+            paragraphLines.removeAll()
+        }
+
+        for rawLine in source.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else {
+                flushParagraph()
+                continue
+            }
+
+            if line.hasPrefix("### ") {
+                flushParagraph()
+                blocks.append(.heading(level: 2, text: String(line.dropFirst(4))))
+            } else if line.hasPrefix("## ") {
+                flushParagraph()
+                blocks.append(.heading(level: 2, text: String(line.dropFirst(3))))
+            } else if line.hasPrefix("# ") {
+                flushParagraph()
+                blocks.append(.heading(level: 1, text: String(line.dropFirst(2))))
+            } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                flushParagraph()
+                blocks.append(.bullet(marker: "•", text: String(line.dropFirst(2))))
+            } else if let range = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+                flushParagraph()
+                let marker = String(line[..<range.upperBound]).trimmingCharacters(in: .whitespaces)
+                blocks.append(.bullet(marker: marker, text: String(line[range.upperBound...])))
+            } else {
+                paragraphLines.append(line)
+            }
+        }
+        flushParagraph()
+        return blocks.isEmpty ? [.paragraph(source)] : blocks
     }
 }
 

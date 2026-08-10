@@ -7,13 +7,40 @@ import SecurityKit
 
 public struct ServerConnectionInput: Sendable {
     public var displayName: String
+    /// 内网入口，连接时优先选用。
     public var baseURL: URL
+    /// 可选的外网入口；仅在内网端点确认不可达时降级使用。
+    public var externalBaseURL: URL?
     public var username: String
     public var password: String
 
-    public init(displayName: String, baseURL: URL, username: String, password: String) {
+    public init(
+        displayName: String,
+        baseURL: URL,
+        externalBaseURL: URL? = nil,
+        username: String,
+        password: String
+    ) {
         self.displayName = displayName
         self.baseURL = baseURL
+        self.externalBaseURL = externalBaseURL
+        self.username = username
+        self.password = password
+    }
+}
+
+/// 已保存服务器的本机连接配置编辑值；密码留空时继续使用 Keychain 中现有凭据。
+public struct ServerConfigurationUpdate: Sendable {
+    public var displayName: String
+    public var baseURL: URL
+    public var externalBaseURL: URL?
+    public var username: String
+    public var password: String?
+
+    public init(displayName: String, baseURL: URL, externalBaseURL: URL?, username: String, password: String?) {
+        self.displayName = displayName
+        self.baseURL = baseURL
+        self.externalBaseURL = externalBaseURL
         self.username = username
         self.password = password
     }
@@ -72,13 +99,26 @@ public struct ServerConnectionResult: Sendable {
 /// 收藏是「服务器权威」回流：以 getStarred2 的完整集合为准，覆盖本地展示。
 public struct AuxiliaryLibraryData: Sendable {
     public let playlists: [Playlist]
+    /// `true` 仅表示本轮 getPlaylists 成功返回完整集合；失败回退缓存时不能把
+    /// 本地尚未确认的删除当作“服务器重新创建”。
+    public let playlistsAreAuthoritative: Bool
     public let genres: [Genre]
     public let favoriteTrackIDs: [String]
+    /// `true` 仅表示本轮 getStarred2 成功返回完整集合；失败回退缓存时绝不能清空本地收藏。
+    public let favoriteTrackIDsAreAuthoritative: Bool
 
-    public init(playlists: [Playlist], genres: [Genre], favoriteTrackIDs: [String] = []) {
+    public init(
+        playlists: [Playlist],
+        playlistsAreAuthoritative: Bool = false,
+        genres: [Genre],
+        favoriteTrackIDs: [String] = [],
+        favoriteTrackIDsAreAuthoritative: Bool = false
+    ) {
         self.playlists = playlists
+        self.playlistsAreAuthoritative = playlistsAreAuthoritative
         self.genres = genres
         self.favoriteTrackIDs = favoriteTrackIDs
+        self.favoriteTrackIDsAreAuthoritative = favoriteTrackIDsAreAuthoritative
     }
 }
 
@@ -169,6 +209,10 @@ public protocol ServerConnecting: Sendable {
     func forgetServer(serverID: ServerID) async
     /// 修改服务器显示名称（持久化，不影响凭据与连接）。
     func updateServerDisplayName(serverID: ServerID, displayName: String) async -> Bool
+    /// 更新已保存服务器的外网降级地址；不改变内网地址、账号 ID 或凭据。
+    func updateServerExternalBaseURL(serverID: ServerID, externalBaseURL: URL?) async -> Bool
+    /// 编辑已保存连接而不新建服务器；成功返回更新后的本地账户。
+    func updateServerConfiguration(serverID: ServerID, update: ServerConfigurationUpdate) async -> ServerAccount?
     /// 备份恢复：把服务器账号与登录凭据写回本地持久化（不联网、不触发资料同步）。
     /// `secret` 为解密后的登录密码 / Token，仅在备份恢复流程中传入。
     func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async
@@ -229,6 +273,8 @@ public extension ServerConnecting {
     func disconnect() async {}
     func forgetServer(serverID: ServerID) async {}
     func updateServerDisplayName(serverID: ServerID, displayName: String) async -> Bool { false }
+    func updateServerExternalBaseURL(serverID: ServerID, externalBaseURL: URL?) async -> Bool { false }
+    func updateServerConfiguration(serverID: ServerID, update: ServerConfigurationUpdate) async -> ServerAccount? { nil }
 }
 
 public enum ServerConnectionStage: String, CaseIterable, Equatable, Sendable {

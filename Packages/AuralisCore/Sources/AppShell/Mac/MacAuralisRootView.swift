@@ -96,7 +96,7 @@ enum MacLibraryScope: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
-/// macOS 主窗口：顶部三区工具栏 + 可收起侧边栏 + 主内容 + 按需检查器。
+/// macOS 主窗口：资料库侧边栏、主内容、按需检查器，以及固定在底部的桌面播放控制条。
 /// 设置通过独立设置窗口打开；检查器只通过工具栏按钮或选中/播放上下文显示。
 struct MacAuralisRootView: View {
     @ObservedObject var model: AuralisAppModel
@@ -107,29 +107,53 @@ struct MacAuralisRootView: View {
     @State private var inspectorTab: MacInspector.InspectorTab = .queue
     @State private var selectedTracks: Set<TrackID> = []
     @State private var sidebarSearch = ""
-    @State private var showSidebar = true
+    @State private var isSidebarSearchPresented = false
 
     private var theme: BuiltInTheme { themeStore.current }
-    private var colors: ThemeColors { theme.colorTokens }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 320)
         } content: {
-            content
+            ZStack(alignment: .topTrailing) {
+                content
+                    .padding(.top, isShowingAlbumDetail ? 0 : 42)
+                if !isShowingAlbumDetail {
+                    contentActionBar
+                }
+            }
                 .navigationTitle(selection?.title ?? "澜音")
                 .navigationSplitViewColumnWidth(min: 560, ideal: 800)
         } detail: {
-            if showInspector, inspectorContextAvailable {
+            if showInspector {
                 MacInspector(model: model, theme: theme, initialTab: inspectorTab, onTabChange: { inspectorTab = $0 })
                     .navigationSplitViewColumnWidth(min: 300, ideal: 330, max: 380)
             }
         }
-        // 移除系统自动 sidebar toggle，统一使用我们自己的一个按钮（避免两个重复按钮）。
-        .toolbar(removing: .sidebarToggle)
-        .toolbar { toolbarContent }
+        // 这个 macOS Beta 会强制为 NavigationSplitView 注入一枚纵向 sidebarToggle，
+        // 即使使用 `.toolbar(removing:)` 也无法移除。隐藏系统窗口工具栏，改由内容区
+        // 自己的无边框操作条承接控制，避免出现不对称的标题栏胶囊按钮。
+        .toolbarVisibility(.hidden, for: .windowToolbar)
+        // 桌面播放器固定在窗口底部，避免把歌曲信息、进度与播放键挤进狭窄的标题栏。
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            MacDesktopPlayerBar(model: model, theme: theme)
+        }
+        // Mac 端此前缺少这些 presentation，状态会被写入却没有界面承接。
+        .sheet(isPresented: $model.isNowPlayingPresented) {
+            NowPlayingView(model: model, theme: theme)
+                .frame(minWidth: 640, minHeight: 680)
+        }
+        .sheet(isPresented: $model.shouldPresentServerSetup) {
+            ServerConnectionSheet(model: model, theme: theme)
+                .frame(minWidth: 560, minHeight: 500)
+        }
+        .sheet(item: browseDestinationSheetBinding) { destination in
+            BrowseDetailSheet(destination: destination, model: model, theme: theme)
+                .frame(minWidth: 640, minHeight: 560)
+        }
         .onChange(of: selection) { _, newValue in
+            if newValue != nil { model.browseDestination = nil }
             if newValue == .server { showInspector = false }
             if newValue == .search { sidebarSearch = model.macSearchQuery }
         }
@@ -141,10 +165,13 @@ struct MacAuralisRootView: View {
         }
         .onChange(of: sidebarSearch) { _, newValue in
             model.macSearchQuery = newValue
-            if selection == .search { /* 结果页实时刷新 */ }
+            if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                selection = .search
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: MacCommandNotification.search)) { _ in
             selection = .search
+            isSidebarSearchPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: MacCommandNotification.revealNowPlaying)) { _ in
             model.isNowPlayingPresented = true
@@ -171,51 +198,56 @@ struct MacAuralisRootView: View {
         }
     }
 
-    private var inspectorContextAvailable: Bool {
-        selection != .server
-            && (model.currentTrack.id.rawValue != "placeholder" || !selectedTracks.isEmpty)
+    /// 专辑在 Mac 主内容区内导航，保留与 Apple Music 相同的「网格 → 专辑详情」层级；
+    /// 其余临时浏览目标仍采用已有的通用弹窗，避免影响 iOS 路由。
+    private var browseDestinationSheetBinding: Binding<BrowseDestination?> {
+        Binding(
+            get: {
+                guard !model.shouldPresentServerSetup, let destination = model.browseDestination else { return nil }
+                if case .album = destination { return nil }
+                return destination
+            },
+            set: { model.browseDestination = $0 }
+        )
+    }
+
+    private var isShowingAlbumDetail: Bool {
+        if case .album = model.browseDestination { return true }
+        return false
     }
 
     // MARK: - 侧边栏
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            // 紧凑侧边栏搜索框（Apple Music 风格），结果进入搜索页。
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                TextField("搜索", text: $sidebarSearch)
-                    .textFieldStyle(.plain)
-                    .onSubmit { selection = .search }
+        List(selection: $selection) {
+            Section("浏览") {
+                sidebarItem(.home)
+                sidebarItem(.recentlyPlayed)
+                sidebarItem(.recentlyAdded)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(theme.colorTokens.surface.color.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .padding(.horizontal, 10)
-            .padding(.top, 10)
-
-            List(selection: $selection) {
-                Section("资料库") {
-                    MacSidebarRow(item: .home, selection: $selection, theme: theme)
-                    MacSidebarRow(item: .recentlyPlayed, selection: $selection, theme: theme)
-                    MacSidebarRow(item: .recentlyAdded, selection: $selection, theme: theme)
-                    ForEach(MacLibraryScope.allCases) { scope in
-                        MacSidebarRow(item: .library(scope), selection: $selection, theme: theme)
-                    }
+            Section("资料库") {
+                ForEach(MacLibraryScope.allCases) { scope in
+                    sidebarItem(.library(scope))
                 }
-                Section("收藏与歌单") {
-                    MacSidebarRow(item: .favorites, selection: $selection, theme: theme)
-                    MacSidebarRow(item: .playlists, selection: $selection, theme: theme)
-                }
-                Section("工具") {
-                    MacSidebarRow(item: .assistant, selection: $selection, theme: theme)
-                    MacSidebarRow(item: .downloads, selection: $selection, theme: theme)
-                }
+                sidebarItem(.favorites)
+                sidebarItem(.playlists)
             }
-            .listStyle(.sidebar)
-
-            // 底部紧凑服务器状态入口（点击进入服务器管理）。
+            Section("实用工具") {
+                sidebarItem(.downloads)
+                sidebarItem(.assistant)
+            }
+        }
+        .listStyle(.sidebar)
+        .searchable(
+            text: $sidebarSearch,
+            isPresented: $isSidebarSearchPresented,
+            placement: .sidebar,
+            prompt: "搜索"
+        )
+        .onSubmit(of: .text) {
+            selection = .search
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             MacServerStatusEntry(model: model, theme: theme) {
                 selection = .server
                 showInspector = false
@@ -223,93 +255,73 @@ struct MacAuralisRootView: View {
         }
     }
 
+    @ViewBuilder
+    private func sidebarItem(_ item: MacNavItem) -> some View {
+        Label(item.title, systemImage: item.symbol)
+            .tag(item)
+    }
+
     // MARK: - 内容路由
 
     @ViewBuilder
     private var content: some View {
-        switch selection {
-        case .home:
-            MacHomePage(model: model, theme: theme, selection: $selectedTracks)
-        case .recentlyPlayed:
-            MacTrackListPage(title: "最近播放", tracks: model.recentlyPlayedTracks,
-                             selection: $selectedTracks, model: model, theme: theme)
-        case .recentlyAdded:
-            MacTrackListPage(title: "最近添加", tracks: Array(model.recentlyAddedTracks.prefix(300)),
-                             selection: $selectedTracks, model: model, theme: theme)
-        case let .library(scope):
-            MacLibraryPage(scope: scope, model: model, theme: theme, selection: $selectedTracks)
-        case .favorites:
-            MacTrackListPage(title: "收藏歌曲", tracks: model.favoriteTracks,
-                             selection: $selectedTracks, model: model, theme: theme)
-        case .playlists:
-            MacPlaylistPage(model: model, theme: theme)
-        case .search:
-            MacSearchPage(model: model, theme: theme, query: sidebarSearch, selection: $selectedTracks)
-        case .assistant:
-            AssistantView(model: model, theme: theme)
-        case .downloads:
-            MacDownloadsPage(model: model, theme: theme)
-        case .server:
-            MacServerPage(model: model, theme: theme)
-        case nil:
-            ContentUnavailableView("选择一个项目", systemImage: "music.note.list",
-                                   description: Text("从左侧选择资料库或工具开始"))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if case let .album(album) = model.browseDestination {
+            MacAlbumDetailPage(album: album, model: model, theme: theme) {
+                model.browseDestination = nil
+            }
+        } else {
+            switch selection {
+            case .home:
+                MacHomePage(model: model, theme: theme, selection: $selectedTracks) {
+                    selection = .server
+                    showInspector = false
+                }
+            case .recentlyPlayed:
+                MacTrackListPage(title: "最近播放", tracks: model.recentlyPlayedTracks,
+                                 selection: $selectedTracks, model: model, theme: theme)
+            case .recentlyAdded:
+                MacTrackListPage(title: "最近添加", tracks: Array(model.recentlyAddedTracks.prefix(300)),
+                                 selection: $selectedTracks, model: model, theme: theme)
+            case let .library(scope):
+                MacLibraryPage(scope: scope, model: model, theme: theme, selection: $selectedTracks)
+            case .favorites:
+                MacTrackListPage(title: "收藏歌曲", tracks: model.favoriteTracks,
+                                 selection: $selectedTracks, model: model, theme: theme)
+            case .playlists:
+                MacPlaylistPage(model: model, theme: theme)
+            case .search:
+                MacSearchPage(model: model, theme: theme, query: sidebarSearch, selection: $selectedTracks)
+            case .assistant:
+                AssistantView(model: model, theme: theme)
+            case .downloads:
+                MacDownloadsPage(model: model, theme: theme)
+            case .server:
+                MacServerPage(model: model, theme: theme)
+            case nil:
+                ContentUnavailableView("选择一个项目", systemImage: "music.note.list",
+                                       description: Text("从左侧选择资料库或工具开始"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
-    // MARK: - 顶部工具栏（三区）
+    // MARK: - 内容区操作条
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        // 左区：侧边栏切换（唯一一个）+ 返回 + 前进
-        ToolbarItemGroup(placement: .navigation) {
-            Button {
-                withAnimation { columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly }
-            } label: {
-                Image(systemName: "sidebar.left")
+    private var contentActionBar: some View {
+        HStack(spacing: 2) {
+            MacToolbarIconButton(symbol: "sidebar.left", help: "显示或隐藏侧边栏") {
+                withAnimation {
+                    columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+                }
             }
-            .help("显示或隐藏侧边栏（Command-Option-S）")
-            Button {
-                selection = .home
-            } label: {
-                Image(systemName: "chevron.left")
-            }
-            .help("返回首页")
-            Button {
-                selection = .home
-            } label: {
-                Image(systemName: "chevron.right")
-            }
-            .help("前进")
-        }
-        // 中区：完整播放器控制区（视觉中心）
-        ToolbarItem(placement: .principal) {
-            MacToolbarPlayback(model: model, theme: theme)
-        }
-        // 右区：音量 / 搜索 / 歌词 / 队列 / 更多
-        ToolbarItemGroup(placement: .primaryAction) {
-            MacVolumeControl(model: model, theme: theme)
-            Button {
-                selection = .search
-            } label: {
-                Image(systemName: "magnifyingglass")
-            }
-            .help("搜索（Command-F）")
-            Button {
+            MacToolbarIconButton(symbol: "text.quote", help: "歌词") {
                 inspectorTab = .lyrics
                 showInspector = true
-            } label: {
-                Image(systemName: "text.quote")
             }
-            .help("歌词")
-            Button {
+            MacToolbarIconButton(symbol: "list.bullet", help: "播放队列") {
                 inspectorTab = .queue
                 showInspector = true
-            } label: {
-                Image(systemName: "list.bullet")
             }
-            .help("播放队列")
             Menu {
                 Button("显示或隐藏检查器") { showInspector.toggle() }
                 Button("音频输出…") { openAudioOutput() }
@@ -317,10 +329,18 @@ struct MacAuralisRootView: View {
                 Button("设置…") { openSettings() }
                     .keyboardShortcut(",", modifiers: .command)
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .tint(.primary)
             .help("更多")
         }
+        .padding(.top, 7)
+        .padding(.trailing, 12)
     }
 
     private func openSettings() {
@@ -336,44 +356,6 @@ struct MacAuralisRootView: View {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.sound") {
             NSWorkspace.shared.open(url)
         }
-    }
-}
-
-/// 侧边栏行：悬停高亮 + 选中强调色（图标弱化，突出文字层级）。
-private struct MacSidebarRow: View {
-    let item: MacNavItem
-    @Binding var selection: MacNavItem?
-    let theme: BuiltInTheme
-    @State private var hovering = false
-
-    var body: some View {
-        Button {
-            selection = item
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: item.symbol)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(
-                        selection == item
-                        ? theme.colorTokens.accent.color
-                        : theme.colorTokens.secondaryText.color
-                    )
-                    .frame(width: 18)
-                Text(item.title)
-                    .font(.body)
-                    .foregroundStyle(theme.colorTokens.primaryText.color)
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.vertical, 3)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(
-            selection == item
-            ? theme.colorTokens.accent.color.opacity(0.16)
-            : (hovering ? theme.colorTokens.surface.color.opacity(0.5) : Color.clear)
-        )
-        .onHover { hovering = $0 }
     }
 }
 
@@ -409,13 +391,14 @@ private struct MacServerStatusEntry: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
             .background(hovering ? theme.colorTokens.surface.color.opacity(0.5) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .padding(8)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .onHover { hovering = $0 }
     }
 
@@ -427,6 +410,144 @@ private struct MacServerStatusEntry: View {
             ([type, version].compactMap { $0 }.joined(separator: " · ") + " · \(count) 首")
         case .failed: "连接失败"
         }
+    }
+}
+
+/// 固定在窗口底部的桌面播放条。
+/// 让播放信息、进度和核心控制拥有稳定的水平空间，而不是与窗口工具栏的系统按钮争抢位置。
+private struct MacDesktopPlayerBar: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+
+    private var hasTrack: Bool { model.currentTrack.id.rawValue != "placeholder" }
+    private var duration: TimeInterval { max(model.currentTrack.duration, 1) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Slider(
+                value: Binding(
+                    get: { model.playbackPosition },
+                    set: { model.seek(toProgress: $0 / duration) }
+                ),
+                in: 0...duration
+            )
+            .controlSize(.mini)
+            .tint(theme.colorTokens.accent.color)
+            .disabled(!hasTrack)
+            .padding(.horizontal, 14)
+            .padding(.top, 5)
+
+            HStack(spacing: AuralisSpacing.medium) {
+                Button {
+                    if hasTrack { model.isNowPlayingPresented = true }
+                } label: {
+                    HStack(spacing: 10) {
+                        ArtworkView(
+                            title: model.currentTrack.albumTitle,
+                            artworkKey: model.currentTrack.artworkKey,
+                            colors: theme.colorTokens,
+                            size: 44,
+                            cornerRadius: 8
+                        )
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(hasTrack ? model.currentTrack.title : "尚未选择歌曲")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(hasTrack ? model.currentTrack.artistName : "从资料库开始播放")
+                                .font(.caption)
+                                .lineLimit(1)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        }
+                        .frame(maxWidth: 260, alignment: .leading)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasTrack)
+                .help("打开正在播放")
+
+                Spacer(minLength: 20)
+
+                HStack(spacing: 12) {
+                    Button { if hasTrack { model.previous() } } label: {
+                        Image(systemName: "backward.fill")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!hasTrack || !model.hasPrevious)
+                    .help("上一首（Command-Left）")
+
+                    Button { if hasTrack { model.togglePlayback() } } label: {
+                        Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(theme.colorTokens.accent.color, in: Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!hasTrack)
+                    .help("播放 / 暂停（Space）")
+
+                    Button { if hasTrack { model.next() } } label: {
+                        Image(systemName: "forward.fill")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!hasTrack || !model.hasNext)
+                    .help("下一首（Command-Right）")
+                }
+
+                Spacer(minLength: 20)
+
+                HStack(spacing: 14) {
+                    MacVolumeControl(model: model, theme: theme)
+                    HStack(spacing: 8) {
+                        Text(Self.timeText(model.playbackPosition))
+                        Text("/")
+                            .foregroundStyle(theme.colorTokens.secondaryText.color.opacity(0.6))
+                        Text(Self.timeText(model.currentTrack.duration))
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .frame(minWidth: 92, alignment: .trailing)
+                }
+            }
+            .padding(.horizontal, AuralisSpacing.large)
+            .padding(.vertical, 8)
+        }
+        .frame(height: 82)
+        .background(.bar)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(theme.colorTokens.separator.color.opacity(0.45))
+                .frame(height: 0.5)
+        }
+    }
+
+    private static func timeText(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// 工具栏中的图标操作固定为同一触控尺寸；没有默认边框，悬停时才给出轻微背景。
+private struct MacToolbarIconButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .background(isHovering ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(help)
     }
 }
 
@@ -562,7 +683,7 @@ private struct MacVolumeControl: View {
                 get: { model.volume },
                 set: { model.setVolume($0) }
             ), in: 0...1)
-            .frame(width: 80)
+            .frame(width: 72)
             .controlSize(.mini)
         }
         .help("音量")

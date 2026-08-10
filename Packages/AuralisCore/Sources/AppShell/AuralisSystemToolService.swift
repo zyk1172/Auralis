@@ -53,7 +53,9 @@ public final class AuralisSystemToolService: AgentSystemService {
         case "音乐库", "library":
             model.selectedSection = .library
         case "搜索", "search":
-            model.selectedSection = .search
+            // 搜索已融合到 AI 助手：仍保留本地/服务器搜索能力，但不再跳到独立主页面。
+            model.selectedSection = .assistant
+            model.shouldPresentAssistantSearch = true
         case "ai助手", "assistant":
             model.selectedSection = .assistant
         case "设置", "settings":
@@ -270,6 +272,14 @@ public final class AuralisSystemToolService: AgentSystemService {
         "高能量": ["电子", "摇滚", "舞曲"],
     ]
 
+    /// 用户口语与 V2 有限标签空间的映射；找不到时仍走原有流派回退。
+    private static let recommendationIndexMoodAliases: [String: String] = [
+        "伤感": "忧郁",
+        "安静": "平静",
+        "放松": "平静",
+        "高能量": "激昂",
+    ]
+
     public func recommendByMood(_ mood: String, limit: Int) async -> AgentRecommendationResult {
         let genres = Self.moodGenres[mood] ?? [mood]
         let safeLimit = min(max(limit, 1), 50)
@@ -278,15 +288,35 @@ public final class AuralisSystemToolService: AgentSystemService {
             maximumTracksPerArtist: 2,
             limit: safeLimit * 2
         )
-        var ranked = HybridRecommendationEngine.recommend(tracks: model.catalog.tracks, query: query)
+        let indexedCandidates: [Track]
+        let indexTag = Self.recommendationIndexMoodAliases[mood] ?? mood
+        if let serverID = model.catalog.activeAccount?.id,
+           let ids = try? await model.catalogCoordinator.store.recommendationIndexV2TrackIDs(serverID: serverID, query: indexTag) {
+            let wanted = Set(ids)
+            indexedCandidates = model.catalog.tracks.filter {
+                wanted.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))
+            }
+        } else {
+            indexedCandidates = []
+        }
+        // 索引已覆盖该心情/场景时优先使用；未构建或没有命中时保留旧流派回退。
+        var ranked = indexedCandidates.isEmpty
+            ? HybridRecommendationEngine.recommend(tracks: model.catalog.tracks, query: query)
+            : indexedCandidates.sorted { lhs, rhs in
+                let artist = lhs.artistName.localizedStandardCompare(rhs.artistName)
+                if artist != .orderedSame { return artist == .orderedAscending }
+                let title = lhs.title.localizedStandardCompare(rhs.title)
+                if title != .orderedSame { return title == .orderedAscending }
+                return lhs.id.rawValue < rhs.id.rawValue
+            }
         // 排除最近播放的曲目，避免刚听完又推荐。
         let recentIDs = Set(model.recentlyPlayedTracks.prefix(20).map(\.id))
         ranked.removeAll { recentIDs.contains($0.id) }
         if ranked.isEmpty {
-            // 流派未命中时回退：收藏优先，其次随机。
-            let favorites = model.favoriteTracks.shuffled()
-            ranked = favorites.isEmpty ? model.catalog.tracks.shuffled() : favorites
+            // 无分类命中时从整库中立抽样，不因收藏、评分或播放历史偏置。
+            ranked = model.catalog.tracks.shuffled()
         }
+        ranked = TrackQuality.deduplicatedPreferringQuality(ranked)
         let picks = Array(ranked.prefix(safeLimit))
         let cards = picks.map { track -> TrackCard in
             TrackCard(
@@ -324,13 +354,15 @@ public final class AuralisSystemToolService: AgentSystemService {
             return true
         }
 
-        // 排序：收藏优先，其次评分，再随机。
+        // 只依据用户明确给出的筛选条件排序；收藏仅在 favoritesOnly 时作为过滤条件。
         candidates.sort { lhs, rhs in
-            let ls = (lhs.isFavorite ? 2 : 0) + Double(lhs.rating ?? 0) * 0.25
-            let rs = (rhs.isFavorite ? 2 : 0) + Double(rhs.rating ?? 0) * 0.25
-            if ls != rs { return ls > rs }
-            return lhs.title < rhs.title
+            let artist = lhs.artistName.localizedStandardCompare(rhs.artistName)
+            if artist != .orderedSame { return artist == .orderedAscending }
+            let title = lhs.title.localizedStandardCompare(rhs.title)
+            if title != .orderedSame { return title == .orderedAscending }
+            return lhs.id.rawValue < rhs.id.rawValue
         }
+        candidates = TrackQuality.deduplicatedPreferringQuality(candidates)
         if let totalMinutes = constraints.maxTotalMinutes {
             var total: Double = 0
             var picked: [Track] = []
@@ -711,7 +743,11 @@ public final class AuralisSystemToolService: AgentSystemService {
         if let value = try? await KeychainCredentialVault().retrieve(id: MoviePilotSettings.tokenCredentialID) {
             token = value
         }
-        return MoviePilotConnection(baseURL: url, token: token)
+        return MoviePilotConnection(
+            baseURL: url,
+            externalBaseURL: settings.normalizedExternalURL,
+            token: token
+        )
     }
 
     private static func musicCandidate(_ item: MoviePilotCandidate) -> AgentMusicCandidate {

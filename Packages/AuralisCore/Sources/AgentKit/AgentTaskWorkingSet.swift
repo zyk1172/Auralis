@@ -46,6 +46,10 @@ public struct AgentTaskWorkingSet: Sendable {
     public private(set) var lastTraces: [AgentToolTrace] = []
     /// 是否已要求模型停止搜索。
     public private(set) var stopSearching = false
+    /// 已成功执行的修改型操作：同一语义与参数在一个任务内只能执行一次。
+    private var successfulSideEffects: [String: String] = [:]
+    /// 本任务中已经完成的互斥操作。当前只有“替换队列”是互斥的；追加歌曲仍可多次调用。
+    private var completedExclusiveEffects: [String: String] = [:]
 
     /// 缓存条数上限（LRU 语义：超出时丢弃最旧）。
     public static let maxCacheSize = 60
@@ -91,6 +95,41 @@ public struct AgentTaskWorkingSet: Sendable {
 
     public static func isCacheable(_ tool: String) -> Bool { cacheableTools.contains(tool) }
     public static func isSearchTool(_ tool: String) -> Bool { searchTools.contains(tool) }
+
+    /// 旧工具名和 V2 工具名可能同时被模型看到；先归一成同一副作用语义，
+    /// 避免 `replaceQueue` 后又以 `queue_replace` 覆盖队列。
+    private static func canonicalSideEffectTool(_ tool: String) -> String {
+        switch tool {
+        case "replaceQueue", "queue_replace": "queue_replace"
+        case "appendToQueue", "queue_append": "queue_append"
+        case "playNext", "queue_play_next": "queue_play_next"
+        case "playTrack", "playback_play_song": "playback_play_song"
+        default: tool
+        }
+    }
+
+    /// 返回不可执行原因：相同修改操作幂等复用；整轮任务只允许一次替换队列。
+    public func sideEffectBlockReason(tool: String, args: [String: String]) -> String? {
+        let canonical = Self.canonicalSideEffectTool(tool)
+        let signature = Self.signature(tool: canonical, args: args)
+        if let summary = successfulSideEffects[signature] {
+            return "已跳过重复操作：相同的 \(canonical) 已成功执行（\(summary)），不会再次修改播放器状态。"
+        }
+        if canonical == "queue_replace", let summary = completedExclusiveEffects[canonical] {
+            return "已跳过第二次替换队列：本次任务已成功替换过队列（\(summary)）。如需补充歌曲，请使用 queue_append；不会用新的 replace 覆盖已有队列。"
+        }
+        return nil
+    }
+
+    /// 只在工具成功后登记，失败或超时不会错误地阻止用户的后续重试。
+    public mutating func recordSuccessfulSideEffect(tool: String, args: [String: String], summary: String) {
+        let canonical = Self.canonicalSideEffectTool(tool)
+        let signature = Self.signature(tool: canonical, args: args)
+        successfulSideEffects[signature] = summary
+        if canonical == "queue_replace" {
+            completedExclusiveEffects[canonical] = summary
+        }
+    }
 
     /// 尝试命中缓存：命中返回 true 并更新统计。
     public mutating func tryReuse(tool: String, args: [String: String]) -> String? {

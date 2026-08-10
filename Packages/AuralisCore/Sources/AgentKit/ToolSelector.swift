@@ -14,7 +14,11 @@ public enum ToolSelector {
     /// 任何请求都可能需要的基础查询 / 播放能力。
     static let coreNames: [String] = [
         "library_get_summary",
-        "library_search", "library_select_tracks", "library_get_catalog_index", "library_get_catalog_tracks", "library_get_song",
+        "library_search", "library_select_tracks", "library_get_catalog_index", "library_get_catalog_tracks", "library_get_song", "music_appreciate",
+        // 推荐索引 V2 是一个长任务：后续轮次的输入往往只写「继续」或「开始」，
+        // 不能仅靠本条文字匹配，否则 OpenAI Responses 的 tools 请求会漏掉它们。
+        // 三个工具的实际执行仍受 AgentRunner 的明确意图规则约束。
+        "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch",
         "playback_get_state",
         "playback_play_song", "playback_play_album", "playback_play_artist",
         "playback_play_playlist", "playback_play_random",
@@ -83,7 +87,7 @@ public enum ToolSelector {
         if containsAny(lower, ["歌单", "playlist", "播放列表"]) { names += playlistNames }
         if containsAny(lower, ["收藏", "喜欢", "评分", "favorite", "star", "heart"]) { names += annotationNames }
         if containsAny(lower, ["服务器", "同步", "连接", "在线", "server", "sync", "connect"]) { names += serverNames }
-        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列"]) { names += recommendationNames }
+        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2"]) { names += recommendationNames }
         if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error"]) { names += diagnosticsNames }
         if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
         if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }

@@ -205,54 +205,11 @@ func backgroundRestorePromptsSetupWhenEmpty() async throws {
     #expect(model.shouldPresentServerSetup == true)
 }
 
-// MARK: - Delete confirmation (integration through AgentCoordinator)
+// MARK: - Automatic tool execution (integration through AgentCoordinator)
 
-@Test("删除确认：拒绝后不执行删除，且资料库保持不变")
+@Test("破坏性工具默认直接执行并记入操作日志")
 @MainActor
-func deleteConfirmRejectedSkipsExecution() async throws {
-    let playlistRemoteID = UUID().uuidString
-    let playlist = Playlist(id: PlaylistID(rawValue: playlistRemoteID), serverID: "test-server", name: "待删除", trackIDs: [])
-    let connector = RecordingConnector(result: makeResult(tracks: [makeTrack(remoteID: "remote-1", title: "Only")], playlists: [playlist]))
-    let model = AuralisAppModel(connector: connector, storeURL: temporaryCatalogURL())
-    let coordinator = AgentCoordinator(model: model, coordinator: model.catalogCoordinator, directory: temporaryAgentDirectory())
-    await model.connect(to: .init(
-        displayName: "Test Library",
-        baseURL: URL(string: "https://music.example.test")!,
-        username: "listener",
-        password: "test-only-value"
-    ))
-    await coordinator.bootstrap()
-
-    let gid = GlobalID(serverID: "test-server", remoteID: playlistRemoteID)
-    // 桩连接器未实现 makeSynchronizer，后台同步不会落地歌单；工具层依据本地目录库校验，
-    // 因此这里直接把歌单写入本地库（唯一的插入，无并发写入冲突）。
-    try await model.catalogCoordinator.store.upsertPlaylist(playlist, serverID: "test-server", isReadOnly: false)
-
-    let provider = ScriptedAIProvider(actionBatches: ["ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(gid.description)\"}}"])
-    coordinator.send("删除歌单", provider: provider)
-
-    // 等待破坏性操作弹出待确认状态。
-    for _ in 0..<500 {
-        await Task.yield()
-        if coordinator.pendingConfirmation != nil { break }
-    }
-    #expect(coordinator.pendingConfirmation != nil)
-    #expect(coordinator.actionRecords.isEmpty)
-
-    coordinator.rejectConfirmation()
-
-    // 等待整轮运行结束。
-    for _ in 0..<500 {
-        await Task.yield()
-        if !coordinator.isRunning { break }
-    }
-    #expect(!(await connector.deletedPlaylistIDs).contains(PlaylistID(rawValue: playlistRemoteID)))
-    #expect(model.catalog.playlists.contains { $0.id.rawValue == playlistRemoteID })
-}
-
-@Test("删除确认：批准后执行删除并记入操作日志")
-@MainActor
-func deleteConfirmApprovedDeletesPlaylist() async throws {
+func destructiveToolExecutesWithoutConfirmation() async throws {
     let playlistRemoteID = UUID().uuidString
     let playlist = Playlist(id: PlaylistID(rawValue: playlistRemoteID), serverID: "test-server", name: "待删除", trackIDs: [])
     let connector = RecordingConnector(result: makeResult(tracks: [makeTrack(remoteID: "remote-1", title: "Only")], playlists: [playlist]))
@@ -271,13 +228,6 @@ func deleteConfirmApprovedDeletesPlaylist() async throws {
 
     let provider = ScriptedAIProvider(actionBatches: ["ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(gid.description)\"}}"])
     coordinator.send("删除歌单", provider: provider)
-
-    for _ in 0..<500 {
-        await Task.yield()
-        if coordinator.pendingConfirmation != nil { break }
-    }
-    #expect(coordinator.pendingConfirmation != nil)
-    coordinator.approveConfirmation()
 
     for _ in 0..<500 {
         await Task.yield()

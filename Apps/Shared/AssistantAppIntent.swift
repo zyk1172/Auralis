@@ -6,8 +6,8 @@ import Foundation
 ///
 /// 与 App 内助手共用同一个 `AuralisAppModel.shared.agentCoordinator`，
 /// 因此播放、歌单、收藏、推荐等操作都落在与界面完全相同的播放器与服务器上。
-/// 无界面模式下破坏性操作（删除歌单 / 清空队列等）会被自动拒绝，
-/// 其余操作正常执行，并把助手最终回复作为 Siri 语音结果朗读出来。
+/// 无界面模式与 App 内一致，工具调用会直接执行，
+/// 并把助手最终回复作为 Siri 语音结果朗读出来。
 struct AuralisAskAssistantIntent: AppIntent {
     static let title: LocalizedStringResource = "问 AI 助手"
     static let description = IntentDescription("让 AI 助手播放音乐、管理歌单、推荐歌曲或回答音乐库问题")

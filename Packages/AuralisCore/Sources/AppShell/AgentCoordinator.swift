@@ -43,7 +43,7 @@ public struct AIPrivacyConsentRequest: Sendable, Identifiable {
 ///
 /// 边界约定：
 /// - 只把用户输入与工具「结果摘要」发给模型，永不发送完整音乐目录或任何凭据。
-/// - 破坏性操作一律先弹确认，用户批准后才执行。
+/// - AI 已发起的工具调用直接执行；调用记录仍会保留在本地操作日志中。
 /// - 隐私：三个隐私开关真实生效（元数据 / 播放历史 / 歌词）；首次外发前需用户确认。
 /// - 模型不可用时自动降级到本地规则模式，搜索/播放/收藏等仍然可用。
 @MainActor
@@ -56,13 +56,10 @@ public final class AgentCoordinator: ObservableObject {
     @Published public private(set) var isRunning = false
     @Published public private(set) var actionRecords: [AgentActionRecord] = []
     @Published public private(set) var preferences = UserPreferences()
-    /// 当前待用户裁决的破坏性操作；非 nil 时 UI 弹确认框。
-    @Published public var pendingConfirmation: PendingConfirmation?
     /// 当前待用户裁决的首次外发确认；非 nil 时 AssistantView 弹确认 UI（B5）。
     @Published public private(set) var pendingConsent: AIPrivacyConsentRequest?
     /// 无界面模式：来自 Siri / 快捷指令等系统入口时置为 true。
-    /// 需要确认的破坏性操作自动拒绝（避免挂起等待永远不出现的 UI 确认框），
-    /// 其余只读 / 可逆操作照常执行。
+    /// 所有工具调用与有界面模式一致，直接执行。
     public var headless = false
     /// 当前正在运行（或最近一次运行）的 Agent 任务；供 UI 展示步骤与状态。
     @Published public private(set) var activeTask: AgentTaskRecord?
@@ -89,7 +86,6 @@ public final class AgentCoordinator: ObservableObject {
     public let memoryStore: AgentMemoryStore
 
     private var runTask: Task<Void, Never>?
-    private var confirmationContinuation: CheckedContinuation<Bool, Never>?
     private var consentContinuation: CheckedContinuation<AIConsentDecision, Never>?
     /// 当前正在流式输出的 assistant 气泡 id：`.streaming` 增量累加进该消息，
     /// 直到收到非流式消息（最终文本 / 工具进度 / 卡片等）把它原地定型为止。
@@ -301,8 +297,8 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     /// 无界面执行：发送一条消息并等待本轮运行结束，返回助手新增的文本回复。
-    /// 供 Siri / 快捷指令等系统入口调用（此时 headless 临时置为 true，
-    /// 破坏性操作自动拒绝而非挂起；调用结束恢复原值，不影响 App 内正常确认流程）。
+    /// 供 Siri / 快捷指令等系统入口调用（此时 headless 临时置为 true）。
+    /// 工具调用直接执行；调用结束恢复原值，不影响 App 内运行状态。
     @discardableResult
     public func sendAndWait(_ text: String, provider: (any AIProvider)? = nil) async -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -414,6 +410,7 @@ public final class AgentCoordinator: ObservableObject {
         let catalog = self.catalog
         let history = messages
         let systemService = self.systemService
+        let messageCountBeforeRun = messages.count
         // 创建并持久化任务记录（不依赖任何 View 生命周期）。
         let taskID = taskStore.start(conversationID: activeSessionID).id
         activeTask = taskStore.record(taskID)
@@ -464,9 +461,7 @@ public final class AgentCoordinator: ObservableObject {
                 context: context,
                 history: history,
                 systemService: systemService,
-                confirm: { [weak self] pending in
-                    await self?.requestConfirmation(pending) ?? false
-                },
+                confirm: { _ in true },
                 emit: { [weak self] message in
                     await self?.receive(message, sessionID: sessionID)
                 },
@@ -478,7 +473,8 @@ public final class AgentCoordinator: ObservableObject {
                 }
             )
             await MainActor.run { [weak self] in self?.isRunning = false }
-            await self.finishTask(taskID)
+            let failure = Self.failureSummary(in: self.messages.dropFirst(messageCountBeforeRun))
+            await self.finishTask(taskID, failure: failure)
             await self.summarizeActiveSession()
             // 任务结束即释放对 self 的强引用，避免 runTask 长期持有协调器。
             self.runTask = nil
@@ -497,18 +493,37 @@ public final class AgentCoordinator: ObservableObject {
         activeTask = taskStore.record(taskID)
     }
 
-    /// 任务正常结束：标记为 completed；若已达保护上限则标记为 paused（由 Runner 文本说明）。
-    private func finishTask(_ taskID: UUID) async {
-        let status: AgentTaskStatus = runTask?.isCancelled == true ? .cancelled : .completed
-        taskStore.update(taskID, status: status)
+    /// 任务结束后按真实结果落盘。此前 Runner 已发出 `.error` 时仍被一律标为
+    /// completed，导致用户看到失败、任务记录却显示完成，无法诊断或恢复。
+    private func finishTask(_ taskID: UUID, failure: String?) async {
+        let status: AgentTaskStatus
+        if runTask?.isCancelled == true {
+            status = .cancelled
+        } else if failure != nil {
+            status = .failed
+        } else {
+            status = .completed
+        }
+        taskStore.update(taskID, status: status, error: failure)
         activeTask = taskStore.record(taskID)
+    }
+
+    private static func failureSummary(in messages: ArraySlice<AgentChatMessage>) -> String? {
+        for message in messages.reversed() where message.role == .assistant {
+            for item in message.messages.reversed() {
+                if case let .error(text) = item {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { return trimmed }
+                }
+            }
+        }
+        return nil
     }
 
     /// 用户主动取消当前运行。
     public func cancel() {
         runTask?.cancel()
         runTask = nil
-        resolveConfirmation(false)
         resolveConsent(.deny)
         isRunning = false
         if let taskID = activeTask?.id {
@@ -595,30 +610,6 @@ public final class AgentCoordinator: ObservableObject {
     private func record(_ record: AgentActionRecord) async {
         await actionLog.add(record)
         actionRecords = await actionLog.all
-    }
-
-    // MARK: - Confirmation
-
-    /// 阻塞 Runner，直到用户在 UI 上批准或拒绝。
-    private func requestConfirmation(_ pending: PendingConfirmation) async -> Bool {
-        // 无界面模式（Siri / 快捷指令）：没有可见确认框，直接拒绝破坏性操作。
-        if headless { return false }
-        // 上一个确认还没结束时直接拒绝，避免弹窗互相覆盖。
-        guard confirmationContinuation == nil else { return false }
-        pendingConfirmation = pending
-        return await withCheckedContinuation { continuation in
-            confirmationContinuation = continuation
-        }
-    }
-
-    public func approveConfirmation() { resolveConfirmation(true) }
-    public func rejectConfirmation() { resolveConfirmation(false) }
-
-    private func resolveConfirmation(_ approved: Bool) {
-        guard let continuation = confirmationContinuation else { return }
-        confirmationContinuation = nil
-        pendingConfirmation = nil
-        continuation.resume(returning: approved)
     }
 
     // MARK: - First-send consent (B5)

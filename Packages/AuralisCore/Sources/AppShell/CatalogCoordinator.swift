@@ -84,8 +84,14 @@ public final class CatalogCoordinator: ObservableObject {
     public func registerAndSync(account: ServerAccount) async {
         try? await store.upsertServer(account)
         let status = await currentStatus(for: account.id)
-        // 从未成功同步过 → 首次全量；已同步过 → 增量。
-        let mode: LibrarySyncMode = (status?.lastCompletedAt == nil) ? .full : .incremental
+        // 同步元数据可能来自旧版本而缺失，但 SQLite 里已经有完整歌曲元数据。
+        // 不能因为少了一条 lastCompletedAt 就每次误走“首次全量同步”；只要本地目录
+        // 已有歌曲，先做轻量的服务器曲目数比对，真正不一致时才拉取。
+        let localTrackCount = (try? await store.trackCount(serverID: account.id)) ?? 0
+        let hasUsableLocalCatalog = localTrackCount > 0
+        let mode: LibrarySyncMode = (status?.lastCompletedAt == nil && !hasUsableLocalCatalog)
+            ? .full
+            : .incremental
         startSync(serverID: account.id, mode: mode, skipIfUpToDate: true)
     }
 

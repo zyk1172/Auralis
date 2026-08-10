@@ -1,5 +1,6 @@
 import DesignSystem
 import Domain
+import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
@@ -8,6 +9,8 @@ struct LibraryView: View {
     let theme: BuiltInTheme
     @State private var scope = LibraryScope.albums
     @State private var playlistTarget: Track?
+    @State private var recommendationCategories: [RecommendationIndexV2Category] = []
+    @State private var isLoadingRecommendationCategories = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +40,7 @@ struct LibraryView: View {
         case .playlists: playlistGrid
         case .favorites: favoriteList
         case .genres: genreList
+        case .categories: recommendationCategoryList
         }
     }
 
@@ -76,6 +80,7 @@ struct LibraryView: View {
                         }
                 }
                 .listStyle(.plain)
+                .reportsBottomDockScroll()
             }
         }
     }
@@ -120,6 +125,7 @@ struct LibraryView: View {
                     }
                     .padding()
                 }
+                .reportsBottomDockScroll()
             }
         }
     }
@@ -156,6 +162,7 @@ struct LibraryView: View {
                     }
                 }
                 .listStyle(.plain)
+                .reportsBottomDockScroll()
             }
         }
     }
@@ -210,6 +217,7 @@ struct LibraryView: View {
                     }
                     .padding(AuralisSpacing.medium)
                 }
+                .reportsBottomDockScroll()
             }
         }
         .task { model.refreshGenres() }
@@ -223,6 +231,122 @@ struct LibraryView: View {
         return items.sorted { left, right in
             if left.count != right.count { return left.count > right.count }
             return left.genre.name.localizedStandardCompare(right.genre.name) == .orderedAscending
+        }
+    }
+
+    /// AI 推荐索引 V2 的标签浏览。卡片尺寸、栅格和流派完全一致，区别仅在数据源是本地 SQLite 索引。
+    private var recommendationCategoryList: some View {
+        Group {
+            if isLoadingRecommendationCategories && recommendationCategories.isEmpty {
+                ProgressView("正在读取本地分类…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if recommendationCategories.isEmpty {
+                AuralisEmptyState(
+                    icon: "square.grid.2x2",
+                    title: "还没有分类",
+                    message: "AI 推荐索引完成分类后，情绪、场景、人声、质感、风格和听感维度会显示在这里。",
+                    colors: theme.colorTokens
+                )
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 150), spacing: AuralisSpacing.medium)],
+                        spacing: AuralisSpacing.medium
+                    ) {
+                        ForEach(recommendationCategories) { category in
+                            Button {
+                                openRecommendationCategory(category)
+                            } label: {
+                                VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+                                    HStack {
+                                        Image(systemName: Self.categorySymbol(for: category.dimension))
+                                            .font(.title3)
+                                            .foregroundStyle(theme.colorTokens.accent.color)
+                                        Spacer()
+                                        Text("\(category.trackCount)")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                    }
+                                    Text(Self.categoryTitle(category))
+                                        .font(.headline)
+                                        .lineLimit(1)
+                                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                                    Text("\(category.trackCount) 首")
+                                        .font(.caption)
+                                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                }
+                                .padding(AuralisSpacing.medium)
+                                .frame(maxWidth: .infinity, minHeight: 86, alignment: .topLeading)
+                                .background(theme.colorTokens.surface.color)
+                                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
+                            }
+                            .buttonStyle(HapticPlainButtonStyle())
+                        }
+                    }
+                    .padding(AuralisSpacing.medium)
+                }
+                .reportsBottomDockScroll()
+            }
+        }
+        .task { await loadRecommendationCategories() }
+    }
+
+    private func loadRecommendationCategories() async {
+        guard let serverID = model.catalog.activeAccount?.id else {
+            recommendationCategories = []
+            return
+        }
+        isLoadingRecommendationCategories = true
+        recommendationCategories = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(serverID: serverID)) ?? []
+        isLoadingRecommendationCategories = false
+    }
+
+    private func openRecommendationCategory(_ category: RecommendationIndexV2Category) {
+        Task {
+            let tracks = (try? await model.catalogCoordinator.store.recommendationIndexV2Tracks(
+                serverID: model.catalog.activeAccount?.id,
+                dimension: category.dimension,
+                value: category.value
+            )) ?? []
+            model.browseDestination = .recommendationCategory(category, tracks: tracks)
+        }
+    }
+
+    private static func categoryTitle(_ category: RecommendationIndexV2Category) -> String {
+        let dimension: String
+        switch category.dimension {
+        case "mood": dimension = "情绪"
+        case "scene": dimension = "场景"
+        case "vocal": dimension = "人声"
+        case "texture": dimension = "质感"
+        case "style": dimension = "风格"
+        case "energy": dimension = "能量"
+        case "tempo": dimension = "速度"
+        case "acousticness": dimension = "原声感"
+        case "danceability": dimension = "舞动性"
+        default: dimension = category.dimension
+        }
+        let suffix: String
+        switch category.dimension {
+        case "energy": suffix = "\(category.value)/10"
+        case "tempo", "acousticness", "danceability": suffix = "\(category.value)/5"
+        default: suffix = category.value
+        }
+        return "\(dimension) · \(suffix)"
+    }
+
+    private static func categorySymbol(for dimension: String) -> String {
+        switch dimension {
+        case "mood": "face.smiling"
+        case "scene": "location"
+        case "vocal": "mic"
+        case "texture": "waveform"
+        case "style": "music.note.list"
+        case "energy": "bolt"
+        case "tempo": "metronome"
+        case "acousticness": "guitars"
+        case "danceability": "figure.dance"
+        default: "tag"
         }
     }
 
@@ -275,6 +399,7 @@ struct LibraryView: View {
                     }
                     .padding()
                 }
+                .reportsBottomDockScroll()
             }
         }
     }
@@ -300,6 +425,7 @@ struct LibraryView: View {
                         }
                 }
                 .listStyle(.plain)
+                .reportsBottomDockScroll()
             }
         }
     }
@@ -314,7 +440,7 @@ struct LibraryView: View {
 }
 
 private enum LibraryScope: String, CaseIterable, Identifiable {
-    case albums, tracks, artists, playlists, favorites, genres
+    case albums, tracks, artists, playlists, favorites, genres, categories
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -324,6 +450,7 @@ private enum LibraryScope: String, CaseIterable, Identifiable {
         case .playlists: String(localized: "歌单")
         case .favorites: String(localized: "收藏")
         case .genres: String(localized: "流派")
+        case .categories: String(localized: "分类")
         }
     }
 }

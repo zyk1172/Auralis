@@ -12,21 +12,25 @@ public struct SettingsBackup: Codable, Sendable {
     public var createdAt: Date
     public var servers: [BackupServer]
     public var ai: BackupAISettings
+    /// 音乐下载插件配置。可选以兼容不含该字段的旧备份。
+    public var musicDownload: BackupMusicDownloadSettings?
     public var preferences: [String: String]
 
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public init(
         version: Int = SettingsBackup.currentVersion,
         createdAt: Date,
         servers: [BackupServer],
         ai: BackupAISettings,
+        musicDownload: BackupMusicDownloadSettings? = nil,
         preferences: [String: String]
     ) {
         self.version = version
         self.createdAt = createdAt
         self.servers = servers
         self.ai = ai
+        self.musicDownload = musicDownload
         self.preferences = preferences
     }
 }
@@ -59,6 +63,20 @@ public struct BackupAISettings: Codable, Sendable {
     }
 }
 
+/// 音乐下载（MoviePilot 插件）配置。
+/// Token 只会存在于已加密的备份 payload 内，绝不写入普通设置或数据库。
+public struct BackupMusicDownloadSettings: Codable, Sendable {
+    public var baseURL: String
+    public var externalBaseURL: String
+    public var token: String?
+
+    public init(baseURL: String, externalBaseURL: String, token: String?) {
+        self.baseURL = baseURL
+        self.externalBaseURL = externalBaseURL
+        self.token = token
+    }
+}
+
 public enum SettingsBackupError: Error, LocalizedError, Equatable, Sendable {
     case emptyPassword
     case noServers
@@ -73,7 +91,7 @@ public enum SettingsBackupError: Error, LocalizedError, Equatable, Sendable {
         case .emptyPassword:
             "请设置备份密码（至少 8 位）。"
         case .noServers:
-            "还没有配置服务器，没有可备份的内容。"
+            "还没有配置服务器。仍可导出其它设置。"
         case .invalidFormat:
             "这不是有效的 Auralis 备份文件。"
         case let .unsupportedVersion(version):
@@ -166,7 +184,6 @@ public struct SettingsBackupService: Sendable {
         "auralis.ai.allowsHistory": .bool,
         "auralis.audio.highQualityWiFi": .bool,
         "auralis.audio.cellularTranscoding": .bool,
-        "auralis.ui.showMiniPlayer": .bool,
         "auralis.debug.crashLogEnabled": .bool,
     ]
 

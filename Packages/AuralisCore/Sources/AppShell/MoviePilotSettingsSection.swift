@@ -6,18 +6,25 @@ import SwiftUI
 /// Base URL 存 UserDefaults；调用 Token 只存 Keychain（不落盘明文）。
 struct MoviePilotSettingsSection: View {
     @AppStorage(MoviePilotSettings.baseURLKey) private var baseURL = ""
+    @AppStorage(MoviePilotSettings.externalBaseURLKey) private var externalBaseURL = ""
     @State private var token = ""
     @State private var testResult: String?
     @State private var isTesting = false
 
     var body: some View {
         Section {
-            TextField("服务器地址（如 http://192.168.1.10:3000）", text: $baseURL)
+            TextField("内网服务器地址（如 http://192.168.1.10:3000）", text: $baseURL)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
                 .onChange(of: baseURL) { testResult = nil }
+            TextField("外网服务器地址（可选）", text: $externalBaseURL)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .autocorrectionDisabled()
+                .onChange(of: externalBaseURL) { testResult = nil }
             SecureField("调用 Token（插件的 X-Music-Token）", text: $token)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
@@ -39,7 +46,7 @@ struct MoviePilotSettingsSection: View {
         } header: {
             Text("音乐下载（MoviePilot）")
         } footer: {
-            Text("在 MoviePilot 安装「音乐下载」插件后填写地址与 Token。Agent 说「下载某首歌/某个专辑」或点播不在库中的歌曲时，会通过它搜索并下载到 NAS 音乐目录（仅下载，不刮削/整理）。")
+            Text("填写内网地址及可选外网地址后，澜音会同时探测两端；内网 30 秒内可达则优先使用，内网不可达才降级外网。外网请填写完整的 http:// 或 https:// 地址；HTTPS 更安全，HTTP 会明文传输调用 Token。Agent 会通过插件搜索并下载到 NAS 音乐目录（仅下载，不刮削/整理）。")
         }
         .task {
             await loadToken()
@@ -85,7 +92,17 @@ struct MoviePilotSettingsSection: View {
         if let value = try? await KeychainCredentialVault().retrieve(id: MoviePilotSettings.tokenCredentialID) {
             storedToken = value
         }
-        let connection = MoviePilotConnection(baseURL: url, token: storedToken)
+        let rawExternalURL = externalBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let externalURL: URL?
+        if rawExternalURL.isEmpty {
+            externalURL = nil
+        } else if let parsed = settings.normalizedExternalURL {
+            externalURL = parsed
+        } else {
+            testResult = "外网服务器地址无效"
+            return
+        }
+        let connection = MoviePilotConnection(baseURL: url, externalBaseURL: externalURL, token: storedToken)
         do {
             // 走插件 v0.4.8+ 的 /test 接口：逐项返回插件启用/目录/站点/下载器/元数据服务。
             let data = try await MoviePilotClient().test(connection)

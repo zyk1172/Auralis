@@ -6,13 +6,17 @@ import SecurityKit
 /// MoviePilot（MoviePilot 音乐下载插件）配置：普通字段存 UserDefaults，Token 存 Keychain。
 public struct MoviePilotSettings: Sendable {
     public static let baseURLKey = "auralis.movipnote.baseURL"
+    public static let externalBaseURLKey = "auralis.movipnote.externalBaseURL"
     public static let tokenCredentialID = CredentialID(rawValue: "movipnote.music-token")
     public static let defaultHint = "http://<MoviePilot-Host>:3000"
 
     public var baseURL: String
+    public var externalBaseURL: String
 
     public init(defaults: UserDefaults = .standard) {
         baseURL = (defaults.string(forKey: Self.baseURLKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        externalBaseURL = (defaults.string(forKey: Self.externalBaseURLKey) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -20,7 +24,15 @@ public struct MoviePilotSettings: Sendable {
 
     /// 把用户可能漏写协议的地址补全为合法 URL（IP/localhost 推断 http，其余 https）。
     public var normalizedURL: URL? {
-        let raw = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.normalizedURL(from: baseURL)
+    }
+
+    public var normalizedExternalURL: URL? {
+        Self.normalizedURL(from: externalBaseURL)
+    }
+
+    private static func normalizedURL(from value: String) -> URL? {
+        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
         if let url = URL(string: raw),
            let scheme = url.scheme?.lowercased(),
@@ -43,11 +55,15 @@ public struct MoviePilotSettings: Sendable {
 
 /// 一次调用所需的连接信息（地址 + 可选 Token），Token 只从 Keychain 读取。
 public struct MoviePilotConnection: Sendable {
+    /// 内网地址；所有连接先对它进行 30 秒可达性探测。
     public let baseURL: URL
+    /// 内网不可达时才使用的外网地址。
+    public let externalBaseURL: URL?
     public let token: String?
 
-    public init(baseURL: URL, token: String?) {
+    public init(baseURL: URL, externalBaseURL: URL? = nil, token: String?) {
         self.baseURL = baseURL
+        self.externalBaseURL = externalBaseURL
         self.token = token
     }
 }
@@ -473,6 +489,12 @@ public struct MoviePilotClient: Sendable {
 
     private let session: URLSession
 
+    private enum EndpointProbe: Sendable {
+        case reachable
+        case unavailable
+        case failed(MoviePilotError)
+    }
+
     public init(session: URLSession = .shared) {
         self.session = session
     }
@@ -655,7 +677,83 @@ public struct MoviePilotClient: Sendable {
         body: [String: Any]?,
         query: [URLQueryItem]?
     ) async throws -> (Data, URLResponse) {
-        let base = connection.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let baseURL = try await selectedBaseURL(for: connection)
+        return try await perform(
+            baseURL: baseURL,
+            token: connection.token,
+            endpoint: endpoint,
+            body: body,
+            query: query
+        )
+    }
+
+    /// 内外网探测并行开始，但内网仍是唯一优先级：内网可达即取消外网探测；
+    /// 只有内网明确不可达才使用外网。探测使用无副作用的插件 /test 接口，
+    /// 因而不会重复提交下载、清理等变更请求。
+    private func selectedBaseURL(for connection: MoviePilotConnection) async throws -> URL {
+        guard let externalURL = connection.externalBaseURL, externalURL != connection.baseURL else {
+            return connection.baseURL
+        }
+        let externalTask = Task { await probe(baseURL: externalURL, token: connection.token) }
+        let internalResult = await probe(baseURL: connection.baseURL, token: connection.token)
+        switch internalResult {
+        case .reachable:
+            externalTask.cancel()
+            return connection.baseURL
+        case let .failed(error):
+            externalTask.cancel()
+            throw error
+        case .unavailable:
+            switch await externalTask.value {
+            case .reachable:
+                return externalURL
+            case let .failed(error):
+                throw error
+            case .unavailable:
+                throw MoviePilotError.transport("内网与外网服务器均不可达")
+            }
+        }
+    }
+
+    private func probe(baseURL: URL, token: String?) async -> EndpointProbe {
+        do {
+            let (data, response) = try await perform(
+                baseURL: baseURL,
+                token: token,
+                endpoint: "test",
+                body: [:],
+                query: nil
+            )
+            try Self.checkHTTP(response, data: data)
+            let envelope = try JSONDecoder().decode(MoviePilotEnvelope<MoviePilotTestData>.self, from: data)
+            guard envelope.success else {
+                return .failed(.pluginFailed(envelope.message ?? "插件返回失败"))
+            }
+            return .reachable
+        } catch let error as MoviePilotError {
+            return Self.isEndpointUnavailable(error) ? .unavailable : .failed(error)
+        } catch {
+            return .failed(.transport(error.localizedDescription))
+        }
+    }
+
+    private static func isEndpointUnavailable(_ error: MoviePilotError) -> Bool {
+        guard case let .transport(message) = error else { return false }
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return !normalized.hasPrefix("HTTP ")
+            || normalized == "HTTP 408"
+            || normalized.hasPrefix("HTTP 5")
+    }
+
+    /// 组装单个端点请求并执行；调用方已完成端点选择。
+    private func perform(
+        baseURL: URL,
+        token: String?,
+        endpoint: String,
+        body: [String: Any]?,
+        query: [URLQueryItem]?
+    ) async throws -> (Data, URLResponse) {
+        let base = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         var path = Self.apiPath
         if base.hasSuffix(Self.apiPath) {
             path = ""
@@ -677,7 +775,7 @@ public struct MoviePilotClient: Sendable {
         } else {
             request.httpMethod = "GET"
         }
-        if let token = connection.token, !token.isEmpty {
+        if let token, !token.isEmpty {
             request.setValue(token, forHTTPHeaderField: "X-Music-Token")
         }
         // 未配置 Token 时不发送空鉴权头，让插件返回明确的鉴权错误。

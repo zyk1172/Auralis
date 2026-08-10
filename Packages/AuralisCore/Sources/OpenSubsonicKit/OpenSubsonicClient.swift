@@ -48,6 +48,49 @@ public final class OpenSubsonicClient: OpenSubsonicServing, Sendable {
             baseURL: configuration.baseURL,
             endpoint: .stream
         )
+        return try streamURL(
+            trackID: trackID,
+            endpointURL: endpointURL,
+            authentication: auth,
+            maxBitRate: maxBitRate,
+            format: format
+        )
+    }
+
+    /// 批量构造播放地址。认证信息只从 Keychain 读取一次，避免恢复大曲库时
+    /// 对每首歌重复读取凭据而让启动阶段串行阻塞数千次。
+    public func makeStreamURLs(
+        trackIDs: [String],
+        maxBitRate: Int? = nil,
+        format: String? = nil
+    ) async throws -> [String: URL] {
+        guard !trackIDs.isEmpty else { return [:] }
+        let auth = try await authenticationParameters()
+        let endpointURL = try OpenSubsonicRequestFactory.endpointURL(
+            baseURL: configuration.baseURL,
+            endpoint: .stream
+        )
+        var result: [String: URL] = [:]
+        result.reserveCapacity(trackIDs.count)
+        for trackID in trackIDs where result[trackID] == nil {
+            result[trackID] = try streamURL(
+                trackID: trackID,
+                endpointURL: endpointURL,
+                authentication: auth,
+                maxBitRate: maxBitRate,
+                format: format
+            )
+        }
+        return result
+    }
+
+    private func streamURL(
+        trackID: String,
+        endpointURL: URL,
+        authentication auth: [OpenSubsonicParameter],
+        maxBitRate: Int?,
+        format: String?
+    ) throws -> URL {
         var components = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false)
         var items = auth.map { URLQueryItem(name: $0.name, value: $0.value) }
         items.append(URLQueryItem(name: "id", value: trackID))

@@ -14,7 +14,9 @@ public struct AuralisArtwork: View {
     }
 
     public var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        // 无封面时，服务器可能仍会返回自己的默认唱片图并叠加在此占位层之上。
+        // 因此字标必须居中，作为被唱片遮住的背景细节；不能再落在左下角露出残字。
+        ZStack {
             LinearGradient(
                 colors: [colors.accent.color, colors.accentSecondary.color, colors.background.color],
                 startPoint: .topLeading,
@@ -27,7 +29,6 @@ public struct AuralisArtwork: View {
             Text(monogram)
                 .font(.system(size: max(18, size * 0.19), weight: .bold, design: .rounded))
                 .foregroundStyle(colors.primaryText.color.opacity(0.88))
-                .padding(size * 0.1)
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))

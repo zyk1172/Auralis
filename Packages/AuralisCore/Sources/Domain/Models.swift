@@ -38,7 +38,10 @@ public struct PlaylistID: RawRepresentable, Codable, Hashable, Sendable, Identif
 public struct ServerAccount: Codable, Hashable, Sendable, Identifiable {
     public let id: ServerID
     public var displayName: String
+    /// 局域网优先地址。始终保留用户填写的内网入口，切换网络后可重新优先使用它。
     public var baseURL: URL?
+    /// 内网不可用时使用的外网入口；缺省时保持单地址的既有行为。
+    public var externalBaseURL: URL?
     public var username: String?
     public var credentialReference: String?
 
@@ -46,12 +49,14 @@ public struct ServerAccount: Codable, Hashable, Sendable, Identifiable {
         id: ServerID,
         displayName: String,
         baseURL: URL? = nil,
+        externalBaseURL: URL? = nil,
         username: String? = nil,
         credentialReference: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.baseURL = baseURL
+        self.externalBaseURL = externalBaseURL
         self.username = username
         self.credentialReference = credentialReference
     }
@@ -208,6 +213,77 @@ public struct Track: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// 同一录音在资料库中可能有多个编码或不同规格的版本。Agent 生成推荐、智能队列时
+/// 以这个规则合并，确保高质量音源优先命中，而不会把同一首歌反复塞进结果。
+public enum TrackQuality {
+    /// 标题、艺人和时长共同构成保守的“同一录音”键。
+    /// 时长按 8 秒分桶，容忍不同服务器写入的微小尾部时长差异，避免仅凭歌名误合并翻唱。
+    public static func recordingKey(for track: Track) -> String {
+        let durationBucket = max(0, Int((track.duration / 8).rounded()))
+        return "\(normalized(track.title))|\(normalized(track.artistName))|\(durationBucket)"
+    }
+
+    /// 保留原有推荐顺序，但每个录音只保留一个版本；质量相同时才考虑收藏、评分。
+    public static func deduplicatedPreferringQuality(_ tracks: [Track]) -> [Track] {
+        var result: [Track] = []
+        var indexByRecording: [String: Int] = [:]
+
+        for track in tracks {
+            let key = recordingKey(for: track)
+            if let index = indexByRecording[key] {
+                if isPreferred(track, over: result[index]) {
+                    result[index] = track
+                }
+            } else {
+                indexByRecording[key] = result.count
+                result.append(track)
+            }
+        }
+        return result
+    }
+
+    /// DSD > 无损 PCM > 有损；同一档内按位深、采样率、码率和声道数比较。
+    public static func isPreferred(_ candidate: Track, over current: Track) -> Bool {
+        let candidateScore = score(candidate)
+        let currentScore = score(current)
+        if candidateScore != currentScore { return candidateScore > currentScore }
+        if candidate.isFavorite != current.isFavorite { return candidate.isFavorite }
+        if candidate.rating != current.rating { return (candidate.rating ?? 0) > (current.rating ?? 0) }
+        return candidate.id.rawValue.localizedStandardCompare(current.id.rawValue) == .orderedAscending
+    }
+
+    public static func score(_ track: Track) -> Int64 {
+        let codecTier: Int64
+        switch track.sourceInfo.normalizedCodec {
+        case "dsf", "dff": codecTier = 7
+        case "wav", "aiff", "aif": codecTier = 6
+        case "flac", "alac", "ape", "wv": codecTier = 5
+        case "opus": codecTier = 3
+        case "aac", "m4a", "mp4", "ogg", "vorbis": codecTier = 2
+        case "mp3", "mpeg": codecTier = 1
+        default: codecTier = 0
+        }
+        let bitDepth = Int64(min(max(track.sourceInfo.bitDepth ?? 0, 0), 64))
+        let sampleRate = Int64(min(max(track.sourceInfo.sampleRate ?? 0, 0), 768_000))
+        let bitRate = Int64(min(max(track.sourceInfo.bitRate ?? 0, 0), 20_000_000))
+        let channels = Int64(min(max(track.sourceInfo.channelCount ?? 0, 0), 16))
+        return codecTier * 1_000_000_000_000
+            + bitDepth * 1_000_000_000
+            + sampleRate * 1_000
+            + bitRate
+            + channels
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+            .unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+    }
+}
+
 public struct Genre: Codable, Hashable, Sendable, Identifiable {
     public var id: String { name.lowercased() }
     public var name: String
@@ -224,13 +300,24 @@ public struct Playlist: Codable, Hashable, Sendable, Identifiable {
     public var name: String
     public var trackIDs: [TrackID]
     public var comment: String?
+    /// 歌单内容或元数据最后一次修改的时间。由 OpenSubsonic 的 `changed` 提供；
+    /// 本地成功编辑后也会立即标记，用于下一次同步的 LWW（最新修改优先）合并。
+    public var modifiedAt: Date?
 
-    public init(id: PlaylistID, serverID: ServerID, name: String, trackIDs: [TrackID], comment: String? = nil) {
+    public init(
+        id: PlaylistID,
+        serverID: ServerID,
+        name: String,
+        trackIDs: [TrackID],
+        comment: String? = nil,
+        modifiedAt: Date? = nil
+    ) {
         self.id = id
         self.serverID = serverID
         self.name = name
         self.trackIDs = trackIDs
         self.comment = comment
+        self.modifiedAt = modifiedAt
     }
 }
 

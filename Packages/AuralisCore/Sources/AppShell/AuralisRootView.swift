@@ -1,5 +1,6 @@
 import DesignSystem
 import Domain
+import LocalCatalog
 import SwiftUI
 import ThemeEngine
 #if os(iOS)
@@ -10,6 +11,7 @@ import UIKit
 public struct AuralisRootView: View {
     @StateObject private var model: AuralisAppModel
     @StateObject private var themeStore: ThemeStore
+    @StateObject private var bottomDockScroll = BottomDockScrollCoordinator()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -34,6 +36,7 @@ public struct AuralisRootView: View {
 #endif
         }
         .environmentObject(model)
+        .environmentObject(bottomDockScroll)
         .environment(model.artworkStore)
         .environmentObject(themeStore)
         .preferredColorScheme(themeStore.current.colorScheme)
@@ -73,16 +76,22 @@ let dockBottomPadding: CGFloat = 6
 private struct CompactShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
+    @EnvironmentObject private var bottomDockScroll: BottomDockScrollCoordinator
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dockPresentation: DockPresentation = .expanded
 
     var body: some View {
         NavigationStack {
             SectionContent(section: model.selectedSection, model: model, themeStore: themeStore)
                 .navigationTitle(model.selectedSection.title)
                 // 顶部标题用系统大标题：字体大、与正文内容有明显区分（Apple Music 风格）。
-                // 导航栏背景与页面背景同色：大标题下方不再出现与背景割裂的浅色圆角空条。
+                // 不覆盖系统导航栏材质。iOS 26+ 会为标准导航栏自动采用 Liquid Glass；
+                // 之前把这里强制涂成主题纯色，导致顶部仍是旧式、不透明的导航栏。
                 .navigationBarTitleDisplayMode(.large)
-                .toolbarBackground(themeStore.current.colorTokens.background.color, for: .navigationBar)
         }
+        // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
+        // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
+        .id(model.selectedSection)
         .overlay(alignment: .bottom) {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -98,6 +107,12 @@ private struct CompactShell: View {
         }
         .sheet(item: browseDestinationBinding) { destination in
             BrowseDetailSheet(destination: destination, model: model, theme: themeStore.current)
+        }
+        // 设置页没有底部附件；离开首页 / 音乐库 / AI 助手时回到完整导航态。
+        .onChange(of: model.selectedSection) { _, _ in
+            bottomDockScroll.reset()
+            guard !hasDockAccessory, dockPresentation != .expanded else { return }
+            setDockPresentation(.expanded)
         }
         .alert("播放失败", isPresented: .init(
             get: { model.playbackError != nil },
@@ -124,33 +139,58 @@ private struct CompactShell: View {
         }
     }
 
-    /// 底部 Dock 真正占用的纵向高度（统一来源）：
-    /// 直接从 BottomDock 的同一套布局参数读取实际高度与间距，
-    /// 供各页面用完全相同的数字预留底部空间，避免每个页面写不一致的固定 padding。
+    /// 底部 Dock 的预留高度必须和当前两态 Dock 相同，避免首页 / 音乐库在缩放过渡后
+    /// 被底栏遮住。AI 助手有自己的输入栏，因此仍以完整导航栏高度避让。
     private var dockReservedHeight: CGFloat {
-        let tabBarStack = bottomBarHeight + dockBottomPadding
-        if model.selectedSection == .assistant {
-            return bottomBarHeight + dockSpacing + tabBarStack
-        }
-        let hasMini = model.isMiniPlayerVisible && model.selectedSection != .settings
-        return hasMini ? (bottomBarHeight + dockSpacing + tabBarStack) : tabBarStack
+        let singleBar = bottomBarHeight + dockBottomPadding
+        guard hasDockAccessory else { return singleBar }
+        let expandedHeight = bottomBarHeight + dockSpacing + singleBar
+        return expandedHeight + (singleBar - expandedHeight) * bottomDockScroll.collapseProgress
     }
 
-    /// 悬浮在屏幕底部的 Dock 覆盖层（自身不预留内容空间，由各页面自行避让）。
-    /// 助手页只渲染主菜单栏（输入框由助手页自身管理，独立响应键盘）；
-    /// 其它页面渲染「迷你播放条 + 主菜单栏」。键盘不推动该覆盖层，由系统键盘自然覆盖。
+    private var showsPlaybackAccessory: Bool {
+        model.selectedSection == .home || model.selectedSection == .library
+    }
+
+    private var showsAssistantAccessory: Bool {
+        model.selectedSection == .assistant
+    }
+
+    private var hasDockAccessory: Bool {
+        showsPlaybackAccessory || showsAssistantAccessory
+    }
+
+    private var collapsedDockAccessory: CollapsedDockAccessory? {
+        if showsPlaybackAccessory { return .player }
+        if showsAssistantAccessory { return .assistant }
+        return nil
+    }
+
+    /// 同一 Dock 的两种布局：展开态对应 Apple Music 的完整底栏，紧凑态把播放附件
+    /// 内联到导航栏。它们在同一个 ZStack 内缩放淡入淡出，避免出现两套栏位同时抢手势。
     @ViewBuilder
     private var dockOverlay: some View {
-        if model.selectedSection == .assistant {
-            BottomGlassBarShell {
-                MainTabBarContent(model: model, theme: themeStore.current)
+        MorphingBottomDock(
+            model: model,
+            theme: themeStore.current,
+            accessory: collapsedDockAccessory,
+            progress: bottomDockScroll.collapseProgress,
+            onExpand: { setDockPresentation(.expanded) },
+            onAssistant: {
+                model.selectedSection = .assistant
+                setDockPresentation(.expanded)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: bottomBarHeight)
-            .padding(.horizontal, 16)
-            .padding(.bottom, dockBottomPadding)
-        } else {
-            BottomDock(model: model, theme: themeStore.current)
+        )
+    }
+
+    private var dockAnimation: Animation? {
+        reduceMotion ? .linear(duration: 0.22) : .spring(response: 0.58, dampingFraction: 0.88)
+    }
+
+    private func setDockPresentation(_ presentation: DockPresentation) {
+        withAnimation(dockAnimation) {
+            dockPresentation = presentation
+            bottomDockScroll.setCollapseProgress(presentation == .compact ? 1 : 0)
         }
     }
     /// 互斥呈现：服务器配置弹窗优先；正在播放 / 浏览详情不会与它同时弹出，
@@ -174,19 +214,244 @@ private struct CompactShell: View {
             set: { model.browseDestination = $0 }
         )
     }
+
 }
 
-/// 双层悬浮液态玻璃 Dock：迷你播放条 + 主菜单栏。
-/// 两者放进同一个父级 VStack(spacing: 8) 统一管理，共用同一宽度来源与玻璃外壳，
-/// 保证等宽、等高（bottomBarHeight）、等圆角、8pt 间距，且只有一次 safeAreaInset。
+private enum DockPresentation: Equatable {
+    case expanded
+    case compact
+}
 
-private struct BottomDock: View {
+/// 首页 / 音乐库的滚动进度。它直接驱动 Dock 的连续形变，不在滚动结束后播放一段
+/// 离散动画；因此手指停在哪里，组件就停在对应的中间状态。
+@MainActor
+final class BottomDockScrollCoordinator: ObservableObject {
+    @Published private(set) var collapseProgress: CGFloat = 0
+    @Published private(set) var isCompact = false
+
+    func report(contentOffset: CGFloat) {
+        // 140pt 是完整双层 Dock 逐渐收拢所需的内容滚动距离。
+        // 负向橡皮筋回弹被钳制为 0，列表到底后也稳定保持 1，不会抖动。
+        setCollapseProgress(min(max(contentOffset / 140, 0), 1))
+    }
+
+    func reset() {
+        collapseProgress = 0
+        isCompact = false
+    }
+
+    func setCollapseProgress(_ progress: CGFloat) {
+        let clamped = min(max(progress, 0), 1)
+        collapseProgress = clamped
+        isCompact = clamped >= 0.999
+    }
+}
+
+/// 应加在真正可纵向滚动的 ScrollView 或 List 上。iOS 26 在这里提供稳定的
+/// ScrollGeometry，避免用全屏 DragGesture 抢走列表点击、横向货架和系统回弹。
+struct BottomDockScrollReportingModifier: ViewModifier {
+    @EnvironmentObject private var coordinator: BottomDockScrollCoordinator
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self, of: { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        }) { _, offset in
+            coordinator.report(contentOffset: offset)
+        }
+    }
+}
+
+extension View {
+    func reportsBottomDockScroll() -> some View {
+        modifier(BottomDockScrollReportingModifier())
+    }
+}
+
+/// 展开态与紧凑态共用的一套底部组件。所有位置都由 progress 插值计算，
+/// 因而播放器、主页和 AI 入口都是同一个 View 在移动和变形，而非两套 UI 交叉淡入淡出。
+private struct MorphingBottomDock: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    let accessory: CollapsedDockAccessory?
+    let progress: CGFloat
+    let onExpand: () -> Void
+    let onAssistant: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var p: CGFloat { min(max(progress, 0), 1) }
+    /// 平滑阶跃：起止柔和、中段移动明确，滚动时不会自行延迟播放。
+    private var eased: CGFloat { p * p * (3 - 2 * p) }
+    private var chromeFade: CGFloat { smoothstep(from: 0.38, to: 1, value: p) }
+    private var itemFade: CGFloat { smoothstep(from: 0.32, to: 0.78, value: p) }
+
+    var body: some View {
+        if accessory == nil {
+            ExpandedDock(model: model, theme: theme, showsPlayer: false)
+        } else {
+            GeometryReader { proxy in
+                let height = bottomBarHeight * 2 + dockSpacing + dockBottomPadding
+                let horizontalInset: CGFloat = 16
+                let fullWidth = max(proxy.size.width - horizontalInset * 2, 0)
+                let navCenterY = height - dockBottomPadding - bottomBarHeight / 2
+                let playerCenterY = navCenterY - (bottomBarHeight + dockSpacing) * (1 - eased)
+                let playerWidth = fullWidth - 128 * eased
+                let playerCenterX = proxy.size.width / 2
+                let sections = AppSection.compactDockSections
+                let itemWidth = fullWidth / CGFloat(sections.count)
+
+                ZStack {
+                    // 完整导航栏的玻璃底板在前半程保持完整，后半程收窄并淡出。
+                    MorphingGlassCapsule { Color.clear }
+                        .frame(width: fullWidth * (1 - 0.16 * chromeFade), height: bottomBarHeight)
+                        .position(x: playerCenterX, y: navCenterY)
+                        .opacity(1 - chromeFade)
+
+                    // 迷你播放器只有一个实例：从上层下降并持续缩短，最后抵达三件套的中间。
+                    if accessory == .player {
+                        MorphingGlassCapsule {
+                            MiniPlayerContent(model: model, theme: theme, height: bottomBarHeight)
+                        }
+                        .frame(width: max(playerWidth, bottomBarHeight), height: bottomBarHeight)
+                        .position(x: playerCenterX, y: playerCenterY)
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.isNowPlayingPresented = true }
+                        .accessibilityElement(children: .contain)
+                    }
+
+                    ForEach(sections.indices, id: \.self) { index in
+                        morphingItem(
+                            section: sections[index],
+                            index: index,
+                            itemWidth: itemWidth,
+                            navCenterY: navCenterY,
+                            containerWidth: proxy.size.width
+                        )
+                    }
+                }
+                .frame(width: proxy.size.width, height: height, alignment: .bottom)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: bottomBarHeight * 2 + dockSpacing + dockBottomPadding)
+        }
+    }
+
+    private func morphingItem(
+        section: AppSection,
+        index: Int,
+        itemWidth: CGFloat,
+        navCenterY: CGFloat,
+        containerWidth: CGFloat
+    ) -> some View {
+        let inset: CGFloat = 16
+        let initialX = inset + itemWidth * (CGFloat(index) + 0.5)
+        let terminalX: CGFloat
+        switch section {
+        case .home:
+            terminalX = inset + bottomBarHeight / 2
+        case .assistant:
+            terminalX = containerWidth - inset - bottomBarHeight / 2
+        default:
+            terminalX = initialX
+        }
+        let survives = section == .home || section == .assistant
+        let x = survives ? interpolate(initialX, terminalX, eased) : initialX
+        let width = survives ? interpolate(itemWidth, bottomBarHeight, eased) : itemWidth
+        let opacity = survives ? 1 : 1 - itemFade
+        let scale = survives ? 1 : 1 - 0.16 * itemFade
+        let titleOpacity = 1 - smoothstep(from: 0.08, to: 0.52, value: p)
+        let icon = section == .assistant && p > 0.5 ? "sparkles" : section.symbol
+        let selectedFill = section == model.selectedSection
+            ? Color.primary.opacity((colorScheme == .dark ? 0.17 : 0.09) * (1 - chromeFade))
+            : Color.clear
+
+        return Button {
+            switch section {
+            case .home:
+                // 完整导航栏仍是原有的“进入首页”；只有收拢完成后，首页圆按钮才承担展开职责。
+                if p >= 0.96 {
+                    onExpand()
+                } else {
+                    model.selectedSection = .home
+                }
+            case .assistant:
+                onAssistant()
+            default:
+                model.selectedSection = section
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 19, weight: .medium))
+                Text(section.title)
+                    .font(.caption2)
+                    .opacity(titleOpacity)
+                    .frame(height: titleOpacity > 0.01 ? nil : 0)
+            }
+            .foregroundStyle(
+                section == .home
+                    ? theme.colorTokens.accent.color
+                    : theme.colorTokens.secondaryText.color
+            )
+            .frame(width: width, height: bottomBarHeight)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(selectedFill)
+                    .opacity(1 - eased)
+                if survives {
+                    MorphingGlassCapsule { Color.clear }
+                        .opacity(eased)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(opacity)
+        .scaleEffect(scale)
+        .position(x: x, y: navCenterY)
+        .allowsHitTesting(opacity > 0.08)
+        .accessibilityLabel(section.title)
+    }
+
+    private func interpolate(_ start: CGFloat, _ end: CGFloat, _ amount: CGFloat) -> CGFloat {
+        start + (end - start) * amount
+    }
+
+    private func smoothstep(from start: CGFloat, to end: CGFloat, value: CGFloat) -> CGFloat {
+        let t = min(max((value - start) / (end - start), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+}
+
+/// 与现有 BottomGlassBarShell 使用相同的液态玻璃材质与描边，只是 frame 由滚动进度连续控制。
+private struct MorphingGlassCapsule<Content: View>: View {
+    @ViewBuilder let content: Content
+    @Environment(\.auralisReduceTransparency) private var reduceTransparency
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .glassEffect(.regular, in: Capsule(style: .continuous))
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(reduceTransparency ? 0.10 : 0.08), lineWidth: 0.5)
+            )
+            .shadow(color: Color.black.opacity(reduceTransparency ? 0.08 : 0.14), radius: 12, x: 0, y: 6)
+    }
+}
+
+/// 展开态：播放附件独立位于四个一级入口上方，和 Apple Music 的常规底栏结构一致。
+private struct ExpandedDock: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+    let showsPlayer: Bool
 
     var body: some View {
         VStack(spacing: dockSpacing) {
-            if model.isMiniPlayerVisible && model.selectedSection != .settings {
+            if showsPlayer {
                 BottomGlassBarShell {
                     MiniPlayerContent(model: model, theme: theme, height: bottomBarHeight)
                 }
@@ -209,11 +474,97 @@ private struct BottomDock: View {
     }
 }
 
+/// 紧凑态：非当前分区收回到首页入口；AI 助手占用原搜索位置。
+/// 首页按钮只负责展开完整 Dock，不改变当前首页/音乐库内容，避免意外跳页。
+private enum CollapsedDockAccessory: Equatable {
+    case player
+    case assistant
+}
+
+private struct CollapsedDock: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+    let accessory: CollapsedDockAccessory
+    let onHome: () -> Void
+    let onAssistant: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            CircularDockButton(action: onHome) {
+                Image(systemName: "house.fill")
+                    .font(.system(size: 19, weight: .semibold))
+            }
+            .foregroundStyle(theme.colorTokens.accent.color)
+            .accessibilityLabel("展开首页、音乐库和设置")
+
+            Group {
+                switch accessory {
+                case .player:
+                    BottomGlassBarShell {
+                        CompactMiniPlayerContent(model: model, theme: theme)
+                    }
+                case .assistant:
+                    // AI 页的中间区域由 AssistantView 的真实输入栏占用；
+                    // 这里只保留与两端圆形入口等高的透明槽位，不能再叠一层玻璃。
+                    Color.clear
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: bottomBarHeight)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if accessory == .player {
+                    model.isNowPlayingPresented = true
+                }
+            }
+            .accessibilityElement(children: accessory == .player ? .contain : .ignore)
+
+            CircularDockButton(action: onAssistant) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 21, weight: .semibold))
+            }
+            .foregroundStyle(theme.colorTokens.primaryText.color)
+            .accessibilityLabel("AI 助手")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.bottom, dockBottomPadding)
+    }
+}
+
+/// 紧凑态两端的系统玻璃圆形入口。它们与中间胶囊同高，不再让图标直接悬空。
+private struct CircularDockButton<Label: View>: View {
+    let action: () -> Void
+    @ViewBuilder let label: Label
+    @Environment(\.auralisReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        Button(action: action) {
+            label
+                .frame(width: bottomBarHeight, height: bottomBarHeight)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular, in: Circle())
+        .overlay(
+            Circle()
+                .stroke(Color.white.opacity(reduceTransparency ? 0.10 : 0.08), lineWidth: 0.5)
+        )
+        .shadow(
+            color: Color.black.opacity(reduceTransparency ? 0.08 : 0.14),
+            radius: 12, x: 0, y: 6
+        )
+    }
+}
+
 /// AI 助手输入框（iOS，渲染在助手页底部安全区，取代迷你播放条的位置）。
 /// 与迷你播放条共用 BottomGlassBarShell、同一高度与材质；点击发送 / 运行时切换为停止。
 /// 焦点由调用方通过 `focus` 传入（助手页用 @FocusState 管理），便于页面在发送 / 点击空白时收起键盘。
 struct DockAssistantInputBar: View {
     @ObservedObject var model: AuralisAppModel
+    /// 运行状态由 AgentCoordinator 发布；不能只经由 model 的计算属性读取，
+    /// 否则 Agent 收尾时 model 本身没有 objectWillChange，底部按钮会残留“停止”。
+    @ObservedObject var agent: AgentCoordinator
     let theme: BuiltInTheme
     var focus: FocusState<Bool>.Binding
 
@@ -228,18 +579,18 @@ struct DockAssistantInputBar: View {
                     .focused(focus)
                     .onSubmit { model.sendAssistantMessage(); focus.wrappedValue = false }
                 Button {
-                    if model.assistantIsRunning {
-                        model.cancelAssistant()
+                    if agent.isRunning {
+                        agent.cancel()
                     } else {
                         model.sendAssistantMessage()
                         focus.wrappedValue = false
                     }
                 } label: {
-                    Image(systemName: model.assistantIsRunning ? "stop.circle.fill" : "arrow.up.circle.fill")
+                    Image(systemName: agent.isRunning ? "stop.circle.fill" : "arrow.up.circle.fill")
                         .font(.title2)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel(model.assistantIsRunning ? "停止" : "发送")
+                .accessibilityLabel(agent.isRunning ? "停止" : "发送")
                 .frame(width: 32, height: 32)
             }
             .padding(.horizontal, 12)
@@ -274,43 +625,113 @@ struct BottomGlassBarShell<Content: View>: View {
     }
 }
 
-/// 主菜单栏内部内容：五个主入口等分宽度，图标与文字居中，
+/// 主菜单栏内部内容：三个主入口等分宽度，图标与文字居中，
 /// 选中高亮仅存在于栏内，不改变栏的整体宽度与高度。
 private struct MainTabBarContent: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    @State private var dragOffset: CGFloat = 0
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppSection.allCases) { section in
-                Button {
-                    model.selectedSection = section
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: section.symbol)
-                            .font(.system(size: 19, weight: .medium))
-                        Text(section.title)
-                            .font(.caption2)
+        GeometryReader { proxy in
+            let sections = AppSection.compactDockSections
+            let itemWidth = proxy.size.width / CGFloat(sections.count)
+            // 选中胶囊占满单个 tab 的高度与宽度。首尾时它与外层 Dock 同高、
+            // 同半径，圆弧会恰好贴合外框而不是留缝或越界。
+            let selectionWidth = itemWidth
+            let selectionHeight = proxy.size.height
+            let selectedIndex = sections.firstIndex(of: model.selectedSection) ?? 0
+
+            ZStack(alignment: .leading) {
+                // 选中块是单一、可拖动的中性胶囊。用动态中性填充而非第二层
+                // glassEffect：浅色外观呈图一那种柔和灰色，深色外观保持足够对比。
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.17 : 0.09))
+                    .shadow(
+                        color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.05),
+                        radius: 7, x: 0, y: 3
+                    )
+                    .frame(width: selectionWidth, height: selectionHeight)
+                    // ZStack 在垂直方向默认居中；只需缩小高度，不能再加 y 偏移，
+                    // 否则会让胶囊整体下沉而上下留白不对称。
+                    .offset(x: CGFloat(selectedIndex) * itemWidth + dragOffset)
+                    .allowsHitTesting(false)
+
+                HStack(spacing: 0) {
+                    ForEach(sections) { section in
+                        Button {
+                            withAnimation(.snappy(duration: 0.30, extraBounce: 0.08)) {
+                                dragOffset = 0
+                                model.selectedSection = section
+                            }
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: section.symbol)
+                                    .font(.system(size: 19, weight: .medium))
+                                Text(section.title)
+                                    .font(.caption2)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .foregroundStyle(
+                                model.selectedSection == section
+                                ? theme.colorTokens.accent.color
+                                : theme.colorTokens.secondaryText.color
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .foregroundStyle(
-                        model.selectedSection == section
-                        ? theme.colorTokens.accent.color
-                        : theme.colorTokens.secondaryText.color
-                    )
-                    // 选中态：液态玻璃高亮胶囊（半透明白） + 强调色图标，符合 iOS 26 玻璃工具栏观感。
-                    .background(
-                        model.selectedSection == section
-                        ? AnyShapeStyle(.white.opacity(0.20))
-                        : AnyShapeStyle(.clear),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
                 }
-                .buttonStyle(.plain)
             }
+            .contentShape(Rectangle())
+            .simultaneousGesture(tabSwitchGesture(itemWidth: itemWidth, selectedIndex: selectedIndex, sections: sections))
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private func tabSwitchGesture(
+        itemWidth: CGFloat,
+        selectedIndex: Int,
+        sections: [AppSection]
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                // 当前手势仅允许挪到相邻入口，避免一次误滑跨过多个 tab。
+                let canMoveLeft = selectedIndex < sections.count - 1
+                let canMoveRight = selectedIndex > 0
+                let requested = value.translation.width
+                let limit: ClosedRange<CGFloat>
+                if requested < 0, canMoveLeft {
+                    limit = -itemWidth ... 0
+                } else if requested > 0, canMoveRight {
+                    limit = 0 ... itemWidth
+                } else {
+                    limit = 0 ... 0
+                }
+                dragOffset = min(max(requested, limit.lowerBound), limit.upperBound)
+            }
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else {
+                    withAnimation(.snappy(duration: 0.24)) { dragOffset = 0 }
+                    return
+                }
+                let movesToNext = value.translation.width < -itemWidth * 0.32
+                let movesToPrevious = value.translation.width > itemWidth * 0.32
+                let target: Int
+                if movesToNext {
+                    target = min(selectedIndex + 1, sections.count - 1)
+                } else if movesToPrevious {
+                    target = max(selectedIndex - 1, 0)
+                } else {
+                    target = selectedIndex
+                }
+                withAnimation(.snappy(duration: 0.32, extraBounce: 0.08)) {
+                    model.selectedSection = sections[target]
+                    dragOffset = 0
+                }
+            }
     }
 }
 #endif
@@ -326,7 +747,6 @@ private struct DesktopShell: View {
                 Section("资料库") {
                     desktopRow(.home)
                     desktopRow(.library)
-                    desktopRow(.search)
                 }
                 Section("工具") {
                     desktopRow(.assistant)
@@ -349,7 +769,7 @@ private struct DesktopShell: View {
         }
         .navigationSplitViewStyle(.balanced)
         .safeAreaInset(edge: .bottom) {
-            if model.isMiniPlayerVisible && model.selectedSection != .assistant && model.selectedSection != .settings {
+            if model.hasCurrentTrack && model.selectedSection != .assistant && model.selectedSection != .settings {
                 MiniPlayer(model: model, theme: themeStore.current)
             }
         }
@@ -492,11 +912,33 @@ extension EnvironmentValues {
 
 /// 浏览详情弹窗：专辑/艺术家/歌单/收藏/最常听的歌曲清单。
 /// 先展示清单，点选单曲才播放；顶部提供「播放全部」作为显式的整列播放入口。
-private struct BrowseDetailSheet: View {
+struct BrowseDetailSheet: View {
+    private enum PlaylistSortOrder: String, CaseIterable, Identifiable {
+        case nameAscending
+        case nameDescending
+        case recentlyModified
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .nameAscending: "名称（A 到 Z）"
+            case .nameDescending: "名称（Z 到 A）"
+            case .recentlyModified: "最近修改"
+            }
+        }
+    }
+
     let destination: BrowseDestination
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @State private var isConfirmingDownload = false
+    /// 从歌单总览左滑后暂存目标；确认后才会删除服务器歌单。
+    @State private var playlistPendingDeletion: Playlist?
+    @State private var isManagingPlaylists = false
+    @State private var selectedPlaylistIDs: Set<PlaylistID> = []
+    @State private var playlistSortOrder: PlaylistSortOrder = .nameAscending
+    @State private var confirmsBatchPlaylistDeletion = false
+    @State private var isDeletingPlaylists = false
     @Environment(\.dismiss) private var dismiss
 
     private var tracks: [Track] {
@@ -520,6 +962,8 @@ private struct BrowseDetailSheet: View {
             case let .genre(genre):
                 let local = model.tracks(for: genre)
                 return local.isEmpty ? (model.genreTracks ?? []) : local
+            case let .recommendationCategory(_, tracks):
+                return tracks
             case .random:
                 return model.randomTracks
             case .recentlyPlayed:
@@ -548,6 +992,7 @@ private struct BrowseDetailSheet: View {
         case .favorites: "收藏"
         case .mostPlayed: "最常听"
         case let .genre(genre): GenreLocalization.displayName(for: genre.name)
+        case let .recommendationCategory(category, _): categoryDisplayName(category)
         case .random: "随机音乐"
         case .recentlyPlayed: "最近播放"
         case .recentlyAdded: "最近添加"
@@ -569,6 +1014,7 @@ private struct BrowseDetailSheet: View {
         case .favorites: "\(tracks.count) 首喜爱的歌曲"
         case .mostPlayed: "按你的播放次数排序"
         case let .genre(genre): "\(tracks.count) 首 · 按流派「\(GenreLocalization.displayName(for: genre.name))」筛选"
+        case let .recommendationCategory(category, _): "\(tracks.count) 首 · 按分类「\(categoryDisplayName(category))」筛选"
         case .random: "点右上角「换一批」可重新随机"
         case .recentlyPlayed: "\(tracks.count) 首 · 最近播放过的歌曲"
         case .recentlyAdded: "\(tracks.count) 首 · 最近同步进来的歌曲"
@@ -589,6 +1035,25 @@ private struct BrowseDetailSheet: View {
         }
     }
 
+    private func categoryDisplayName(_ category: RecommendationIndexV2Category) -> String {
+        let dimension: String
+        switch category.dimension {
+        case "mood": dimension = "情绪"
+        case "scene": dimension = "场景"
+        case "vocal": dimension = "人声"
+        case "texture": dimension = "质感"
+        case "style": dimension = "风格"
+        case "energy": dimension = "能量"
+        case "tempo": dimension = "速度"
+        case "acousticness": dimension = "原声感"
+        case "danceability": dimension = "舞动性"
+        default: dimension = category.dimension
+        }
+        let value = ["energy": 10, "tempo": 5, "acousticness": 5, "danceability": 5][category.dimension]
+            .map { "\(category.value)/\($0)" } ?? category.value
+        return "\(dimension) · \(value)"
+    }
+
     var body: some View {
         NavigationStack {
             content
@@ -604,6 +1069,11 @@ private struct BrowseDetailSheet: View {
                             } label: {
                                 Label("换一批", systemImage: "arrow.clockwise")
                             }
+                        }
+                    }
+                    if isPlaylistDestination {
+                        ToolbarItem(placement: .primaryAction) {
+                            playlistManagementToolbar
                         }
                     }
                     ToolbarItem(placement: .cancellationAction) {
@@ -635,11 +1105,87 @@ private struct BrowseDetailSheet: View {
         } message: {
             Text("预计约 \(estimatedSizeMB(tracks.count)) MB，下载到本地后可离线播放。已下载的歌曲会自动跳过。")
         }
+        .confirmationDialog(
+            "删除选中的 \(selectedPlaylistIDs.count) 个歌单？",
+            isPresented: $confirmsBatchPlaylistDeletion,
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) { deleteSelectedPlaylists() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("选中的歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。")
+        }
     }
 
     private func estimatedSizeMB(_ count: Int) -> Int {
         // 按平均 8 MB/首估算（原始 FLAC 更大、MP3 更小），仅用于下载前容量提示。
         Int((Double(count) * 8 / 1024).rounded())
+    }
+
+    private var isPlaylistDestination: Bool {
+        if case .playlists = destination { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private var playlistManagementToolbar: some View {
+        if isManagingPlaylists {
+            HStack(spacing: AuralisSpacing.small) {
+                Button(selectedPlaylistIDs.count == sortedPlaylists.count ? "取消全选" : "全选") {
+                    if selectedPlaylistIDs.count == sortedPlaylists.count {
+                        selectedPlaylistIDs.removeAll()
+                    } else {
+                        selectedPlaylistIDs = Set(sortedPlaylists.map(\.id))
+                    }
+                }
+                .disabled(sortedPlaylists.isEmpty || isDeletingPlaylists)
+                Button(role: .destructive) {
+                    confirmsBatchPlaylistDeletion = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(selectedPlaylistIDs.isEmpty || isDeletingPlaylists)
+                Button("完成") {
+                    selectedPlaylistIDs.removeAll()
+                    isManagingPlaylists = false
+                }
+                .disabled(isDeletingPlaylists)
+            }
+        } else {
+            Menu {
+                Button {
+                    isManagingPlaylists = true
+                } label: {
+                    Label("批量删除", systemImage: "checkmark.circle")
+                }
+                Menu("排序") {
+                    ForEach(PlaylistSortOrder.allCases) { order in
+                        Button {
+                            playlistSortOrder = order
+                        } label: {
+                            Label(order.title, systemImage: playlistSortOrder == order ? "checkmark" : "")
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("歌单管理与排序")
+        }
+    }
+
+    private func deleteSelectedPlaylists() {
+        let ids = selectedPlaylistIDs
+        guard !ids.isEmpty else { return }
+        isDeletingPlaylists = true
+        Task {
+            for id in ids {
+                _ = await model.deletePlaylist(id: id)
+            }
+            selectedPlaylistIDs.removeAll()
+            isDeletingPlaylists = false
+            isManagingPlaylists = false
+        }
     }
 
     @ViewBuilder
@@ -747,29 +1293,98 @@ private struct BrowseDetailSheet: View {
 
     /// 歌单总览：点选进入歌单内的歌曲清单。
     private var playlistList: some View {
-        List(model.catalog.playlists) { playlist in
-            NavigationLink {
-                PlaylistTracksView(playlist: playlist, model: model, theme: theme)
-            } label: {
-                HStack(spacing: AuralisSpacing.medium) {
-                    if let coverKey = playlistCoverKey(model, playlist) {
-                        ArtworkView(title: playlist.name, artworkKey: coverKey, colors: theme.colorTokens, size: 40, cornerRadius: 8)
+        List(sortedPlaylists) { playlist in
+            if isManagingPlaylists {
+                Button {
+                    if selectedPlaylistIDs.contains(playlist.id) {
+                        selectedPlaylistIDs.remove(playlist.id)
                     } else {
-                        Image(systemName: "music.note.list")
-                            .font(.title3)
-                            .foregroundStyle(theme.colorTokens.accent.color)
-                            .frame(width: 40, height: 40)
-                            .background(theme.colorTokens.surface.color)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        selectedPlaylistIDs.insert(playlist.id)
                     }
-                    VStack(alignment: .leading) {
-                        Text(playlist.name)
-                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                } label: {
+                    playlistRow(playlist, showsSelection: true)
+                }
+                .buttonStyle(.plain)
+            } else {
+                NavigationLink {
+                    PlaylistTracksView(playlist: playlist, model: model, theme: theme)
+                } label: {
+                    playlistRow(playlist, showsSelection: false)
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        playlistPendingDeletion = playlist
+                    } label: {
+                        Label("删除", systemImage: "trash")
                     }
                 }
             }
         }
         .listStyle(.plain)
+        .confirmationDialog(
+            playlistPendingDeletion.map { "删除歌单「\($0.name)」？" } ?? "删除歌单？",
+            isPresented: Binding(
+                get: { playlistPendingDeletion != nil },
+                set: { if !$0 { playlistPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                guard let playlist = playlistPendingDeletion else { return }
+                playlistPendingDeletion = nil
+                Task { _ = await model.deletePlaylist(id: playlist.id) }
+            }
+            Button("取消", role: .cancel) { playlistPendingDeletion = nil }
+        } message: {
+            Text("该歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。")
+        }
+        .alert(
+            "无法删除歌单",
+            isPresented: Binding(
+                get: { model.playlistDeletionError != nil },
+                set: { if !$0 { model.clearPlaylistDeletionError() } }
+            )
+        ) {
+            Button("知道了", role: .cancel) { model.clearPlaylistDeletionError() }
+        } message: {
+            Text(model.playlistDeletionError ?? "")
+        }
+    }
+
+    private var sortedPlaylists: [Playlist] {
+        switch playlistSortOrder {
+        case .nameAscending:
+            model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .nameDescending:
+            model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedDescending }
+        case .recentlyModified:
+            model.catalog.playlists.sorted {
+                ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast)
+            }
+        }
+    }
+
+    private func playlistRow(_ playlist: Playlist, showsSelection: Bool) -> some View {
+        HStack(spacing: AuralisSpacing.medium) {
+            if showsSelection {
+                Image(systemName: selectedPlaylistIDs.contains(playlist.id) ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selectedPlaylistIDs.contains(playlist.id) ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
+            }
+            if let coverKey = playlistCoverKey(model, playlist) {
+                ArtworkView(title: playlist.name, artworkKey: coverKey, colors: theme.colorTokens, size: 40, cornerRadius: 8)
+            } else {
+                Image(systemName: "music.note.list")
+                    .font(.title3)
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .frame(width: 40, height: 40)
+                    .background(theme.colorTokens.surface.color)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            Text(playlist.name)
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
     }
 
     /// 随机类浏览页（随机音乐 / 收藏里随便听）：右上角「换一批」本地重采样，不发网络请求。

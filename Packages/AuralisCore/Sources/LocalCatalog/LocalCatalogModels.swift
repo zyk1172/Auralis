@@ -151,6 +151,102 @@ public struct CatalogTrackLine: Codable, Sendable, Hashable {
     }
 }
 
+/// 推荐索引 V2 由已配置的 Agent 模型写入的多维标签。
+/// 这些标签只基于曲目元数据，不保存歌词、文件路径或播放地址。
+public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
+    public let id: String
+    public let moods: [String]
+    public let scenes: [String]
+    public let energy: Int
+    public let tempo: Int
+    public let acousticness: Int
+    public let danceability: Int
+    public let vocals: [String]
+    public let textures: [String]
+    public let styles: [String]
+    public let confidence: Double
+
+    public init(
+        id: String,
+        moods: [String] = [],
+        scenes: [String] = [],
+        energy: Int,
+        tempo: Int = 3,
+        acousticness: Int = 3,
+        danceability: Int = 3,
+        vocals: [String] = [],
+        textures: [String] = [],
+        styles: [String] = [],
+        confidence: Double = 0.5
+    ) {
+        self.id = id
+        self.moods = moods
+        self.scenes = scenes
+        self.energy = energy
+        self.tempo = tempo
+        self.acousticness = acousticness
+        self.danceability = danceability
+        self.vocals = vocals
+        self.textures = textures
+        self.styles = styles
+        self.confidence = confidence
+    }
+}
+
+public struct RecommendationIndexV2Status: Sendable, Hashable {
+    public let totalTracks: Int
+    public let indexedTracks: Int
+    public let pendingTracks: Int
+    public let rulesVersion: String
+
+    public init(totalTracks: Int, indexedTracks: Int, pendingTracks: Int, rulesVersion: String) {
+        self.totalTracks = totalTracks
+        self.indexedTracks = indexedTracks
+        self.pendingTracks = pendingTracks
+        self.rulesVersion = rulesVersion
+    }
+}
+
+public struct RecommendationIndexV2Batch: Sendable, Hashable {
+    public let tracks: [CatalogTrackLine]
+    public let pendingTracks: Int
+    public let rulesVersion: String
+
+    public init(tracks: [CatalogTrackLine], pendingTracks: Int, rulesVersion: String) {
+        self.tracks = tracks
+        self.pendingTracks = pendingTracks
+        self.rulesVersion = rulesVersion
+    }
+}
+
+/// 一条已完成的推荐索引 V2 记录。仅含本地元数据和分类标签，不含歌词、路径或播放地址。
+public struct RecommendationIndexV2IndexedTrack: Codable, Sendable, Hashable {
+    public let track: CatalogTrackLine
+    public let tags: [String: [String]]
+    public let confidence: Double
+
+    public init(track: CatalogTrackLine, tags: [String: [String]], confidence: Double) {
+        self.track = track
+        self.tags = tags
+        self.confidence = confidence
+    }
+}
+
+/// 推荐索引 V2 的一个可浏览分类（例如「场景 · 通勤」或「情绪 · 平静」）。
+public struct RecommendationIndexV2Category: Sendable, Hashable, Identifiable {
+    public let dimension: String
+    public let value: String
+    public let trackCount: Int
+
+    public var id: String { "\(dimension):\(value)" }
+
+    public init(dimension: String, value: String, trackCount: Int) {
+        self.dimension = dimension
+        self.value = value
+        self.trackCount = trackCount
+    }
+}
+
 public struct CatalogArtistIndexEntry: Codable, Sendable, Hashable {
     public let name: String
     public let albumCount: Int
@@ -238,11 +334,19 @@ public struct CatalogPlaylistSummary: Sendable, Hashable, Identifiable {
     public let name: String
     public let trackIDs: [GlobalID]
     public let isReadOnly: Bool
+    public let modifiedAt: Date?
 
-    public init(globalID: GlobalID, name: String, trackIDs: [GlobalID], isReadOnly: Bool) {
+    public init(
+        globalID: GlobalID,
+        name: String,
+        trackIDs: [GlobalID],
+        isReadOnly: Bool,
+        modifiedAt: Date? = nil
+    ) {
         self.globalID = globalID
         self.name = name
         self.trackIDs = trackIDs
         self.isReadOnly = isReadOnly
+        self.modifiedAt = modifiedAt
     }
 }

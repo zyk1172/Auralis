@@ -128,7 +128,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 同时补全原生 tool calling：Chat 流式里 `choices[0].delta.tool_calls`
     /// 是**分片片段**（同一 `index` 的 id/name/arguments 分散在多个 chunk，
     /// arguments 需要跨 chunk 拼接），这里按 `index` 合并 fragments，
-    /// 到流结束（`[DONE]` 或自然结束）时统一产出完整 `.toolCall`，
+    /// 到流结束（`[DONE]`、`finish_reason` 或自然结束）时统一产出完整 `.toolCall`，
     /// 保证参数不会因为提前产出而被截断。
     private func chatStream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -138,10 +138,13 @@ public struct OpenAICompatibleProvider: AIProvider {
                     continuation.yield(.started(model: request.model))
                     var parser = SSEParser()
                     var toolCallFragments: [Int: ChatToolCallFragment] = [:]
-                    for try await line in bytes.lines {
-                        // URLSession 按行吐出，SSEParser 以空行分块；
-                        // 逐行补 "\n" 后再补一个空行切出完整事件。
-                        for message in parser.append(Data((line + "\n\n").utf8)) {
+                    var pendingLine = Data()
+                    for try await byte in bytes {
+                        pendingLine.append(byte)
+                        guard byte == 0x0A else { continue }
+                        // 以原始换行切分输入，而不是使用 `bytes.lines`。后者会吞掉
+                        // 空行，无法区分 SSE 的事件边界；这里完整保留多段 data:。
+                        for message in parser.append(pendingLine) {
                             if message.data == "[DONE]" {
                                 Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
                                 continuation.yield(.completed)
@@ -164,6 +167,48 @@ public struct OpenAICompatibleProvider: AIProvider {
                                     toolCallFragments[fragment.index] = fragment
                                 }
                             }
+                            // 一些 OpenAI 兼容网关会发送标准的 finish_reason，但不会
+                            // 再补 [DONE] 或主动关闭 SSE 连接。若忽略它，最终文本虽然
+                            // 已显示，AgentRunner 仍会一直等待，界面就会卡在“正在执行”。
+                            if Self.streamHasFinished(message.data) {
+                                Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
+                                continuation.yield(.completed)
+                                continuation.finish()
+                                return
+                            }
+                        }
+                        pendingLine.removeAll(keepingCapacity: true)
+                    }
+                    // 末尾若没有空行，仍解析缓冲中的最后一个 SSE 事件。
+                    if !pendingLine.isEmpty { _ = parser.append(pendingLine) }
+                    for message in parser.finish() {
+                        if message.data == "[DONE]" {
+                            Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
+                            continuation.yield(.completed)
+                            continuation.finish()
+                            return
+                        }
+                        if let delta = Self.streamDelta(from: message.data) {
+                            continuation.yield(.delta(delta))
+                        }
+                        if let usage = Self.streamUsage(from: message.data) {
+                            continuation.yield(.usage(input: usage.input, output: usage.output))
+                        }
+                        for fragment in Self.streamToolCallFragments(from: message.data) {
+                            if var existing = toolCallFragments[fragment.index] {
+                                if existing.id == nil { existing.id = fragment.id }
+                                if existing.name == nil { existing.name = fragment.name }
+                                existing.arguments += fragment.arguments
+                                toolCallFragments[fragment.index] = existing
+                            } else {
+                                toolCallFragments[fragment.index] = fragment
+                            }
+                        }
+                        if Self.streamHasFinished(message.data) {
+                            Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
+                            continuation.yield(.completed)
+                            continuation.finish()
+                            return
                         }
                     }
                     // 网关不发 [DONE] 也视为正常结束（沿用既有行为），此时同样补发 tool calls。
@@ -188,6 +233,18 @@ public struct OpenAICompatibleProvider: AIProvider {
         }
     }
 
+    /// Chat Completions 的最后一个 chunk 通常带 `finish_reason`。把它当作
+    /// 与 `[DONE]` 等价的结束信号，兼容没有关闭长连接的转发服务。
+    private static func streamHasFinished(_ data: String) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any],
+              let choices = object["choices"] as? [[String: Any]]
+        else { return false }
+        return choices.contains { choice in
+            guard let reason = choice["finish_reason"] else { return false }
+            return !(reason is NSNull)
+        }
+    }
+
     /// Responses API 流式：SSE 事件按 `data: {"type":...}` 解析，
     /// 映射到现有 `AIStreamEvent`：
     /// - `response.output_text.delta` → `.delta`
@@ -201,8 +258,12 @@ public struct OpenAICompatibleProvider: AIProvider {
                     let (bytes, _) = try await performRequestBytes(body: requestBody(request, stream: true))
                     continuation.yield(.started(model: request.model))
                     var parser = SSEParser()
-                    for try await line in bytes.lines {
-                        for message in parser.append(Data((line + "\n\n").utf8)) {
+                    var pendingLine = Data()
+                    for try await byte in bytes {
+                        pendingLine.append(byte)
+                        guard byte == 0x0A else { continue }
+                        // 保留真实 SSE 事件边界，支持 event:/id: 与多段 data:。
+                        for message in parser.append(pendingLine) {
                             if message.data == "[DONE]" {
                                 continuation.yield(.completed)
                                 continuation.finish()
@@ -229,6 +290,37 @@ public struct OpenAICompatibleProvider: AIProvider {
                             case .ignore:
                                 break
                             }
+                        }
+                        pendingLine.removeAll(keepingCapacity: true)
+                    }
+                    // 末尾若没有空行，仍处理最后一个完整 SSE 事件。
+                    if !pendingLine.isEmpty { _ = parser.append(pendingLine) }
+                    for message in parser.finish() {
+                        if message.data == "[DONE]" {
+                            continuation.yield(.completed)
+                            continuation.finish()
+                            return
+                        }
+                        let parsed = Self.parseResponsesStreamEvent(message.data)
+                        switch parsed {
+                        case let .text(text):
+                            continuation.yield(.delta(text))
+                        case let .toolCall(call):
+                            continuation.yield(.toolCall(call))
+                        case .done:
+                            if let usage = Self.responsesUsage(from: message.data) {
+                                continuation.yield(.usage(input: usage.input, output: usage.output))
+                            }
+                            continuation.yield(.completed)
+                            continuation.finish()
+                            return
+                        case let .failed(detail):
+                            throw AIProviderError.malformedResponse(
+                                detail: "服务返回错误：\(detail)",
+                                retryable: false
+                            )
+                        case .ignore:
+                            break
                         }
                     }
                     // 网关不发 [DONE] / response.completed 也视为正常结束（沿用 Chat 路径行为）。

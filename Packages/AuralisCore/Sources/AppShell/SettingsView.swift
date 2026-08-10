@@ -38,7 +38,12 @@ struct SettingsView: View {
     @State private var serverToSwitch: ServerAccount?
     @State private var serverToRename: ServerAccount?
     @State private var renameServerText = ""
+    @State private var serverToEdit: ServerAccount?
+    @State private var recommendationIndexStatus: RecommendationIndexV2Status?
+    @State private var isLoadingRecommendationIndexStatus = false
+    @State private var isEditingHomeLayout = false
     @AppStorage("auralis.debug.crashLogEnabled") private var crashLogEnabled = true
+    @Environment(\.bottomDockReservedHeight) private var bottomDockReservedHeight
 
     private let credentialVault = KeychainCredentialVault()
 
@@ -46,122 +51,75 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("主题") {
-                Picker("主题外观", selection: themeSelection) {
-                    ForEach(themeStore.themes) { candidate in
-                        Text(candidate.name).tag(candidate.id)
-                    }
+            Section("设置") {
+                NavigationLink {
+                    ServerSettingsPage(model: model, theme: theme)
+                } label: {
+                    SettingsCategoryRow(
+                        title: "服务器",
+                        subtitle: model.catalog.isConnected ? "已连接 · \(model.catalog.tracks.count) 首歌曲" : "连接音乐服务器与下载服务",
+                        icon: "server.rack"
+                    )
                 }
-                .pickerStyle(.menu)
-                // 当前主题色板预览（8 个核心色 Token）
-                ThemeSwatchGrid(colors: theme.colorTokens, name: theme.name)
-                Text("主题由共享 Design Token 驱动；页面结构不会为主题复制。跟随系统、定时与主题 JSON 导入将在后续阶段实现。")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                NavigationLink {
+                    AgentSettingsPage(model: model, theme: theme)
+                } label: {
+                    SettingsCategoryRow(
+                        title: "Agent",
+                        subtitle: aiEnabled ? "大模型、推荐索引与隐私" : "已关闭",
+                        icon: "sparkles"
+                    )
+                }
+                NavigationLink {
+                    PlaybackSettingsPage(model: model, theme: theme)
+                } label: {
+                    SettingsCategoryRow(title: "播放与音质", subtitle: "网络音质与迷你播放条", icon: "speaker.wave.2")
+                }
+                NavigationLink {
+                    DataSettingsPage(model: model, themeStore: themeStore, theme: theme)
+                } label: {
+                    SettingsCategoryRow(title: "数据与备份", subtitle: "本地缓存与配置备份", icon: "externaldrive")
+                }
             }
-            Section("服务器") {
-                serverStatus
-                if !savedServers.isEmpty {
-                    ForEach(savedServers) { server in
-                        serverRow(server)
-                    }
+            Section("外观") {
+                Button {
+                    isEditingHomeLayout = true
+                } label: {
+                    SettingsCategoryRow(
+                        title: "首页布局",
+                        subtitle: "模块显示与排序",
+                        icon: "slider.horizontal.3"
+                    )
                 }
-                Button("添加 OpenSubsonic 服务器") { isAddingServer = true }
-                if case .connected = model.serverConnectionState {
-                    Button("更换服务器") { isAddingServer = true }
-                    Button("测试连接") {
-                        Task { pingResult = await model.testActiveServerConnection() }
-                    }
-                    if let pingResult {
-                        Label(
-                            pingResult ? "服务器可达" : "服务器无响应",
-                            systemImage: pingResult ? "checkmark.circle.fill" : "xmark.octagon.fill"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(pingResult ? theme.colorTokens.success.color : theme.colorTokens.error.color)
-                    }
-                    if model.serverAuthenticationFailed {
-                        Label("认证可能已失效，请重新登录", systemImage: "exclamationmark.shield.fill")
-                            .font(.caption)
-                            .foregroundStyle(theme.colorTokens.warning.color)
-                        Button("重新登录") { isAddingServer = true }
-                    }
-                    Button("移除服务器（仅本机）", role: .destructive) { isRemovingServer = true }
+                .buttonStyle(HapticPlainButtonStyle())
+                NavigationLink {
+                    ThemeSettingsPage(themeStore: themeStore)
+                } label: {
+                    SettingsCategoryRow(title: "主题", subtitle: theme.name, icon: "paintpalette")
                 }
-                Text("凭据只保存在系统 Keychain，不会写入日志、不会发送给大模型。移除服务器只清理本机数据，NAS 上的音乐不受影响。")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            CatalogSyncSection(model: model, theme: theme)
-            CacheManagementSection(model: model, theme: theme)
-            Section("OpenAI 兼容接口") {
-                LabeledContent("Base URL", value: aiBaseURL)
-                LabeledContent("模型", value: aiModel)
-                LabeledContent("API Key", value: hasAPIKey ? "已配置 · 存于系统 Keychain" : "未配置")
-                #if os(iOS)
-                // iOS 上从 Form 直接弹 sheet 存在点击无响应的问题，改为推入整页
-                NavigationLink("配置接口…") {
-                    AIProviderSettingsPage(theme: theme, hasAPIKey: $hasAPIKey)
-                }
-                #else
-                Button("配置接口…") { isConfiguringAIProvider = true }
-                #endif
-            }
-            AgentMemoryManagementSection(model: model, theme: theme)
-            MoviePilotSettingsSection()
-            SettingsBackupSection(model: model, themeStore: themeStore, theme: theme)
             Section("关于") {
                 LabeledContent("版本", value: "0.3.4")
             }
-
-            // 二级设置：默认收起，避免一屏拉到底。
-            DisclosureGroup("播放与音质") {
-                Toggle("Wi-Fi 优先原始音质", isOn: $highQualityWiFi)
-                Toggle("蜂窝网络允许转码", isOn: $cellularTranscoding)
-                Toggle("显示迷你播放条", isOn: $model.showMiniPlayer)
-            }
-            DisclosureGroup("助手偏好") {
-                Picker("推荐场景", selection: sceneBinding) {
-                    Text("无偏好").tag("")
-                    Text("深夜").tag("深夜")
-                    Text("通勤").tag("通勤")
-                    Text("学习").tag("学习")
-                    Text("运动").tag("运动")
-                }
-                Picker("重复容忍度", selection: repeatBinding) {
-                    Text("允许少量重复").tag("allow")
-                    Text("尽量不重复").tag("avoid")
-                }
-                Text("这些偏好用于推荐与智能队列；不会发送文件路径、服务器地址或完整日志。")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-            }
-            DisclosureGroup("AI 与隐私") {
-                Toggle("启用 AI 功能", isOn: $aiEnabled)
-                Toggle("允许发送歌曲元数据", isOn: $allowsMetadata)
-                Toggle("允许发送歌词", isOn: $allowsLyrics)
-                Toggle("允许发送播放历史摘要", isOn: $allowsHistory)
-                Text("默认不发送文件路径、NAS 地址、用户名、服务器令牌、设备标识或完整日志。")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-            }
-            DisclosureGroup("高级") {
-                Toggle("启用崩溃日志", isOn: $crashLogEnabled)
-                if crashLogEnabled {
-                    NavigationLink {
-                        CrashLogView(theme: theme)
-                    } label: {
-                        Label("崩溃日志", systemImage: "doc.text.magnifyingglass")
-                    }
-                }
-            }
         }
         .scrollContentBackground(.hidden)
-        .padding(.bottom, AuralisSpacing.large)
+        // 悬浮 Dock 不参与 NavigationStack 的安全区计算。为 Form 的末项预留同一高度，
+        // 滚到底时不会再被栏位遮挡。
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: bottomDockReservedHeight)
+        }
         .background(theme.colorTokens.background.color)
         .task { await reloadServers() }
         .sheet(isPresented: $isAddingServer) {
             ServerConnectionSheet(model: model, theme: theme)
+        }
+        .sheet(isPresented: $isEditingHomeLayout) {
+            HomeLayoutEditView(model: model, theme: theme)
+        }
+        .sheet(item: $serverToEdit) { server in
+            ServerEditSheet(model: model, theme: theme, server: server) {
+                await reloadServers()
+            }
         }
         .alert("重命名服务器", isPresented: Binding(
             get: { serverToRename != nil },
@@ -222,6 +180,9 @@ struct SettingsView: View {
         .task {
             hasAPIKey = (try? await credentialVault.retrieve(id: AIConnectionSettings.credentialID)) != nil
         }
+        .task(id: model.catalog.activeServerID) {
+            await refreshRecommendationIndexStatus()
+        }
     }
 
     private var sceneBinding: Binding<String> {
@@ -229,6 +190,16 @@ struct SettingsView: View {
             get: { UserDefaults.standard.string(forKey: "auralis.agent.scene") ?? "" },
             set: { UserDefaults.standard.set($0, forKey: "auralis.agent.scene") }
         )
+    }
+
+    private func refreshRecommendationIndexStatus() async {
+        guard let serverID = model.catalog.activeServerID else {
+            recommendationIndexStatus = nil
+            return
+        }
+        isLoadingRecommendationIndexStatus = true
+        recommendationIndexStatus = try? await model.catalogCoordinator.store.recommendationIndexV2Status(serverID: serverID)
+        isLoadingRecommendationIndexStatus = false
     }
 
     private var repeatBinding: Binding<String> {
@@ -322,6 +293,9 @@ struct SettingsView: View {
                     renameServerText = server.displayName
                     serverToRename = server
                 } label: { Label("重命名", systemImage: "pencil") }
+                Button {
+                    serverToEdit = server
+                } label: { Label("编辑服务器", systemImage: "slider.horizontal.3") }
                 if !isActive {
                     Button("切换到此服务器") { serverToSwitch = server }
                 }
@@ -339,6 +313,122 @@ struct SettingsView: View {
 
 
 }
+/// 编辑既有服务器：仅更新本机的连接资料，不重新建库也不删除已同步歌曲。
+struct ServerEditSheet: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+    let server: ServerAccount
+    let onSaved: @MainActor () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var displayName: String
+    @State private var internalURL: String
+    @State private var externalURL: String
+    @State private var username: String
+    @State private var password = ""
+    @State private var errorMessage: String?
+    @State private var isSaving = false
+
+    init(
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        server: ServerAccount,
+        onSaved: @escaping @MainActor () async -> Void
+    ) {
+        self.model = model
+        self.theme = theme
+        self.server = server
+        self.onSaved = onSaved
+        _displayName = State(initialValue: server.displayName)
+        _internalURL = State(initialValue: server.baseURL?.absoluteString ?? "")
+        _externalURL = State(initialValue: server.externalBaseURL?.absoluteString ?? "")
+        _username = State(initialValue: server.username ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("服务器信息") {
+                    TextField("显示名称", text: $displayName)
+                    TextField("内网服务器地址", text: $internalURL)
+                        .autocorrectionDisabled()
+                    TextField("外网服务器地址（可选）", text: $externalURL)
+                        .autocorrectionDisabled()
+                    TextField("用户名", text: $username)
+                        .autocorrectionDisabled()
+                    SecureField("新密码（留空则不修改）", text: $password)
+                }
+                Section {
+                    Text("内网和外网会同时探测。内网在 30 秒内可达时优先使用；只有内网确认不可达时才使用外网。")
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    Text("修改地址不会新建重复服务器，也不会删除本机已同步的音乐库。")
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
+                if let errorMessage {
+                    Section("无法保存") {
+                        Text(errorMessage)
+                            .foregroundStyle(theme.colorTokens.error.color)
+                    }
+                }
+            }
+            .navigationTitle("编辑服务器")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "保存中…" : "保存") { Task { await save() } }
+                        .disabled(isSaving)
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 480, idealWidth: 540, minHeight: 430)
+        #endif
+    }
+
+    @MainActor
+    private func save() async {
+        errorMessage = nil
+        guard let internalEndpoint = URL(string: internalURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            errorMessage = ServerConnectionError.invalidURL.localizedDescription
+            return
+        }
+        let externalEndpoint: URL?
+        let rawExternal = externalURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rawExternal.isEmpty {
+            externalEndpoint = nil
+        } else if let parsed = URL(string: rawExternal) {
+            externalEndpoint = parsed
+        } else {
+            errorMessage = ServerConnectionError.invalidURL.localizedDescription
+            return
+        }
+        do {
+            try ServerURLPolicy.validate(internalEndpoint)
+            if let externalEndpoint { try ServerURLPolicy.validate(externalEndpoint) }
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        isSaving = true
+        defer { isSaving = false }
+        let update = ServerConfigurationUpdate(
+            displayName: displayName,
+            baseURL: internalEndpoint,
+            externalBaseURL: externalEndpoint,
+            username: username,
+            password: password.isEmpty ? nil : password
+        )
+        guard await model.updateServerConfiguration(serverID: server.id, update: update) else {
+            errorMessage = "无法保存服务器设置，请检查名称、用户名和系统 Keychain。"
+            return
+        }
+        await onSaved()
+        dismiss()
+    }
+}
 
 struct ServerConnectionSheet: View {
     @ObservedObject var model: AuralisAppModel
@@ -346,11 +436,13 @@ struct ServerConnectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var displayName = ""
     @State private var serverURL = ""
+    @State private var externalServerURL = ""
     @State private var username = ""
     @State private var password = ""
     @State private var localValidationError: String?
     @State private var connectionTask: Task<Void, Never>?
     @State private var isTesting = false
+    @State private var isRequestingLocalNetworkAuthorization = false
     private enum TestResultDisplay {
         case success(String)
         case failure(String)
@@ -367,7 +459,13 @@ struct ServerConnectionSheet: View {
                 Section("OpenSubsonic 服务器") {
                     TextField("显示名称", text: $displayName)
                         .textContentType(.organizationName)
-                    TextField("http://192.168.2.240:3000", text: $serverURL)
+                    TextField("内网服务器地址（如 http://192.168.2.240:3000）", text: $serverURL)
+#if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+#endif
+                        .autocorrectionDisabled()
+                    TextField("外网服务器地址（可选）", text: $externalServerURL)
 #if os(iOS)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
@@ -385,17 +483,17 @@ struct ServerConnectionSheet: View {
                     Button {
                         Task { await runTest() }
                     } label: {
-                        if isTesting {
+                        if isTesting || isRequestingLocalNetworkAuthorization {
                             HStack {
                                 ProgressView().controlSize(.small)
-                                Text("正在测试…")
+                                Text(isRequestingLocalNetworkAuthorization ? "正在请求本地网络访问…" : "正在测试…")
                             }
                         } else {
                             Label("测试连接", systemImage: "network")
                         }
                     }
-                    .disabled(isTesting || model.serverConnectionState.isConnecting)
-                    Text("首次连接局域网服务器时，系统会自动弹出「本地网络」授权；若之前拒绝过，请点「打开本地网络设置」允许后重试。")
+                    .disabled(isTesting || isRequestingLocalNetworkAuthorization || model.serverConnectionState.isConnecting)
+                    Text("内网与外网会同时探测；内网在 30 秒内可用时始终优先使用，确认不可用后才降级外网。首次连接局域网服务器时，澜音会自动请求「本地网络」授权。")
                         .font(.caption2)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     if let testResult {
@@ -464,7 +562,9 @@ struct ServerConnectionSheet: View {
                     }
                 }
 #endif
-                if let localValidationError {
+                // 测试连接已在上方展示同一错误时，不重复占用一整段表单空间；
+                // 点击“保存”时仍在这里显示校验/授权失败原因。
+                if let localValidationError, case nil = testResult {
                     Section("需要处理") {
                         Label(localValidationError, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(theme.colorTokens.error.color)
@@ -581,14 +681,35 @@ struct ServerConnectionSheet: View {
             localValidationError = error.localizedDescription
             return
         }
+        let externalURL: URL?
+        let rawExternalURL = externalServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rawExternalURL.isEmpty {
+            externalURL = nil
+        } else if let parsed = URL(string: rawExternalURL) {
+            do {
+                try ServerURLPolicy.validate(parsed)
+                externalURL = parsed
+            } catch {
+                localValidationError = error.localizedDescription
+                return
+            }
+        } else {
+            localValidationError = ServerConnectionError.invalidURL.localizedDescription
+            return
+        }
         let input = ServerConnectionInput(
             displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
             baseURL: url,
+            externalBaseURL: externalURL,
             username: username.trimmingCharacters(in: .whitespacesAndNewlines),
             password: password
         )
         connectionTask?.cancel()
-        connectionTask = Task { await model.connect(to: input) }
+        connectionTask = Task { @MainActor in
+            guard await requestLocalNetworkAuthorizationIfNeeded(for: url) else { return }
+            guard !Task.isCancelled else { return }
+            await model.connect(to: input)
+        }
     }
 
     /// 只做连接测试：不保存凭据、不同步、不关闭配置界面。
@@ -603,9 +724,24 @@ struct ServerConnectionSheet: View {
         }
         do {
             try ServerURLPolicy.validate(url)
+            guard await requestLocalNetworkAuthorizationIfNeeded(for: url) else {
+                testResult = .failure(localValidationError ?? "本地网络访问被系统拒绝。")
+                return
+            }
+            let rawExternalURL = externalServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let externalURL: URL?
+            if rawExternalURL.isEmpty {
+                externalURL = nil
+            } else if let parsed = URL(string: rawExternalURL) {
+                try ServerURLPolicy.validate(parsed)
+                externalURL = parsed
+            } else {
+                throw ServerConnectionError.invalidURL
+            }
             let input = ServerConnectionInput(
                 displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 baseURL: url,
+                externalBaseURL: externalURL,
                 username: username.trimmingCharacters(in: .whitespacesAndNewlines),
                 password: password
             )
@@ -616,6 +752,30 @@ struct ServerConnectionSheet: View {
         } catch {
             testResult = .failure(ConnectionErrorDescription.describe(error))
         }
+    }
+
+    /// macOS 首次访问私有地址时，主动发起一次轻量 TCP 连接以触发系统的本地网络授权。
+    /// 非局域网地址和探测超时都交由实际的 OpenSubsonic 请求处理；只有系统明确返回
+    /// `localNetworkDenied` 时才阻止继续连接并提供可操作的说明。
+    @MainActor
+    private func requestLocalNetworkAuthorizationIfNeeded(for url: URL) async -> Bool {
+#if os(macOS)
+        guard let host = url.host, ServerURLPolicy.isPrivateOrLocal(host: host) else {
+            return true
+        }
+
+        let port = UInt16(url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80))
+        isRequestingLocalNetworkAuthorization = true
+        defer { isRequestingLocalNetworkAuthorization = false }
+
+        let result = await LocalNetworkProbe.probe(host: host, port: port, timeout: 15)
+        guard result.isLocalNetworkDenied else { return true }
+
+        localValidationError = "本地网络访问已被 macOS 拒绝。澜音会在首次连接时自动申请；若此前点过“不允许”，系统不会再次弹窗。请在“系统设置 → 隐私与安全性 → 本地网络”中打开“澜音”后重试。"
+        return false
+#else
+        return true
+#endif
     }
 
 #if DEBUG

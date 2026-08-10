@@ -25,20 +25,14 @@ public final class AuralisAppModel: ObservableObject {
     public static let shared = AuralisAppModel()
     @Published public var selectedSection: AppSection = .home
     @Published public var currentTrack: Track
-    /// 迷你播放器是否应显示：仅在存在真实曲目（非未连接时的占位曲目）时展示，
-    /// 这样未连接服务器时底部不会留出无意义的迷你播放器高度，也不会与 Tab Bar 叠出多余留白。
-    /// 用户是否希望显示迷你播放条（设置项，持久化到 UserDefaults，默认 true）。
-    /// 设为 false 时，即便有正在播放的曲目，底部也只保留主菜单栏、不显示迷你播放条，
-    /// 给内容（如 AI 助手的输入框）让出更多空间。
-    @Published public var showMiniPlayer: Bool = true {
-        didSet { defaults.set(showMiniPlayer, forKey: Self.showMiniPlayerDefaultsKey) }
-    }
     /// AI 助手输入框的草稿文本。提升到模型层是为了让底部 Dock（iOS）
     /// 与助手页面（macOS）共用同一份输入，避免嵌套 safeAreaInset 造成的布局重叠。
     @Published public var assistantDraft: String = ""
-    /// 迷你播放器是否应显示：仅在存在真实曲目（非未连接时的占位曲目）且用户未关闭时展示，
-    /// 这样未连接服务器时底部不会留出无意义的迷你播放条高度，也不会与 Tab Bar 叠出多余留白。
-    public var isMiniPlayerVisible: Bool { currentTrack.id.rawValue != "placeholder" && showMiniPlayer }
+    /// 搜索不再是主导航页；系统入口需要搜索时由 AI 助手展示本地/服务器搜索兜底页。
+    @Published public var shouldPresentAssistantSearch = false
+    /// 桌面版仅在已有实际播放项目时显示底部迷你播放器；iPhone 的 Dock 则在首页和
+    /// 音乐库固定显示，未播放时使用“未在播放”的紧凑内容。
+    public var hasCurrentTrack: Bool { currentTrack.id.rawValue != "placeholder" }
     @Published public var playbackState: PlaybackState = .paused
     @Published public var playbackPosition: TimeInterval = 0
     /// 播放队列。SwiftUI 的 ForEach / List 要求元素 id 唯一，队列里出现重复 TrackID 时
@@ -225,6 +219,13 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var playlistTracks: [PlaylistID: [Track]] = [:]
     /// 正在加载曲目的歌单 ID。
     @Published public private(set) var loadingPlaylistIDs: Set<PlaylistID> = []
+    /// 服务器列表显示该歌单已有更新、但 getPlaylists 不含完整 entry 时，
+    /// 需要随后通过 getPlaylist 拉取最新曲目顺序的歌单。
+    private var playlistIDsNeedingContentRefresh: Set<PlaylistID> = []
+    /// 当前进程内已成功删除的歌单。屏蔽并发请求里携带的过期列表，直到下次冷启动。
+    private var deletedPlaylistIDs: Set<PlaylistID> = []
+    /// 删除请求被服务器明确拒绝或验证仍存在时的可展示提示，避免 UI 静默失败。
+    @Published public private(set) var playlistDeletionError: String?
     /// 随机音乐（首页「随机音乐」货架）：资料库载入时随机采样一次，避免界面频繁重排。
     @Published public private(set) var randomTracks: [Track] = []
     /// 首页「收藏 / 最常听 / 最近播放 / 最近添加」货架快照。
@@ -370,7 +371,6 @@ public final class AuralisAppModel: ObservableObject {
     private static let lastTrackDefaultsKey = "auralis.lastTrackID"
     private static let recentlyPlayedDefaultsKey = "auralis.recentlyPlayed"
     private static let libraryAddedDefaultsKey = "auralis.libraryAdded"
-    private static let showMiniPlayerDefaultsKey = "auralis.ui.showMiniPlayer"
     private static func playbackSessionKey(_ serverID: ServerID) -> String {
         "auralis.playbackSession.\(serverID.rawValue)"
     }
@@ -410,7 +410,6 @@ public final class AuralisAppModel: ObservableObject {
         self.recentSearches = defaults.array(forKey: Self.recentSearchesDefaultsKey) as? [String] ?? []
         self.repeatMode = RepeatMode(rawValue: defaults.string(forKey: Self.repeatModeDefaultsKey) ?? "") ?? .off
         self.isShuffled = defaults.bool(forKey: Self.shuffleDefaultsKey)
-        self.showMiniPlayer = (defaults.object(forKey: Self.showMiniPlayerDefaultsKey) as? Bool) ?? true
         // 首页布局偏好：无配置时用默认布局，读取时自动归一化并补齐新模块。
         self.homeLayout = HomeLayoutStore.load(from: defaults)
         // 最近播放按「serverID:trackID」组合键存储；旧格式（纯 trackID，无冒号）无法归属服务器，直接丢弃。
@@ -1404,6 +1403,13 @@ public final class AuralisAppModel: ObservableObject {
         agentCoordinator.send(text)
     }
 
+    /// 设置页的快捷入口：复用 Agent 已验证的“状态 → 分批分类 → 写回至 0”流程，
+    /// 由 AgentRunner 的索引任务约束保证不会在中途把自然语言回复误报为完成。
+    public func startOrContinueRecommendationIndexV2() {
+        selectedSection = .assistant
+        agentCoordinator.send("开始并一次性完成推荐索引 V2：先读取状态，持续分批分类并写回，直到待分类为 0。")
+    }
+
     /// 助手是否正在运行（输入框按钮在「发送 / 停止」之间切换）。
     public var assistantIsRunning: Bool { agentCoordinator.isRunning }
 
@@ -1749,6 +1755,7 @@ public final class AuralisAppModel: ObservableObject {
            let index = catalog.playlists.firstIndex(where: { $0.id == playlist.id }),
            !catalog.playlists[index].trackIDs.contains(track.id) {
             catalog.playlists[index].trackIDs.append(track.id)
+            catalog.playlists[index].modifiedAt = Date()
         }
         // 曲目关系写回 SQLite，保证 Agent/UI 的 getPlaylist 看到最新顺序。
         if let serverID = catalog.activeServerID {
@@ -1783,6 +1790,7 @@ public final class AuralisAppModel: ObservableObject {
         let succeeded = await connector.renamePlaylist(playlistID: id, name: trimmed)
         if succeeded, let index = catalog.playlists.firstIndex(where: { $0.id == id }) {
             catalog.playlists[index].name = trimmed
+            catalog.playlists[index].modifiedAt = Date()
             if let serverID = catalog.activeServerID {
                 persistServerPlaylists(catalog.playlists, serverID: serverID)
             }
@@ -1801,6 +1809,7 @@ public final class AuralisAppModel: ObservableObject {
                 where catalog.playlists[index].trackIDs.indices.contains(offset) {
                     catalog.playlists[index].trackIDs.remove(at: offset)
                 }
+                catalog.playlists[index].modifiedAt = Date()
                 if let serverID = catalog.activeServerID {
                     persistServerPlaylists(catalog.playlists, serverID: serverID)
                 }
@@ -1827,6 +1836,7 @@ public final class AuralisAppModel: ObservableObject {
         let succeeded = await connector.replacePlaylistTracks(playlistID: id, trackIDs: ids)
         if succeeded {
             catalog.playlists[index].trackIDs = ids
+            catalog.playlists[index].modifiedAt = Date()
             if let serverID = catalog.activeServerID {
                 persistServerPlaylists(catalog.playlists, serverID: serverID)
             }
@@ -1848,18 +1858,28 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     public func deletePlaylist(id: PlaylistID) async -> Bool {
+        playlistDeletionError = nil
         let succeeded = await connector.deletePlaylist(playlistID: id)
-        if succeeded {
-            catalog.playlists.removeAll { $0.id == id }
-            playlistTracks.removeValue(forKey: id)
-            if case let .playlist(shown) = browseDestination, shown.id == id {
-                browseDestination = .playlists
-            }
-            if let serverID = catalog.activeServerID {
-                deleteLocalPlaylist(id, serverID: serverID)
-            }
+        guard succeeded else {
+            playlistDeletionError = "服务器未确认删除。请检查网络与歌单权限后重试。"
+            return false
         }
-        return succeeded
+        deletedPlaylistIDs.insert(id)
+        catalog.playlists.removeAll { $0.id == id }
+        playlistTracks.removeValue(forKey: id)
+        playlistIDsNeedingContentRefresh.remove(id)
+        if case let .playlist(shown) = browseDestination, shown.id == id {
+            browseDestination = .playlists
+        }
+        if let serverID = catalog.activeServerID {
+            let gid = GlobalID(serverID: serverID, remoteID: id.rawValue)
+            try? await catalogCoordinator.store.deletePlaylist(gid)
+        }
+        return true
+    }
+
+    public func clearPlaylistDeletionError() {
+        playlistDeletionError = nil
     }
 
     /// 按需从服务器拉取歌单内的完整曲目列表并缓存。
@@ -1873,6 +1893,7 @@ public final class AuralisAppModel: ObservableObject {
             let tracks = await connector.fetchPlaylistTracks(playlistID: playlistID)
             loadingPlaylistIDs.remove(playlistID)
             playlistTracks[playlistID] = tracks
+            playlistIDsNeedingContentRefresh.remove(playlistID)
             // 同步更新 catalog 中歌单的 trackIDs
             if let index = catalog.playlists.firstIndex(where: { $0.id == playlistID }),
                !tracks.isEmpty {
@@ -1892,17 +1913,19 @@ public final class AuralisAppModel: ObservableObject {
     /// getPlaylist / playback_play_playlist 看到「空壳歌单」。
     /// 这里对每个「本地还没有曲目的歌单」调 getPlaylist（单数）拉全量曲目，
     /// 写回内存 catalog + SQLite（playlist_tracks），让 Agent 下次直接看到真实歌曲，
-    /// 无需用户先打开歌单详情。仅补空壳歌单，避免每次启动全量请求。
+    /// 无需用户先打开歌单详情。除空壳歌单外，服务器 `changed` 更新过的歌单也会
+    /// 刷新完整曲目列表，避免仅拿到名称与时间、却继续显示旧曲目顺序。
     public func cachePlaylistContentsInBackground() {
         guard !isCachingPlaylistContents else { return }
-        let pending = catalog.playlists.filter { $0.trackIDs.isEmpty }
+        let pending = catalog.playlists.filter {
+            $0.trackIDs.isEmpty || playlistIDsNeedingContentRefresh.contains($0.id)
+        }
         guard !pending.isEmpty else { return }
         isCachingPlaylistContents = true
         Task { @MainActor in
             defer { self.isCachingPlaylistContents = false }
             for playlist in pending {
                 let tracks = await self.connector.fetchPlaylistTracks(playlistID: playlist.id)
-                guard !tracks.isEmpty else { continue }
                 self.playlistTracks[playlist.id] = tracks
                 if let index = self.catalog.playlists.firstIndex(where: { $0.id == playlist.id }) {
                     self.catalog.playlists[index].trackIDs = tracks.map(\.id)
@@ -1911,6 +1934,7 @@ public final class AuralisAppModel: ObservableObject {
                 let gid = GlobalID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)
                 let trackGIDs = tracks.map { GlobalID(serverID: playlist.serverID, remoteID: $0.id.rawValue) }
                 try? await store.setPlaylistTracks(gid, trackGIDs: trackGIDs)
+                self.playlistIDsNeedingContentRefresh.remove(playlist.id)
             }
         }
     }
@@ -2031,6 +2055,52 @@ public final class AuralisAppModel: ObservableObject {
         return true
     }
 
+    /// 只更新外网降级地址；内网主地址、服务器身份和 Keychain 凭据保持不变。
+    public func updateServerExternalBaseURL(serverID: ServerID, to url: URL?) async -> Bool {
+        guard let account = (try? await catalogCoordinator.store.listServers())?
+            .first(where: { $0.id == serverID })
+        else { return false }
+        var updated = account
+        updated.externalBaseURL = url
+        guard await connector.updateServerExternalBaseURL(serverID: serverID, externalBaseURL: url) else { return false }
+        try? await catalogCoordinator.store.upsertServer(updated)
+        if catalog.activeServerID == serverID {
+            catalog = LibraryCatalog(
+                account: updated,
+                artists: catalog.artists,
+                albums: catalog.albums,
+                tracks: catalog.tracks,
+                genres: catalog.genres,
+                playlists: catalog.playlists,
+                history: catalog.history,
+                downloads: catalog.downloads,
+                lyrics: catalog.lyrics,
+                recommendations: catalog.recommendations
+            )
+        }
+        return true
+    }
+
+    public func updateServerConfiguration(serverID: ServerID, update: ServerConfigurationUpdate) async -> Bool {
+        guard let updated = await connector.updateServerConfiguration(serverID: serverID, update: update) else { return false }
+        try? await catalogCoordinator.store.upsertServer(updated)
+        if catalog.activeServerID == serverID {
+            catalog = LibraryCatalog(
+                account: updated,
+                artists: catalog.artists,
+                albums: catalog.albums,
+                tracks: catalog.tracks,
+                genres: catalog.genres,
+                playlists: catalog.playlists,
+                history: catalog.history,
+                downloads: catalog.downloads,
+                lyrics: catalog.lyrics,
+                recommendations: catalog.recommendations
+            )
+        }
+        return true
+    }
+
     /// 备份恢复：把服务器账号与登录凭据写回本地（不联网、不触发资料同步）。
     /// 仅登记账号信息，不会自动下载 / 同步音乐资料库。
     public func restoreServerAccountFromBackup(_ account: ServerAccount, secret: String?) async {
@@ -2049,6 +2119,7 @@ public final class AuralisAppModel: ObservableObject {
         artworkStore.reset()
         playlistTracks = [:]
         loadingPlaylistIDs = []
+        playlistIDsNeedingContentRefresh = []
         lyricsInFlight = []
         lyricsUnavailable = []
         artworkInFlight = []
@@ -2702,6 +2773,8 @@ public final class AuralisAppModel: ObservableObject {
             artworkStore.reset()
             playlistTracks = [:]
             loadingPlaylistIDs = []
+            playlistIDsNeedingContentRefresh = []
+            deletedPlaylistIDs = []
             favoriteAlbumIDs = []
             favoriteArtistIDs = []
         } else {
@@ -2940,9 +3013,16 @@ public final class AuralisAppModel: ObservableObject {
             let trackIDs = summary.trackIDs.map { TrackID(rawValue: $0.remoteID) }
             if var existing = byID[id] {
                 if !trackIDs.isEmpty { existing.trackIDs = trackIDs }
+                if let modifiedAt = summary.modifiedAt { existing.modifiedAt = modifiedAt }
                 byID[id] = existing
             } else {
-                byID[id] = Playlist(id: id, serverID: serverID, name: summary.name, trackIDs: trackIDs)
+                byID[id] = Playlist(
+                    id: id,
+                    serverID: serverID,
+                    name: summary.name,
+                    trackIDs: trackIDs,
+                    modifiedAt: summary.modifiedAt
+                )
             }
         }
         return byID.values.sorted {
@@ -2972,8 +3052,14 @@ public final class AuralisAppModel: ObservableObject {
             guard let refreshed = await connector.refreshAuxiliaryData() else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                mergeServerPlaylists(refreshed.playlists)
-                mergeServerFavorites(refreshed.favoriteTrackIDs)
+                mergeServerPlaylists(
+                    refreshed.playlists,
+                    isAuthoritative: refreshed.playlistsAreAuthoritative
+                )
+                mergeServerFavorites(
+                    refreshed.favoriteTrackIDs,
+                    isAuthoritative: refreshed.favoriteTrackIDsAreAuthoritative
+                )
                 mergeServerGenres(refreshed.genres)
                 // 服务器刷新后的歌单同步写入 SQLite（保留本地已加载的 trackIDs）。
                 if let serverID = self.catalog.activeServerID {
@@ -2992,58 +3078,84 @@ public final class AuralisAppModel: ObservableObject {
     private func persistServerPlaylists(_ playlists: [Playlist], serverID: ServerID) {
         guard !playlists.isEmpty else { return }
         let store = catalogCoordinator.store
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             for playlist in playlists {
+                // 已删除或不再属于当前 catalog 的歌单不得被旧的异步持久化任务写回。
+                guard !self.deletedPlaylistIDs.contains(playlist.id),
+                      self.catalog.playlists.contains(where: { $0.id == playlist.id })
+                else { continue }
                 try? await store.upsertPlaylist(playlist, serverID: serverID)
             }
         }
     }
 
-    /// 删除本地 SQLite 中的单个歌单（配合服务器删除 / 用户删除后清理）。
-    private func deleteLocalPlaylist(_ id: PlaylistID, serverID: ServerID) {
-        let store = catalogCoordinator.store
-        let gid = GlobalID(serverID: serverID, remoteID: id.rawValue)
-        Task { @MainActor in
-            try? await store.deletePlaylist(gid)
-        }
-    }
-
-    /// 以服务器歌单为基准合并本地歌单：
-    /// - 服务器新增 / 改名 / 删除的歌单按服务器为准；
-    /// - 已加载过详情的歌单保留本地 trackIDs（服务器 getPlaylists 常不含 entry），避免列表闪空。
-    private func mergeServerPlaylists(_ serverPlaylists: [Playlist]) {
+    /// 合并服务器与本地歌单，按 OpenSubsonic `changed` 执行“最近修改优先”。
+    ///
+    /// getPlaylists 只返回歌单壳，因此当服务器元数据较新时保留旧的曲目列表作
+    /// 临时展示，并标记为需要再调 getPlaylist 拉取；这既避免列表闪空，也不会把
+    /// 旧的本地曲目顺序永久当作最新内容。
+    private func mergeServerPlaylists(_ serverPlaylists: [Playlist], isAuthoritative: Bool) {
         var merged: [Playlist] = []
         var seen = Set<PlaylistID>()
         for server in serverPlaylists {
+            // 删除请求完成后，可能仍有一轮更早发出的刷新携带旧歌单；绝不能让它复活。
+            guard !deletedPlaylistIDs.contains(server.id) else { continue }
             var value = server
-            if let local = catalog.playlists.first(where: { $0.id == server.id }),
-               !local.trackIDs.isEmpty {
-                value.trackIDs = local.trackIDs
+            if let local = catalog.playlists.first(where: { $0.id == server.id }) {
+                let serverIsNewer = shouldUseServerPlaylist(server, over: local)
+                if serverIsNewer {
+                    // 列表接口通常不带 entry；完整内容由后续 getPlaylist 刷新。
+                    if server.trackIDs.isEmpty, !local.trackIDs.isEmpty {
+                        value.trackIDs = local.trackIDs
+                    }
+                    if server.modifiedAt != nil,
+                       server.modifiedAt != local.modifiedAt {
+                        playlistIDsNeedingContentRefresh.insert(server.id)
+                    }
+                } else {
+                    value = local
+                }
             }
             merged.append(value)
             seen.insert(server.id)
         }
-        // 服务器尚未收录的本地歌单（例如刚创建、服务器列表还未刷新）保留；
-        // 服务器已删除的歌单随之移除。
-        for local in catalog.playlists where !seen.contains(local.id) {
-            merged.append(local)
+        if isAuthoritative {
+            // getPlaylists 成功返回完整集合时，缺失项才是真正的服务器删除。
+            // 失败时给的是旧缓存，必须保留现有本地目录，不能误删。
+            deletedPlaylistIDs.formUnion(
+                catalog.playlists.lazy.filter { !seen.contains($0.id) }.map(\.id)
+            )
+        } else {
+            // 服务器尚未返回完整列表时保留本地歌单，避免离线刷新把列表清空。
+            for local in catalog.playlists
+            where !seen.contains(local.id) && !deletedPlaylistIDs.contains(local.id) {
+                merged.append(local)
+            }
         }
         catalog.playlists = merged
-        let currentIDs = Set(serverPlaylists.map(\.id))
+        let currentIDs = Set(merged.map(\.id))
         playlistTracks = playlistTracks.filter { currentIDs.contains($0.key) }
     }
 
-    /// 服务器收藏回流：以 getStarred2 为准，把服务器上已收藏的曲目标记为 isFavorite。
-    /// 只补正「服务器有、本地缺」的收藏，不把本地刚收藏但服务器尚未确认的曲目清掉，
-    /// 避免网络抖动时用户刚点的收藏被后台刷新抹掉。
-    private func mergeServerFavorites(_ favoriteTrackIDs: [String]) {
-        guard !favoriteTrackIDs.isEmpty else { return }
+    /// 时间缺失的旧服务器不具备可靠冲突依据，保持既有的“服务器列表优先”兼容行为；
+    /// 两侧都有时间时，时间相同也选服务器，作为确定性的并发冲突裁决。
+    private func shouldUseServerPlaylist(_ server: Playlist, over local: Playlist) -> Bool {
+        guard let serverModifiedAt = server.modifiedAt else { return true }
+        guard let localModifiedAt = local.modifiedAt else { return true }
+        return serverModifiedAt >= localModifiedAt
+    }
+
+    /// 仅在 getStarred2 成功后以完整结果覆盖本地收藏；请求失败时保留原状，
+    /// 避免把离线状态误写成“服务器没有任何收藏”。
+    private func mergeServerFavorites(_ favoriteTrackIDs: [String], isAuthoritative: Bool) {
+        guard isAuthoritative else { return }
         let favoriteSet = Set(favoriteTrackIDs)
         var changed = false
-        for index in catalog.tracks.indices
-        where favoriteSet.contains(catalog.tracks[index].id.rawValue)
-            && !catalog.tracks[index].isFavorite {
-            catalog.tracks[index].isFavorite = true
+        for index in catalog.tracks.indices {
+            let shouldBeFavorite = favoriteSet.contains(catalog.tracks[index].id.rawValue)
+            guard catalog.tracks[index].isFavorite != shouldBeFavorite else { continue }
+            catalog.tracks[index].isFavorite = shouldBeFavorite
             changed = true
         }
         if changed,
@@ -3053,6 +3165,15 @@ public final class AuralisAppModel: ObservableObject {
         }
         if changed {
             refreshHomeSnapshots()
+        }
+        if let serverID = catalog.activeServerID {
+            let store = catalogCoordinator.store
+            Task {
+                try? await store.replaceFavoriteTracks(
+                    favoriteTrackIDs.map { GlobalID(serverID: serverID, remoteID: $0) },
+                    serverID: serverID
+                )
+            }
         }
     }
 
@@ -3226,6 +3347,9 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
     case search
     case settings
 
+    /// 紧凑设备的主 Dock。搜索保留为助手内的兜底能力，不再占用一级入口。
+    public static let compactDockSections: [AppSection] = [.home, .library, .assistant]
+
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -3263,7 +3387,7 @@ public enum InspectorSection: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// 浏览目标：专辑、艺术家、单个歌单、歌单总览、收藏与最常听、流派。
+/// 浏览目标：专辑、艺术家、单个歌单、歌单总览、收藏与最常听、流派和 AI 分类。
 public enum BrowseDestination: Identifiable {
     case album(Album)
     case artist(Artist)
@@ -3272,6 +3396,7 @@ public enum BrowseDestination: Identifiable {
     case favorites
     case mostPlayed
     case genre(Genre)
+    case recommendationCategory(RecommendationIndexV2Category, tracks: [Track])
     case random
     case recentlyPlayed
     case recentlyAdded
@@ -3290,6 +3415,7 @@ public enum BrowseDestination: Identifiable {
         case .favorites: return "favorites"
         case .mostPlayed: return "mostPlayed"
         case let .genre(g): return "genre.\(g.id)"
+        case let .recommendationCategory(category, _): return "recommendationCategory.\(category.id)"
         case .random: return "random"
         case .recentlyPlayed: return "recentlyPlayed"
         case .recentlyAdded: return "recentlyAdded"

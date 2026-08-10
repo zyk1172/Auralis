@@ -5,6 +5,14 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
+/// 按照 macOS 音乐 App 的网格、详情和曲目表共享同一套尺寸，避免同级控件各自写一组间距。
+private enum MacMusicLayout {
+    static let pageInset: CGFloat = 28
+    static let gridSpacing: CGFloat = 24
+    static let artworkCornerRadius: CGFloat = 10
+    static let detailArtworkSize: CGFloat = 264
+}
+
 // MARK: - 歌曲表格（macOS 原生 Table）
 
 /// 适合鼠标的歌曲表格：可调列宽、多选（Shift/Cmd）、双击播放、右键菜单、悬停反馈。
@@ -125,7 +133,6 @@ struct MacLibraryPage: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             switch scope {
             case .songs:
                 if model.catalog.tracks.isEmpty {
@@ -146,7 +153,7 @@ struct MacLibraryPage: View {
 
     private var header: some View {
         HStack(spacing: AuralisSpacing.medium) {
-            Text(scope.title).font(.title2.bold())
+            Text(scope.title).font(.title2.weight(.bold))
                 .foregroundStyle(theme.colorTokens.primaryText.color)
             Spacer()
             if scope == .songs, !model.catalog.tracks.isEmpty {
@@ -154,21 +161,25 @@ struct MacLibraryPage: View {
                 Button("随机播放") { model.playRandom() }
             }
         }
-        .padding(.horizontal, AuralisSpacing.large)
-        .padding(.vertical, AuralisSpacing.medium)
+        .padding(.horizontal, MacMusicLayout.pageInset)
+        .padding(.vertical, 18)
     }
 
     private var albumGrid: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: AuralisSpacing.large)], spacing: AuralisSpacing.large) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 148, maximum: 190), spacing: MacMusicLayout.gridSpacing)],
+                alignment: .leading,
+                spacing: MacMusicLayout.gridSpacing
+            ) {
                 ForEach(model.catalog.albums) { album in
                     Button {
                         model.browseDestination = .album(album)
                     } label: {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 6) {
                             GeometryReader { geo in
                                 ArtworkView(title: album.title, artworkKey: album.artworkKey,
-                                            colors: theme.colorTokens, size: max(geo.size.width, 1), cornerRadius: AuralisRadius.medium)
+                                            colors: theme.colorTokens, size: max(geo.size.width, 1), cornerRadius: MacMusicLayout.artworkCornerRadius)
                             }
                             .aspectRatio(1, contentMode: .fit)
                             Text(album.title).font(.subheadline.weight(.medium)).lineLimit(1)
@@ -182,7 +193,8 @@ struct MacLibraryPage: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(AuralisSpacing.large)
+            .padding(.horizontal, MacMusicLayout.pageInset)
+            .padding(.bottom, 36)
         }
     }
 
@@ -268,6 +280,238 @@ struct MacLibraryPage: View {
             if left.count != right.count { return left.count > right.count }
             return left.genre.name.localizedStandardCompare(right.genre.name) == .orderedAscending
         }
+    }
+}
+
+// MARK: - 专辑详情（Mac 的主内容导航）
+
+/// 复刻 macOS 音乐 App 的专辑层级：大封面与元数据在同一视觉层，
+/// 播放操作紧随标题，曲目用极简行列表而非设置样式的卡片或通用弹窗。
+struct MacAlbumDetailPage: View {
+    let album: Album
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+    let onBack: () -> Void
+    @State private var hoveredTrackID: TrackID?
+
+    private var tracks: [Track] {
+        model.catalog.tracks
+            .filter { $0.albumID == album.id }
+            .sorted { lhs, rhs in
+                let leftDisc = lhs.discNumber ?? 0
+                let rightDisc = rhs.discNumber ?? 0
+                if leftDisc != rightDisc { return leftDisc < rightDisc }
+                let leftTrack = lhs.trackNumber ?? 0
+                let rightTrack = rhs.trackNumber ?? 0
+                if leftTrack != rightTrack { return leftTrack < rightTrack }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+    }
+
+    private var totalDuration: TimeInterval {
+        tracks.reduce(0) { $0 + $1.duration }
+    }
+
+    private var summary: String {
+        let count = "\(tracks.count) 首歌曲"
+        let minutes = max(1, Int((totalDuration / 60).rounded()))
+        return "\(count)，\(minutes) 分钟"
+    }
+
+    private var metadata: String {
+        var parts = [String]()
+        if let year = album.year { parts.append(String(year)) }
+        if let genre = album.genre, !genre.isEmpty { parts.append(GenreLocalization.displayName(for: genre)) }
+        parts.append(summary)
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    albumHero
+                    trackList
+                }
+                .frame(maxWidth: 960, alignment: .leading)
+                .padding(.horizontal, 54)
+                .padding(.bottom, 42)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .background(theme.colorTokens.background.color)
+    }
+
+    private var header: some View {
+        HStack {
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("返回专辑")
+
+            Spacer()
+
+            Menu {
+                Button("下载专辑") { model.downloadAll(tracks) }
+                    .disabled(tracks.isEmpty)
+                Button("加入播放队列") { model.queue = tracks }
+                    .disabled(tracks.isEmpty)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+                    .contentShape(Circle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .tint(.primary)
+            .help("更多")
+        }
+        .padding(.horizontal, MacMusicLayout.pageInset)
+        .padding(.vertical, 12)
+    }
+
+    private var albumHero: some View {
+        HStack(alignment: .center, spacing: 30) {
+            ArtworkView(
+                title: album.title,
+                artworkKey: album.artworkKey,
+                colors: theme.colorTokens,
+                size: MacMusicLayout.detailArtworkSize,
+                cornerRadius: 14
+            )
+            .shadow(color: .black.opacity(0.12), radius: 16, y: 7)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(album.title)
+                    .font(.system(size: 32, weight: .bold))
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                    .lineLimit(2)
+
+                Text(album.artistName)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .lineLimit(1)
+
+                Text(metadata)
+                    .font(.subheadline)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .lineLimit(2)
+
+                Spacer(minLength: 24)
+
+                HStack(spacing: 10) {
+                    circularAction(symbol: "shuffle", help: "随机播放") {
+                        guard !tracks.isEmpty else { return }
+                        model.queue = tracks.shuffled()
+                        if let first = model.queue.first { model.selectAndPlay(first) }
+                    }
+
+                    Button {
+                        model.playQueue(tracks)
+                    } label: {
+                        Label("播放", systemImage: "play.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(minWidth: 92, minHeight: 34)
+                            .foregroundStyle(theme.colorTokens.accent.color)
+                            .background(Color.primary.opacity(0.07), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(tracks.isEmpty)
+
+                    circularAction(symbol: "arrow.down", help: "下载专辑") {
+                        model.downloadAll(tracks)
+                    }
+                    .disabled(tracks.isEmpty)
+                }
+            }
+            .frame(minHeight: MacMusicLayout.detailArtworkSize, alignment: .leading)
+        }
+        .padding(.top, 18)
+        .padding(.bottom, 26)
+    }
+
+    private var trackList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                HStack(spacing: 12) {
+                    Text(track.trackNumber.map(String.init) ?? String(index + 1))
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        .frame(width: 28, alignment: .trailing)
+
+                    Button {
+                        model.queue = tracks
+                        model.selectAndPlay(track)
+                    } label: {
+                        Text(track.title)
+                            .font(.body.weight(track.id == model.currentTrack.id ? .semibold : .regular))
+                            .foregroundStyle(track.id == model.currentTrack.id ? theme.colorTokens.accent.color : theme.colorTokens.primaryText.color)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+
+                    Text(timeText(track.duration))
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        .frame(width: 48, alignment: .trailing)
+
+                    Menu {
+                        Button(track.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(track) }
+                        Button("下一首播放") { model.playNext(globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)) }
+                        Button("下载") { model.download(track) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 28, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .tint(.secondary)
+                    .help("更多")
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .background(hoveredTrackID == track.id ? Color.primary.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .onHover { hoveredTrackID = $0 ? track.id : nil }
+
+                if track.id != tracks.last?.id {
+                    Divider().padding(.leading, 50)
+                }
+            }
+
+            Text(summary)
+                .font(.subheadline)
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .padding(.top, 20)
+                .padding(.leading, 10)
+        }
+    }
+
+    private func circularAction(symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.colorTokens.accent.color)
+                .frame(width: 34, height: 34)
+                .background(Color.primary.opacity(0.07), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func timeText(_ duration: TimeInterval) -> String {
+        let total = max(0, Int(duration))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 
@@ -408,38 +652,98 @@ struct MacHomePage: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<TrackID>
+    let onOpenServer: () -> Void
 
     private let gridColumns = [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: AuralisSpacing.large)]
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
-                if model.currentTrack.id.rawValue != "placeholder" {
-                    continuePlaying
-                }
-                serverStatusRow
-                if !model.recentlyPlayedTracks.isEmpty {
-                    songShelf(title: "最近播放", tracks: model.recentlyPlayedTracks.prefix(12).map { $0 }) {
-                        model.browseDestination = .recentlyPlayed
+            Group {
+                if model.catalog.tracks.isEmpty {
+                    emptyLibrary
+                } else {
+                    LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
+                        if model.currentTrack.id.rawValue != "placeholder" {
+                            continuePlaying
+                        }
+                        serverStatusRow
+                        if !model.recentlyPlayedTracks.isEmpty {
+                            songShelf(title: "最近播放", tracks: model.recentlyPlayedTracks.prefix(12).map { $0 }) {
+                                model.browseDestination = .recentlyPlayed
+                            }
+                        }
+                        if !model.recentlyAddedTracks.isEmpty {
+                            songShelf(title: "最近添加", tracks: Array(model.recentlyAddedTracks.prefix(12))) {
+                                model.browseDestination = .recentlyAdded
+                            }
+                        }
+                        if !model.favoriteTracks.isEmpty {
+                            songShelf(title: "收藏", tracks: model.favoriteTracks.prefix(12).map { $0 }) {
+                                model.browseDestination = .favorites
+                            }
+                        }
+                        if !model.catalog.playlists.isEmpty {
+                            playlistShelf
+                        }
                     }
-                }
-                if !model.recentlyAddedTracks.isEmpty {
-                    songShelf(title: "最近添加", tracks: Array(model.recentlyAddedTracks.prefix(12))) {
-                        model.browseDestination = .recentlyAdded
-                    }
-                }
-                if !model.favoriteTracks.isEmpty {
-                    songShelf(title: "收藏", tracks: model.favoriteTracks.prefix(12).map { $0 }) {
-                        model.browseDestination = .favorites
-                    }
-                }
-                if !model.catalog.playlists.isEmpty {
-                    playlistShelf
                 }
             }
             .padding(AuralisSpacing.large)
         }
         .background(theme.colorTokens.background.color)
+    }
+
+    /// 空资料库沿用 Apple Music 的“内容舞台”而不是设置向导：一张主卡只保留
+    /// 一个清晰动作，避免把首次使用拆成生硬的 1/2/3 面板。
+    private var emptyLibrary: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("资料库")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+
+            Text("让音乐回到你的 Mac")
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+
+            Text("连接你的 Navidrome、OpenSubsonic 或兼容服务器后，专辑、歌手和播放列表都会出现在这里。")
+                .font(.title3)
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .frame(maxWidth: 620, alignment: .leading)
+
+            Button(action: onOpenServer) {
+                Label("添加音乐服务器", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            HStack(spacing: 16) {
+                emptyArtwork(symbol: "music.note")
+                emptyArtwork(symbol: "waveform")
+                emptyArtwork(symbol: "headphones")
+            }
+            .padding(.top, 10)
+
+            serverStatusRow
+                .padding(.top, 4)
+        }
+        .padding(40)
+        .frame(maxWidth: 760, minHeight: 460, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .background {
+            LinearGradient(
+                colors: [theme.colorTokens.accent.color.opacity(0.10), theme.colorTokens.background.color],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    private func emptyArtwork(symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 28, weight: .medium))
+            .foregroundStyle(theme.colorTokens.accent.color.opacity(0.8))
+            .frame(width: 74, height: 74)
+            .background(theme.colorTokens.surface.color.opacity(0.85), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
     }
 
     private var continuePlaying: some View {

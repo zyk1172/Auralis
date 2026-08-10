@@ -484,8 +484,20 @@ struct OpenSubsonicDomainMapper: Sendable {
             serverID: serverID,
             name: value.name ?? value.id.value,
             trackIDs: (value.entry ?? []).map { TrackID(rawValue: $0.id.value) },
-            comment: value.comment
+            comment: value.comment,
+            modifiedAt: playlistChangedDate(value.changed)
         )
+    }
+
+    /// OpenSubsonic 的 playlist.changed 是 ISO-8601 字符串。少数服务器会省略
+    /// 小数秒，因此同时尝试带/不带小数秒的标准格式；无法解析时保留 nil，
+    /// 合并逻辑将安全地回退到服务器数据而不是猜测一个时间。
+    private func playlistChangedDate(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
     }
 
     private func legacyID(prefix: String, value: String) -> String {

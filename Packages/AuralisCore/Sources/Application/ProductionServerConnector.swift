@@ -10,6 +10,13 @@ import SecurityKit
 public actor ProductionServerConnector: ServerConnecting {
     public typealias SourceFactory = @Sendable (OpenSubsonicClient) -> any LibrarySyncSource
 
+    /// 端点探测只把“不可达”与“地址虽然可达但认证/协议不正确”分开；后者绝不能误切到外网。
+    private enum EndpointProbe: Sendable {
+        case reachable(OpenSubsonicServerInfo)
+        case unavailable
+        case failed(ServerConnectionError)
+    }
+
     private let credentialVault: any CredentialVault
     private let persistence: any AuralisPersisting
     private let session: URLSession
@@ -51,6 +58,7 @@ public actor ProductionServerConnector: ServerConnecting {
             try validate(input)
 
             let normalizedURL = Self.normalizedBaseURL(input.baseURL)
+            let normalizedExternalURL = input.externalBaseURL.map(Self.normalizedBaseURL)
             let username = input.username.trimmingCharacters(in: .whitespacesAndNewlines)
             let serverID = Self.stableServerID(baseURL: normalizedURL, username: username)
             let credentialID = CredentialID(rawValue: "opensubsonic.\(serverID.rawValue)")
@@ -60,18 +68,14 @@ public actor ProductionServerConnector: ServerConnecting {
             try await credentialVault.store(input.password, for: credentialID)
 
             do {
-                let client = OpenSubsonicClient(
-                    configuration: OpenSubsonicConfiguration(
-                        serverID: serverID,
-                        baseURL: normalizedURL,
-                        authentication: .token(username: username, credentialID: credentialID)
-                    ),
-                    credentialVault: credentialVault,
-                    session: session
-                )
-
                 await progress(.authenticating)
-                let serverInfo = try await client.serverInfo()
+                let (client, serverInfo) = try await selectAuthenticatedClient(
+                    internalURL: normalizedURL,
+                    externalURL: normalizedExternalURL,
+                    serverID: serverID,
+                    username: username,
+                    credentialID: credentialID
+                )
 
                 await progress(.detectingCapabilities)
                 let capabilities = (try? await client.capabilities()) ?? ServerCapabilities()
@@ -105,6 +109,7 @@ public actor ProductionServerConnector: ServerConnecting {
                     id: serverID,
                     displayName: input.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
                     baseURL: normalizedURL,
+                    externalBaseURL: normalizedExternalURL,
                     username: username,
                     credentialReference: credentialID.rawValue
                 )
@@ -121,8 +126,8 @@ public actor ProductionServerConnector: ServerConnecting {
                 if let starred {
                     favoriteTrackIDs = starred.tracks.map(\.id.rawValue)
                     let favoriteSet = Set(favoriteTrackIDs)
-                    for index in tracks.indices where favoriteSet.contains(tracks[index].id.rawValue) {
-                        tracks[index].isFavorite = true
+                    for index in tracks.indices {
+                        tracks[index].isFavorite = favoriteSet.contains(tracks[index].id.rawValue)
                     }
                 }
                 // 首次连接就把歌单 / 流派 / 收藏落盘，下次冷启动直接读本地。
@@ -177,10 +182,16 @@ public actor ProductionServerConnector: ServerConnecting {
             guard let account = try await persistence.account(id: serverID) else {
                 return nil
             }
-            // 重建已认证的客户端：恢复播放地址，并支撑歌词/封面/后台同步的按需请求。
-            // makeStreamURL 只是本地拼串（无网络往返），不影响冷启动速度。
-            if let client = restoreClient(for: account) {
-                activeClient = client
+            // 冷启动必须先展示本地快照，不能被内外网探测（内网最长 30 秒）阻塞。
+            // 先用内网客户端拼出本地目录；端点选择转到后台，完成后会替换 activeClient，
+            // 后续播放/下载自然使用当前网络可达的端点。
+            activeClient = restoreClient(for: account)
+            if account.externalBaseURL != nil {
+                Task {
+                    if let client = await self.resolvedClient(for: account) {
+                        self.activeClient = client
+                    }
+                }
             }
             var tracks: [Track] = []
             var artists: [Artist] = []
@@ -190,22 +201,17 @@ public actor ProductionServerConnector: ServerConnecting {
                 artists = snapshot.artists
                 albums = snapshot.albums
                 if let client = activeClient {
-                    for index in tracks.indices {
-                        tracks[index].streamURL = await Self.makeStreamURL(client: client, trackID: tracks[index].id.rawValue, quality: streamQuality)
-                    }
+                    tracks = await Self.applyingStreamURLs(to: tracks, client: client, quality: streamQuality)
                 }
             }
-            // 关键：冷启动这条路径「零网络请求」。
-            // 以前这里同步 await getPlaylists + getGenres，服务器慢或不可达时
-            // 整个启动被拖住，看上去就像「每次打开都要重新下载一遍资料」。
-            // 现在改为读本地辅助缓存立即返回，联网后由 refreshAuxiliaryData() 在后台增量刷新。
+            // 除双地址的端点选择外，仍只读本地辅助缓存；歌单/流派随后后台增量刷新。
             let cached = await auxiliaryCache.snapshot(serverID: account.id)
             // 服务器收藏回流：冷启动时用本地缓存的收藏 ID 集合校正曲目收藏状态，
             // 否则重启后所有收藏都会回到未收藏，与服务器不一致。
-            if let favoriteIDs = cached?.favoriteTrackIDs, !favoriteIDs.isEmpty {
+            if let favoriteIDs = cached?.favoriteTrackIDs {
                 let favoriteSet = Set(favoriteIDs)
-                for index in tracks.indices where favoriteSet.contains(tracks[index].id.rawValue) {
-                    tracks[index].isFavorite = true
+                for index in tracks.indices {
+                    tracks[index].isFavorite = favoriteSet.contains(tracks[index].id.rawValue)
                 }
             }
             return ServerConnectionResult(
@@ -227,7 +233,7 @@ public actor ProductionServerConnector: ServerConnecting {
     /// 本方法真正走 getArtists/getAlbumList2/getAlbum 全量拉取并重写快照。
     public func resync(serverID: ServerID) async throws -> ServerConnectionResult? {
         guard let account = try await persistence.account(id: serverID) else { return nil }
-        guard let client = restoreClient(for: account) else { return nil }
+        guard let client = await resolvedClient(for: account) else { return nil }
         activeClient = client
         do {
             try Task.checkCancellation()
@@ -259,8 +265,8 @@ public actor ProductionServerConnector: ServerConnecting {
             if let starred {
                 favoriteTrackIDs = starred.tracks.map(\.id.rawValue)
                 let favoriteSet = Set(favoriteTrackIDs)
-                for index in tracks.indices where favoriteSet.contains(tracks[index].id.rawValue) {
-                    tracks[index].isFavorite = true
+                for index in tracks.indices {
+                    tracks[index].isFavorite = favoriteSet.contains(tracks[index].id.rawValue)
                 }
             }
             await auxiliaryCache.save(
@@ -315,8 +321,10 @@ public actor ProductionServerConnector: ServerConnecting {
         )
         return AuxiliaryLibraryData(
             playlists: mergedPlaylists,
+            playlistsAreAuthoritative: playlists != nil,
             genres: mergedGenres,
-            favoriteTrackIDs: mergedFavorites
+            favoriteTrackIDs: mergedFavorites,
+            favoriteTrackIDsAreAuthoritative: starred != nil
         )
     }
 
@@ -544,26 +552,80 @@ public actor ProductionServerConnector: ServerConnecting {
         }
     }
 
+    public func updateServerExternalBaseURL(serverID: ServerID, externalBaseURL: URL?) async -> Bool {
+        guard var account = try? await persistence.account(id: serverID) else { return false }
+        account.externalBaseURL = externalBaseURL.map(Self.normalizedBaseURL)
+        do {
+            try await persistence.saveAccount(account)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    public func updateServerConfiguration(
+        serverID: ServerID,
+        update: ServerConfigurationUpdate
+    ) async -> ServerAccount? {
+        guard var account = try? await persistence.account(id: serverID) else { return nil }
+        do {
+            try ServerURLPolicy.validate(update.baseURL)
+            if let externalBaseURL = update.externalBaseURL {
+                try ServerURLPolicy.validate(externalBaseURL)
+            }
+        } catch {
+            return nil
+        }
+        let displayName = update.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = update.username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displayName.isEmpty, !username.isEmpty else { return nil }
+
+        let credentialID = CredentialID(rawValue: account.credentialReference ?? "opensubsonic.\(serverID.rawValue)")
+        if let password = update.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
+            guard (try? await credentialVault.store(password, for: credentialID)) != nil else { return nil }
+        }
+        account.displayName = displayName
+        account.baseURL = Self.normalizedBaseURL(update.baseURL)
+        account.externalBaseURL = update.externalBaseURL.map(Self.normalizedBaseURL)
+        account.username = username
+        account.credentialReference = credentialID.rawValue
+        do {
+            try await persistence.saveAccount(account)
+            if activeClient?.configuration.serverID == serverID {
+                activeClient = makeClient(
+                    baseURL: account.baseURL!,
+                    serverID: serverID,
+                    username: username,
+                    credentialID: credentialID,
+                    vault: credentialVault
+                )
+            }
+            return account
+        } catch {
+            return nil
+        }
+    }
+
     /// 用「用户当前输入」执行一次真实连接测试：临时把密码存入 Keychain（测试专用 ID），
     /// 构造客户端调用 serverInfo，测试结束后删除临时凭据；不保存账号、不同步、不影响当前连接。
     public func testConnection(_ input: ServerConnectionInput) async throws -> ServerConnectionTestResult {
+        try validate(input)
         let normalizedURL = Self.normalizedBaseURL(input.baseURL)
+        let normalizedExternalURL = input.externalBaseURL.map(Self.normalizedBaseURL)
         let username = input.username.trimmingCharacters(in: .whitespacesAndNewlines)
         // 用内存凭据测试：不写 Keychain（测试连接本就不需要持久化凭据，
         // 也避免 macOS 上 Keychain 交互不允许（-128）导致测试失败）。
         let memoryVault = InMemoryCredentialVault()
         let tempCredentialID = CredentialID(rawValue: "connection-test")
         try await memoryVault.store(input.password, for: tempCredentialID)
-        let client = OpenSubsonicClient(
-            configuration: OpenSubsonicConfiguration(
-                serverID: ServerID(rawValue: "connection-test"),
-                baseURL: normalizedURL,
-                authentication: .token(username: username, credentialID: tempCredentialID)
-            ),
-            credentialVault: memoryVault,
-            session: session
+        let (_, info) = try await selectAuthenticatedClient(
+            internalURL: normalizedURL,
+            externalURL: normalizedExternalURL,
+            serverID: ServerID(rawValue: "connection-test"),
+            username: username,
+            credentialID: tempCredentialID,
+            vault: memoryVault
         )
-        let info = try await client.serverInfo()
         return ServerConnectionTestResult(
             serverType: info.serverType,
             serverVersion: info.serverVersion,
@@ -636,10 +698,34 @@ public actor ProductionServerConnector: ServerConnecting {
         guard let client = activeClient else { return false }
         do {
             try await client.deletePlaylist(id: playlistID)
-            await refreshCachedPlaylists(serverID: client.configuration.serverID)
+            await cacheDeletedPlaylist(playlistID, client: client)
             return true
         } catch {
-            return false
+            // 删除属于幂等操作：请求超时不代表服务器没有执行。用 getPlaylists 验证一次，
+            // 只有服务器仍明确返回该 ID 时才报失败，避免“已删但 App 显示删不掉”。
+            guard let playlists = try? await client.playlists(),
+                  !playlists.contains(where: { $0.id == playlistID })
+            else { return false }
+            await cacheDeletedPlaylist(playlistID, client: client, verifiedPlaylists: playlists)
+            return true
+        }
+    }
+
+    /// 删除确认后立即更新缓存。若验证请求已拿到完整列表，直接采用它；否则仅移除
+    /// 目标项，避免等待下一轮刷新期间把已删歌单显示回来。
+    private func cacheDeletedPlaylist(
+        _ playlistID: PlaylistID,
+        client: OpenSubsonicClient,
+        verifiedPlaylists: [Playlist]? = nil
+    ) async {
+        let serverID = client.configuration.serverID
+        if let verifiedPlaylists {
+            await auxiliaryCache.updatePlaylists(verifiedPlaylists, serverID: serverID)
+        } else if let cached = await auxiliaryCache.snapshot(serverID: serverID) {
+            await auxiliaryCache.updatePlaylists(
+                cached.playlists.filter { $0.id != playlistID },
+                serverID: serverID
+            )
         }
     }
 
@@ -753,6 +839,112 @@ public actor ProductionServerConnector: ServerConnecting {
         )
     }
 
+    /// 已保存账户的实际端点选择。单地址沿用零网络恢复；双地址在这里并行探测，
+    /// 让随后生成的播放/下载 URL 与当前网络一致。
+    private func resolvedClient(for account: ServerAccount) async -> OpenSubsonicClient? {
+        guard let internalURL = account.baseURL,
+              let username = account.username,
+              let reference = account.credentialReference
+        else { return nil }
+        guard account.externalBaseURL != nil else {
+            return restoreClient(for: account)
+        }
+        let selection = try? await selectAuthenticatedClient(
+            internalURL: internalURL,
+            externalURL: account.externalBaseURL,
+            serverID: account.id,
+            username: username,
+            credentialID: CredentialID(rawValue: reference)
+        )
+        return selection?.0
+    }
+
+    /// 内外网端点同时探测。内网在 30 秒窗口内可用就取消外网探测并固定内网；
+    /// 只有内网确认不可达，才采纳外网结果。认证、协议和地址校验失败不会触发降级。
+    private func selectAuthenticatedClient(
+        internalURL: URL,
+        externalURL: URL?,
+        serverID: ServerID,
+        username: String,
+        credentialID: CredentialID,
+        vault: (any CredentialVault)? = nil
+    ) async throws -> (OpenSubsonicClient, OpenSubsonicServerInfo) {
+        let vault = vault ?? credentialVault
+        let internalClient = makeClient(
+            baseURL: internalURL,
+            serverID: serverID,
+            username: username,
+            credentialID: credentialID,
+            vault: vault
+        )
+        guard let externalURL, externalURL != internalURL else {
+            return (internalClient, try await internalClient.serverInfo())
+        }
+
+        let externalClient = makeClient(
+            baseURL: externalURL,
+            serverID: serverID,
+            username: username,
+            credentialID: credentialID,
+            vault: vault
+        )
+        let externalTask = Task { await Self.probe(externalClient) }
+        let internalResult = await Self.probe(internalClient)
+        switch internalResult {
+        case let .reachable(info):
+            externalTask.cancel()
+            return (internalClient, info)
+        case let .failed(error):
+            externalTask.cancel()
+            throw error
+        case .unavailable:
+            switch await externalTask.value {
+            case let .reachable(info):
+                return (externalClient, info)
+            case let .failed(error):
+                throw error
+            case .unavailable:
+                throw ServerConnectionError.serverUnavailable
+            }
+        }
+    }
+
+    private func makeClient(
+        baseURL: URL,
+        serverID: ServerID,
+        username: String,
+        credentialID: CredentialID,
+        vault: any CredentialVault
+    ) -> OpenSubsonicClient {
+        OpenSubsonicClient(
+            configuration: OpenSubsonicConfiguration(
+                serverID: serverID,
+                baseURL: baseURL,
+                authentication: .token(username: username, credentialID: credentialID),
+                requestTimeout: 30
+            ),
+            credentialVault: vault,
+            session: session
+        )
+    }
+
+    private nonisolated static func probe(_ client: OpenSubsonicClient) async -> EndpointProbe {
+        do {
+            return .reachable(try await client.serverInfo())
+        } catch let error as OpenSubsonicClientError {
+            switch error {
+            case .transport:
+                return .unavailable
+            case let .httpStatus(status) where status == 408 || (500...599).contains(status):
+                return .unavailable
+            default:
+                return .failed(safeError(error))
+            }
+        } catch {
+            return .failed(safeError(error))
+        }
+    }
+
     /// 按流质量策略构造带认证的流地址（本地拼串，无网络往返）。
     nonisolated private static func makeStreamURL(
         client: OpenSubsonicClient,
@@ -764,6 +956,25 @@ public actor ProductionServerConnector: ServerConnecting {
             maxBitRate: quality.maxBitRate,
             format: quality.format
         )
+    }
+
+    /// 大曲库恢复时一次认证、批量生成 URL，避免 N 首歌触发 N 次 Keychain 查询。
+    nonisolated private static func applyingStreamURLs(
+        to tracks: [Track],
+        client: OpenSubsonicClient,
+        quality: StreamQualityPolicy
+    ) async -> [Track] {
+        guard !tracks.isEmpty else { return tracks }
+        guard let urls = try? await client.makeStreamURLs(
+            trackIDs: tracks.map { $0.id.rawValue },
+            maxBitRate: quality.maxBitRate,
+            format: quality.format
+        ) else { return tracks }
+        return tracks.map { track in
+            var track = track
+            track.streamURL = urls[track.id.rawValue]
+            return track
+        }
     }
 
     public nonisolated static func stableServerID(baseURL: URL, username: String) -> ServerID {
@@ -808,6 +1019,9 @@ public actor ProductionServerConnector: ServerConnecting {
 
     private func validate(_ input: ServerConnectionInput) throws {
         try ServerURLPolicy.validate(input.baseURL)
+        if let externalBaseURL = input.externalBaseURL {
+            try ServerURLPolicy.validate(externalBaseURL)
+        }
         guard !input.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ServerConnectionError.missingDisplayName
         }
@@ -918,4 +1132,3 @@ public actor ProductionServerConnector: ServerConnecting {
         return .unexpected
     }
 }
-

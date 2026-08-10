@@ -128,6 +128,36 @@ func syncStoresStagedTracks() async throws {
     #expect(status.lastCompletedAt != nil)
 }
 
+@Test("Recommendation Index V2 batches, validates, and reuses metadata classifications")
+func recommendationIndexV2RoundTrip() async throws {
+    let store = try makeStore()
+    let serverID: ServerID = "v2"
+    try await seed(store, [
+        makeTrack(serverID: serverID, remoteID: "t1", title: "Night Piano"),
+        makeTrack(serverID: serverID, remoteID: "t2", title: "Morning Run"),
+    ])
+
+    let initial = try await store.recommendationIndexV2Status(serverID: serverID)
+    #expect(initial.totalTracks == 2)
+    #expect(initial.pendingTracks == 2)
+
+    let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 80)
+    #expect(batch.tracks.count == 2)
+    let firstID = try #require(batch.tracks.first?.id)
+    let secondID = try #require(batch.tracks.last?.id)
+    let written = try await store.writeRecommendationIndexV2([
+        .init(id: firstID, moods: ["平静"], scenes: ["深夜"], energy: 1, vocals: ["器乐"], textures: ["钢琴"], confidence: 0.92),
+        .init(id: secondID, moods: ["明亮"], scenes: ["运动"], energy: 5, vocals: ["女声"], textures: ["电子"], confidence: 0.85),
+        .init(id: "v2:not-a-track", moods: ["平静"], scenes: ["深夜"], energy: 1),
+    ], serverID: serverID)
+    #expect(written == 2)
+
+    let complete = try await store.recommendationIndexV2Status(serverID: serverID)
+    #expect(complete.indexedTracks == 2)
+    #expect(complete.pendingTracks == 0)
+    #expect(try await store.recommendationIndexV2TrackIDs(serverID: serverID, query: "深夜").map(\.description) == [firstID])
+}
+
 @Test("Multi-server: ratings are scoped per server and readable back")
 func multiServerRatingIsolation() async throws {
     let store = try makeStore()

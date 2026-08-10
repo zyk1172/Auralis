@@ -61,7 +61,7 @@ struct SettingsBackupSection: View {
                 Label("从备份恢复…", systemImage: "square.and.arrow.down")
             }
 #endif
-            Text("备份内容：服务器信息（含登录凭据）、大模型接口配置与其他设置。不包含歌曲、专辑、歌单、收藏与播放记录。备份文件使用密码加密，请妥善保管密码。")
+            Text("备份内容：App 设置、音乐服务器（含登录凭据）、大模型接口、音乐下载插件（含 Token）。不包含本地数据库、歌曲、专辑、歌单、收藏、播放记录、缓存或下载文件。备份文件使用密码加密，请妥善保管密码。")
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
         }
@@ -166,10 +166,6 @@ struct SettingsBackupSection: View {
         defer { isGenerating = false }
         do {
             let servers = (try? await model.catalogCoordinator.store.listServers()) ?? []
-            guard !servers.isEmpty else {
-                exportError = SettingsBackupError.noServers.localizedDescription
-                return
-            }
             let backup = await Self.makeBackupPayload(servers: servers)
             let data = try service.encrypt(backup, password: exportPassword)
             let url = FileManager.default.temporaryDirectory
@@ -191,7 +187,7 @@ struct SettingsBackupSection: View {
                     if let url = importFileURL {
                         LabeledContent("备份文件", value: url.lastPathComponent)
                     }
-                    Text("将恢复：服务器信息、大模型配置与其他设置。不会覆盖或删除歌曲、歌单、收藏与播放记录。")
+                    Text("将恢复：App 设置、音乐服务器、大模型与音乐下载配置。不会覆盖或删除本地数据库、歌曲、歌单、收藏、播放记录、缓存或下载文件。")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     Button {
@@ -266,6 +262,8 @@ struct SettingsBackupSection: View {
         }
         let ai = AIConnectionSettings()
         let aiKey = try? await vault.retrieve(id: AIConnectionSettings.credentialID)
+        let download = MoviePilotSettings()
+        let downloadToken = try? await vault.retrieve(id: MoviePilotSettings.tokenCredentialID)
         return SettingsBackup(
             createdAt: Date(),
             servers: backupServers,
@@ -274,6 +272,11 @@ struct SettingsBackupSection: View {
                 apiPath: ai.apiPath,
                 model: ai.model,
                 apiKey: aiKey
+            ),
+            musicDownload: BackupMusicDownloadSettings(
+                baseURL: download.baseURL,
+                externalBaseURL: download.externalBaseURL,
+                token: downloadToken
             ),
             preferences: SettingsBackupService.collectedPreferences(from: .standard)
         )
@@ -294,6 +297,13 @@ struct SettingsBackupSection: View {
 
         if let apiKey = backup.ai.apiKey, !apiKey.isEmpty {
             try? await vault.store(apiKey, for: AIConnectionSettings.credentialID)
+        }
+        if let download = backup.musicDownload {
+            defaults.set(download.baseURL, forKey: MoviePilotSettings.baseURLKey)
+            defaults.set(download.externalBaseURL, forKey: MoviePilotSettings.externalBaseURLKey)
+            if let token = download.token, !token.isEmpty {
+                try? await vault.store(token, for: MoviePilotSettings.tokenCredentialID)
+            }
         }
         if let themeID = backup.preferences["auralis.selected-theme"] {
             await MainActor.run { themeStore.select(id: themeID) }
@@ -375,10 +385,6 @@ struct BackupExportPage: View {
         defer { isGenerating = false }
         do {
             let servers = (try? await model.catalogCoordinator.store.listServers()) ?? []
-            guard !servers.isEmpty else {
-                exportError = SettingsBackupError.noServers.localizedDescription
-                return
-            }
             let backup = await SettingsBackupSection.makeBackupPayload(servers: servers)
             let data = try service.encrypt(backup, password: exportPassword)
             let url = FileManager.default.temporaryDirectory

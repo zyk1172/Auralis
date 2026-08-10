@@ -21,7 +21,9 @@ public struct RecommendationQuery: Hashable, Sendable {
 
 public enum HybridRecommendationEngine {
     public static func recommend(tracks: [Track], query: RecommendationQuery, history: [PlayHistory] = []) -> [Track] {
-        let recentIDs = Set(history.sorted(by: { $0.playedAt > $1.playedAt }).prefix(30).map(\.trackID))
+        // 推荐排序不使用收藏、评分或播放历史；这些都是个人行为数据，
+        // 只在用户明确要求“只看收藏”时作为筛选条件参与。
+        _ = history
         let filtered = tracks.filter { track in
             (query.languages.isEmpty || track.language.map(query.languages.contains) == true)
                 && (query.genres.isEmpty || !query.genres.isDisjoint(with: track.genres))
@@ -29,7 +31,7 @@ public enum HybridRecommendationEngine {
                 && (!query.favoritesOnly || track.isFavorite)
         }
         let ranked = filtered.sorted { lhs, rhs in
-            score(lhs, recentIDs: recentIDs) > score(rhs, recentIDs: recentIDs)
+            objectiveOrder(lhs, rhs)
         }
         var artistCounts: [ArtistID: Int] = [:]
         var result: [Track] = []
@@ -47,11 +49,13 @@ public enum HybridRecommendationEngine {
         return trackIDs.allSatisfy(known.contains)
     }
 
-    private static func score(_ track: Track, recentIDs: Set<TrackID>) -> Double {
-        let favorite = track.isFavorite ? 2.0 : 0
-        let rating = Double(track.rating ?? 0) * 0.25
-        let freshness = recentIDs.contains(track.id) ? -1.5 : 0.7
-        return favorite + rating + freshness
+    /// 无明确偏好时使用稳定、可复现的资料库顺序，避免私人行为数据塑造结果。
+    private static func objectiveOrder(_ lhs: Track, _ rhs: Track) -> Bool {
+        let artist = lhs.artistName.localizedStandardCompare(rhs.artistName)
+        if artist != .orderedSame { return artist == .orderedAscending }
+        let title = lhs.title.localizedStandardCompare(rhs.title)
+        if title != .orderedSame { return title == .orderedAscending }
+        return lhs.id.rawValue.localizedStandardCompare(rhs.id.rawValue) == .orderedAscending
     }
 }
 

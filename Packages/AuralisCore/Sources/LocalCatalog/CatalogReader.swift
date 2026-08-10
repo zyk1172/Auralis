@@ -213,7 +213,20 @@ extension LocalCatalogStore {
             if let serverID, gid.serverID != serverID { return nil }
             let trackIDs = try playlistTrackIDs(gid)
             let isReadOnly = (row["is_readonly"]?.int ?? 0) == 1
-            return CatalogPlaylistSummary(globalID: gid, name: name, trackIDs: trackIDs, isReadOnly: isReadOnly)
+            let modifiedAt: Date?
+            if let payload = row["payload"]?.string,
+               let playlist = try? decode(Playlist.self, payload) {
+                modifiedAt = playlist.modifiedAt
+            } else {
+                modifiedAt = nil
+            }
+            return CatalogPlaylistSummary(
+                globalID: gid,
+                name: name,
+                trackIDs: trackIDs,
+                isReadOnly: isReadOnly,
+                modifiedAt: modifiedAt
+            )
         }
     }
 
@@ -301,6 +314,20 @@ extension LocalCatalogStore {
             )
         } else {
             try db.run("DELETE FROM favorites WHERE global_id = ?", [.text(globalID.description)])
+        }
+    }
+
+    /// 使用服务器 getStarred2 的完整结果原子替换某台服务器的单曲收藏，
+    /// 防止本地历史收藏在服务器取消后永久残留。
+    public func replaceFavoriteTracks(_ globalIDs: [GlobalID], serverID: ServerID) throws {
+        try db.transaction {
+            try db.run("DELETE FROM favorites WHERE kind = 'track' AND global_id LIKE ?", [.text(serverID.rawValue + ":%")])
+            for id in Set(globalIDs) where id.serverID == serverID {
+                try db.run(
+                    "INSERT INTO favorites (global_id, kind, value, updated_at) VALUES (?, 'track', 1, ?)",
+                    [.text(id.description), .real(Date().timeIntervalSince1970)]
+                )
+            }
         }
     }
 

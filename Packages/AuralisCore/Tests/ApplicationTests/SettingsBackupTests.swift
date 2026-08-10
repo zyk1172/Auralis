@@ -24,6 +24,11 @@ private func sampleBackup() -> SettingsBackup {
             model: "deepseek-chat",
             apiKey: "sk-test-123"
         ),
+        musicDownload: BackupMusicDownloadSettings(
+            baseURL: "http://192.168.2.24:3000",
+            externalBaseURL: "https://download.example.com",
+            token: "music-token"
+        ),
         preferences: [
             "auralis.selected-theme": "midnight",
             "auralis.ai.enabled": "true",
@@ -49,6 +54,9 @@ func backupRoundTripPreservesContent() throws {
     #expect(restored.ai.baseURL == "https://api.deepseek.com")
     #expect(restored.ai.model == "deepseek-chat")
     #expect(restored.ai.apiKey == "sk-test-123")
+    #expect(restored.musicDownload?.baseURL == "http://192.168.2.24:3000")
+    #expect(restored.musicDownload?.externalBaseURL == "https://download.example.com")
+    #expect(restored.musicDownload?.token == "music-token")
     #expect(restored.preferences["auralis.selected-theme"] == "midnight")
     #expect(restored.preferences["auralis.ai.enabled"] == "true")
     #expect(restored.preferences["auralis.audio.highQualityWiFi"] == "false")

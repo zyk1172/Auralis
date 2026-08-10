@@ -3,6 +3,7 @@ import AIKit
 import Domain
 import Foundation
 import LocalCatalog
+import SecurityKit
 import Testing
 
 // MARK: - Test doubles
@@ -17,6 +18,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     private(set) var deletedPlaylists: [GlobalID] = []
     private(set) var addedToPlaylist: [(GlobalID, [GlobalID])] = []
     private(set) var createdPlaylistNames: [String] = []
+    private(set) var replacedQueues: [[GlobalID]] = []
 
     /// 播放类工具的统一返回（默认 true；置 false 可模拟「目标不在目录」）。
     var playResult: Bool = true
@@ -48,7 +50,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) {}
     func playNext(globalID: GlobalID) {}
-    func replaceQueue(globalIDs: [GlobalID]) {}
+    func replaceQueue(globalIDs: [GlobalID]) { replacedQueues.append(globalIDs) }
     func removeFromQueue(at index: Int) {}
     func reorderQueue(from: Int, to: Int) {}
     func clearQueue() {}
@@ -212,6 +214,205 @@ private func seed(_ store: LocalCatalogStore, _ tracks: [Track]) async throws {
     let session = try await store.beginSync(serverID: serverID, mode: .full)
     try await store.stageTracks(tracks, session: session)
     try await store.completeSync(session, completedAt: .now)
+}
+
+// MARK: - 协议级多轮工具调用网络桩
+
+/// 以真实 URLSession / OpenAICompatibleProvider 跑 Agent 循环，同时记录每一轮
+/// 请求体。与逐个 UI 用例相比，它能在一次会话内验证多轮工具回灌的协议形状。
+private final class AgentProtocolMockURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Stub: Sendable {
+        let data: Data
+        let headers: [String: String]
+
+        init(data: Data, headers: [String: String] = ["Content-Type": "text/event-stream"]) {
+            self.data = data
+            self.headers = headers
+        }
+    }
+
+    private static let state = State()
+
+    private final class State: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stubs: [Stub] = []
+        private var capturedRequests: [URLRequest] = []
+
+        func reset(stubs: [Stub]) {
+            lock.lock()
+            self.stubs = stubs
+            capturedRequests = []
+            lock.unlock()
+        }
+
+        func next(for request: URLRequest) -> Stub? {
+            lock.lock()
+            defer { lock.unlock() }
+            capturedRequests.append(materialized(request))
+            guard !stubs.isEmpty else { return nil }
+            return stubs.removeFirst()
+        }
+
+        func requests() -> [URLRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return capturedRequests
+        }
+
+        private func materialized(_ request: URLRequest) -> URLRequest {
+            guard request.httpBody == nil, let stream = request.httpBodyStream else { return request }
+            stream.open()
+            defer { stream.close() }
+            var body = Data()
+            var buffer = [UInt8](repeating: 0, count: 1_024)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                body.append(buffer, count: count)
+            }
+            var copy = request
+            copy.httpBodyStream = nil
+            copy.httpBody = body
+            return copy
+        }
+    }
+
+    static func reset(stubs: [Stub]) { state.reset(stubs: stubs) }
+    static var requests: [URLRequest] { state.requests() }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let stub = Self.state.next(for: request), let url = request.url,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: stub.headers)
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: stub.data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+@Suite("OpenAI protocols: one-session multi-round Agent tool loop", .serialized)
+struct OpenAIProtocolAgentLoopTests {
+    private func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AgentProtocolMockURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    private func makeProvider(apiPath: String) -> OpenAICompatibleProvider {
+        OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "protocol-loop",
+                baseURL: URL(string: "https://example.invalid")!,
+                apiPath: apiPath,
+                model: "protocol-loop-model",
+                supportsToolCalling: true
+            ),
+            credentialVault: InMemoryCredentialVault(),
+            session: makeSession()
+        )
+    }
+
+    private func requestObject(_ request: URLRequest) throws -> [String: Any] {
+        let body = try #require(request.httpBody)
+        return try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+    }
+
+    private func runThreeRoundToolChain(
+        apiPath: String,
+        stubs: [AgentProtocolMockURLProtocol.Stub]
+    ) async throws -> (requests: [[String: Any]], collector: EmittedCollector) {
+        AgentProtocolMockURLProtocol.reset(stubs: stubs)
+        let store = try makeStore()
+        let collector = EmittedCollector()
+        await AgentRunner.run(
+            userText: "查询资料库后检查当前播放状态",
+            provider: makeProvider(apiPath: apiPath),
+            model: "protocol-loop-model",
+            bridge: MockAgentBridge(),
+            catalog: store,
+            context: .init(serverID: "test-server"),
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        return (try AgentProtocolMockURLProtocol.requests.map(requestObject), collector)
+    }
+
+    /// Chat Completions：同一 Agent 会话内连续 two tools → final；最后一轮的
+    /// SSE JSON 被拆成两段 data 行，覆盖标准 SSE 多行事件的回归。
+    @Test func chatCompletionsReplaysTwoToolResultsInOneSession() async throws {
+        let first = """
+        data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"chat-call-1\",\"type\":\"function\",\"function\":{\"name\":\"library_get_summary\",\"arguments\":\"{}\"}}]}}]}
+
+        data: [DONE]
+        """
+        let second = """
+        data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"chat-call-2\",\"type\":\"function\",\"function\":{\"name\":\"playback_get_state\",\"arguments\":\"{}\"}}]}}]}
+
+        data: [DONE]
+        """
+        let final = """
+        event: message
+        data: {\"choices\":[{\"delta\":{\"content\":\"协议链路已完成\"},\"finish_reason\":\"stop\",\"extra\":
+        data: true}]}
+        """
+        let outcome = try await runThreeRoundToolChain(
+            apiPath: "/v1/chat/completions",
+            stubs: [.init(data: Data(first.utf8)), .init(data: Data(second.utf8)), .init(data: Data(final.utf8))]
+        )
+
+        #expect(outcome.requests.count == 3)
+        #expect(await outcome.collector.containsText("协议链路已完成"))
+        let secondMessages = try #require(outcome.requests[1]["messages"] as? [[String: Any]])
+        #expect(secondMessages.contains { ($0["tool_call_id"] as? String) == "chat-call-1" })
+        let thirdMessages = try #require(outcome.requests[2]["messages"] as? [[String: Any]])
+        #expect(thirdMessages.contains { ($0["tool_call_id"] as? String) == "chat-call-1" })
+        #expect(thirdMessages.contains { ($0["tool_call_id"] as? String) == "chat-call-2" })
+    }
+
+    /// 原生 Responses：同一 Agent 会话内连续 two function_call → final，并确认
+    /// function_call_output 使用 Responses 所需的 call_id。
+    @Test func responsesAPIReplaysTwoFunctionOutputsInOneSession() async throws {
+        let first = """
+        event: response.output_item.done
+        data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"resp-call-1\",\"name\":\"library_get_summary\",\"arguments\":\"{}\"}}
+
+        data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}
+        """
+        let second = """
+        event: response.output_item.done
+        data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"resp-call-2\",\"name\":\"playback_get_state\",\"arguments\":\"{}\"}}
+
+        data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r2\"}}
+        """
+        let final = """
+        event: response.output_text.delta
+        data: {\"type\":\"response.output_text.delta\",\"delta\":\"Responses 协议链路已完成\",\"extra\":
+        data: true}
+
+        data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r3\"}}
+        """
+        let outcome = try await runThreeRoundToolChain(
+            apiPath: "/v1/responses",
+            stubs: [.init(data: Data(first.utf8)), .init(data: Data(second.utf8)), .init(data: Data(final.utf8))]
+        )
+
+        #expect(outcome.requests.count == 3)
+        #expect(await outcome.collector.containsText("Responses 协议链路已完成"))
+        let secondInput = try #require(outcome.requests[1]["input"] as? [[String: Any]])
+        #expect(secondInput.contains { ($0["type"] as? String) == "function_call" && ($0["call_id"] as? String) == "resp-call-1" })
+        #expect(secondInput.contains { ($0["type"] as? String) == "function_call_output" && ($0["call_id"] as? String) == "resp-call-1" })
+        let thirdInput = try #require(outcome.requests[2]["input"] as? [[String: Any]])
+        #expect(thirdInput.contains { ($0["type"] as? String) == "function_call_output" && ($0["call_id"] as? String) == "resp-call-1" })
+        #expect(thirdInput.contains { ($0["type"] as? String) == "function_call_output" && ($0["call_id"] as? String) == "resp-call-2" })
+    }
 }
 
 // MARK: - Tool validation
@@ -1258,6 +1459,34 @@ func loopBlocksRepeatedSearches() async throws {
     // 重复搜索被拦截：最后一轮模型请求里应出现停止搜索的提示。
     let lastRequest = provider.requests.last
     #expect(lastRequest?.messages.contains { $0.content.contains("请停止重复搜索") } == true)
+}
+
+@Test("Loop allows only one queue replacement per task")
+func loopBlocksSecondQueueReplacement() async throws {
+    let store = try makeStore()
+    let first = makeTrack(serverID: "test-server", remoteID: "queue-1", title: "第一首")
+    let second = makeTrack(serverID: "test-server", remoteID: "queue-2", title: "第二首")
+    try await seed(store, [first, second])
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let provider = ScriptedAIProvider(actionBatches: [
+        "ACTION: {\"tool\":\"queue_replace\",\"args\":{\"trackIDs\":\"test-server:queue-1\"}}",
+        "ACTION: {\"tool\":\"queue_replace\",\"args\":{\"trackIDs\":\"test-server:queue-2\"}}",
+        "已完成。",
+    ])
+    await AgentRunner.run(
+        userText: "建立一个播放队列",
+        provider: provider,
+        model: "scripted-model",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+    #expect(bridge.replacedQueues.count == 1)
+    #expect(bridge.replacedQueues.first?.first?.remoteID == "queue-1")
+    #expect(await collector.containsText("已跳过第二次替换队列"))
 }
 
 /// 链式修改 Track 的测试辅助。

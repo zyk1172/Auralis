@@ -17,7 +17,6 @@ private enum HomeCardMetrics {
 struct HomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    @State private var isEditingLayout = false
 
     private var colors: ThemeColors { theme.colorTokens }
 
@@ -34,25 +33,21 @@ struct HomeView: View {
             .padding(.top, AuralisSpacing.medium)
             .padding(.bottom, AuralisSpacing.large)
         }
+        .reportsBottomDockScroll()
         .background(ambientBackground)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    isEditingLayout = true
+                    model.selectedSection = .settings
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    Image(systemName: "gearshape")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(colors.accent.color)
                         .frame(width: 30, height: 30)
-                        .background(colors.surface.color)
-                        .clipShape(Circle())
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel("编辑首页")
+                .accessibilityLabel("设置")
             }
-        }
-        .sheet(isPresented: $isEditingLayout) {
-            HomeLayoutEditView(model: model, theme: theme)
         }
     }
 
@@ -366,7 +361,7 @@ struct HomeView: View {
     // MARK: - 资料库统计
 
     private var librarySummary: some View {
-        HStack(spacing: AuralisSpacing.medium) {
+        HStack(spacing: AuralisSpacing.small) {
             stat("\(model.catalog.artists.count)", "艺术家")
             stat("\(model.catalog.albums.count)", "专辑")
             stat("\(model.catalog.tracks.count)", "歌曲")
@@ -375,12 +370,23 @@ struct HomeView: View {
     }
 
     private func stat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading) {
-            Text(value).font(.title2.bold()).foregroundStyle(colors.primaryText.color)
-            Text(label).font(.caption).foregroundStyle(colors.secondaryText.color)
+        VStack(alignment: .center) {
+            Text(value)
+                .font(.headline.bold())
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .foregroundStyle(colors.primaryText.color)
+                .frame(maxWidth: .infinity, alignment: .center)
+            Text(label)
+                .font(.caption2)
+                .lineLimit(1)
+                .foregroundStyle(colors.secondaryText.color)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(AuralisSpacing.medium)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, AuralisSpacing.small)
+        .padding(.vertical, AuralisSpacing.medium)
         .background(colors.surface.color)
         .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
     }

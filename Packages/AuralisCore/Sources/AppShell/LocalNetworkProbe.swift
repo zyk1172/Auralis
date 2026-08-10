@@ -3,13 +3,13 @@ import Foundation
 import Network
 #endif
 
-#if DEBUG
-/// NWConnection 本地网络探测结果（仅 DEBUG 诊断用，不参与正式请求）。
+/// NWConnection 本地网络探测结果。
 ///
-/// 用途：定位 macOS「本地网络」权限链路。URLSession 只给出笼统的 -1009，
-/// 用 NWConnection 直接观察连接状态机，尤其区分：
+/// macOS 对局域网访问的隐私授权由实际的网络连接触发，而 URLSession 在被拦截时
+/// 只会给出笼统的 -1009。因此正式连接前会用这个轻量 TCP 请求触发系统授权，并区分：
 /// - `.waiting` + `unsatisfiedReason == .localNetworkDenied` → 本地网络隐私被拦截
 /// - `.ready` → 本地网络 TCP 可达
+#if canImport(Network)
 public struct LocalNetworkProbeResult: Sendable, Equatable {
     public enum State: String, Sendable {
         case ready = "ready"
@@ -32,8 +32,10 @@ public struct LocalNetworkProbeResult: Sendable, Equatable {
 }
 #endif
 
-#if DEBUG
-/// 仅 DEBUG 的 TCP 连通性 / 本地网络权限探测。
+#if canImport(Network)
+/// TCP 连通性 / 本地网络权限预检。
+///
+/// 在 macOS 正式连接局域网服务器前调用一次，以触发系统的「本地网络」授权弹窗。
 public enum LocalNetworkProbe {
     /// 对 `host:port` 建立 NWConnection TCP 连接，观察状态机直到 ready / failed /
     /// cancelled / 超时。若期间出现 `.waiting(localNetworkDenied)` 且最终未 ready，
