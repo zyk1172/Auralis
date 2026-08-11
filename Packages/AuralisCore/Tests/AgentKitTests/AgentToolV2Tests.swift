@@ -82,6 +82,41 @@ private final class IndexScriptedProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+/// 覆盖真机使用的 OpenAI 原生 function calling：参数中的 items 是数组而不是
+/// 预先转义的 JSON 字符串。
+private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
+    private var call: AIToolCall?
+    var supportsToolCalling: Bool { true }
+
+    init(call: AIToolCall) { self.call = call }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "native-index", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        if let call {
+            self.call = nil
+            return AICompletionResponse(model: request.model, content: "", finishReason: "tool_calls", toolCalls: [call])
+        }
+        return AICompletionResponse(model: request.model, content: "索引已完成。", finishReason: "stop")
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(model: request.model))
+            if let call {
+                self.call = nil
+                continuation.yield(.toolCall(call))
+            } else {
+                continuation.yield(.delta("索引已完成。"))
+            }
+            continuation.yield(.completed)
+            continuation.finish()
+        }
+    }
+}
+
 private actor IndexResultCollector {
     private var texts: [String] = []
     func record(_ message: AgentChatMessage) {
@@ -155,6 +190,61 @@ func recommendationIndexV2TextAgentRoundTrip() async throws {
     #expect(status.pendingTracks == 0)
     #expect(try await store.recommendationIndexV2TrackIDs(serverID: serverID, query: "深夜") == [gid])
     #expect(await collector.contains("已处理完成"))
+}
+
+@Test("原生工具调用可用结构化数组写入 V2，并创建自定义分类")
+func recommendationIndexV2NativeStructuredWriteAndCustomTags() async throws {
+    let store = try makeV2Store()
+    let serverID: ServerID = "native-index-server"
+    try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "native-1", title: "Chamber Night")])
+    let gid = GlobalID(serverID: serverID, remoteID: "native-1")
+    let arguments: [String: Any] = [
+        "items": [[
+            "id": gid.description,
+            "moods": ["平静"],
+            "scenes": ["深夜"],
+            "energy": 2,
+            "tempo": 2,
+            "acousticness": 5,
+            "danceability": 1,
+            "vocals": ["器乐"],
+            "textures": ["弦乐"],
+            "styles": ["古典"],
+            "customTags": ["编制": ["室内乐"], "聆听方式": ["耳机"]],
+            "confidence": 0.94,
+        ]],
+    ]
+    let argumentData = try JSONSerialization.data(withJSONObject: arguments)
+    let provider = NativeIndexProvider(call: AIToolCall(
+        id: "native-write-1",
+        name: "library_index_v2_write_batch",
+        arguments: String(decoding: argumentData, as: UTF8.self)
+    ))
+
+    await AgentRunner.run(
+        userText: "继续构建推荐索引 V2",
+        provider: provider,
+        model: "native-index-model",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID, currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    #expect(status.pendingTracks == 0)
+    let custom = try await store.readRecommendationIndexV2(serverID: serverID, dimension: "编制", value: "室内乐")
+    #expect(custom.map(\.track.id) == [gid.description])
+
+    let definition = try #require(ToolSelector.toolDefinitions(
+        from: AgentToolRegistry.all.filter { $0.name == "library_index_v2_write_batch" }
+    ).first)
+    let schemaData = try #require(definition.parametersJSON?.data(using: .utf8))
+    let schema = try #require(JSONSerialization.jsonObject(with: schemaData) as? [String: Any])
+    let properties = try #require(schema["properties"] as? [String: Any])
+    let items = try #require(properties["items"] as? [String: Any])
+    #expect(items["type"] as? String == "array")
 }
 
 @Test("v2 playback_play_song executes through bridge")

@@ -154,9 +154,16 @@ public enum ToolSelector {
     /// 由 ToolParameter 生成最小 JSON Schema。
     static func parametersJSON(for descriptor: ToolDescriptor) -> String? {
         guard !descriptor.parameters.isEmpty else { return nil }
-        var properties: [String: [String: String]] = [:]
+        var properties: [String: Any] = [:]
         for parameter in descriptor.parameters {
-            properties[parameter.name] = ["type": "string", "description": parameter.description]
+            if let schemaJSON = parameter.schemaJSON,
+               let data = schemaJSON.data(using: .utf8),
+               var schema = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                schema["description"] = parameter.description
+                properties[parameter.name] = schema
+            } else {
+                properties[parameter.name] = ["type": "string", "description": parameter.description]
+            }
         }
         let required = descriptor.parameters.filter(\.required).map(\.name)
         let schema: [String: Any] = [

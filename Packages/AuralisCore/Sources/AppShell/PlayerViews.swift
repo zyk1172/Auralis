@@ -326,12 +326,15 @@ struct NowPlayingView: View {
         let heroHeight = max(geo.size.height - estimatedControlHeight, 190)
         // 保留海报主体感，但四周留出明确呼吸空间，避免贴近分段控件和曲目信息。
         let artworkSide = min(350, geo.size.width * 0.84, heroHeight * 0.88)
+        // Glow 画布以封面为中心向外扩散；允许的最大值不超过页面可用高度，
+        // 避免光效被 TabView 页面边缘裁成方框，同时封面本体尺寸不受影响。
+        let glowCanvasSize = max(0, heroHeight - AuralisSpacing.medium * 2)
 
         return VStack(spacing: sectionSpacing) {
             TabView(selection: $page) {
                 lyrics
                     .tag(NowPlayingPage.lyrics)
-                artworkHero(side: artworkSide, compactHeight: compactHeight)
+                artworkHero(side: artworkSide, compactHeight: compactHeight, glowCanvasSize: glowCanvasSize)
                     .tag(NowPlayingPage.player)
                 queue
                     .tag(NowPlayingPage.queue)
@@ -353,27 +356,26 @@ struct NowPlayingView: View {
     }
 
     /// 上方海报区：在分段控件以下的空白区居中，保留轻微下移以强化上下留白。
-    private func artworkHero(side: CGFloat, compactHeight: Bool) -> some View {
+    private func artworkHero(side: CGFloat, compactHeight: Bool, glowCanvasSize: CGFloat) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: AuralisSpacing.medium)
             ZStack {
                 NowPlayingArtworkGlowView(
                     isPlaying: model.playbackState == .playing,
                     artworkKey: model.currentTrack.artworkKey,
-                    title: model.currentTrack.albumTitle,
                     colors: theme.colorTokens,
-                    size: side
+                    size: side,
+                    maxCanvasSize: glowCanvasSize
                 )
+                // 封面本体只保留轻微中性黑色阴影负责层级；彩色环境光全部由
+                // NowPlayingArtworkGlowView（真实封面模糊副本）承担，避免三套光叠加。
                 ArtworkView(
                     title: model.currentTrack.albumTitle,
                     artworkKey: model.currentTrack.artworkKey,
                     colors: theme.colorTokens,
                     size: side
                 )
-                .shadow(
-                    color: theme.colorTokens.accent.color.opacity(theme.motion.glowIntensity),
-                    radius: compactHeight ? 20 : 28
-                )
+                .shadow(color: Color.black.opacity(0.22), radius: 12, x: 0, y: 2)
             }
             Spacer(minLength: AuralisSpacing.xSmall)
         }
@@ -835,6 +837,38 @@ private struct OneShotMarqueeText: View {
     }
 }
 
+/// 歌曲信息页的公开音乐资料状态。它只负责把偏好和三个来源的独立结果折叠成
+/// 用户可理解的页面状态；关闭来源不会被误报成“暂无数据”。
+enum ExternalMusicInformationViewState: Equatable {
+    case disabled
+    case loading
+    case available
+    case noData
+    case failed
+    case rateLimited
+    case unavailable
+
+    static func resolve(
+        preferences: ExternalMusicPreferences,
+        isLoading: Bool,
+        metrics: CommunityMusicMetrics?
+    ) -> Self {
+        let enabledSources = CommunityMusicSource.allCases.filter(preferences.isEnabled)
+        guard preferences.enabled, !enabledSources.isEmpty else { return .disabled }
+        if isLoading { return .loading }
+        guard let metrics else { return .failed }
+
+        let statuses = enabledSources.compactMap { metrics.value(for: $0)?.status }
+        if !statuses.isEmpty, statuses.allSatisfy({ $0 == .disabled }) { return .disabled }
+        if statuses.contains(.available) { return .available }
+        if statuses.contains(.loading) { return .loading }
+        if statuses.contains(.rateLimited) { return .rateLimited }
+        if statuses.contains(.unavailable) { return .unavailable }
+        if statuses.contains(.failed) { return .failed }
+        return .noData
+    }
+}
+
 /// 播放页“歌曲信息”：仅展示真实本地目录与播放状态，不暴露流地址或凭据。
 private struct TrackInformationSheet: View {
     @ObservedObject var model: AuralisAppModel
@@ -842,7 +876,36 @@ private struct TrackInformationSheet: View {
     let track: Track
     @Environment(\.dismiss) private var dismiss
     @State private var externalResult: AgentExternalMusicResult?
-    @State private var isLoadingExternalData = false
+    @State private var isLoadingExternalData = true
+    // AppStorage 只负责让打开中的信息页在设置变化时立即重算；权限判定的唯一模型仍是
+    // ExternalMusicPreferences，网络层还会执行同一份 gating。
+    @AppStorage(ExternalMusicPreferences.Keys.enabled) private var externalMusicEnabled = true
+    @AppStorage(ExternalMusicPreferences.Keys.musicBrainz) private var musicBrainzEnabled = true
+    @AppStorage(ExternalMusicPreferences.Keys.critiqueBrainz) private var critiqueBrainzEnabled = true
+    @AppStorage(ExternalMusicPreferences.Keys.listenBrainz) private var listenBrainzEnabled = true
+
+    private var externalMusicPreferences: ExternalMusicPreferences {
+        ExternalMusicPreferences.current()
+    }
+
+    private var externalMusicViewState: ExternalMusicInformationViewState {
+        .resolve(
+            preferences: externalMusicPreferences,
+            isLoading: isLoadingExternalData,
+            metrics: externalResult?.metrics
+        )
+    }
+
+    private var externalMusicRequestID: String {
+        [
+            track.serverID.rawValue,
+            track.id.rawValue,
+            externalMusicEnabled.description,
+            musicBrainzEnabled.description,
+            critiqueBrainzEnabled.description,
+            listenBrainzEnabled.description,
+        ].joined(separator: "|")
+    }
 
     var body: some View {
         NavigationStack {
@@ -875,23 +938,38 @@ private struct TrackInformationSheet: View {
                     infoRow("歌词", model.currentLyrics == nil ? "无" : "已获取")
                 }
                 Section("大众评价") {
-                    if isLoadingExternalData && externalResult == nil {
+                    switch externalMusicViewState {
+                    case .disabled:
+                        Text("公开音乐数据已关闭。")
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    case .loading:
                         HStack(spacing: AuralisSpacing.small) {
                             ProgressView()
                             Text("正在按需查询公开音乐资料…")
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                         }
-                    } else if let metrics = externalResult?.metrics, metrics.hasCommunityEvidence {
-                        communityMetricRow(.musicBrainz, in: metrics)
-                        communityMetricRow(.critiqueBrainz, in: metrics)
-                        communityMetricRow(.listenBrainz, in: metrics)
-                    } else {
+                    case .available:
+                        if let metrics = externalResult?.metrics {
+                            communityMetricRow(.musicBrainz, in: metrics, preferences: externalMusicPreferences)
+                            communityMetricRow(.critiqueBrainz, in: metrics, preferences: externalMusicPreferences)
+                            communityMetricRow(.listenBrainz, in: metrics, preferences: externalMusicPreferences)
+                        }
+                        Text("各来源含义不同，评分、评论数和收听量不会合并为综合分。")
+                            .font(.caption)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    case .noData:
                         Text("暂无可核验的大众评价数据。")
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    case .failed:
+                        Text("公开音乐数据暂时不可用。")
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    case .rateLimited:
+                        Text("公开音乐数据请求过于频繁，请稍后再试。")
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    case .unavailable:
+                        Text("公开音乐数据暂时不可用，请检查网络连接。")
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
-                    Text("各来源含义不同，评分、评论数和收听量不会合并为综合分。")
-                        .font(.caption)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -905,7 +983,14 @@ private struct TrackInformationSheet: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .task(id: "\(track.serverID.rawValue)|\(track.id.rawValue)") {
+            .task(id: externalMusicRequestID) {
+                externalResult = nil
+                let preferences = externalMusicPreferences
+                let hasEnabledSource = CommunityMusicSource.allCases.contains(where: preferences.isEnabled)
+                guard preferences.enabled, hasEnabledSource else {
+                    isLoadingExternalData = false
+                    return
+                }
                 isLoadingExternalData = true
                 externalResult = await model.agentCoordinator.externalMusicData(for: track)
                 isLoadingExternalData = false
@@ -931,10 +1016,30 @@ private struct TrackInformationSheet: View {
     @ViewBuilder
     private func communityMetricRow(
         _ source: CommunityMusicSource,
-        in metrics: CommunityMusicMetrics
+        in metrics: CommunityMusicMetrics,
+        preferences: ExternalMusicPreferences
     ) -> some View {
-        if let metric = metrics.value(for: source), metric.status == .available {
-            infoRow(sourceTitle(source), metricDescription(metric))
+        if preferences.isEnabled(source) {
+            if let metric = metrics.value(for: source) {
+                switch metric.status {
+                case .available:
+                    infoRow(sourceTitle(source), metricDescription(metric))
+                case .noData, .notSupported:
+                    infoRow(sourceTitle(source), "暂无数据")
+                case .failed:
+                    infoRow(sourceTitle(source), "查询失败")
+                case .rateLimited:
+                    infoRow(sourceTitle(source), "请求过于频繁")
+                case .unavailable:
+                    infoRow(sourceTitle(source), "暂时不可用")
+                case .loading:
+                    infoRow(sourceTitle(source), "正在查询")
+                case .disabled:
+                    EmptyView()
+                }
+            } else {
+                infoRow(sourceTitle(source), "暂无数据")
+            }
         }
     }
 

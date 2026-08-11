@@ -749,14 +749,14 @@ struct BottomGlassBarShell<Content: View>: View {
         Group {
             if reduceTransparency {
                 framedContent
-                    .background(.background, in: RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous))
+                    .background(.background, in: Capsule(style: .continuous))
             } else {
                 framedContent
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous))
+                    .glassEffect(.regular, in: Capsule(style: .continuous))
             }
         }
         .overlay(
-            RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous)
+            Capsule(style: .continuous)
                 .stroke(Color.white.opacity(reduceTransparency ? 0.14 : 0.08), lineWidth: 0.5)
         )
         .shadow(

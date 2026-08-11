@@ -17,6 +17,8 @@ public enum ContextManager {
     /// 按 token 预算裁剪的模型总上下文上限。当前模型最大 256K；实际输入还会由
     /// `inputBudget` 为 16K 输出和协议字段预留空间。
     public static let maxContextTokens = 256_000
+    /// 消息角色、JSON 包装、原生工具字段等不在正文估算中的固定协议预留。
+    public static let protocolReserveTokens = 1_024
 
     /// 为输入计算真实可用预算：上下文窗口必须为输出、工具 schema 与协议开销留空间。
     public static func inputBudget(
@@ -24,9 +26,10 @@ public enum ContextManager {
         requestedInputBudget: Int,
         reservedOutputTokens: Int
     ) -> Int {
-        let protocolReserve = 1_024
-        let available = capabilities.maxContextTokens - reservedOutputTokens - protocolReserve
-        return max(2_048, min(requestedInputBudget, available))
+        let available = max(0, capabilities.maxContextTokens - reservedOutputTokens - protocolReserveTokens)
+        // 极小上下文模型可能连旧的 2K 下限也容纳不下；此时宁可返回真实剩余值，
+        // 也不能为了满足人为下限而制造一个超过 Provider 窗口的请求。
+        return min(max(0, requestedInputBudget), available)
     }
 
     /// 裁剪对话：始终保留首条 system；截取末尾若干条。
@@ -50,15 +53,18 @@ public enum ContextManager {
         _ conversation: [AIMessage],
         maxTokens: Int = ContextManager.maxContextTokens
     ) -> [AIMessage] {
-        guard conversation.count > 2 else { return conversation }
+        guard !conversation.isEmpty else { return [] }
         let system = conversation.first { $0.role == .system } ?? conversation[0]
         var kept: [AIMessage] = []
-        var tokens = 0
+        // System prompt 是实际输入的一部分，必须先占用预算；旧实现把它无条件加回，
+        // 在工具清单较长时会使裁剪后的请求仍超过 Provider 上下文窗口。
+        var tokens = estimatedTokens(system)
         for message in conversation.reversed() {
-            // 系统提示单独保留并最后加回，不占用普通预算。
+            // 系统提示单独保留并最后加回；其成本已经计入 `tokens`。
             if message.role == .system { continue }
-            tokens += estimatedTokens(message.content)
-            if tokens > maxTokens, !kept.isEmpty { break }
+            let messageTokens = estimatedTokens(message)
+            guard tokens + messageTokens <= maxTokens else { break }
+            tokens += messageTokens
             kept.insert(message, at: 0)
         }
         // 若首条被裁掉，把开头的连续 .tool 消息整组丢弃（其 assistant tool_calls 已丢失）。
@@ -87,5 +93,19 @@ public enum ContextManager {
             if scalar.isASCII { ascii += 1 } else { nonAscii += 1 }
         }
         return nonAscii + ascii / 4 + 1
+    }
+
+    /// 计算消息正文及原生工具调用参数的近似输入成本。角色/JSON 固定开销由
+    /// `protocolReserveTokens` 统一预留，避免在每条消息重复猜测。
+    public static func estimatedTokens(_ message: AIMessage) -> Int {
+        var total = estimatedTokens(message.content)
+        if let toolCallID = message.toolCallID { total += estimatedTokens(toolCallID) }
+        if let name = message.name { total += estimatedTokens(name) }
+        for call in message.toolCalls ?? [] {
+            total += estimatedTokens(call.id)
+            total += estimatedTokens(call.name)
+            total += estimatedTokens(call.arguments)
+        }
+        return total
     }
 }

@@ -134,6 +134,39 @@ struct DownloadManagerTests {
         #expect(DownloadTaskMetadata.decode(taskDescription: "unrelated") == nil)
     }
 
+    @Test("相同 TrackID 在不同服务器的活动任务互不覆盖")
+    func sameTrackIDAcrossServersHasIndependentRuntimeState() {
+        let (metadataStore, defaults, suiteName) = makeMetadataStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let trackID = TrackID(rawValue: "shared-track")
+        let metadataA = DownloadTaskMetadata(trackID: trackID, serverID: "server-a", codec: "flac")
+        let metadataB = DownloadTaskMetadata(trackID: trackID, serverID: "server-b", codec: "alac")
+        metadataStore.save(metadataA, for: 41)
+        metadataStore.save(metadataB, for: 42)
+
+        let manager = DownloadManager(
+            store: makeStore(),
+            metadataStore: metadataStore,
+            automaticallyReconnect: false
+        )
+        let idA = DownloadTaskID(serverID: metadataA.serverID, trackID: trackID)
+        let idB = DownloadTaskID(serverID: metadataB.serverID, trackID: trackID)
+
+        #expect(manager.activeCount() == 2)
+        #expect(manager.isDownloading(idA))
+        #expect(manager.isDownloading(idB))
+        #expect(manager.status(idA)?.status == .downloading)
+        #expect(manager.status(idB)?.status == .downloading)
+        #expect(manager.status(trackID) == nil) // 裸 ID 在多服务器场景必须保持不确定。
+
+        manager.cancel(idA)
+        #expect(!manager.isDownloading(idA))
+        #expect(manager.isDownloading(idB))
+        #expect(manager.activeCount() == 1)
+        #expect(metadataStore.metadata(for: 41) == nil)
+        #expect(metadataStore.metadata(for: 42) == metadataB)
+    }
+
     @Test("持久映射会在新 DownloadManager 初始化时恢复并在系统任务缺失时标记失败")
     func persistedMetadataHydratesAndPrunesStaleTask() {
         let (metadataStore, defaults, suiteName) = makeMetadataStore()

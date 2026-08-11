@@ -121,7 +121,8 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
 
     public func authorizes(_ descriptor: ToolDescriptor) -> Bool {
         guard allowedToolGroups.contains(descriptor.group),
-              allowedPermissions.contains(descriptor.permission)
+              allowedPermissions.contains(descriptor.permission),
+              scopes.isSuperset(of: descriptor.requiredScopes)
         else { return false }
         return Self.risk(for: descriptor.permission) <= maxRisk
     }
@@ -562,7 +563,7 @@ public enum AgentCompletionEvaluator {
             if state.facts["recommendation.index.pending"] == nil {
                 continuation = "推荐索引完成事实尚未取得。请先调用 library_index_v2_status；只有真实工具结果显示 pending=0 才能结束。"
             } else if state.facts["recommendation.index.nextBatchAvailable"] == "true" {
-                continuation = "推荐索引仍有待分类歌曲，上一条工具结果已提供下一批元数据。请直接调用 library_index_v2_write_batch 写回该批；pending=0 前不得结束。"
+                continuation = "推荐索引仍有待分类歌曲，上一条工具结果已提供下一批元数据。请直接用结构化 items 调用 library_index_v2_write_batch 写回该批；pending=0 前不得结束。"
             } else {
                 continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch(limit=80) 并持续分类写回；pending=0 前不得结束。"
             }
@@ -621,6 +622,7 @@ public actor AgentRuntime {
         taskID: UUID,
         userText: String,
         explicitIntent: AgentTaskIntent? = nil,
+        policy explicitPolicy: AgentTaskPolicy? = nil,
         provider: (any AIProvider)?,
         model: String,
         bridge: AgentBridge,
@@ -641,7 +643,9 @@ public actor AgentRuntime {
             default: nil
             }
         }.joined(separator: " ")
-        let policy = AgentTaskPolicyResolver.resolve(
+        // AppShell 已经为任务记录解析过策略时必须复用同一份值，避免持久化预算/意图
+        // 与真正运行的策略因历史上下文不同而分叉。独立调用者仍可省略并在此解析。
+        let policy = explicitPolicy ?? AgentTaskPolicyResolver.resolve(
             text: userText,
             historyText: historyText,
             explicitIntent: explicitIntent

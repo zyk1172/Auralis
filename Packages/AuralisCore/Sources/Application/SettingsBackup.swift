@@ -174,6 +174,7 @@ public struct SettingsBackupService: Sendable {
     private enum PreferenceValueKind: Sendable {
         case string
         case bool
+        case int
     }
 
     private static let preferenceTypes: [String: PreferenceValueKind] = [
@@ -182,6 +183,12 @@ public struct SettingsBackupService: Sendable {
         "auralis.ai.allowsMetadata": .bool,
         "auralis.ai.allowsLyrics": .bool,
         "auralis.ai.allowsHistory": .bool,
+        "auralis.ai.maxContextTokens": .int,
+        "auralis.ai.maxOutputTokens": .int,
+        "auralis.externalMusic.enabled": .bool,
+        "auralis.externalMusic.musicBrainz": .bool,
+        "auralis.externalMusic.critiqueBrainz": .bool,
+        "auralis.externalMusic.listenBrainz": .bool,
         "auralis.audio.highQualityWiFi": .bool,
         "auralis.audio.cellularTranscoding": .bool,
         "auralis.debug.crashLogEnabled": .bool,
@@ -198,6 +205,10 @@ public struct SettingsBackupService: Sendable {
                 if defaults.object(forKey: key) != nil {
                     result[key] = defaults.bool(forKey: key) ? "true" : "false"
                 }
+            case .int:
+                if defaults.object(forKey: key) != nil {
+                    result[key] = String(defaults.integer(forKey: key))
+                }
             }
         }
         return result
@@ -212,6 +223,10 @@ public struct SettingsBackupService: Sendable {
                 defaults.set(value, forKey: key)
             case .bool:
                 defaults.set(value == "true", forKey: key)
+            case .int:
+                if let number = Int(value) {
+                    defaults.set(number, forKey: key)
+                }
             }
         }
     }

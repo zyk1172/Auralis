@@ -222,7 +222,7 @@ func recommendationIndexV2RoundTrip() async throws {
     let firstID = try #require(batch.tracks.first?.id)
     let secondID = try #require(batch.tracks.last?.id)
     let written = try await store.writeRecommendationIndexV2([
-        .init(id: firstID, moods: ["平静"], scenes: ["深夜"], energy: 1, vocals: ["器乐"], textures: ["钢琴"], confidence: 0.92),
+        .init(id: firstID, moods: ["平静"], scenes: ["深夜"], energy: 1, vocals: ["器乐"], textures: ["钢琴"], customTags: ["编制": ["独奏"]], confidence: 0.92),
         .init(id: secondID, moods: ["明亮"], scenes: ["运动"], energy: 5, vocals: ["女声"], textures: ["电子"], confidence: 0.85),
         .init(id: "v2:not-a-track", moods: ["平静"], scenes: ["深夜"], energy: 1),
     ], serverID: serverID)
@@ -232,6 +232,7 @@ func recommendationIndexV2RoundTrip() async throws {
     #expect(complete.indexedTracks == 2)
     #expect(complete.pendingTracks == 0)
     #expect(try await store.recommendationIndexV2TrackIDs(serverID: serverID, query: "深夜").map(\.description) == [firstID])
+    #expect(try await store.readRecommendationIndexV2(serverID: serverID, dimension: "编制", value: "独奏").map(\.track.id) == [firstID])
 }
 
 @Test("Multi-server: ratings are scoped per server and readable back")

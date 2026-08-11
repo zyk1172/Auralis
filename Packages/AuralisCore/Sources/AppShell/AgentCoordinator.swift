@@ -131,6 +131,12 @@ public final class AgentCoordinator: ObservableObject {
         return await externalMusicService.enrich(track: track, globalID: globalID)
     }
 
+    /// 清除按需查询产生的公开音乐身份、候选和指标缓存。偏好开关不会被重置，
+    /// 也不会触碰歌曲、播放历史、收藏或推荐索引。
+    public func clearExternalMusicDataCache() async throws {
+        try await externalMusicService.clearCache()
+    }
+
     // MARK: - Bootstrap
 
     /// 恢复上次的会话列表、操作日志与偏好。
@@ -432,8 +438,15 @@ public final class AgentCoordinator: ObservableObject {
         let systemService = self.systemService
         let messageCountBeforeRun = messages.count
         // 创建并持久化任务记录（不依赖任何 View 生命周期）。
+        let historyText = messages.flatMap(\.messages).compactMap { item -> String? in
+            switch item {
+            case let .text(value), let .streaming(value), let .error(value): value
+            default: nil
+            }
+        }.joined(separator: " ")
         let taskPolicy = AgentTaskPolicyResolver.resolve(
             text: trimmed,
+            historyText: historyText,
             explicitIntent: explicitIntent
         )
         let taskIntent = taskPolicy.intent
@@ -486,6 +499,7 @@ public final class AgentCoordinator: ObservableObject {
                 taskID: taskID,
                 userText: trimmed,
                 explicitIntent: explicitIntent,
+                policy: taskPolicy,
                 provider: resolvedProvider,
                 model: modelName,
                 bridge: bridge,

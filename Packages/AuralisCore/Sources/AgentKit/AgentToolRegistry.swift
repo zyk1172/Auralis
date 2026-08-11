@@ -7,11 +7,15 @@ public struct ToolParameter: Sendable, Hashable {
     public let name: String
     public let required: Bool
     public let description: String
+    /// 可选的完整 JSON Schema 片段。未提供时参数仍按字符串声明；用于索引批次这类
+    /// 原生结构化参数，避免模型先把数组转义成字符串再传回工具。
+    public let schemaJSON: String?
 
-    public init(name: String, required: Bool, description: String) {
+    public init(name: String, required: Bool, description: String, schemaJSON: String? = nil) {
         self.name = name
         self.required = required
         self.description = description
+        self.schemaJSON = schemaJSON
     }
 }
 
@@ -50,6 +54,9 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let cachePolicy: ToolCachePolicy
     public let sideEffectPolicy: ToolSideEffectPolicy
     public let evidencePolicy: ToolEvidencePolicy
+    /// 执行该工具必须具备的任务能力域。工具组用于减少模型可见 schema，scope 才是
+    /// 与具体副作用对应的最终能力门禁，二者不能互相替代。
+    public let requiredScopes: Set<GrantedScope>
     public let maxResultCharacters: Int
 
     public init(
@@ -62,6 +69,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         cachePolicy: ToolCachePolicy? = nil,
         sideEffectPolicy: ToolSideEffectPolicy? = nil,
         evidencePolicy: ToolEvidencePolicy? = nil,
+        requiredScopes: Set<GrantedScope>? = nil,
         maxResultCharacters: Int = ContextManager.maxToolResultCharacters
     ) {
         self.name = name
@@ -71,9 +79,53 @@ public struct ToolDescriptor: Sendable, Hashable {
         self.summary = summary
         self.parameters = parameters
         self.cachePolicy = cachePolicy ?? (permission == .readOnly ? .task : .none)
-        self.sideEffectPolicy = sideEffectPolicy ?? Self.defaultSideEffectPolicy(name: name, group: group, permission: permission)
+        let resolvedSideEffectPolicy = sideEffectPolicy ?? Self.defaultSideEffectPolicy(name: name, group: group, permission: permission)
+        self.sideEffectPolicy = resolvedSideEffectPolicy
         self.evidencePolicy = evidencePolicy ?? Self.defaultEvidencePolicy(group: group, permission: permission)
+        self.requiredScopes = requiredScopes ?? Self.defaultRequiredScopes(
+            name: name,
+            group: group,
+            permission: permission,
+            sideEffectPolicy: resolvedSideEffectPolicy
+        )
         self.maxResultCharacters = maxResultCharacters
+    }
+
+    private static func defaultRequiredScopes(
+        name: String,
+        group: ToolGroup,
+        permission: ToolPermission,
+        sideEffectPolicy: ToolSideEffectPolicy
+    ) -> Set<GrantedScope> {
+        // 少数工具的注册分组是为了兼容旧 schema；它们的真实能力域必须按实际行为声明。
+        switch name {
+        case "music_appreciate":
+            return [.catalogRead, .externalRead]
+        case "library_index_v2_write_batch":
+            return [.catalogRead, .annotationWrite]
+        case "media_download_offline":
+            return [.catalogRead, .downloadWrite]
+        default:
+            break
+        }
+
+        switch group {
+        case .catalog:
+            return permission == .readOnly ? [.catalogRead] : [.annotationWrite]
+        case .playback:
+            if permission == .readOnly { return [.catalogRead] }
+            return sideEffectPolicy == .queue ? [.queueWrite] : [.playbackWrite]
+        case .playlist:
+            return permission == .readOnly ? [.catalogRead] : [.playlistWrite]
+        case .annotation:
+            return permission == .readOnly ? [.catalogRead] : [.annotationWrite]
+        case .server:
+            return permission == .readOnly ? [.serverRead] : [.serverWrite]
+        case .download:
+            return permission == .readOnly ? [.serverRead] : [.downloadWrite]
+        case .memory:
+            return permission == .readOnly ? [.memoryRead] : [.memoryWrite]
+        }
     }
 
     private static func defaultEvidencePolicy(group: ToolGroup, permission: ToolPermission) -> ToolEvidencePolicy {
@@ -102,6 +154,38 @@ public struct ToolDescriptor: Sendable, Hashable {
 
 /// 全部 Agent 工具注册表。集中声明权限与确认要求，供 Runner 校验与 UI 展示。
 public enum AgentToolRegistry {
+    /// 原生 Function Calling 直接接收数组。保留有限的内置维度，同时允许 Agent 通过
+    /// customTags 创建可复用的新分类；工具执行层仍会限制维度、标签长度和每首数量。
+    static let recommendationClassificationArraySchema = #"""
+    {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "moods": {"type": "array", "items": {"type": "string"}},
+          "scenes": {"type": "array", "items": {"type": "string"}},
+          "energy": {"type": "integer", "minimum": 1, "maximum": 10},
+          "tempo": {"type": "integer", "minimum": 1, "maximum": 5},
+          "acousticness": {"type": "integer", "minimum": 1, "maximum": 5},
+          "danceability": {"type": "integer", "minimum": 1, "maximum": 5},
+          "vocals": {"type": "array", "items": {"type": "string"}},
+          "textures": {"type": "array", "items": {"type": "string"}},
+          "styles": {"type": "array", "items": {"type": "string"}},
+          "customTags": {
+            "type": "object",
+            "additionalProperties": {"type": "array", "items": {"type": "string"}}
+          },
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "required": ["id", "energy"]
+      }
+    }
+    """#
+
     public static let all: [ToolDescriptor] = [
         // MARK: Catalog
         .init(name: "searchTracks", group: .catalog, permission: .readOnly, summary: "按关键词搜索单曲",
@@ -296,8 +380,13 @@ public enum AgentToolRegistry {
         .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；仅在用户明确要求构建或继续索引时使用；每个真实 ID 必须恰好分类一次，不能加入歌词、路径或播放地址",
               parameters: [.init(name: "limit", required: false, description: "每批 1-100，建议 80")],
               maxResultCharacters: 24_000),
-        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；itemsJSON 必须严格覆盖上一批全部真实 ID 各一次；结果若直接附带下一批就继续写回，直到结构化事实 pending=0",
-              parameters: [.init(name: "itemsJSON", required: true, description: "JSON 数组字符串：[{id,moods,scenes,energy,tempo,acousticness,danceability,vocals,textures,styles,confidence}]")],
+        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；items 必须严格覆盖上一批全部真实 ID 各一次。除内置维度外可用 customTags 自建稳定分类；结果若直接附带下一批就继续写回，直到 pending=0",
+              parameters: [.init(
+                name: "items",
+                required: true,
+                description: "分类数组；customTags 可自建维度与标签，例如 {\"编制\":[\"室内乐\"],\"适用空间\":[\"耳机\"]}",
+                schemaJSON: Self.recommendationClassificationArraySchema
+              )],
               maxResultCharacters: 24_000),
         .init(name: "library_select_tracks", group: .catalog, permission: .readOnly, summary: "集合查询：一次筛选语言/流派/艺术家/年代，按本地热度代理排序，返回候选歌曲清单（多首任务优先用这个，不要逐个歌手搜索）",
               parameters: [

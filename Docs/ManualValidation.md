@@ -119,3 +119,85 @@
 【预期结果】tool_call_id 与 tool result 严格配对；成功副作用不重复；真实有进展时不因低工具次数中止；无进展/重复/超时按结构化原因停止；索引只有 pending=0 才完成；重启任务标记 interrupted 且不重放动作；凭据和完整曲库不进入 Prompt/日志。
 
 【失败时需要提供】脱敏后的请求/响应、Agent 会话导出、操作记录、任务状态、Console、模型/接口类型和完整操作路径。
+
+### `MANUAL-VERIFY` 公开音乐数据总开关与隐私边界
+
+【测试名称】公开音乐数据开关与 0 请求
+
+【测试目的】验证“公开音乐数据”总开关与 MusicBrainz / CritiqueBrainz / ListenBrainz 三个独立开关真正控制网络请求；关闭时不是 UI 隐藏而是 0 个网络请求。
+
+【前置条件】真机可访问互联网；一首公开数据库常见歌曲。
+
+【Xcode Beta 操作步骤】设置 → Agent → 公开音乐数据，关闭总开关；打开该歌曲“更多操作 → 歌曲信息”。预期页面显示“公开音乐数据已关闭。”；用 Network Instruments 确认 0 个 MusicBrainz / CritiqueBrainz / ListenBrainz 请求。然后只开 MusicBrainz 重复一次，确认只有 MusicBrainz 被访问；再分别只开 CritiqueBrainz、ListenBrainz 重复。最后全部开启并再次打开歌曲信息，确认三个来源分别显示、没有综合分；点击“清除公开音乐数据缓存”后再次打开会重新请求（而非一直命中旧缓存）。
+
+【预期结果】总开关关闭时 0 个公开音乐 API 请求；单独关闭某个来源时该来源 0 请求；disabled 与 noData 是两种不同文案（“公开音乐数据已关闭。” vs “暂无可核验的大众评价数据。”）；请求失败显示“公开音乐数据暂时不可用。”而不是伪造数据。
+
+【失败时需要提供】Console、Network Instruments 抓包、歌曲信息页截图、开关状态、操作路径。
+
+### `MANUAL-VERIFY` ListenBrainz 收听量字段来源
+
+【测试名称】Listen Count 与 Listener Count 来自 popularity 接口
+
+【测试目的】验证歌曲信息页的 ListenBrainz 数据来自 `/1/popularity/release-group`（或 recording fallback）的 `total_listen_count` / `total_user_count`，而不是用 top listener 数量冒充总听众。
+
+【前置条件】真机可访问互联网；一首能匹配到 release-group MBID 的常见歌曲；Network Instruments。
+
+【Xcode Beta 操作步骤】打开歌曲信息，确认 ListenBrainz 显示“收听次数”与“听众数”两个独立数字；用 Network Instruments 确认请求为 `POST https://api.listenbrainz.org/1/popularity/release-group`（JSON `{"release_group_mbids":[...]}`）并返回 `total_listen_count` / `total_user_count`。对只有 recording MBID 的冷门歌曲确认 fallback 到 `POST /1/popularity/recording`。
+
+【预期结果】显示的是总收听量与总用户数（不同来源字段）；不使用 topListeners.count 冒充总听众；请求体只包含一个 MBID，不含任何私人数据。
+
+【失败时需要提供】Network Instruments 请求/响应、歌曲信息页截图、歌曲标题/艺人/版本。
+
+### `MANUAL-VERIFY` Now Playing 封面环境光
+
+【测试名称】封面动态环境光视觉回归
+
+【测试目的】验证环境光主光源来自真实封面模糊副本，不再出现“封面后面多一层矩形彩色框”，且不被页面边缘裁成方框。
+
+【前置条件】真机；分别准备黄色、黑色、红色、蓝色、多彩封面与无封面歌曲。
+
+【Xcode Beta 操作步骤】依次播放上述封面歌曲并停留播放页：观察封面周围光效是否从封面本身向四周扩散；切换歌词/队列页再切回播放页，确认光效不盖住歌曲标题且不改变布局；播放中观察缓慢呼吸（约 3~5 秒周期、幅度小）；暂停后确认呼吸停止、只留弱静态光；开启“减少动态效果”后确认呼吸动画完全静止；检查页面上下边缘没有被裁出的水平亮线/方框。
+
+【预期结果】无矩形彩色底板；光源颜色来自当前封面；Glow 不被页面边缘裁成方框；封面本体只有轻微中性阴影；呼吸动画自然缓慢；暂停静止；Reduce Motion 正常；切歌时颜色平滑过渡。
+
+【失败时需要提供】各封面播放页截图与录屏、设备/系统版本、Reduce Motion 状态。
+
+### `MANUAL-VERIFY` 推荐索引 V2 跨设备导入导出
+
+【测试名称】同一 NAS 两台设备共享 V2 索引
+
+【测试目的】验证设备 A 导出的 `.auralis-index-v2` 可在设备 B（连接同一 NAS、本地 ServerID 不同）导入，且不再重新调用 LLM 分类。
+
+【前置条件】两台真机/一台真机 + Mac；同一 Navidrome 服务器；设备 A 已有完整 V2 索引。
+
+【Xcode Beta 操作步骤】设备 A：设置 → Agent → 推荐索引 V2 → 导出索引…，保存 `.auralis-index-v2` 文件（确认只导出“已分类”条目）。设备 B 连接同一 NAS 并完成目录同步后：导入索引… 选择该文件。预期显示结构化统计（成功导入 / 已存在 / 歌曲已变化 / 当前音乐库不存在 / 格式错误）。随后打开资料库“分类”页确认标签立即可用，并观察网络/日志确认没有重新发起 LLM 分类。然后修改设备 A 上一首歌的 title，重新导出并导入设备 B：该歌应被拒绝并保持 pending，其余歌曲正常导入。
+
+【预期结果】分类导入后立即可用且不调用 LLM；不同本地 ServerID 仍能正确匹配（remoteTrackID + contentHash）；title 变化的歌曲被标记“歌曲已变化”保持 pending；导入不改变收藏/评分/播放次数等私人数据；索引文件内不含服务器密码、token、NAS URL、播放地址、歌词或播放历史。
+
+【失败时需要提供】导出文件结构（脱敏）、导入统计截图、分类页截图、Console/网络日志、两台设备 ServerID 差异说明。
+
+### `MANUAL-VERIFY` OpenAI 兼容模型能力配置
+
+【测试名称】上下文/输出上限按模型配置
+
+【测试目的】验证不同 OpenAI 兼容端点（OpenAI / DeepSeek / OpenRouter / Ollama / LM Studio）可按实际模型修改上下文窗口与单次输出上限，且长任务不会因为预算与 Provider 上限混淆而失败。
+
+【前置条件】真机；至少一个 OpenAI 兼容端点（如本地 Ollama 或 DeepSeek）；一个上下文窗口小于 256K 的模型。
+
+【Xcode Beta 操作步骤】设置 → Agent → 配置大模型 → 高级设置：把“上下文窗口”改为该模型实际值（如 32K/64K）、“单次输出上限”改为合适值；保存后跑一次歌曲鉴赏与一次推荐索引 V2 批次。再导出/导入一次设置备份，确认这两个值随备份恢复；用旧备份（无这两个字段）导入，确认回退到默认 256K / 16K。
+
+【预期结果】请求不会因超 Provider 上下文窗口被 API 拒绝；任务累计预算、单轮输入限制、单轮输出限制互不混淆；备份/恢复正确，旧备份兼容。
+
+【失败时需要提供】请求/响应脱敏日志、设置页截图、备份文件（加密）往返结果、模型名称与真实上下文窗口。
+
+### `MANUAL-VERIFY` 设置页版本号
+
+【测试名称】版本号来自 Bundle
+
+【测试目的】验证设置“关于”页显示 `1.0.2 (3)` 这类来自 `CFBundleShortVersionString (CFBundleVersion)` 的版本，而不是硬编码旧版本号。
+
+【Xcode Beta 操作步骤】打开 iOS 设置 → 关于 与 macOS 设置窗口 → 关于；与 `project.yml` 的 `MARKETING_VERSION: 1.0.2`、`CURRENT_PROJECT_VERSION: 3` 对比。
+
+【预期结果】iOS 与 macOS 均显示 `1.0.2 (3)`（或与工程设置一致的值）；修改工程版本后设置页同步变化，无硬编码残留。
+
+【失败时需要提供】设置页截图、project.yml 版本配置。

@@ -215,9 +215,16 @@ public final class AuralisAppModel: ObservableObject {
     public var downloadedTrackIDs: Set<GlobalID> { downloadStore.downloadedTrackIDs }
     /// 正在下载的歌曲。
     public var downloadingTrackIDs: Set<GlobalID> { downloadStore.downloadingTrackIDs }
-    /// 下载进度（0...1）。保留裸 TrackID 键以兼容 PlayerViews（非写权限文件）；
-    /// DownloadManager 内部按裸 TrackID 串行化下载，进度键不会跨服务器并发冲突。
-    public var downloadingProgress: [TrackID: Double] { downloadStore.progress }
+    /// 全部服务器作用域的下载进度（0...1）。
+    public var downloadingProgressByGlobalID: [GlobalID: Double] { downloadStore.progress }
+    /// 当前活跃服务器的兼容投影；内部状态始终使用 GlobalID，避免同 TrackID 跨服务器碰撞。
+    public var downloadingProgress: [TrackID: Double] {
+        guard let serverID = catalog.activeServerID else { return [:] }
+        return Dictionary(uniqueKeysWithValues: downloadStore.progress.compactMap { globalID, value in
+            guard globalID.serverID == serverID else { return nil }
+            return (TrackID(rawValue: globalID.remoteID), value)
+        })
+    }
     /// 随机播放模式，持久化到 UserDefaults。
     @Published public private(set) var isShuffled: Bool {
         didSet {

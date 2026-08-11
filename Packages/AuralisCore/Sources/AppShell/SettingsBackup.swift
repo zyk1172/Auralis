@@ -11,16 +11,13 @@ import ThemeEngine
 /// 恢复 = 选择备份文件 + 输入密码，写回服务器、大模型与其他设置。
 /// 只备份配置，不包含歌曲、歌单、收藏与播放记录等音乐资料。
 ///
-/// iOS 呈现策略：行内按钮只发出明确 route，真正的 sheet 由 `DataSettingsPage`
-/// 在 Form 外层呈现。这样按钮不会依赖嵌套 NavigationLink，也不会让 fileImporter
-/// 与 Form 行状态在首次点击时互相撤销。
+/// iOS 呈现策略：使用真实 NavigationLink 推入独立导出/恢复页。呈现状态不再经过
+/// Form 内按钮 -> 外层 sheet 两次转发，避免页面刷新时 route 丢失而表现为点击无响应。
 /// macOS 设置窗口用 TabView+Form，sheet 行为稳定，保留原 sheet 方案。
 struct SettingsBackupSection: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
     let theme: BuiltInTheme
-    var onExport: (() -> Void)? = nil
-    var onImport: (() -> Void)? = nil
 
     // macOS 专用呈现状态
     @State private var isExportSheetPresented = false
@@ -41,13 +38,13 @@ struct SettingsBackupSection: View {
     var body: some View {
         Section("备份与恢复") {
 #if os(iOS)
-            Button {
-                onExport?()
+            NavigationLink {
+                BackupExportPage(model: model, themeStore: themeStore, theme: theme)
             } label: {
                 Label("导出备份…", systemImage: "square.and.arrow.up")
             }
-            Button {
-                onImport?()
+            NavigationLink {
+                BackupImportPage(model: model, themeStore: themeStore, theme: theme)
             } label: {
                 Label("从备份恢复…", systemImage: "square.and.arrow.down")
             }

@@ -22,30 +22,8 @@ struct SettingsView: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
     @AppStorage("auralis.ai.enabled") private var aiEnabled = true
-    @AppStorage("auralis.ai.allowsMetadata") private var allowsMetadata = true
-    @AppStorage("auralis.ai.allowsLyrics") private var allowsLyrics = false
-    @AppStorage("auralis.ai.allowsHistory") private var allowsHistory = false
-    @AppStorage("auralis.audio.highQualityWiFi") private var highQualityWiFi = true
-    @AppStorage("auralis.audio.cellularTranscoding") private var cellularTranscoding = true
-    @AppStorage(AIConnectionSettings.Keys.baseURL) private var aiBaseURL = AIConnectionSettings.defaultBaseURL
-    @AppStorage(AIConnectionSettings.Keys.model) private var aiModel = AIConnectionSettings.defaultModel
-    @State private var isAddingServer = false
-    @State private var isConfiguringAIProvider = false
-    @State private var hasAPIKey = false
-    @State private var pingResult: Bool?
-    @State private var isRemovingServer = false
-    @State private var savedServers: [ServerAccount] = []
-    @State private var serverToSwitch: ServerAccount?
-    @State private var serverToRename: ServerAccount?
-    @State private var renameServerText = ""
-    @State private var serverToEdit: ServerAccount?
-    @State private var recommendationIndexStatus: RecommendationIndexV2Status?
-    @State private var isLoadingRecommendationIndexStatus = false
     @State private var isEditingHomeLayout = false
-    @AppStorage("auralis.debug.crashLogEnabled") private var crashLogEnabled = true
     @Environment(\.bottomDockReservedHeight) private var bottomDockReservedHeight
-
-    private let credentialVault = KeychainCredentialVault()
 
     private var theme: BuiltInTheme { themeStore.current }
 
@@ -99,7 +77,7 @@ struct SettingsView: View {
                 }
             }
             Section("关于") {
-                LabeledContent("版本", value: "0.3.4")
+                LabeledContent("版本", value: AppVersionInfo.display)
             }
         }
         .scrollContentBackground(.hidden)
@@ -109,209 +87,10 @@ struct SettingsView: View {
             Color.clear.frame(height: bottomDockReservedHeight)
         }
         .background(theme.colorTokens.background.color)
-        .task { await reloadServers() }
-        .sheet(isPresented: $isAddingServer) {
-            ServerConnectionSheet(model: model, theme: theme)
-        }
         .sheet(isPresented: $isEditingHomeLayout) {
             HomeLayoutEditView(model: model, theme: theme)
         }
-        .sheet(item: $serverToEdit) { server in
-            ServerEditSheet(model: model, theme: theme, server: server) {
-                await reloadServers()
-            }
-        }
-        .alert("重命名服务器", isPresented: Binding(
-            get: { serverToRename != nil },
-            set: { if !$0 { serverToRename = nil } }
-        )) {
-            TextField("服务器名称", text: $renameServerText)
-            Button("保存") {
-                guard let server = serverToRename else { return }
-                serverToRename = nil
-                let name = renameServerText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty {
-                    Task {
-                        _ = await model.renameServer(serverID: server.id, to: name)
-                        await reloadServers()
-                    }
-                }
-            }
-            Button("取消", role: .cancel) { serverToRename = nil }
-        } message: {
-            Text("只修改本机显示名称，不影响服务器凭据与连接。")
-        }
-        .confirmationDialog(
-            serverToSwitch.map { "切换到「\($0.displayName)」？" } ?? "切换服务器？",
-            isPresented: Binding(
-                get: { serverToSwitch != nil },
-                set: { if !$0 { serverToSwitch = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("切换") {
-                guard let server = serverToSwitch else { return }
-                serverToSwitch = nil
-                pingResult = nil
-                Task {
-                    await model.switchServer(serverID: server.id)
-                    savedServers = (try? await model.catalogCoordinator.store.listServers()) ?? []
-                }
-            }
-            Button("取消", role: .cancel) { serverToSwitch = nil }
-        } message: {
-            Text("切换后本地资料库、队列与播放会话将切换到该服务器，不会影响 NAS 上的数据。")
-        }
-        .sheet(isPresented: $isConfiguringAIProvider) {
-            AIProviderSettingsSheet(theme: theme, hasAPIKey: $hasAPIKey)
-        }
-        .alert("移除服务器？", isPresented: $isRemovingServer) {
-            Button("移除", role: .destructive) {
-                guard let serverID = model.catalog.activeServerID else { return }
-                Task {
-                    await model.catalogCoordinator.purgeLocalData(serverID: serverID)
-                    await model.removeServerLocally(serverID: serverID)
-                }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("将删除本机保存的登录凭据、离线目录与缓存。服务器上的音乐、歌单与收藏不会被删除。")
-        }
-        .task {
-            hasAPIKey = (try? await credentialVault.retrieve(id: AIConnectionSettings.credentialID)) != nil
-        }
-        .task(id: model.catalog.activeServerID) {
-            await refreshRecommendationIndexStatus()
-        }
     }
-
-    private var sceneBinding: Binding<String> {
-        Binding(
-            get: { UserDefaults.standard.string(forKey: "auralis.agent.scene") ?? "" },
-            set: { UserDefaults.standard.set($0, forKey: "auralis.agent.scene") }
-        )
-    }
-
-    private func refreshRecommendationIndexStatus() async {
-        guard let serverID = model.catalog.activeServerID else {
-            recommendationIndexStatus = nil
-            return
-        }
-        isLoadingRecommendationIndexStatus = true
-        recommendationIndexStatus = try? await model.catalogCoordinator.store.recommendationIndexV2Status(serverID: serverID)
-        isLoadingRecommendationIndexStatus = false
-    }
-
-    private var repeatBinding: Binding<String> {
-        Binding(
-            get: { UserDefaults.standard.string(forKey: "auralis.agent.repeatTolerance") ?? "allow" },
-            set: { UserDefaults.standard.set($0, forKey: "auralis.agent.repeatTolerance") }
-        )
-    }
-
-
-    private var themeSelection: Binding<String> {
-        Binding(
-            get: { themeStore.selectedID },
-            set: { themeStore.select(id: $0) }
-        )
-    }
-
-    @ViewBuilder
-    private var serverStatus: some View {
-        switch model.serverConnectionState {
-        case .idle:
-            LabeledContent("当前资料库", value: "未连接服务器")
-            LabeledContent("状态", value: "请添加 OpenSubsonic 服务器")
-        case let .connecting(stage):
-            HStack {
-                ProgressView()
-                Text(stage.title)
-                Spacer()
-            }
-        case let .connected(account, serverType, serverVersion, trackCount):
-            LabeledContent("当前资料库", value: account.displayName)
-            LabeledContent("服务器", value: [serverType, serverVersion].compactMap { $0 }.joined(separator: " · "))
-            LabeledContent("已同步", value: "\(trackCount) 首歌曲")
-            capabilityRows
-        case let .failed(message):
-            Label("连接失败", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(theme.colorTokens.error.color)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(theme.colorTokens.secondaryText.color)
-            HStack {
-                Button("再次尝试") { isAddingServer = true }
-                Button("检查服务器") { isAddingServer = true }
-                Button("复制错误详情") { PlatformPasteboard.copy(message) }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var capabilityRows: some View {
-        let capabilities = model.serverCapabilities
-        if capabilities.supportsStructuredLyrics { Label("结构化歌词", systemImage: "quote.bubble.fill") }
-        if capabilities.supportsSonicSimilarity { Label("声音相似度", systemImage: "waveform.path") }
-        if capabilities.supportsIndexedQueue { Label("索引式播放队列", systemImage: "list.number") }
-        if capabilities.supportsPlaybackReport { Label("播放报告", systemImage: "chart.bar.fill") }
-        if capabilities.supportsTranscoding { Label("服务器转码", systemImage: "arrow.triangle.2.circlepath") }
-        if capabilities.supportsTranscodeOffset { Label("转码偏移定位", systemImage: "gobackward") }
-        if capabilities.supportsAPIKeyAuthentication { Label("API Key 认证", systemImage: "key.horizontal.fill") }
-        if !capabilities.supportsStructuredLyrics && !capabilities.supportsSonicSimilarity
-            && !capabilities.supportsIndexedQueue && !capabilities.supportsPlaybackReport
-            && !capabilities.supportsTranscoding && !capabilities.supportsTranscodeOffset
-            && !capabilities.supportsAPIKeyAuthentication {
-            Text("服务器未声明可选扩展；澜音只显示基础 OpenSubsonic 功能。")
-                .font(.caption)
-                .foregroundStyle(theme.colorTokens.secondaryText.color)
-        }
-    }
-    /// 已保存服务器列表行：当前服务器显示标记，其余可切换（需确认）。
-    @ViewBuilder
-    private func serverRow(_ server: ServerAccount) -> some View {
-        let isActive = model.catalog.activeServerID == server.id
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(server.displayName)
-                        .font(.body)
-                    if isActive {
-                        Label("当前", systemImage: "checkmark.circle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(theme.colorTokens.success.color)
-                    }
-                }
-                Text(server.baseURL?.host ?? server.username ?? "本地资料库")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Menu {
-                Button {
-                    renameServerText = server.displayName
-                    serverToRename = server
-                } label: { Label("重命名", systemImage: "pencil") }
-                Button {
-                    serverToEdit = server
-                } label: { Label("编辑服务器", systemImage: "slider.horizontal.3") }
-                if !isActive {
-                    Button("切换到此服务器") { serverToSwitch = server }
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .accessibilityLabel("服务器操作")
-        }
-        .contentShape(Rectangle())
-    }
-
-    private func reloadServers() async {
-        savedServers = (try? await model.catalogCoordinator.store.listServers()) ?? []
-    }
-
-
 }
 /// 编辑既有服务器：仅更新本机的连接资料，不重新建库也不删除已同步歌曲。
 struct ServerEditSheet: View {
@@ -822,6 +601,8 @@ struct AIProviderSettingsPage: View {
     @AppStorage(AIConnectionSettings.Keys.baseURL) private var aiBaseURL = AIConnectionSettings.defaultBaseURL
     @AppStorage(AIConnectionSettings.Keys.apiPath) private var aiAPIPath = AIConnectionSettings.defaultAPIPath
     @AppStorage(AIConnectionSettings.Keys.model) private var aiModel = AIConnectionSettings.defaultModel
+    @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
+    @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
     @State private var isConfiguringAPIKey = false
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
@@ -871,6 +652,44 @@ struct AIProviderSettingsPage: View {
                         }
                     }
                 }
+            }
+            Section("高级设置") {
+                Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
+                    HStack {
+                        Text("上下文窗口")
+                        Spacer()
+                        Text("\(aiMaxContextTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+                Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
+                    HStack {
+                        Text("单次输出上限")
+                        Spacer()
+                        Text("\(aiMaxOutputTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+                Text("不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            Section("高级设置") {
+                Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
+                    HStack {
+                        Text("上下文窗口")
+                        Spacer()
+                        Text("\(aiMaxContextTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+                Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
+                    HStack {
+                        Text("单次输出上限")
+                        Spacer()
+                        Text("\(aiMaxOutputTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                }
+                Text("不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
             Section("连接测试") {
                 HStack {

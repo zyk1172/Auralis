@@ -64,7 +64,7 @@ enum RecommendationIndexToolService {
                 )
             }
             let payload = String(decoding: try JSONEncoder().encode(batch.tracks), as: UTF8.self)
-            let text = "待分类总数 \(batch.pendingTracks)，本批 \(batch.tracks.count) 首。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，并把 itemsJSON 传为严格 JSON 数组字符串，数组必须恰好覆盖本批每个 id 一次：\n\(payload)"
+            let text = "待分类总数 \(batch.pendingTracks)，本批 \(batch.tracks.count) 首。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，把结构化 items 数组直接传入，数组必须恰好覆盖本批每个 id 一次。可用 customTags 创建并复用适合本曲库的额外分类维度：\n\(payload)"
             return .ok(
                 call,
                 descriptor,
@@ -77,17 +77,19 @@ enum RecommendationIndexToolService {
             )
 
         case "library_index_v2_write_batch":
-            guard let raw = call.arguments["itemsJSON"]?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-                throw AgentToolError.missingParameter("itemsJSON")
+            // `items` 是当前原生结构化参数；`itemsJSON` 继续兼容已保存的旧会话和
+            // 不支持原生 tools 的 ACTION 文本协议。
+            guard let rawValue = call.arguments["items"] ?? call.arguments["itemsJSON"] else {
+                throw AgentToolError.missingParameter("items")
             }
+            let raw = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { throw AgentToolError.missingParameter("items") }
             let cleaned = raw
                 .replacingOccurrences(of: "```json", with: "")
                 .replacingOccurrences(of: "```", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let data = cleaned.data(using: .utf8),
-                  let items = try? JSONDecoder().decode([RecommendationIndexV2Classification].self, from: data)
-            else {
-                throw AgentToolError.invalidParameter("itemsJSON", "必须是 JSON 数组，且每项包含 id/moods/scenes/energy/tempo/acousticness/danceability/vocals/textures/styles/confidence")
+            guard let items = decodeClassifications(cleaned) else {
+                throw AgentToolError.invalidParameter("items", "必须是结构化数组；每项至少包含 id/energy，可包含内置标签、customTags 与 confidence")
             }
             let written = try await catalog.writeRecommendationIndexV2(items, serverID: serverID)
             let status = try await catalog.recommendationIndexV2Status(serverID: serverID)
@@ -101,7 +103,7 @@ enum RecommendationIndexToolService {
                 let nextBatch = try await catalog.nextRecommendationIndexV2Batch(serverID: serverID, limit: 80)
                 nextBatchAvailable = !nextBatch.tracks.isEmpty
                 let payload = String(decoding: try JSONEncoder().encode(nextBatch.tracks), as: UTF8.self)
-                text = "已写入 \(written) 首。尚待分类 \(status.pendingTracks) 首。下一批 \(nextBatch.tracks.count) 首已直接提供；不要调用 library_index_v2_next_batch，也不要输出自然语言。请立刻只根据下列元数据生成严格 JSON 数组，并调用 library_index_v2_write_batch(itemsJSON=该数组)：\n\(payload)"
+                text = "已写入 \(written) 首。尚待分类 \(status.pendingTracks) 首。下一批 \(nextBatch.tracks.count) 首已直接提供；不要调用 library_index_v2_next_batch，也不要输出自然语言。请立刻只根据下列元数据生成结构化 items 数组，并调用 library_index_v2_write_batch(items=该数组)：\n\(payload)"
             } else {
                 text = "已写入 \(written) 首。尚待分类 0 首。索引 V2 已完成。"
             }
@@ -122,6 +124,20 @@ enum RecommendationIndexToolService {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func decodeClassifications(_ raw: String) -> [RecommendationIndexV2Classification]? {
+        guard let data = raw.data(using: .utf8) else { return nil }
+        if let direct = try? JSONDecoder().decode([RecommendationIndexV2Classification].self, from: data) {
+            return direct
+        }
+        // 少数兼容网关会把参数再包一层 {"items":[...]}；在工具边界宽容解包，
+        // 但真正的分类对象仍由 Codable 和落库校验严格验证。
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = object["items"], JSONSerialization.isValidJSONObject(items),
+              let nested = try? JSONSerialization.data(withJSONObject: items)
+        else { return nil }
+        return try? JSONDecoder().decode([RecommendationIndexV2Classification].self, from: nested)
     }
 
     private static func int(_ call: ToolCall, _ key: String) -> Int? {

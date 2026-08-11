@@ -2,9 +2,9 @@ import DesignSystem
 import SwiftUI
 import ThemeEngine
 
-// MARK: - 封面调色板（光效取色）
+// MARK: - 封面调色板（辅助光取色）
 
-/// 光效配色：主色 + 辅助色。
+/// 辅助光配色：主色 + 辅助色。只用于极轻的补光椭圆和无封面回退，不再是主光源。
 struct ArtworkPalette: Equatable {
     let primary: Color
     let secondary: Color
@@ -104,20 +104,36 @@ final class ArtworkPaletteStore: @unchecked Sendable {
     }
 }
 
-// MARK: - 播放态动态光效（封面后方，3 层）
+// MARK: - 播放态封面环境光
 
-/// “正在播放”封面的动态光效：静态柔光底 + 呼吸式主光晕 + 间歇波纹扩散。
-/// 通过独立封面管线取色；动画由 isPlaying 驱动，切歌时颜色随封面平滑过渡。
+/// “正在播放”封面的环境光。主光源是真实封面本身的低分辨率副本：
+/// 放大 → 轻微提饱和 → 高斯模糊 → 低透明度，让光线从封面向外扩散，
+/// 而不是在封面后面再画一个大号 RoundedRectangle 色板。
+///
+/// 设计约束：
+/// - 只复用 ArtworkStore 已缓存的低分辨率封面，不重新加载高清封面；
+/// - Glow 画布明显大于封面本体（约 1.5×），给模糊扩散留出外围空间；
+/// - 播放时缓慢呼吸（3.6s 周期），暂停保持弱静态光，Reduce Motion 完全静止；
+/// - 不进行每帧图片分析，调色板只在封面变化时计算并缓存。
 struct NowPlayingArtworkGlowView: View {
     @Environment(ArtworkStore.self) private var artworkStore
     @State private var artworkImage: PlatformImage?
     let isPlaying: Bool
     let artworkKey: String?
-    let title: String
     let colors: ThemeColors
     let size: CGFloat
+    /// 页面允许的最大 Glow 画布。默认无限制（1.5× 封面），紧凑布局由调用方传入
+    /// 实际可用高度，避免光效把页面边缘裁成方框，同时不改变封面布局足迹。
+    var maxCanvasSize: CGFloat = .greatestFiniteMagnitude
     var cornerRadius: CGFloat = AuralisRadius.artwork
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Glow 画布：明显大于封面本体，避免模糊被页面边缘直接裁成方框。
+    private var canvasSize: CGFloat { min(size * 1.5, max(0, maxCanvasSize)) }
+    /// 主光源副本放大比例（相对封面）。
+    private var lightScale: CGFloat { 1.28 }
+    /// 高斯模糊半径随封面尺寸缩放；使用 SwiftUI 系统 GPU 路径。
+    private var blurRadius: CGFloat { max(12, size * 0.10) }
 
     private var pixelSize: Int { max(64, Int(size * 2)) }
 
@@ -125,36 +141,36 @@ struct NowPlayingArtworkGlowView: View {
         artworkStore.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
     }
 
+    private var animates: Bool { isPlaying && !reduceMotion }
+
     var body: some View {
-        // 与封面同尺寸的“不可见”占位，光效从中心向外扩散，绝不遮挡封面/文字。
+        // 调色板只在封面变化/加载完成时计算（ArtworkPaletteStore 已按 key 缓存），
+        // 用于无封面回退与极轻的补光椭圆；主光源始终是真实封面本身。
         let palette = ArtworkPaletteStore.shared.palette(
             for: artworkKey,
             image: artworkImage,
             fallbackPrimary: colors.accent.color,
             fallbackSecondary: colors.accentSecondary.color
         )
-        ZStack {
-            ArtworkStaticGlowLayer(color: palette.primary, size: size, cornerRadius: cornerRadius)
-            ArtworkBreathingGlowLayer(
-                isPlaying: isPlaying && !reduceMotion,
-                color: palette.primary,
-                size: size,
-                cornerRadius: cornerRadius
-            )
-            ArtworkRippleLayer(
-                isPlaying: isPlaying && !reduceMotion,
-                color: palette.secondary,
-                size: size,
-                cornerRadius: cornerRadius
-            )
-        }
-        .frame(width: size, height: size)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-        // 切歌/封面加载完成时颜色平滑过渡，不跳色。
-        .animation(.easeInOut(duration: 0.8), value: palette.primary)
-        .animation(.easeInOut(duration: 0.8), value: palette.secondary)
-        .task(id: requestIdentifier) {
+        // 布局足迹始终等于封面尺寸（size × size），Glow 画布以 overlay 向外扩散，
+        // 不会改变播放页布局，也不会因光效把封面本体撑大。
+        Color.clear
+            .frame(width: size, height: size)
+            .overlay {
+                ArtworkAmbientLight(
+                    image: artworkImage,
+                    palettePrimary: palette.primary,
+                    paletteSecondary: palette.secondary,
+                    canvasSize: canvasSize,
+                    lightScale: lightScale,
+                    blurRadius: blurRadius,
+                    cornerRadius: cornerRadius,
+                    animates: animates
+                )
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .task(id: requestIdentifier) {
             artworkImage = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
             if artworkImage == nil {
                 artworkImage = await artworkStore.load(
@@ -166,128 +182,85 @@ struct NowPlayingArtworkGlowView: View {
     }
 }
 
-/// 第 1 层：静态柔光底层。始终存在、很轻，提供“氛围基座”。
-struct ArtworkStaticGlowLayer: View {
-    let color: Color
-    let size: CGFloat
+/// 单层环境光：真实封面副本放大 + 提饱和 + 高斯模糊，径向淡出到透明。
+/// 没有封面时退化为极轻的径向补光；补光椭圆只负责环境亮度，不形成矩形底板。
+struct ArtworkAmbientLight: View {
+    let image: PlatformImage?
+    let palettePrimary: Color
+    let paletteSecondary: Color
+    let canvasSize: CGFloat
+    let lightScale: CGFloat
+    let blurRadius: CGFloat
     let cornerRadius: CGFloat
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(
-                RadialGradient(
-                    colors: [color.opacity(0.30), color.opacity(0.08), .clear],
-                    center: .center,
-                    startRadius: size * 0.28,
-                    endRadius: size * 0.72
-                )
-            )
-            .frame(width: size * 1.9, height: size * 1.9)
-            .blur(radius: 30)
-            .opacity(0.55)
-    }
-}
-
-/// 第 2 层：呼吸式主光晕。播放时缓慢明暗起伏 + 半径微变；暂停时停在较弱状态。
-struct ArtworkBreathingGlowLayer: View {
-    let isPlaying: Bool
-    let color: Color
-    let size: CGFloat
-    let cornerRadius: CGFloat
+    let animates: Bool
     @State private var breathe = false
 
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(
-                RadialGradient(
-                    colors: [color.opacity(isPlaying ? 0.52 : 0.16), color.opacity(0.10), .clear],
-                    center: .center,
-                    startRadius: size * 0.30,
-                    endRadius: size * 0.78
-                )
-            )
-            .frame(width: size * 1.7, height: size * 1.7)
-            .scaleEffect(isPlaying ? (breathe ? 1.07 : 0.98) : 1.0)
-            .opacity(isPlaying ? (breathe ? 0.85 : 0.45) : 0.22)
-            .blur(radius: 26)
-            .onAppear { update(playing: isPlaying) }
-            .onChange(of: isPlaying) { _, playing in update(playing: playing) }
-    }
-
-    private func update(playing: Bool) {
-        if playing {
-            withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: true)) {
-                breathe = true
-            }
-        } else {
-            withAnimation(.easeOut(duration: 0.9)) {
-                breathe = false
-            }
-        }
-    }
-}
-
-/// 第 3 层：间歇波纹扩散层。播放时每隔约 2.6s 扩散 1～2 圈柔光波纹，透明度递减消失。
-struct ArtworkRippleLayer: View {
-    let isPlaying: Bool
-    let color: Color
-    let size: CGFloat
-    let cornerRadius: CGFloat
-    @State private var ripples: [Ripple] = []
-
-    struct Ripple: Identifiable {
-        let id = UUID()
-        var progress: CGFloat = 0
-    }
+    /// 呼吸范围：scale 0.99 ↔ 1.04，opacity 轻微起伏（C5 要求 3~5 秒周期、低速）。
+    private var lightFrame: CGFloat { canvasSize * lightScale }
+    private var glowOpacity: Double { animates ? (breathe ? 0.44 : 0.30) : 0.30 }
+    private var glowScale: CGFloat { animates ? (breathe ? 1.04 : 0.99) : 1.0 }
 
     var body: some View {
         ZStack {
-            ForEach(ripples) { ripple in
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(
+            if let image {
+                // 先按封面形状 clip 源图，再整体模糊；最后用径向 mask 淡出，
+                // 不再把光晕裁回矩形。
+                Image(platformImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: lightFrame, height: lightFrame)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius * lightScale, style: .continuous))
+                    .saturation(1.15)
+                    .blur(radius: blurRadius)
+                    .scaleEffect(glowScale)
+                    .opacity(glowOpacity)
+                    .mask(
                         RadialGradient(
-                            colors: [color.opacity(0.30), color.opacity(0.08), .clear],
+                            colors: [.white, .white.opacity(0.65), .clear],
                             center: .center,
-                            startRadius: size * 0.20,
-                            endRadius: size * 0.50
+                            startRadius: 0,
+                            endRadius: canvasSize * 0.62
                         )
                     )
-                    .frame(width: size * 1.25, height: size * 1.25)
-                    .scaleEffect(1 + ripple.progress * 0.22)
-                    .opacity(0.5 * (1 - ripple.progress))
-                    .blur(radius: 8)
+            } else {
+                // 无封面：极轻径向补光，仅提供环境亮度。
+                RadialGradient(
+                    colors: [palettePrimary.opacity(0.16), paletteSecondary.opacity(0.06), .clear],
+                    center: .center,
+                    startRadius: canvasSize * 0.10,
+                    endRadius: canvasSize * 0.50
+                )
+                .scaleEffect(glowScale)
+                .opacity(glowOpacity)
             }
+
+            // 补光椭圆：极低透明度，给环境一点方向感；位于真实封面光晕之后。
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [paletteSecondary.opacity(0.12), paletteSecondary.opacity(0.04), .clear],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: canvasSize * 0.42
+                    )
+                )
+                .frame(width: canvasSize * 0.9, height: canvasSize * 0.55)
+                .offset(y: -canvasSize * 0.04)
+                .blur(radius: blurRadius * 0.8)
+                .opacity(glowOpacity * 0.35)
         }
-        .task(id: isPlaying) {
-            guard isPlaying else { return }
-            // 播放中循环触发；暂停/离开页面时 .task(id:) 自动取消，不残留后台资源。
-            while !Task.isCancelled {
-                spawnRipple()
-                try? await Task.sleep(nanoseconds: 2_600_000_000)
-            }
-        }
-        .onChange(of: isPlaying) { _, playing in
-            if !playing {
-                withAnimation(.easeOut(duration: 0.5)) {
-                    ripples.removeAll()
-                }
-            }
-        }
+        .onAppear { update(animates: animates) }
+        .onChange(of: animates) { _, newValue in update(animates: newValue) }
     }
 
-    private func spawnRipple() {
-        guard ripples.count < 2 else { return }
-        let ripple = Ripple()
-        ripples.append(ripple)
-        withAnimation(.easeOut(duration: 2.2)) {
-            guard let index = ripples.firstIndex(where: { $0.id == ripple.id }) else { return }
-            ripples[index].progress = 1
-        }
-        // 动画结束后移除，避免数组无限增长。
-        Task {
-            try? await Task.sleep(nanoseconds: 2_400_000_000)
-            await MainActor.run {
-                ripples.removeAll { $0.id == ripple.id }
+    private func update(animates: Bool) {
+        if animates {
+            withAnimation(.easeInOut(duration: 3.6).repeatForever(autoreverses: true)) {
+                breathe = true
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.8)) {
+                breathe = false
             }
         }
     }

@@ -167,20 +167,19 @@ final class ServerStore: ObservableObject {
 final class DownloadStore: ObservableObject {
     @Published private(set) var downloadedTrackIDs: Set<GlobalID> = []
     @Published private(set) var downloadingTrackIDs: Set<GlobalID> = []
-    @Published private(set) var progress: [TrackID: Double] = [:]
+    @Published private(set) var progress: [GlobalID: Double] = [:]
 
     private let connector: any ServerConnecting
     private let cacheStore: TrackCacheStore
     private let manager: DownloadManager
-    private var globalIDsByTrackID: [TrackID: GlobalID] = [:]
 
     init(connector: any ServerConnecting, cacheStore: TrackCacheStore) {
         self.connector = connector
         self.cacheStore = cacheStore
         self.manager = DownloadManager(store: cacheStore)
-        manager.onStateChange = { [weak self] trackID, status, progress in
+        manager.onStateChange = { [weak self] taskID, status, progress in
             Task { @MainActor [weak self] in
-                self?.handle(trackID: trackID, status: status, progress: progress)
+                self?.handle(taskID: taskID, status: status, progress: progress)
             }
         }
         restoreActiveDownloads()
@@ -192,9 +191,8 @@ final class DownloadStore: ObservableObject {
                 serverID: snapshot.serverID,
                 remoteID: snapshot.info.trackID.rawValue
             )
-            globalIDsByTrackID[snapshot.info.trackID] = globalID
             downloadingTrackIDs.insert(globalID)
-            progress[snapshot.info.trackID] = snapshot.info.progress
+            progress[globalID] = snapshot.info.progress
         }
     }
 
@@ -218,10 +216,10 @@ final class DownloadStore: ObservableObject {
         guard !downloadedTrackIDs.contains(globalID), !downloadingTrackIDs.contains(globalID) else { return }
         Task { @MainActor [weak self] in
             guard let self, let url = await connector.downloadURL(trackID: track.id) else { return }
-            guard !manager.isDownloading(track.id) else { return }
-            globalIDsByTrackID[track.id] = globalID
+            let taskID = DownloadTaskID(serverID: track.serverID, trackID: track.id)
+            guard !manager.isDownloading(taskID) else { return }
             downloadingTrackIDs.insert(globalID)
-            progress[track.id] = 0
+            progress[globalID] = 0
             manager.start(
                 trackID: track.id,
                 url: url,
@@ -232,10 +230,10 @@ final class DownloadStore: ObservableObject {
     }
 
     func cancel(_ track: Track) {
-        manager.cancel(track.id)
-        downloadingTrackIDs.remove(globalID(for: track))
-        progress[track.id] = nil
-        globalIDsByTrackID[track.id] = nil
+        let globalID = globalID(for: track)
+        manager.cancel(DownloadTaskID(serverID: track.serverID, trackID: track.id))
+        downloadingTrackIDs.remove(globalID)
+        progress[globalID] = nil
     }
 
     func remove(_ track: Track) async {
@@ -257,28 +255,25 @@ final class DownloadStore: ObservableObject {
         downloadedTrackIDs = []
         downloadingTrackIDs = []
         progress = [:]
-        globalIDsByTrackID = [:]
     }
 
     func handleBackgroundEvents(identifier: String, completion: @escaping () -> Void) {
         manager.handleEventsForBackgroundURLSession(identifier: identifier, completion: completion)
     }
 
-    private func handle(trackID: TrackID, status: DownloadStatus, progress value: Double) {
-        guard let globalID = globalIDsByTrackID[trackID] else { return }
+    private func handle(taskID: DownloadTaskID, status: DownloadStatus, progress value: Double) {
+        let globalID = GlobalID(serverID: taskID.serverID, remoteID: taskID.trackID.rawValue)
         switch status {
         case .downloading:
             downloadingTrackIDs.insert(globalID)
-            progress[trackID] = value
+            progress[globalID] = value
         case .downloaded:
             downloadingTrackIDs.remove(globalID)
-            progress[trackID] = nil
+            progress[globalID] = nil
             downloadedTrackIDs.insert(globalID)
-            globalIDsByTrackID[trackID] = nil
         case .failed, .notDownloaded:
             downloadingTrackIDs.remove(globalID)
-            progress[trackID] = nil
-            globalIDsByTrackID[trackID] = nil
+            progress[globalID] = nil
         case .queued:
             break
         }

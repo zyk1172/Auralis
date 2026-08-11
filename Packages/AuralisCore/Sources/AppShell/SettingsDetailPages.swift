@@ -124,7 +124,6 @@ struct DataSettingsPage: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
     let theme: BuiltInTheme
-    @State private var backupRoute: DataBackupRoute?
 
     var body: some View {
         SettingsDetailForm(title: "数据与备份", theme: theme) {
@@ -132,31 +131,10 @@ struct DataSettingsPage: View {
             SettingsBackupSection(
                 model: model,
                 themeStore: themeStore,
-                theme: theme,
-                onExport: { backupRoute = .export },
-                onImport: { backupRoute = .import }
+                theme: theme
             )
         }
-        #if os(iOS)
-        .sheet(item: $backupRoute) { route in
-            NavigationStack {
-                switch route {
-                case .export:
-                    BackupExportPage(model: model, themeStore: themeStore, theme: theme)
-                case .import:
-                    BackupImportPage(model: model, themeStore: themeStore, theme: theme)
-                }
-            }
-        }
-        #endif
     }
-}
-
-private enum DataBackupRoute: String, Identifiable {
-    case export
-    case `import`
-
-    var id: String { rawValue }
 }
 
 struct AgentSettingsPage: View {
@@ -166,11 +144,22 @@ struct AgentSettingsPage: View {
     @AppStorage("auralis.ai.allowsMetadata") private var allowsMetadata = true
     @AppStorage("auralis.ai.allowsLyrics") private var allowsLyrics = false
     @AppStorage("auralis.ai.allowsHistory") private var allowsHistory = false
+    @AppStorage(ExternalMusicPreferences.Keys.enabled) private var externalMusicEnabled = true
+    @AppStorage(ExternalMusicPreferences.Keys.musicBrainz) private var musicBrainzEnabled = true
+    @AppStorage(ExternalMusicPreferences.Keys.critiqueBrainz) private var critiqueBrainzEnabled = true
+    @AppStorage(ExternalMusicPreferences.Keys.listenBrainz) private var listenBrainzEnabled = true
     @AppStorage(AIConnectionSettings.Keys.baseURL) private var aiBaseURL = AIConnectionSettings.defaultBaseURL
     @AppStorage(AIConnectionSettings.Keys.model) private var aiModel = AIConnectionSettings.defaultModel
     @State private var hasAPIKey = false
     @State private var indexStatus: RecommendationIndexV2Status?
     @State private var isLoadingIndexStatus = false
+    @State private var isClearingExternalMusicCache = false
+    @State private var externalMusicCacheMessage: String?
+    @State private var isExportingIndex = false
+    @State private var indexExportFile: RecommendationIndexV2IndexFile?
+    @State private var isImportingIndex = false
+    @State private var indexTransferMessage: String?
+    @State private var isPerformingIndexTransfer = false
 
     private let credentialVault = KeychainCredentialVault()
 
@@ -192,6 +181,8 @@ struct AgentSettingsPage: View {
                     LabeledContent("待处理", value: "\(status.pendingTracks) 首")
                     ProgressView(value: Double(status.indexedTracks), total: Double(max(status.totalTracks, 1)))
                         .tint(theme.colorTokens.accent.color)
+                    LabeledContent("规则版本", value: status.rulesVersion)
+                    LabeledContent("索引格式", value: "V2 包 v\(LocalCatalogStore.recommendationIndexV2PackageFormatVersion)")
                     Button {
                         model.startOrContinueRecommendationIndexV2()
                     } label: {
@@ -201,6 +192,17 @@ struct AgentSettingsPage: View {
                         )
                     }
                     .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
+                    HStack {
+                        Button("导出索引…") { Task { await exportIndex() } }
+                            .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
+                        Button("导入索引…") { isImportingIndex = true }
+                            .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
+                    }
+                    if let indexTransferMessage {
+                        Text(indexTransferMessage)
+                            .font(.caption)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
                     Button("刷新状态") { Task { await refreshIndexStatus() } }
                 } else {
                     Text("连接并同步音乐库后，可查看索引进度。")
@@ -233,13 +235,67 @@ struct AgentSettingsPage: View {
                 Toggle("允许发送歌词", isOn: $allowsLyrics)
                 Toggle("允许发送播放历史摘要", isOn: $allowsHistory)
             }
+            Section("公开音乐数据") {
+                Toggle("启用公开音乐数据", isOn: $externalMusicEnabled)
+                Toggle("MusicBrainz", isOn: $musicBrainzEnabled)
+                    .disabled(!externalMusicEnabled)
+                Toggle("CritiqueBrainz", isOn: $critiqueBrainzEnabled)
+                    .disabled(!externalMusicEnabled)
+                Toggle("ListenBrainz", isOn: $listenBrainzEnabled)
+                    .disabled(!externalMusicEnabled)
+                Text("仅在打开歌曲信息、歌曲鉴赏等需要公开音乐资料的功能时按需查询。不会上传音频文件、歌词、播放地址、NAS 密码或完整音乐库。查询结果默认缓存 14 天。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                Button {
+                    Task { await clearExternalMusicCache() }
+                } label: {
+                    if isClearingExternalMusicCache {
+                        HStack { ProgressView(); Text("正在清除…") }
+                    } else {
+                        Label("清除公开音乐数据缓存", systemImage: "trash")
+                    }
+                }
+                .disabled(isClearingExternalMusicCache)
+                if let externalMusicCacheMessage {
+                    Text(externalMusicCacheMessage)
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
+            }
             AgentMemoryManagementSection(model: model, theme: theme)
+        }
+        .fileExporter(
+            isPresented: $isExportingIndex,
+            document: indexExportFile,
+            contentType: .auralisIndexV2,
+            defaultFilename: defaultIndexExportFilename
+        ) { result in
+            if case let .failure(error) = result {
+                indexTransferMessage = "导出失败：\(error.localizedDescription)"
+            }
+        }
+        .fileImporter(
+            isPresented: $isImportingIndex,
+            allowedContentTypes: [.auralisIndexV2, .json, .data]
+        ) { result in
+            switch result {
+            case let .success(url):
+                Task { await importIndex(from: url) }
+            case let .failure(error):
+                indexTransferMessage = "导入失败：\(error.localizedDescription)"
+            }
         }
         .task {
             hasAPIKey = (try? await credentialVault.retrieve(id: AIConnectionSettings.credentialID)) != nil
             await refreshIndexStatus()
         }
         .task(id: model.catalog.activeServerID) { await refreshIndexStatus() }
+    }
+
+    private var defaultIndexExportFilename: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return "Auralis-推荐索引-V2-\(formatter.string(from: Date()))"
     }
 
     private var sceneBinding: Binding<String> {
@@ -264,6 +320,59 @@ struct AgentSettingsPage: View {
         isLoadingIndexStatus = true
         indexStatus = try? await model.catalogCoordinator.store.recommendationIndexV2Status(serverID: serverID)
         isLoadingIndexStatus = false
+    }
+
+    private func clearExternalMusicCache() async {
+        isClearingExternalMusicCache = true
+        externalMusicCacheMessage = nil
+        defer { isClearingExternalMusicCache = false }
+        do {
+            try await model.agentCoordinator.clearExternalMusicDataCache()
+            externalMusicCacheMessage = "公开音乐数据缓存已清除。"
+        } catch {
+            externalMusicCacheMessage = "清除失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 导出当前服务器的 V2 索引为 `.auralis-index-v2` 包；只导出已完成且元数据
+    /// 匹配当前内容指纹的歌曲，不包含任何凭据、播放地址或私人播放数据。
+    private func exportIndex() async {
+        guard let serverID = model.catalog.activeServerID else { return }
+        isPerformingIndexTransfer = true
+        indexTransferMessage = nil
+        defer { isPerformingIndexTransfer = false }
+        do {
+            let package = try await model.catalogCoordinator.store.exportRecommendationIndexV2Package(serverID: serverID)
+            let data = try JSONEncoder().encode(package)
+            indexExportFile = RecommendationIndexV2IndexFile(data: data)
+            isExportingIndex = true
+        } catch {
+            indexTransferMessage = "导出失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 从用户选择的 `.auralis-index-v2` 文件导入到当前服务器；导入使用 SQLite
+    /// 事务并逐条统计，一首失败不会让整个文件失败。
+    private func importIndex(from url: URL) async {
+        guard let serverID = model.catalog.activeServerID else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessing { url.stopAccessingSecurityScopedResource() }
+        }
+        isPerformingIndexTransfer = true
+        indexTransferMessage = nil
+        defer { isPerformingIndexTransfer = false }
+        do {
+            let data = try Data(contentsOf: url)
+            let stats = try await model.catalogCoordinator.store.importRecommendationIndexV2Package(
+                data: data,
+                serverID: serverID
+            )
+            indexTransferMessage = "成功导入 \(stats.imported) 首；已存在 \(stats.alreadyExists) 首；歌曲已变化 \(stats.metadataChanged) 首；当前音乐库不存在 \(stats.notFound) 首；格式错误 \(stats.malformed) 首。"
+            await refreshIndexStatus()
+        } catch {
+            indexTransferMessage = "导入失败：\(error.localizedDescription)"
+        }
     }
 }
 

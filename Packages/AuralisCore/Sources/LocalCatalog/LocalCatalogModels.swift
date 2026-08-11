@@ -178,7 +178,15 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
     public let vocals: [String]
     public let textures: [String]
     public let styles: [String]
+    /// Agent 可按曲库实际内容创建的额外分类。键是稳定维度名，值是该曲目的标签；
+    /// 例如 ["编制": ["室内乐"], "录音特征": ["现场录音"]]。
+    public let customTags: [String: [String]]?
     public let confidence: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case id, moods, scenes, energy, tempo, acousticness, danceability
+        case vocals, textures, styles, customTags, confidence
+    }
 
     public init(
         id: String,
@@ -191,6 +199,7 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         vocals: [String] = [],
         textures: [String] = [],
         styles: [String] = [],
+        customTags: [String: [String]]? = nil,
         confidence: Double = 0.5
     ) {
         self.id = id
@@ -203,7 +212,26 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         self.vocals = vocals
         self.textures = textures
         self.styles = styles
+        self.customTags = customTags
         self.confidence = confidence
+    }
+
+    /// 原生工具 Schema 只强制真实 ID 与能量值；其它维度允许模型按证据省略，
+    /// 解码时使用与公开初始化器一致的安全默认值，而不是让整批写回失败。
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        moods = try container.decodeIfPresent([String].self, forKey: .moods) ?? []
+        scenes = try container.decodeIfPresent([String].self, forKey: .scenes) ?? []
+        energy = try container.decode(Int.self, forKey: .energy)
+        tempo = try container.decodeIfPresent(Int.self, forKey: .tempo) ?? 3
+        acousticness = try container.decodeIfPresent(Int.self, forKey: .acousticness) ?? 3
+        danceability = try container.decodeIfPresent(Int.self, forKey: .danceability) ?? 3
+        vocals = try container.decodeIfPresent([String].self, forKey: .vocals) ?? []
+        textures = try container.decodeIfPresent([String].self, forKey: .textures) ?? []
+        styles = try container.decodeIfPresent([String].self, forKey: .styles) ?? []
+        customTags = try container.decodeIfPresent([String: [String]].self, forKey: .customTags)
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
     }
 }
 

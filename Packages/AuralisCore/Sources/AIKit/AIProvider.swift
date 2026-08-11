@@ -7,8 +7,9 @@ import SecurityKit
 /// 避免保存配置、原生 Responses 与兼容 Chat 请求之间出现不同上限。
 public let auralisDefaultMaxOutputTokens = 16_000
 
-/// OpenAI 兼容接口的统一最大输出上限，与默认请求预算保持一致。
-public let auralisMaximumCompatibleOutputTokens = 16_000
+/// OpenAI 兼容接口默认上下文窗口。不再假设所有模型都是 256K：
+/// 用户可在 Provider「高级设置」中按实际模型修改 maxContextTokens / maxOutputTokens。
+public let auralisDefaultMaxContextTokens = 256_000
 
 /// Auralis 当前模型能力声明：256K 总上下文、16K 单次输出。
 public struct ModelCapabilities: Codable, Hashable, Sendable {
@@ -232,7 +233,10 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     public var organization: String?
     public var project: String?
     public var temperature: Double
+    /// 单次回复输出上限（沿用旧字段名，兼容旧配置）。
     public var maxTokens: Int
+    /// 模型上下文窗口。默认 256K，用户可按实际模型修改；不参与累计任务预算。
+    public var maxContextTokens: Int
     public var timeout: TimeInterval
     public var usesStreaming: Bool
     public var supportsJSONMode: Bool
@@ -252,6 +256,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         project: String? = nil,
         temperature: Double = 0.4,
         maxTokens: Int = auralisDefaultMaxOutputTokens,
+        maxContextTokens: Int = auralisDefaultMaxContextTokens,
         timeout: TimeInterval = 60,
         usesStreaming: Bool = true,
         supportsJSONMode: Bool = false,
@@ -270,6 +275,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.project = project
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.maxContextTokens = max(4_096, maxContextTokens)
         self.timeout = timeout
         self.usesStreaming = usesStreaming
         self.supportsJSONMode = supportsJSONMode
@@ -277,6 +283,40 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.supportsToolCalling = supportsToolCalling
         self.supportsImageInput = supportsImageInput
     }
+
+    /// 自定义解码：旧配置 / 旧备份缺少 `maxContextTokens` 时使用当前默认值，
+    /// 保证已有用户升级后行为不变。
+    private enum CodingKeys: String, CodingKey {
+        case id, name, baseURL, apiPath, credentialID, model, customHeaders
+        case organization, project, temperature, maxTokens, maxContextTokens
+        case timeout, usesStreaming, supportsJSONMode, supportsJSONSchema
+        case supportsToolCalling, supportsImageInput
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        baseURL = try container.decode(URL.self, forKey: .baseURL)
+        apiPath = try container.decodeIfPresent(String.self, forKey: .apiPath) ?? "/v1/chat/completions"
+        credentialID = try container.decodeIfPresent(CredentialID.self, forKey: .credentialID)
+        model = try container.decode(String.self, forKey: .model)
+        customHeaders = try container.decodeIfPresent(AIProviderHeaders.self, forKey: .customHeaders) ?? AIProviderHeaders()
+        organization = try container.decodeIfPresent(String.self, forKey: .organization)
+        project = try container.decodeIfPresent(String.self, forKey: .project)
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
+        maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? auralisDefaultMaxOutputTokens
+        maxContextTokens = max(4_096, try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? auralisDefaultMaxContextTokens)
+        timeout = try container.decodeIfPresent(TimeInterval.self, forKey: .timeout) ?? 60
+        usesStreaming = try container.decodeIfPresent(Bool.self, forKey: .usesStreaming) ?? true
+        supportsJSONMode = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false
+        supportsJSONSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false
+        supportsToolCalling = try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false
+        supportsImageInput = try container.decodeIfPresent(Bool.self, forKey: .supportsImageInput) ?? false
+    }
+
+    /// 输出上限别名：与既有 `maxTokens` 同一数值，语义上独立于上下文窗口。
+    public var maxOutputTokens: Int { maxTokens }
 }
 
 public struct AIPrivacyPermissions: Codable, Hashable, Sendable {

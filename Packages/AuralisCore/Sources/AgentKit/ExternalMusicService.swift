@@ -59,7 +59,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
     private let musicBrainzMinimumInterval: TimeInterval
     private var lastMusicBrainzRequestAt: Date?
     private let userAgent: String
-    private let cacheAge: TimeInterval
+    private let preferencesProvider: @Sendable () -> ExternalMusicPreferences
 
     public init(
         catalog: LocalCatalogStore,
@@ -67,7 +67,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         endpoints: Endpoints = .init(),
         userAgent: String = "Auralis/1.0.2 (https://github.com/zyk1172/Auralis)",
         musicBrainzMinimumInterval: TimeInterval = 1.05,
-        cacheAge: TimeInterval = 14 * 86_400,
+        preferencesProvider: @escaping @Sendable () -> ExternalMusicPreferences = { .current() },
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.catalog = catalog
@@ -75,8 +75,13 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         self.endpoints = endpoints
         self.userAgent = userAgent
         self.musicBrainzMinimumInterval = max(musicBrainzMinimumInterval, 0)
-        self.cacheAge = min(max(cacheAge, 7 * 86_400), 30 * 86_400)
+        self.preferencesProvider = preferencesProvider
         self.now = now
+    }
+
+    /// 清除身份匹配、候选与三来源指标缓存；设置开关本身不受影响。
+    public func clearCache() async throws {
+        try await catalog.clearExternalMusicCache()
     }
 
     public func enrich(track: Track, globalID: GlobalID) async -> AgentExternalMusicResult {
@@ -87,40 +92,52 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             )
         }
 
+        let preferences = preferencesProvider()
         let cachedIdentity = try? await catalog.externalMusicIdentity(for: globalID)
+        let cachedCandidates = (try? await catalog.externalMusicCandidates(for: globalID)) ?? []
+        guard preferences.enabled else {
+            return AgentExternalMusicResult(
+                identity: cachedIdentity,
+                candidates: cachedCandidates,
+                metrics: disabledMetrics(globalID: globalID)
+            )
+        }
+
         let identity: ExternalMusicIdentity?
         var candidates: [ExternalMusicIdentityCandidate] = []
         // MBID 是稳定外部身份，不因为本地校验时间过期而丢弃；指标有自己的刷新周期。
         if let cachedIdentity, cachedIdentity.recordingMBID != nil {
             identity = cachedIdentity
-        } else if let cachedIdentity, let isrc = cachedIdentity.isrc, !isrc.isEmpty {
+        } else if preferences.musicBrainzEnabled,
+                  let cachedIdentity, let isrc = cachedIdentity.isrc, !isrc.isEmpty {
             let match = await matchByISRC(isrc, globalID: globalID)
             identity = match.identity
             candidates = match.candidates
-        } else {
+        } else if preferences.musicBrainzEnabled {
             let match = await match(track: track, globalID: globalID)
             identity = match.identity
             candidates = match.candidates
+        } else {
+            // MusicBrainz 被单独关闭时只能使用本地已有身份，绝不为了其他来源偷偷匹配。
+            identity = cachedIdentity
+            candidates = cachedCandidates
         }
 
-        if let cached = try? await catalog.communityMusicMetrics(for: globalID),
-           isFresh(cached) {
-            return AgentExternalMusicResult(identity: identity, candidates: candidates, metrics: cached)
-        }
-
-        guard let identity else {
-            return AgentExternalMusicResult(
-                identity: nil,
-                candidates: candidates,
-                metrics: CommunityMusicMetrics(globalTrackID: globalID, values: [])
-            )
-        }
-
-        async let musicBrainz = fetchMusicBrainzMetric(identity: identity)
-        async let critiqueBrainz = fetchCritiqueBrainzMetric(identity: identity)
-        async let listenBrainz = fetchListenBrainzMetric(identity: identity)
+        let cached = try? await catalog.communityMusicMetrics(for: globalID)
+        async let musicBrainz = metric(
+            for: .musicBrainz, identity: identity,
+            cached: cached?.value(for: .musicBrainz), preferences: preferences
+        )
+        async let critiqueBrainz = metric(
+            for: .critiqueBrainz, identity: identity,
+            cached: cached?.value(for: .critiqueBrainz), preferences: preferences
+        )
+        async let listenBrainz = metric(
+            for: .listenBrainz, identity: identity,
+            cached: cached?.value(for: .listenBrainz), preferences: preferences
+        )
         let metrics = await [musicBrainz, critiqueBrainz, listenBrainz]
-        for metric in metrics {
+        for metric in metrics where metric.status != .disabled && metric.status != .loading {
             try? await catalog.upsertCommunityMusicMetric(metric, for: globalID)
         }
         return AgentExternalMusicResult(
@@ -130,17 +147,40 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         )
     }
 
-    private func isFresh(_ metrics: CommunityMusicMetrics) -> Bool {
-        guard !metrics.values.isEmpty else { return false }
-        let current = now()
-        return metrics.values.allSatisfy { metric in
-            let allowedAge: TimeInterval = switch metric.status {
-            case .available, .noData, .notSupported: cacheAge
-            case .rateLimited: 15 * 60
-            case .unavailable, .failed: 5 * 60
-            }
-            return current.timeIntervalSince(metric.fetchedAt) <= allowedAge
+    private func metric(
+        for source: CommunityMusicSource,
+        identity: ExternalMusicIdentity?,
+        cached: CommunityMusicMetric?,
+        preferences: ExternalMusicPreferences
+    ) async -> CommunityMusicMetric {
+        guard preferences.isEnabled(source) else {
+            return metric(source, nil, status: .disabled)
         }
+        if let cached, isFresh(cached, maxAge: preferences.cacheTTL) { return cached }
+        guard let identity else { return metric(source, nil, status: .noData) }
+        switch source {
+        case .musicBrainz: return await fetchMusicBrainzMetric(identity: identity)
+        case .critiqueBrainz: return await fetchCritiqueBrainzMetric(identity: identity)
+        case .listenBrainz: return await fetchListenBrainzMetric(identity: identity)
+        }
+    }
+
+    private func disabledMetrics(globalID: GlobalID) -> CommunityMusicMetrics {
+        CommunityMusicMetrics(
+            globalTrackID: globalID,
+            values: CommunityMusicSource.allCases.map { metric($0, nil, status: .disabled) }
+        )
+    }
+
+    private func isFresh(_ metric: CommunityMusicMetric, maxAge: TimeInterval) -> Bool {
+        let current = now()
+        let allowedAge: TimeInterval = switch metric.status {
+        case .available, .noData, .notSupported: maxAge
+        case .rateLimited: min(maxAge, 15 * 60)
+        case .unavailable, .failed: min(maxAge, 5 * 60)
+        case .disabled, .loading: 0
+        }
+        return allowedAge > 0 && current.timeIntervalSince(metric.fetchedAt) <= allowedAge
     }
 
     private func match(
@@ -345,39 +385,56 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
     }
 
     private func fetchListenBrainzMetric(identity: ExternalMusicIdentity) async -> CommunityMusicMetric {
-        guard let releaseGroupMBID = identity.releaseGroupMBID else {
+        let entityID: String
+        let endpoint: String
+        let bodyKey: String
+        if let releaseGroupMBID = identity.releaseGroupMBID {
+            entityID = releaseGroupMBID
+            endpoint = "popularity/release-group"
+            bodyKey = "release_group_mbids"
+        } else if let recordingMBID = identity.recordingMBID {
+            entityID = recordingMBID
+            endpoint = "popularity/recording"
+            bodyKey = "recording_mbids"
+        } else {
             return metric(.listenBrainz, nil, status: .noData)
         }
         do {
-            var components = URLComponents(
-                url: endpoints.listenBrainz.appendingPathComponent("stats/release-group/\(releaseGroupMBID)/listeners"),
-                resolvingAgainstBaseURL: false
-            )
-            components?.queryItems = [URLQueryItem(name: "range", value: "all_time")]
-            guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
-            let data = try await request(url: url)
-            let response = try JSONDecoder().decode(ListenBrainzListenersResponse.self, from: data)
-            let count = response.payload.totalListenCount
+            let url = endpoints.listenBrainz.appendingPathComponent(endpoint)
+            let body = try JSONSerialization.data(withJSONObject: [bodyKey: [entityID]])
+            let data = try await request(url: url, method: "POST", body: body)
+            guard let result = try decodeListenBrainzPopularity(data).first else {
+                return metric(.listenBrainz, entityID, status: .noData)
+            }
+            let hasData = (result.totalListenCount ?? 0) > 0 || (result.totalUserCount ?? 0) > 0
             return CommunityMusicMetric(
                 source: .listenBrainz,
-                entityID: releaseGroupMBID,
-                listenCount: count,
-                listenerCount: response.payload.totalListenerCount,
+                entityID: entityID,
+                listenCount: result.totalListenCount,
+                listenerCount: result.totalUserCount,
                 fetchedAt: now(),
-                status: count > 0 ? .available : .noData
+                status: hasData ? .available : .noData
             )
         } catch {
-            return metric(.listenBrainz, releaseGroupMBID, status: status(for: error))
+            return metric(.listenBrainz, entityID, status: status(for: error))
         }
     }
 
-    private func request(url: URL, musicBrainz: Bool = false) async throws -> Data {
+    private func request(
+        url: URL,
+        musicBrainz: Bool = false,
+        method: String = "GET",
+        body: Data? = nil
+    ) async throws -> Data {
         try Task.checkCancellation()
         if musicBrainz { try await waitForMusicBrainzSlot() }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
+        request.httpMethod = method
+        request.httpBody = body
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         do {
             let (data, response) = try await session.data(for: request)
             try Task.checkCancellation()
@@ -467,6 +524,16 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
     private func integer(_ value: Any?) -> Int? {
         (value as? NSNumber)?.intValue ?? (value as? String).flatMap(Int.init)
     }
+
+    private func decodeListenBrainzPopularity(_ data: Data) throws -> [ListenBrainzPopularityEntry] {
+        if let entries = try? JSONDecoder().decode([ListenBrainzPopularityEntry].self, from: data) {
+            return entries
+        }
+        if let wrapped = try? JSONDecoder().decode(ListenBrainzPopularityResponse.self, from: data) {
+            return wrapped.payload
+        }
+        throw ExternalMusicServiceError.invalidResponse
+    }
 }
 
 private struct MBSearchResponse: Decodable {
@@ -522,16 +589,16 @@ private struct MBRating: Decodable {
     }
 }
 
-private struct ListenBrainzListenersResponse: Decodable {
-    let payload: Payload
+private struct ListenBrainzPopularityEntry: Decodable {
+    let totalListenCount: Int?
+    let totalUserCount: Int?
 
-    struct Payload: Decodable {
-        let totalListenCount: Int
-        let totalListenerCount: Int?
-
-        enum CodingKeys: String, CodingKey {
-            case totalListenCount = "total_listen_count"
-            case totalListenerCount = "total_listener_count"
-        }
+    enum CodingKeys: String, CodingKey {
+        case totalListenCount = "total_listen_count"
+        case totalUserCount = "total_user_count"
     }
+}
+
+private struct ListenBrainzPopularityResponse: Decodable {
+    let payload: [ListenBrainzPopularityEntry]
 }

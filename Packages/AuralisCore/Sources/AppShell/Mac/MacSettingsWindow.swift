@@ -200,7 +200,7 @@ public struct MacSettingsWindow: View {
     private var about: some View {
         Form {
             Section {
-                LabeledContent("版本", value: "0.3.4")
+                LabeledContent("版本", value: AppVersionInfo.display)
                 LabeledContent("构建", value: "原生 macOS")
                 Text("澜音 · 私人音乐服务器播放器（OpenSubsonic / Navidrome）")
                     .font(.caption)

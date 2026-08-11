@@ -109,6 +109,18 @@ public struct DownloadTaskInfo: Sendable, Equatable {
     }
 }
 
+/// 下载任务在运行时的稳定身份。远端 TrackID 只在单台服务器内唯一，所有下载
+/// 状态、回调和取消操作都必须同时携带 ServerID，避免多服务器相同 TrackID 串任务。
+public struct DownloadTaskID: Hashable, Sendable {
+    public let serverID: ServerID
+    public let trackID: TrackID
+
+    public init(serverID: ServerID, trackID: TrackID) {
+        self.serverID = serverID
+        self.trackID = trackID
+    }
+}
+
 /// 可跨进程恢复的下载快照。业务层用服务器作用域重新建立 GlobalID，
 /// 不再依赖只存在于 AppModel 内存中的 TrackID 映射。
 public struct ActiveDownloadSnapshot: Sendable, Equatable {
@@ -125,7 +137,7 @@ public struct ActiveDownloadSnapshot: Sendable, Equatable {
 /// 使用 URLSessionDownloadTask + delegate 汇报进度；完成后把临时文件移入 TrackCacheStore。
 /// 线程安全：delegate 回调可能来自任意队列，内部用锁保护状态。
 public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    public typealias StateChange = @Sendable (TrackID, DownloadStatus, Double) -> Void
+    public typealias StateChange = @Sendable (DownloadTaskID, DownloadStatus, Double) -> Void
 
     /// delegate 必须指向 self，因此用 lazy 在 super.init 之后创建。
     /// 使用后台会话：App 被系统挂起后，下载任务按系统规则继续并在完成后回调
@@ -145,13 +157,11 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
     /// 可替换的状态回调（App 在 init 完成后注入，避免 init 期捕获 self）。
     public var onStateChange: StateChange
     private let lock = NSLock()
-    private var tasks: [TrackID: URLSessionDownloadTask] = [:]
-    private var infos: [TrackID: DownloadTaskInfo] = [:]
-    private var codecs: [TrackID: String] = [:]
-    /// 下载任务归属的服务器（P0-1 缓存按服务器隔离：落盘必须带 serverID）。
-    private var serverIDs: [TrackID: ServerID] = [:]
+    private var tasks: [DownloadTaskID: URLSessionDownloadTask] = [:]
+    private var infos: [DownloadTaskID: DownloadTaskInfo] = [:]
+    private var codecs: [DownloadTaskID: String] = [:]
     /// taskIdentifier 在进程重启后仍可由后台 URLSession 恢复；同时也覆盖“文件已下载、正搬入缓存”的窗口。
-    private var taskIdentifiers: [TrackID: Int] = [:]
+    private var taskIdentifiers: [DownloadTaskID: Int] = [:]
     /// `getAllTasks` 的异步快照可能晚于用户取消返回。用 taskIdentifier 墓碑阻止恢复回调
     /// 把已经取消的系统任务重新绑定成 downloading；消费后立即移除，集合保持有界。
     private var cancelledTaskIdentifiers: Set<Int> = []
@@ -189,16 +199,33 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         }
     }
 
+    public func status(_ id: DownloadTaskID) -> DownloadTaskInfo? {
+        lock.lock()
+        defer { lock.unlock() }
+        return infos[id]
+    }
+
+    public func isDownloading(_ id: DownloadTaskID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return taskIdentifiers[id] != nil
+    }
+
+    /// 旧调用方兼容查询。仅在同一 TrackID 恰好对应一个服务器任务时返回状态；
+    /// 新代码必须使用带 ServerID 的 DownloadTaskID，避免结果含糊。
     public func status(_ trackID: TrackID) -> DownloadTaskInfo? {
         lock.lock()
         defer { lock.unlock() }
-        return infos[trackID]
+        let matches = infos.filter { $0.key.trackID == trackID }
+        guard matches.count == 1 else { return nil }
+        return matches.first?.value
     }
 
+    /// 旧调用方兼容查询：任意服务器存在该 TrackID 的活动任务即返回 true。
     public func isDownloading(_ trackID: TrackID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return taskIdentifiers[trackID] != nil
+        return taskIdentifiers.keys.contains { $0.trackID == trackID }
     }
 
     public func activeCount() -> Int {
@@ -211,41 +238,41 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
     public func activeSnapshots() -> [ActiveDownloadSnapshot] {
         lock.lock()
         defer { lock.unlock() }
-        return taskIdentifiers.keys.compactMap { trackID in
-            guard let serverID = serverIDs[trackID], let info = infos[trackID] else { return nil }
-            return ActiveDownloadSnapshot(serverID: serverID, info: info)
+        return taskIdentifiers.keys.compactMap { id in
+            guard let info = infos[id] else { return nil }
+            return ActiveDownloadSnapshot(serverID: id.serverID, info: info)
         }
     }
 
     /// 开始下载：trackID → url（带认证的 download 地址）；serverID 用于落盘时按服务器隔离。
     public func start(trackID: TrackID, url: URL, codec: String?, serverID: ServerID) {
+        let id = DownloadTaskID(serverID: serverID, trackID: trackID)
         lock.lock()
-        guard taskIdentifiers[trackID] == nil else {
+        guard taskIdentifiers[id] == nil else {
             lock.unlock()
             return
         }
-        infos[trackID] = DownloadTaskInfo(trackID: trackID, status: .downloading)
-        codecs[trackID] = codec
-        serverIDs[trackID] = serverID
+        infos[id] = DownloadTaskInfo(trackID: trackID, status: .downloading)
+        codecs[id] = codec
         lock.unlock()
 
         let task = session.downloadTask(with: url)
         let metadata = DownloadTaskMetadata(trackID: trackID, serverID: serverID, codec: codec)
         task.taskDescription = metadata.taskDescription
         lock.lock()
-        tasks[trackID] = task
-        taskIdentifiers[trackID] = task.taskIdentifier
+        tasks[id] = task
+        taskIdentifiers[id] = task.taskIdentifier
         lock.unlock()
         // 必须在 resume 前写入兜底映射，避免任务刚启动进程就被系统终止的竞态。
         metadataStore.save(metadata, for: task.taskIdentifier)
-        onStateChange(trackID, .downloading, 0)
+        onStateChange(id, .downloading, 0)
         task.resume()
     }
 
-    public func cancel(_ trackID: TrackID) {
+    public func cancel(_ id: DownloadTaskID) {
         lock.lock()
-        let task = tasks.removeValue(forKey: trackID)
-        let taskIdentifier = taskIdentifiers.removeValue(forKey: trackID)
+        let task = tasks.removeValue(forKey: id)
+        let taskIdentifier = taskIdentifiers.removeValue(forKey: id)
         if let taskIdentifier {
             cancelledTaskIdentifiers.insert(taskIdentifier)
             if cancelledTaskIdentifiers.count > 256,
@@ -253,16 +280,23 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
                 cancelledTaskIdentifiers.remove(oldestUnknown)
             }
         }
-        infos[trackID] = DownloadTaskInfo(trackID: trackID, status: .notDownloaded)
-        codecs[trackID] = nil
-        serverIDs[trackID] = nil
+        infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .notDownloaded)
+        codecs[id] = nil
         lock.unlock()
         task?.taskDescription = nil
         if let taskIdentifier {
             metadataStore.remove(taskIdentifier: taskIdentifier)
         }
         task?.cancel()
-        onStateChange(trackID, .notDownloaded, 0)
+        onStateChange(id, .notDownloaded, 0)
+    }
+
+    /// 旧调用方兼容取消：取消所有匹配的服务器任务。业务代码应使用 scoped 版本。
+    public func cancel(_ trackID: TrackID) {
+        lock.lock()
+        let ids = taskIdentifiers.keys.filter { $0.trackID == trackID }
+        lock.unlock()
+        for id in ids { cancel(id) }
     }
 
     // MARK: - URLSessionDownloadDelegate
@@ -274,15 +308,15 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
-        guard let trackID = trackID(for: downloadTask) else { return }
+        guard let id = taskID(for: downloadTask) else { return }
         let progress = totalBytesExpectedToWrite > 0
             ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
             : 0
         lock.lock()
-        infos[trackID]?.progress = min(max(progress, 0), 1)
-        infos[trackID]?.byteCount = totalBytesWritten
+        infos[id]?.progress = min(max(progress, 0), 1)
+        infos[id]?.byteCount = totalBytesWritten
         lock.unlock()
-        onStateChange(trackID, .downloading, min(max(progress, 0), 1))
+        onStateChange(id, .downloading, min(max(progress, 0), 1))
     }
 
     public func urlSession(
@@ -290,74 +324,64 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
-        guard let trackID = trackID(for: downloadTask) else { return }
+        guard let id = taskID(for: downloadTask) else { return }
         let codec: String?
-        let serverID: ServerID?
         let taskIdentifier: Int
         lock.lock()
-        codec = codecs[trackID]
-        serverID = serverIDs[trackID]
-        tasks[trackID] = nil
-        taskIdentifier = taskIdentifiers[trackID] ?? downloadTask.taskIdentifier
+        codec = codecs[id]
+        tasks[id] = nil
+        taskIdentifier = taskIdentifiers[id] ?? downloadTask.taskIdentifier
         pendingCacheMoves += 1
         lock.unlock()
-        guard let serverID else {
-            finishFailure(trackID: trackID, taskIdentifier: taskIdentifier)
-            finishPendingCacheMove()
-            return
-        }
         // store 是 actor，moveDownloadedFile 需要 await；delegate 回调是同步的，用 Task 包裹。
         // 组合键带 serverID：不同服务器同 trackID 的文件互不覆盖（P0-1）。
-        let cacheID = TrackCacheStore.TrackCacheID(serverID: serverID, trackID: trackID)
+        let cacheID = TrackCacheStore.TrackCacheID(serverID: id.serverID, trackID: id.trackID)
         Task { [store, cacheID, codec, location, self] in
             do {
                 _ = try await store.moveDownloadedFile(at: location, for: cacheID, codec: codec)
-                self.finishSuccess(trackID: trackID, taskIdentifier: taskIdentifier)
+                self.finishSuccess(id: id, taskIdentifier: taskIdentifier)
             } catch {
-                self.finishFailure(trackID: trackID, taskIdentifier: taskIdentifier)
+                self.finishFailure(id: id, taskIdentifier: taskIdentifier)
             }
             self.finishPendingCacheMove()
         }
     }
 
     /// 同步辅助：完成状态更新（从异步上下文调用，锁在同步方法内执行）。
-    private func finishSuccess(trackID: TrackID, taskIdentifier: Int) {
+    private func finishSuccess(id: DownloadTaskID, taskIdentifier: Int) {
         lock.lock()
-        infos[trackID] = DownloadTaskInfo(trackID: trackID, status: .downloaded, progress: 1)
-        codecs[trackID] = nil
-        serverIDs[trackID] = nil
-        taskIdentifiers[trackID] = nil
+        infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .downloaded, progress: 1)
+        codecs[id] = nil
+        taskIdentifiers[id] = nil
         lock.unlock()
         metadataStore.remove(taskIdentifier: taskIdentifier)
-        onStateChange(trackID, .downloaded, 1)
+        onStateChange(id, .downloaded, 1)
     }
 
-    private func finishFailure(trackID: TrackID, taskIdentifier: Int) {
+    private func finishFailure(id: DownloadTaskID, taskIdentifier: Int) {
         lock.lock()
-        infos[trackID] = DownloadTaskInfo(trackID: trackID, status: .failed)
-        codecs[trackID] = nil
-        serverIDs[trackID] = nil
-        taskIdentifiers[trackID] = nil
+        infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .failed)
+        codecs[id] = nil
+        taskIdentifiers[id] = nil
         lock.unlock()
         metadataStore.remove(taskIdentifier: taskIdentifier)
-        onStateChange(trackID, .failed, 0)
+        onStateChange(id, .failed, 0)
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let trackID = trackID(for: task), error != nil else { return }
+        guard let id = taskID(for: task), error != nil else { return }
         lock.lock()
-        let wasActive = tasks[trackID] != nil
-        tasks[trackID] = nil
-        let taskIdentifier = taskIdentifiers.removeValue(forKey: trackID) ?? task.taskIdentifier
+        let wasActive = tasks[id] != nil
+        tasks[id] = nil
+        let taskIdentifier = taskIdentifiers.removeValue(forKey: id) ?? task.taskIdentifier
         lock.unlock()
         guard wasActive else { return }
         lock.lock()
-        infos[trackID] = DownloadTaskInfo(trackID: trackID, status: .failed)
-        codecs[trackID] = nil
-        serverIDs[trackID] = nil
+        infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .failed)
+        codecs[id] = nil
         lock.unlock()
         metadataStore.remove(taskIdentifier: taskIdentifier)
-        onStateChange(trackID, .failed, 0)
+        onStateChange(id, .failed, 0)
     }
 
     /// 由 App 生命周期转发：后台会话标识匹配时保存完成回调。
@@ -384,18 +408,18 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         completion?()
     }
 
-    private func trackID(for task: URLSessionTask) -> TrackID? {
+    private func taskID(for task: URLSessionTask) -> DownloadTaskID? {
         lock.lock()
-        let inMemoryTrackID = tasks.first { $0.value === task }?.key
+        let inMemoryID = tasks.first { $0.value === task }?.key
         lock.unlock()
-        if let inMemoryTrackID { return inMemoryTrackID }
+        if let inMemoryID { return inMemoryID }
 
         guard
             let downloadTask = task as? URLSessionDownloadTask,
             let metadata = metadata(for: downloadTask)
         else { return nil }
         bind(task: downloadTask, metadata: metadata)
-        return metadata.trackID
+        return DownloadTaskID(serverID: metadata.serverID, trackID: metadata.trackID)
     }
 
     private func metadata(for task: URLSessionTask) -> DownloadTaskMetadata? {
@@ -407,10 +431,10 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         let persisted = metadataStore.all()
         lock.lock()
         for (taskIdentifier, metadata) in persisted {
-            infos[metadata.trackID] = DownloadTaskInfo(trackID: metadata.trackID, status: .downloading)
-            codecs[metadata.trackID] = metadata.codec
-            serverIDs[metadata.trackID] = metadata.serverID
-            taskIdentifiers[metadata.trackID] = taskIdentifier
+            let id = DownloadTaskID(serverID: metadata.serverID, trackID: metadata.trackID)
+            infos[id] = DownloadTaskInfo(trackID: metadata.trackID, status: .downloading)
+            codecs[id] = metadata.codec
+            taskIdentifiers[id] = taskIdentifier
         }
         lock.unlock()
     }
@@ -454,31 +478,32 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
 
         // 只清理 getAllTasks 调用前已经存在的记录，避免与同时发生的新 start() 竞争。
         let staleTaskIdentifiers = pruneCandidates.subtracting(activeTaskIdentifiers)
-        var failedTrackIDs: [TrackID] = []
+        var failedIDs: [DownloadTaskID] = []
         for taskIdentifier in staleTaskIdentifiers {
             guard let metadata = metadataStore.metadata(for: taskIdentifier) else { continue }
             metadataStore.remove(taskIdentifier: taskIdentifier)
+            let id = DownloadTaskID(serverID: metadata.serverID, trackID: metadata.trackID)
             lock.lock()
-            if taskIdentifiers[metadata.trackID] == taskIdentifier {
-                taskIdentifiers[metadata.trackID] = nil
-                codecs[metadata.trackID] = nil
-                serverIDs[metadata.trackID] = nil
-                infos[metadata.trackID] = DownloadTaskInfo(trackID: metadata.trackID, status: .failed)
-                failedTrackIDs.append(metadata.trackID)
+            if taskIdentifiers[id] == taskIdentifier {
+                taskIdentifiers[id] = nil
+                codecs[id] = nil
+                infos[id] = DownloadTaskInfo(trackID: metadata.trackID, status: .failed)
+                failedIDs.append(id)
             }
             lock.unlock()
         }
-        for trackID in failedTrackIDs {
-            onStateChange(trackID, .failed, 0)
+        for id in failedIDs {
+            onStateChange(id, .failed, 0)
         }
     }
 
     private func bind(task: URLSessionDownloadTask, metadata: DownloadTaskMetadata) {
+        let id = DownloadTaskID(serverID: metadata.serverID, trackID: metadata.trackID)
         lock.lock()
-        // start() 本来就禁止同一首歌重复下载；恢复时也只认同一 track 的一个系统任务。
-        if let existingIdentifier = taskIdentifiers[metadata.trackID],
+        // 同一服务器的同一首歌只允许一个系统任务；不同服务器的相同 TrackID 可并存。
+        if let existingIdentifier = taskIdentifiers[id],
            existingIdentifier != task.taskIdentifier,
-           let existingTask = tasks[metadata.trackID],
+           let existingTask = tasks[id],
            existingTask !== task {
             lock.unlock()
             task.taskDescription = nil
@@ -486,11 +511,10 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             task.cancel()
             return
         }
-        tasks[metadata.trackID] = task
-        taskIdentifiers[metadata.trackID] = task.taskIdentifier
-        infos[metadata.trackID] = DownloadTaskInfo(trackID: metadata.trackID, status: .downloading)
-        codecs[metadata.trackID] = metadata.codec
-        serverIDs[metadata.trackID] = metadata.serverID
+        tasks[id] = task
+        taskIdentifiers[id] = task.taskIdentifier
+        infos[id] = DownloadTaskInfo(trackID: metadata.trackID, status: .downloading)
+        codecs[id] = metadata.codec
         lock.unlock()
     }
 

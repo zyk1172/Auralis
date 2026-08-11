@@ -55,6 +55,23 @@ struct AgentRuntimeArchitectureTests {
         }
     }
 
+    @Test func grantedScopeIsAnEnforcedAuthorizationBoundary() {
+        let conversation = AgentTaskPolicy.policy(for: .conversation)
+        let appreciation = AgentTaskPolicy.policy(for: .musicAppreciation)
+        let tool = AgentToolRegistry.descriptor(for: "music_appreciate")!
+        #expect(tool.requiredScopes == [.catalogRead, .externalRead])
+        #expect(!conversation.authorizes(tool))
+        #expect(appreciation.authorizes(tool))
+    }
+
+    @Test func queueScopeDoesNotGrantGeneralPlaybackMutation() {
+        let discovery = AgentTaskPolicy.policy(for: .musicDiscovery)
+        let queueAppend = AgentToolRegistry.descriptor(for: "queue_append")!
+        let playSong = AgentToolRegistry.descriptor(for: "playback_play_song")!
+        #expect(discovery.authorizes(queueAppend))
+        #expect(!discovery.authorizes(playSong))
+    }
+
     @Test func unknownToolIsRejected() async {
         let runtime = AgentRuntime()
         await #expect(throws: AgentRuntimeError.toolOutsidePolicy("not_real")) {
@@ -118,6 +135,30 @@ struct AgentRuntimeArchitectureTests {
         let capabilities = ModelCapabilities(maxContextTokens: 256_000, maxOutputTokens: 16_000)
         let budget = ContextManager.inputBudget(capabilities: capabilities, requestedInputBudget: 256_000, reservedOutputTokens: 16_000)
         #expect(budget == 238_976)
+    }
+
+    @Test func smallProviderWindowNeverProducesAnOversizedInputBudget() {
+        let capabilities = ModelCapabilities(maxContextTokens: 4_096, maxOutputTokens: 2_048)
+        let budget = ContextManager.inputBudget(
+            capabilities: capabilities,
+            requestedInputBudget: 256_000,
+            reservedOutputTokens: capabilities.maxOutputTokens
+        )
+        #expect(budget == 1_024)
+        #expect(budget + capabilities.maxOutputTokens + ContextManager.protocolReserveTokens <= capabilities.maxContextTokens)
+    }
+
+    @Test func tokenTrimmingCountsSystemPromptAndNativeToolCalls() {
+        let system = AIMessage(role: .system, content: String(repeating: "系", count: 120))
+        let older = AIMessage(role: .user, content: String(repeating: "旧", count: 80))
+        let call = AIToolCall(id: "call-1", name: "library_search", arguments: String(repeating: "x", count: 160))
+        let newest = AIMessage(role: .assistant, content: "", toolCalls: [call])
+        let budget = ContextManager.estimatedTokens(system) + ContextManager.estimatedTokens(newest)
+
+        let trimmed = ContextManager.trimByTokens([system, older, newest], maxTokens: budget)
+
+        #expect(trimmed == [system, newest])
+        #expect(trimmed.reduce(0) { $0 + ContextManager.estimatedTokens($1) } <= budget)
     }
 
     @Test func cumulativeUsageDoesNotTripPerRequestTokenLimits() {

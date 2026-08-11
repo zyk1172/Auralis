@@ -9,6 +9,10 @@ struct AIConnectionSettings: Sendable {
     var baseURL: String
     var apiPath: String
     var model: String
+    /// 模型上下文窗口（token）。不再假设所有 OpenAI 兼容模型都是 256K。
+    var maxContextTokens: Int
+    /// 单次回复输出上限（token）。
+    var maxOutputTokens: Int
 
     static let credentialID = CredentialID(rawValue: "ai.provider.api-key")
 
@@ -16,16 +20,30 @@ struct AIConnectionSettings: Sendable {
         static let baseURL = "auralis.ai.baseURL"
         static let apiPath = "auralis.ai.apiPath"
         static let model = "auralis.ai.model"
+        static let maxContextTokens = "auralis.ai.maxContextTokens"
+        static let maxOutputTokens = "auralis.ai.maxOutputTokens"
     }
 
     static let defaultBaseURL = "https://api.openai.com"
     static let defaultAPIPath = "/v1/chat/completions"
     static let defaultModel = "gpt-4o-mini"
+    static let defaultMaxContextTokens = auralisDefaultMaxContextTokens
+    static let defaultMaxOutputTokens = auralisDefaultMaxOutputTokens
 
     init(defaults: UserDefaults = .standard) {
         baseURL = defaults.string(forKey: Keys.baseURL) ?? Self.defaultBaseURL
         apiPath = defaults.string(forKey: Keys.apiPath) ?? Self.defaultAPIPath
         model = defaults.string(forKey: Keys.model) ?? Self.defaultModel
+        if defaults.object(forKey: Keys.maxContextTokens) != nil {
+            maxContextTokens = max(4_096, defaults.integer(forKey: Keys.maxContextTokens))
+        } else {
+            maxContextTokens = Self.defaultMaxContextTokens
+        }
+        if defaults.object(forKey: Keys.maxOutputTokens) != nil {
+            maxOutputTokens = max(512, defaults.integer(forKey: Keys.maxOutputTokens))
+        } else {
+            maxOutputTokens = Self.defaultMaxOutputTokens
+        }
     }
 
     /// 把用户可能漏写协议的地址补全为合法 URL。
@@ -84,6 +102,8 @@ struct AIConnectionSettings: Sendable {
                 apiPath: apiPath.trimmingCharacters(in: .whitespacesAndNewlines),
                 credentialID: Self.credentialID,
                 model: model.trimmingCharacters(in: .whitespacesAndNewlines),
+                maxTokens: maxOutputTokens,
+                maxContextTokens: maxContextTokens,
                 supportsToolCalling: true
             ),
             credentialVault: credentialVault,

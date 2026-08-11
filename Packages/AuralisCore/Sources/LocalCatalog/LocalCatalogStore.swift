@@ -198,7 +198,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
             source_hash TEXT NOT NULL,
             rules_version TEXT NOT NULL,
             classifier TEXT NOT NULL,
-            classified_at REAL NOT NULL
+            classified_at REAL NOT NULL,
+            source_hash_version INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS recommendation_index_v2_tags (
             global_id TEXT NOT NULL,
@@ -250,6 +251,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
         CREATE INDEX IF NOT EXISTS idx_community_metrics_track ON community_music_metrics(global_track_id, fetched_at DESC);
         """)
         // Additive migration for databases created before revision-aware sync probes.
+        try? db.run("ALTER TABLE recommendation_index_v2_state ADD COLUMN source_hash_version INTEGER NOT NULL DEFAULT 0")
         try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_fingerprint TEXT")
         try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_probe_kind TEXT")
         try? db.run("ALTER TABLE sync_meta ADD COLUMN last_probe_at REAL")

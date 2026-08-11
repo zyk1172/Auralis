@@ -660,8 +660,22 @@ public struct AgentRunner {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [:] }
         var args: [String: String] = [:]
-        for (key, value) in object { args[key] = String(describing: value) }
+        for (key, value) in object { args[key] = argumentString(value) }
         return args
+    }
+
+    /// 原生工具参数可能包含数组或对象。`String(describing:)` 会生成 Swift 的
+    /// `[(key: value)]` 表示而不是 JSON，索引写入因而无法解码；结构值必须重新编码
+    /// 为标准 JSON，字符串和标量则保持原值。
+    private static func argumentString(_ value: Any) -> String {
+        if let value = value as? String { return value }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            return json
+        }
+        if let value = value as? NSNumber { return value.stringValue }
+        return String(describing: value)
     }
 
     /// 判定是否「模型不认识 tools 字段」的确定性拒绝（400 / 422），以便降级重试。
@@ -1066,7 +1080,7 @@ public struct AgentRunner {
             var args: [String: String] = [:]
             if let rawArgs = obj["args"] as? [String: Any] {
                 for (key, value) in rawArgs {
-                    args[key] = String(describing: value)
+                    args[key] = argumentString(value)
                 }
             }
             results.append((tool, args))

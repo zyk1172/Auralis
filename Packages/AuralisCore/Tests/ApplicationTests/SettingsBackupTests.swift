@@ -108,14 +108,31 @@ func preferenceWhitelistRoundTrip() {
     defaults.set("midnight", forKey: "auralis.selected-theme")
     defaults.set(true, forKey: "auralis.ai.enabled")
     defaults.set(false, forKey: "auralis.audio.highQualityWiFi")
+    defaults.set(true, forKey: "auralis.externalMusic.enabled")
+    defaults.set(true, forKey: "auralis.externalMusic.musicBrainz")
+    defaults.set(false, forKey: "auralis.externalMusic.critiqueBrainz")
+    defaults.set(true, forKey: "auralis.externalMusic.listenBrainz")
     // 歌曲相关 key 必须被忽略（不进入备份）
     defaults.set("some-title", forKey: "auralis.last-track")
+    // 外部身份、公众指标/API 响应缓存与 V2 派生记录不属于普通设置备份。
+    defaults.set("identity-cache", forKey: "auralis.externalMusic.identityCache")
+    defaults.set("metrics-cache", forKey: "auralis.externalMusic.communityMetricsCache")
+    defaults.set("response-cache", forKey: "auralis.externalMusic.responseCache")
+    defaults.set("index-records", forKey: "auralis.recommendationIndexV2.records")
 
     let collected = SettingsBackupService.collectedPreferences(from: defaults)
     #expect(collected["auralis.selected-theme"] == "midnight")
     #expect(collected["auralis.ai.enabled"] == "true")
     #expect(collected["auralis.audio.highQualityWiFi"] == "false")
+    #expect(collected["auralis.externalMusic.enabled"] == "true")
+    #expect(collected["auralis.externalMusic.musicBrainz"] == "true")
+    #expect(collected["auralis.externalMusic.critiqueBrainz"] == "false")
+    #expect(collected["auralis.externalMusic.listenBrainz"] == "true")
     #expect(collected["auralis.last-track"] == nil)
+    #expect(collected["auralis.externalMusic.identityCache"] == nil)
+    #expect(collected["auralis.externalMusic.communityMetricsCache"] == nil)
+    #expect(collected["auralis.externalMusic.responseCache"] == nil)
+    #expect(collected["auralis.recommendationIndexV2.records"] == nil)
 
     // 写回另一组 defaults，验证恢复路径。
     let targetSuite = "SettingsBackupTests-\(UUID().uuidString)"
@@ -128,5 +145,13 @@ func preferenceWhitelistRoundTrip() {
     #expect(target.string(forKey: "auralis.selected-theme") == "midnight")
     #expect(target.bool(forKey: "auralis.ai.enabled") == true)
     #expect(target.bool(forKey: "auralis.audio.highQualityWiFi") == false)
+    #expect(target.bool(forKey: "auralis.externalMusic.enabled") == true)
+    #expect(target.bool(forKey: "auralis.externalMusic.musicBrainz") == true)
+    #expect(target.bool(forKey: "auralis.externalMusic.critiqueBrainz") == false)
+    #expect(target.bool(forKey: "auralis.externalMusic.listenBrainz") == true)
     #expect(target.string(forKey: "auralis.last-track") == nil)
+    #expect(target.object(forKey: "auralis.externalMusic.identityCache") == nil)
+    #expect(target.object(forKey: "auralis.externalMusic.communityMetricsCache") == nil)
+    #expect(target.object(forKey: "auralis.externalMusic.responseCache") == nil)
+    #expect(target.object(forKey: "auralis.recommendationIndexV2.records") == nil)
 }

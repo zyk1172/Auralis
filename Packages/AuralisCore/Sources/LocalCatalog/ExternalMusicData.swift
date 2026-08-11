@@ -94,7 +94,64 @@ public enum CommunityMusicSource: String, Codable, Sendable, Hashable, CaseItera
     case listenBrainz
 }
 
+/// 公开音乐数据库的独立隐私偏好。它与“向大模型发送歌曲元数据”是两个不同目的地，
+/// 因此不能复用 AI Provider 的隐私开关。
+public struct ExternalMusicPreferences: Sendable, Equatable {
+    public static let defaultCacheTTL: TimeInterval = 14 * 24 * 60 * 60
+
+    public enum Keys {
+        public static let enabled = "auralis.externalMusic.enabled"
+        public static let musicBrainz = "auralis.externalMusic.musicBrainz"
+        public static let critiqueBrainz = "auralis.externalMusic.critiqueBrainz"
+        public static let listenBrainz = "auralis.externalMusic.listenBrainz"
+    }
+
+    public var enabled: Bool
+    public var musicBrainzEnabled: Bool
+    public var critiqueBrainzEnabled: Bool
+    public var listenBrainzEnabled: Bool
+    public var cacheTTL: TimeInterval
+
+    public init(
+        enabled: Bool = true,
+        musicBrainzEnabled: Bool = true,
+        critiqueBrainzEnabled: Bool = true,
+        listenBrainzEnabled: Bool = true,
+        cacheTTL: TimeInterval = ExternalMusicPreferences.defaultCacheTTL
+    ) {
+        self.enabled = enabled
+        self.musicBrainzEnabled = musicBrainzEnabled
+        self.critiqueBrainzEnabled = critiqueBrainzEnabled
+        self.listenBrainzEnabled = listenBrainzEnabled
+        self.cacheTTL = max(0, cacheTTL)
+    }
+
+    public static func current(defaults: UserDefaults = .standard) -> ExternalMusicPreferences {
+        func value(_ key: String) -> Bool {
+            // 保持升级前“按需公开读取”的行为；用户一旦操作开关就以持久值为准。
+            defaults.object(forKey: key) == nil ? true : defaults.bool(forKey: key)
+        }
+        return ExternalMusicPreferences(
+            enabled: value(Keys.enabled),
+            musicBrainzEnabled: value(Keys.musicBrainz),
+            critiqueBrainzEnabled: value(Keys.critiqueBrainz),
+            listenBrainzEnabled: value(Keys.listenBrainz)
+        )
+    }
+
+    public func isEnabled(_ source: CommunityMusicSource) -> Bool {
+        guard enabled else { return false }
+        return switch source {
+        case .musicBrainz: musicBrainzEnabled
+        case .critiqueBrainz: critiqueBrainzEnabled
+        case .listenBrainz: listenBrainzEnabled
+        }
+    }
+}
+
 public enum CommunityMetricStatus: String, Codable, Sendable, Hashable {
+    case disabled
+    case loading
     case available
     case noData
     case notSupported
@@ -273,5 +330,14 @@ public extension LocalCatalogStore {
             row["payload"]?.string.flatMap { try? decoder.decode(CommunityMusicMetric.self, from: Data($0.utf8)) }
         }
         return CommunityMusicMetrics(globalTrackID: globalTrackID, values: values)
+    }
+
+    /// 清除全部公开音乐派生缓存；不触碰歌曲、播放历史、收藏或其他本地目录数据。
+    func clearExternalMusicCache() throws {
+        try db.transaction {
+            try db.run("DELETE FROM community_music_metrics")
+            try db.run("DELETE FROM external_music_candidates")
+            try db.run("DELETE FROM external_music_identities")
+        }
     }
 }

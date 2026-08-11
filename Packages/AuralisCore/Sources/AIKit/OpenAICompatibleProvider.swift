@@ -82,9 +82,12 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     public var supportsToolCalling: Bool { configuration.supportsToolCalling }
     public var capabilities: ModelCapabilities {
+        // 不再把所有 OpenAI 兼容模型假设为 256K：上下文与输出都来自用户配置，
+        // 默认仍为 256K / 16K 以维持旧行为，但 DeepSeek / OpenRouter / Ollama /
+        // LM Studio 等端点可按实际模型修改。
         ModelCapabilities(
-            maxContextTokens: 256_000,
-            maxOutputTokens: min(configuration.maxTokens, auralisMaximumCompatibleOutputTokens),
+            maxContextTokens: configuration.maxContextTokens,
+            maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: configuration.supportsToolCalling,
             supportsStreaming: configuration.usesStreaming,
             supportsJSONMode: configuration.supportsJSONMode,
