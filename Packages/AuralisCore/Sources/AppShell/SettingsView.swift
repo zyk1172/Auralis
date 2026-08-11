@@ -672,25 +672,6 @@ struct AIProviderSettingsPage: View {
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            Section("高级设置") {
-                Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
-                    HStack {
-                        Text("上下文窗口")
-                        Spacer()
-                        Text("\(aiMaxContextTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                }
-                Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
-                    HStack {
-                        Text("单次输出上限")
-                        Spacer()
-                        Text("\(aiMaxOutputTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                }
-                Text("不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-            }
             Section("连接测试") {
                 HStack {
                     Button(action: testAIConnection) {

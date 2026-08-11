@@ -68,5 +68,25 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.auralis.player.index-v2</string>
+			<key>UTTypeDescription</key>
+			<string>Auralis 推荐索引 V2</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>auralis-index-v2</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
