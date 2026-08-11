@@ -1,5 +1,6 @@
 #if os(macOS)
 import DesignSystem
+import Domain
 import LocalCatalog
 import SecurityKit
 import SwiftUI
@@ -16,18 +17,15 @@ public struct MacSettingsWindow: View {
     @State private var category: Category = .general
 
     private enum Category: String, CaseIterable, Identifiable {
-        case general, server, library, cache, downloads, ai, shortcuts, advanced, about
+        case general, server, libraryPlayback, ai, system, about
         var id: String { rawValue }
         var title: String {
             switch self {
             case .general: "通用"
             case .server: "服务器"
-            case .library: "音乐库"
-            case .cache: "缓存"
-            case .downloads: "下载"
-            case .ai: "AI 助手"
-            case .shortcuts: "快捷指令与 Siri"
-            case .advanced: "高级"
+            case .libraryPlayback: "资料库与播放"
+            case .ai: "AI 与公开数据"
+            case .system: "系统"
             case .about: "关于"
             }
         }
@@ -35,12 +33,9 @@ public struct MacSettingsWindow: View {
             switch self {
             case .general: "gearshape"
             case .server: "server.rack"
-            case .library: "music.note.list"
-            case .cache: "externaldrive"
-            case .downloads: "arrow.down.circle"
+            case .libraryPlayback: "music.note.list"
             case .ai: "sparkles"
-            case .shortcuts: "command"
-            case .advanced: "wrench.and.screwdriver"
+            case .system: "command"
             case .about: "info.circle"
             }
         }
@@ -52,15 +47,12 @@ public struct MacSettingsWindow: View {
         TabView(selection: $category) {
             general.tabItem { Label(Category.general.title, systemImage: Category.general.symbol) }.tag(Category.general)
             server.tabItem { Label(Category.server.title, systemImage: Category.server.symbol) }.tag(Category.server)
-            library.tabItem { Label(Category.library.title, systemImage: Category.library.symbol) }.tag(Category.library)
-            cache.tabItem { Label(Category.cache.title, systemImage: Category.cache.symbol) }.tag(Category.cache)
-            downloads.tabItem { Label(Category.downloads.title, systemImage: Category.downloads.symbol) }.tag(Category.downloads)
+            libraryPlayback.tabItem { Label(Category.libraryPlayback.title, systemImage: Category.libraryPlayback.symbol) }.tag(Category.libraryPlayback)
             ai.tabItem { Label(Category.ai.title, systemImage: Category.ai.symbol) }.tag(Category.ai)
-            shortcuts.tabItem { Label(Category.shortcuts.title, systemImage: Category.shortcuts.symbol) }.tag(Category.shortcuts)
-            advanced.tabItem { Label(Category.advanced.title, systemImage: Category.advanced.symbol) }.tag(Category.advanced)
+            system.tabItem { Label(Category.system.title, systemImage: Category.system.symbol) }.tag(Category.system)
             about.tabItem { Label(Category.about.title, systemImage: Category.about.symbol) }.tag(Category.about)
         }
-        .frame(width: 720, height: 540)
+        .frame(width: 760, height: 560)
         .padding(0)
     }
 
@@ -94,9 +86,11 @@ public struct MacSettingsWindow: View {
         MacServerPage(model: model, theme: theme)
     }
 
-    // MARK: - 音乐库
+    // MARK: - 资料库与播放
 
-    private var library: some View {
+    @AppStorage("auralis.audio.highQualityWiFi") private var highQualityWiFi = true
+
+    private var libraryPlayback: some View {
         Form {
             Section("资料库统计") {
                 LabeledContent("歌曲", value: "\(model.catalog.tracks.count) 首")
@@ -105,29 +99,53 @@ public struct MacSettingsWindow: View {
                 LabeledContent("歌单", value: "\(model.catalog.playlists.count) 个")
             }
             CatalogSyncSection(model: model, theme: theme)
-        }
-        .formStyle(.grouped)
-    }
-
-    // MARK: - 缓存
-
-    private var cache: some View {
-        Form {
-            CacheManagementSection(model: model, theme: theme)
-        }
-        .formStyle(.grouped)
-    }
-
-    // MARK: - 下载
-
-    private var downloads: some View {
-        Form {
+            Section("网络音质") {
+                Toggle("Wi-Fi 优先原始音质", isOn: $highQualityWiFi)
+                Text("开启后 Wi-Fi / 有线网络下优先使用服务器原始质量；关闭则限制码率（MP3 320kbps）以节省带宽。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            Section("ReplayGain") {
+                Picker("模式", selection: Binding(
+                    get: { model.replayGainSettings.mode },
+                    set: { model.setReplayGainMode($0) }
+                )) {
+                    ForEach(ReplayGainMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Slider(
+                    value: Binding(
+                        get: { model.replayGainSettings.preampDB },
+                        set: { model.setReplayGainPreamp($0) }
+                    ),
+                    in: -12...12,
+                    step: 0.5
+                ) {
+                    Text("前级")
+                } minimumValueLabel: {
+                    Text("-12")
+                } maximumValueLabel: {
+                    Text("+12")
+                }
+                Text("前级：\(model.replayGainSettings.preampDB, specifier: "%+.1f") dB")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                Toggle("峰值保护", isOn: Binding(
+                    get: { model.replayGainSettings.peakProtection },
+                    set: { model.setReplayGainPeakProtection($0) }
+                ))
+                Text("默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
             Section("离线下载") {
                 LabeledContent("已离线", value: "\(model.catalog.downloads.count) 首")
                 Text("用户主动下载的离线音乐与临时播放缓存分开存储；清理临时缓存不会删除已下载的音乐。")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
+            CacheManagementSection(model: model, theme: theme)
         }
         .formStyle(.grouped)
     }
@@ -376,29 +394,20 @@ public struct MacSettingsWindow: View {
         }
     }
 
-    // MARK: - 快捷指令与 Siri
+    // MARK: - 系统
 
-    private var shortcuts: some View {
+    @AppStorage("auralis.debug.crashLogEnabled") private var crashLogEnabled = true
+
+    private var system: some View {
         Form {
             Section("系统集成") {
                 LabeledContent("Siri 媒体播放", value: "已启用（AppIntents）")
                 LabeledContent("快捷指令", value: "已启用")
                 LabeledContent("后台播放", value: "已启用")
-                LabeledContent("本地网络权限", value: "首次连接局域网服务器时请求")
             }
             Text("Siri 与快捷指令只使用本地资料库的名称与标识进行匹配，不会暴露服务器地址、账号或令牌。")
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
-        }
-        .formStyle(.grouped)
-    }
-
-    // MARK: - 高级
-
-    @AppStorage("auralis.debug.crashLogEnabled") private var crashLogEnabled = true
-
-    private var advanced: some View {
-        Form {
             SettingsBackupSection(model: model, themeStore: themeStore, theme: theme)
             Section("调试") {
                 Toggle("启用崩溃日志", isOn: $crashLogEnabled)

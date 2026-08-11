@@ -136,4 +136,23 @@ struct SharedPlaybackCapabilityTests {
         #expect(!model.queue.map(\.id.rawValue).contains("t-disliked"))
         #expect(model.queue.map(\.id.rawValue).contains("t-ok"))
     }
+
+    @Test("Mac 当前集合随机只使用传入 tracks，不混入整库其它歌曲")
+    @MainActor
+    func scopedShuffleUsesOnlySuppliedTracks() async {
+        // 整库 4 首，但收藏页只包含 t2/t3：随机播放必须只从这两首中选择。
+        let model = makeModel(tracks: [track("t1"), track("t2"), track("t3"), track("t4")])
+        model.playShuffledQueue([track("t2"), track("t3")])
+        #expect(model.queue.count == 2)
+        #expect(Set(model.queue.map(\.id.rawValue)) == ["t2", "t3"])
+        #expect(model.currentTrack.id.rawValue != "placeholder")
+    }
+
+    @Test("Mac 空集合随机播放不产生队列")
+    @MainActor
+    func emptyScopedShuffleIsNoop() async {
+        let model = makeModel(tracks: [track("t1")])
+        model.playShuffledQueue([])
+        #expect(model.queue.isEmpty)
+    }
 }
