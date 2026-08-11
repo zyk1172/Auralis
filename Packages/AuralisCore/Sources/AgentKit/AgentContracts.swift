@@ -84,12 +84,27 @@ public struct ToolResult: Sendable {
 /// Agent 与播放器/服务器/偏好之间的桥接协议。
 /// 所有修改型操作经此协议落到真实播放器与服务器；AppModel 负责实现。
 /// 协议仅引用 Domain 与 LocalCatalog，保持 AgentKit 不依赖 Application。
+/// 歌曲鉴赏等工具使用的歌词真实状态。
+/// 隐私 gating 在工具执行层结合 `allowsLyrics` 决定是否报告 `availableButPrivate`。
+public enum AgentLyricsState: String, Sendable, Equatable {
+    /// 已有歌词且允许发送正文。
+    case available
+    /// 已有歌词但隐私设置不允许发送歌词正文。
+    case availableButPrivate
+    /// 已确认无歌词（服务器/缓存确认，不是“还没查”）。
+    case unavailable
+    /// 尚未确认（仍在加载或未请求）。
+    case unknown
+}
+
 public protocol AgentBridge: Sendable {
     /// 全部方法都是 async：桥接实现通常运行在 @MainActor（播放器状态所在），
     /// 用 async 让跨隔离域调用在 Swift 6 严格并发下保持安全。
     var activeServerID: ServerID? { get async }
     func currentTrack() async -> Track?
     func currentQueue() async -> [Track]
+    /// 某首歌的歌词真实状态（有/无/未确认）；默认 unknown，测试桥接可覆盖。
+    func lyricsState(for globalID: GlobalID) async -> AgentLyricsState
 
     // Playback（返回是否真正开始播放：目标在本地目录且已交给播放引擎）
     func playTrack(globalID: GlobalID) async -> Bool
@@ -160,6 +175,7 @@ public protocol AgentBridge: Sendable {
 public extension AgentBridge {
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
     func playServerTrack(globalID: GlobalID) async -> Bool { false }
+    func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { .unknown }
 }
 
 /// 需要用户确认的待定操作。

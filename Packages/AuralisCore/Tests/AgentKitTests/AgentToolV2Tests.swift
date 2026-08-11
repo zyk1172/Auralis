@@ -192,8 +192,8 @@ func recommendationIndexV2TextAgentRoundTrip() async throws {
     #expect(await collector.contains("已处理完成"))
 }
 
-@Test("原生工具调用可用结构化数组写入 V2，并创建自定义分类")
-func recommendationIndexV2NativeStructuredWriteAndCustomTags() async throws {
+@Test("原生工具调用可用结构化数组写入 V2（固定维度）")
+func recommendationIndexV2NativeStructuredWrite() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "native-index-server"
     try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "native-1", title: "Chamber Night")])
@@ -210,7 +210,6 @@ func recommendationIndexV2NativeStructuredWriteAndCustomTags() async throws {
             "vocals": ["器乐"],
             "textures": ["弦乐"],
             "styles": ["古典"],
-            "customTags": ["编制": ["室内乐"], "聆听方式": ["耳机"]],
             "confidence": 0.94,
         ]],
     ]
@@ -234,8 +233,8 @@ func recommendationIndexV2NativeStructuredWriteAndCustomTags() async throws {
 
     let status = try await store.recommendationIndexV2Status(serverID: serverID)
     #expect(status.pendingTracks == 0)
-    let custom = try await store.readRecommendationIndexV2(serverID: serverID, dimension: "编制", value: "室内乐")
-    #expect(custom.map(\.track.id) == [gid.description])
+    let fixed = try await store.readRecommendationIndexV2(serverID: serverID, dimension: "texture", value: "弦乐")
+    #expect(fixed.map(\.track.id) == [gid.description])
 
     let definition = try #require(ToolSelector.toolDefinitions(
         from: AgentToolRegistry.all.filter { $0.name == "library_index_v2_write_batch" }

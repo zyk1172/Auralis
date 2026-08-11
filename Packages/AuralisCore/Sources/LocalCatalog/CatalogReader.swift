@@ -214,16 +214,24 @@ extension LocalCatalogStore {
         return result
     }
 
+    /// 相似曲目（自动发现候选）。默认硬排除“不喜欢”的歌曲；
+    /// 用户显式查询相似时同样不推荐 disliked（产品语义：不喜欢 = 不主动推荐）。
     public func getSimilarTracks(_ globalID: GlobalID, limit: Int = 20) throws -> [CatalogTrackSummary] {
         guard let base = try getTrack(globalID) else { return [] }
+        let disliked = try dislikedTrackIDs(serverID: base.serverID)
         let rows = try db.query(
             "SELECT global_id FROM tracks WHERE server_id = ? AND global_id != ? AND (artist_name = ? OR album_title = ?) LIMIT ?",
-            [.text(base.serverID.rawValue), .text(globalID.description), .text(base.artistName), .text(base.albumTitle), .integer(Int64(limit))]
+            [.text(base.serverID.rawValue), .text(globalID.description), .text(base.artistName), .text(base.albumTitle), .integer(Int64(limit * 4))]
         )
-        return try rows.compactMap { row -> CatalogTrackSummary? in
-            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString) else { return nil }
-            return try trackSummary(gid)
+        var result: [CatalogTrackSummary] = []
+        for row in rows {
+            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString),
+                  !disliked.contains(gid)
+            else { continue }
+            if let summary = try? trackSummary(gid) { result.append(summary) }
+            if result.count >= limit { break }
         }
+        return result
     }
 
     public func listPlaylists(serverID: ServerID? = nil) throws -> [CatalogPlaylistSummary] {
@@ -513,6 +521,7 @@ extension LocalCatalogStore {
             try db.run("DELETE FROM play_history WHERE global_id LIKE ?", [.text(prefix + "%")])
             try db.run("DELETE FROM downloads WHERE global_id LIKE ?", [.text(prefix + "%")])
             try db.run("DELETE FROM lyrics WHERE global_id LIKE ?", [.text(prefix + "%")])
+            try db.run("DELETE FROM disliked_tracks WHERE server_id = ?", [.text(serverID.rawValue)])
         }
     }
 

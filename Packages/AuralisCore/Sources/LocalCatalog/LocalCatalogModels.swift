@@ -178,14 +178,11 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
     public let vocals: [String]
     public let textures: [String]
     public let styles: [String]
-    /// Agent 可按曲库实际内容创建的额外分类。键是稳定维度名，值是该曲目的标签；
-    /// 例如 ["编制": ["室内乐"], "录音特征": ["现场录音"]]。
-    public let customTags: [String: [String]]?
     public let confidence: Double
 
     private enum CodingKeys: String, CodingKey {
         case id, moods, scenes, energy, tempo, acousticness, danceability
-        case vocals, textures, styles, customTags, confidence
+        case vocals, textures, styles, confidence
     }
 
     public init(
@@ -199,7 +196,6 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         vocals: [String] = [],
         textures: [String] = [],
         styles: [String] = [],
-        customTags: [String: [String]]? = nil,
         confidence: Double = 0.5
     ) {
         self.id = id
@@ -212,7 +208,6 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         self.vocals = vocals
         self.textures = textures
         self.styles = styles
-        self.customTags = customTags
         self.confidence = confidence
     }
 
@@ -230,7 +225,6 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         vocals = try container.decodeIfPresent([String].self, forKey: .vocals) ?? []
         textures = try container.decodeIfPresent([String].self, forKey: .textures) ?? []
         styles = try container.decodeIfPresent([String].self, forKey: .styles) ?? []
-        customTags = try container.decodeIfPresent([String: [String]].self, forKey: .customTags)
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
     }
 }

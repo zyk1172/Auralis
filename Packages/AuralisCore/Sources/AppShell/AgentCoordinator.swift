@@ -82,8 +82,8 @@ public final class AgentCoordinator: ObservableObject {
     private let runtime: AgentRuntime
     /// 系统服务工具适配：App / 设备 / 服务器 / 缓存 / 统计 / 诊断 / 记忆与技能。
     private let systemService: AuralisSystemToolService
-    /// 按需开放音乐数据；只在鉴赏/歌曲信息工具实际调用时联网。
-    private let externalMusicService: MusicBrainzExternalMusicService
+    /// 按需开放音乐数据；与歌曲信息 UI、无歌词补全共用同一个 MusicEnrichmentService 实例。
+    private let externalMusicService: MusicEnrichmentService
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
     public let memoryStore: AgentMemoryStore
 
@@ -100,7 +100,12 @@ public final class AgentCoordinator: ObservableObject {
     /// 设置接口的展示名（与 AIConnectionSettings.makeProvider 的配置名保持一致）。
     private static let providerDisplayName = "OpenAI 兼容接口"
 
-    public init(model: AuralisAppModel, coordinator: CatalogCoordinator, directory: URL? = nil) {
+    public init(
+        model: AuralisAppModel,
+        coordinator: CatalogCoordinator,
+        directory: URL? = nil,
+        musicEnrichment: MusicEnrichmentService? = nil
+    ) {
         self.model = model
         self.catalog = coordinator.store
         self.bridge = AuralisAgentBridge(model: model, coordinator: coordinator)
@@ -108,7 +113,8 @@ public final class AgentCoordinator: ObservableObject {
         let memoryStore = AgentMemoryStore(directory: dir)
         self.memoryStore = memoryStore
         self.systemService = AuralisSystemToolService(model: model, memoryStore: memoryStore)
-        self.externalMusicService = MusicBrainzExternalMusicService(catalog: coordinator.store)
+        // UI / Agent / 歌词补全共用同一个 MusicEnrichmentService；未传入时自建（测试用）。
+        self.externalMusicService = musicEnrichment ?? MusicEnrichmentService(catalog: coordinator.store)
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
@@ -124,6 +130,14 @@ public final class AgentCoordinator: ObservableObject {
         return dir
     }
 
+    /// 旧「不感兴趣」反馈 → disliked_tracks 权威状态的一次性迁移（幂等）。
+    public func migrateLegacyDislikedIfNeeded() async {
+        _ = try? await DislikedMigration.migrateNotInterestedFeedback(
+            catalog: catalog,
+            preferences: preferencesStore
+        )
+    }
+
     /// 歌曲信息页与歌曲鉴赏共用同一按需服务和 SQLite 缓存。
     /// 该入口不会被启动或整库同步调用，只有用户打开歌曲信息时才会联网。
     public func externalMusicData(for track: Track) async -> AgentExternalMusicResult {
@@ -131,10 +145,15 @@ public final class AgentCoordinator: ObservableObject {
         return await externalMusicService.enrich(track: track, globalID: globalID)
     }
 
-    /// 清除按需查询产生的公开音乐身份、候选和指标缓存。偏好开关不会被重置，
-    /// 也不会触碰歌曲、播放历史、收藏或推荐索引。
+    /// 清除按需查询产生的公开音乐元数据、大众指标、评论与候选缓存；保留 Stable Identity。
+    /// 偏好开关不会被重置，也不会触碰歌曲、播放历史、收藏或推荐索引。
     public func clearExternalMusicDataCache() async throws {
         try await externalMusicService.clearCache()
+    }
+
+    /// 高级“重置音乐身份匹配”：连 Stable Identity 一起清空，下次按需重新识别 MBID。
+    public func resetExternalMusicIdentity() async throws {
+        try await externalMusicService.resetIdentity()
     }
 
     // MARK: - Bootstrap
@@ -143,6 +162,7 @@ public final class AgentCoordinator: ObservableObject {
     public func bootstrap() async {
         // App 重启：把上次仍在运行的任务标记为 interrupted，不自动重放已完成的写操作。
         taskStore.markInterruptedOnLaunch()
+        await migrateLegacyDislikedIfNeeded()
         await reloadAll()
         if activeSessionID == nil {
             if let latest = sessions.first {

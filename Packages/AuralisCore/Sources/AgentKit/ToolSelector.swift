@@ -43,12 +43,13 @@ public enum ToolSelector {
         "queue_save_as_playlist", "favorite_set",
     ]
 
-    /// 收藏 / 评分相关。
+    /// 收藏 / 评分 / 不喜欢相关。
     static let annotationNames: [String] = [
         "getFavorites", "library_get_starred",
         "likeTrack", "unlikeTrack",
         "favoriteAlbum", "favoriteArtist",
         "setRating", "clearRating",
+        "preference_set_disliked", "library_get_disliked",
     ]
 
     /// 服务器 / 同步相关。
@@ -66,6 +67,7 @@ public enum ToolSelector {
         "library_get_random_songs", "library_get_most_played",
         "library_get_recently_played", "library_get_similar_songs",
         "library_get_genres", "library_get_tracks_by_genre",
+        "music_get_public_evidence",
         "queue_replace", "queue_append",
     ]
 
@@ -85,9 +87,9 @@ public enum ToolSelector {
         var names = coreNames
 
         if containsAny(lower, ["歌单", "playlist", "播放列表"]) { names += playlistNames }
-        if containsAny(lower, ["收藏", "喜欢", "评分", "favorite", "star", "heart"]) { names += annotationNames }
+        if containsAny(lower, ["收藏", "喜欢", "评分", "不喜欢", "不感兴趣", "favorite", "star", "heart", "dislike"]) { names += annotationNames }
         if containsAny(lower, ["服务器", "同步", "连接", "在线", "server", "sync", "connect"]) { names += serverNames }
-        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2"]) { names += recommendationNames }
+        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2", "大众评价", "乐评", "评分", "资料"]) { names += recommendationNames }
         if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error"]) { names += diagnosticsNames }
         if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
         if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
@@ -123,13 +125,13 @@ public enum ToolSelector {
         case .playlistManagement:
             intentNames = ["listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
         case .libraryManagement:
-            intentNames = ["library_get_summary", "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "favorite_set", "setRating", "clearRating"]
+            intentNames = ["library_get_summary", "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked"]
         case .serverManagement:
             intentNames = Set(serverNames)
         case .diagnostics:
             intentNames = Set(diagnosticsNames + serverNames)
         case .musicAppreciation:
-            intentNames = ["library_search", "library_get_song", "music_appreciate"]
+            intentNames = ["library_search", "library_get_song", "music_appreciate", "music_get_public_evidence"]
         case .musicDownload:
             intentNames = ["library_search", "server_search", "music_download", "media_download_offline", "getDownloadedTracks"]
         case .memoryManagement:

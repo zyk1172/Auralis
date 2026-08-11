@@ -283,6 +283,11 @@ public final class AuralisSystemToolService: AgentSystemService {
     public func recommendByMood(_ mood: String, limit: Int) async -> AgentRecommendationResult {
         let genres = Self.moodGenres[mood] ?? [mood]
         let safeLimit = min(max(limit, 1), 50)
+        // Hard Exclusion：自动推荐不得包含“不喜欢”的歌曲。
+        let disliked = Set((try? await model.catalogCoordinator.store.dislikedTrackIDs(serverID: model.catalog.activeAccount?.id)) ?? [])
+        func isDisliked(_ track: Track) -> Bool {
+            disliked.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
+        }
         let query = RecommendationQuery(
             genres: Set(genres),
             maximumTracksPerArtist: 2,
@@ -311,10 +316,10 @@ public final class AuralisSystemToolService: AgentSystemService {
             }
         // 排除最近播放的曲目，避免刚听完又推荐。
         let recentIDs = Set(model.recentlyPlayedTracks.prefix(20).map(\.id))
-        ranked.removeAll { recentIDs.contains($0.id) }
+        ranked.removeAll { recentIDs.contains($0.id) || isDisliked($0) }
         if ranked.isEmpty {
             // 无分类命中时从整库中立抽样，不因收藏、评分或播放历史偏置。
-            ranked = model.catalog.tracks.shuffled()
+            ranked = model.catalog.tracks.shuffled().filter { !isDisliked($0) }
         }
         ranked = TrackQuality.deduplicatedPreferringQuality(ranked)
         let picks = Array(ranked.prefix(safeLimit))
@@ -336,8 +341,13 @@ public final class AuralisSystemToolService: AgentSystemService {
         let languages = Set(constraints.languages.map { $0.localizedLowercase })
         let genres = Set(constraints.genres.map { $0.localizedLowercase })
         let recentIDs = Set(model.recentlyPlayedTracks.prefix(20).map(\.id))
+        // Hard Exclusion：约束推荐属于自动发现，不得包含“不喜欢”的歌曲。
+        let disliked = Set((try? await model.catalogCoordinator.store.dislikedTrackIDs(serverID: model.catalog.activeAccount?.id)) ?? [])
 
         var candidates = model.catalog.tracks.filter { track in
+            if disliked.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)) {
+                return false
+            }
             if !languages.isEmpty, let language = track.language?.localizedLowercase, !languages.contains(language) {
                 return false
             }

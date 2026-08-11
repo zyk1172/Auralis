@@ -67,26 +67,36 @@ final class HomeStore: ObservableObject {
         replaceLayout(HomeModuleRegistry.defaultPreference())
     }
 
-    func regenerateRandom(from tracks: [Track]) {
-        randomTracks = Array(tracks.shuffled().prefix(18))
+    func regenerateRandom(from tracks: [Track], dislikedTrackIDs: Set<GlobalID> = []) {
+        randomTracks = Array(tracks
+            .filter { track in
+                !dislikedTrackIDs.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
+            }
+            .shuffled().prefix(18))
     }
 
-    func regenerateFavoriteRandom(from tracks: [Track]) {
-        favoriteRandom = Array(tracks.filter(\.isFavorite).shuffled().prefix(18))
+    func regenerateFavoriteRandom(from tracks: [Track], dislikedTrackIDs: Set<GlobalID> = []) {
+        favoriteRandom = Array(tracks
+            .filter { track in
+                track.isFavorite && !dislikedTrackIDs.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
+            }
+            .shuffled().prefix(18))
     }
 
     func refresh(
         catalog: LibraryCatalog,
         playCounts: [TrackID: Int],
         recentIDs: [TrackID],
-        addedDates: [GlobalID: Date]
+        addedDates: [GlobalID: Date],
+        dislikedTrackIDs: Set<GlobalID> = []
     ) {
         guard catalog.tracks.count >= 2_000 else {
             apply(HomeSnapshotBuilder.build(
                 catalog: catalog,
                 playCounts: playCounts,
                 recentIDs: recentIDs,
-                addedDates: addedDates
+                addedDates: addedDates,
+                dislikedTrackIDs: dislikedTrackIDs
             ))
             return
         }
@@ -100,7 +110,8 @@ final class HomeStore: ObservableObject {
                     catalog: catalog,
                     playCounts: playCounts,
                     recentIDs: recentIDs,
-                    addedDates: addedDates
+                    addedDates: addedDates,
+                    dislikedTrackIDs: dislikedTrackIDs
                 )
             }.value
             guard !Task.isCancelled, let self, self.snapshotGeneration == generation else { return }

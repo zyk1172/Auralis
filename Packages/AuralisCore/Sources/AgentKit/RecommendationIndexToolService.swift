@@ -64,7 +64,7 @@ enum RecommendationIndexToolService {
                 )
             }
             let payload = String(decoding: try JSONEncoder().encode(batch.tracks), as: UTF8.self)
-            let text = "待分类总数 \(batch.pendingTracks)，本批 \(batch.tracks.count) 首。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，把结构化 items 数组直接传入，数组必须恰好覆盖本批每个 id 一次。可用 customTags 创建并复用适合本曲库的额外分类维度：\n\(payload)"
+            let text = "待分类总数 \(batch.pendingTracks)，本批 \(batch.tracks.count) 首。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，把结构化 items 数组直接传入，数组必须恰好覆盖本批每个 id 一次。只使用固定维度（moods/scenes/vocals/textures/styles 与 energy/tempo/acousticness/danceability 数值），不要创建自定义维度：\n\(payload)"
             return .ok(
                 call,
                 descriptor,
@@ -89,7 +89,7 @@ enum RecommendationIndexToolService {
                 .replacingOccurrences(of: "```", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard let items = decodeClassifications(cleaned) else {
-                throw AgentToolError.invalidParameter("items", "必须是结构化数组；每项至少包含 id/energy，可包含内置标签、customTags 与 confidence")
+                throw AgentToolError.invalidParameter("items", "必须是结构化数组；每项至少包含 id/energy，可包含内置标签与 confidence")
             }
             let written = try await catalog.writeRecommendationIndexV2(items, serverID: serverID)
             let status = try await catalog.recommendationIndexV2Status(serverID: serverID)

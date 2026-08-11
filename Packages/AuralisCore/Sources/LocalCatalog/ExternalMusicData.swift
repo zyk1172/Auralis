@@ -332,12 +332,261 @@ public extension LocalCatalogStore {
         return CommunityMusicMetrics(globalTrackID: globalTrackID, values: values)
     }
 
-    /// 清除全部公开音乐派生缓存；不触碰歌曲、播放历史、收藏或其他本地目录数据。
+    /// 普通“清除公开音乐数据缓存”：清除元数据新鲜度、大众指标、评论与低置信候选，
+    /// **保留高置信度 Stable Identity**（避免清缓存后丢失已核验的 MBID/ISRC）。
+    /// 不触碰歌曲、播放历史、收藏或其他本地目录数据。
     func clearExternalMusicCache() throws {
         try db.transaction {
             try db.run("DELETE FROM community_music_metrics")
+            try db.run("DELETE FROM community_music_evidence")
+            try db.run("DELETE FROM community_music_reviews")
+            try db.run("DELETE FROM external_music_candidates")
+        }
+    }
+
+    /// 高级“重置音乐身份匹配”：连 Stable Identity 一起清空，下次按需重新识别 MBID。
+    func resetExternalMusicIdentity() throws {
+        try db.transaction {
+            try db.run("DELETE FROM community_music_metrics")
+            try db.run("DELETE FROM community_music_evidence")
+            try db.run("DELETE FROM community_music_reviews")
             try db.run("DELETE FROM external_music_candidates")
             try db.run("DELETE FROM external_music_identities")
         }
+    }
+}
+
+// MARK: - Community Music Evidence（详情级）
+
+/// CritiqueBrainz 单条评论（聚合摘要之外的详情数据）。
+/// 必须保留 license / source / sourceURL；Agent 默认只取少量 excerpt，不塞全文。
+public struct CommunityMusicReview: Codable, Sendable, Hashable {
+    public var reviewID: String
+    public var entityID: String
+    public var authorName: String?
+    public var rating: Double?
+    public var publishedAt: Date?
+    public var language: String?
+    public var excerpt: String
+    public var fullText: String?
+    public var positiveVotes: Int?
+    public var negativeVotes: Int?
+    public var popularity: Double?
+    public var licenseID: String?
+    public var sourceName: String?
+    public var sourceURL: String?
+    public var fetchedAt: Date
+
+    public init(
+        reviewID: String,
+        entityID: String,
+        authorName: String? = nil,
+        rating: Double? = nil,
+        publishedAt: Date? = nil,
+        language: String? = nil,
+        excerpt: String,
+        fullText: String? = nil,
+        positiveVotes: Int? = nil,
+        negativeVotes: Int? = nil,
+        popularity: Double? = nil,
+        licenseID: String? = nil,
+        sourceName: String? = nil,
+        sourceURL: String? = nil,
+        fetchedAt: Date = .now
+    ) {
+        self.reviewID = reviewID
+        self.entityID = entityID
+        self.authorName = authorName
+        self.rating = rating
+        self.publishedAt = publishedAt
+        self.language = language
+        self.excerpt = excerpt
+        self.fullText = fullText
+        self.positiveVotes = positiveVotes
+        self.negativeVotes = negativeVotes
+        self.popularity = popularity
+        self.licenseID = licenseID
+        self.sourceName = sourceName
+        self.sourceURL = sourceURL
+        self.fetchedAt = fetchedAt
+    }
+}
+
+/// MusicBrainz 录音详情（真实 API 字段，无字段不堆“未知”）。
+public struct MusicBrainzDetail: Codable, Sendable, Hashable {
+    public var recordingMBID: String?
+    public var releaseMBID: String?
+    public var releaseGroupMBID: String?
+    public var artistMBID: String?
+    public var isrc: String?
+    public var title: String?
+    public var artistCredit: String?
+    public var rating: Double?
+    public var votesCount: Int?
+    public var genres: [String]
+    public var tags: [String]
+    public var releaseDate: String?
+    public var releaseType: String?
+
+    public init(
+        recordingMBID: String? = nil,
+        releaseMBID: String? = nil,
+        releaseGroupMBID: String? = nil,
+        artistMBID: String? = nil,
+        isrc: String? = nil,
+        title: String? = nil,
+        artistCredit: String? = nil,
+        rating: Double? = nil,
+        votesCount: Int? = nil,
+        genres: [String] = [],
+        tags: [String] = [],
+        releaseDate: String? = nil,
+        releaseType: String? = nil
+    ) {
+        self.recordingMBID = recordingMBID
+        self.releaseMBID = releaseMBID
+        self.releaseGroupMBID = releaseGroupMBID
+        self.artistMBID = artistMBID
+        self.isrc = isrc
+        self.title = title
+        self.artistCredit = artistCredit
+        self.rating = rating
+        self.votesCount = votesCount
+        self.genres = genres
+        self.tags = tags
+        self.releaseDate = releaseDate
+        self.releaseType = releaseType
+    }
+}
+
+/// 歌曲公开音乐资料详情：身份 + 各来源详情 + 评论（供详情页与 Agent 使用）。
+public struct CommunityMusicEvidence: Codable, Sendable, Hashable {
+    public var globalTrackID: GlobalID
+    public var identity: ExternalMusicIdentity?
+    public var musicBrainz: MusicBrainzDetail?
+    public var critiqueBrainzAggregate: CommunityMusicMetric?
+    public var listenBrainz: CommunityMusicMetric?
+    public var reviews: [CommunityMusicReview]
+    public var fetchedAt: Date
+
+    public init(
+        globalTrackID: GlobalID,
+        identity: ExternalMusicIdentity? = nil,
+        musicBrainz: MusicBrainzDetail? = nil,
+        critiqueBrainzAggregate: CommunityMusicMetric? = nil,
+        listenBrainz: CommunityMusicMetric? = nil,
+        reviews: [CommunityMusicReview] = [],
+        fetchedAt: Date = .now
+    ) {
+        self.globalTrackID = globalTrackID
+        self.identity = identity
+        self.musicBrainz = musicBrainz
+        self.critiqueBrainzAggregate = critiqueBrainzAggregate
+        self.listenBrainz = listenBrainz
+        self.reviews = reviews
+        self.fetchedAt = fetchedAt
+    }
+
+    /// 是否存在任何可核验的大众评价证据。
+    public var hasCommunityEvidence: Bool {
+        musicBrainz != nil || critiqueBrainzAggregate != nil || listenBrainz != nil || !reviews.isEmpty
+    }
+}
+
+/// 各来源缓存策略（集中定义，不再统一一个 TTL）。
+public enum ExternalMusicCachePolicy {
+    /// 高置信度 Stable Identity：约 180 天。
+    public static let identityTTL: TimeInterval = 180 * 24 * 60 * 60
+    /// MusicBrainz 元数据：60 天（30～90 天窗口内）。
+    public static let musicBrainzTTL: TimeInterval = 60 * 24 * 60 * 60
+    /// CritiqueBrainz 聚合与评论：21 天（14～30 天窗口内）。
+    public static let critiqueBrainzTTL: TimeInterval = 21 * 24 * 60 * 60
+    /// ListenBrainz 收听统计：10 天（7～14 天窗口内）。
+    public static let listenBrainzTTL: TimeInterval = 10 * 24 * 60 * 60
+    /// 无数据负缓存：7 天。
+    public static let noDataTTL: TimeInterval = 7 * 24 * 60 * 60
+    /// 暂时性失败（限流 / 网络）：5 分钟。
+    public static let transientFailureTTL: TimeInterval = 5 * 60
+}
+
+extension LocalCatalogStore {
+    /// 按来源返回可用缓存 TTL；无数据/失败走更短负缓存。
+    public static func cacheTTL(for source: CommunityMusicSource, status: CommunityMetricStatus) -> TimeInterval {
+        switch status {
+        case .available, .notSupported:
+            switch source {
+            case .musicBrainz: return ExternalMusicCachePolicy.musicBrainzTTL
+            case .critiqueBrainz: return ExternalMusicCachePolicy.critiqueBrainzTTL
+            case .listenBrainz: return ExternalMusicCachePolicy.listenBrainzTTL
+            }
+        case .noData:
+            return ExternalMusicCachePolicy.noDataTTL
+        case .rateLimited, .unavailable, .failed, .disabled, .loading:
+            return ExternalMusicCachePolicy.transientFailureTTL
+        }
+    }
+
+    public func upsertCommunityMusicReviews(
+        _ reviews: [CommunityMusicReview],
+        for globalTrackID: GlobalID
+    ) throws {
+        guard !reviews.isEmpty else { return }
+        try db.transaction {
+            for review in reviews {
+                let payload = String(decoding: try encoder.encode(review), as: UTF8.self)
+                try db.run(
+                    """
+                    INSERT INTO community_music_reviews (global_track_id, source, review_id, payload, fetched_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(global_track_id, source, review_id) DO UPDATE SET
+                        payload = excluded.payload, fetched_at = excluded.fetched_at
+                    """,
+                    [
+                        .text(globalTrackID.description), .text(CommunityMusicSource.critiqueBrainz.rawValue),
+                        .text(review.reviewID), .text(payload),
+                        .real(review.fetchedAt.timeIntervalSince1970),
+                    ]
+                )
+            }
+        }
+    }
+
+    public func upsertCommunityMusicEvidence(
+        _ evidence: CommunityMusicEvidence,
+        for globalTrackID: GlobalID
+    ) throws {
+        let payload = String(decoding: try encoder.encode(evidence), as: UTF8.self)
+        try db.run(
+            """
+            INSERT INTO community_music_evidence (global_track_id, payload, fetched_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(global_track_id) DO UPDATE SET
+                payload = excluded.payload, fetched_at = excluded.fetched_at
+            """,
+            [.text(globalTrackID.description), .text(payload), .real(evidence.fetchedAt.timeIntervalSince1970)]
+        )
+    }
+
+    public func communityMusicEvidence(for globalTrackID: GlobalID) throws -> CommunityMusicEvidence? {
+        try db.query(
+            "SELECT payload FROM community_music_evidence WHERE global_track_id = ? LIMIT 1",
+            [.text(globalTrackID.description)]
+        ).first.flatMap { row in
+            row["payload"]?.string.flatMap { try? decoder.decode(CommunityMusicEvidence.self, from: Data($0.utf8)) }
+        }
+    }
+
+    public func communityMusicReviews(for globalTrackID: GlobalID) throws -> [CommunityMusicReview] {
+        try db.query(
+            "SELECT payload FROM community_music_reviews WHERE global_track_id = ? ORDER BY fetched_at DESC",
+            [.text(globalTrackID.description)]
+        ).compactMap { row in
+            row["payload"]?.string.flatMap { try? decoder.decode(CommunityMusicReview.self, from: Data($0.utf8)) }
+        }
+    }
+
+    /// 清除评论缓存（普通清缓存的一部分）。
+    func clearCommunityMusicReviews() throws {
+        try db.run("DELETE FROM community_music_reviews")
     }
 }

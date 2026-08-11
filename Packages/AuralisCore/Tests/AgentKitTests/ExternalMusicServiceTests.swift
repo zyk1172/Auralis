@@ -35,16 +35,50 @@ private final class ExternalMusicURLProtocol: URLProtocol, @unchecked Sendable {
 
         let body: String
         let path = request.url?.path ?? ""
+        let query = request.url?.query ?? ""
         if path.hasSuffix("/recording") {
+            if query.contains("Multi") {
+                // 多艺术家：credit 是两个独立 artist。
+                body = """
+                {"recordings":[{"id":"rec-multi","score":100,"title":"Multi Artist Song","length":200000,
+                "artist-credit":[{"name":"ArtistA","artist":{"id":"a1"}},{"name":"ArtistB","artist":{"id":"a2"}}],
+                "releases":[{"id":"release-multi","title":"Exact Album","release-group":{"id":"rg-multi"}}]}]}
+                """
+            } else if query.contains("isrc:TEST") {
+                // ISRC 命中多 release：release-wrong 专辑名不匹配，release-right 匹配。
+                body = """
+                {"recordings":[{"id":"rec-isrc","score":100,"title":"ISRC Song","length":200000,
+                "isrcs":["TEST1234"],"artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-1"}}],
+                "releases":[
+                  {"id":"release-wrong","title":"Other Album","release-group":{"id":"rg-wrong"}},
+                  {"id":"release-right","title":"Exact Album","release-group":{"id":"rg-right"}}
+                ]}]}
+                """
+            } else {
+                body = """
+                {"recordings":[{"id":"rec-1","score":100,"title":"Exact Song","length":200000,
+                "isrcs":["USAAA0000001"],"artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-1"}}],
+                "releases":[{"id":"release-1","title":"Exact Album","release-group":{"id":"rg-1"}}]}]}
+                """
+            }
+        } else if path.contains("/recording/rec-multi") {
             body = """
-            {"recordings":[{"id":"rec-1","score":100,"title":"Exact Song","length":200000,
-            "isrcs":["USAAA0000001"],"artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-1"}}],
-            "releases":[{"id":"release-1","title":"Exact Album","release-group":{"id":"rg-1"}}]}]}
+            {"rating":{"value":4.5,"votes-count":7},"title":"Multi Artist Song",
+            "artist-credit":[{"name":"ArtistA","artist":{"id":"a1"}},{"name":"ArtistB","artist":{"id":"a2"}}],
+            "genres":[{"name":"Jazz"}],"tags":[{"name":"piano"}]}
             """
         } else if path.contains("/recording/rec-1") {
             body = "{\"rating\":{\"value\":4.5,\"votes-count\":20}}"
         } else if path.contains("/review") {
-            body = "{\"count\":2,\"average_rating\":{\"rating\":4.0,\"count\":3}}"
+            body = """
+            {"count":2,"average_rating":{"rating":4.0,"count":3},"reviews":[
+              {"id":"rev-1","user":{"display_name":"Critic One"},"rating":4.5,
+               "created":"2024-01-01T00:00:00Z","language":"en","text":"A thoughtful review about the album.",
+               "license":"CC BY-SA 3.0","source":"CritiqueBrainz","source_url":"https://critiquebrainz.org/review/rev-1"},
+              {"id":"rev-2","user":{"name":"Anonymous"},"rating":3.0,"language":"zh",
+               "text":"A shorter review.","source":"Manual"}
+            ]}
+            """
         } else if path.contains("/popularity/") {
             body = "[{\"total_listen_count\":12345,\"total_user_count\":456}]"
         } else {
@@ -345,8 +379,127 @@ struct ExternalMusicServiceTests {
 
         try await service.clearCache()
 
-        #expect(try await store.externalMusicIdentity(for: globalID) == nil)
+        // 普通清缓存保留高置信度 Stable Identity；只清指标与候选。
+        #expect(try await store.externalMusicIdentity(for: globalID)?.recordingMBID == "rec-1")
         #expect(try await store.communityMusicMetrics(for: globalID).values.isEmpty)
+        #expect(ExternalMusicURLProtocol.captured.isEmpty)
+    }
+
+    @Test("多艺术家 credit 用 & 连接，不拼成 ArtistAArtistB")
+    func multiArtistCreditJoined() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let endpoints = MusicBrainzExternalMusicService.Endpoints(
+            musicBrainz: URL(string: "https://musicbrainz.test/ws/2")!,
+            critiqueBrainz: URL(string: "https://critiquebrainz.test/ws/1")!,
+            listenBrainz: URL(string: "https://listenbrainz.test/1")!
+        )
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            endpoints: endpoints,
+            musicBrainzMinimumInterval: 0,
+            preferencesProvider: { ExternalMusicPreferences() }
+        )
+        let globalID = GlobalID(serverID: "nas", remoteID: "multi-1")
+        let track = Track(
+            id: "multi-1", serverID: "nas", albumID: "album-multi", artistID: "artist-local",
+            title: "Multi Artist Song", artistName: "ArtistA & ArtistB", albumTitle: "Exact Album", duration: 200
+        )
+        let result = await service.enrich(track: track, globalID: globalID)
+        #expect(result.identity?.recordingMBID == "rec-multi")
+        // 详情里的 artistCredit 是 " & " 连接，不是 ArtistAArtistB。
+        #expect(result.evidence?.musicBrainz?.artistCredit == "ArtistA & ArtistB")
+        // 真实字段：流派 / 标签。
+        #expect(result.evidence?.musicBrainz?.genres == ["Jazz"])
+        #expect(result.evidence?.musicBrainz?.tags == ["piano"])
+    }
+
+    @Test("ISRC 命中多 release 时按专辑匹配选择，不取 releases.first")
+    func isrcChoosesBestRelease() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let globalID = GlobalID(serverID: "nas", remoteID: "isrc-1")
+        // 预置只有 ISRC、无 recordingMBID 的身份：触发 matchByISRC。
+        try await store.upsertExternalMusicIdentity(ExternalMusicIdentity(
+            globalTrackID: globalID, isrc: "TEST1234",
+            matchConfidence: 1, matchMethod: .isrc
+        ))
+        let endpoints = MusicBrainzExternalMusicService.Endpoints(
+            musicBrainz: URL(string: "https://musicbrainz.test/ws/2")!,
+            critiqueBrainz: URL(string: "https://critiquebrainz.test/ws/1")!,
+            listenBrainz: URL(string: "https://listenbrainz.test/1")!
+        )
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            endpoints: endpoints,
+            musicBrainzMinimumInterval: 0,
+            preferencesProvider: { ExternalMusicPreferences() }
+        )
+        let track = Track(
+            id: "isrc-1", serverID: "nas", albumID: "album-isrc", artistID: "artist-local",
+            title: "ISRC Song", artistName: "Exact Artist", albumTitle: "Exact Album", duration: 200
+        )
+        let result = await service.enrich(track: track, globalID: globalID)
+        // 选择与本地专辑匹配的 release-right，而不是 releases.first（release-wrong）。
+        #expect(result.identity?.releaseMBID == "release-right")
+        #expect(result.identity?.releaseGroupMBID == "rg-right")
+    }
+
+    @Test("CritiqueBrainz 评论保存 license/source/sourceURL，无评论=noData")
+    func critiqueBrainzReviewsSavedWithLicense() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let endpoints = MusicBrainzExternalMusicService.Endpoints(
+            musicBrainz: URL(string: "https://musicbrainz.test/ws/2")!,
+            critiqueBrainz: URL(string: "https://critiquebrainz.test/ws/1")!,
+            listenBrainz: URL(string: "https://listenbrainz.test/1")!
+        )
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            endpoints: endpoints,
+            musicBrainzMinimumInterval: 0,
+            preferencesProvider: { ExternalMusicPreferences() }
+        )
+        let globalID = GlobalID(serverID: "nas", remoteID: "track-1")
+        let result = await service.enrich(track: externalMusicTrack(), globalID: globalID)
+
+        let reviews = result.evidence?.reviews ?? []
+        #expect(reviews.count == 2)
+        let first = try #require(reviews.first { $0.reviewID == "rev-1" })
+        #expect(first.authorName == "Critic One")
+        #expect(first.rating == 4.5)
+        #expect(first.licenseID == "CC BY-SA 3.0")
+        #expect(first.sourceName == "CritiqueBrainz")
+        #expect(first.sourceURL == "https://critiquebrainz.org/review/rev-1")
+        #expect(first.excerpt.contains("thoughtful"))
+        // excerpt 超长会截断（长度限制）。
+        #expect(first.excerpt.count <= 281)
+
+        // 持久化到 SQLite。
+        let stored = try await store.communityMusicReviews(for: globalID)
+        #expect(stored.count == 2)
+        #expect(stored.contains { $0.licenseID == "CC BY-SA 3.0" })
+    }
+
+    @Test("resetIdentity 连 Stable Identity 一起清空")
+    func resetIdentityClearsStableIdentity() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let globalID = GlobalID(serverID: "nas", remoteID: "identity")
+        try await store.upsertExternalMusicIdentity(ExternalMusicIdentity(
+            globalTrackID: globalID, recordingMBID: "rec-1", matchConfidence: 1,
+            matchMethod: .embeddedRecordingMBID
+        ))
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            preferencesProvider: { ExternalMusicPreferences(enabled: false) }
+        )
+        try await service.resetIdentity()
+        #expect(try await store.externalMusicIdentity(for: globalID) == nil)
         #expect(ExternalMusicURLProtocol.captured.isEmpty)
     }
 }

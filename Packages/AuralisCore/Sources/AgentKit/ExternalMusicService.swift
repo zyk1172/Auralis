@@ -6,21 +6,34 @@ public struct AgentExternalMusicResult: Sendable, Equatable {
     public let identity: ExternalMusicIdentity?
     public let candidates: [ExternalMusicIdentityCandidate]
     public let metrics: CommunityMusicMetrics
+    /// 详情级公开音乐资料（MusicBrainz 详情 / CritiqueBrainz 评论 / ListenBrainz 统计）。
+    /// 歌曲信息详情页与 Agent `music_get_public_evidence` 共用。
+    public let evidence: CommunityMusicEvidence?
 
     public init(
         identity: ExternalMusicIdentity?,
         candidates: [ExternalMusicIdentityCandidate] = [],
-        metrics: CommunityMusicMetrics
+        metrics: CommunityMusicMetrics,
+        evidence: CommunityMusicEvidence? = nil
     ) {
         self.identity = identity
         self.candidates = candidates
         self.metrics = metrics
+        self.evidence = evidence
     }
 }
 
 public protocol AgentExternalMusicService: Sendable {
     /// 只由歌曲鉴赏/歌曲信息显式触发；不得在启动或整库同步时批量调用。
     func enrich(track: Track, globalID: GlobalID) async -> AgentExternalMusicResult
+    /// 带强制刷新：忽略本地指标缓存重新请求（身份匹配仍复用 Stable Identity）。
+    func enrich(track: Track, globalID: GlobalID, forceRefresh: Bool) async -> AgentExternalMusicResult
+}
+
+public extension AgentExternalMusicService {
+    func enrich(track: Track, globalID: GlobalID, forceRefresh: Bool) async -> AgentExternalMusicResult {
+        await enrich(track: track, globalID: globalID)
+    }
 }
 
 public enum ExternalMusicServiceError: Error, Sendable, Equatable {
@@ -79,12 +92,22 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         self.now = now
     }
 
-    /// 清除身份匹配、候选与三来源指标缓存；设置开关本身不受影响。
+    /// 普通清缓存：清除元数据新鲜度、大众指标、评论与低置信候选，
+    /// 保留高置信度 Stable Identity（避免重新识别 MBID）。
     public func clearCache() async throws {
         try await catalog.clearExternalMusicCache()
     }
 
+    /// 高级“重置音乐身份匹配”：连 Stable Identity 一起清空，下次按需重新识别。
+    public func resetIdentity() async throws {
+        try await catalog.resetExternalMusicIdentity()
+    }
+
     public func enrich(track: Track, globalID: GlobalID) async -> AgentExternalMusicResult {
+        await enrich(track: track, globalID: globalID, forceRefresh: false)
+    }
+
+    public func enrich(track: Track, globalID: GlobalID, forceRefresh: Bool) async -> AgentExternalMusicResult {
         if Task.isCancelled {
             return AgentExternalMusicResult(
                 identity: nil,
@@ -110,7 +133,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             identity = cachedIdentity
         } else if preferences.musicBrainzEnabled,
                   let cachedIdentity, let isrc = cachedIdentity.isrc, !isrc.isEmpty {
-            let match = await matchByISRC(isrc, globalID: globalID)
+            let match = await matchByISRC(isrc, track: track, globalID: globalID)
             identity = match.identity
             candidates = match.candidates
         } else if preferences.musicBrainzEnabled {
@@ -124,26 +147,147 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         }
 
         let cached = try? await catalog.communityMusicMetrics(for: globalID)
-        async let musicBrainz = metric(
-            for: .musicBrainz, identity: identity,
-            cached: cached?.value(for: .musicBrainz), preferences: preferences
+        // forceRefresh 时忽略缓存（仍复用 Stable Identity）。
+        func cachedValue(_ source: CommunityMusicSource) -> CommunityMusicMetric? {
+            forceRefresh ? nil : cached?.value(for: source)
+        }
+
+        // MusicBrainz：一次 lookup 同时得到 summary metric 与详情（不重复打 API）。
+        let musicBrainzResult = await fetchMusicBrainzMetricAndDetail(
+            identity: identity,
+            cached: cachedValue(.musicBrainz),
+            preferences: preferences
         )
-        async let critiqueBrainz = metric(
+        let critiqueBrainz = await metric(
             for: .critiqueBrainz, identity: identity,
-            cached: cached?.value(for: .critiqueBrainz), preferences: preferences
+            cached: cachedValue(.critiqueBrainz), preferences: preferences
         )
-        async let listenBrainz = metric(
+        let listenBrainz = await metric(
             for: .listenBrainz, identity: identity,
-            cached: cached?.value(for: .listenBrainz), preferences: preferences
+            cached: cachedValue(.listenBrainz), preferences: preferences
         )
-        let metrics = await [musicBrainz, critiqueBrainz, listenBrainz]
+        let metrics = [musicBrainzResult.metric, critiqueBrainz, listenBrainz]
         for metric in metrics where metric.status != .disabled && metric.status != .loading {
             try? await catalog.upsertCommunityMusicMetric(metric, for: globalID)
         }
+
+        // 详情级 Evidence：全部来自缓存（零网络）时保持已缓存证据不变，避免 fetchedAt 抖动；
+        // 有新鲜获取时重建。
+        var evidence: CommunityMusicEvidence?
+        let allFromCache = musicBrainzResult.fromCache
+            && (critiqueBrainz.fetchedAt == cached?.value(for: .critiqueBrainz)?.fetchedAt)
+            && (listenBrainz.fetchedAt == cached?.value(for: .listenBrainz)?.fetchedAt)
+        if allFromCache, let cachedEvidence = try? await catalog.communityMusicEvidence(for: globalID) {
+            evidence = cachedEvidence
+        } else {
+            evidence = await buildEvidence(
+                track: track,
+                globalID: globalID,
+                identity: identity,
+                metrics: metrics,
+                musicBrainzDetail: musicBrainzResult.detail,
+                preferences: preferences
+            )
+        }
+        if let evidence {
+            try? await catalog.upsertCommunityMusicEvidence(evidence, for: globalID)
+        }
+
         return AgentExternalMusicResult(
             identity: identity,
             candidates: candidates,
-            metrics: CommunityMusicMetrics(globalTrackID: globalID, values: metrics)
+            metrics: CommunityMusicMetrics(globalTrackID: globalID, values: metrics),
+            evidence: evidence
+        )
+    }
+
+    /// MusicBrainz：metric + 详情一次 lookup 获取；返回是否命中缓存。
+    private func fetchMusicBrainzMetricAndDetail(
+        identity: ExternalMusicIdentity?,
+        cached: CommunityMusicMetric?,
+        preferences: ExternalMusicPreferences
+    ) async -> (metric: CommunityMusicMetric, detail: MusicBrainzDetail?, fromCache: Bool) {
+        guard preferences.isEnabled(.musicBrainz) else {
+            return (metric(.musicBrainz, nil, status: .disabled), nil, true)
+        }
+        if let cached, isFresh(cached) {
+            return (cached, nil, true)
+        }
+        guard let identity else {
+            return (metric(.musicBrainz, nil, status: .noData), nil, false)
+        }
+        guard let mbid = identity.recordingMBID else {
+            return (metric(.musicBrainz, identity.recordingMBID, status: .noData), nil, false)
+        }
+        do {
+            let lookup = try await musicBrainzLookup(mbid: mbid)
+            let detail = Self.detail(from: lookup, mbid: mbid)
+            guard let rating = lookup.rating, (rating.votesCount ?? 0) > 0 else {
+                return (metric(.musicBrainz, mbid, status: .noData), detail, false)
+            }
+            let metric = CommunityMusicMetric(
+                source: .musicBrainz,
+                entityID: mbid,
+                rating: rating.value,
+                ratingCount: rating.votesCount,
+                fetchedAt: now(),
+                status: .available
+            )
+            return (metric, detail, false)
+        } catch {
+            return (metric(.musicBrainz, mbid, status: status(for: error)), nil, false)
+        }
+    }
+
+    /// 组装详情级 Evidence。各来源只在该来源开启且（新取或缓存可用）时纳入。
+    private func buildEvidence(
+        track: Track,
+        globalID: GlobalID,
+        identity: ExternalMusicIdentity?,
+        metrics: [CommunityMusicMetric],
+        musicBrainzDetail: MusicBrainzDetail?,
+        preferences: ExternalMusicPreferences
+    ) async -> CommunityMusicEvidence? {
+        var reviews: [CommunityMusicReview] = []
+        if preferences.isEnabled(.critiqueBrainz),
+           identity?.releaseGroupMBID != nil,
+           let fresh = try? await catalog.communityMusicReviews(for: globalID), !fresh.isEmpty {
+            reviews = fresh
+        }
+
+        let critique = metrics.first(where: { $0.source == .critiqueBrainz })
+        let listen = metrics.first(where: { $0.source == .listenBrainz })
+        let hasAny = musicBrainzDetail != nil || critique != nil || listen != nil || !reviews.isEmpty
+        guard hasAny else { return nil }
+        return CommunityMusicEvidence(
+            globalTrackID: globalID,
+            identity: identity,
+            musicBrainz: musicBrainzDetail,
+            critiqueBrainzAggregate: critique,
+            listenBrainz: listen,
+            reviews: reviews,
+            fetchedAt: now()
+        )
+    }
+
+    private static func detail(from lookup: MBRecordingLookup, mbid: String) -> MusicBrainzDetail? {
+        let release = lookup.releases?.max { lhs, rhs in
+            (lhs.date ?? "") < (rhs.date ?? "")
+        }
+        return MusicBrainzDetail(
+            recordingMBID: mbid,
+            releaseMBID: release?.id,
+            releaseGroupMBID: release?.releaseGroup?.id,
+            artistMBID: lookup.artistCredit?.first?.artist?.id,
+            isrc: lookup.isrcs?.first,
+            title: lookup.title,
+            artistCredit: artistCreditString(lookup.artistCredit),
+            rating: lookup.rating?.value,
+            votesCount: lookup.rating?.votesCount,
+            genres: (lookup.genres ?? []).map(\.name),
+            tags: (lookup.tags ?? []).map(\.name),
+            releaseDate: release?.date,
+            releaseType: release?.releaseGroup?.primaryType
         )
     }
 
@@ -156,10 +300,10 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         guard preferences.isEnabled(source) else {
             return metric(source, nil, status: .disabled)
         }
-        if let cached, isFresh(cached, maxAge: preferences.cacheTTL) { return cached }
+        if let cached, isFresh(cached) { return cached }
         guard let identity else { return metric(source, nil, status: .noData) }
         switch source {
-        case .musicBrainz: return await fetchMusicBrainzMetric(identity: identity)
+        case .musicBrainz: return await fetchMusicBrainzMetricAndDetail(identity: identity, cached: nil, preferences: ExternalMusicPreferences.current()).metric
         case .critiqueBrainz: return await fetchCritiqueBrainzMetric(identity: identity)
         case .listenBrainz: return await fetchListenBrainzMetric(identity: identity)
         }
@@ -172,14 +316,10 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         )
     }
 
-    private func isFresh(_ metric: CommunityMusicMetric, maxAge: TimeInterval) -> Bool {
+    /// 按来源 + 状态使用集中缓存策略：成功/无数据走各自 TTL，失败走短负缓存。
+    private func isFresh(_ metric: CommunityMusicMetric) -> Bool {
         let current = now()
-        let allowedAge: TimeInterval = switch metric.status {
-        case .available, .noData, .notSupported: maxAge
-        case .rateLimited: min(maxAge, 15 * 60)
-        case .unavailable, .failed: min(maxAge, 5 * 60)
-        case .disabled, .loading: 0
-        }
+        let allowedAge = LocalCatalogStore.cacheTTL(for: metric.source, status: metric.status)
         return allowedAge > 0 && current.timeIntervalSince(metric.fetchedAt) <= allowedAge
     }
 
@@ -236,6 +376,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
     /// ISRC 是录音级标识，优先于标题/艺人模糊匹配；命中后仍把完整身份写回本地。
     private func matchByISRC(
         _ isrc: String,
+        track: Track,
         globalID: GlobalID
     ) async -> (identity: ExternalMusicIdentity?, candidates: [ExternalMusicIdentityCandidate]) {
         do {
@@ -252,7 +393,11 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             let data = try await request(url: url, musicBrainz: true)
             let response = try JSONDecoder().decode(MBSearchResponse.self, from: data)
             guard let recording = response.recordings.first else { return (nil, []) }
-            let release = recording.releases?.first
+            // ISRC 对 Recording 匹配权重很高，但 Release 仍要结合专辑/艺人/时长选择，
+            // 不直接拿 releases.first。
+            let release = recording.releases?.max { lhs, rhs in
+                albumSimilarity(lhs.title, track.albumTitle) < albumSimilarity(rhs.title, track.albumTitle)
+            }
             let identity = ExternalMusicIdentity(
                 globalTrackID: globalID,
                 recordingMBID: recording.id,
@@ -277,7 +422,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         track: Track,
         globalID: GlobalID
     ) -> ExternalMusicIdentityCandidate {
-        let candidateArtist = recording.artistCredit?.map(\.name).joined() ?? ""
+        let candidateArtist = Self.artistCreditString(recording.artistCredit)
         let candidateDuration = recording.length.map { Double($0) / 1_000 }
         let titleExact = normalized(recording.title) == normalized(track.title)
         let artistExact = normalized(candidateArtist) == normalized(track.artistName)
@@ -314,38 +459,22 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         )
     }
 
-    private func fetchMusicBrainzMetric(identity: ExternalMusicIdentity) async -> CommunityMusicMetric {
-        guard let mbid = identity.recordingMBID else {
-            return metric(.musicBrainz, identity.recordingMBID, status: .noData)
-        }
-        do {
-            var components = URLComponents(
-                url: endpoints.musicBrainz.appendingPathComponent("recording/\(mbid)"),
-                resolvingAgainstBaseURL: false
-            )
-            components?.queryItems = [
-                URLQueryItem(name: "inc", value: "ratings+isrcs+artist-credits+releases+release-groups"),
-                URLQueryItem(name: "fmt", value: "json"),
-            ]
-            guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
-            let data = try await request(url: url, musicBrainz: true)
-            let response = try JSONDecoder().decode(MBRecordingLookup.self, from: data)
-            guard let rating = response.rating, (rating.votesCount ?? 0) > 0 else {
-                return metric(.musicBrainz, mbid, status: .noData)
-            }
-            return CommunityMusicMetric(
-                source: .musicBrainz,
-                entityID: mbid,
-                rating: rating.value,
-                ratingCount: rating.votesCount,
-                fetchedAt: now(),
-                status: .available
-            )
-        } catch {
-            return metric(.musicBrainz, mbid, status: status(for: error))
-        }
+    /// 统一 MB 录音查询（metric + detail 共用，避免重复打 API）。
+    private func musicBrainzLookup(mbid: String) async throws -> MBRecordingLookup {
+        var components = URLComponents(
+            url: endpoints.musicBrainz.appendingPathComponent("recording/\(mbid)"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "inc", value: "ratings+isrcs+artist-credits+releases+release-groups+genres+tags"),
+            URLQueryItem(name: "fmt", value: "json"),
+        ]
+        guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
+        let data = try await request(url: url, musicBrainz: true)
+        return try JSONDecoder().decode(MBRecordingLookup.self, from: data)
     }
 
+    /// CritiqueBrainz：拉取聚合 + 有限真实评论（默认最多 10 条），容错解析。
     private func fetchCritiqueBrainzMetric(identity: ExternalMusicIdentity) async -> CommunityMusicMetric {
         guard let releaseGroupMBID = identity.releaseGroupMBID else {
             return metric(.critiqueBrainz, nil, status: .noData)
@@ -358,7 +487,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             components?.queryItems = [
                 URLQueryItem(name: "entity_id", value: releaseGroupMBID),
                 URLQueryItem(name: "entity_type", value: "release_group"),
-                URLQueryItem(name: "limit", value: "0"),
+                URLQueryItem(name: "limit", value: "10"),
             ]
             guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
             let data = try await request(url: url)
@@ -370,6 +499,14 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             let ratingCount = integer(average?["count"] ?? average?["rating_count"])
             let reviewCount = integer(object["count"] ?? object["review_count"])
             let hasData = (ratingCount ?? 0) > 0 || (reviewCount ?? 0) > 0
+
+            let rawReviews = object["reviews"] as? [[String: Any]] ?? []
+            let reviews = rawReviews.prefix(10).compactMap { raw in
+                Self.parseReview(raw, releaseGroupMBID: releaseGroupMBID, now: now())
+            }
+            if !reviews.isEmpty {
+                try? await catalog.upsertCommunityMusicReviews(reviews, for: identity.globalTrackID)
+            }
             return CommunityMusicMetric(
                 source: .critiqueBrainz,
                 entityID: releaseGroupMBID,
@@ -382,6 +519,47 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         } catch {
             return metric(.critiqueBrainz, releaseGroupMBID, status: status(for: error))
         }
+    }
+
+    /// 容错解析单条 CritiqueBrainz 评论；任一可选字段缺失不导致整条失败。
+    private static func parseReview(
+        _ raw: [String: Any],
+        releaseGroupMBID: String,
+        now: Date
+    ) -> CommunityMusicReview? {
+        guard let id = raw["id"] as? String, !id.isEmpty else { return nil }
+        let author = raw["user"] as? [String: Any]
+        let text = raw["text"] as? String ?? ""
+        guard !text.isEmpty else { return nil }
+        let sourceName = raw["source"] as? String
+        let license = raw["license"] as? String
+        // excerpt：取前 280 字符，超出加省略号，避免详情/Agent 塞入全文。
+        let excerpt = text.count > 280 ? String(text.prefix(277)) + "…" : text
+        let dateString = raw["created"] as? String
+        let publishedAt = dateString.flatMap(Self.isoDate)
+        return CommunityMusicReview(
+            reviewID: id,
+            entityID: releaseGroupMBID,
+            authorName: author?["display_name"] as? String ?? (author?["name"] as? String),
+            rating: (raw["rating"] as? NSNumber)?.doubleValue,
+            publishedAt: publishedAt,
+            language: raw["language"] as? String,
+            excerpt: excerpt,
+            fullText: nil,
+            positiveVotes: (raw["vote"] as? [String: Any])?["positive"] as? Int,
+            negativeVotes: (raw["vote"] as? [String: Any])?["negative"] as? Int,
+            popularity: nil,
+            licenseID: license,
+            sourceName: sourceName,
+            sourceURL: raw["source_url"] as? String,
+            fetchedAt: now
+        )
+    }
+
+    private static func isoDate(_ string: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: string) ?? ISO8601DateFormatter().date(from: string)
     }
 
     private func fetchListenBrainzMetric(identity: ExternalMusicIdentity) async -> CommunityMusicMetric {
@@ -512,6 +690,13 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         return markers.contains { local.contains($0) != remote.contains($0) } ? 0.18 : 0
     }
 
+    /// 多艺术家 credit 用 " & " 连接展示，不再把 ArtistAArtistB 直接拼在一起；
+    /// 匹配仍优先按数组逐段比较（见 makeCandidate 的 artistExact）。
+    private static func artistCreditString(_ credits: [MBArtistCredit]?) -> String {
+        guard let credits, !credits.isEmpty else { return "" }
+        return credits.map(\.name).joined(separator: " & ")
+    }
+
     private func lucene(_ string: String) -> String {
         string.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -565,18 +750,42 @@ private struct MBArtist: Decodable { let id: String? }
 private struct MBRelease: Decodable {
     let id: String
     let title: String
+    let date: String?
     let releaseGroup: MBReleaseGroup?
 
     enum CodingKeys: String, CodingKey {
-        case id, title
+        case id, title, date
         case releaseGroup = "release-group"
     }
 }
 
-private struct MBReleaseGroup: Decodable { let id: String }
+private struct MBReleaseGroup: Decodable {
+    let id: String
+    let primaryType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case primaryType = "primary-type"
+    }
+}
 
 private struct MBRecordingLookup: Decodable {
+    let title: String?
+    let isrcs: [String]?
+    let artistCredit: [MBArtistCredit]?
+    let releases: [MBRelease]?
+    let genres: [MBGenreTag]?
+    let tags: [MBGenreTag]?
     let rating: MBRating?
+
+    enum CodingKeys: String, CodingKey {
+        case title, isrcs, releases, genres, tags, rating
+        case artistCredit = "artist-credit"
+    }
+}
+
+private struct MBGenreTag: Decodable {
+    let name: String
 }
 
 private struct MBRating: Decodable {

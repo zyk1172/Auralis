@@ -155,6 +155,7 @@ struct AgentSettingsPage: View {
     @State private var isLoadingIndexStatus = false
     @State private var isClearingExternalMusicCache = false
     @State private var externalMusicCacheMessage: String?
+    @State private var isResettingExternalIdentity = false
     @State private var isExportingIndex = false
     @State private var indexExportFile: RecommendationIndexV2IndexFile?
     @State private var isImportingIndex = false
@@ -256,6 +257,10 @@ struct AgentSettingsPage: View {
                     }
                 }
                 .disabled(isClearingExternalMusicCache)
+                Button("重置音乐身份匹配…", role: .destructive) {
+                    Task { await resetExternalMusicIdentity() }
+                }
+                .disabled(isResettingExternalIdentity)
                 if let externalMusicCacheMessage {
                     Text(externalMusicCacheMessage)
                         .font(.caption)
@@ -328,9 +333,21 @@ struct AgentSettingsPage: View {
         defer { isClearingExternalMusicCache = false }
         do {
             try await model.agentCoordinator.clearExternalMusicDataCache()
-            externalMusicCacheMessage = "公开音乐数据缓存已清除。"
+            externalMusicCacheMessage = "公开音乐数据缓存已清除（保留已核验的音乐身份）。"
         } catch {
             externalMusicCacheMessage = "清除失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func resetExternalMusicIdentity() async {
+        isResettingExternalIdentity = true
+        externalMusicCacheMessage = nil
+        defer { isResettingExternalIdentity = false }
+        do {
+            try await model.agentCoordinator.resetExternalMusicIdentity()
+            externalMusicCacheMessage = "音乐身份匹配已重置；下次打开歌曲信息/鉴赏时将重新识别 MBID。"
+        } catch {
+            externalMusicCacheMessage = "重置失败：\(error.localizedDescription)"
         }
     }
 

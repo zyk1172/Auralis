@@ -1,4 +1,5 @@
 import AIKit
+import AgentKit
 import Application
 import Combine
 import LocalCatalog
@@ -42,6 +43,9 @@ public final class AuralisAppModel: ObservableObject {
     /// AI 助手输入框的草稿文本。提升到模型层是为了让底部 Dock（iOS）
     /// 与助手页面（macOS）共用同一份输入，避免嵌套 safeAreaInset 造成的布局重叠。
     @Published public var assistantDraft: String = ""
+    /// “不喜欢”状态的内存镜像（SQLite disliked_tracks 是唯一权威）。
+    /// 用于同步 UI 读取；启动/同步/变更时从目录刷新。
+    @Published public private(set) var dislikedTrackIDs: Set<GlobalID> = []
     /// 搜索不再是主导航页；系统入口需要搜索时由 AI 助手展示本地/服务器搜索兜底页。
     @Published public var shouldPresentAssistantSearch = false
     /// 桌面版仅在已有实际播放项目时显示底部迷你播放器；iPhone 的 Dock 则在首页和
@@ -347,10 +351,13 @@ public final class AuralisAppModel: ObservableObject {
         }
         return coordinator
     }()
+    /// App 级公开音乐资料服务：歌曲信息 UI、Agent、无歌词补全共用同一实例。
+    public private(set) lazy var musicEnrichment = MusicEnrichmentService(catalog: catalogCoordinator.store)
     /// AI 助手运行时（会话 / 工具调用 / 确认 / 操作日志 / 偏好）。
     public private(set) lazy var agentCoordinator = AgentCoordinator(
         model: self,
-        coordinator: catalogCoordinator
+        coordinator: catalogCoordinator,
+        musicEnrichment: musicEnrichment
     )
 
     private let engine: any PlaybackControlling
@@ -1082,6 +1089,14 @@ public final class AuralisAppModel: ObservableObject {
 
     public var currentLyrics: LyricsDocument? { catalog.lyrics[currentTrack.id] }
 
+    /// Agent 歌词状态查询：区分“有歌词 / 已确认无歌词 / 尚未确认”，
+    /// 不把“还没查”误报成“没有歌词”。
+    func lyricsAvailability(for trackID: TrackID) -> AgentLyricsState {
+        if catalog.lyrics[trackID] != nil { return .available }
+        if lyricsUnavailable.contains(trackID) { return .unavailable }
+        return .unknown
+    }
+
     /// 0...1 playback progress of the current track.
     public var playbackProgress: Double {
         get {
@@ -1113,9 +1128,10 @@ public final class AuralisAppModel: ObservableObject {
         selectAndPlay(tracks[0])
     }
 
-    /// 随机播放（30 首）。
+    /// 随机播放（30 首）。整库随机属于自动发现：必须排除“不喜欢”的歌曲。
     public func playRandom() {
-        let tracks = Array(catalog.tracks.shuffled().prefix(30))
+        let candidates = catalog.tracks.filter { !isDisliked($0) }
+        let tracks = Array(candidates.shuffled().prefix(30))
         guard !tracks.isEmpty else { return }
         queue = tracks
         selectAndPlay(tracks[0])
@@ -1349,7 +1365,7 @@ public final class AuralisAppModel: ObservableObject {
     public func regenerateRandomMusic() {
         let tracks = catalog.tracks
         guard !tracks.isEmpty else { return }
-        homeStore.regenerateRandom(from: tracks)
+        homeStore.regenerateRandom(from: tracks, dislikedTrackIDs: dislikedTrackIDs)
     }
 
 
@@ -1384,7 +1400,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 重新采样「收藏里随便听」：只在本机收藏里本地随机，不发网络请求、不重新下载服务器资料。
     public func regenerateFavoriteRandomMusic() {
-        homeStore.regenerateFavoriteRandom(from: catalog.tracks)
+        homeStore.regenerateFavoriteRandom(from: catalog.tracks, dislikedTrackIDs: dislikedTrackIDs)
     }
 
     /// 清除播放错误（供 UI 在展示后调用）。
@@ -1648,7 +1664,8 @@ public final class AuralisAppModel: ObservableObject {
             catalog: catalog,
             playCounts: playCounts,
             recentIDs: recentlyPlayedIDs,
-            addedDates: libraryAddedTracker.dates
+            addedDates: libraryAddedTracker.dates,
+            dislikedTrackIDs: dislikedTrackIDs
         )
     }
 
@@ -2172,6 +2189,11 @@ public final class AuralisAppModel: ObservableObject {
             } else {
                 lyricsUnavailable.insert(track.id)
                 await lyricsCache.markMissing(serverID: track.serverID, trackID: track.id)
+                // 无歌词：低优先级补全公开音乐资料（歌曲信息/鉴赏用）。
+                // 不阻塞播放、歌词界面或主线程；评价平台不是歌词 Provider。
+                Task.detached(priority: .utility) { [musicEnrichment] in
+                    _ = await musicEnrichment.prefetchForMissingLyrics(track: track)
+                }
             }
         }
     }
@@ -2328,6 +2350,20 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 切换曲目的收藏状态，并同步到服务器（star/unstar）。
     public func toggleFavorite(_ track: Track) {
+        Task { @MainActor [weak self] in
+            await self?.toggleFavoritePersisted(track)
+        }
+    }
+
+    /// 可等待的收藏切换（含与不喜欢的互斥）；测试直接调用以同步断言。
+    func toggleFavoritePersisted(_ track: Track) async {
+        // 收藏与不喜欢互斥：点击收藏时若歌曲处于“不喜欢”，先取消不喜欢再收藏。
+        let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        if dislikedTrackIDs.contains(gid) {
+            dislikedTrackIDs.remove(gid)
+            try? await catalogCoordinator.store.setDisliked(gid, value: false, source: "user")
+            refreshHomeSnapshots()
+        }
         // 曲目可能不在本地目录（例如刚由「服务器在线流播」播放、尚未同步的歌曲）：
         // 先翻转本地副本，再同步到目录（若在）与服务器，保证播放页红心即时响应。
         var updated = track
@@ -2337,7 +2373,64 @@ public final class AuralisAppModel: ObservableObject {
         }
         if currentTrack.id == track.id { currentTrack = updated }
         refreshHomeSnapshots()
-        Task { await connector.setFavorite(trackID: updated.id, isFavorite: updated.isFavorite) }
+        await connector.setFavorite(trackID: updated.id, isFavorite: updated.isFavorite)
+    }
+
+    /// 是否“不喜欢”：只影响自动推荐/发现；搜索、浏览与显式播放不受影响。
+    public func isDisliked(_ track: Track) -> Bool {
+        dislikedTrackIDs.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
+    }
+
+    /// 从 SQLite 权威状态刷新“不喜欢”内存镜像。
+    public func refreshDislikedState() async {
+        guard let serverID = catalog.activeServerID else {
+            dislikedTrackIDs = []
+            return
+        }
+        dislikedTrackIDs = (try? await catalogCoordinator.store.dislikedTrackIDs(serverID: serverID)) ?? []
+    }
+
+    /// 设置/取消“不喜欢”。产品规则：
+    /// - 设置不喜欢时若当前已收藏，先取消收藏（收藏与不喜欢互斥）；
+    /// - 取消不喜欢不会恢复旧收藏；
+    /// - 不改变当前播放、不改变队列、不跳歌、不删除任何内容。
+    public func setDisliked(_ track: Track, value: Bool, source: String? = nil) {
+        Task { @MainActor [weak self] in
+            await self?.persistDisliked(track, value: value, source: source)
+        }
+    }
+
+    public func toggleDisliked(_ track: Track) {
+        setDisliked(track, value: !isDisliked(track), source: "user")
+    }
+
+    /// 可等待的 dislike 持久化（UI 通过 setDisliked 触发；测试直接调用以同步断言）。
+    func persistDisliked(_ track: Track, value: Bool, source: String?) async {
+        let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        if value == dislikedTrackIDs.contains(gid) { return }
+        if value {
+            dislikedTrackIDs.insert(gid)
+            if track.isFavorite {
+                // 复用现有收藏取消实现，不重新实现一套 OpenSubsonic favorite API。
+                await unfavoriteTrack(track)
+            }
+        } else {
+            dislikedTrackIDs.remove(gid)
+        }
+        refreshHomeSnapshots()
+        try? await catalogCoordinator.store.setDisliked(gid, value: value, source: source)
+    }
+
+    /// 取消收藏（供 dislike 互斥复用）。收藏状态本地与服务器同步。
+    private func unfavoriteTrack(_ track: Track) async {
+        var updated = track
+        updated.isFavorite = false
+        if let index = catalog.tracks.firstIndex(where: { $0.id == track.id }) {
+            catalog.tracks[index].isFavorite = false
+        }
+        if currentTrack.id == track.id { currentTrack = updated }
+        refreshHomeSnapshots()
+        await connector.setFavorite(trackID: updated.id, isFavorite: false)
     }
 
     /// 跳到上一首；播放已超过 3 秒时先回到本曲开头（主流播放器的习惯行为）。
@@ -2726,6 +2819,9 @@ public final class AuralisAppModel: ObservableObject {
     public func restorePersistedLibrary() async {
         guard !attemptedRestore else { return }
         attemptedRestore = true
+        // 旧「不感兴趣」反馈迁移到 disliked_tracks（幂等），并加载 dislike 镜像。
+        await agentCoordinator.migrateLegacyDislikedIfNeeded()
+        await refreshDislikedState()
         do {
             // 优先恢复「上次活跃服务器」，其次回退到首个已保存账户，
             // 保证切换服务器后冷启动不会错误地回到第一台服务器。
@@ -2877,8 +2973,10 @@ public final class AuralisAppModel: ObservableObject {
 
         reconcileLibraryAddedDates(tracks: tracks, serverID: result.account.id)
 
+        // “不喜欢”是私人状态：每次目录就绪/服务器切换后从 SQLite 刷新镜像。
+        Task { await self.refreshDislikedState() }
         // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
-        homeStore.regenerateRandom(from: tracks)
+        homeStore.regenerateRandom(from: tracks, dislikedTrackIDs: dislikedTrackIDs)
         // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
         refreshHomeSnapshots()
 

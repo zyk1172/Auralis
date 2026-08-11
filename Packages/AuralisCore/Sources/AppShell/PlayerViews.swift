@@ -385,6 +385,8 @@ struct NowPlayingView: View {
     private func playbackControls(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
         VStack(spacing: sectionSpacing) {
             // 标题和艺术家始终以整行中心为基准；超长内容只从头到尾慢速移动一次。
+            // 左右各预留 56pt 对称安全区：长标题滚动时不会滑到不喜欢/收藏按钮下面，
+            // 也不会把歌名从屏幕中心推走。
             ZStack {
                 VStack(spacing: AuralisSpacing.xSmall) {
                     OneShotMarqueeText(
@@ -400,14 +402,17 @@ struct NowPlayingView: View {
                         height: 22
                     )
                 }
-                .padding(.horizontal, 48)
+                .padding(.horizontal, 56)
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(nowPlayingAccessibilityLabel)
 
-                HStack {
-                    Spacer()
+                // 不喜欢（左）与收藏（右）严格镜像：距屏幕边缘一致、frame 一致、
+                // 命中区域一致、symbol 大小一致；标题以屏幕中心为基准独立居中。
+                HStack(spacing: 0) {
+                    dislikeButton
+                    Spacer(minLength: 0)
                     favoriteButton
                 }
             }
@@ -452,7 +457,29 @@ struct NowPlayingView: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(HapticPlainButtonStyle())
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
         .accessibilityLabel(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+    }
+
+    /// “不喜欢”按钮：与收藏按钮严格镜像。只影响未来自动推荐，
+    /// 点击不跳歌、不改变队列、不暂停。
+    private var dislikeButton: some View {
+        let isDisliked = model.isDisliked(model.currentTrack)
+        return Button {
+            model.toggleDisliked(model.currentTrack)
+        } label: {
+            Image(systemName: isDisliked ? "heart.slash.fill" : "heart.slash")
+                .font(.title3)
+                .foregroundStyle(isDisliked ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(HapticPlainButtonStyle())
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel(isDisliked ? "取消不喜欢" : "不喜欢")
+        .accessibilityHint("不喜欢的歌曲不会再出现在自动推荐中。")
+        .accessibilityValue(isDisliked ? "已标记不喜欢" : "未标记不喜欢")
     }
 
     private func transportControls(playButtonSize: CGFloat) -> some View {
@@ -949,10 +976,10 @@ private struct TrackInformationSheet: View {
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                         }
                     case .available:
-                        if let metrics = externalResult?.metrics {
-                            communityMetricRow(.musicBrainz, in: metrics, preferences: externalMusicPreferences)
-                            communityMetricRow(.critiqueBrainz, in: metrics, preferences: externalMusicPreferences)
-                            communityMetricRow(.listenBrainz, in: metrics, preferences: externalMusicPreferences)
+                        if let result = externalResult {
+                            communitySourceLink(.musicBrainz, result: result, preferences: externalMusicPreferences)
+                            communitySourceLink(.critiqueBrainz, result: result, preferences: externalMusicPreferences)
+                            communitySourceLink(.listenBrainz, result: result, preferences: externalMusicPreferences)
                         }
                         Text("各来源含义不同，评分、评论数和收听量不会合并为综合分。")
                             .font(.caption)
@@ -992,7 +1019,8 @@ private struct TrackInformationSheet: View {
                     return
                 }
                 isLoadingExternalData = true
-                externalResult = await model.agentCoordinator.externalMusicData(for: track)
+                let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+                externalResult = await model.musicEnrichment.enrich(track: track, globalID: globalID)
                 isLoadingExternalData = false
             }
         }
@@ -1014,32 +1042,65 @@ private struct TrackInformationSheet: View {
     }
 
     @ViewBuilder
-    private func communityMetricRow(
+    private func communitySourceLink(
         _ source: CommunityMusicSource,
-        in metrics: CommunityMusicMetrics,
+        result: AgentExternalMusicResult,
         preferences: ExternalMusicPreferences
     ) -> some View {
         if preferences.isEnabled(source) {
-            if let metric = metrics.value(for: source) {
-                switch metric.status {
-                case .available:
-                    infoRow(sourceTitle(source), metricDescription(metric))
-                case .noData, .notSupported:
-                    infoRow(sourceTitle(source), "暂无数据")
-                case .failed:
-                    infoRow(sourceTitle(source), "查询失败")
-                case .rateLimited:
-                    infoRow(sourceTitle(source), "请求过于频繁")
-                case .unavailable:
-                    infoRow(sourceTitle(source), "暂时不可用")
-                case .loading:
-                    infoRow(sourceTitle(source), "正在查询")
-                case .disabled:
-                    EmptyView()
+            let metric = result.metrics.value(for: source)
+            NavigationLink {
+                CommunityMusicDetailView(source: source, result: result, theme: theme)
+            } label: {
+                HStack(spacing: AuralisSpacing.small) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(sourceTitle(source))
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                        if let metric {
+                            Text(sourceSummary(metric))
+                                .font(.caption)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer(minLength: AuralisSpacing.small)
                 }
-            } else {
-                infoRow(sourceTitle(source), "暂无数据")
             }
+        }
+    }
+
+    private func sourceSummary(_ metric: CommunityMusicMetric) -> String {
+        switch metric.status {
+        case .available:
+            switch metric.source {
+            case .musicBrainz:
+                if let rating = metric.rating, let count = metric.ratingCount {
+                    return String(format: "%.1f / 5 · %d 次评分", rating, count)
+                }
+                return "有评分数据"
+            case .critiqueBrainz:
+                var parts: [String] = []
+                if let rating = metric.rating, let count = metric.ratingCount {
+                    parts.append(String(format: "%.1f / 5 · %d 次评分", rating, count))
+                }
+                if let reviews = metric.reviewCount { parts.append("\(reviews) 篇评论") }
+                return parts.isEmpty ? "有评论数据" : parts.joined(separator: " · ")
+            case .listenBrainz:
+                var parts: [String] = []
+                if let listens = metric.listenCount { parts.append("\(listens) 次收听") }
+                if let listeners = metric.listenerCount { parts.append("\(listeners) 位听众") }
+                return parts.isEmpty ? "有收听数据" : parts.joined(separator: " · ")
+            }
+        case .noData, .notSupported:
+            return "暂无数据"
+        case .failed:
+            return "查询失败"
+        case .rateLimited:
+            return "请求过于频繁"
+        case .unavailable:
+            return "暂时不可用"
+        case .disabled, .loading:
+            return ""
         }
     }
 
@@ -1051,18 +1112,8 @@ private struct TrackInformationSheet: View {
         }
     }
 
-    private func metricDescription(_ metric: CommunityMusicMetric) -> String {
-        var values: [String] = []
-        if let rating = metric.rating {
-            values.append(String(format: "评分 %.1f/5", rating))
-        }
-        if let count = metric.ratingCount { values.append("\(count) 次评分") }
-        if let count = metric.reviewCount { values.append("\(count) 篇评论") }
-        if let count = metric.listenCount { values.append("\(count.formatted()) 次收听") }
-        if let count = metric.listenerCount { values.append("\(count.formatted()) 位听众") }
-        return values.isEmpty ? "暂无数据" : values.joined(separator: " · ")
-    }
 }
+
 
 /// 添加到歌单弹窗：列出服务器歌单，点选即追加当前歌曲。
 struct AddToPlaylistSheet: View {

@@ -4,6 +4,11 @@ import MusicLibrary
 
 /// 可由 Agent 稳定生成、也便于之后检索的有限标签空间。
 public enum RecommendationIndexV2 {
+    /// 固定音乐分析维度（结构化索引，不是用户标签系统）。
+    public static let fixedDimensions: Set<String> = [
+        "mood", "scene", "vocal", "texture", "style",
+        "energy", "tempo", "acousticness", "danceability",
+    ]
     public static let rulesVersion = "2.1"
     /// 内容指纹算法版本：只描述“判断歌曲内容是否变化”的指纹算法，与
     /// rulesVersion（分类 taxonomy / prompt / schema 版本）相互独立。
@@ -49,8 +54,7 @@ extension LocalCatalogStore {
     ) throws -> Int {
         let snapshot = try recommendationIndexV2Snapshot(serverID: serverID)
         let byID = Dictionary(uniqueKeysWithValues: snapshot.lines.map { ($0.id, $0) })
-        let valid = classifications.prefix(100).compactMap { item -> (RecommendationIndexV2Classification, CatalogTrackLine, [(String, [String])])? in
-            let customTags = normalizedCustomTags(item.customTags)
+        let valid = classifications.prefix(100).compactMap { item -> (RecommendationIndexV2Classification, CatalogTrackLine)? in
             guard let line = byID[item.id],
                   (1...10).contains(item.energy),
                   (1...5).contains(item.tempo),
@@ -59,15 +63,14 @@ extension LocalCatalogStore {
                   !normalizedTags(item.moods, allowed: RecommendationIndexV2.moods).isEmpty ||
                   !normalizedTags(item.scenes, allowed: RecommendationIndexV2.scenes).isEmpty ||
                   !normalizedTags(item.textures, allowed: RecommendationIndexV2.textures).isEmpty ||
-                  !normalizedTags(item.styles, allowed: RecommendationIndexV2.styles).isEmpty ||
-                  !customTags.isEmpty
+                  !normalizedTags(item.styles, allowed: RecommendationIndexV2.styles).isEmpty
             else { return nil }
-            return (item, line, customTags)
+            return (item, line)
         }
         guard !valid.isEmpty else { return 0 }
 
         try db.transaction {
-            for (item, line, customTags) in valid {
+            for (item, line) in valid {
                 let confidence = min(max(item.confidence, 0), 1)
                 try db.run("DELETE FROM recommendation_index_v2_tags WHERE global_id = ?", [.text(item.id)])
                 try db.run(
@@ -87,14 +90,6 @@ extension LocalCatalogStore {
                 try recommendationIndexV2InsertTags(item.vocals, dimension: "vocal", allowed: RecommendationIndexV2.vocals, id: item.id, confidence: confidence)
                 try recommendationIndexV2InsertTags(item.textures, dimension: "texture", allowed: RecommendationIndexV2.textures, id: item.id, confidence: confidence)
                 try recommendationIndexV2InsertTags(item.styles, dimension: "style", allowed: RecommendationIndexV2.styles, id: item.id, confidence: confidence)
-                for (dimension, values) in customTags {
-                    for value in values {
-                        try db.run(
-                            "INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, ?, ?, ?)",
-                            [.text(item.id), .text(dimension), .text(value), .real(confidence)]
-                        )
-                    }
-                }
                 try recommendationIndexV2InsertNumericTags(item, id: item.id, confidence: confidence)
             }
         }
@@ -314,28 +309,15 @@ extension LocalCatalogStore {
         Array(Set(values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(allowed.contains))).sorted()
     }
 
-    /// 自建分类仍需是可控、可检索的短文本。每首最多 8 个自建维度、每维最多 4 个
-    /// 标签；保留维度不能借 customTags 绕过固定词表校验。
-    private func normalizedCustomTags(_ groups: [String: [String]]?) -> [(String, [String])] {
-        let reserved = Set(["mood", "scene", "vocal", "texture", "style", "energy", "tempo", "acousticness", "danceability"])
-        return (groups ?? [:]).compactMap { rawDimension, rawValues -> (String, [String])? in
-            let dimension = rawDimension.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !dimension.isEmpty,
-                  dimension.count <= 24,
-                  !reserved.contains(dimension.lowercased()),
-                  !dimension.contains("\n"), !dimension.contains("\t")
-            else { return nil }
-            let values = Array(Set(rawValues.compactMap { raw -> String? in
-                let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !value.isEmpty, value.count <= 32, !value.contains("\n"), !value.contains("\t") else { return nil }
-                return value
-            })).sorted().prefix(4)
-            guard !values.isEmpty else { return nil }
-            return (dimension, Array(values))
-        }
-        .sorted { $0.0.localizedStandardCompare($1.0) == .orderedAscending }
-        .prefix(8)
-        .map { $0 }
+    /// 清理历史遗留的动态维度标签（customTags 已下线）：
+    /// 只删除不属于固定 allowed dimensions 的 recommendation_index_v2_tags 行，
+    /// 不删除 state、不删除固定维度、不重新运行 V2。
+    nonisolated func cleanupRecommendationIndexV2DynamicDimensions() throws {
+        let placeholders = RecommendationIndexV2.fixedDimensions.map { _ in "?" }.joined(separator: ",")
+        try db.run(
+            "DELETE FROM recommendation_index_v2_tags WHERE dimension NOT IN (\(placeholders))",
+            RecommendationIndexV2.fixedDimensions.sorted().map { SQLiteValue.text($0) }
+        )
     }
 
     /// V2 内容指纹：只包含相对稳定的音乐内容身份字段。

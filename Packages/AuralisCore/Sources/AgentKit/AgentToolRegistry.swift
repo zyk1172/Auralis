@@ -154,8 +154,9 @@ public struct ToolDescriptor: Sendable, Hashable {
 
 /// 全部 Agent 工具注册表。集中声明权限与确认要求，供 Runner 校验与 UI 展示。
 public enum AgentToolRegistry {
-    /// 原生 Function Calling 直接接收数组。保留有限的内置维度，同时允许 Agent 通过
-    /// customTags 创建可复用的新分类；工具执行层仍会限制维度、标签长度和每首数量。
+    /// 原生 Function Calling 直接接收数组。只保留固定音乐分析维度
+    /// （mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability），
+    /// 不提供 customTags 动态标签能力。
     static let recommendationClassificationArraySchema = #"""
     {
       "type": "array",
@@ -175,10 +176,6 @@ public enum AgentToolRegistry {
           "vocals": {"type": "array", "items": {"type": "string"}},
           "textures": {"type": "array", "items": {"type": "string"}},
           "styles": {"type": "array", "items": {"type": "string"}},
-          "customTags": {
-            "type": "object",
-            "additionalProperties": {"type": "array", "items": {"type": "string"}}
-          },
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         },
         "required": ["id", "energy"]
@@ -380,11 +377,11 @@ public enum AgentToolRegistry {
         .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；仅在用户明确要求构建或继续索引时使用；每个真实 ID 必须恰好分类一次，不能加入歌词、路径或播放地址",
               parameters: [.init(name: "limit", required: false, description: "每批 1-100，建议 80")],
               maxResultCharacters: 24_000),
-        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；items 必须严格覆盖上一批全部真实 ID 各一次。除内置维度外可用 customTags 自建稳定分类；结果若直接附带下一批就继续写回，直到 pending=0",
+        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；items 必须严格覆盖上一批全部真实 ID 各一次。只使用固定维度（情绪/场景/人声/质感/风格/能量/节奏/原声度/舞动感），不接受自定义维度；结果若直接附带下一批就继续写回，直到 pending=0",
               parameters: [.init(
                 name: "items",
                 required: true,
-                description: "分类数组；customTags 可自建维度与标签，例如 {\"编制\":[\"室内乐\"],\"适用空间\":[\"耳机\"]}",
+                description: "分类数组；仅使用固定维度：moods/scenes/vocals/textures/styles 与 energy/tempo/acousticness/danceability 数值",
                 schemaJSON: Self.recommendationClassificationArraySchema
               )],
               maxResultCharacters: 24_000),
@@ -502,6 +499,20 @@ public enum AgentToolRegistry {
                 .init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
                 .init(name: "trackIDs", required: true, description: "逗号分隔的 GlobalTrackID 列表"),
               ]),
+        .init(name: "preference_set_disliked", group: .annotation, permission: .reversible, summary: "设置/取消“不喜欢”：不喜欢的歌曲不会再出现在任何自动推荐、随机播放、相似歌曲、智能队列或发现模块中；显式搜索、打开专辑/歌单或直接点播仍然允许播放",
+              parameters: [
+                .init(name: "trackID", required: true, description: "GlobalTrackID"),
+                .init(name: "value", required: true, description: "true=标记不喜欢 / false=取消不喜欢"),
+              ]),
+        .init(name: "library_get_disliked", group: .catalog, permission: .readOnly, summary: "读取已标记“不喜欢”的歌曲（含标题/艺术家/专辑）",
+              parameters: [
+                .init(name: "limit", required: false, description: "返回数量，默认 50，最大 200"),
+              ]),
+        .init(name: "music_get_public_evidence", group: .catalog, permission: .readOnly, summary: "获取当前/指定歌曲的真实公开音乐资料证据（MusicBrainz 身份与评分、CritiqueBrainz 聚合与少量评论摘要、ListenBrainz 收听统计）；没有真实数据时不得编造大众评价",
+              parameters: [
+                .init(name: "trackID", required: false, description: "GlobalTrackID；省略时使用当前播放歌曲"),
+                .init(name: "refresh", required: false, description: "true=忽略缓存强制刷新，默认 false"),
+              ]),
         .init(name: "lyrics_get", group: .catalog, permission: .readOnly, summary: "获取歌词状态",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "media_download_offline", group: .catalog, permission: .reversible, summary: "下载歌曲到本地离线缓存",
@@ -588,7 +599,8 @@ public enum AgentToolRegistry {
         catalog: LocalCatalogStore,
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
-        externalMusicService: (any AgentExternalMusicService)? = nil
+        externalMusicService: (any AgentExternalMusicService)? = nil,
+        allowsLyrics: Bool = false
     ) async -> ToolResult {
         guard let descriptor = descriptor(for: call.name) else {
             return ToolResult(
@@ -610,7 +622,8 @@ public enum AgentToolRegistry {
             bridge: bridge,
             catalog: catalog,
             serverID: serverID,
-            externalMusicService: externalMusicService
+            externalMusicService: externalMusicService,
+            allowsLyrics: allowsLyrics
         )
     }
 }

@@ -26,6 +26,7 @@ enum HomeSnapshotBuilder {
         playCounts: [TrackID: Int],
         recentIDs: [TrackID],
         addedDates: [GlobalID: Date],
+        dislikedTrackIDs: Set<GlobalID> = [],
         now: Date = .now
     ) -> HomeSnapshot {
         let tracks = catalog.tracks
@@ -34,16 +35,21 @@ enum HomeSnapshotBuilder {
         let addedDate: (Track) -> Date = { track in
             addedDates[GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)] ?? .distantPast
         }
+        let isDisliked: (Track) -> Bool = { track in
+            dislikedTrackIDs.contains(GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
+        }
 
+        // 浏览型货架（收藏 / 最常听 / 最近播放 / 最近添加）完整保留 disliked；
+        // 只有“自动发现”货架（很久没听 / 从未播放 / 收藏里随便听）硬排除 disliked。
         let favorites = tracks.filter(\.isFavorite)
         let mostPlayed = tracks
             .filter { (playCounts[$0.id] ?? 0) > 0 }
             .sorted { (playCounts[$0.id] ?? 0, $0.title) > (playCounts[$1.id] ?? 0, $1.title) }
         let recentlyPlayed = recentIDs.compactMap { trackByID[$0] }
         let recentlyAdded = tracks.sorted { addedDate($0) > addedDate($1) }
-        let longUnplayed = Array(mostPlayed.filter { !recentSet.contains($0.id) }.prefix(24))
+        let longUnplayed = Array(mostPlayed.filter { !recentSet.contains($0.id) && !isDisliked($0) }.prefix(24))
         let neverPlayed = Array(recentlyAdded
-            .filter { (playCounts[$0.id] ?? 0) == 0 && !recentSet.contains($0.id) }
+            .filter { (playCounts[$0.id] ?? 0) == 0 && !recentSet.contains($0.id) && !isDisliked($0) }
             .prefix(24))
         let cutoff = now.addingTimeInterval(-30 * 86_400)
         let recentlyAdded30Days = Array(recentlyAdded.filter { addedDate($0) >= cutoff }.prefix(24))
@@ -76,7 +82,7 @@ enum HomeSnapshotBuilder {
             longUnplayed: longUnplayed,
             neverPlayed: neverPlayed,
             recentlyAdded30Days: recentlyAdded30Days,
-            favoriteRandom: Array(favorites.shuffled().prefix(18)),
+            favoriteRandom: Array(favorites.filter { !isDisliked($0) }.shuffled().prefix(18)),
             topArtists: topArtists,
             topAlbums: topAlbums,
             artistPlayCounts: artistTotals,

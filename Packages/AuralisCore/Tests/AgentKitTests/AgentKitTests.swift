@@ -28,6 +28,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     init(activeServerID: ServerID? = nil) { self.activeServerIDValue = activeServerID }
 
     var activeServerID: ServerID? { activeServerIDValue }
+    /// 可配置的歌词状态（默认 unknown）。
+    var lyricsStateValue: AgentLyricsState = .unknown
+    func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { lyricsStateValue }
 
     func currentTrack() -> Track? { nil }
     func currentQueue() -> [Track] { [] }

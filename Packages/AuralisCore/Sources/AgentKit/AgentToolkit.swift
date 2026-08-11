@@ -18,7 +18,8 @@ public struct AgentToolkit {
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         serverID: ServerID?,
-        externalMusicService: (any AgentExternalMusicService)? = nil
+        externalMusicService: (any AgentExternalMusicService)? = nil,
+        allowsLyrics: Bool = false
     ) async -> ToolResult {
         await AgentToolRegistry.execute(
             call,
@@ -26,7 +27,8 @@ public struct AgentToolkit {
             catalog: catalog,
             serverID: serverID,
             systemService: nil,
-            externalMusicService: externalMusicService
+            externalMusicService: externalMusicService,
+            allowsLyrics: allowsLyrics
         )
     }
 
@@ -37,7 +39,8 @@ public struct AgentToolkit {
         catalog: LocalCatalogStore,
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
-        externalMusicService: (any AgentExternalMusicService)? = nil
+        externalMusicService: (any AgentExternalMusicService)? = nil,
+        allowsLyrics: Bool = false
     ) async -> ToolResult {
         await AgentToolRegistry.execute(
             call,
@@ -45,7 +48,8 @@ public struct AgentToolkit {
             catalog: catalog,
             serverID: serverID,
             systemService: systemService,
-            externalMusicService: externalMusicService
+            externalMusicService: externalMusicService,
+            allowsLyrics: allowsLyrics
         )
     }
 
@@ -56,7 +60,8 @@ public struct AgentToolkit {
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         serverID: ServerID?,
-        externalMusicService: (any AgentExternalMusicService)?
+        externalMusicService: (any AgentExternalMusicService)?,
+        allowsLyrics: Bool
     ) async -> ToolResult {
         do {
             return try await dispatch(
@@ -65,7 +70,8 @@ public struct AgentToolkit {
                 bridge: bridge,
                 catalog: catalog,
                 serverID: serverID,
-                externalMusicService: externalMusicService
+                externalMusicService: externalMusicService,
+                allowsLyrics: allowsLyrics
             )
         } catch {
             return ToolResult(
@@ -85,7 +91,8 @@ public struct AgentToolkit {
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         serverID: ServerID?,
-        externalMusicService: (any AgentExternalMusicService)?
+        externalMusicService: (any AgentExternalMusicService)?,
+        allowsLyrics: Bool
     ) async throws -> ToolResult {
         if RecommendationIndexToolService.handles(call.name) {
             return try await RecommendationIndexToolService.execute(
@@ -295,6 +302,68 @@ public struct AgentToolkit {
         case "clearRating":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             await bridge.clearRating(globalID: gid); return .ok(call, descriptor, "已清除评分")
+        case "preference_set_disliked":
+            let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
+            let value = try boolParam(call, "value")
+            try await catalog.setDisliked(gid, value: value, source: "agent")
+            return .ok(
+                call,
+                descriptor,
+                value ? "已标记不喜欢；不会再出现在自动推荐中，但仍可搜索与显式点播" : "已取消不喜欢"
+            )
+        case "library_get_disliked":
+            let limit = min(max((try? intParam(call, "limit")) ?? 50, 1), 200)
+            guard let serverID else {
+                return .fail(call, descriptor, "未连接服务器")
+            }
+            let tracks = try await catalog.dislikedTracks(serverID: serverID, limit: limit)
+            guard !tracks.isEmpty else {
+                return .ok(call, descriptor, "没有标记不喜欢的歌曲", .text("当前没有歌曲被标记为不喜欢。"))
+            }
+            let text = "不喜欢 \(tracks.count) 首：" + tracks.prefix(20)
+                .map { "《\($0.title)》-\($0.artistName)" }
+                .joined(separator: "、")
+            return .ok(call, descriptor, text, .trackCards(tracks.map(TrackCard.from)))
+        case "music_get_public_evidence":
+            let rawTrackID = call.arguments["trackID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let track: Track
+            if let rawTrackID, !rawTrackID.isEmpty {
+                let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
+                guard let found = try await catalog.getTrack(gid) else {
+                    return .fail(call, descriptor, "找不到歌曲；请先用 library_search 获取真实 trackID")
+                }
+                track = found
+            } else if let current = await bridge.currentTrack() {
+                track = current
+            } else {
+                return .fail(call, descriptor, "当前没有正在播放的歌曲；请传入 trackID")
+            }
+            let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+            guard let externalMusicService else {
+                return .fail(call, descriptor, "公开音乐资料服务不可用")
+            }
+            let refresh = (try? boolParam(call, "refresh")) ?? false
+            let result = await externalMusicService.enrich(track: track, globalID: gid, forceRefresh: refresh)
+            let text = Self.publicEvidenceBrief(result: result)
+            var evidence = Self.communityEvidence(from: result)
+            let hasCommunityEvidence = !evidence.isEmpty
+            if !hasCommunityEvidence {
+                evidence.append(AgentEvidence(
+                    source: .localCatalog,
+                    provenance: "tool:music_get_public_evidence",
+                    confidence: 1,
+                    entityID: gid.description,
+                    claim: "暂无可核验的大众评价数据。"
+                ))
+            }
+            return .ok(
+                call,
+                descriptor,
+                hasCommunityEvidence ? "已获取公开音乐资料证据" : "暂无公开音乐资料证据",
+                .text(text),
+                facts: ["publicEvidence.community": hasCommunityEvidence ? "available" : "unavailable"],
+                evidence: evidence
+            )
 
         // MARK: Server
         case "listServers":
@@ -457,6 +526,10 @@ public struct AgentToolkit {
                 }
             }
 
+            // Hard Exclusion：自动选歌候选不得包含“不喜欢”的歌曲（Swift 层保证，
+            // 不依赖模型自觉）。显式搜索/播放不受影响。
+            tracks = await excludingDisliked(tracks, catalog: catalog, serverID: serverID)
+
             func proxyScore(_ track: Track) -> Int {
                 let gid = gidOf(track)
                 let pop = popularity[gid]
@@ -521,12 +594,19 @@ public struct AgentToolkit {
             let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
             let popularity = (try? await catalog.popularityScores(serverID: track.serverID))?[gid]
             let downloaded = (try? await catalog.getDownloadedTracks(serverID: track.serverID).contains { $0.globalID == gid }) ?? false
+            let isDisliked = (try? await catalog.isDisliked(gid)) ?? false
             let external = await externalMusicService?.enrich(track: track, globalID: gid)
+            // 真实歌词状态：有歌词 / 已确认无歌词 / 尚未确认；隐私不允许发送正文时
+            // 报告 availableButPrivate，绝不把“有歌词”硬编码成 unavailable。
+            let rawLyricsState = await bridge.lyricsState(for: gid)
+            let lyricsState: AgentLyricsState = rawLyricsState == .available && !allowsLyrics ? .availableButPrivate : rawLyricsState
             let text = Self.appreciationBrief(
                 track: track,
                 globalID: gid,
                 popularity: popularity,
                 downloaded: downloaded,
+                isDisliked: isDisliked,
+                lyricsState: lyricsState,
                 external: external
             )
             let hasCommunityEvidence = external?.metrics.hasCommunityEvidence == true
@@ -543,7 +623,7 @@ public struct AgentToolkit {
                     provenance: "localCatalog:play-history-and-user-state",
                     confidence: 1,
                     entityID: gid.description,
-                    claim: "本地私人数据：播放 \(popularity?.playCount ?? 0) 次，\(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { "，个人评分 \($0)/5" } ?? "")."
+                    claim: "本地私人数据：播放 \(popularity?.playCount ?? 0) 次，\(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { "，个人评分 \($0)/5" } ?? "")\(isDisliked ? "，已标记不喜欢" : "")."
                 ),
             ]
             if let external {
@@ -556,7 +636,7 @@ public struct AgentToolkit {
                 .text(text),
                 facts: [
                     "appreciation.metadata": "available",
-                    "appreciation.lyrics": "unavailable",
+                    "appreciation.lyrics": lyricsState.rawValue,
                     "appreciation.privateData": "available",
                     "appreciation.community": hasCommunityEvidence ? "available" : "unavailable",
                 ],
@@ -585,7 +665,11 @@ public struct AgentToolkit {
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "library_get_random_songs":
             let limit = (try? intParam(call, "limit")) ?? 10
-            let all = try await catalog.allTrackSummaries(serverID: serverID)
+            let all = await excludingDislikedSummaries(
+                try await catalog.allTrackSummaries(serverID: serverID),
+                catalog: catalog,
+                serverID: serverID
+            )
             let sample = Array(all.shuffled().prefix(min(max(limit, 1), 50)))
             return .ok(call, descriptor, "随机 \(sample.count) 首", .trackCards(sample.map(TrackCard.from)))
         case "library_get_similar_songs":
@@ -733,7 +817,8 @@ public struct AgentToolkit {
             let limit = min(max((try? intParam(call, "limit")) ?? 20, 1), 100)
             let all = try await catalog.allTracks(serverID: serverID, limit: 20_000)
             let recent = Set(try await catalog.getRecentHistory(serverID: serverID, limit: 50).map(\.globalID))
-            let candidates = TrackQuality.deduplicatedPreferringQuality(all.filter {
+            let base = await excludingDisliked(all, catalog: catalog, serverID: serverID)
+            let candidates = TrackQuality.deduplicatedPreferringQuality(base.filter {
                 !recent.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))
             })
             let picks = candidates.shuffled().prefix(limit)
@@ -1131,6 +1216,8 @@ public struct AgentToolkit {
         globalID: GlobalID,
         popularity: TrackPopularity?,
         downloaded: Bool,
+        isDisliked: Bool,
+        lyricsState: AgentLyricsState,
         external: AgentExternalMusicResult?
     ) -> String {
         var audio: [String] = []
@@ -1149,17 +1236,29 @@ public struct AgentToolkit {
             "- 音源：\(audio.isEmpty ? "服务器未提供编码/规格" : audio.joined(separator: " · "))\(downloaded ? " · 已离线" : "")",
             "",
             "【我的私人数据】",
-            "- 本机播放 \(popularity?.playCount ?? 0) 次 · \(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { " · 个人评分 \($0)/5" } ?? "")",
+            "- 本机播放 \(popularity?.playCount ?? 0) 次 · \(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { " · 个人评分 \($0)/5" } ?? "")\(isDisliked ? " · 已标记不喜欢" : "")",
             "",
             "【大众评价】",
         ]
         let communityLines = external.map(Self.communityBrief) ?? []
         lines.append(contentsOf: communityLines.isEmpty ? ["暂无可核验的大众评价数据。"] : communityLines)
+        let lyricsLine: String
+        switch lyricsState {
+        case .available:
+            lyricsLine = "- 歌词可用：可以引用真实歌词内容进行分析。"
+        case .availableButPrivate:
+            lyricsLine = "- 歌词存在，但当前隐私设置不允许发送歌词正文；不得编造或猜测歌词内容。"
+        case .unavailable:
+            lyricsLine = "- 已确认无歌词（服务器未提供）；不得编造歌词内容。"
+        case .unknown:
+            lyricsLine = "- 歌词状态尚未确认；不得编造歌词内容。"
+        }
         lines.append(contentsOf: [
             "",
             "【模型分析边界】",
             "- 可以基于上述元数据给出专业的聆听分析，但必须明确这是模型分析。",
-            "- 歌词当前不可用；不得编造歌词内容、创作背景、调性、BPM、和声、榜单、奖项、平台评分、评论来源或引语。"
+            lyricsLine,
+            "- 不得编造创作背景、调性、BPM、和声、榜单、奖项、平台评分、评论来源或引语；没有真实大众 Evidence 时不得声称“广受赞誉/普遍认为/乐迷一致认为”。"
         ])
         return lines.joined(separator: "\n")
     }
@@ -1187,6 +1286,21 @@ public struct AgentToolkit {
         }
     }
 
+    /// 公开音乐资料证据摘要：身份 + 各来源真实指标 + 少量评论摘要（如可用）。
+    private static func publicEvidenceBrief(result: AgentExternalMusicResult) -> String {
+        var lines: [String] = []
+        if let identity = result.identity {
+            var parts: [String] = []
+            if let id = identity.recordingMBID { parts.append("recording MBID \(id.prefix(8))…") }
+            if let id = identity.releaseGroupMBID { parts.append("release-group MBID \(id.prefix(8))…") }
+            if let isrc = identity.isrc, !isrc.isEmpty { parts.append("ISRC \(isrc)") }
+            if !parts.isEmpty { lines.append("身份：" + parts.joined(separator: " · ")) }
+        }
+        let community = communityBrief(result)
+        lines.append(contentsOf: community.isEmpty ? ["暂无可核验的大众评价数据。"] : community)
+        return lines.joined(separator: "\n")
+    }
+
     private static func communityEvidence(from result: AgentExternalMusicResult) -> [AgentEvidence] {
         result.metrics.values.compactMap { metric in
             guard metric.status == .available else { return nil }
@@ -1208,6 +1322,31 @@ public struct AgentToolkit {
                 claim: claim
             )
         }
+    }
+
+    /// Hard Exclusion 辅助：从自动推荐候选里移除“不喜欢”的歌曲。
+    private static func excludingDisliked(
+        _ tracks: [Track],
+        catalog: LocalCatalogStore,
+        serverID: ServerID?
+    ) async -> [Track] {
+        guard let serverID, !tracks.isEmpty else { return tracks }
+        let disliked = (try? await catalog.dislikedTrackIDs(serverID: serverID)) ?? []
+        guard !disliked.isEmpty else { return tracks }
+        return tracks.filter {
+            !disliked.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))
+        }
+    }
+
+    private static func excludingDislikedSummaries(
+        _ summaries: [CatalogTrackSummary],
+        catalog: LocalCatalogStore,
+        serverID: ServerID?
+    ) async -> [CatalogTrackSummary] {
+        guard let serverID, !summaries.isEmpty else { return summaries }
+        let disliked = (try? await catalog.dislikedTrackIDs(serverID: serverID)) ?? []
+        guard !disliked.isEmpty else { return summaries }
+        return summaries.filter { !disliked.contains($0.globalID) }
     }
 
     private static func requireReadOnlyPlaylist(_ gid: GlobalID, catalog: LocalCatalogStore) async throws {

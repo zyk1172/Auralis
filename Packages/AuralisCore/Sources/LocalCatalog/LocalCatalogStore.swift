@@ -17,6 +17,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
         self.db = try SQLiteDatabase(url: url)
         try createSchema()
         try cleanupOrphanedSyncState()
+        // customTags 动态维度已下线：清理历史遗留的非固定维度标签（幂等）。
+        try cleanupRecommendationIndexV2DynamicDimensions()
     }
 
     /// Canonical on-device catalog location shared by the app and extensions.
@@ -235,6 +237,25 @@ public actor LocalCatalogStore: LibrarySyncStore {
             status TEXT NOT NULL,
             PRIMARY KEY (global_track_id, source)
         );
+        CREATE TABLE IF NOT EXISTS community_music_evidence (
+            global_track_id TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS community_music_reviews (
+            global_track_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            review_id TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL,
+            PRIMARY KEY (global_track_id, source, review_id)
+        );
+        CREATE TABLE IF NOT EXISTS disliked_tracks (
+            global_id TEXT PRIMARY KEY,
+            server_id TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            source TEXT
+        );
         CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(kind UNINDEXED, global_id UNINDEXED, text);
         CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id);
         CREATE INDEX IF NOT EXISTS idx_albums_server ON albums(server_id);
@@ -249,6 +270,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
         CREATE INDEX IF NOT EXISTS idx_external_identity_recording ON external_music_identities(recording_mbid);
         CREATE INDEX IF NOT EXISTS idx_external_candidates_track ON external_music_candidates(global_track_id, confidence DESC);
         CREATE INDEX IF NOT EXISTS idx_community_metrics_track ON community_music_metrics(global_track_id, fetched_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_disliked_tracks_server ON disliked_tracks(server_id);
+        CREATE INDEX IF NOT EXISTS idx_community_reviews_track ON community_music_reviews(global_track_id, fetched_at DESC);
         """)
         // Additive migration for databases created before revision-aware sync probes.
         try? db.run("ALTER TABLE recommendation_index_v2_state ADD COLUMN source_hash_version INTEGER NOT NULL DEFAULT 0")
