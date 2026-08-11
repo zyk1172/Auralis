@@ -6,7 +6,7 @@ Deployment Target 保持 macOS 15.0；macOS 27 独占 API 一律使用 `#availab
 ## 窗口 / 场景
 
 - 恢复系统窗口 chrome（删除 `.windowStyle(.hiddenTitleBar)`），使用标准 `WindowGroup` + `Settings` Scene。
-- 播放快捷键（上一首 / 下一首 / 播放暂停）走 `CommandMenu("播放")`；Space 只由菜单快捷键触发，避免文本框误触发。
+- 播放快捷键（上一首 Command-Left / 下一首 Command-Right）走 `CommandMenu("播放")`；Space 播放/暂停的唯一入口为根视图 `.onKeyPress(.space)`——菜单不再注册裸 Space 快捷键，避免 AppKit 菜单 key-equivalent 在文本输入框抢键；输入框内由 firstResponder 文本检测（NSTextView / 可编辑 NSTextField）放行，空格正常输入。
 - Command-F 聚焦侧边栏搜索、Command-L 定位当前歌曲、Command-Option-I 切换 Inspector。
 
 ## Sidebar / Toolbar / Inspector
@@ -40,7 +40,7 @@ Deployment Target 保持 macOS 15.0；macOS 27 独占 API 一律使用 `#availab
 
 ## 播放器
 
-- Desktop Player 前 / 后使用 `canGoPrevious` / `canGoNext`；左侧显示当前歌曲收藏 / 不喜欢状态；点击封面发起定位当前歌曲。
+- Desktop Player 前 / 后使用 `canGoPrevious` / `canGoNext`；左侧显示当前歌曲收藏 / 不喜欢状态；点击封面仅导航到主内容 `MacNowPlayingPage`（不再设置 iOS 式 `isNowPlayingPresented`，也无 `.onTapGesture` 双重触发）。
 
 ## 构建与测试
 

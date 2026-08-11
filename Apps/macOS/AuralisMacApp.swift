@@ -21,8 +21,9 @@ struct AuralisMacApp: App {
                     .keyboardShortcut(.leftArrow, modifiers: .command)
                 Button("下一首") { post(MacCommandNotification.next) }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
+                // Space 播放/暂停的唯一入口在 MacAuralisRootView 的 .onKeyPress(.space)，
+                // 这里不注册裸 Space 菜单快捷键，避免 AppKit 菜单 key-equivalent 在文本输入框抢键。
                 Button("播放 / 暂停") { post(MacCommandNotification.togglePlay) }
-                    .keyboardShortcut(.space, modifiers: [])
             }
             CommandGroup(after: .sidebar) {
                 Divider()

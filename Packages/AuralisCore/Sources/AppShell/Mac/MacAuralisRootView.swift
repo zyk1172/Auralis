@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import DesignSystem
 import Domain
 import LocalCatalog
@@ -132,9 +133,16 @@ struct MacAuralisRootView: View {
     @State private var sidebarSearch = ""
     @State private var isSidebarSearchPresented = false
     @State private var path: [MacContentRoute] = []
-    @State private var isTypingInSearchField = false
 
     private var theme: BuiltInTheme { themeStore.current }
+
+    /// 当前是否有文本输入框正在编辑（NSTextField 的 field editor 是 NSTextView）。
+    /// Space 在输入时必须是空格，不能触发播放/暂停。
+    private var isTypingText: Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
+        if responder is NSTextView { return true }
+        return (responder as? NSTextField)?.isEditable == true
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -241,8 +249,13 @@ struct MacAuralisRootView: View {
             inspectorTab = .details
             showInspector = true
         }
-        // 空格播放/暂停唯一入口在 Menu Bar 的 CommandMenu（带 .space 快捷键）。
-        // 系统会优先把按键交给聚焦的 TextField / SearchField，输入框内不会触发播放。
+        // Space 播放/暂停唯一入口：根视图 .onKeyPress(.space)。
+        // 菜单不再注册裸 Space 快捷键；输入框内由 isTypingText 放行，空格正常输入。
+        .onKeyPress(.space) {
+            if isTypingText { return .ignored }
+            model.togglePlayback()
+            return .handled
+        }
     }
 
     /// 对指定歌曲发起歌曲鉴赏：切换到 AI 助手并调用 music_appreciate。
@@ -397,7 +410,7 @@ private struct MacDesktopPlayerBar: View {
 
             HStack(spacing: AuralisSpacing.medium) {
                 Button {
-                    if hasTrack { model.isNowPlayingPresented = true }
+                    if hasTrack { pathlessOpenNowPlaying() }
                 } label: {
                     HStack(spacing: 10) {
                         ArtworkView(
@@ -446,9 +459,6 @@ private struct MacDesktopPlayerBar: View {
                 .buttonStyle(.plain)
                 .disabled(!hasTrack)
                 .help("打开正在播放")
-                .onTapGesture {
-                    if hasTrack { pathlessOpenNowPlaying() }
-                }
 
                 Spacer(minLength: 20)
 
