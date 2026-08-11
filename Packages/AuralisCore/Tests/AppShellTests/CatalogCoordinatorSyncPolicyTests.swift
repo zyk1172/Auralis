@@ -8,11 +8,13 @@ import Testing
 
 private actor SyncPolicyConnector: ServerConnecting {
     let networkCount: Int?
+    let fingerprint: String?
     private(set) var countProbeCalls = 0
     private(set) var synchronizerRequests = 0
 
-    init(networkCount: Int?) {
+    init(networkCount: Int?, fingerprint: String? = nil) {
         self.networkCount = networkCount
+        self.fingerprint = fingerprint
     }
 
     func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
@@ -22,6 +24,16 @@ private actor SyncPolicyConnector: ServerConnecting {
     func librarySongCount() async -> Int? {
         countProbeCalls += 1
         return networkCount
+    }
+
+    func libraryRevisionProbe() async -> LibraryRevisionProbe? {
+        countProbeCalls += 1
+        guard networkCount != nil || fingerprint != nil else { return nil }
+        return LibraryRevisionProbe(
+            kind: fingerprint == nil ? .countOnly : .albumFingerprint,
+            fingerprint: fingerprint,
+            songCount: networkCount
+        )
     }
 
     func makeSynchronizer(store: LocalCatalogStore) async -> LibrarySynchronizer? {
@@ -38,7 +50,8 @@ private actor SyncPolicyConnector: ServerConnecting {
 private func makeSyncPolicyCoordinator(
     connector: SyncPolicyConnector,
     now: Date,
-    completedAt: Date
+    completedAt: Date,
+    fingerprint: String? = nil
 ) async throws -> CatalogCoordinator {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("auralis-sync-policy-\(UUID().uuidString)", isDirectory: true)
@@ -56,6 +69,15 @@ private func makeSyncPolicyCoordinator(
     let session = try await coordinator.store.beginSync(serverID: serverID, mode: .full)
     try await coordinator.store.stageTracks([track], session: session)
     try await coordinator.store.completeSync(session, completedAt: completedAt)
+    if let fingerprint {
+        try await coordinator.store.recordRemoteProbe(
+            serverID: serverID,
+            fingerprint: fingerprint,
+            kind: LibraryRevisionProbe.Kind.albumFingerprint.rawValue,
+            probedAt: completedAt,
+            markValidated: true
+        )
+    }
     return coordinator
 }
 
@@ -63,7 +85,7 @@ private func makeSyncPolicyCoordinator(
 @MainActor
 func foregroundCooldownSkipsProbe() async throws {
     let now = Date(timeIntervalSince1970: 10_000)
-    let connector = SyncPolicyConnector(networkCount: 1)
+    let connector = SyncPolicyConnector(networkCount: 1, fingerprint: "same")
     let coordinator = try await makeSyncPolicyCoordinator(
         connector: connector,
         now: now,
@@ -77,15 +99,16 @@ func foregroundCooldownSkipsProbe() async throws {
     #expect(coordinator.phase == .upToDate(tracks: 1))
 }
 
-@Test("After cooldown, an equal count probe skips the full catalog traversal")
+@Test("After cooldown, an unchanged fingerprint with recent validation skips traversal")
 @MainActor
 func equalCountProbeSkipsCatalogSync() async throws {
     let now = Date(timeIntervalSince1970: 20_000)
-    let connector = SyncPolicyConnector(networkCount: 1)
+    let connector = SyncPolicyConnector(networkCount: 1, fingerprint: "same")
     let coordinator = try await makeSyncPolicyCoordinator(
         connector: connector,
         now: now,
-        completedAt: now.addingTimeInterval(-(CatalogCoordinator.foregroundSyncCooldown + 1))
+        completedAt: now.addingTimeInterval(-(CatalogCoordinator.foregroundSyncCooldown + 1)),
+        fingerprint: "same"
     )
 
     await coordinator.backgroundRefresh(serverID: "cooldown")
@@ -93,4 +116,55 @@ func equalCountProbeSkipsCatalogSync() async throws {
     #expect(calls.probe == 1)
     #expect(calls.synchronizer == 0)
     #expect(coordinator.phase == .upToDate(tracks: 1))
+}
+
+@Test("Equal song count alone never proves the catalog is unchanged")
+@MainActor
+func countOnlyProbeDoesNotSkipCatalogSync() async throws {
+    let now = Date(timeIntervalSince1970: 30_000)
+    let connector = SyncPolicyConnector(networkCount: 1)
+    let coordinator = try await makeSyncPolicyCoordinator(
+        connector: connector,
+        now: now,
+        completedAt: now.addingTimeInterval(-(CatalogCoordinator.foregroundSyncCooldown + 1))
+    )
+    await coordinator.backgroundRefresh(serverID: "cooldown")
+    let calls = await connector.callCounts()
+    #expect(calls.probe == 1)
+    #expect(calls.synchronizer == 1)
+}
+
+@Test("Same count with changed fingerprint requests a full replacement")
+@MainActor
+func changedFingerprintTriggersSync() async throws {
+    let now = Date(timeIntervalSince1970: 40_000)
+    let connector = SyncPolicyConnector(networkCount: 1, fingerprint: "new")
+    let coordinator = try await makeSyncPolicyCoordinator(
+        connector: connector,
+        now: now,
+        completedAt: now.addingTimeInterval(-(CatalogCoordinator.foregroundSyncCooldown + 1)),
+        fingerprint: "old"
+    )
+    await coordinator.backgroundRefresh(serverID: "cooldown")
+    let calls = await connector.callCounts()
+    #expect(calls.probe == 1)
+    #expect(calls.synchronizer == 1)
+}
+
+@Test("Weak fingerprint performs low-frequency full validation")
+@MainActor
+func staleWeakFingerprintTriggersValidation() async throws {
+    let now = Date(timeIntervalSince1970: 200_000)
+    let connector = SyncPolicyConnector(networkCount: 1, fingerprint: "same")
+    let completedAt = now.addingTimeInterval(-(CatalogCoordinator.weakProbeFullValidationInterval + 1))
+    let coordinator = try await makeSyncPolicyCoordinator(
+        connector: connector,
+        now: now,
+        completedAt: completedAt,
+        fingerprint: "same"
+    )
+    await coordinator.backgroundRefresh(serverID: "cooldown")
+    let calls = await connector.callCounts()
+    #expect(calls.probe == 1)
+    #expect(calls.synchronizer == 1)
 }

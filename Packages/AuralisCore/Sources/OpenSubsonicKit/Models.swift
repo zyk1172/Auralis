@@ -258,6 +258,16 @@ struct SongDTO: Decodable {
     let channelCount: Int?
     let starred: String?
     let userRating: Int?
+    let replayGain: ReplayGainDTO?
+}
+
+struct ReplayGainDTO: Decodable {
+    let trackGain: Double?
+    let albumGain: Double?
+    let trackPeak: Double?
+    let albumPeak: Double?
+    let baseGain: Double?
+    let fallbackGain: Double?
 }
 
 struct ItemGenreDTO: Decodable {
@@ -473,7 +483,17 @@ struct OpenSubsonicDomainMapper: Sendable {
                 bitDepth: value.bitDepth,
                 sampleRate: value.samplingRate,
                 bitRate: value.bitRate,
-                channelCount: value.channelCount
+                channelCount: value.channelCount,
+                replayGain: value.replayGain.map {
+                    ReplayGainMetadata(
+                        trackGainDB: $0.trackGain,
+                        albumGainDB: $0.albumGain,
+                        trackPeak: $0.trackPeak,
+                        albumPeak: $0.albumPeak,
+                        baseGainDB: $0.baseGain,
+                        fallbackGainDB: $0.fallbackGain
+                    )
+                }
             )
         )
     }

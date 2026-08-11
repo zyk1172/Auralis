@@ -189,6 +189,7 @@ public final class AudioInterruptionCoordinator {
     }
 
     public func start(onBegan: @escaping () -> Void, onShouldResume: @escaping () -> Void) {
+        stop()
         onInterruptionBegan = onBegan
         onInterruptionShouldResume = onShouldResume
         #if os(iOS)
@@ -263,6 +264,7 @@ public final class AudioRouteCoordinator {
         onOutputDetached: @escaping () -> Void,
         onRouteChanged: @escaping () -> Void = {}
     ) {
+        stop()
         self.onOutputDetached = onOutputDetached
         self.onRouteChanged = onRouteChanged
         #if os(iOS)

@@ -53,6 +53,26 @@ public struct AgentToolkit {
         return await execute(call, bridge: bridge, catalog: catalog, serverID: serverID)
     }
 
+    /// 仅供 AgentToolRegistry 调用的已解析执行入口，避免再次查表或再次分流。
+    static func executeRegistered(
+        _ call: ToolCall,
+        descriptor: ToolDescriptor,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        serverID: ServerID?
+    ) async -> ToolResult {
+        do {
+            return try await dispatch(call, descriptor: descriptor, bridge: bridge, catalog: catalog, serverID: serverID)
+        } catch {
+            return ToolResult(
+                call: call,
+                permission: descriptor.permission,
+                success: false,
+                summary: "执行失败：\(error.localizedDescription)"
+            )
+        }
+    }
+
     // MARK: - Dispatch
 
     private static func dispatch(

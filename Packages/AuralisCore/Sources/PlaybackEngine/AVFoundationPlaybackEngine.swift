@@ -8,10 +8,15 @@ import Observability
 /// 都来自 AVPlayer 的真实状态。歌曲没有可用播放地址时抛出错误。
 @MainActor
 public final class AVFoundationPlaybackEngine: PlaybackControlling {
-    private var avPlayer: AVPlayer?
+    private var avPlayer: AVQueuePlayer?
     private var playbackState: PlaybackState = .idle
     private var currentTrack: Track?
     private var volume: Float = 0.8
+    private var replayGainSettings = ReplayGainSettings()
+    public private(set) var replayGainAdjustment = ReplayGainAdjustment.disabled
+    private var preparedItem: AVPlayerItem?
+    private var preparedTrack: Track?
+    private var preparedTrackStartedHandler: (@Sendable (Track) -> Void)?
 
     // MARK: - Observers
     private var endObserver: NSObjectProtocol?
@@ -37,7 +42,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
     public func setVolume(_ volume: Float) {
         self.volume = min(max(volume, 0), 1)
-        avPlayer?.volume = self.volume
+        applyOutputVolume()
     }
 
     /// 播放速度：直接驱动 AVPlayer.rate（0.5x–2.0x，夹取）。
@@ -53,6 +58,15 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// 注册播放中途失败回调（AVPlayerItem failed / FailedToPlayToEndTime / stalled 超时）。
     public func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) {
         playbackFailureHandler = handler
+    }
+
+    public func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) {
+        preparedTrackStartedHandler = handler
+    }
+
+    public func configureReplayGain(_ settings: ReplayGainSettings) {
+        replayGainSettings = settings
+        updateReplayGain(for: currentTrack)
     }
 
     public func play(track: Track) async throws {
@@ -77,12 +91,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         // 只记录脱敏后的地址（去掉查询串，查询串含认证参数）。
         CrashLog.shared.log("创建 AVPlayerItem，URL: \(Self.redactedURL(streamURL))")
         let item = AVPlayerItem(url: streamURL)
-        let player = AVPlayer(playerItem: item)
-        player.volume = volume
-
-        // 等待缓冲就绪
-        CrashLog.shared.log("等待缓冲 (100ms)...")
-        try await Task.sleep(for: .milliseconds(100))
+        let player = AVQueuePlayer(items: [item])
+        player.automaticallyWaitsToMinimizeStalling = true
 
         // 快速切歌 / 任务取消：本代际已被更新的 play() 取代或被取消时直接放弃，
         // 不再把 avPlayer/观察者交给引擎，避免旧曲目 AVPlayer 覆盖新曲目（P1-7）。
@@ -95,6 +105,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             return
         }
         self.avPlayer = player
+        updateReplayGain(for: track)
         observeTrackEnd(for: item)
         observeItemFailure(for: item)
         observeTimeControl(for: player)
@@ -112,6 +123,26 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         playbackState = .playing
         AuralisLog.playback.info("开始播放 \(track.title) · \(streamURL.isFileURL ? "本地缓存" : "服务器流式")音频")
         CrashLog.shared.log("播放状态已设为 .playing")
+    }
+
+    /// Inserts one next item into AVQueuePlayer. The system may buffer it while
+    /// the current item plays and advances without a second player teardown.
+    /// This is true preloading, but remote HTTP/codec behaviour remains
+    /// best-effort seamless rather than a sample-perfect guarantee.
+    public func prepareNext(track: Track?) {
+        if let preparedItem, avPlayer?.items().contains(where: { $0 === preparedItem }) == true {
+            avPlayer?.remove(preparedItem)
+        }
+        preparedItem = nil
+        preparedTrack = nil
+
+        guard let track, let url = track.streamURL, let player = avPlayer,
+              player.currentItem != nil else { return }
+        let item = AVPlayerItem(url: url)
+        guard player.canInsert(item, after: nil) else { return }
+        preparedItem = item
+        preparedTrack = track
+        player.insert(item, after: nil)
     }
 
     // MARK: - Controls
@@ -178,10 +209,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         timeControlObservation = nil
         avPlayer?.pause()
         avPlayer = nil
+        preparedItem = nil
+        preparedTrack = nil
     }
 
     /// 曲目自然播完 → 通知 AppModel 按循环模式切歌。
     private func observeTrackEnd(for item: AVPlayerItem) {
+        let observedGeneration = playGeneration
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
@@ -189,30 +223,86 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 // 检查 observer 是否已被移除（快速切歌场景）
-                guard self?.endObserver != nil else { return }
-                self?.trackEndedHandler?()
+                guard let self, self.endObserver != nil,
+                      self.playGeneration == observedGeneration else { return }
+                // AVQueuePlayer advances at item end. Yield one executor turn
+                // so currentItem reflects the prepared item before deciding.
+                await Task.yield()
+                if let preparedItem = self.preparedItem,
+                   self.avPlayer?.currentItem === preparedItem,
+                   let track = self.preparedTrack {
+                    self.finishPreparedTransition(item: preparedItem, track: track)
+                } else {
+                    self.trackEndedHandler?()
+                }
             }
         }
+    }
+
+    private func finishPreparedTransition(item: AVPlayerItem, track: Track) {
+        clearItemObservers()
+        preparedItem = nil
+        preparedTrack = nil
+        currentTrack = track
+        failureReported = false
+        updateReplayGain(for: track)
+        observeTrackEnd(for: item)
+        observeItemFailure(for: item)
+        if let player = avPlayer { observeTimeControl(for: player) }
+        playbackState = avPlayer?.timeControlStatus == .playing ? .playing : .buffering
+        preparedTrackStartedHandler?(track)
+    }
+
+    private func clearItemObservers() {
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        if let failedToPlayObserver { NotificationCenter.default.removeObserver(failedToPlayObserver) }
+        if let stalledObserver { NotificationCenter.default.removeObserver(stalledObserver) }
+        endObserver = nil
+        failedToPlayObserver = nil
+        stalledObserver = nil
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        timeControlObservation?.invalidate()
+        timeControlObservation = nil
+        cancelStallTimeout()
+    }
+
+    private func updateReplayGain(for track: Track?) {
+        replayGainAdjustment = ReplayGainCalculator.adjustment(
+            metadata: track?.sourceInfo.replayGain,
+            settings: replayGainSettings
+        )
+        applyOutputVolume()
+    }
+
+    private func applyOutputVolume() {
+        // AVPlayer volume is limited to 0...1. Negative ReplayGain values are
+        // applied exactly; positive gain uses the remaining user-volume
+        // headroom and is clamped instead of pretending to provide DSP boost.
+        avPlayer?.volume = min(max(volume * replayGainAdjustment.linearMultiplier, 0), 1)
     }
 
     /// 播放中途失败：AVPlayerItem.status == .failed 或 FailedToPlayToEndTime 通知。
     /// 只把「失败」事件抛给 AppModel（由其刷新流地址并重试 / 自动下一首），
     /// 不把错误细节（可能含 URL）写入日志。
     private func observeItemFailure(for item: AVPlayerItem) {
+        let observedGeneration = playGeneration
         failedToPlayObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: item,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard self?.failedToPlayObserver != nil else { return }
+                guard self?.failedToPlayObserver != nil,
+                      self?.playGeneration == observedGeneration else { return }
                 self?.reportPlaybackFailure()
             }
         }
         itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
             Task { @MainActor [weak self] in
-                guard self?.itemStatusObservation != nil else { return }
+                guard self?.itemStatusObservation != nil,
+                      self?.playGeneration == observedGeneration else { return }
                 self?.reportPlaybackFailure()
             }
         }
@@ -223,7 +313,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.stalledObserver != nil else { return }
+                guard let self, self.stalledObserver != nil,
+                      self.playGeneration == observedGeneration else { return }
                 // 失败态免疫（P1-6）：失败后晚到的 stall 通知不得把状态改回 stalled。
                 if case .failed = self.playbackState { return }
                 if self.playbackState != .paused {
@@ -238,7 +329,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private func observeTimeControl(for player: AVPlayer) {
         timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             Task { @MainActor [weak self] in
-                guard let self, self.timeControlObservation != nil else { return }
+                guard let self, self.timeControlObservation != nil,
+                      self.avPlayer === player else { return }
                 // 失败态免疫（P1-6）：失败后晚到的 KVO 回调不得把状态改回 buffering/playing。
                 if case .failed = self.playbackState { return }
                 switch player.timeControlStatus {

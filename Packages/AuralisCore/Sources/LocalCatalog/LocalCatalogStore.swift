@@ -186,7 +186,11 @@ public actor LocalCatalogStore: LibrarySyncStore {
             mode TEXT,
             last_completed_at REAL,
             last_processed_count INTEGER NOT NULL DEFAULT 0,
-            next_retry_at REAL
+            next_retry_at REAL,
+            remote_fingerprint TEXT,
+            remote_probe_kind TEXT,
+            last_probe_at REAL,
+            last_validated_at REAL
         );
         CREATE TABLE IF NOT EXISTS recommendation_index_v2_state (
             global_id TEXT PRIMARY KEY,
@@ -215,6 +219,11 @@ public actor LocalCatalogStore: LibrarySyncStore {
         CREATE INDEX IF NOT EXISTS idx_recommendation_v2_state_server ON recommendation_index_v2_state(server_id);
         CREATE INDEX IF NOT EXISTS idx_recommendation_v2_tags_dimension_value ON recommendation_index_v2_tags(dimension, value);
         """)
+        // Additive migration for databases created before revision-aware sync probes.
+        try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_fingerprint TEXT")
+        try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_probe_kind TEXT")
+        try? db.run("ALTER TABLE sync_meta ADD COLUMN last_probe_at REAL")
+        try? db.run("ALTER TABLE sync_meta ADD COLUMN last_validated_at REAL")
     }
 
     /// Older builds persisted checkpoints without durable staged pages. Those rows cannot be
@@ -259,6 +268,52 @@ public actor LocalCatalogStore: LibrarySyncStore {
             )
         }
         return session
+    }
+
+    public func remoteProbeState(for serverID: ServerID) -> CatalogRemoteProbeState {
+        let rows = try? db.query(
+            "SELECT remote_fingerprint, remote_probe_kind, last_probe_at, last_validated_at FROM sync_meta WHERE server_id = ?",
+            [.text(serverID.rawValue)]
+        )
+        let row = rows?.first
+        return CatalogRemoteProbeState(
+            fingerprint: row?["remote_fingerprint"]?.string,
+            kind: row?["remote_probe_kind"]?.string,
+            lastProbedAt: row?["last_probe_at"]?.double.map { Date(timeIntervalSince1970: $0) },
+            lastValidatedAt: row?["last_validated_at"]?.double.map { Date(timeIntervalSince1970: $0) }
+        )
+    }
+
+    public func recordRemoteProbe(
+        serverID: ServerID,
+        fingerprint: String?,
+        kind: String,
+        probedAt: Date,
+        markValidated: Bool
+    ) throws {
+        try db.run(
+            """
+            INSERT INTO sync_meta
+                (server_id, last_processed_count, remote_fingerprint, remote_probe_kind, last_probe_at, last_validated_at)
+            VALUES (?, 0, ?, ?, ?, ?)
+            ON CONFLICT(server_id) DO UPDATE SET
+                remote_fingerprint = excluded.remote_fingerprint,
+                remote_probe_kind = excluded.remote_probe_kind,
+                last_probe_at = excluded.last_probe_at,
+                last_validated_at = CASE
+                    WHEN ? = 1 THEN excluded.last_validated_at
+                    ELSE sync_meta.last_validated_at
+                END
+            """,
+            [
+                .text(serverID.rawValue),
+                fingerprint.map(SQLiteValue.text) ?? .null,
+                .text(kind),
+                .real(probedAt.timeIntervalSince1970),
+                markValidated ? .real(probedAt.timeIntervalSince1970) : .null,
+                .integer(markValidated ? 1 : 0),
+            ]
+        )
     }
 
     public func checkpoint(session: LibrarySyncSession, section: LibrarySyncSection) async throws -> LibrarySyncCheckpoint? {

@@ -758,84 +758,79 @@ public struct AgentMusicHistoryMutation: Sendable, Equatable {
     }
 }
 
-public protocol AgentSystemService: Sendable {
-    // App
+public protocol AgentAppService: Sendable {
     func appContext() async -> AgentAppContext
     func openPage(_ page: String) async -> Bool
     func featureStatus() async -> AgentFeatureStatus
-    // Server
+    func networkStatus() async -> AgentNetworkStatus
+    func audioRoute() async -> AgentAudioRoute
+    func storageStatus() async -> AgentStorageStatus
+}
+
+public protocol AgentServerService: Sendable {
     func listServers() async -> [AgentServerInfo]
     func currentServer() async -> AgentServerInfo?
     func testServerConnection() async -> AgentConnectionTestResult
     func serverCapabilities() async -> AgentCapabilitiesSummary
     func syncStatus() async -> AgentSyncStatus
-    // Device
-    func networkStatus() async -> AgentNetworkStatus
-    func audioRoute() async -> AgentAudioRoute
-    func storageStatus() async -> AgentStorageStatus
-    // Media
+}
+
+public protocol AgentMediaService: Sendable {
     func lyrics(for trackID: TrackID) async -> AgentLyricsResult
     func downloadOffline(trackID: TrackID) async -> Bool
     func cacheStatus() async -> AgentCacheStatus
-    // 控制中心对比
     func nowPlayingStatus() async -> AgentNowPlayingStatus
-    // 资料库维护
-    /// 封面标识存在但本地磁盘缓存缺失的歌曲标题（可能需要重新下载封面）。
+}
+
+public protocol AgentLibraryInsightsService: Sendable {
     func brokenArtwork(limit: Int) async -> [String]
-    /// 本地音频缓存中存在但资料库已不存在的曲目 ID（陈旧缓存）。
     func staleCache(limit: Int) async -> [String]
-    // 最近添加 / 最常播放
     func recentlyAdded(days: Int, limit: Int) async -> [TrackCard]
     func mostPlayed(limit: Int) async -> [TrackCard]
-    // 统计
     func topItems(kind: String, limit: Int) async -> [AgentTopItem]
     func formatDistribution() async -> [AgentFormatCount]
-    // 推荐（基于真实资料库）
     func recommendByMood(_ mood: String, limit: Int) async -> AgentRecommendationResult
     func recommendByConstraints(_ constraints: AgentRecommendationConstraints) async -> AgentRecommendationResult
-    /// 导出一份脱敏诊断报告（纯文本，不含凭据 / 完整 URL / 聊天内容）。
+}
+
+public protocol AgentDiagnosticsService: Sendable {
     func diagnosticsReport() async -> String
-    // Stats / Diagnostics
     func listeningSummary() async -> AgentListeningSummary
     func playbackDiagnostics() async -> AgentPlaybackDiagnostics
     func recentErrors(limit: Int) async -> [AgentErrorRecord]
+}
 
-    // 音乐下载（MoviePilot / MoviePilot 插件）
-    /// - Parameter kind: "single"（单曲，大小上限生效）/ "album" / "auto"（v0.5.x）。
+public protocol AgentMusicDownloadService: Sendable {
     func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int, kind: String?) async -> AgentMusicSearchResult
-    /// - Parameters:
-    ///   - maxSizeGB: search 返回的 size_limit_gb 原样传回（v0.5.x）。
-    ///   - verifySong / verifyArtist: 单曲自动下载必传（v0.5.2+ 曲目级内容校验）。
     func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double?, verifySong: String?, verifyArtist: String?) async -> AgentMusicDownloadResult
     func musicTasks(status: String?) async -> [AgentMusicTask]
     func musicHistory() async -> AgentMusicHistoryResult
-    /// 查询插件状态（目录校验 / 站点 / 筛查与体积上限配置）；未配置或目录无效时给出可操作提示。
     func musicStatus() async -> AgentMusicStatus
-    /// 移除单条下载历史；返回操作结果。
     func musicHistoryRemove(hash: String) async -> AgentMusicHistoryMutation
-    /// 按条件清理下载历史（status 按状态清理 / keep 只保留最近 N 条 / orphans 清理孤儿记录）。
     func musicHistoryClean(status: String?, keep: Int?, orphans: Bool?) async -> AgentMusicHistoryMutation
+}
 
-    // 跨会话记忆
-    /// 当前已记住的关于主人的信息。
+public protocol AgentMemoryService: Sendable {
     func agentMemories() async -> [AgentMemoryEntry]
-    /// 保存 / 覆盖一条记忆（key 建议用简短字段名，如 名字 / 喜欢的歌手）。
     func saveMemory(key: String, value: String) async -> Bool
-    /// 删除一条记忆；不存在返回 false。
     func deleteMemory(key: String) async -> Bool
-    /// 清空全部记忆；返回删除条数。
     func clearMemories() async -> Int
-    // 简单技能（skill 文件）
-    /// 当前已创建的技能列表。
     func agentSkills() async -> [AgentSkillEntry]
-    /// 创建一段可复用指令并落盘；返回落盘后的技能（nil 表示失败）。
     func createSkill(name: String, instructions: String) async -> AgentSkillEntry?
-    /// 读取某个技能的完整指令；不存在返回 nil。
     func readSkill(name: String) async -> AgentSkillEntry?
-    /// 删除一个技能；不存在返回 false。
     func deleteSkill(name: String) async -> Bool
 }
 
+/// AppShell 可继续提供一个组合适配器；AgentKit 内部依赖上面的领域协议。
+public protocol AgentSystemService:
+    AgentAppService,
+    AgentServerService,
+    AgentMediaService,
+    AgentLibraryInsightsService,
+    AgentDiagnosticsService,
+    AgentMusicDownloadService,
+    AgentMemoryService
+{}
 
 // MARK: - 默认实现（未配置 / 不可用）
 

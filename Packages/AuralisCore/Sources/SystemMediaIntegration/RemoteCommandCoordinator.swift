@@ -50,6 +50,7 @@ public struct RemoteCommandHandlers: Sendable {
 @MainActor
 public final class RemoteCommandCoordinator {
     private var handlers = RemoteCommandHandlers()
+    private var registered = false
 
     public init() {}
 
@@ -70,6 +71,10 @@ public final class RemoteCommandCoordinator {
     /// 注册到 MPRemoteCommandCenter。
     public func register(handlers: RemoteCommandHandlers) {
         self.handlers = handlers
+        // Updating callbacks is allowed, but MPRemoteCommandCenter targets are
+        // process-global and must only be installed once per coordinator.
+        guard !registered else { return }
+        registered = true
         let center = MPRemoteCommandCenter.shared()
 
         center.playCommand.isEnabled = true

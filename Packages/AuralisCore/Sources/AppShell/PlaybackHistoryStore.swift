@@ -9,12 +9,53 @@ import LocalCatalog
 struct PlaybackHistoryStore: Sendable {
     private(set) var counts: [String: Int]
     private(set) var recentKeys: [String]
+    private var deferredLegacyCounts: [String: Int]
+    private var deferredLegacyRecentKeys: [String]
     private var activeGlobalID: GlobalID?
     private var countedActivePlay = false
 
-    init(counts: [String: Int], recentKeys: [String]) {
-        self.counts = counts.filter { $0.key.contains(":") }
-        self.recentKeys = recentKeys.filter { $0.contains(":") }
+    init(counts: [String: Int], recentKeys: [String], legacyServerID: ServerID? = nil) {
+        var migratedCounts: [String: Int] = [:]
+        var deferredCounts: [String: Int] = [:]
+        for (key, value) in counts {
+            if GlobalID(key) != nil {
+                migratedCounts[key] = value
+            } else if let legacyServerID, !key.isEmpty {
+                migratedCounts[GlobalID(serverID: legacyServerID, remoteID: key).description] = value
+            } else if !key.isEmpty {
+                deferredCounts[key] = value
+            }
+        }
+        var migratedRecent: [String] = []
+        var deferredRecent: [String] = []
+        for key in recentKeys {
+            if GlobalID(key) != nil {
+                migratedRecent.append(key)
+            } else if let legacyServerID, !key.isEmpty {
+                migratedRecent.append(GlobalID(serverID: legacyServerID, remoteID: key).description)
+            } else if !key.isEmpty {
+                deferredRecent.append(key)
+            }
+        }
+        self.counts = migratedCounts
+        self.recentKeys = Array(Self.uniqued(migratedRecent).prefix(100))
+        self.deferredLegacyCounts = deferredCounts
+        self.deferredLegacyRecentKeys = deferredRecent
+    }
+
+    mutating func reconcileLegacy(serverID: ServerID) -> Bool {
+        guard !deferredLegacyCounts.isEmpty || !deferredLegacyRecentKeys.isEmpty else { return false }
+        for (remoteID, value) in deferredLegacyCounts {
+            let key = GlobalID(serverID: serverID, remoteID: remoteID).description
+            counts[key] = max(counts[key] ?? 0, value)
+        }
+        let migratedRecent = deferredLegacyRecentKeys.map {
+            GlobalID(serverID: serverID, remoteID: $0).description
+        }
+        recentKeys = Array(Self.uniqued(migratedRecent + recentKeys).prefix(100))
+        deferredLegacyCounts.removeAll()
+        deferredLegacyRecentKeys.removeAll()
+        return true
     }
 
     mutating func resetSelection() {
@@ -68,5 +109,18 @@ struct PlaybackHistoryStore: Sendable {
             guard let globalID = GlobalID(key), globalID.serverID == serverID else { return nil }
             return TrackID(rawValue: globalID.remoteID)
         }
+    }
+
+    var encodedCounts: [String: Int] {
+        counts.merging(deferredLegacyCounts) { current, _ in current }
+    }
+
+    var encodedRecentKeys: [String] {
+        Self.uniqued(recentKeys + deferredLegacyRecentKeys)
+    }
+
+    private static func uniqued(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
 }

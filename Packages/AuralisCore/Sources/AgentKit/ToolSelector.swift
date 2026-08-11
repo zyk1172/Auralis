@@ -99,6 +99,47 @@ public enum ToolSelector {
         return unique.compactMap { byName[$0] }
     }
 
+    /// 意图感知选择：先生成小型候选集，再用运行时策略收紧。
+    /// 若关键词选择遗漏了该意图的必要工具，会从获准分组补入；不会把未授权工具暴露给模型。
+    public static func select(
+        for userText: String,
+        intent: AgentTaskIntent,
+        policy: AgentTaskPolicy,
+        all: [ToolDescriptor]
+    ) -> [ToolDescriptor] {
+        var selected = select(for: userText, all: all)
+        let intentNames: Set<String>
+        switch intent {
+        case .conversation:
+            intentNames = ["library_get_summary", "app_get_context", "memory_list"]
+        case .librarySearch:
+            intentNames = ["library_search", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
+        case .playbackControl:
+            intentNames = ["playback_get_state", "playback_play_song", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat"]
+        case .musicDiscovery:
+            intentNames = ["library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks", "recommend_by_mood", "recommend_by_constraints", "library_get_similar_songs", "queue_replace", "queue_append"]
+        case .queueManagement:
+            intentNames = ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
+        case .playlistManagement:
+            intentNames = ["listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
+        case .libraryManagement:
+            intentNames = ["library_get_summary", "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "favorite_set", "setRating", "clearRating"]
+        case .serverManagement:
+            intentNames = Set(serverNames)
+        case .diagnostics:
+            intentNames = Set(diagnosticsNames + serverNames)
+        case .musicAppreciation:
+            intentNames = ["library_search", "library_get_song", "music_appreciate"]
+        case .musicDownload:
+            intentNames = ["library_search", "server_search", "music_download", "media_download_offline", "getDownloadedTracks"]
+        case .memoryManagement:
+            intentNames = ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
+        }
+        let existing = Set(selected.map(\.name))
+        selected.append(contentsOf: all.filter { intentNames.contains($0.name) && !existing.contains($0.name) })
+        return selected.filter(policy.authorizes)
+    }
+
     /// 把选中的工具描述转为原生 function calling 定义。
     public static func toolDefinitions(from descriptors: [ToolDescriptor]) -> [AIToolDefinition] {
         descriptors.map { descriptor in

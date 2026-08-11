@@ -120,13 +120,17 @@ public struct AudioSourceInfo: Codable, Hashable, Sendable {
     public var sampleRate: Int?
     public var bitRate: Int?
     public var channelCount: Int?
+    /// OpenSubsonic ReplayGain metadata. All values are optional because legacy
+    /// Subsonic servers and files without tags legitimately omit them.
+    public var replayGain: ReplayGainMetadata?
 
-    public init(codec: String? = nil, bitDepth: Int? = nil, sampleRate: Int? = nil, bitRate: Int? = nil, channelCount: Int? = nil) {
+    public init(codec: String? = nil, bitDepth: Int? = nil, sampleRate: Int? = nil, bitRate: Int? = nil, channelCount: Int? = nil, replayGain: ReplayGainMetadata? = nil) {
         self.codec = codec
         self.bitDepth = bitDepth
         self.sampleRate = sampleRate
         self.bitRate = bitRate
         self.channelCount = channelCount
+        self.replayGain = replayGain
     }
 
     /// 服务器返回的格式描述（suffix 或 MIME）规整为短名：小写并去掉 "audio/" 前缀。
@@ -135,6 +139,33 @@ public struct AudioSourceInfo: Codable, Hashable, Sendable {
         guard let raw = codec, !raw.isEmpty else { return nil }
         let lower = raw.lowercased().trimmingCharacters(in: .whitespaces)
         return lower.hasPrefix("audio/") ? String(lower.dropFirst("audio/".count)) : lower
+    }
+}
+
+/// ReplayGain values exposed by OpenSubsonic's `Child.replayGain` object.
+/// Gain values are dB; peaks are positive linear full-scale ratios.
+public struct ReplayGainMetadata: Codable, Hashable, Sendable {
+    public var trackGainDB: Double?
+    public var albumGainDB: Double?
+    public var trackPeak: Double?
+    public var albumPeak: Double?
+    public var baseGainDB: Double?
+    public var fallbackGainDB: Double?
+
+    public init(
+        trackGainDB: Double? = nil,
+        albumGainDB: Double? = nil,
+        trackPeak: Double? = nil,
+        albumPeak: Double? = nil,
+        baseGainDB: Double? = nil,
+        fallbackGainDB: Double? = nil
+    ) {
+        self.trackGainDB = trackGainDB
+        self.albumGainDB = albumGainDB
+        self.trackPeak = trackPeak
+        self.albumPeak = albumPeak
+        self.baseGainDB = baseGainDB
+        self.fallbackGainDB = fallbackGainDB
     }
 }
 

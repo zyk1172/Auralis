@@ -81,6 +81,16 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     public var supportsToolCalling: Bool { configuration.supportsToolCalling }
+    public var capabilities: ModelCapabilities {
+        ModelCapabilities(
+            maxContextTokens: 32_768,
+            maxOutputTokens: min(configuration.maxTokens, auralisMaximumCompatibleOutputTokens),
+            supportsToolCalling: configuration.supportsToolCalling,
+            supportsStreaming: configuration.usesStreaming,
+            supportsJSONMode: configuration.supportsJSONMode,
+            supportsJSONSchema: configuration.supportsJSONSchema
+        )
+    }
 
     public func testConnection() async throws -> AIConnectionResult {
         let started = Date()

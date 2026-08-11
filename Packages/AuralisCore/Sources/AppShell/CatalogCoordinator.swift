@@ -49,6 +49,8 @@ public final class CatalogCoordinator: ObservableObject {
     /// Foreground transitions are frequent (Control Center, calls, permission sheets). A recent
     /// successful catalog must not trigger even the album-count probe on every transition.
     public static let foregroundSyncCooldown: TimeInterval = 15 * 60
+    /// 专辑级指纹无法覆盖“同专辑、同曲目数、只改单曲元数据”，因此至少每天做一次完整校验。
+    public static let weakProbeFullValidationInterval: TimeInterval = 24 * 60 * 60
 
     public init(
         connector: any ServerConnecting,
@@ -148,22 +150,48 @@ public final class CatalogCoordinator: ObservableObject {
                 self.syncTask = nil
                 self.syncingServerID = nil
             }
-            // 快速路径：增量同步且此前已成功同步过，若本地目录曲目数与网络曲目数一致，
-            // 判定目录已是最新，跳过整库拉取（元数据已在本地 SQLite，无需重复下载）。
             var effectiveMode = mode
+            var observedProbe: LibraryRevisionProbe?
             if mode == .incremental, skipIfUpToDate,
                let local = try? await store.trackCount(serverID: serverID),
-               let network = await connector.librarySongCount() {
-                if local == network {
+               let probe = await connector.libraryRevisionProbe() {
+                observedProbe = probe
+                let stored = await store.remoteProbeState(for: serverID)
+                let countMatches = probe.songCount == local
+                let fingerprintMatches = probe.fingerprint != nil && probe.fingerprint == stored.fingerprint
+                let authoritative = probe.kind == .authoritativeRevision
+                let validationAge = stored.lastValidatedAt.map { self.now().timeIntervalSince($0) }
+                let weakProbeValidationDue = validationAge == nil
+                    || validationAge! < 0
+                    || validationAge! >= Self.weakProbeFullValidationInterval
+
+                // 总数相同绝不是充分条件。只有真实 revision 相同，或弱指纹相同且最近做过
+                // 完整校验，才允许跳过。countOnly、首次没有基线、指纹变化都进入完整替换。
+                if countMatches, fingerprintMatches, authoritative || !weakProbeValidationDue {
+                    try? await store.recordRemoteProbe(
+                        serverID: serverID,
+                        fingerprint: probe.fingerprint,
+                        kind: probe.kind.rawValue,
+                        probedAt: probe.fetchedAt,
+                        markValidated: false
+                    )
                     self.phase = .upToDate(tracks: local)
                     return
                 }
-                // The OpenSubsonic adapter has no server-side delta/revision endpoint: once the
-                // cheap count probe detects a change, it traverses the whole catalog anyway.
-                // Commit that traversal as an atomic full replacement so server deletions do not
-                // remain forever in SQLite under misleading "incremental merge" semantics.
                 effectiveMode = .full
-                self.phase = .running(stage: "检测到目录变化，完整更新", processed: 0)
+                let stage: String
+                if !countMatches {
+                    stage = "检测到曲目数量变化，完整更新"
+                } else if probe.kind == .countOnly {
+                    stage = "服务器仅提供数量，执行完整校验"
+                } else if stored.fingerprint == nil {
+                    stage = "建立服务器修订基线，完整校验"
+                } else if !fingerprintMatches {
+                    stage = "检测到资料库内容变化，完整更新"
+                } else {
+                    stage = "定期完整校验单曲元数据"
+                }
+                self.phase = .running(stage: stage, processed: 0)
             }
             guard let synchronizer = await connector.makeSynchronizer(store: store) else {
                 self.phase = .failed("未连接服务器，无法同步目录")
@@ -180,6 +208,21 @@ public final class CatalogCoordinator: ObservableObject {
                     }
                 }
                 self.lastReport = report
+                let finalProbe: LibraryRevisionProbe?
+                if let observedProbe {
+                    finalProbe = observedProbe
+                } else {
+                    finalProbe = await connector.libraryRevisionProbe()
+                }
+                if let finalProbe {
+                    try? await store.recordRemoteProbe(
+                        serverID: serverID,
+                        fingerprint: finalProbe.fingerprint,
+                        kind: finalProbe.kind.rawValue,
+                        probedAt: finalProbe.fetchedAt,
+                        markValidated: effectiveMode == .full
+                    )
+                }
                 self.phase = .succeeded(tracks: report.trackCount, at: report.completedAt)
                 await self.refreshStatuses()
                 self.onSyncCompleted?(serverID, report.trackCount)

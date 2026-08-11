@@ -34,6 +34,22 @@ public struct ToolCall: Codable, Sendable {
     }
 }
 
+/// 在任何提示词、日志、任务记录或诊断 UI 边界统一移除凭据与完整地址。
+public enum AgentSensitiveDataRedactor {
+    private static let sensitiveFragments = [
+        "password", "passwd", "token", "apikey", "api_key", "authorization",
+        "secret", "credential", "cookie", "baseurl", "base_url", "url",
+    ]
+
+    public static func arguments(_ values: [String: String]) -> [String: String] {
+        values.mapValues { $0 }.map { key, value in
+            let normalized = key.lowercased().replacingOccurrences(of: "-", with: "_")
+            let isSensitive = sensitiveFragments.contains { normalized.contains($0) }
+            return (key, isSensitive ? "<redacted>" : value)
+        }.reduce(into: [:]) { $0[$1.0] = $1.1 }
+    }
+}
+
 /// 工具执行结果。
 public struct ToolResult: Sendable {
     public let call: ToolCall

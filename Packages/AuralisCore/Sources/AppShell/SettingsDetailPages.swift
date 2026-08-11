@@ -80,6 +80,40 @@ struct PlaybackSettingsPage: View {
                 Toggle("Wi-Fi 优先原始音质", isOn: $highQualityWiFi)
                 Toggle("蜂窝网络允许转码", isOn: $cellularTranscoding)
             }
+            Section("ReplayGain") {
+                Picker("模式", selection: Binding(
+                    get: { model.replayGainSettings.mode },
+                    set: { model.setReplayGainMode($0) }
+                )) {
+                    ForEach(ReplayGainMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Slider(
+                    value: Binding(
+                        get: { model.replayGainSettings.preampDB },
+                        set: { model.setReplayGainPreamp($0) }
+                    ),
+                    in: -12...12,
+                    step: 0.5
+                ) {
+                    Text("前级")
+                } minimumValueLabel: {
+                    Text("-12")
+                } maximumValueLabel: {
+                    Text("+12")
+                }
+                Text("前级：\(model.replayGainSettings.preampDB, specifier: "%+.1f") dB")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("峰值保护", isOn: Binding(
+                    get: { model.replayGainSettings.peakProtection },
+                    set: { model.setReplayGainPeakProtection($0) }
+                ))
+                Text("默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }

@@ -51,6 +51,20 @@ public struct CatalogSyncStatus: Sendable, Hashable {
     }
 }
 
+public struct CatalogRemoteProbeState: Sendable, Equatable {
+    public let fingerprint: String?
+    public let kind: String?
+    public let lastProbedAt: Date?
+    public let lastValidatedAt: Date?
+
+    public init(fingerprint: String?, kind: String?, lastProbedAt: Date?, lastValidatedAt: Date?) {
+        self.fingerprint = fingerprint
+        self.kind = kind
+        self.lastProbedAt = lastProbedAt
+        self.lastValidatedAt = lastValidatedAt
+    }
+}
+
 /// 本地目录中保存的一首歌曲的轻量摘要，供 Agent 卡片与列表使用。
 public struct CatalogTrackSummary: Sendable, Hashable, Identifiable {
     public var id: GlobalID { globalID }

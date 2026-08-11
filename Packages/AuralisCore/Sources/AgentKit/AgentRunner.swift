@@ -128,6 +128,8 @@ public struct AgentRunner {
         context: Context,
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
+        intent: AgentTaskIntent? = nil,
+        policy: AgentTaskPolicy? = nil,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
@@ -146,6 +148,8 @@ public struct AgentRunner {
                 context: context,
                 history: history,
                 systemService: systemService,
+                intent: intent ?? AgentIntentClassifier.classify(userText),
+                policy: policy ?? AgentTaskPolicy.policy(for: intent ?? AgentIntentClassifier.classify(userText)),
                 confirm: confirm,
                 emit: emit,
                 log: log,
@@ -189,13 +193,15 @@ public struct AgentRunner {
         context: Context,
         history: [AgentChatMessage],
         systemService: (any AgentSystemService)?,
+        intent: AgentTaskIntent,
+        policy: AgentTaskPolicy,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
         // 动态工具加载：只向模型暴露与本次意图相关的工具，降低 schema 对上下文的占用。
-        let selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
+        let selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
         let isRecommendationIndexTask = Self.isRecommendationIndexTask(userText, history: history)
         let requiresCompleteRecommendationIndex = Self.requiresCompleteRecommendationIndex(userText, history: history)
         let requestTimeout = isRecommendationIndexTask
@@ -205,15 +211,24 @@ public struct AgentRunner {
             ? ToolSelector.toolDefinitions(from: selectedTools)
             : []
 
-        var conversation: [AIMessage] = [
-            AIMessage(role: .system, content: Self.systemPrompt(
+        var taskState = AgentTaskState(intent: intent, goal: userText)
+        var privacy = AIPrivacyPermissions()
+        privacy.allowsMetadata = context.allowsMetadata
+        privacy.allowsLyrics = context.allowsLyrics
+        privacy.allowsPlaybackHistory = context.allowsHistory
+        var conversation = AgentContextBuilder.build(
+            systemPrompt: Self.systemPrompt(
                 context: context,
                 tools: selectedTools,
                 nativeToolCalling: provider.supportsToolCalling
-            ))
-        ]
-        // 把同一会话的历史消息作为上下文带入，让模型记住之前聊过的内容。
-        conversation.append(contentsOf: Self.convertHistory(history))
+            ),
+            task: taskState,
+            facts: [],
+            history: Self.convertHistory(history),
+            permissions: privacy,
+            capabilities: provider.capabilities,
+            inputBudget: policy.budget.maxInputTokens
+        )
         conversation.append(AIMessage(role: .user, content: userText))
 
         var toolStepCount = 0
@@ -237,8 +252,18 @@ public struct AgentRunner {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                 return
             }
+            if let violation = taskState.budgetViolation(policy: policy) {
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(violation.localizedDescription)]))
+                return
+            }
             // 上下文裁剪：防止无限增长导致 API 拒绝或 token 爆预算。
-            conversation = ContextManager.trimByTokens(conversation)
+            let reservedOutput = min(policy.budget.maxOutputTokens, provider.capabilities.maxOutputTokens)
+            let contextBudget = ContextManager.inputBudget(
+                capabilities: provider.capabilities,
+                requestedInputBudget: policy.budget.maxInputTokens,
+                reservedOutputTokens: reservedOutput
+            )
+            conversation = ContextManager.trimByTokens(conversation, maxTokens: contextBudget)
 
             // 显式指定输出上限：Agent 回复必须完整，不受历史默认 1_200 影响。
             // 8_192 是主流 OpenAI 兼容模型通用的最大输出上限（见
@@ -247,7 +272,7 @@ public struct AgentRunner {
                 model: model,
                 messages: conversation,
                 temperature: 0.3,
-                maxTokens: auralisDefaultMaxOutputTokens,
+                maxTokens: reservedOutput,
                 tools: nativeMode ? toolDefinitions : nil
             )
             let outcome: StreamOutcome
@@ -267,7 +292,7 @@ public struct AgentRunner {
                         model: model,
                         messages: conversation,
                         temperature: 0.3,
-                        maxTokens: auralisDefaultMaxOutputTokens,
+                        maxTokens: reservedOutput,
                         tools: nil
                     )
                     do {
@@ -317,6 +342,9 @@ public struct AgentRunner {
                 inputTokens: outcome.inputTokens,
                 outputTokens: outcome.outputTokens
             ))
+            taskState.progress.modelRounds += 1
+            taskState.progress.inputTokens += outcome.inputTokens ?? 0
+            taskState.progress.outputTokens += outcome.outputTokens ?? 0
 
             // 解析本轮工具调用：原生 tool_calls 优先（流式事件收集），文本 ACTION 兜底。
             let streamedText = outcome.text
@@ -411,11 +439,19 @@ public struct AgentRunner {
 
             for call in calls {
                 toolStepCount += 1
+                taskState.progress.toolCalls += 1
+                taskState.recordToolCall(name: call.name, arguments: call.args)
+                let diagnosticArgs = AgentSensitiveDataRedactor.arguments(call.args)
+                if let violation = taskState.budgetViolation(policy: policy) {
+                    await Self.emitBufferedCards(bufferedCards, emit: emit)
+                    await emit(AgentChatMessage(role: .assistant, messages: [.error(violation.localizedDescription)]))
+                    return
+                }
                 roundToolNames.insert(call.name)
                 if AgentTaskWorkingSet.isSearchTool(call.name) { roundSearchCalls += 1 }
 
                 guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: call.args, summary: "未知工具", reused: false))
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "未知工具", reused: false))
                     toolMessages.append(Self.toolResultMessage(
                         callID: call.id,
                         content: "执行失败：未知工具 \(call.name)",
@@ -424,13 +460,27 @@ public struct AgentRunner {
                     continue
                 }
 
-                if descriptor.requiresConfirmation {
+                // 模型只能调用当前意图策略真正授权的工具。ToolSelector 只是减少 schema，
+                // 这里才是不可绕过的运行时安全边界。
+                guard policy.authorizes(descriptor) else {
+                    let reason = AgentRuntimeError.toolOutsidePolicy(call.name).localizedDescription
+                    taskState.errors.append(reason)
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: reason, reused: false))
+                    toolMessages.append(Self.toolResultMessage(
+                        callID: call.id,
+                        content: "执行失败：\(reason)",
+                        native: nativeMode
+                    ))
+                    continue
+                }
+
+                if descriptor.requiresConfirmation || (descriptor.permission == .destructive && policy.requiresConfirmationForDestructive) {
                     let pending = PendingConfirmation(
                         toolName: call.name,
                         permission: descriptor.permission,
                         title: "确认\(descriptor.summary)",
-                        detail: call.args.map { "\($0.key)=\($0.value)" }.joined(separator: "，"),
-                        call: ToolCall(name: call.name, arguments: call.args)
+                        detail: diagnosticArgs.map { "\($0.key)=\($0.value)" }.joined(separator: "，"),
+                        call: ToolCall(name: call.name, arguments: diagnosticArgs)
                     )
                     let approved = await confirm(pending)
                     if !approved {
@@ -450,7 +500,7 @@ public struct AgentRunner {
                 // 成功的写操作在工作集里登记：相同操作幂等，替换队列在单个任务内互斥。
                 if descriptor.permission != .readOnly,
                    let reason = ws.sideEffectBlockReason(tool: call.name, args: call.args) {
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: call.args, summary: "已拦截重复副作用", reused: true))
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复副作用", reused: true))
                     // 这是一次真实的状态保护，而不是普通的模型内部提示：用户需要知道
                     // 第二次修改没有发生，否则最终回答仍可能谎称队列再次被替换。
                     await emit(AgentChatMessage(role: .assistant, messages: [.text(reason)]))
@@ -465,7 +515,7 @@ public struct AgentRunner {
                 // ① 重复调用保护：已要求停止搜索，模型又调用搜索工具 → 不再执行，明确要求基于现有候选完成。
                 if ws.stopSearching, AgentTaskWorkingSet.isSearchTool(call.name) {
                     let blocked = "（工具执行结果）\(call.name): 失败 - 已停止搜索：已有 \(ws.uniqueSongIDs.count) 首唯一候选\(ws.queuedSongIDs.isEmpty ? "" : "，队列已含 \(ws.queuedSongIDs.count) 首")，请直接基于现有结果完成任务，不要再搜索。"
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: call.args, summary: "已拦截重复搜索", reused: false))
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复搜索", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: blocked, native: nativeMode))
                     continue
                 }
@@ -480,7 +530,7 @@ public struct AgentRunner {
                             text += "\n（系统提示）同一搜索已重复 \(ws.noNewResultsStreak) 次且没有新结果，已有 \(ws.uniqueSongIDs.count) 首唯一候选，请停止重复搜索，直接基于现有候选完成任务。"
                         }
                     }
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: call.args, summary: "缓存命中", reused: true))
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "缓存命中", reused: true))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: text, native: nativeMode))
                     continue
                 }
@@ -493,7 +543,7 @@ public struct AgentRunner {
                 let result: ToolResult
                 do {
                     result = try await Self.withTimeout(toolExecutionTimeout) {
-                        await AgentToolkit.executeV2(
+                        await AgentToolRegistry.execute(
                             ToolCall(name: call.name, arguments: call.args),
                             bridge: bridge,
                             catalog: catalog,
@@ -523,6 +573,12 @@ public struct AgentRunner {
                 }
                 if result.success, result.permission != .readOnly {
                     ws.recordSuccessfulSideEffect(tool: call.name, args: call.args, summary: result.summary)
+                }
+                if result.success {
+                    taskState.recordProgress(action: "\(call.name): \(result.summary)")
+                } else {
+                    taskState.recordNoProgress()
+                    taskState.errors.append(result.summary)
                 }
                 if result.success, requiresCompleteRecommendationIndex {
                     recommendationIndexHasPendingWork = Self.recommendationIndexResultHasPendingWork(
@@ -577,7 +633,7 @@ public struct AgentRunner {
                 }
                 resultText = ContextManager.truncateToolResult(resultText, limit: Self.toolResultLimit(for: call.name))
                 ws.recordExecution(tool: call.name, args: call.args, resultText: resultText)
-                ws.recordTrace(AgentToolTrace(tool: call.name, args: call.args, summary: result.summary, reused: false))
+                ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: result.summary, reused: false))
                 toolMessages.append(Self.toolResultMessage(callID: call.id, content: resultText, native: nativeMode))
             }
 
@@ -819,12 +875,7 @@ public struct AgentRunner {
     /// 再来一轮只会让界面持续无响应；超时后直接结束本轮，避免无感等待。
     /// 其余瞬时故障（5xx / 429 / 连接重置 / 空响应 / 截断 JSON）都是快速失败，重试成本很低。
     static func isTransientFailure(_ error: Error) -> Bool {
-        if error is CancellationError { return false }
-        if let providerError = error as? AIProviderError { return providerError.isTransient }
-        if let urlError = error as? URLError {
-            return urlError.code != .cancelled && urlError.code != .timedOut
-        }
-        return false
+        AgentFailureClassifier.classify(error).isRetryable
     }
 
     /// 记录一次流式请求是否已经产出过可见内容。

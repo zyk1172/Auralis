@@ -70,6 +70,7 @@ public final class AuralisAppModel: ObservableObject {
             // 队列是播放会话的一部分：变更即持久化（按服务器隔离），
             // 进程重启后可恢复上次的队列与当前曲目。
             persistPlaybackSession()
+            schedulePreparedNext()
         }
     }
     @Published public var isNowPlayingPresented = false
@@ -170,6 +171,7 @@ public final class AuralisAppModel: ObservableObject {
         didSet {
             defaults.set(repeatMode.rawValue, forKey: Self.repeatModeDefaultsKey)
             mediaIntegration.modeChanged(isShuffled: isShuffled, repeatMode: repeatMode)
+            schedulePreparedNext()
         }
     }
     /// 播放速度 0.5...2.0（默认 1.0），持久化到 UserDefaults。
@@ -177,6 +179,8 @@ public final class AuralisAppModel: ObservableObject {
     private static let playbackRateDefaultsKey = "auralis.playbackRate"
     /// 播放器音量 0...1，持久化到 UserDefaults。
     @Published public private(set) var volume: Float
+    @Published public private(set) var replayGainSettings: ReplayGainSettings
+    private var prepareNextTask: Task<Void, Never>?
     /// macOS 侧边栏搜索框的查询词（搜索页实时使用）。
     @Published public var macSearchQuery: String = ""
     /// 播放历史与单次播放达标状态由独立组件管理，避免“点选即计数”。
@@ -203,6 +207,7 @@ public final class AuralisAppModel: ObservableObject {
         didSet {
             defaults.set(isShuffled, forKey: Self.shuffleDefaultsKey)
             mediaIntegration.modeChanged(isShuffled: isShuffled, repeatMode: repeatMode)
+            schedulePreparedNext()
         }
     }
     /// 最近播放的曲目 ID（最近在前），持久化到 UserDefaults，驱动首页「最近播放」。
@@ -375,9 +380,15 @@ public final class AuralisAppModel: ObservableObject {
 
     private static let playCountsDefaultsKey = "auralis.playCounts"
     private static let volumeDefaultsKey = "auralis.volume"
+    private static let replayGainModeDefaultsKey = "auralis.replayGain.mode"
+    private static let replayGainPreampDefaultsKey = "auralis.replayGain.preampDB"
+    private static let replayGainPeakProtectionDefaultsKey = "auralis.replayGain.peakProtection"
     private static let repeatModeDefaultsKey = "auralis.repeatMode"
     private static let shuffleDefaultsKey = "auralis.isShuffled"
-    private static let lastTrackDefaultsKey = "auralis.lastTrackID"
+    private static let legacyLastTrackDefaultsKey = "auralis.lastTrackID"
+    private static func lastTrackKey(_ serverID: ServerID) -> String {
+        "auralis.lastTrackID.\(serverID.rawValue)"
+    }
     private static let recentlyPlayedDefaultsKey = "auralis.recentlyPlayed"
     private static let libraryAddedDefaultsKey = "auralis.libraryAdded"
     private static func playbackSessionKey(_ serverID: ServerID) -> String {
@@ -420,6 +431,16 @@ public final class AuralisAppModel: ObservableObject {
         self.playbackRate = Float(min(max(storedRate ?? 1.0, 0.5), 2.0))
         let storedVolume = defaults.object(forKey: Self.volumeDefaultsKey) as? Double
         self.volume = Float(storedVolume ?? 0.8)
+        let storedReplayGainMode = ReplayGainMode(
+            rawValue: defaults.string(forKey: Self.replayGainModeDefaultsKey) ?? ""
+        ) ?? .off
+        let storedPreamp = defaults.object(forKey: Self.replayGainPreampDefaultsKey) as? Double ?? 0
+        let storedPeakProtection = defaults.object(forKey: Self.replayGainPeakProtectionDefaultsKey) as? Bool ?? true
+        self.replayGainSettings = ReplayGainSettings(
+            mode: storedReplayGainMode,
+            preampDB: storedPreamp,
+            peakProtection: storedPeakProtection
+        )
         let storedCounts = defaults.dictionary(forKey: Self.playCountsDefaultsKey) as? [String: Int] ?? [:]
         self.lastStopReason = PlaybackStopReason(
             rawValue: defaults.string(forKey: Self.lastStopReasonDefaultsKey) ?? ""
@@ -431,9 +452,14 @@ public final class AuralisAppModel: ObservableObject {
         self.homeLayout = HomeLayoutStore.load(from: defaults)
         // 最近播放按「serverID:trackID」组合键存储；旧格式（纯 trackID，无冒号）无法归属服务器，直接丢弃。
         let storedRecent = defaults.array(forKey: Self.recentlyPlayedDefaultsKey) as? [String] ?? []
-        self.playbackHistoryStore = PlaybackHistoryStore(counts: storedCounts, recentKeys: storedRecent)
+        let legacyHistoryServerID = defaults.string(forKey: Self.lastActiveServerKey).map(ServerID.init(rawValue:))
+        self.playbackHistoryStore = PlaybackHistoryStore(
+            counts: storedCounts,
+            recentKeys: storedRecent,
+            legacyServerID: legacyHistoryServerID
+        )
         let storedAdded = defaults.dictionary(forKey: Self.libraryAddedDefaultsKey) as? [String: Double] ?? [:]
-        let legacyAddedServerID = defaults.string(forKey: Self.lastActiveServerKey).map(ServerID.init(rawValue:))
+        let legacyAddedServerID = legacyHistoryServerID
         self.libraryAddedTracker = LibraryAddedTracker(stored: storedAdded, legacyServerID: legacyAddedServerID)
         // 下载管理器：init 期不捕获 self，回调在下方 Task（init 完成）中注入。
         self.downloadManager = DownloadManager(store: cacheStore)
@@ -483,6 +509,7 @@ public final class AuralisAppModel: ObservableObject {
             }
             await engine.setVolume(volume)
             await engine.setRate(playbackRate)
+            await engine.configureReplayGain(replayGainSettings)
             await engine.setTrackEndedHandler { [weak self] in
                 Task { @MainActor [weak self] in
                     self?.handleTrackEnded()
@@ -494,6 +521,15 @@ public final class AuralisAppModel: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.handleStreamFailure()
                 }
+            }
+            await engine.setPreparedTrackStartedHandler { [weak self] track in
+                Task { @MainActor [weak self] in
+                    self?.handlePreparedTrackStarted(track)
+                }
+            }
+            if let serverID = catalog.activeServerID {
+                await cacheStore.migrateLegacyEntries(to: serverID)
+                await lyricsCache.migrateLegacyEntries(to: serverID)
             }
             downloadedTrackIDs = Set(await cacheStore.cachedTrackIDs().map {
                 GlobalID(serverID: $0.serverID, remoteID: $0.trackID.rawValue)
@@ -517,7 +553,10 @@ public final class AuralisAppModel: ObservableObject {
         sleepTimerTask = nil
         sleepTimerMode = mode
         sleepTimerEndsAt = nil
-        guard mode != .off else { return }
+        guard mode != .off else {
+            schedulePreparedNext()
+            return
+        }
         if mode == .afterMinutes {
             let duration = max(minutes, 0.1)
             sleepTimerEndsAt = Date().addingTimeInterval(duration * 60)
@@ -527,6 +566,7 @@ public final class AuralisAppModel: ObservableObject {
                 await MainActor.run { self?.stopForSleepTimer(reason: .userStopped) }
             }
         }
+        schedulePreparedNext()
     }
 
     /// 取消睡眠定时。
@@ -535,6 +575,7 @@ public final class AuralisAppModel: ObservableObject {
         sleepTimerTask = nil
         sleepTimerMode = .off
         sleepTimerEndsAt = nil
+        schedulePreparedNext()
     }
 
     /// 当前睡眠定时的剩余描述（用于 Agent / UI 展示）。
@@ -1179,6 +1220,9 @@ public final class AuralisAppModel: ObservableObject {
             CrashLog.shared.log("播放状态: \(String(describing: self.playbackState))")
             self.syncProgressTimer()
             self.syncNowPlayingTrack()
+            if self.playbackState == .playing || self.playbackState == .buffering {
+                self.schedulePreparedNext()
+            }
         }
     }
 
@@ -1235,6 +1279,32 @@ public final class AuralisAppModel: ObservableObject {
         volume = clamped
         defaults.set(Double(clamped), forKey: Self.volumeDefaultsKey)
         Task { await engine.setVolume(clamped) }
+    }
+
+    public func setReplayGainMode(_ mode: ReplayGainMode) {
+        var settings = replayGainSettings
+        settings.mode = mode
+        updateReplayGainSettings(settings)
+    }
+
+    public func setReplayGainPreamp(_ decibels: Double) {
+        var settings = replayGainSettings
+        settings.preampDB = min(max(decibels.isFinite ? decibels : 0, -12), 12)
+        updateReplayGainSettings(settings)
+    }
+
+    public func setReplayGainPeakProtection(_ enabled: Bool) {
+        var settings = replayGainSettings
+        settings.peakProtection = enabled
+        updateReplayGainSettings(settings)
+    }
+
+    private func updateReplayGainSettings(_ settings: ReplayGainSettings) {
+        replayGainSettings = settings
+        defaults.set(settings.mode.rawValue, forKey: Self.replayGainModeDefaultsKey)
+        defaults.set(settings.preampDB, forKey: Self.replayGainPreampDefaultsKey)
+        defaults.set(settings.peakProtection, forKey: Self.replayGainPeakProtectionDefaultsKey)
+        Task { await engine.configureReplayGain(settings) }
     }
 
     /// 设置播放速度（0.5x–2.0x），同步控制中心速率与本地持久化。
@@ -1462,11 +1532,11 @@ public final class AuralisAppModel: ObservableObject {
         guard track.id.rawValue != "placeholder" else { return }
         let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
         let recentChanged = playbackHistoryStore.markStarted(globalID)
-        let recentRaw = playbackHistoryStore.recentKeys
+        let recentRaw = playbackHistoryStore.encodedRecentKeys
         let trackID = track.id.rawValue
         Task { @Sendable [defaults] in
             defaults.set(recentRaw, forKey: Self.recentlyPlayedDefaultsKey)
-            defaults.set(trackID, forKey: Self.lastTrackDefaultsKey)
+            defaults.set(trackID, forKey: Self.lastTrackKey(track.serverID))
         }
         if recentChanged { refreshHomeSnapshots() }
     }
@@ -1481,7 +1551,7 @@ public final class AuralisAppModel: ObservableObject {
             duration: track.duration,
             force: force
         ) else { return }
-        let storedCounts = playbackHistoryStore.counts
+        let storedCounts = playbackHistoryStore.encodedCounts
         Task { @Sendable [defaults, catalogStore = catalogCoordinator.store] in
             defaults.set(storedCounts, forKey: Self.playCountsDefaultsKey)
             try? await catalogStore.recordPlay(globalID, completed: false)
@@ -2463,22 +2533,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 曲目播完：按循环/随机模式决定重播、切下一首、绕回队首或暂停。
     /// 睡眠定时优先：当前歌曲/专辑/队列结束时停止而不是继续切歌。
     public func handleTrackEnded() {
-        // 短曲也必须在真正播完时记一次合格播放；选择或播放失败仍不会计数。
-        qualifyCurrentPlaybackIfNeeded(force: true)
-        // Navidrome 只在 scrobble(submission=true) 时记录播放次数，stream 不会标记。
-        // 曲目自然播完即上报当前曲目，保持服务器端播放计数与本地一致。
-        // 仅在当前曲目属于活动服务器时上报，避免跨服务器串库。
-        let finished = currentTrack
-        if finished.id.rawValue != "placeholder",
-           finished.serverID == catalog.activeServerID {
-            let connector = self.connector
-            let store = catalogCoordinator.store
-            let globalID = GlobalID(serverID: finished.serverID, remoteID: finished.id.rawValue)
-            Task {
-                await connector.scrobble(trackID: finished.id, submission: true)
-                try? await store.markPlayCompleted(globalID)
-            }
-        }
+        finalizeCompletedTrack(currentTrack)
         if applySleepTimerAtTrackEnd() { return }
         switch repeatMode {
         case .one:
@@ -2505,6 +2560,100 @@ public final class AuralisAppModel: ObservableObject {
                 pauseAtQueueEnd()
             }
         }
+    }
+
+    /// AVQueuePlayer has already advanced into this item. Update only model,
+    /// history and platform metadata; calling selectAndPlay here would tear
+    /// down the prebuffered player and reintroduce the gap we just removed.
+    private func handlePreparedTrackStarted(_ prepared: Track) {
+        let finished = currentTrack
+        finalizeCompletedTrack(finished)
+        if applySleepTimerAtTrackEnd() { return }
+
+        guard seamlessNextCandidate()?.id == prepared.id,
+              let canonical = queue.first(where: { $0.id == prepared.id }) else {
+            // Queue changed at the boundary after preparation. Stop the stale
+            // transition and let the current queue policy choose deterministically.
+            if let expected = seamlessNextCandidate() {
+                selectAndPlay(expected)
+            } else {
+                pauseAtQueueEnd()
+            }
+            return
+        }
+        playbackHistoryStore.resetSelection()
+        currentTrack = canonical
+        playbackPosition = 0
+        playbackState = .playing
+        loadLyricsIfNeeded(for: canonical)
+        syncProgressTimer()
+        syncNowPlayingTrack()
+        persistPlaybackSession()
+        schedulePreparedNext()
+    }
+
+    private func finalizeCompletedTrack(_ finished: Track) {
+        // 短曲也必须在真正播完时记一次合格播放；选择或播放失败仍不会计数。
+        qualifyCurrentPlaybackIfNeeded(force: true)
+        // Navidrome 只在 scrobble(submission=true) 时记录播放次数，stream 不会标记。
+        // 曲目自然播完即上报当前曲目，保持服务器端播放计数与本地一致。
+        // 仅在当前曲目属于活动服务器时上报，避免跨服务器串库。
+        if finished.id.rawValue != "placeholder",
+           finished.serverID == catalog.activeServerID {
+            let connector = self.connector
+            let store = catalogCoordinator.store
+            let globalID = GlobalID(serverID: finished.serverID, remoteID: finished.id.rawValue)
+            Task {
+                await connector.scrobble(trackID: finished.id, submission: true)
+                try? await store.markPlayCompleted(globalID)
+            }
+        }
+    }
+
+    private func schedulePreparedNext() {
+        prepareNextTask?.cancel()
+        let candidate = seamlessNextCandidate()
+        guard let candidate,
+              playbackState == .playing || playbackState == .buffering || playbackState == .preparing
+        else {
+            prepareNextTask = Task { [engine] in await engine.prepareNext(track: nil) }
+            return
+        }
+        let currentID = currentTrack.id
+        prepareNextTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var playable = candidate
+            if let localURL = await cacheStore.cachedFileURL(for: cacheID(for: candidate)) {
+                playable.streamURL = localURL
+            } else if playable.streamURL == nil,
+                      let refreshed = await connector.refreshStreamURL(trackID: candidate.id) {
+                playable.streamURL = refreshed
+            }
+            guard !Task.isCancelled,
+                  currentTrack.id == currentID,
+                  seamlessNextCandidate()?.id == candidate.id,
+                  playable.streamURL != nil else { return }
+            await engine.prepareNext(track: playable)
+        }
+    }
+
+    private func seamlessNextCandidate() -> Track? {
+        guard !isShuffled, repeatMode != .one,
+              let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return nil }
+        if sleepTimerMode == .afterCurrentTrack { return nil }
+
+        let candidate: Track?
+        if queue.indices.contains(index + 1) {
+            candidate = queue[index + 1]
+        } else if repeatMode == .all {
+            candidate = queue.first
+        } else {
+            candidate = nil
+        }
+        guard let candidate else { return nil }
+        if sleepTimerMode == .afterCurrentAlbum, candidate.albumID != currentTrack.albumID { return nil }
+        if sleepTimerMode == .afterCurrentQueue, !queue.indices.contains(index + 1) { return nil }
+        return candidate
     }
 
     private func pauseAtQueueEnd() {
@@ -2705,7 +2854,20 @@ public final class AuralisAppModel: ObservableObject {
         let switchedServer = appliedServerID != nil && appliedServerID != result.account.id
         appliedServerID = result.account.id
         defaults.set(result.account.id.rawValue, forKey: Self.lastActiveServerKey)
+        if playbackHistoryStore.reconcileLegacy(serverID: result.account.id) {
+            defaults.set(playbackHistoryStore.encodedCounts, forKey: Self.playCountsDefaultsKey)
+            defaults.set(playbackHistoryStore.encodedRecentKeys, forKey: Self.recentlyPlayedDefaultsKey)
+        }
         artworkStore.setServerID(result.account.id.rawValue)
+        let migrationServerID = result.account.id
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.cacheStore.migrateLegacyEntries(to: migrationServerID)
+            await self.lyricsCache.migrateLegacyEntries(to: migrationServerID)
+            self.downloadedTrackIDs = Set(await self.cacheStore.cachedTrackIDs().map {
+                GlobalID(serverID: $0.serverID, remoteID: $0.trackID.rawValue)
+            })
+        }
         catalog = LibraryCatalog(
             account: result.account,
             artists: result.artists,
@@ -2789,8 +2951,10 @@ public final class AuralisAppModel: ObservableObject {
             if !restorePlaybackSession(from: result.tracks, serverID: result.account.id) {
                 // 恢复上次收听的那一首（若仍存在于新目录），否则取队列首；
                 // 这样「继续聆听 / 播放条」在重新打开时显示的是上次听过的曲目，而非目录第一首。
-                let lastID = defaults.string(forKey: Self.lastTrackDefaultsKey)
+                let lastID = defaults.string(forKey: Self.lastTrackKey(result.account.id))
+                    ?? defaults.string(forKey: Self.legacyLastTrackDefaultsKey)
                 if let id = lastID, let restored = result.tracks.first(where: { $0.id.rawValue == id }) {
+                    defaults.set(id, forKey: Self.lastTrackKey(result.account.id))
                     currentTrack = restored
                     loadLyricsIfNeeded(for: restored)
                     // 恢复曲目可能位于队列前 30 首之外，确保它进入队列，避免上一首/下一首静默失效。

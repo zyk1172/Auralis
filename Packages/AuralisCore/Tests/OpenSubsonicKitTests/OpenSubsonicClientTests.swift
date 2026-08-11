@@ -28,7 +28,7 @@ struct OpenSubsonicClientTests {
     @Test("Search maps server DTOs to server-scoped Domain models")
     func searchMapping() async throws {
         MockURLProtocol.reset(stubs: [
-            .response(data: ok(#""searchResult3":{"artist":[{"id":"artist-1","name":"Night Artist","albumCount":2}],"album":[{"id":"album-1","name":"Blue Hour","artist":"Night Artist","artistId":"artist-1","year":2024,"genre":"Ambient"}],"song":[{"id":"track-1","title":"Rain Signal","artist":"Night Artist","artistId":"artist-1","album":"Blue Hour","albumId":"album-1","duration":241.5,"track":3,"discNumber":1,"year":2024,"genres":[{"name":"Ambient"},{"name":"Electronic"}],"coverArt":"cover-1","suffix":"flac","bitRate":2854,"bitDepth":24,"samplingRate":96000,"channelCount":2,"starred":"2026-01-01T00:00:00Z","userRating":5}]}"#)),
+            .response(data: ok(#""searchResult3":{"artist":[{"id":"artist-1","name":"Night Artist","albumCount":2}],"album":[{"id":"album-1","name":"Blue Hour","artist":"Night Artist","artistId":"artist-1","year":2024,"genre":"Ambient"}],"song":[{"id":"track-1","title":"Rain Signal","artist":"Night Artist","artistId":"artist-1","album":"Blue Hour","albumId":"album-1","duration":241.5,"track":3,"discNumber":1,"year":2024,"genres":[{"name":"Ambient"},{"name":"Electronic"}],"coverArt":"cover-1","suffix":"flac","bitRate":2854,"bitDepth":24,"samplingRate":96000,"channelCount":2,"starred":"2026-01-01T00:00:00Z","userRating":5,"replayGain":{"trackGain":-6.2,"albumGain":-8.1,"trackPeak":0.91,"albumPeak":0.98,"baseGain":0.5,"fallbackGain":-7.0}}]}"#)),
         ])
         let client = try await makeClient()
 
@@ -50,6 +50,11 @@ struct OpenSubsonicClientTests {
         #expect(track.sourceInfo.codec == "flac")
         #expect(track.sourceInfo.bitDepth == 24)
         #expect(track.sourceInfo.sampleRate == 96_000)
+        #expect(track.sourceInfo.replayGain?.trackGainDB == -6.2)
+        #expect(track.sourceInfo.replayGain?.albumGainDB == -8.1)
+        #expect(track.sourceInfo.replayGain?.trackPeak == 0.91)
+        #expect(track.sourceInfo.replayGain?.baseGainDB == 0.5)
+        #expect(track.sourceInfo.replayGain?.fallbackGainDB == -7.0)
 
         let request = try #require(MockURLProtocol.requests.last)
         #expect(request.url?.lastPathComponent == "search3.view")

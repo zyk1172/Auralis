@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// Agent 任务状态。
@@ -27,6 +28,11 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
     public var outputTokens: Int
     public var errorSummary: String?
     public var updatedAt: Date
+    public var intent: AgentTaskIntent?
+    public var goal: String?
+    public var budget: AgentTaskBudget?
+    public var completedActions: [String]?
+    public var noProgressRounds: Int?
 
     public init(
         id: UUID = UUID(),
@@ -38,7 +44,12 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
         inputTokens: Int = 0,
         outputTokens: Int = 0,
         errorSummary: String? = nil,
-        updatedAt: Date = .now
+        updatedAt: Date = .now,
+        intent: AgentTaskIntent? = nil,
+        goal: String? = nil,
+        budget: AgentTaskBudget? = nil,
+        completedActions: [String]? = [],
+        noProgressRounds: Int? = 0
     ) {
         self.id = id
         self.conversationID = conversationID
@@ -50,6 +61,11 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
         self.outputTokens = outputTokens
         self.errorSummary = errorSummary
         self.updatedAt = updatedAt
+        self.intent = intent
+        self.goal = goal
+        self.budget = budget
+        self.completedActions = completedActions
+        self.noProgressRounds = noProgressRounds
     }
 }
 
@@ -76,8 +92,8 @@ public final class AgentTaskStore {
     public func record(_ id: UUID) -> AgentTaskRecord? { records[id] }
 
     @discardableResult
-    public func start(conversationID: UUID?) -> AgentTaskRecord {
-        let record = AgentTaskRecord(conversationID: conversationID)
+    public func start(conversationID: UUID?, intent: AgentTaskIntent? = nil, goal: String? = nil, budget: AgentTaskBudget? = nil) -> AgentTaskRecord {
+        let record = AgentTaskRecord(conversationID: conversationID, intent: intent, goal: goal, budget: budget)
         records[record.id] = record
         try? persist()
         return record

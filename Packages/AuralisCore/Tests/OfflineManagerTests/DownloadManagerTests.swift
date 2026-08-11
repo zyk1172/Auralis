@@ -20,6 +20,25 @@ struct DownloadManagerTests {
         return (DownloadTaskMetadataStore(defaults: defaults), defaults, suiteName)
     }
 
+    @Test("旧裸 TrackID 缓存迁移到最后活跃服务器且文件保留")
+    func legacyIndexMigrationPreservesAudio() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let audioURL = directory.appendingPathComponent("legacy.flac")
+        try Data("legacy-audio".utf8).write(to: audioURL)
+        let indexData = try JSONEncoder().encode(["same-id": "legacy.flac"])
+        try indexData.write(to: directory.appendingPathComponent("index.json"), options: .atomic)
+
+        let store = TrackCacheStore(directory: directory)
+        #expect((await store.cachedTrackIDs()).isEmpty)
+        await store.migrateLegacyEntries(to: "old-server")
+
+        let migrated = cacheID("old-server", "same-id")
+        #expect(await store.isCached(migrated))
+        let restoredURL = try #require(await store.cachedFileURL(for: migrated))
+        #expect(try String(contentsOf: restoredURL, encoding: .utf8) == "legacy-audio")
+    }
+
     @Test("moveDownloadedFile 把临时文件移入缓存并登记索引")
     func moveFileIntoCache() async throws {
         let store = makeStore()

@@ -9,7 +9,41 @@ import SecurityKit
 /// 16_384 或 32_768）。取 8_192 作为 App 默认：相比旧值 1_200 大幅提高，
 /// 解决 Agent 长回答被截断的问题；同时不超出常见模型允许的最大输出，
 /// 避免请求被服务端拒绝。模型上下文允许时可在此基础上继续上调。
-public let auralisDefaultMaxOutputTokens = 256_000
+public let auralisDefaultMaxOutputTokens = 8_192
+
+/// OpenAI-compatible endpoints may advertise or accept a larger reply budget.
+/// Keep the app default conservative while permitting evidence-heavy tasks
+/// (such as music appreciation) to request up to 16K when the saved provider
+/// configuration explicitly allows it.
+public let auralisMaximumCompatibleOutputTokens = 16_384
+
+/// 模型能力的保守声明。未知 OpenAI 兼容端点不得假设拥有超大上下文或超大输出。
+public struct ModelCapabilities: Codable, Hashable, Sendable {
+    public var maxContextTokens: Int
+    public var maxOutputTokens: Int
+    public var supportsToolCalling: Bool
+    public var supportsStreaming: Bool
+    public var supportsJSONMode: Bool
+    public var supportsJSONSchema: Bool
+
+    public init(
+        maxContextTokens: Int = 32_768,
+        maxOutputTokens: Int = auralisDefaultMaxOutputTokens,
+        supportsToolCalling: Bool = false,
+        supportsStreaming: Bool = true,
+        supportsJSONMode: Bool = false,
+        supportsJSONSchema: Bool = false
+    ) {
+        self.maxContextTokens = max(4_096, maxContextTokens)
+        self.maxOutputTokens = max(512, min(maxOutputTokens, self.maxContextTokens / 2))
+        self.supportsToolCalling = supportsToolCalling
+        self.supportsStreaming = supportsStreaming
+        self.supportsJSONMode = supportsJSONMode
+        self.supportsJSONSchema = supportsJSONSchema
+    }
+
+    public static let conservative = ModelCapabilities()
+}
 
 public enum AIProviderHeaderValue: Codable, Hashable, Sendable {
     case literal(String)
@@ -431,10 +465,15 @@ public protocol AIProvider: Sendable {
     /// 默认 false：保持文本 ACTION 协议行为；支持方（OpenAICompatibleProvider 等）
     /// 自行覆盖为 true，AgentLoop 才会启用原生 tool calling。
     var supportsToolCalling: Bool { get }
+    /// 当前端点可确认的能力；未知时使用保守默认值。
+    var capabilities: ModelCapabilities { get }
 }
 
 public extension AIProvider {
     var supportsToolCalling: Bool { false }
+    var capabilities: ModelCapabilities {
+        ModelCapabilities(supportsToolCalling: supportsToolCalling)
+    }
 }
 
 public struct MockAIProvider: AIProvider {

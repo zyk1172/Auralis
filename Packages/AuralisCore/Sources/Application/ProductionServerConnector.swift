@@ -414,11 +414,16 @@ public actor ProductionServerConnector: ServerConnecting {
     /// 只拉专辑列表元数据，不逐张专辑拉取曲目，因此比全量同步快得多。
     /// 服务器不返回 songCount（老版本 Subsonic）或总数异常时返回 nil，表示「无法判断，不跳过同步」。
     public func librarySongCount() async -> Int? {
+        await libraryRevisionProbe()?.songCount
+    }
+
+    public func libraryRevisionProbe() async -> LibraryRevisionProbe? {
         guard let client = activeClient else { return nil }
         var total = 0
         var offset = 0
         let pageSize = 500
         var anySongCount = false
+        var fingerprintParts: [String] = []
         let maxPages = 500
         for _ in 0..<maxPages {
             do {
@@ -429,6 +434,15 @@ public actor ProductionServerConnector: ServerConnecting {
                         anySongCount = true
                         total += count
                     }
+                    fingerprintParts.append([
+                        album.id.rawValue,
+                        album.title,
+                        album.artistName,
+                        album.year.map(String.init) ?? "",
+                        album.genre ?? "",
+                        album.artworkKey ?? "",
+                        album.songCount.map(String.init) ?? "",
+                    ].joined(separator: "\u{1f}"))
                 }
                 if page.count < pageSize { break }
                 offset += pageSize
@@ -438,7 +452,17 @@ public actor ProductionServerConnector: ServerConnecting {
         }
         // 服务器未提供任何 songCount 时无法可靠比对，返回 nil 走原有同步逻辑。
         guard anySongCount, total > 0 else { return nil }
-        return total
+        fingerprintParts.sort()
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in fingerprintParts.joined(separator: "\u{1e}").utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return LibraryRevisionProbe(
+            kind: .albumFingerprint,
+            fingerprint: String(hash, radix: 16),
+            songCount: total
+        )
     }
 
     public func refreshStreamURL(trackID: TrackID) async -> URL? {

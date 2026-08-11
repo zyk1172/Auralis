@@ -26,6 +26,14 @@ public protocol PlaybackControlling: Sendable {
     func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) async
     /// 注册播放中途失败回调（流地址失效 / 解码失败 / 网络错误），用于刷新 URL 后重试或自动下一首。
     func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) async
+    /// Prepares the next item without starting it. Passing nil invalidates any
+    /// previous preparation after queue edits, shuffle or repeat changes.
+    func prepareNext(track: Track?) async
+    /// Called when the engine has advanced into the prepared item without a
+    /// second `play(track:)` call, allowing the model and Now Playing state to
+    /// follow the same continuous playback transition.
+    func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) async
+    func configureReplayGain(_ settings: ReplayGainSettings) async
 }
 
 public extension PlaybackControlling {
@@ -35,6 +43,35 @@ public extension PlaybackControlling {
     func currentPosition() async -> TimeInterval? { nil }
     func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) async {}
     func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) async {}
+    func prepareNext(track: Track?) async {}
+    func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) async {}
+    func configureReplayGain(_ settings: ReplayGainSettings) async {}
+}
+
+public enum ReplayGainMode: String, CaseIterable, Codable, Sendable {
+    case off
+    case track
+    case album
+
+    public var title: String {
+        switch self {
+        case .off: String(localized: "关闭")
+        case .track: String(localized: "按歌曲")
+        case .album: String(localized: "按专辑")
+        }
+    }
+}
+
+public struct ReplayGainSettings: Codable, Hashable, Sendable {
+    public var mode: ReplayGainMode
+    public var preampDB: Double
+    public var peakProtection: Bool
+
+    public init(mode: ReplayGainMode = .off, preampDB: Double = 0, peakProtection: Bool = true) {
+        self.mode = mode
+        self.preampDB = min(max(preampDB.isFinite ? preampDB : 0, -12), 12)
+        self.peakProtection = peakProtection
+    }
 }
 
 /// 循环模式：关闭 / 列表循环 / 单曲循环。

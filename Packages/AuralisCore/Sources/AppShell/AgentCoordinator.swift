@@ -78,6 +78,8 @@ public final class AgentCoordinator: ObservableObject {
     private let preferencesStore: PreferencesStore
     /// 长期存活的任务仓库：任务状态落盘，App 重启后标记 interrupted。
     private let taskStore: AgentTaskStore
+    /// 真正拥有任务生命周期与策略边界的独立运行时。
+    private let runtime: AgentRuntime
     /// 系统服务工具适配：App / 设备 / 服务器 / 缓存 / 统计 / 诊断 / 记忆与技能。
     private let systemService: AuralisSystemToolService
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
@@ -90,7 +92,7 @@ public final class AgentCoordinator: ObservableObject {
     private var streamingMessageID: UUID?
 
     /// 单次请求带给模型的最大 token 预算（超出时裁剪历史）。
-    public static let tokenBudget = 256_000
+    public static let tokenBudget = ContextManager.maxContextTokens
     /// 首次外发确认的持久化标记键（UserDefaults，默认 false）。
     public static let consentGivenDefaultsKey = "auralis.ai.consentGiven"
     /// 设置接口的展示名（与 AIConnectionSettings.makeProvider 的配置名保持一致）。
@@ -108,6 +110,7 @@ public final class AgentCoordinator: ObservableObject {
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
         self.taskStore = AgentTaskStore(fileURL: dir.appendingPathComponent("agent-tasks.json"))
+        self.runtime = AgentRuntime()
     }
 
     public static func defaultDirectory() -> URL {
@@ -407,7 +410,14 @@ public final class AgentCoordinator: ObservableObject {
         let systemService = self.systemService
         let messageCountBeforeRun = messages.count
         // 创建并持久化任务记录（不依赖任何 View 生命周期）。
-        let taskID = taskStore.start(conversationID: activeSessionID).id
+        let taskIntent = AgentIntentClassifier.classify(trimmed)
+        let taskPolicy = AgentTaskPolicy.policy(for: taskIntent)
+        let taskID = taskStore.start(
+            conversationID: activeSessionID,
+            intent: taskIntent,
+            goal: trimmed,
+            budget: taskPolicy.budget
+        ).id
         activeTask = taskStore.record(taskID)
 
         runTask = Task { [weak self] in
@@ -447,7 +457,8 @@ public final class AgentCoordinator: ObservableObject {
                 }
             }
 
-            await AgentRunner.run(
+            await self.runtime.run(
+                taskID: taskID,
                 userText: trimmed,
                 provider: resolvedProvider,
                 model: modelName,

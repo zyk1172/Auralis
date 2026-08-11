@@ -1,4 +1,6 @@
+import Domain
 import Foundation
+import LocalCatalog
 
 /// 单个工具参数的声明，用于参数校验与系统提示生成。
 public struct ToolParameter: Sendable, Hashable {
@@ -426,5 +428,36 @@ public enum AgentToolRegistry {
 
     public static func descriptor(for name: String) -> ToolDescriptor? {
         all.first { $0.name == name }
+    }
+
+    /// 元数据查找与执行的唯一公开入口。调用方无需再判断系统工具或旧工具分支。
+    public static func execute(
+        _ call: ToolCall,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        serverID: ServerID?,
+        systemService: (any AgentSystemService)?
+    ) async -> ToolResult {
+        guard let descriptor = descriptor(for: call.name) else {
+            return ToolResult(
+                call: call,
+                permission: .readOnly,
+                success: false,
+                summary: "未知工具：\(call.name)"
+            )
+        }
+        if SystemToolNames.contains(call.name) {
+            guard let systemService else {
+                return ToolResult(call: call, permission: descriptor.permission, success: false, summary: "当前设备未提供该系统能力。")
+            }
+            return await SystemToolExecutor.execute(call, descriptor: descriptor, systemService: systemService)
+        }
+        return await AgentToolkit.executeRegistered(
+            call,
+            descriptor: descriptor,
+            bridge: bridge,
+            catalog: catalog,
+            serverID: serverID
+        )
     }
 }

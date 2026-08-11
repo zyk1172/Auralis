@@ -17,7 +17,18 @@ public enum ContextManager {
     /// 按 token 预算裁剪的默认预算。
     /// 面向 100 万 token 上下文模型（如 DeepSeek V4 Flash）设得比较宽，
     /// 长任务（建歌单 → 逐批加歌 → 验证）不会因上下文被过早截断而丢失关键 ID。
-    public static let maxContextTokens = 256_000
+    public static let maxContextTokens = 24_000
+
+    /// 为输入计算真实可用预算：上下文窗口必须为输出、工具 schema 与协议开销留空间。
+    public static func inputBudget(
+        capabilities: ModelCapabilities,
+        requestedInputBudget: Int,
+        reservedOutputTokens: Int
+    ) -> Int {
+        let protocolReserve = 1_024
+        let available = capabilities.maxContextTokens - reservedOutputTokens - protocolReserve
+        return max(2_048, min(requestedInputBudget, available))
+    }
 
     /// 裁剪对话：始终保留首条 system；截取末尾若干条。
     /// 若截取后以 `.tool` 消息开头（失去配对的 assistant tool_calls，会被 API 拒绝），

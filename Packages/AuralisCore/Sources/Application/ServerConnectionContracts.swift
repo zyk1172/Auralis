@@ -122,6 +122,29 @@ public struct AuxiliaryLibraryData: Sendable {
     }
 }
 
+public struct LibraryRevisionProbe: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        /// 服务器提供的真实单调 revision / scan id。
+        case authoritativeRevision
+        /// 专辑 ID、名称、曲目数等轻量元数据的稳定指纹；不能覆盖单曲级元数据变化。
+        case albumFingerprint
+        /// 仅有总数，只能发现数量变化，绝不能单独证明资料库未变化。
+        case countOnly
+    }
+
+    public let kind: Kind
+    public let fingerprint: String?
+    public let songCount: Int?
+    public let fetchedAt: Date
+
+    public init(kind: Kind, fingerprint: String?, songCount: Int?, fetchedAt: Date = .now) {
+        self.kind = kind
+        self.fingerprint = fingerprint
+        self.songCount = songCount
+        self.fetchedAt = fetchedAt
+    }
+}
+
 public protocol ServerConnecting: Sendable {
     func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult
     func connect(
@@ -164,6 +187,8 @@ public protocol ServerConnecting: Sendable {
     /// 轻量获取服务器音乐库的曲目总数（getAlbumList2 各专辑 songCount 求和）。
     /// 用于启动/回前台时与本地目录曲目数比对：一致则跳过整库拉取。未连接/不支持/失败返回 nil（= 不跳过）。
     func librarySongCount() async -> Int?
+    /// 轻量远端修订探针。countOnly 不能作为“无需同步”的充分条件。
+    func libraryRevisionProbe() async -> LibraryRevisionProbe?
     /// 生成带认证的下载地址（供后台下载任务使用）；未连接或失败返回 nil。
     func downloadURL(trackID: TrackID) async -> URL?
     /// 下载单曲完整音频数据（用于本地缓存）；未连接或失败时返回 nil。
@@ -248,6 +273,10 @@ public extension ServerConnecting {
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
     func serverTrack(trackID: TrackID) async -> Track? { nil }
     func librarySongCount() async -> Int? { nil }
+    func libraryRevisionProbe() async -> LibraryRevisionProbe? {
+        guard let count = await librarySongCount() else { return nil }
+        return LibraryRevisionProbe(kind: .countOnly, fingerprint: nil, songCount: count)
+    }
     func downloadURL(trackID: TrackID) async -> URL? { nil }
     func downloadData(trackID: TrackID) async -> Data? { nil }
     func addToPlaylist(playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }

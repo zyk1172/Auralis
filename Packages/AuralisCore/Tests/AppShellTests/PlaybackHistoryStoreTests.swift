@@ -42,3 +42,26 @@ func shortPlaybackQualifiesAtHalf() {
     #expect(store.counts(for: "one")["same"] == 1)
     #expect(store.counts(for: "two")["same"] == 1)
 }
+
+@Test("旧播放次数与最近记录迁移到最后活跃服务器而不丢失")
+func legacyPlaybackHistoryMigration() {
+    let store = PlaybackHistoryStore(
+        counts: ["same": 7],
+        recentKeys: ["same"],
+        legacyServerID: "old-server"
+    )
+    #expect(store.counts["old-server:same"] == 7)
+    #expect(store.recentKeys == ["old-server:same"])
+    #expect(store.counts(for: "old-server")["same"] == 7)
+}
+
+@Test("服务器未知时旧播放记录延迟迁移并可继续编码")
+func deferredPlaybackHistoryMigration() {
+    var store = PlaybackHistoryStore(counts: ["same": 3], recentKeys: ["same"])
+    #expect(store.encodedCounts["same"] == 3)
+    #expect(store.encodedRecentKeys == ["same"])
+    let migrated = store.reconcileLegacy(serverID: "resolved-server")
+    #expect(migrated)
+    #expect(store.counts["resolved-server:same"] == 3)
+    #expect(store.recentKeys == ["resolved-server:same"])
+}

@@ -67,6 +67,36 @@ public actor LyricsDiskCache {
         persistMisses()
     }
 
+    /// Migrates pre-GlobalID lyric documents and negative-cache keys into the
+    /// last active server namespace. The document payload retains TrackID, so
+    /// legacy filenames can be identified without guessing or discarding data.
+    public func migrateLegacyEntries(to serverID: ServerID) {
+        loadMissesIfNeeded()
+        let legacyMisses = misses.filter { !$0.contains(":") }
+        if !legacyMisses.isEmpty {
+            for remoteID in legacyMisses where !remoteID.isEmpty {
+                misses.insert(Self.key(serverID, TrackID(rawValue: remoteID)))
+            }
+            misses.subtract(legacyMisses)
+            persistMisses()
+        }
+
+        let manager = FileManager.default
+        let entries = (try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for source in entries where source.pathExtension == "json" && source.lastPathComponent != "misses.json" {
+            guard let data = try? Data(contentsOf: source),
+                  let document = try? decoder.decode(LyricsDocument.self, from: data),
+                  source.lastPathComponent == Self.safeEncode(document.trackID.rawValue) + ".json"
+            else { continue }
+            let destination = directory.appendingPathComponent(Self.fileName(serverID: serverID, trackID: document.trackID))
+            if !manager.fileExists(atPath: destination.path) {
+                try? manager.moveItem(at: source, to: destination)
+            } else {
+                try? manager.removeItem(at: source)
+            }
+        }
+    }
+
     // MARK: - 统计与清理
 
     public func totalBytes() -> Int64 {
@@ -126,10 +156,9 @@ public actor LyricsDiskCache {
         guard let data = try? Data(contentsOf: missesURL),
               let decoded = try? decoder.decode(Set<String>.self, from: data)
         else { return }
-        // 旧格式（裸 trackID，无冒号）无法归属服务器 → 丢弃，
-        // 避免历史负缓存永久误伤新服务器的同 ID 曲目（P0-2 自愈）。
-        misses = decoded.filter { $0.contains(":") }
-        if misses.count != decoded.count { persistMisses() }
+        // Keep legacy bare IDs dormant until the last active server is known;
+        // migration then assigns the only provenance older versions retained.
+        misses = decoded
     }
 
     private func persistMisses() {

@@ -42,14 +42,10 @@ public actor TrackCacheStore {
         try? manager.createDirectory(at: base, withIntermediateDirectories: true)
         if let data = try? Data(contentsOf: indexURL),
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
-            // 旧格式（裸 trackID，无冒号）无法归属服务器，启动时直接丢弃，
-            // 与 playCounts 旧数据迁移策略一致，避免残留裸键被新服务器误用。
-            let filtered = decoded.filter { $0.key.contains(":") }
-            index = filtered
-            if filtered.count != decoded.count,
-               let migrated = try? JSONEncoder().encode(filtered) {
-                try? migrated.write(to: indexURL, options: .atomic)
-            }
+            // Preserve legacy bare TrackID entries until the app supplies the
+            // last active server. Silently deleting downloaded audio would be
+            // irreversible and violates the GlobalID migration contract.
+            index = decoded
         } else if manager.fileExists(atPath: indexURL.path) {
             // 更早版本 index.json 是 [TrackID: String]（JSON 数组形式），同样无法归属
             // 服务器 → 整体丢弃并落回空索引。
@@ -58,6 +54,24 @@ public actor TrackCacheStore {
                 try? migrated.write(to: indexURL, options: .atomic)
             }
         }
+    }
+
+    /// One-time migration for pre-GlobalID cache indexes. The last active
+    /// server is the only provenance older builds persisted; entries remain
+    /// dormant until that namespace is known and are never assigned to a
+    /// newly-added unrelated server.
+    public func migrateLegacyEntries(to serverID: ServerID) {
+        let legacyKeys = index.keys.filter { !$0.contains(":") }
+        guard !legacyKeys.isEmpty else { return }
+        for remoteID in legacyKeys {
+            let globalKey = TrackCacheID(
+                serverID: serverID,
+                trackID: TrackID(rawValue: remoteID)
+            ).description
+            if index[globalKey] == nil { index[globalKey] = index[remoteID] }
+            index[remoteID] = nil
+        }
+        try? persistIndex()
     }
 
     /// 已缓存且文件存在时返回本地文件 URL。
