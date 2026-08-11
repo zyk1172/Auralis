@@ -44,16 +44,23 @@ public final class CatalogCoordinator: ObservableObject {
     private var synchronizer: LibrarySynchronizer?
     private var syncTask: Task<Void, Never>?
     private var syncingServerID: ServerID?
+    private let now: @Sendable () -> Date
+
+    /// Foreground transitions are frequent (Control Center, calls, permission sheets). A recent
+    /// successful catalog must not trigger even the album-count probe on every transition.
+    public static let foregroundSyncCooldown: TimeInterval = 15 * 60
 
     public init(
         connector: any ServerConnecting,
         storeURL: URL? = nil,
         trackCache: TrackCacheStore = TrackCacheStore(),
-        lyricsCache: LyricsDiskCache = LyricsDiskCache()
+        lyricsCache: LyricsDiskCache = LyricsDiskCache(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.connector = connector
         self.trackCache = trackCache
         self.lyricsCache = lyricsCache
+        self.now = now
         let url = storeURL ?? Self.defaultStoreURL()
         // 目录库打不开时退化到内存库，保证 App 仍可运行（只是无本地目录能力）。
         self.store = (try? LocalCatalogStore(url: url)) ?? (try! LocalCatalogStore(url: URL(fileURLWithPath: ":memory:")))
@@ -62,17 +69,7 @@ public final class CatalogCoordinator: ObservableObject {
     /// 目录库位置：优先使用 App Group 共享容器（供 Siri/小组件等扩展读取），
     /// 未配置 App Group 时回退到 App 沙盒 Application Support。
     public static func defaultStoreURL() -> URL {
-        let manager = FileManager.default
-        let base: URL
-        if let group = manager.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier) {
-            base = group
-        } else {
-            base = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? manager.temporaryDirectory
-        }
-        let dir = base.appendingPathComponent("Auralis", isDirectory: true)
-        try? manager.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("catalog.sqlite")
+        LocalCatalogStore.defaultStoreURL(appGroupIdentifier: Self.appGroupIdentifier)
     }
 
     /// App Group 标识：App、Siri Intents 扩展、小组件共用。
@@ -89,6 +86,10 @@ public final class CatalogCoordinator: ObservableObject {
         // 已有歌曲，先做轻量的服务器曲目数比对，真正不一致时才拉取。
         let localTrackCount = (try? await store.trackCount(serverID: account.id)) ?? 0
         let hasUsableLocalCatalog = localTrackCount > 0
+        if hasUsableLocalCatalog, isInsideForegroundCooldown(status) {
+            phase = .upToDate(tracks: localTrackCount)
+            return
+        }
         let mode: LibrarySyncMode = (status?.lastCompletedAt == nil && !hasUsableLocalCatalog)
             ? .full
             : .incremental
@@ -110,6 +111,12 @@ public final class CatalogCoordinator: ObservableObject {
     /// 后台刷新入口（iOS BGAppRefresh / macOS 定时器都可调用）。
     public func backgroundRefresh(serverID: ServerID) async {
         guard syncTask == nil else { return }
+        let status = await currentStatus(for: serverID)
+        let localTrackCount = (try? await store.trackCount(serverID: serverID)) ?? 0
+        if localTrackCount > 0, isInsideForegroundCooldown(status) {
+            phase = .upToDate(tracks: localTrackCount)
+            return
+        }
         startSync(serverID: serverID, mode: .incremental, skipIfUpToDate: true)
         await syncTask?.value
     }
@@ -143,12 +150,20 @@ public final class CatalogCoordinator: ObservableObject {
             }
             // 快速路径：增量同步且此前已成功同步过，若本地目录曲目数与网络曲目数一致，
             // 判定目录已是最新，跳过整库拉取（元数据已在本地 SQLite，无需重复下载）。
+            var effectiveMode = mode
             if mode == .incremental, skipIfUpToDate,
                let local = try? await store.trackCount(serverID: serverID),
-               let network = await connector.librarySongCount(),
-               local == network {
-                self.phase = .upToDate(tracks: local)
-                return
+               let network = await connector.librarySongCount() {
+                if local == network {
+                    self.phase = .upToDate(tracks: local)
+                    return
+                }
+                // The OpenSubsonic adapter has no server-side delta/revision endpoint: once the
+                // cheap count probe detects a change, it traverses the whole catalog anyway.
+                // Commit that traversal as an atomic full replacement so server deletions do not
+                // remain forever in SQLite under misleading "incremental merge" semantics.
+                effectiveMode = .full
+                self.phase = .running(stage: "检测到目录变化，完整更新", processed: 0)
             }
             guard let synchronizer = await connector.makeSynchronizer(store: store) else {
                 self.phase = .failed("未连接服务器，无法同步目录")
@@ -156,7 +171,7 @@ public final class CatalogCoordinator: ObservableObject {
             }
             self.synchronizer = synchronizer
             do {
-                let report = try await synchronizer.sync(serverID: serverID, mode: mode) { progress in
+                let report = try await synchronizer.sync(serverID: serverID, mode: effectiveMode) { progress in
                     await MainActor.run {
                         self.phase = .running(
                             stage: Self.stageTitle(progress.stage, section: progress.section),
@@ -192,6 +207,12 @@ public final class CatalogCoordinator: ObservableObject {
 
     private func currentStatus(for serverID: ServerID) async -> CatalogSyncStatus? {
         await store.syncStatus(for: serverID)
+    }
+
+    private func isInsideForegroundCooldown(_ status: CatalogSyncStatus?) -> Bool {
+        guard let completedAt = status?.lastCompletedAt else { return false }
+        let elapsed = now().timeIntervalSince(completedAt)
+        return elapsed >= 0 && elapsed < Self.foregroundSyncCooldown
     }
 
     // MARK: - 服务器在线拉取

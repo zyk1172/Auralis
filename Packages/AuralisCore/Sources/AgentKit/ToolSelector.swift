@@ -22,13 +22,13 @@ public enum ToolSelector {
         "playback_get_state",
         "playback_play_song", "playback_play_album", "playback_play_artist",
         "playback_play_playlist", "playback_play_random",
-        // 歌单编辑：加歌/删歌必须随时可用（用户点歌单操作时不一定带「歌单」关键词）
-        "playlist_add_songs", "addTracksToPlaylist", "removeTracksFromPlaylist",
+        // 常驻新式歌单加歌工具；旧式别名与按下标删除只在明确歌单意图时提供，
+        // 避免每个请求都携带重复 schema，保持原生接口工具集有界。
+        "playlist_add_songs",
         "playback_pause", "playback_resume",
         "playback_next", "playback_previous", "playback_seek",
         "playback_set_shuffle", "playback_set_repeat",
         "queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear",
-        "playTrack",
         // 音乐下载（MoviePilot）：用户点播不在库中的歌曲 / 直接要求下载时使用
         "music_download",
         // 记忆与技能：主人报出个人信息 / 创建、读取 skill 时使用（常驻，保证原生模式可用）
@@ -39,7 +39,7 @@ public enum ToolSelector {
     /// 歌单相关。
     static let playlistNames: [String] = [
         "listPlaylists", "library_get_playlist",
-        "playlist_create", "playlist_add_songs",
+        "playlist_create", "playlist_add_songs", "addTracksToPlaylist", "removeTracksFromPlaylist",
         "queue_save_as_playlist", "favorite_set",
     ]
 

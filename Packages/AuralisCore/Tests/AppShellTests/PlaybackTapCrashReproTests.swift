@@ -15,6 +15,16 @@ private struct ReproConnector: ServerConnecting {
     func restoreLastConnection() async throws -> ServerConnectionResult? { result }
 }
 
+private actor InertPlaybackEngine: PlaybackControlling {
+    private var playbackState: PlaybackState = .idle
+
+    func state() -> PlaybackState { playbackState }
+    func play(track: Track) throws { playbackState = .playing }
+    func pause() { playbackState = .paused }
+    func resume() throws { playbackState = .playing }
+    func stop() { playbackState = .idle }
+}
+
 
 /// 记录 scrobble 调用的桩，用于验证曲目播完会上报服务器播放计数。
 private actor ScrobbleRecordingConnector: ServerConnecting {
@@ -191,6 +201,41 @@ func trackEndReportsScrobbleToActiveServer() async throws {
     #expect(recorded.count == 1, "播完应上报一次 scrobble，实际 \(recorded.count) 次")
     #expect(recorded.first?.trackID == track.id)
     #expect(recorded.first?.submission == true)
+}
+
+/// 回归测试：播放页单个模式按钮必须能真正进入列表循环和单曲循环，
+/// 不能只在图标上切换“顺序/随机”而永远到不了 RepeatMode.one。
+@Test("播放模式按钮完整循环四种真实状态")
+@MainActor
+func playbackModeButtonCyclesThroughRepeatStates() {
+    let defaults = UserDefaults(suiteName: "play-mode-repro-\(UUID().uuidString)")!
+    let model = AuralisAppModel(
+        engine: InertPlaybackEngine(),
+        defaults: defaults,
+        storeURL: reproTemporaryCatalogURL()
+    )
+
+    model.setShuffle(false)
+    model.setRepeatMode(.off)
+    #expect(model.playMode == .list)
+
+    model.cyclePlayMode()
+    #expect(model.playMode == .shuffle)
+    #expect(model.isShuffled)
+    #expect(model.repeatMode == .off)
+
+    model.cyclePlayMode()
+    #expect(model.playMode == .repeatAll)
+    #expect(!model.isShuffled)
+    #expect(model.repeatMode == .all)
+
+    model.cyclePlayMode()
+    #expect(model.playMode == .repeatOne)
+    #expect(model.repeatMode == .one)
+
+    model.cyclePlayMode()
+    #expect(model.playMode == .list)
+    #expect(model.repeatMode == .off)
 }
 
 

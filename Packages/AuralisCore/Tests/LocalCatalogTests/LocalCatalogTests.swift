@@ -1,6 +1,7 @@
 import Domain
 import Foundation
 import LocalCatalog
+import MusicLibrary
 import Testing
 
 private func makeStore() throws -> LocalCatalogStore {
@@ -126,6 +127,81 @@ func syncStoresStagedTracks() async throws {
     #expect(try await store.allTrackSummaries(serverID: "gamma").count == 5)
     let status = await store.syncStatus(for: "gamma")
     #expect(status.lastCompletedAt != nil)
+}
+
+@Test("Durable staging resumes after reopening and keeps the committed catalog visible")
+func durableSyncStagingSurvivesRestart() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("auralis-durable-sync-(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appendingPathComponent("catalog.sqlite")
+    let serverID: ServerID = "resume-server"
+
+    let firstStore = try LocalCatalogStore(url: url)
+    let committed = makeTrack(serverID: serverID, remoteID: "old", title: "Committed")
+    let seedSession = try await firstStore.beginSync(serverID: serverID, mode: .full)
+    try await firstStore.stageTracks([committed], session: seedSession)
+    try await firstStore.completeSync(seedSession, completedAt: .now)
+
+    let interrupted = try await firstStore.beginSync(serverID: serverID, mode: .full)
+    let firstReplacement = makeTrack(serverID: serverID, remoteID: "new-1", title: "Replacement 1")
+    try await firstStore.stageTracks([firstReplacement], session: interrupted)
+    try await firstStore.saveCheckpoint(
+        LibrarySyncCheckpoint(
+            sessionID: interrupted.id,
+            serverID: serverID,
+            section: .tracks,
+            continuation: "page-2",
+            processedCount: 1
+        ),
+        session: interrupted
+    )
+    await firstStore.suspendSync(interrupted)
+
+    // Staging is invisible: a terminated sync cannot expose a half-replaced catalog.
+    #expect(try await firstStore.allTracks(serverID: serverID).map(\.id) == [committed.id])
+
+    let reopened = try LocalCatalogStore(url: url)
+    let resumed = try await reopened.beginSync(serverID: serverID, mode: .full)
+    #expect(resumed.id == interrupted.id)
+    let checkpoint = try await reopened.checkpoint(session: resumed, section: .tracks)
+    #expect(checkpoint?.continuation == "page-2")
+    #expect(checkpoint?.processedCount == 1)
+
+    let secondReplacement = makeTrack(serverID: serverID, remoteID: "new-2", title: "Replacement 2")
+    try await reopened.stageTracks([secondReplacement], session: resumed)
+    try await reopened.saveCheckpoint(
+        LibrarySyncCheckpoint(
+            sessionID: resumed.id,
+            serverID: serverID,
+            section: .tracks,
+            processedCount: 2,
+            completedAt: .now
+        ),
+        session: resumed
+    )
+    try await reopened.completeSync(resumed, completedAt: .now)
+
+    #expect(Set(try await reopened.allTracks(serverID: serverID).map(\.id)) == Set([firstReplacement.id, secondReplacement.id]))
+    let freshSession = try await reopened.beginSync(serverID: serverID, mode: .full)
+    #expect(freshSession.id != interrupted.id)
+    await reopened.discardSync(freshSession)
+}
+
+@Test("Incremental staging is invisible until commit and merges atomically")
+func incrementalStagingMergesOnlyAtCommit() async throws {
+    let store = try makeStore()
+    let serverID: ServerID = "incremental-server"
+    let original = makeTrack(serverID: serverID, remoteID: "old", title: "Original")
+    try await seed(store, [original])
+
+    let session = try await store.beginSync(serverID: serverID, mode: .incremental)
+    let added = makeTrack(serverID: serverID, remoteID: "new", title: "Added")
+    try await store.stageTracks([added], session: session)
+    #expect(try await store.allTracks(serverID: serverID).map(\.id) == [original.id])
+
+    try await store.completeSync(session, completedAt: .now)
+    #expect(Set(try await store.allTracks(serverID: serverID).map(\.id)) == Set([original.id, added.id]))
 }
 
 @Test("Recommendation Index V2 batches, validates, and reuses metadata classifications")

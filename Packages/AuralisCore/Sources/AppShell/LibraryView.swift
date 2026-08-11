@@ -147,7 +147,9 @@ struct LibraryView: View {
                             Text(artist.name).font(.headline)
                             Text("\(artist.albumCount) 张专辑").font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color)
                         }
+                        Spacer(minLength: 0)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .foregroundStyle(theme.colorTokens.primaryText.color)
                     .contentShape(Rectangle())
                     .onTapGesture { model.browseDestination = .artist(artist) }

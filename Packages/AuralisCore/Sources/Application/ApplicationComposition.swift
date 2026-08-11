@@ -1,5 +1,6 @@
 import Domain
 import Foundation
+import LocalCatalog
 import Persistence
 import SecurityKit
 
@@ -7,9 +8,11 @@ public enum ApplicationComposition {
     /// The composition entry point is kept in the application layer so AppShell
     /// never constructs URLSession, Keychain, or persistence implementations.
     public static func makeServerConnector() -> any ServerConnecting {
-        ProductionServerConnector(
+        let catalogStore = makeCatalogStore()
+        return ProductionServerConnector(
             credentialVault: KeychainCredentialVault(),
             persistence: makePersistence(),
+            catalogStore: catalogStore,
             session: serverURLSession(),
             sourceFactory: { client in
                 OpenSubsonicLibrarySyncSource(client: client)
@@ -33,14 +36,20 @@ public enum ApplicationComposition {
         return URLSession(configuration: configuration)
     }
 
-    /// 资料库存储在 Application Support/Auralis/library.json。
-    /// 磁盘不可用（如沙箱限制）时退化为内存存储：连接流程仍然可用，
-    /// 只是重启后需要重新同步资料库。
+    /// `library.json` now stores only accounts and lightweight migration state.
+    /// Music entities live exclusively in LocalCatalog SQLite.
     private static func makePersistence() -> any AuralisPersisting {
         if let store = try? FileBackedPersistence(fileURL: libraryStoreURL()) {
             return store
         }
         return InMemoryPersistence()
+    }
+
+    private static func makeCatalogStore() -> LocalCatalogStore {
+        if let store = try? LocalCatalogStore(url: LocalCatalogStore.defaultStoreURL()) {
+            return store
+        }
+        return try! LocalCatalogStore(url: URL(fileURLWithPath: ":memory:"))
     }
 
     private static func libraryStoreURL() -> URL {

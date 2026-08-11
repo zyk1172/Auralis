@@ -1,6 +1,6 @@
 import Domain
 import Foundation
-import OfflineManager
+@testable import OfflineManager
 import Testing
 
 @Suite("下载管理与缓存落盘")
@@ -12,6 +12,12 @@ struct DownloadManagerTests {
 
     private func cacheID(_ server: String, _ track: String) -> TrackCacheStore.TrackCacheID {
         TrackCacheStore.TrackCacheID(serverID: ServerID(rawValue: server), trackID: TrackID(rawValue: track))
+    }
+
+    private func makeMetadataStore() -> (DownloadTaskMetadataStore, UserDefaults, String) {
+        let suiteName = "DownloadManagerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        return (DownloadTaskMetadataStore(defaults: defaults), defaults, suiteName)
     }
 
     @Test("moveDownloadedFile 把临时文件移入缓存并登记索引")
@@ -93,5 +99,75 @@ struct DownloadManagerTests {
         #expect(!manager.isDownloading(trackID))
         #expect(manager.status(trackID)?.status == .notDownloaded)
         #expect(manager.activeCount() == 0)
+    }
+
+    @Test("后台任务身份可从 taskDescription 无损恢复")
+    func taskDescriptionRoundTrip() {
+        let metadata = DownloadTaskMetadata(
+            trackID: TrackID(rawValue: "track/中文/42"),
+            serverID: ServerID(rawValue: "server-a"),
+            codec: "flac"
+        )
+
+        let description = metadata.taskDescription
+        #expect(description != nil)
+        #expect(DownloadTaskMetadata.decode(taskDescription: description) == metadata)
+        #expect(DownloadTaskMetadata.decode(taskDescription: "unrelated") == nil)
+    }
+
+    @Test("持久映射会在新 DownloadManager 初始化时恢复并在系统任务缺失时标记失败")
+    func persistedMetadataHydratesAndPrunesStaleTask() {
+        let (metadataStore, defaults, suiteName) = makeMetadataStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let metadata = DownloadTaskMetadata(
+            trackID: TrackID(rawValue: "restored-track"),
+            serverID: ServerID(rawValue: "restored-server"),
+            codec: "alac"
+        )
+        metadataStore.save(metadata, for: 42)
+
+        let manager = DownloadManager(
+            store: makeStore(),
+            metadataStore: metadataStore,
+            automaticallyReconnect: false
+        )
+        #expect(manager.isDownloading(metadata.trackID))
+        #expect(manager.status(metadata.trackID)?.status == .downloading)
+
+        manager.restoreForTesting(existingTasks: [], pruneCandidates: [42])
+
+        #expect(!manager.isDownloading(metadata.trackID))
+        #expect(manager.status(metadata.trackID)?.status == .failed)
+        #expect(metadataStore.metadata(for: 42) == nil)
+    }
+
+    @Test("getAllTasks 恢复路径从任务描述重建 track/server/codec 映射")
+    func restoresExistingURLSessionTask() {
+        let (metadataStore, defaults, suiteName) = makeMetadataStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let metadata = DownloadTaskMetadata(
+            trackID: TrackID(rawValue: "live-task"),
+            serverID: ServerID(rawValue: "server-live"),
+            codec: "opus"
+        )
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.downloadTask(with: URL(string: "http://127.0.0.1:1/audio")!)
+        task.taskDescription = metadata.taskDescription
+
+        let manager = DownloadManager(
+            store: makeStore(),
+            metadataStore: metadataStore,
+            automaticallyReconnect: false
+        )
+        manager.restoreForTesting(existingTasks: [task])
+
+        #expect(manager.isDownloading(metadata.trackID))
+        #expect(manager.activeCount() == 1)
+        #expect(manager.status(metadata.trackID)?.status == .downloading)
+        #expect(metadataStore.metadata(for: task.taskIdentifier) == metadata)
+
+        manager.cancel(metadata.trackID)
+        session.invalidateAndCancel()
+        #expect(metadataStore.metadata(for: task.taskIdentifier) == nil)
     }
 }

@@ -4,10 +4,12 @@ import SwiftUI
 import ThemeEngine
 
 /// 首页统一横向卡片度量（需求：左边距/卡片宽/间距/封面比例统一，
-/// 标题最多两行 / 艺术家最多一行 / 尾部截断 / 下一张露出宽度一致）。
+/// 标题与艺术家各一行 / 尾部截断 / 下一张露出宽度一致）。
 private enum HomeCardMetrics {
     static let width: CGFloat = 140
     static let spacing: CGFloat = AuralisSpacing.medium
+    static let textSpacing: CGFloat = 3
+    static let titleHeight: CGFloat = 20
 }
 
 /// 首页：由模块注册表驱动，不再写死 `if showX` 分支。
@@ -401,19 +403,21 @@ struct HomeView: View {
     }
 }
 
-/// 统一横向歌曲卡片：封面方形、标题最多两行、艺术家最多一行、尾部截断。
+/// 统一横向歌曲卡片：封面方形、标题与艺术家各一行并尾部截断。
+/// 固定同一文本度量，避免某张长标题把作者名挤远、相邻卡片高低不齐。
 private struct HomeTrackCard: View {
     let track: Track
     let colors: ThemeColors
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+        VStack(alignment: .leading, spacing: HomeCardMetrics.textSpacing) {
             ArtworkView(title: track.albumTitle, artworkKey: track.artworkKey, colors: colors, size: HomeCardMetrics.width)
             Text(track.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(colors.primaryText.color)
-                .lineLimit(2)
-                .frame(height: 38, alignment: .top)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(height: HomeCardMetrics.titleHeight, alignment: .top)
             Text(track.artistName)
                 .font(.caption)
                 .foregroundStyle(colors.secondaryText.color)
@@ -430,13 +434,14 @@ private struct HomeArtistCard: View {
     let colors: ThemeColors
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+        VStack(alignment: .leading, spacing: HomeCardMetrics.textSpacing) {
             ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: colors, size: HomeCardMetrics.width)
             Text(artist.name)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(colors.primaryText.color)
-                .lineLimit(2)
-                .frame(height: 38, alignment: .top)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(height: HomeCardMetrics.titleHeight, alignment: .top)
             Text("\(playCount) 次播放")
                 .font(.caption)
                 .foregroundStyle(colors.secondaryText.color)
@@ -453,13 +458,14 @@ private struct HomeAlbumCard: View {
     let colors: ThemeColors
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+        VStack(alignment: .leading, spacing: HomeCardMetrics.textSpacing) {
             ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: colors, size: HomeCardMetrics.width)
             Text(album.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(colors.primaryText.color)
-                .lineLimit(2)
-                .frame(height: 38, alignment: .top)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(height: HomeCardMetrics.titleHeight, alignment: .top)
             Text("\(playCount) 次播放")
                 .font(.caption)
                 .foregroundStyle(colors.secondaryText.color)

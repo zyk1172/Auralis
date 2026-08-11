@@ -1,6 +1,7 @@
 import AVKit
 import DesignSystem
 import Domain
+import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
@@ -56,6 +57,9 @@ struct MiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var height: CGFloat = 56
+    /// 展开态为 1；收拢为底部中间胶囊时连续收至 0。
+    /// 这样同一根播放条仍保留曲目信息，只把前后切歌控制收起。
+    var skipControlsVisibility: CGFloat = 1
 
     private var coverSize: CGFloat { min(42, max(36, height - 14)) }
     private var displayTitle: String {
@@ -91,14 +95,12 @@ struct MiniPlayerContent: View {
             Spacer(minLength: 8)
 
             HStack(spacing: 4) {
-                Button(action: model.previous) {
-                    Image(systemName: "backward.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(minWidth: 44, minHeight: 44)
-                        .foregroundStyle(theme.colorTokens.primaryText.color)
-                }
-                .disabled(!model.hasPrevious)
-                .accessibilityLabel("上一首")
+                skipControl(
+                    systemImage: "backward.fill",
+                    action: model.previous,
+                    isEnabled: model.hasPrevious,
+                    accessibilityLabel: "上一首"
+                )
 
                 Button(action: model.togglePlayback) {
                     Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
@@ -108,14 +110,12 @@ struct MiniPlayerContent: View {
                 }
                 .accessibilityLabel(model.playbackState == .playing ? "暂停" : "播放")
 
-                Button(action: model.next) {
-                    Image(systemName: "forward.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(minWidth: 44, minHeight: 44)
-                        .foregroundStyle(theme.colorTokens.primaryText.color)
-                }
-                .disabled(!model.hasNext)
-                .accessibilityLabel("下一首")
+                skipControl(
+                    systemImage: "forward.fill",
+                    action: model.next,
+                    isEnabled: model.hasNext,
+                    accessibilityLabel: "下一首"
+                )
             }
         }
         .padding(.horizontal, 12)
@@ -131,6 +131,31 @@ struct MiniPlayerContent: View {
         default: state = "未播放"
         }
         return "\(model.currentTrack.title)，\(model.currentTrack.artistName)，\(state)"
+    }
+
+    private var normalizedSkipControlsVisibility: CGFloat {
+        min(max(skipControlsVisibility, 0), 1)
+    }
+
+    private func skipControl(
+        systemImage: String,
+        action: @escaping () -> Void,
+        isEnabled: Bool,
+        accessibilityLabel: String
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+        }
+        .frame(width: 44 * normalizedSkipControlsVisibility, height: 44)
+        .opacity(normalizedSkipControlsVisibility)
+        .scaleEffect(normalizedSkipControlsVisibility, anchor: systemImage == "backward.fill" ? .trailing : .leading)
+        .disabled(!isEnabled || normalizedSkipControlsVisibility < 0.05)
+        .allowsHitTesting(normalizedSkipControlsVisibility >= 0.05)
+        .accessibilityHidden(normalizedSkipControlsVisibility < 0.05)
+        .accessibilityLabel(accessibilityLabel)
     }
 
 }
@@ -179,16 +204,26 @@ struct CompactMiniPlayerContent: View {
 
 struct NowPlayingView: View {
     @ObservedObject var model: AuralisAppModel
+    @ObservedObject private var playbackStore: PlaybackStore
     let theme: BuiltInTheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var page = NowPlayingPage.player
     @State private var isPlaylistSheetPresented = false
+    @State private var showsMoreActions = false
+    @State private var showsAudioTechnicalInfo = false
+    @State private var showsTrackInformation = false
     /// 拖动进度条时暂存的 seek 目标：松手才真正 seek（Apple Music 行为）。
     @State private var pendingSeek: Double?
 #if os(iOS)
     @State private var queueEditMode = EditMode.inactive
 #endif
+
+    init(model: AuralisAppModel, theme: BuiltInTheme) {
+        self.model = model
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self.theme = theme
+    }
 
     var body: some View {
         ZStack {
@@ -205,23 +240,39 @@ struct NowPlayingView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 460)
-                TabView(selection: $page) {
-                    lyrics.tag(NowPlayingPage.lyrics)
-                    player.tag(NowPlayingPage.player)
-                    queue.tag(NowPlayingPage.queue)
+                GeometryReader { geo in
+                    playbackContent(in: geo)
                 }
-#if os(iOS)
-                .tabViewStyle(.page(indexDisplayMode: .never))
-#else
-                .tabViewStyle(.automatic)
-#endif
-                .frame(maxHeight: .infinity)
             }
             .padding(AuralisSpacing.large)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
         .sheet(isPresented: $isPlaylistSheetPresented) {
             AddToPlaylistSheet(model: model, theme: theme, track: model.currentTrack)
+        }
+        .sheet(isPresented: $showsTrackInformation) {
+            TrackInformationSheet(model: model, theme: theme, track: model.currentTrack)
+        }
+        .confirmationDialog("更多操作", isPresented: $showsMoreActions, titleVisibility: .visible) {
+            Button("添加到歌单") { isPlaylistSheetPresented = true }
+            if model.isDownloading(model.currentTrack) {
+                let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
+                Button("取消下载（\(Int(progress * 100))%）", role: .destructive) {
+                    model.cancelDownload(model.currentTrack)
+                }
+            } else if model.isDownloaded(model.currentTrack) {
+                Button("删除下载", role: .destructive) { model.removeDownload(model.currentTrack) }
+            } else {
+                Button("下载到本地") { model.download(model.currentTrack) }
+            }
+            Button("前往专辑") { openCurrentAlbum() }
+                .disabled(currentAlbum == nil)
+            Button("前往艺术家") { openCurrentArtist() }
+                .disabled(currentArtist == nil)
+            Button("由此继续播放") { continueWithSimilarQueue() }
+            Button("歌曲鉴赏") { appreciateCurrentSong() }
+            Button("歌曲信息") { showsTrackInformation = true }
+            Button("取消", role: .cancel) {}
         }
     }
 
@@ -253,58 +304,10 @@ struct NowPlayingView: View {
         }
     }
 
-    /// 右上角“三个点”更多操作菜单：放在播放控制区（原队列按钮位置）。
+    /// “更多”必须单击即展开；不用 Menu，避免在自定义按钮样式层级里退化为长按菜单。
     private var moreMenu: some View {
-        Menu {
-            Button { model.setShuffle(!model.isShuffled) } label: {
-                Label(model.isShuffled ? "关闭随机播放" : "随机播放",
-                      systemImage: model.isShuffled ? "shuffle.circle.fill" : "shuffle")
-            }
-            Divider()
-            Button { isPlaylistSheetPresented = true } label: {
-                Label("添加到歌单", systemImage: "text.badge.plus")
-            }
-            if model.isDownloading(model.currentTrack) {
-                let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
-                Button(role: .destructive) { model.cancelDownload(model.currentTrack) } label: {
-                    Label("取消下载（\(Int(progress * 100))%）", systemImage: "xmark.circle")
-                }
-            } else if model.isDownloaded(model.currentTrack) {
-                Button(role: .destructive) { model.removeDownload(model.currentTrack) } label: {
-                    Label("删除本地缓存", systemImage: "trash")
-                }
-            } else {
-                Button { model.download(model.currentTrack) } label: {
-                    Label("下载到本地", systemImage: "arrow.down.circle")
-                }
-            }
-            Divider()
-            Button { model.skipBackward() } label: { Label("后退 15 秒", systemImage: "gobackward.15") }
-            Button { model.skipForward() } label: { Label("快进 30 秒", systemImage: "goforward.30") }
-            Button(role: .destructive) { model.stopPlayback() } label: { Label("停止播放", systemImage: "stop.fill") }
-            Menu {
-                ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
-                    Button {
-                        model.setPlaybackRate(Float(speed))
-                    } label: {
-                        if abs(model.playbackRate - Float(speed)) < 0.01 {
-                            Label("\(speed, specifier: "%.2g")x", systemImage: "checkmark")
-                        } else {
-                            Text("\(speed, specifier: "%.2g")x")
-                        }
-                    }
-                }
-            } label: {
-                Label("播放速度 \(model.playbackRate, specifier: "%.2g")x", systemImage: "speedometer")
-            }
-            Divider()
-            Button { page = .lyrics } label: { Label("查看歌词", systemImage: "quote.bubble") }
-            Button {
-                dismiss()
-                model.selectedSection = .settings
-            } label: {
-                Label("前往设置", systemImage: "gearshape")
-            }
+        Button {
+            showsMoreActions = true
         } label: {
             Image(systemName: "ellipsis")
         }
@@ -312,102 +315,129 @@ struct NowPlayingView: View {
         .accessibilityLabel("更多操作")
     }
 
-    private var player: some View {
-        GeometryReader { geo in
-            let compactHeight = geo.size.height < 720
-            // 封面宽度不超过可用宽度的 72%，大屏最多 300pt，小屏再缩小，
-            // 保证左右有明显边距，且不会压住进度条或标题。
-            let artworkSide = min(
-                compactHeight ? 240 : 300,
-                geo.size.width * 0.72
-            )
-            let sectionSpacing: CGFloat = compactHeight ? AuralisSpacing.medium : AuralisSpacing.large
-            let playButtonSize: CGFloat = compactHeight ? 56 : 72
+    /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。
+    /// 这样切到歌词 / 队列时不会把整个播放界面换走，布局也不会上下跳动。
+    private func playbackContent(in geo: GeometryProxy) -> some View {
+        let compactHeight = geo.size.height < 650
+        let sectionSpacing: CGFloat = compactHeight ? 10 : 15
+        let playButtonSize: CGFloat = compactHeight ? 56 : 64
+        let estimatedControlHeight: CGFloat = compactHeight ? 264 : 294
+        let heroHeight = max(geo.size.height - estimatedControlHeight, 190)
+        // 保留海报主体感，但四周留出明确呼吸空间，避免贴近分段控件和曲目信息。
+        let artworkSide = min(350, geo.size.width * 0.84, heroHeight * 0.88)
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-
-                VStack(spacing: sectionSpacing) {
-                    // 封面后方叠加播放态动态光效（呼吸光晕 + 间歇波纹），不遮挡封面。
-                    ZStack {
-                        NowPlayingArtworkGlowView(
-                            isPlaying: model.playbackState == .playing,
-                            artworkKey: model.currentTrack.artworkKey,
-                            title: model.currentTrack.albumTitle,
-                            colors: theme.colorTokens,
-                            size: artworkSide
-                        )
-                        ArtworkView(
-                            title: model.currentTrack.albumTitle,
-                            artworkKey: model.currentTrack.artworkKey,
-                            colors: theme.colorTokens,
-                            size: artworkSide
-                        )
-                        .shadow(
-                            color: theme.colorTokens.accent.color.opacity(theme.motion.glowIntensity),
-                            radius: compactHeight ? 20 : 28
-                        )
-                    }
-
-                    // 歌曲信息与收藏按钮在同一行，收藏按钮不单独悬浮在封面外
-                    HStack(alignment: .center, spacing: AuralisSpacing.medium) {
-                        VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
-                            Text(model.currentTrack.title)
-                                .font(.title2.bold())
-                                .foregroundStyle(theme.colorTokens.primaryText.color)
-                                .lineLimit(1)
-                            Text(model.currentTrack.artistName)
-                                .font(.title3)
-                                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                                .lineLimit(1)
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel(nowPlayingAccessibilityLabel)
-                        Spacer(minLength: AuralisSpacing.small)
-                        favoriteButton
-                    }
-                    .frame(maxWidth: 520)
-
-                    // 进度条位于歌曲信息下方，左右留出边距（Apple Music 风格细轨道）
-                    VStack(spacing: AuralisSpacing.xSmall) {
-                        ThinSlider(
-                            value: model.playbackProgress,
-                            accent: theme.colorTokens.accent.color,
-                            track: theme.colorTokens.separator.color.opacity(0.4),
-                            thumb: Color.white,
-                            onEditingChanged: { editing in
-                                if !editing, let pending = pendingSeek {
-                                    model.playbackProgress = pending
-                                    pendingSeek = nil
-                                }
-                            },
-                            onValueChanged: { pendingSeek = $0 }
-                        )
-                        .accessibilityLabel("播放进度")
-                        .accessibilityValue(Text(formatDuration(model.playbackPosition)))
-                        HStack {
-                            Text(formatDuration(model.playbackPosition))
-                            Spacer()
-                            Text("-" + formatDuration(max(model.currentTrack.duration - model.playbackPosition, 0)))
-                        }
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-
-                    // 播放控制：循环 | 上一首 | 播放 | 下一首 | 队列
-                    transportControls(playButtonSize: playButtonSize)
-
-                    // 音量
-                    volumeControl
-
-                    // 音质 + AirPlay（AirPlay 限制为普通按钮尺寸）
-                    bottomInfo
-                }
-                .frame(maxWidth: 560)
-
-                Spacer(minLength: 0)
+        return VStack(spacing: sectionSpacing) {
+            TabView(selection: $page) {
+                lyrics
+                    .tag(NowPlayingPage.lyrics)
+                artworkHero(side: artworkSide, compactHeight: compactHeight)
+                    .tag(NowPlayingPage.player)
+                queue
+                    .tag(NowPlayingPage.queue)
             }
-            .padding(.horizontal, AuralisSpacing.large)
+#if os(iOS)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+#else
+            .tabViewStyle(.automatic)
+#endif
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            playbackControls(sectionSpacing: sectionSpacing, playButtonSize: playButtonSize)
+                .frame(maxWidth: 560)
+                // 控制区贴近可用区域底部，不再用下方 Spacer 把它悬在页面中间。
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, AuralisSpacing.medium)
+    }
+
+    /// 上方海报区：在分段控件以下的空白区居中，保留轻微下移以强化上下留白。
+    private func artworkHero(side: CGFloat, compactHeight: Bool) -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: AuralisSpacing.medium)
+            ZStack {
+                NowPlayingArtworkGlowView(
+                    isPlaying: model.playbackState == .playing,
+                    artworkKey: model.currentTrack.artworkKey,
+                    title: model.currentTrack.albumTitle,
+                    colors: theme.colorTokens,
+                    size: side
+                )
+                ArtworkView(
+                    title: model.currentTrack.albumTitle,
+                    artworkKey: model.currentTrack.artworkKey,
+                    colors: theme.colorTokens,
+                    size: side
+                )
+                .shadow(
+                    color: theme.colorTokens.accent.color.opacity(theme.motion.glowIntensity),
+                    radius: compactHeight ? 20 : 28
+                )
+            }
+            Spacer(minLength: AuralisSpacing.xSmall)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func playbackControls(sectionSpacing: CGFloat, playButtonSize: CGFloat) -> some View {
+        VStack(spacing: sectionSpacing) {
+            // 标题和艺术家始终以整行中心为基准；超长内容只从头到尾慢速移动一次。
+            ZStack {
+                VStack(spacing: AuralisSpacing.xSmall) {
+                    OneShotMarqueeText(
+                        text: model.currentTrack.title,
+                        font: .title2.bold(),
+                        color: theme.colorTokens.primaryText.color,
+                        height: 30
+                    )
+                    OneShotMarqueeText(
+                        text: model.currentTrack.artistName,
+                        font: .subheadline,
+                        color: theme.colorTokens.secondaryText.color,
+                        height: 22
+                    )
+                }
+                .padding(.horizontal, 48)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(nowPlayingAccessibilityLabel)
+
+                HStack {
+                    Spacer()
+                    favoriteButton
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(spacing: AuralisSpacing.xSmall) {
+                ThinSlider(
+                    value: model.playbackProgress,
+                    accent: theme.colorTokens.accent.color,
+                    track: theme.colorTokens.separator.color.opacity(0.4),
+                    thumb: Color.white,
+                    onEditingChanged: { editing in
+                        if !editing, let pending = pendingSeek {
+                            model.playbackProgress = pending
+                            pendingSeek = nil
+                        }
+                    },
+                    onValueChanged: { pendingSeek = $0 }
+                )
+                .accessibilityLabel("播放进度")
+                .accessibilityValue(Text(formatDuration(playbackStore.position)))
+                HStack {
+                    Text(formatDuration(playbackStore.position))
+                    Spacer()
+                    Text("-" + formatDuration(max(model.currentTrack.duration - playbackStore.position, 0)))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+
+            transportControls(playButtonSize: playButtonSize)
+            volumeControl
+            bottomInfo
         }
     }
 
@@ -424,13 +454,16 @@ struct NowPlayingView: View {
 
     private func transportControls(playButtonSize: CGFloat) -> some View {
         HStack(spacing: 0) {
-            // 播放模式：单个按钮循环切换「列表顺序 → 随机播放 → 循环播放」。
+            // 播放模式：单个按钮循环切换顺序、随机、列表循环和单曲循环。
             transportItem {
-                Button(action: model.cyclePlayMode) {
+                Button {
+                    // 只保留很短的状态过渡，避免默认符号替换动画显得迟缓。
+                    withAnimation(.linear(duration: 0.12)) { model.cyclePlayMode() }
+                } label: {
                     Image(systemName: model.playMode.symbol)
                         .font(.title3)
                         .foregroundStyle(model.playMode == .list ? theme.colorTokens.secondaryText.color : theme.colorTokens.accent.color)
-                        .contentTransition(.symbolEffect(.replace))
+                        .contentTransition(.identity)
                 }
                 .accessibilityLabel("播放模式：\(model.playMode.title)")
             }
@@ -487,15 +520,31 @@ struct NowPlayingView: View {
 
     private var bottomInfo: some View {
         HStack(spacing: AuralisSpacing.medium) {
-            Label(model.currentTrack.effectiveCodec?.uppercased() ?? "未知", systemImage: "waveform")
-                .font(.caption)
-                .foregroundStyle(theme.colorTokens.secondaryText.color)
+            Button {
+                withAnimation(.easeInOut(duration: 0.12)) { showsAudioTechnicalInfo.toggle() }
+            } label: {
+                Label(audioTechnicalLabel, systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            .buttonStyle(HapticPlainButtonStyle())
+            .accessibilityLabel("音频格式，点击切换采样率")
             Spacer()
             RoutePickerView()
                 .frame(width: 28, height: 28)
                 .accessibilityLabel("AirPlay 输出设备")
         }
         .frame(maxWidth: 420)
+    }
+
+    private var audioTechnicalLabel: String {
+        guard showsAudioTechnicalInfo else {
+            return model.currentTrack.effectiveCodec?.uppercased() ?? "未知"
+        }
+        let info = model.currentTrack.sourceInfo
+        let sampleRate = info.sampleRate.map { "\($0 / 1_000) kHz" } ?? "采样率未知"
+        if let bitDepth = info.bitDepth { return "\(bitDepth)-bit · \(sampleRate)" }
+        return sampleRate
     }
 
 
@@ -516,10 +565,72 @@ struct NowPlayingView: View {
         return "\(model.currentTrack.title)，\(model.currentTrack.artistName)，专辑 \(model.currentTrack.albumTitle)，\(state)"
     }
 
+    private var currentAlbum: Album? {
+        model.catalog.albums.first {
+            $0.id == model.currentTrack.albumID && $0.serverID == model.currentTrack.serverID
+        }
+    }
+
+    private var currentArtist: Artist? {
+        model.catalog.artists.first {
+            $0.id == model.currentTrack.artistID && $0.serverID == model.currentTrack.serverID
+        }
+    }
+
+    private func openCurrentAlbum() {
+        guard let album = currentAlbum else { return }
+        openLibraryDestination(.album(album))
+    }
+
+    private func openCurrentArtist() {
+        guard let artist = currentArtist else { return }
+        openLibraryDestination(.artist(artist))
+    }
+
+    private func openLibraryDestination(_ destination: BrowseDestination) {
+        dismiss()
+        model.isNowPlayingPresented = false
+        Task { @MainActor in
+            // 先让播放页完成关闭，再呈现资料库详情，避免同一时刻竞争两个 sheet。
+            try? await Task.sleep(for: .milliseconds(180))
+            model.selectedSection = .library
+            model.browseDestination = destination
+        }
+    }
+
+    /// 后台创建独立会话，要求 Agent 真实查询相似曲目并只调用一次 queue_replace。
+    private func continueWithSimilarQueue() {
+        let track = model.currentTrack
+        let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description
+        Task { @MainActor in
+            if model.assistantIsRunning { model.cancelAssistant() }
+            _ = await model.agentCoordinator.newSession()
+            model.agentCoordinator.send(
+                "以当前歌曲《\(track.title)》—\(track.artistName)（trackID: \(globalID)）为种子，调用 library_get_similar_songs 查找相似歌曲，去重并优先保留高质量版本，生成约 20 首队列；最后只调用一次 queue_replace 替换当前播放队列并开始播放。不要只输出文字建议。"
+            )
+        }
+    }
+
+    /// 歌曲鉴赏必须进入一个干净的新会话，并明确调用现有 music_appreciate 工具。
+    private func appreciateCurrentSong() {
+        let track = model.currentTrack
+        let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description
+        dismiss()
+        model.isNowPlayingPresented = false
+        Task { @MainActor in
+            if model.assistantIsRunning { model.cancelAssistant() }
+            _ = await model.agentCoordinator.newSession()
+            model.selectedSection = .assistant
+            model.agentCoordinator.send(
+                "请调用 music_appreciate，专业鉴赏《\(track.title)》—\(track.artistName)（trackID: \(globalID)），并按应用规定的鉴赏格式输出，区分已核验事实、专业听感与大众评价。"
+            )
+        }
+    }
+
     /// 当前应高亮的歌词行：仅对带时间轴的同步歌词按播放位置计算。
     private var currentLyricIndex: Int? {
         guard let document = model.currentLyrics, document.isSynced else { return nil }
-        let position = model.playbackPosition
+        let position = playbackStore.position
         var result: Int?
         for (index, line) in document.lines.enumerated() {
             guard let start = line.startTime else { continue }
@@ -540,7 +651,7 @@ struct NowPlayingView: View {
                         ForEach(Array(document.lines.enumerated()), id: \.element.id) { index, line in
                             let isCurrent = index == currentLyricIndex
                             Text(line.text)
-                                .font(.title2.weight(isCurrent ? .bold : .medium))
+                                .font(.title3.weight(isCurrent ? .semibold : .regular))
                                 .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity, alignment: .center)
@@ -569,6 +680,7 @@ struct NowPlayingView: View {
                 TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
                     .contentShape(Rectangle())
                     .onTapGesture { model.selectAndPlay(track) }
+                    .listRowBackground(Color.clear)
             }
 #if os(iOS)
             .onDelete { model.removeFromQueue(atOffsets: $0) }
@@ -576,6 +688,8 @@ struct NowPlayingView: View {
 #endif
         }
         .scrollContentBackground(.hidden)
+        .background(theme.colorTokens.surface.color.opacity(0.42))
+        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.large, style: .continuous))
 #if os(iOS)
         .environment(\.editMode, $queueEditMode)
         .overlay(alignment: .topTrailing) {
@@ -602,6 +716,181 @@ private enum NowPlayingPage: String, CaseIterable, Identifiable {
         case .lyrics: String(localized: "歌词")
         case .player: String(localized: "正在播放")
         case .queue: String(localized: "队列")
+        }
+    }
+}
+
+private struct MarqueeTextWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct MarqueeIdentity: Hashable {
+    let text: String
+    let textWidth: Int
+    let containerWidth: Int
+}
+
+/// 播放页标题是否需要跑马灯的纯布局规则，独立出来避免把“略微可缩放显示”的
+/// 名称误判为溢出。测试覆盖正常、临界和真实超宽三种情况。
+struct MarqueeLayoutPolicy: Sendable {
+    static let minimumScaleFactor: CGFloat = 0.86
+
+    static func shouldScroll(textWidth: CGFloat, containerWidth: CGFloat) -> Bool {
+        guard containerWidth > 0 else { return false }
+        return textWidth > containerWidth / minimumScaleFactor
+    }
+}
+
+/// 只在内容溢出时从开头慢速移动到末尾一次，停在末尾，不循环也不来回闪动。
+private struct OneShotMarqueeText: View {
+    let text: String
+    let font: Font
+    let color: Color
+    let height: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var textWidth: CGFloat = 0
+    @State private var travel: CGFloat = 0
+
+    var body: some View {
+        // GeometryReader 先接受父级给出的有限宽度，内部的 fixedSize 文本只能在这个
+        // 裁剪窗口里移动，绝不能再参与父级横向测量、把整张播放页撑宽。
+        GeometryReader { proxy in
+            let containerWidth = max(proxy.size.width, 1)
+            // 最多允许轻微缩小到 86%。能完整容纳的标题保持静止；只有连轻微缩小
+            // 也放不下的内容才滚动，避免短歌名等待很久才进入可视区域。
+            let canFitWithoutScrolling = !MarqueeLayoutPolicy.shouldScroll(
+                textWidth: textWidth,
+                containerWidth: containerWidth
+            )
+            let overflow = canFitWithoutScrolling ? 0 : max(textWidth - containerWidth, 0)
+            let identity = MarqueeIdentity(
+                text: text,
+                textWidth: Int(textWidth.rounded()),
+                containerWidth: Int(containerWidth.rounded())
+            )
+
+            ZStack(alignment: overflow > 1 ? .leading : .center) {
+                if canFitWithoutScrolling {
+                    Text(text)
+                        .font(font)
+                        .foregroundStyle(color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(MarqueeLayoutPolicy.minimumScaleFactor)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                } else {
+                    Text(text)
+                        .font(font)
+                        .foregroundStyle(color)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .offset(x: -min(travel, overflow))
+                }
+            }
+            .frame(width: containerWidth, height: height, alignment: overflow > 1 ? .leading : .center)
+            // 用背景中的固有尺寸文本做判断；background 不参与父级尺寸计算，既能得到
+            // 完整文字宽度，也不会再次把播放页横向撑开。
+            .background {
+                Text(text)
+                    .font(font)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .hidden()
+                    .background {
+                        GeometryReader { textProxy in
+                            Color.clear.preference(
+                                key: MarqueeTextWidthPreferenceKey.self,
+                                value: textProxy.size.width
+                            )
+                        }
+                    }
+            }
+            .clipped()
+            .task(id: identity) {
+                var resetTransaction = Transaction(animation: nil)
+                resetTransaction.disablesAnimations = true
+                withTransaction(resetTransaction) { travel = 0 }
+                guard overflow > 1, !reduceMotion else { return }
+                try? await Task.sleep(for: .milliseconds(1_600))
+                guard !Task.isCancelled else { return }
+                // 约每秒 10pt；只从头到尾走一遍，完成后停在末尾。
+                withAnimation(.linear(duration: max(9, Double(overflow / 10)))) {
+                    travel = overflow
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+        .clipped()
+        .onPreferenceChange(MarqueeTextWidthPreferenceKey.self) { textWidth = $0 }
+    }
+}
+
+/// 播放页“歌曲信息”：仅展示真实本地目录与播放状态，不暴露流地址或凭据。
+private struct TrackInformationSheet: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+    let track: Track
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("基本信息") {
+                    infoRow("歌曲", track.title)
+                    infoRow("艺术家", track.artistName)
+                    infoRow("专辑", track.albumTitle)
+                    infoRow("时长", formatDuration(track.duration))
+                    infoRow("年份", track.year.map(String.init) ?? "未知")
+                    infoRow("流派", track.genres.isEmpty ? "未知" : track.genres.joined(separator: "、"))
+                    infoRow("语言", track.language ?? "未知")
+                }
+                Section("曲目位置") {
+                    infoRow("碟片", track.discNumber.map(String.init) ?? "未知")
+                    infoRow("曲目", track.trackNumber.map(String.init) ?? "未知")
+                }
+                Section("音频质量") {
+                    infoRow("格式", track.effectiveCodec?.uppercased() ?? "未知")
+                    infoRow("采样率", track.sourceInfo.sampleRate.map { "\($0) Hz" } ?? "未知")
+                    infoRow("位深", track.sourceInfo.bitDepth.map { "\($0) bit" } ?? "未知")
+                    infoRow("码率", track.sourceInfo.bitRate.map { "\($0) kbps" } ?? "未知")
+                    infoRow("声道", track.sourceInfo.channelCount.map { "\($0)" } ?? "未知")
+                }
+                Section("状态") {
+                    infoRow("收藏", track.isFavorite ? "已收藏" : "未收藏")
+                    infoRow("评分", track.rating.map { "\($0)/5" } ?? "未评分")
+                    infoRow("播放次数", "\(model.playCounts[track.id] ?? 0) 次")
+                    infoRow("本地下载", model.isDownloaded(track) ? "已下载" : "未下载")
+                    infoRow("歌词", model.currentLyrics == nil ? "无" : "已获取")
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(theme.colorTokens.background.color)
+            .navigationTitle("歌曲信息")
+#if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+#endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+#if os(macOS)
+        .frame(minWidth: 440, minHeight: 540)
+#endif
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: AuralisSpacing.medium) {
+            Text(label)
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+            Spacer(minLength: AuralisSpacing.medium)
+            Text(value)
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
         }
     }
 }

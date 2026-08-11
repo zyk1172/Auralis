@@ -39,11 +39,15 @@ struct CatalogSyncSection: View {
             HStack {
                 if isSyncing {
                     Button("取消同步") { coordinator.cancelSync() }
+                        .buttonStyle(HapticBorderedButtonStyle())
                 } else {
                     Button("立即刷新") { withServerID { coordinator.manualRefresh(serverID: $0) } }
+                        .buttonStyle(HapticBorderedButtonStyle())
                     Button("完全重建") { isRebuilding = true }
+                        .buttonStyle(HapticDestructiveButtonStyle())
                     if case .failed = coordinator.phase {
                         Button("重试") { withServerID { coordinator.retry(serverID: $0) } }
+                            .buttonStyle(HapticBorderedButtonStyle())
                     }
                 }
             }
@@ -137,10 +141,19 @@ struct CacheManagementSection: View {
             Text("App 只在本机持久化音乐库元数据（歌曲、专辑、艺术家、流派、歌单、收藏与播放记录）。封面与歌词按需从服务器加载，不主动缓存；离线下载的歌曲仍会占用临时音频缓存。")
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
-            HStack {
-                Button("清理历史封面") { confirmClearArtwork = true }
-                Button("清理历史歌词") { run { await model.clearLyricsCache() } }
-                Button("清理临时音频") { confirmClearAudio = true }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: AuralisSpacing.small) {
+                    cacheAction("清理历史封面", symbol: "photo.on.rectangle") { confirmClearArtwork = true }
+                    cacheAction("清理历史歌词", symbol: "text.quote") { run { await model.clearLyricsCache() } }
+                    cacheAction("清理临时音频", symbol: "waveform.slash") { confirmClearAudio = true }
+                }
+                VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+                    HStack(spacing: AuralisSpacing.small) {
+                        cacheAction("清理历史封面", symbol: "photo.on.rectangle") { confirmClearArtwork = true }
+                        cacheAction("清理历史歌词", symbol: "text.quote") { run { await model.clearLyricsCache() } }
+                    }
+                    cacheAction("清理临时音频", symbol: "waveform.slash") { confirmClearAudio = true }
+                }
             }
             .disabled(isWorking)
         }
@@ -166,6 +179,16 @@ struct CacheManagementSection: View {
             await reload()
             isWorking = false
         }
+    }
+
+    private func cacheAction(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.medium))
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(HapticBorderedButtonStyle())
+        .tint(theme.colorTokens.secondaryText.color)
     }
 
     private func reload() async {

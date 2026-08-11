@@ -417,7 +417,14 @@ private struct MacServerStatusEntry: View {
 /// 让播放信息、进度和核心控制拥有稳定的水平空间，而不是与窗口工具栏的系统按钮争抢位置。
 private struct MacDesktopPlayerBar: View {
     @ObservedObject var model: AuralisAppModel
+    @ObservedObject private var playbackStore: PlaybackStore
     let theme: BuiltInTheme
+
+    init(model: AuralisAppModel, theme: BuiltInTheme) {
+        self.model = model
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self.theme = theme
+    }
 
     private var hasTrack: Bool { model.currentTrack.id.rawValue != "placeholder" }
     private var duration: TimeInterval { max(model.currentTrack.duration, 1) }
@@ -426,7 +433,7 @@ private struct MacDesktopPlayerBar: View {
         VStack(spacing: 0) {
             Slider(
                 value: Binding(
-                    get: { model.playbackPosition },
+                    get: { playbackStore.position },
                     set: { model.seek(toProgress: $0 / duration) }
                 ),
                 in: 0...duration
@@ -502,7 +509,7 @@ private struct MacDesktopPlayerBar: View {
                 HStack(spacing: 14) {
                     MacVolumeControl(model: model, theme: theme)
                     HStack(spacing: 8) {
-                        Text(Self.timeText(model.playbackPosition))
+                        Text(Self.timeText(playbackStore.position))
                         Text("/")
                             .foregroundStyle(theme.colorTokens.secondaryText.color.opacity(0.6))
                         Text(Self.timeText(model.currentTrack.duration))
@@ -554,8 +561,15 @@ private struct MacToolbarIconButton: View {
 /// 顶部工具栏播放器控制区（视觉中心）：空状态与播放状态保持基本尺寸，避免重排。
 private struct MacToolbarPlayback: View {
     @ObservedObject var model: AuralisAppModel
+    @ObservedObject private var playbackStore: PlaybackStore
     let theme: BuiltInTheme
     @State private var hovering = false
+
+    init(model: AuralisAppModel, theme: BuiltInTheme) {
+        self.model = model
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self.theme = theme
+    }
 
     private var isPlaying: Bool { model.currentTrack.id.rawValue != "placeholder" }
     private var duration: TimeInterval { model.currentTrack.duration > 0 ? model.currentTrack.duration : 1 }
@@ -629,13 +643,13 @@ private struct MacToolbarPlayback: View {
                 // 进度（可拖动）
                 VStack(spacing: 2) {
                     Slider(value: Binding(
-                        get: { model.playbackPosition },
+                        get: { playbackStore.position },
                         set: { model.seek(toProgress: $0 / duration) }
                     ), in: 0...duration)
                     .frame(width: 160)
                     .controlSize(.mini)
                     HStack {
-                        Text(Self.timeText(model.playbackPosition))
+                        Text(Self.timeText(playbackStore.position))
                         Spacer()
                         Text(Self.timeText(model.currentTrack.duration))
                     }

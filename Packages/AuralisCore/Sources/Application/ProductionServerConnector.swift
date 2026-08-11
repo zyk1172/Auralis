@@ -18,6 +18,8 @@ public actor ProductionServerConnector: ServerConnecting {
     }
 
     private let credentialVault: any CredentialVault
+    /// Canonical music catalog. `persistence` below retains accounts/configuration only.
+    private let catalogStore: LocalCatalogStore
     private let persistence: any AuralisPersisting
     private let session: URLSession
     private let sourceFactory: SourceFactory
@@ -31,6 +33,7 @@ public actor ProductionServerConnector: ServerConnecting {
     public init(
         credentialVault: any CredentialVault,
         persistence: any AuralisPersisting,
+        catalogStore: LocalCatalogStore? = nil,
         session: URLSession = .shared,
         auxiliaryCache: LibraryAuxiliaryCache = LibraryAuxiliaryCache(),
         sourceFactory: @escaping SourceFactory,
@@ -38,6 +41,8 @@ public actor ProductionServerConnector: ServerConnecting {
     ) {
         self.credentialVault = credentialVault
         self.persistence = persistence
+        self.catalogStore = catalogStore
+            ?? (try! LocalCatalogStore(url: URL(fileURLWithPath: ":memory:")))
         self.session = session
         self.auxiliaryCache = auxiliaryCache
         self.sourceFactory = sourceFactory
@@ -85,10 +90,9 @@ public actor ProductionServerConnector: ServerConnecting {
                 async let starredRequest = Self.optional { try await client.starred() }
 
                 await progress(.loadingLibrary)
-                let syncStore = PersistenceLibrarySyncStore(persistence: persistence)
                 let synchronizer = LibrarySynchronizer(
                     source: sourceFactory(client),
-                    store: syncStore,
+                    store: catalogStore,
                     pageSize: 50,
                     isRetryable: Self.isRetryableSyncError
                 )
@@ -102,9 +106,6 @@ public actor ProductionServerConnector: ServerConnecting {
                 }
 
                 try Task.checkCancellation()
-                guard var snapshot = try await persistence.snapshot(serverID: serverID) else {
-                    throw ServerConnectionError.libraryStorageUnavailable
-                }
                 let account = ServerAccount(
                     id: serverID,
                     displayName: input.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -113,8 +114,10 @@ public actor ProductionServerConnector: ServerConnecting {
                     username: username,
                     credentialReference: credentialID.rawValue
                 )
-                snapshot = Self.repaired(snapshot: snapshot, account: account)
-                try await persistence.saveSnapshot(snapshot)
+                try await persistence.saveAccount(account)
+                try await catalogStore.upsertServer(account)
+                let snapshot = try await canonicalSnapshot(serverID: serverID, account: account)
+                try await compactLegacySnapshot(serverID: serverID, account: account)
 
                 let genres = await genresRequest ?? []
                 let playlists = await playlistsRequest ?? []
@@ -182,6 +185,8 @@ public actor ProductionServerConnector: ServerConnecting {
             guard let account = try await persistence.account(id: serverID) else {
                 return nil
             }
+            try await migrateLegacySnapshotIfNeeded(serverID: serverID, account: account)
+            try await catalogStore.upsertServer(account)
             // 冷启动必须先展示本地快照，不能被内外网探测（内网最长 30 秒）阻塞。
             // 先用内网客户端拼出本地目录；端点选择转到后台，完成后会替换 activeClient，
             // 后续播放/下载自然使用当前网络可达的端点。
@@ -193,16 +198,12 @@ public actor ProductionServerConnector: ServerConnecting {
                     }
                 }
             }
-            var tracks: [Track] = []
-            var artists: [Artist] = []
-            var albums: [Album] = []
-            if let snapshot = try await persistence.snapshot(serverID: account.id) {
-                tracks = snapshot.tracks
-                artists = snapshot.artists
-                albums = snapshot.albums
-                if let client = activeClient {
-                    tracks = await Self.applyingStreamURLs(to: tracks, client: client, quality: streamQuality)
-                }
+            let snapshot = try await canonicalSnapshot(serverID: account.id, account: account)
+            var tracks = snapshot.tracks
+            let artists = snapshot.artists
+            let albums = snapshot.albums
+            if let client = activeClient {
+                tracks = await Self.applyingStreamURLs(to: tracks, client: client, quality: streamQuality)
             }
             // 除双地址的端点选择外，仍只读本地辅助缓存；歌单/流派随后后台增量刷新。
             let cached = await auxiliaryCache.snapshot(serverID: account.id)
@@ -244,18 +245,17 @@ public actor ProductionServerConnector: ServerConnecting {
             async let playlistsRequest = Self.optional { try await client.playlists() }
             async let starredRequest = Self.optional { try await client.starred() }
 
-            let syncStore = PersistenceLibrarySyncStore(persistence: persistence)
             let synchronizer = LibrarySynchronizer(
                 source: sourceFactory(client),
-                store: syncStore,
+                store: catalogStore,
                 pageSize: 50,
                 isRetryable: Self.isRetryableSyncError
             )
             _ = try await synchronizer.sync(serverID: serverID, mode: .full) { _ in }
 
-            guard var snapshot = try await persistence.snapshot(serverID: serverID) else { return nil }
-            snapshot = Self.repaired(snapshot: snapshot, account: account)
-            try await persistence.saveSnapshot(snapshot)
+            try await catalogStore.upsertServer(account)
+            let snapshot = try await canonicalSnapshot(serverID: serverID, account: account)
+            try await compactLegacySnapshot(serverID: serverID, account: account)
 
             let genres = await genresRequest ?? []
             let playlists = await playlistsRequest ?? []
@@ -546,6 +546,7 @@ public actor ProductionServerConnector: ServerConnecting {
         account.displayName = trimmed
         do {
             try await persistence.saveAccount(account)
+            try await catalogStore.upsertServer(account)
             return true
         } catch {
             return false
@@ -557,6 +558,7 @@ public actor ProductionServerConnector: ServerConnecting {
         account.externalBaseURL = externalBaseURL.map(Self.normalizedBaseURL)
         do {
             try await persistence.saveAccount(account)
+            try await catalogStore.upsertServer(account)
             return true
         } catch {
             return false
@@ -591,6 +593,7 @@ public actor ProductionServerConnector: ServerConnecting {
         account.credentialReference = credentialID.rawValue
         do {
             try await persistence.saveAccount(account)
+            try await catalogStore.upsertServer(account)
             if activeClient?.configuration.serverID == serverID {
                 activeClient = makeClient(
                     baseURL: account.baseURL!,
@@ -641,6 +644,7 @@ public actor ProductionServerConnector: ServerConnecting {
             try? await credentialVault.store(secret, for: CredentialID(rawValue: reference))
         }
         try? await persistence.saveAccount(account)
+        try? await catalogStore.upsertServer(account)
     }
 
     // MARK: - 歌单编辑
@@ -804,6 +808,57 @@ public actor ProductionServerConnector: ServerConnecting {
         activeClient = nil
     }
 
+    /// Reads the complete visible music library from SQLite. This is the only catalog snapshot
+    /// used to hydrate SwiftUI; the JSON persistence no longer participates in music queries.
+    private func canonicalSnapshot(
+        serverID: ServerID,
+        account: ServerAccount
+    ) async throws -> ServerLibrarySnapshot {
+        let snapshot = ServerLibrarySnapshot(
+            serverID: serverID,
+            account: account,
+            artists: try await catalogStore.allArtists(serverID: serverID),
+            albums: try await catalogStore.allAlbums(serverID: serverID),
+            tracks: try await catalogStore.allTracks(serverID: serverID)
+        )
+        return Self.repaired(snapshot: snapshot, account: account)
+    }
+
+    /// One-time compatibility bridge for users upgrading from the former JSON music snapshot.
+    /// Accounts/config remain in FileBackedPersistence. Music is copied into SQLite first, then
+    /// removed from the JSON archive only after SQLite has committed successfully.
+    private func migrateLegacySnapshotIfNeeded(
+        serverID: ServerID,
+        account: ServerAccount
+    ) async throws {
+        guard let legacy = try await persistence.snapshot(serverID: serverID),
+              !legacy.artists.isEmpty || !legacy.albums.isEmpty || !legacy.tracks.isEmpty
+        else { return }
+
+        let localTracks = try await catalogStore.trackCount(serverID: serverID)
+        let localArtists = try await catalogStore.allArtists(serverID: serverID).count
+        let localAlbums = try await catalogStore.allAlbums(serverID: serverID).count
+        if localTracks < legacy.tracks.count
+            || localArtists < legacy.artists.count
+            || localAlbums < legacy.albums.count {
+            let repaired = Self.repaired(snapshot: legacy, account: account)
+            let session = try await catalogStore.beginSync(serverID: serverID, mode: .full)
+            try await catalogStore.stageArtists(repaired.artists, session: session)
+            try await catalogStore.stageAlbums(repaired.albums, session: session)
+            try await catalogStore.stageTracks(repaired.tracks, session: session)
+            try await catalogStore.completeSync(session, completedAt: .now)
+        }
+        try await catalogStore.upsertServer(account)
+        try await compactLegacySnapshot(serverID: serverID, account: account)
+    }
+
+    private func compactLegacySnapshot(serverID: ServerID, account: ServerAccount) async throws {
+        guard let legacy = try await persistence.snapshot(serverID: serverID),
+              !legacy.artists.isEmpty || !legacy.albums.isEmpty || !legacy.tracks.isEmpty
+        else { return }
+        try await persistence.saveSnapshot(ServerLibrarySnapshot(serverID: serverID, account: account))
+    }
+
     /// 仅本地清理：删除持久化资料库与 Keychain 凭据。远端 NAS 数据不受任何影响。
     /// 移除服务器：仅清理本地凭据与本地数据，绝不向远端发送任何删除请求。
     public func forgetServer(serverID: ServerID) async {
@@ -815,6 +870,7 @@ public actor ProductionServerConnector: ServerConnecting {
             try? await credentialVault.delete(id: CredentialID(rawValue: "opensubsonic.\(serverID.rawValue)"))
         }
         try? await persistence.removeServer(serverID)
+        try? await catalogStore.purgeServer(serverID)
         await auxiliaryCache.purge(serverID: serverID)
         activeClient = nil
     }

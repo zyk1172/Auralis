@@ -21,20 +21,27 @@ extension LocalCatalogStore {
     }
 
     /// 读取指定服务器的全部完整 Track（用于资料库维护 / 诊断，可限制数量）。
-    public func allTracks(serverID: ServerID?, limit: Int = 2000) throws -> [Track] {
+    public func allTracks(serverID: ServerID?, limit: Int? = nil) throws -> [Track] {
         // 服务器过滤下沉到 SQL（tracks 表有 server_id 列）：先 LIMIT 再在内存过滤，
         // 会导致第二台服务器在首台记录数 ≥ limit 时整段被截断。
         let rows: [[String: SQLiteValue]]
-        if let serverID {
+        if let serverID, let limit {
             rows = try db.query(
                 "SELECT global_id, payload FROM tracks WHERE server_id = ? ORDER BY rowid LIMIT ?",
                 [.text(serverID.rawValue), .integer(Int64(limit))]
             )
-        } else {
+        } else if let serverID {
+            rows = try db.query(
+                "SELECT global_id, payload FROM tracks WHERE server_id = ? ORDER BY rowid",
+                [.text(serverID.rawValue)]
+            )
+        } else if let limit {
             rows = try db.query(
                 "SELECT global_id, payload FROM tracks ORDER BY rowid LIMIT ?",
                 [.integer(Int64(limit))]
             )
+        } else {
+            rows = try db.query("SELECT global_id, payload FROM tracks ORDER BY rowid")
         }
         var result: [Track] = []
         for row in rows {
@@ -62,18 +69,25 @@ extension LocalCatalogStore {
 
     /// 读取指定服务器的全部完整 Album（用于资料库刷新 / 维护，可限制数量）。
     /// 与 allTracks 同风格：服务器过滤下沉到 SQL，避免多服务器在 LIMIT 时互相截断。
-    public func allAlbums(serverID: ServerID?, limit: Int = 2000) throws -> [Album] {
+    public func allAlbums(serverID: ServerID?, limit: Int? = nil) throws -> [Album] {
         let rows: [[String: SQLiteValue]]
-        if let serverID {
+        if let serverID, let limit {
             rows = try db.query(
                 "SELECT global_id, payload FROM albums WHERE server_id = ? ORDER BY rowid LIMIT ?",
                 [.text(serverID.rawValue), .integer(Int64(limit))]
             )
-        } else {
+        } else if let serverID {
+            rows = try db.query(
+                "SELECT global_id, payload FROM albums WHERE server_id = ? ORDER BY rowid",
+                [.text(serverID.rawValue)]
+            )
+        } else if let limit {
             rows = try db.query(
                 "SELECT global_id, payload FROM albums ORDER BY rowid LIMIT ?",
                 [.integer(Int64(limit))]
             )
+        } else {
+            rows = try db.query("SELECT global_id, payload FROM albums ORDER BY rowid")
         }
         var result: [Album] = []
         for row in rows {
@@ -91,18 +105,25 @@ extension LocalCatalogStore {
 
     /// 读取指定服务器的全部完整 Artist（用于资料库刷新 / 维护，可限制数量）。
     /// 与 allTracks 同风格：服务器过滤下沉到 SQL，避免多服务器在 LIMIT 时互相截断。
-    public func allArtists(serverID: ServerID?, limit: Int = 2000) throws -> [Artist] {
+    public func allArtists(serverID: ServerID?, limit: Int? = nil) throws -> [Artist] {
         let rows: [[String: SQLiteValue]]
-        if let serverID {
+        if let serverID, let limit {
             rows = try db.query(
                 "SELECT global_id, payload FROM artists WHERE server_id = ? ORDER BY rowid LIMIT ?",
                 [.text(serverID.rawValue), .integer(Int64(limit))]
             )
-        } else {
+        } else if let serverID {
+            rows = try db.query(
+                "SELECT global_id, payload FROM artists WHERE server_id = ? ORDER BY rowid",
+                [.text(serverID.rawValue)]
+            )
+        } else if let limit {
             rows = try db.query(
                 "SELECT global_id, payload FROM artists ORDER BY rowid LIMIT ?",
                 [.integer(Int64(limit))]
             )
+        } else {
+            rows = try db.query("SELECT global_id, payload FROM artists ORDER BY rowid")
         }
         var result: [Artist] = []
         for row in rows {
@@ -372,6 +393,26 @@ extension LocalCatalogStore {
         }
     }
 
+    /// Marks a previously counted qualified play as completed without increasing
+    /// its play count a second time.
+    public func markPlayCompleted(_ globalID: GlobalID) throws {
+        let existing = try db.query(
+            "SELECT global_id FROM play_history WHERE global_id = ? LIMIT 1",
+            [.text(globalID.description)]
+        )
+        if existing.isEmpty {
+            try db.run(
+                "INSERT INTO play_history (global_id, last_played, play_count, completed) VALUES (?, ?, 0, 1)",
+                [.text(globalID.description), .real(Date().timeIntervalSince1970)]
+            )
+        } else {
+            try db.run(
+                "UPDATE play_history SET completed = completed + 1 WHERE global_id = ?",
+                [.text(globalID.description)]
+            )
+        }
+    }
+
     public func setDownloadState(_ globalID: GlobalID, state: DownloadStateValue, localPath: String? = nil) throws {
         try db.run(
             "INSERT INTO downloads (global_id, state, local_path, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(global_id) DO UPDATE SET state = excluded.state, local_path = excluded.local_path, updated_at = excluded.updated_at",
@@ -456,6 +497,16 @@ extension LocalCatalogStore {
             try db.run("DELETE FROM servers WHERE server_id = ?", [.text(serverID.rawValue)])
             try db.run("DELETE FROM sync_meta WHERE server_id = ?", [.text(serverID.rawValue)])
             try db.run("DELETE FROM sync_checkpoints WHERE server_id = ?", [.text(serverID.rawValue)])
+            let sessions = try db.query(
+                "SELECT session_id FROM sync_sessions WHERE server_id = ?",
+                [.text(serverID.rawValue)]
+            ).compactMap { $0["session_id"]?.string }
+            for sessionID in sessions {
+                try db.run("DELETE FROM sync_staged_artists WHERE session_id = ?", [.text(sessionID)])
+                try db.run("DELETE FROM sync_staged_albums WHERE session_id = ?", [.text(sessionID)])
+                try db.run("DELETE FROM sync_staged_tracks WHERE session_id = ?", [.text(sessionID)])
+            }
+            try db.run("DELETE FROM sync_sessions WHERE server_id = ?", [.text(serverID.rawValue)])
             try db.run("DELETE FROM catalog_fts WHERE global_id LIKE ?", [.text(prefix + "%")])
             try db.run("DELETE FROM favorites WHERE global_id LIKE ?", [.text(prefix + "%")])
             try db.run("DELETE FROM ratings WHERE global_id LIKE ?", [.text(prefix + "%")])

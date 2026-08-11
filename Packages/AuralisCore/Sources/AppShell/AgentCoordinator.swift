@@ -67,8 +67,6 @@ public final class AgentCoordinator: ObservableObject {
     @Published public var sessionQuery = "" { didSet { refreshSessionList() } }
     /// 是否在会话列表里显示已归档会话（默认隐藏）。
     @Published public var showArchivedSessions = false { didSet { refreshSessionList() } }
-    /// 只显示当前服务器的会话。
-    @Published public var filtersByActiveServer = false { didSet { refreshSessionList() } }
 
     // MARK: - Dependencies
 
@@ -261,9 +259,6 @@ public final class AgentCoordinator: ObservableObject {
                     }
                 }
             }
-        }
-        if filtersByActiveServer, let serverID = model.catalog.activeServerID {
-            result = result.filter { $0.serverID == serverID }
         }
         if !showArchivedSessions {
             result = result.filter { !$0.isArchived }

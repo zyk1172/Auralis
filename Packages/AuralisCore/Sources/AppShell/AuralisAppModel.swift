@@ -24,7 +24,15 @@ public final class AuralisAppModel: ObservableObject {
     /// 视图持有它而非各自新建，保证「统一播放状态」。
     public static let shared = AuralisAppModel()
     @Published public var selectedSection: AppSection = .home
-    @Published public var currentTrack: Track
+    public let playbackStore: PlaybackStore
+    public var currentTrack: Track {
+        get { playbackStore.currentTrack }
+        set {
+            guard playbackStore.currentTrack != newValue else { return }
+            objectWillChange.send()
+            playbackStore.currentTrack = newValue
+        }
+    }
     /// AI 助手输入框的草稿文本。提升到模型层是为了让底部 Dock（iOS）
     /// 与助手页面（macOS）共用同一份输入，避免嵌套 safeAreaInset 造成的布局重叠。
     @Published public var assistantDraft: String = ""
@@ -33,16 +41,32 @@ public final class AuralisAppModel: ObservableObject {
     /// 桌面版仅在已有实际播放项目时显示底部迷你播放器；iPhone 的 Dock 则在首页和
     /// 音乐库固定显示，未播放时使用“未在播放”的紧凑内容。
     public var hasCurrentTrack: Bool { currentTrack.id.rawValue != "placeholder" }
-    @Published public var playbackState: PlaybackState = .paused
-    @Published public var playbackPosition: TimeInterval = 0
+    public var playbackState: PlaybackState {
+        get { playbackStore.state }
+        set {
+            guard playbackStore.state != newValue else { return }
+            objectWillChange.send()
+            playbackStore.state = newValue
+        }
+    }
+    /// Position ticks are intentionally published only by `PlaybackStore`.
+    /// Publishing them through the global model used to redraw every screen
+    /// twice per second while music was playing.
+    public var playbackPosition: TimeInterval {
+        get { playbackStore.position }
+        set { playbackStore.position = newValue }
+    }
     /// 播放队列。SwiftUI 的 ForEach / List 要求元素 id 唯一，队列里出现重复 TrackID 时
     /// 会在渲染期直接 fatalError（EXC_BREAKPOINT）→ 点击歌曲/打开播放队列即闪退。
     /// 这里在每次写入时强制去重（保留首次出现的位置），从根源杜绝重复 id 进入界面。
     /// 这样即便调用方（加入队列 / 下一首播放 / AI 代理 / 首页货架）忘记去重，也不会崩溃。
-    @Published public var queue: [Track] {
-        didSet {
-            let unique = uniquedTracks(queue)
-            if unique.count != queue.count { queue = unique }
+    public var queue: [Track] {
+        get { playbackStore.queue }
+        set {
+            let unique = uniquedTracks(newValue)
+            guard playbackStore.queue != unique else { return }
+            objectWillChange.send()
+            playbackStore.queue = unique
             // 队列是播放会话的一部分：变更即持久化（按服务器隔离），
             // 进程重启后可恢复上次的队列与当前曲目。
             persistPlaybackSession()
@@ -139,11 +163,8 @@ public final class AuralisAppModel: ObservableObject {
         #endif
     }
 
-    /// 已加载的服务器封面缓存（独立 @Observable 存储，键为 "serverID|封面Key@像素尺寸"）。
-    /// 故意不放进 @Published：封面按需加载完成时写 @Published 会触发包括首页在内的所有
-    /// model 观察者整体重算，滚动时大量封面陆续到达形成刷新风暴，导致上下滑动卡顿与
-    /// "cannot add handler … dropping" 日志刷屏。独立存储只刷新真正读取封面的视图。
-    let artworkStore = ArtworkStore()
+    /// 独立封面管线与有界内存缓存。ArtworkView 直接依赖它，不再观察整个 AppModel。
+    let artworkStore: ArtworkStore
     /// 循环模式，持久化到 UserDefaults。
     @Published public var repeatMode: RepeatMode {
         didSet {
@@ -158,18 +179,15 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var volume: Float
     /// macOS 侧边栏搜索框的查询词（搜索页实时使用）。
     @Published public var macSearchQuery: String = ""
-    /// 本地播放次数统计（组合键 "serverID:trackID" → 次数），按服务器隔离，
-    /// 避免两台服务器同 ID 歌曲串库（P0-5）。驱动首页「最常听」。
-    @Published public private(set) var playCountStorage: [String: Int] = [:]
+    /// 播放历史与单次播放达标状态由独立组件管理，避免“点选即计数”。
+    private var playbackHistoryStore: PlaybackHistoryStore
+
+    public var playCountStorage: [String: Int] { playbackHistoryStore.counts }
 
     /// 当前活跃服务器下的播放次数（trackID → 次数）。跨服务器查询时为空。
     public var playCounts: [TrackID: Int] {
         guard let serverID = catalog.activeServerID else { return [:] }
-        let prefix = serverID.rawValue + ":"
-        return Dictionary(uniqueKeysWithValues: playCountStorage.compactMap { key, count in
-            guard key.hasPrefix(prefix) else { return nil }
-            return (TrackID(rawValue: String(key.dropFirst(prefix.count))), count)
-        })
+        return playbackHistoryStore.counts(for: serverID)
     }
     /// 已下载到本地的歌曲。
     @Published public private(set) var downloadedTrackIDs: Set<GlobalID> = []
@@ -189,15 +207,10 @@ public final class AuralisAppModel: ObservableObject {
     }
     /// 最近播放的曲目 ID（最近在前），持久化到 UserDefaults，驱动首页「最近播放」。
     /// 最近播放的曲目组合键（"serverID:trackID"，最近在前），按服务器隔离持久化。
-    @Published private var recentPlayedKeys: [String] = []
-
     /// 最近播放的曲目 ID（最近在前，按当前服务器过滤，避免两台服务器同 ID 歌曲混在一起）。
     public var recentlyPlayedIDs: [TrackID] {
         guard let serverID = catalog.activeServerID else { return [] }
-        return recentPlayedKeys.compactMap { key -> TrackID? in
-            guard let gid = GlobalID(key), gid.serverID == serverID else { return nil }
-            return TrackID(rawValue: gid.remoteID)
-        }
+        return playbackHistoryStore.recentIDs(for: serverID)
     }
 
     /// 播放会话持久化快照（按服务器隔离，存 UserDefaults）：当前曲目、队列、进度。
@@ -256,8 +269,8 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var loadingGenre: Genre? = nil
     /// 播放错误（streamURL 为 nil 等），供 UI 展示提示。
     @Published public private(set) var playbackError: PlaybackError? = nil
-    /// 每首曲目首次进入本地目录的时间，用于首页「最近添加」排序。仅进程内使用，持久化在 UserDefaults。
-    private var libraryAddedAt: [TrackID: Date] = [:]
+    /// 首次入库时间按 GlobalID 隔离，并由独立组件执行线性 reconcile / 迁移。
+    private var libraryAddedTracker: LibraryAddedTracker
 
     /// 系统媒体集成（Now Playing / 远程命令 / 中断与路由）。
     public let mediaIntegration = SystemMediaIntegrationController()
@@ -314,10 +327,6 @@ public final class AuralisAppModel: ObservableObject {
     private var progressTimer: Timer?
     private var lyricsInFlight: Set<TrackID> = []
     private var lyricsUnavailable: Set<TrackID> = []
-    private var artworkInFlight: Set<String> = []
-    /// 限制同时进行的封面网络请求数，避免服务器不可达时一次性发起几十条
-    /// 挂起请求、淹没网络与控制台。
-    private let artworkLimiter = ArtworkConcurrencyLimiter(max: 6)
     /// 当前播放任务，用于取消之前的播放操作（快速切歌时避免竞态条件）。
     private var playbackTask: Task<Void, Never>?
     /// Handoff 活动：把当前播放（歌曲/队列/进度）接力到其他 Apple 设备。
@@ -388,22 +397,30 @@ public final class AuralisAppModel: ObservableObject {
         defaults: UserDefaults = .standard,
         storeURL: URL? = nil
     ) {
+        let initialTrack = catalog.tracks.first ?? Track(
+            id: "placeholder", serverID: "local",
+            albumID: "placeholder", artistID: "placeholder",
+            title: "请先连接服务器", artistName: "", albumTitle: "", duration: 0
+        )
         self.catalog = catalog
+        self.playbackStore = PlaybackStore(currentTrack: initialTrack)
         self.engine = engine
         self.connector = connector
         self.cacheStore = cacheStore
         self.artworkCache = artworkCache
+        self.artworkStore = ArtworkStore(
+            connector: connector,
+            diskCache: artworkCache,
+            initialServerID: catalog.activeServerID?.rawValue ?? catalog.tracks.first?.serverID.rawValue
+        )
         self.lyricsCache = lyricsCache
         self.defaults = defaults
         self.storeURL = storeURL
-        self.queue = []
         let storedRate = defaults.object(forKey: Self.playbackRateDefaultsKey) as? Double
         self.playbackRate = Float(min(max(storedRate ?? 1.0, 0.5), 2.0))
         let storedVolume = defaults.object(forKey: Self.volumeDefaultsKey) as? Double
         self.volume = Float(storedVolume ?? 0.8)
         let storedCounts = defaults.dictionary(forKey: Self.playCountsDefaultsKey) as? [String: Int] ?? [:]
-        // 旧版本按裸 trackID 存储（无 ":" 分隔），无法归属服务器，直接丢弃避免串库。
-        self.playCountStorage = storedCounts.filter { $0.key.contains(":") }
         self.lastStopReason = PlaybackStopReason(
             rawValue: defaults.string(forKey: Self.lastStopReasonDefaultsKey) ?? ""
         ) ?? .unknown
@@ -414,21 +431,20 @@ public final class AuralisAppModel: ObservableObject {
         self.homeLayout = HomeLayoutStore.load(from: defaults)
         // 最近播放按「serverID:trackID」组合键存储；旧格式（纯 trackID，无冒号）无法归属服务器，直接丢弃。
         let storedRecent = defaults.array(forKey: Self.recentlyPlayedDefaultsKey) as? [String] ?? []
-        self.recentPlayedKeys = storedRecent.filter { $0.contains(":") }
+        self.playbackHistoryStore = PlaybackHistoryStore(counts: storedCounts, recentKeys: storedRecent)
         let storedAdded = defaults.dictionary(forKey: Self.libraryAddedDefaultsKey) as? [String: Double] ?? [:]
-        self.libraryAddedAt = Dictionary(uniqueKeysWithValues: storedAdded.map { (TrackID(rawValue: $0.key), Date(timeIntervalSince1970: $0.value)) })
-        if let first = catalog.tracks.first {
-            self.currentTrack = first
-        } else {
-            // 未连接服务器时的占位 track
-            self.currentTrack = Track(
-                id: "placeholder", serverID: "local",
-                albumID: "placeholder", artistID: "placeholder",
-                title: "请先连接服务器", artistName: "", albumTitle: "", duration: 0
-            )
-        }
+        let legacyAddedServerID = defaults.string(forKey: Self.lastActiveServerKey).map(ServerID.init(rawValue:))
+        self.libraryAddedTracker = LibraryAddedTracker(stored: storedAdded, legacyServerID: legacyAddedServerID)
         // 下载管理器：init 期不捕获 self，回调在下方 Task（init 完成）中注入。
         self.downloadManager = DownloadManager(store: cacheStore)
+        self.artworkStore.onArtworkLoaded = { [weak self] key, data in
+            guard let self, key == self.currentTrack.artworkKey else { return }
+            self.mediaIntegration.artworkLoaded(
+                data,
+                position: self.playbackPosition,
+                isPlaying: self.playbackState == .playing
+            )
+        }
 
         // 安装崩溃日志处理器（仅首次）
         CrashLog.shared.installHandlers()
@@ -1062,13 +1078,13 @@ public final class AuralisAppModel: ObservableObject {
     public func selectAndPlay(_ track: Track) {
         CrashLog.shared.log("selectAndPlay 开始: \(track.title) (id=\(track.id.rawValue))")
         streamRetryAttempts.removeValue(forKey: track.id)
+        playbackHistoryStore.resetSelection()
         currentTrack = track
         playbackPosition = 0
         if !queue.contains(where: { $0.id == track.id }) { queue.insert(track, at: 0) }
         // 播放时自动缓存：当前歌曲的歌词 + 专辑封面（loadArtwork 在 UI 请求时落盘），
         // 并预缓存队列接下来几首的封面缩略图与歌词（写磁盘，不占内存）。
         loadLyricsIfNeeded(for: track)
-        recordPlay(for: track)
 
         // ── 关键安全守卫 ──
         // 手势回调在 com.apple.uikit.eventdispatch 队列上执行（非 Thread 1 主线程）。
@@ -1176,15 +1192,19 @@ public final class AuralisAppModel: ObservableObject {
         repeatMode = mode
     }
 
-    /// 组合播放模式：单个按钮循环切换「列表顺序 → 随机播放 → 循环播放」。
-    /// 随机与循环不再是两个独立按钮，而是同一状态机的三种表现。
+    /// 组合播放模式：单个按钮完整覆盖顺序、随机、列表循环与单曲循环。
+    /// 旧实现把所有非关闭的 RepeatMode 都压成同一个 `.loop`，导致 `.one`
+    /// 无法从播放界面进入，看起来就像循环按钮没有真正工作。
     public var playMode: PlayMode {
         if isShuffled { return .shuffle }
-        if repeatMode != .off { return .loop }
-        return .list
+        switch repeatMode {
+        case .off: return .list
+        case .all: return .repeatAll
+        case .one: return .repeatOne
+        }
     }
 
-    /// 切换播放模式：列表 → 随机 → 循环 → 列表。
+    /// 切换播放模式：列表 → 随机 → 列表循环 → 单曲循环 → 列表。
     public func cyclePlayMode() {
         applyPlayMode(playMode.next())
     }
@@ -1197,9 +1217,12 @@ public final class AuralisAppModel: ObservableObject {
         case .shuffle:
             isShuffled = true
             repeatMode = .off
-        case .loop:
+        case .repeatAll:
             isShuffled = false
             repeatMode = .all
+        case .repeatOne:
+            isShuffled = false
+            repeatMode = .one
         }
     }
 
@@ -1435,35 +1458,34 @@ public final class AuralisAppModel: ObservableObject {
 
     // MARK: - Play counts / collections
 
-    private func recordPlay(for track: Track) {
-        // 内存状态更新（主线程，即时生效，驱动 UI 刷新）。
-        // 播放次数按「serverID:trackID」组合键隔离存储，避免跨服务器串库。
-        let countKey = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description
-        playCountStorage[countKey, default: 0] += 1
-        // 最近播放按「serverID:trackID」组合键隔离存储：不同服务器同 ID 歌曲不会混在一起。
-        let key = countKey
-        // 彻底去重：不仅移除被点击的那一条，也清除历史遗留的重复 ID，
-        // 否则最近播放列表 / 播放队列里会出现重复 id，触发 ForEach 运行期崩溃。
-        var seen = Set<String>()
-        var recent: [String] = []
-        for existing in recentPlayedKeys where existing != key {
-            if seen.insert(existing).inserted { recent.append(existing) }
-        }
-        recent.insert(key, at: 0)
-        if recent.count > 100 { recent = Array(recent.prefix(100)) }
-        recentPlayedKeys = recent
-
-        // 持久化全部移到后台，避免同步磁盘 I/O 阻塞主线程导致
-        // _dispatch_assert_queue_fail / Gesture gate timeout 崩溃。
-        let storedCounts = playCountStorage
-        let recentRaw = recent
+    private func recordPlaybackStarted(for track: Track) {
+        guard track.id.rawValue != "placeholder" else { return }
+        let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        let recentChanged = playbackHistoryStore.markStarted(globalID)
+        let recentRaw = playbackHistoryStore.recentKeys
         let trackID = track.id.rawValue
         Task { @Sendable [defaults] in
-            defaults.set(storedCounts, forKey: Self.playCountsDefaultsKey)
             defaults.set(recentRaw, forKey: Self.recentlyPlayedDefaultsKey)
             defaults.set(trackID, forKey: Self.lastTrackDefaultsKey)
         }
-        // 播放次数 / 最近播放变化后刷新首页「最常听 / 最近播放」快照。
+        if recentChanged { refreshHomeSnapshots() }
+    }
+
+    private func qualifyCurrentPlaybackIfNeeded(force: Bool = false) {
+        let track = currentTrack
+        guard track.id.rawValue != "placeholder" else { return }
+        let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        guard playbackHistoryStore.qualifyIfNeeded(
+            globalID: globalID,
+            position: playbackPosition,
+            duration: track.duration,
+            force: force
+        ) else { return }
+        let storedCounts = playbackHistoryStore.counts
+        Task { @Sendable [defaults, catalogStore = catalogCoordinator.store] in
+            defaults.set(storedCounts, forKey: Self.playCountsDefaultsKey)
+            try? await catalogStore.recordPlay(globalID, completed: false)
+        }
         refreshHomeSnapshots()
     }
 
@@ -1544,14 +1566,21 @@ public final class AuralisAppModel: ObservableObject {
         guard days > 0 else { return [] }
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         return catalog.tracks
-            .filter { libraryAddedAt[$0.id].map { $0 >= cutoff } ?? false }
-            .sorted { (libraryAddedAt[$0.id] ?? .distantPast) > (libraryAddedAt[$1.id] ?? .distantPast) }
+            .filter { libraryAddedTracker.date(for: $0).map { $0 >= cutoff } ?? false }
+            .sorted { (libraryAddedTracker.date(for: $0) ?? .distantPast) > (libraryAddedTracker.date(for: $1) ?? .distantPast) }
     }
 
     public var recentlyAddedTracks: [Track] {
-        let added = libraryAddedAt
         return catalog.tracks.sorted {
-            (added[$0.id] ?? .distantPast) > (added[$1.id] ?? .distantPast)
+            (libraryAddedTracker.date(for: $0) ?? .distantPast) > (libraryAddedTracker.date(for: $1) ?? .distantPast)
+        }
+    }
+
+    private func reconcileLibraryAddedDates(tracks: [Track], serverID: ServerID) {
+        guard libraryAddedTracker.reconcile(tracks: tracks, serverID: serverID) else { return }
+        let stored = libraryAddedTracker.encoded
+        Task { @Sendable [defaults] in
+            defaults.set(stored, forKey: Self.libraryAddedDefaultsKey)
         }
     }
 
@@ -1568,61 +1597,24 @@ public final class AuralisAppModel: ObservableObject {
     /// - 收藏里随便听：从真实收藏随机采样 18 首，刷新时采样一次，换一批时重新采样（不发网络请求）。
     /// - 常听艺术家 / 常听专辑：按真实播放次数聚合统计，仅包含播放过的。
     private func refreshHomeSnapshots() {
-        let tracks = catalog.tracks
-        let counts = playCounts
-        let recentIDs = recentlyPlayedIDs
-        let recent = Set(recentIDs)
-        let added = libraryAddedAt
-
-        homeFavoriteTracks = tracks.filter(\.isFavorite)
-        homeMostPlayedTracks = tracks
-            .filter { (counts[$0.id] ?? 0) > 0 }
-            .sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
-        homeRecentlyPlayedTracks = recentIDs.compactMap { id in
-            tracks.first(where: { $0.id == id })
-        }
-        homeRecentlyAddedTracks = tracks.sorted {
-            (added[$0.id] ?? .distantPast) > (added[$1.id] ?? .distantPast)
-        }
-
-        // 很久没听：播放过但不在最近 100 次播放内（规则见函数注释）。
-        homeLongUnplayedTracks = Array(tracks
-            .filter { (counts[$0.id] ?? 0) > 0 && !recent.contains($0.id) }
-            .sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
-            .prefix(24))
-
-        // 从未播放：播放次数为 0 且不在播放历史；展示排序用入库时间倒序。
-        homeNeverPlayedTracks = Array(tracks
-            .filter { (counts[$0.id] ?? 0) == 0 && !recent.contains($0.id) }
-            .sorted { (added[$0.id] ?? .distantPast) > (added[$1.id] ?? .distantPast) }
-            .prefix(24))
-
-        // 最近添加（近 30 天）。
-        homeRecentlyAdded30DaysTracks = Array(recentlyAddedTracks(inLastDays: 30).prefix(24))
-
-        // 常听艺术家 / 常听专辑：一次遍历聚合，避免每个模块重复全表遍历。
-        var artistTotals: [ArtistID: Int] = [:]
-        var albumTotals: [AlbumID: Int] = [:]
-        for track in tracks {
-            let count = counts[track.id] ?? 0
-            if count > 0 {
-                artistTotals[track.artistID, default: 0] += count
-                albumTotals[track.albumID, default: 0] += count
-            }
-        }
-        homeTopArtistPlayCounts = artistTotals
-        homeTopAlbumPlayCounts = albumTotals
-        homeTopArtists = Array(catalog.artists
-            .filter { (artistTotals[$0.id] ?? 0) > 0 }
-            .sorted { (artistTotals[$0.id] ?? 0, $0.name) > (artistTotals[$1.id] ?? 0, $1.name) }
-            .prefix(24))
-        homeTopAlbums = Array(catalog.albums
-            .filter { (albumTotals[$0.id] ?? 0) > 0 }
-            .sorted { (albumTotals[$0.id] ?? 0, $0.title) > (albumTotals[$1.id] ?? 0, $1.title) }
-            .prefix(24))
-
-        // 收藏里随便听：从真实收藏随机采样一次。
-        homeFavoriteRandomTracks = favoriteRandomSample()
+        let snapshot = HomeSnapshotBuilder.build(
+            catalog: catalog,
+            playCounts: playCounts,
+            recentIDs: recentlyPlayedIDs,
+            addedDates: libraryAddedTracker.dates
+        )
+        homeFavoriteTracks = snapshot.favorites
+        homeMostPlayedTracks = snapshot.mostPlayed
+        homeRecentlyPlayedTracks = snapshot.recentlyPlayed
+        homeRecentlyAddedTracks = snapshot.recentlyAdded
+        homeLongUnplayedTracks = snapshot.longUnplayed
+        homeNeverPlayedTracks = snapshot.neverPlayed
+        homeRecentlyAdded30DaysTracks = snapshot.recentlyAdded30Days
+        homeFavoriteRandomTracks = snapshot.favoriteRandom
+        homeTopArtists = snapshot.topArtists
+        homeTopAlbums = snapshot.topAlbums
+        homeTopArtistPlayCounts = snapshot.artistPlayCounts
+        homeTopAlbumPlayCounts = snapshot.albumPlayCounts
     }
 
     /// 按流派筛选：返回属于指定流派的曲目（名称大小写不敏感）。
@@ -2116,13 +2108,13 @@ public final class AuralisAppModel: ObservableObject {
         catalog = .empty
         queue = []
         playbackPosition = 0
+        artworkStore.setServerID(nil)
         artworkStore.reset()
         playlistTracks = [:]
         loadingPlaylistIDs = []
         playlistIDsNeedingContentRefresh = []
         lyricsInFlight = []
         lyricsUnavailable = []
-        artworkInFlight = []
         downloadedTrackIDs = []
         currentTrack = Track(
             id: "placeholder", serverID: "local",
@@ -2177,68 +2169,20 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 已缓存的封面图；未加载时返回 nil，视图应展示占位封面并调用 loadArtwork。
     public func artworkImage(key: String?, targetPixelSize: Int) -> PlatformImage? {
-        guard let key else { return nil }
-        return artworkStore.image(forKey: artworkCacheKey(key, targetPixelSize))
+        artworkStore.image(remoteKey: key, targetPixelSize: targetPixelSize)
     }
 
-    /// 按需从服务器拉取封面并缓存。拉取过（无论成败）的封面不会重复请求。
+    /// 兼容非 SwiftUI 调用者；磁盘、网络、请求去重与后台解码均由独立管线负责。
     public func loadArtwork(key: String?, targetPixelSize: Int) {
-        guard let key, !key.isEmpty else { return }
-        let cacheKey = artworkCacheKey(key, targetPixelSize)
-        guard artworkStore.image(forKey: cacheKey) == nil,
-              !artworkStore.isUnavailable(cacheKey),
-              !artworkInFlight.contains(cacheKey)
-        else { return }
-        artworkInFlight.insert(cacheKey)
-        Task { [artworkCache, artworkStore] in
-            // 第一优先：磁盘缓存。命中就完全不联网——这是「每次打开 App
-            // 都要把所有封面重新下一遍」的根治点。
-            // 精确尺寸未命中时，回退到「全量缓存」的固定尺寸（512），解码后缩放到目标尺寸，
-            // 让全量缓存后的封面在任意控件尺寸下都能直接命中磁盘、不再联网。
-            let fullCacheKey = artworkCacheKey(key, Self.fullCacheArtworkSize)
-            var cached = await artworkCache.data(for: cacheKey)
-            if cached == nil, cacheKey != fullCacheKey {
-                cached = await artworkCache.data(for: fullCacheKey)
-            }
-            if let cached,
-               let image = PlatformImage(data: cached) {
-                artworkInFlight.remove(cacheKey)
-                let displayImage: PlatformImage?
-                if cacheKey != fullCacheKey, targetPixelSize != Self.fullCacheArtworkSize {
-                    displayImage = Self.resizedPlatformImage(image, to: targetPixelSize)
-                } else {
-                    displayImage = image
-                }
-                artworkStore.setImage(displayImage ?? image, forKey: cacheKey)
-                if key == currentTrack.artworkKey {
-                    mediaIntegration.artworkLoaded(cached, position: playbackPosition, isPlaying: playbackState == .playing)
-                }
-                return
-            }
-            await artworkLimiter.enter()
-            let data = await connector.artworkData(key: key, targetPixelSize: targetPixelSize)
-            artworkInFlight.remove(cacheKey)
-            await artworkLimiter.leave()
-            if let data, let image = PlatformImage(data: data) {
-                artworkStore.setImage(image, forKey: cacheKey)
-                // 落盘，下次冷启动直接命中。
-                await artworkCache.store(data, for: cacheKey)
-                // 封面晚于切歌到达时，补一次 Now Playing 刷新
-                if key == currentTrack.artworkKey {
-                    mediaIntegration.artworkLoaded(data, position: playbackPosition, isPlaying: playbackState == .playing)
-                }
-            } else {
-                artworkStore.markUnavailable(cacheKey)
-            }
+        Task { [artworkStore] in
+            _ = await artworkStore.load(remoteKey: key, targetPixelSize: targetPixelSize)
         }
     }
 
     /// 封面缓存键：**必须包含服务器 ID**，否则两台服务器相同 ID 的封面会在
     /// 磁盘缓存里互相覆盖（P0-4）。内存与磁盘共用同一键，天然按服务器隔离。
     func artworkCacheKey(_ key: String, _ targetPixelSize: Int) -> String {
-        let serverID = catalog.activeServerID?.rawValue
-            ?? (currentTrack.id.rawValue == "placeholder" ? "local" : currentTrack.serverID.rawValue)
-        return "\(serverID)|\(key)@\(targetPixelSize)"
+        artworkStore.cacheKey(key, targetPixelSize: targetPixelSize)
     }
 
     public func togglePlayback() {
@@ -2468,6 +2412,7 @@ public final class AuralisAppModel: ObservableObject {
 
     private func syncProgressTimer() {
         if playbackState == .playing {
+            recordPlaybackStarted(for: currentTrack)
             startProgressTimer()
         } else {
             stopProgressTimer()
@@ -2506,6 +2451,7 @@ public final class AuralisAppModel: ObservableObject {
                     return
                 }
             }
+            self.qualifyCurrentPlaybackIfNeeded()
             // 每 2 秒落盘一次进度，避免高频写入。
             if Date().timeIntervalSince(self.lastPlaybackPersistAt) >= 2 {
                 self.lastPlaybackPersistAt = .now
@@ -2517,6 +2463,8 @@ public final class AuralisAppModel: ObservableObject {
     /// 曲目播完：按循环/随机模式决定重播、切下一首、绕回队首或暂停。
     /// 睡眠定时优先：当前歌曲/专辑/队列结束时停止而不是继续切歌。
     public func handleTrackEnded() {
+        // 短曲也必须在真正播完时记一次合格播放；选择或播放失败仍不会计数。
+        qualifyCurrentPlaybackIfNeeded(force: true)
         // Navidrome 只在 scrobble(submission=true) 时记录播放次数，stream 不会标记。
         // 曲目自然播完即上报当前曲目，保持服务器端播放计数与本地一致。
         // 仅在当前曲目属于活动服务器时上报，避免跨服务器串库。
@@ -2524,7 +2472,12 @@ public final class AuralisAppModel: ObservableObject {
         if finished.id.rawValue != "placeholder",
            finished.serverID == catalog.activeServerID {
             let connector = self.connector
-            Task { await connector.scrobble(trackID: finished.id, submission: true) }
+            let store = catalogCoordinator.store
+            let globalID = GlobalID(serverID: finished.serverID, remoteID: finished.id.rawValue)
+            Task {
+                await connector.scrobble(trackID: finished.id, submission: true)
+                try? await store.markPlayCompleted(globalID)
+            }
         }
         if applySleepTimerAtTrackEnd() { return }
         switch repeatMode {
@@ -2752,6 +2705,7 @@ public final class AuralisAppModel: ObservableObject {
         let switchedServer = appliedServerID != nil && appliedServerID != result.account.id
         appliedServerID = result.account.id
         defaults.set(result.account.id.rawValue, forKey: Self.lastActiveServerKey)
+        artworkStore.setServerID(result.account.id.rawValue)
         catalog = LibraryCatalog(
             account: result.account,
             artists: result.artists,
@@ -2769,8 +2723,6 @@ public final class AuralisAppModel: ObservableObject {
         if switchedServer {
             lyricsInFlight = []
             lyricsUnavailable = []
-            artworkInFlight = []
-            artworkStore.reset()
             playlistTracks = [:]
             loadingPlaylistIDs = []
             playlistIDsNeedingContentRefresh = []
@@ -2822,20 +2774,7 @@ public final class AuralisAppModel: ObservableObject {
         // 那会停用 AVAudioSession 并清空 MPNowPlayingInfoCenter，导致后台播放被杀、
         // 控制中心丢失歌曲信息。正在播放时只更新目录，音频与系统信息保持不变。
 
-        // 记录每首曲目首次进入本地目录的时间（仅首次出现时写入），用于「最近添加」。
-        var added = libraryAddedAt
-        let now = Date()
-        for track in tracks where added[track.id] == nil {
-            added[track.id] = now
-        }
-        // 仅保留当前目录内曲目的时间戳，避免无限增长。
-        added = Dictionary(uniqueKeysWithValues: added.filter { id, _ in tracks.contains(where: { $0.id == id }) })
-        libraryAddedAt = added
-        let addedForDefaults = added.reduce(into: [String: Double]()) { $0[$1.key.rawValue] = $1.value.timeIntervalSince1970 }
-        // 异步持久化，避免大资料库时阻塞主线程。
-        Task { @Sendable [defaults] in
-            defaults.set(addedForDefaults, forKey: Self.libraryAddedDefaultsKey)
-        }
+        reconcileLibraryAddedDates(tracks: tracks, serverID: result.account.id)
 
         // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
         randomTracks = Array(tracks.shuffled().prefix(18))
@@ -2934,7 +2873,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 逻辑对齐 apply() 的「同库刷新」分支：
     /// - 保留当前歌词（catalog.lyrics）、playlistTracks 与正在播放的上下文
     ///   （currentTrack / queue / 进度）不被清掉；
-    /// - 更新 libraryAddedAt（首次见到的曲目记 now，其余保留），并异步持久化到 UserDefaults；
+    /// - 更新按 GlobalID 隔离的首次入库时间，并异步持久化到 UserDefaults；
     /// - 重建 catalog 并调用 refreshHomeSnapshots()。
     func refreshCatalogFromStore(serverID: ServerID) async {
         // 防呆：尚未 apply（或已切到其它服务器）时忽略本次刷新。
@@ -2982,20 +2921,7 @@ public final class AuralisAppModel: ObservableObject {
 
         // 正在播放上下文原样保留：不碰 currentTrack / queue / playbackPosition / engine。
 
-        // 记录每首曲目首次进入本地目录的时间（仅首次出现时写入），用于「最近添加」。
-        var added = libraryAddedAt
-        let now = Date()
-        for track in tracks where added[track.id] == nil {
-            added[track.id] = now
-        }
-        // 仅保留当前目录内曲目的时间戳，避免无限增长。
-        added = Dictionary(uniqueKeysWithValues: added.filter { id, _ in tracks.contains(where: { $0.id == id }) })
-        libraryAddedAt = added
-        let addedForDefaults = added.reduce(into: [String: Double]()) { $0[$1.key.rawValue] = $1.value.timeIntervalSince1970 }
-        // 异步持久化，避免大资料库时阻塞主线程。
-        Task { @Sendable [defaults] in
-            defaults.set(addedForDefaults, forKey: Self.libraryAddedDefaultsKey)
-        }
+        reconcileLibraryAddedDates(tracks: tracks, serverID: serverID)
 
         // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
         refreshHomeSnapshots()
@@ -3253,67 +3179,37 @@ public final class AuralisAppModel: ObservableObject {
         downloadedTrackIDs = []
     }
 
-    // MARK: - 渐进式缓存（封面 + 歌词，不再全量下载）
-
-    /// 渐进预缓存封面使用的固定尺寸（px）= 256×256 缩略图。
-    /// 大尺寸（512/1024）仅在打开全屏播放器、专辑详情或控制中心需要时按需下载，
-    /// 并受 ArtworkDiskCache 的 LRU 容量预算约束。同一专辑多首歌曲共享同一封面文件。
-    static let fullCacheArtworkSize = 256
-
-    /// 默认每批缓存歌曲数。
-    /// 把封面图缩放到目标边长（供全量缓存回退命中后适配控件尺寸）。
-    private static func resizedPlatformImage(_ image: PlatformImage, to pixel: Int) -> PlatformImage? {
-        let target = CGFloat(pixel)
-        #if os(iOS)
-        let size = CGSize(width: target, height: target)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-        #else
-        let targetSize = NSSize(width: target, height: target)
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: pixel, pixelsHigh: pixel,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-        ) else { return nil }
-        rep.size = targetSize
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        image.draw(in: NSRect(x: 0, y: 0, width: target, height: target), from: .zero, operation: .copy, fraction: 1)
-        NSGraphicsContext.restoreGraphicsState()
-        let resized = NSImage(size: targetSize)
-        resized.addRepresentation(rep)
-        return resized
-        #endif
-    }
 }
 
-/// 组合播放模式：单个按钮循环切换的三种状态。
+/// 组合播放模式：单个按钮循环切换的四种真实播放状态。
 public enum PlayMode: Int, CaseIterable, Identifiable, Sendable {
     case list    // 列表顺序（不随机、不循环）
     case shuffle // 随机播放
-    case loop    // 循环播放
+    case repeatAll // 列表循环
+    case repeatOne // 单曲循环
     public var id: Int { rawValue }
     public var title: String {
         switch self {
         case .list: String(localized: "列表顺序")
         case .shuffle: String(localized: "随机播放")
-        case .loop: String(localized: "循环播放")
+        case .repeatAll: String(localized: "列表循环")
+        case .repeatOne: String(localized: "单曲循环")
         }
     }
     public var symbol: String {
         switch self {
         case .list: "list.bullet"
         case .shuffle: "shuffle"
-        case .loop: "repeat"
+        case .repeatAll: "repeat"
+        case .repeatOne: "repeat.1"
         }
     }
     public func next() -> PlayMode {
         switch self {
         case .list: return .shuffle
-        case .shuffle: return .loop
-        case .loop: return .list
+        case .shuffle: return .repeatAll
+        case .repeatAll: return .repeatOne
+        case .repeatOne: return .list
         }
     }
 }
@@ -3426,29 +3322,5 @@ public enum BrowseDestination: Identifiable {
         case .topAlbums: return "topAlbums"
         case .downloads: return "downloads"
         }
-    }
-}
-
-/// 协作式并发限制器：最多允许 `max` 个调用同时越过 `enter()`，
-/// 超出部分在 `enter()` 处挂起，直到有调用 `leave()`。用于限制封面等
-/// 按需网络请求的并发数，避免服务器不可达时一次性发起大量挂起请求。
-private actor ArtworkConcurrencyLimiter {
-    private var active = 0
-    private let max: Int
-    private let pollIntervalNanoseconds: UInt64 = 50_000_000
-
-    init(max: Int) {
-        self.max = max
-    }
-
-    func enter() async {
-        while active >= max {
-            try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
-        }
-        active += 1
-    }
-
-    func leave() {
-        active = Swift.max(0, active - 1)
     }
 }

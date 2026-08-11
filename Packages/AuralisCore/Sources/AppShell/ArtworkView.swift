@@ -24,11 +24,10 @@ extension Image {
 }
 
 /// 服务器封面视图：已加载时显示真实封面，加载中或服务器没有封面时
-/// 回退到渐变占位组件。按需加载由 AuralisAppModel 统一调度与缓存。
+/// 回退到渐变占位组件。视图只订阅独立封面管线，不观察全局 AppModel。
 struct ArtworkView: View {
-    /// 只观察独立封面存储：封面到达只刷新本卡片，不触发首页整体重建。
     @Environment(ArtworkStore.self) private var artworkStore
-    @EnvironmentObject var model: AuralisAppModel
+    @State private var image: PlatformImage?
     let title: String
     let artworkKey: String?
     let colors: ThemeColors
@@ -38,11 +37,14 @@ struct ArtworkView: View {
     /// 按 2x 屏幕密度请求，兼顾清晰度与流量。
     private var pixelSize: Int { max(64, Int(size * 2)) }
 
+    private var requestIdentifier: String? {
+        artworkStore.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
+    }
+
     var body: some View {
         ZStack {
             AuralisArtwork(title: title, colors: colors, size: size, cornerRadius: cornerRadius)
-            if let artworkKey,
-               let image = artworkStore.image(forKey: model.artworkCacheKey(artworkKey, pixelSize)) {
+            if let image {
                 Image(platformImage: image)
                     .resizable()
                     .scaledToFill()
@@ -53,8 +55,14 @@ struct ArtworkView: View {
         }
         .frame(width: size, height: size)
         .accessibilityLabel("\(title) 封面")
-        .task(id: artworkKey) {
-            model.loadArtwork(key: artworkKey, targetPixelSize: pixelSize)
+        .task(id: requestIdentifier) {
+            image = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
+            if image == nil {
+                image = await artworkStore.load(
+                    remoteKey: artworkKey,
+                    targetPixelSize: pixelSize
+                )
+            }
         }
     }
 }

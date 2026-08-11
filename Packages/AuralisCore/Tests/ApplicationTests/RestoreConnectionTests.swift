@@ -1,6 +1,7 @@
 import Application
 import Domain
 import Foundation
+import LocalCatalog
 import MusicLibrary
 import OpenSubsonicKit
 import Persistence
@@ -32,11 +33,13 @@ struct RestoreConnectionTests {
 
     private func makeConnector(
         persistence: any AuralisPersisting,
-        vault: any CredentialVault = InMemoryCredentialVault()
+        vault: any CredentialVault = InMemoryCredentialVault(),
+        catalogStore: LocalCatalogStore? = nil
     ) -> ProductionServerConnector {
         ProductionServerConnector(
             credentialVault: vault,
             persistence: persistence,
+            catalogStore: catalogStore,
             sourceFactory: { _ in EmptySyncSource() }
         )
     }
@@ -71,6 +74,34 @@ struct RestoreConnectionTests {
         #expect(result != nil)
         #expect(result?.account.id == ServerID(rawValue: "b"))
         #expect(result?.tracks.first?.title == "B 歌曲")
+    }
+
+    @Test("旧 JSON 音乐快照一次性迁入 SQLite，JSON 只保留账号")
+    func migratesLegacySnapshotToCanonicalSQLite() async throws {
+        let persistence = InMemoryPersistence()
+        let vault = InMemoryCredentialVault()
+        try await seed(persistence: persistence, vault: vault)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-legacy-migration-(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let catalogStore = try LocalCatalogStore(url: directory.appendingPathComponent("catalog.sqlite"))
+        let connector = makeConnector(persistence: persistence, vault: vault, catalogStore: catalogStore)
+
+        let result = try await connector.restoreConnection(serverID: "b")
+        #expect(result?.tracks.first?.title == "B 歌曲")
+        #expect(try await catalogStore.trackCount(serverID: "b") == 1)
+
+        let compacted = try await persistence.snapshot(serverID: "b")
+        #expect(compacted?.account?.id == ServerID(rawValue: "b"))
+        #expect(compacted?.tracks.isEmpty == true)
+        #expect(compacted?.albums.isEmpty == true)
+        #expect(compacted?.artists.isEmpty == true)
+
+        // A new connector can restore solely from SQLite plus the preserved account.
+        let reopenedStore = try LocalCatalogStore(url: directory.appendingPathComponent("catalog.sqlite"))
+        let reopened = makeConnector(persistence: persistence, vault: vault, catalogStore: reopenedStore)
+        let restoredAgain = try await reopened.restoreConnection(serverID: "b")
+        #expect(restoredAgain?.tracks.first?.title == "B 歌曲")
     }
 
     @Test("restoreLastConnection 回退到首个已保存账户")

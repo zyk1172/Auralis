@@ -63,16 +63,16 @@ let package = Package(
         .testTarget(
             name: "ApplicationTests",
             dependencies: [
-                "Application", "Domain", "OpenSubsonicKit", "MusicLibrary", "Persistence", "SecurityKit",
+                "Application", "Domain", "OpenSubsonicKit", "MusicLibrary", "Persistence", "SecurityKit", "LocalCatalog",
             ]
         ),
         .testTarget(name: "ObservabilityTests", dependencies: ["Observability"]),
-        .testTarget(name: "AppShellTests", dependencies: ["AppShell", "Application", "Domain", "TestSupport", "AgentKit", "LocalCatalog", "AIKit"]),
+        .testTarget(name: "AppShellTests", dependencies: ["AppShell", "Application", "Domain", "TestSupport", "AgentKit", "LocalCatalog", "AIKit", "ImagePipeline", "MusicLibrary"]),
         .testTarget(
             name: "SystemMediaIntegrationTests",
             dependencies: ["SystemMediaIntegration", "Domain"]
         ),
-        .testTarget(name: "LocalCatalogTests", dependencies: ["LocalCatalog", "Domain", "TestSupport"]),
+        .testTarget(name: "LocalCatalogTests", dependencies: ["LocalCatalog", "Domain", "TestSupport", "MusicLibrary"]),
         .testTarget(
             name: "AgentKitTests",
             dependencies: ["AgentKit", "Domain", "LocalCatalog", "TestSupport", "AIKit"]

@@ -16,6 +16,26 @@ public actor LocalCatalogStore: LibrarySyncStore {
     public init(url: URL) throws {
         self.db = try SQLiteDatabase(url: url)
         try createSchema()
+        try cleanupOrphanedSyncState()
+    }
+
+    /// Canonical on-device catalog location shared by the app and extensions.
+    /// Keeping this path in LocalCatalog prevents Application and AppShell from accidentally
+    /// opening different databases and reintroducing a second music-library snapshot.
+    public nonisolated static func defaultStoreURL(
+        fileManager: FileManager = .default,
+        appGroupIdentifier: String = "group.com.auralis.player"
+    ) -> URL {
+        let base: URL
+        if let group = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
+            base = group
+        } else {
+            base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+        }
+        let directory = base.appendingPathComponent("Auralis", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("catalog.sqlite")
     }
 
     // MARK: - Schema
@@ -121,6 +141,46 @@ public actor LocalCatalogStore: LibrarySyncStore {
             updated_at REAL NOT NULL,
             PRIMARY KEY (session_id, section)
         );
+        CREATE TABLE IF NOT EXISTS sync_sessions (
+            session_id TEXT PRIMARY KEY,
+            server_id TEXT NOT NULL UNIQUE,
+            mode TEXT NOT NULL,
+            started_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sync_staged_artists (
+            session_id TEXT NOT NULL,
+            global_id TEXT NOT NULL,
+            server_id TEXT NOT NULL,
+            remote_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (session_id, global_id)
+        );
+        CREATE TABLE IF NOT EXISTS sync_staged_albums (
+            session_id TEXT NOT NULL,
+            global_id TEXT NOT NULL,
+            server_id TEXT NOT NULL,
+            remote_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            artist_name TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (session_id, global_id)
+        );
+        CREATE TABLE IF NOT EXISTS sync_staged_tracks (
+            session_id TEXT NOT NULL,
+            global_id TEXT NOT NULL,
+            server_id TEXT NOT NULL,
+            remote_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            artist_name TEXT NOT NULL,
+            album_title TEXT NOT NULL,
+            duration REAL NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (session_id, global_id)
+        );
         CREATE TABLE IF NOT EXISTS sync_meta (
             server_id TEXT PRIMARY KEY,
             mode TEXT,
@@ -148,23 +208,61 @@ public actor LocalCatalogStore: LibrarySyncStore {
         CREATE INDEX IF NOT EXISTS idx_albums_server ON albums(server_id);
         CREATE INDEX IF NOT EXISTS idx_artists_server ON artists(server_id);
         CREATE INDEX IF NOT EXISTS idx_playlists_server ON playlists(server_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_checkpoints_server ON sync_checkpoints(server_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_staged_artists_session ON sync_staged_artists(session_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_staged_albums_session ON sync_staged_albums(session_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_staged_tracks_session ON sync_staged_tracks(session_id);
         CREATE INDEX IF NOT EXISTS idx_recommendation_v2_state_server ON recommendation_index_v2_state(server_id);
         CREATE INDEX IF NOT EXISTS idx_recommendation_v2_tags_dimension_value ON recommendation_index_v2_tags(dimension, value);
         """)
     }
 
+    /// Older builds persisted checkpoints without durable staged pages. Those rows cannot be
+    /// resumed safely, so retain only checkpoints that belong to the new durable session table.
+    nonisolated private func cleanupOrphanedSyncState() throws {
+        try db.run("DELETE FROM sync_checkpoints WHERE session_id NOT IN (SELECT session_id FROM sync_sessions)")
+        try db.run("DELETE FROM sync_staged_artists WHERE session_id NOT IN (SELECT session_id FROM sync_sessions)")
+        try db.run("DELETE FROM sync_staged_albums WHERE session_id NOT IN (SELECT session_id FROM sync_sessions)")
+        try db.run("DELETE FROM sync_staged_tracks WHERE session_id NOT IN (SELECT session_id FROM sync_sessions)")
+    }
+
     // MARK: - LibrarySyncStore
 
     public func beginSync(serverID: ServerID, mode: LibrarySyncMode) async throws -> LibrarySyncSession {
-        if mode == .full {
-            // 全量同步前清空该服务器已有的艺人与专辑（曲目在 staging 时按页覆盖）。
-            try db.run("DELETE FROM artists WHERE server_id = ?", [.text(serverID.rawValue)])
-            try db.run("DELETE FROM albums WHERE server_id = ?", [.text(serverID.rawValue)])
+        if let row = try db.query(
+            "SELECT session_id, mode, started_at FROM sync_sessions WHERE server_id = ?",
+            [.text(serverID.rawValue)]
+        ).first,
+           let idString = row["session_id"]?.string,
+           let id = UUID(uuidString: idString),
+           let storedMode = row["mode"]?.string.flatMap(LibrarySyncMode.init(rawValue:)),
+           storedMode == mode {
+            return LibrarySyncSession(
+                id: id,
+                serverID: serverID,
+                mode: storedMode,
+                startedAt: Date(timeIntervalSince1970: row["started_at"]?.double ?? Date().timeIntervalSince1970)
+            )
         }
-        return LibrarySyncSession(serverID: serverID, mode: mode)
+
+        let session = LibrarySyncSession(serverID: serverID, mode: mode)
+        try db.transaction {
+            try discardSyncState(serverID: serverID)
+            try db.run(
+                "INSERT INTO sync_sessions (session_id, server_id, mode, started_at) VALUES (?, ?, ?, ?)",
+                [
+                    .text(session.id.uuidString),
+                    .text(serverID.rawValue),
+                    .text(mode.rawValue),
+                    .real(session.startedAt.timeIntervalSince1970),
+                ]
+            )
+        }
+        return session
     }
 
     public func checkpoint(session: LibrarySyncSession, section: LibrarySyncSection) async throws -> LibrarySyncCheckpoint? {
+        try validateSession(session)
         let rows = try db.query(
             "SELECT * FROM sync_checkpoints WHERE session_id = ? AND section = ?",
             [.text(session.id.uuidString), .text(section.rawValue)]
@@ -183,30 +281,98 @@ public actor LocalCatalogStore: LibrarySyncStore {
     }
 
     public func stageArtists(_ artists: [Artist], session: LibrarySyncSession) async throws {
+        try validateSession(session)
         try db.transaction {
             for artist in artists {
-                try upsertArtist(artist, session: session)
+                guard artist.serverID == session.serverID else {
+                    throw LibrarySyncError.invalidRecordServer(
+                        section: .artists,
+                        recordID: artist.id.rawValue,
+                        expected: session.serverID,
+                        actual: artist.serverID
+                    )
+                }
+                let gid = GlobalID(serverID: artist.serverID, remoteID: artist.id.rawValue)
+                try db.run(
+                    """
+                    INSERT OR REPLACE INTO sync_staged_artists
+                    (session_id, global_id, server_id, remote_id, name, payload, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        .text(session.id.uuidString), .text(gid.description), .text(artist.serverID.rawValue),
+                        .text(artist.id.rawValue), .text(artist.name), .text(try encode(artist)),
+                        .real(Date().timeIntervalSince1970),
+                    ]
+                )
             }
         }
     }
 
     public func stageAlbums(_ albums: [Album], session: LibrarySyncSession) async throws {
+        try validateSession(session)
         try db.transaction {
             for album in albums {
-                try upsertAlbum(album, session: session)
+                guard album.serverID == session.serverID else {
+                    throw LibrarySyncError.invalidRecordServer(
+                        section: .albums,
+                        recordID: album.id.rawValue,
+                        expected: session.serverID,
+                        actual: album.serverID
+                    )
+                }
+                let gid = GlobalID(serverID: album.serverID, remoteID: album.id.rawValue)
+                try db.run(
+                    """
+                    INSERT OR REPLACE INTO sync_staged_albums
+                    (session_id, global_id, server_id, remote_id, name, artist_name, payload, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        .text(session.id.uuidString), .text(gid.description), .text(album.serverID.rawValue),
+                        .text(album.id.rawValue), .text(album.title), .text(album.artistName),
+                        .text(try encode(album)), .real(Date().timeIntervalSince1970),
+                    ]
+                )
             }
         }
     }
 
     public func stageTracks(_ tracks: [Track], session: LibrarySyncSession) async throws {
+        try validateSession(session)
         try db.transaction {
             for track in tracks {
-                try upsertTrack(track, session: session)
+                guard track.serverID == session.serverID else {
+                    throw LibrarySyncError.invalidRecordServer(
+                        section: .tracks,
+                        recordID: track.id.rawValue,
+                        expected: session.serverID,
+                        actual: track.serverID
+                    )
+                }
+                let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+                try db.run(
+                    """
+                    INSERT OR REPLACE INTO sync_staged_tracks
+                    (session_id, global_id, server_id, remote_id, title, artist_name, album_title, duration, payload, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        .text(session.id.uuidString), .text(gid.description), .text(track.serverID.rawValue),
+                        .text(track.id.rawValue), .text(track.title), .text(track.artistName),
+                        .text(track.albumTitle), .real(track.duration), .text(try encode(track)),
+                        .real(Date().timeIntervalSince1970),
+                    ]
+                )
             }
         }
     }
 
     public func saveCheckpoint(_ checkpoint: LibrarySyncCheckpoint, session: LibrarySyncSession) async throws {
+        try validateSession(session)
+        guard checkpoint.sessionID == session.id, checkpoint.serverID == session.serverID else {
+            throw LibrarySyncError.sessionMismatch
+        }
         try db.run(
             """
             INSERT INTO sync_checkpoints
@@ -233,31 +399,124 @@ public actor LocalCatalogStore: LibrarySyncStore {
     }
 
     public func completeSync(_ session: LibrarySyncSession, completedAt: Date) async throws {
-        try db.run(
-            """
-            INSERT INTO sync_meta (server_id, mode, last_completed_at, last_processed_count, next_retry_at)
-            VALUES (?, ?, ?, ?, NULL)
-            ON CONFLICT(server_id) DO UPDATE SET
-                mode = excluded.mode,
-                last_completed_at = excluded.last_completed_at,
-                last_processed_count = excluded.last_processed_count,
-                next_retry_at = NULL
-            """,
-            [
-                .text(session.serverID.rawValue),
-                .text(session.mode.rawValue),
-                .real(completedAt.timeIntervalSince1970),
-                .integer(0),
-            ]
-        )
+        try validateSession(session)
+        let sessionID = session.id.uuidString
+        let serverID = session.serverID.rawValue
+        let trackCount = Int(try db.query(
+            "SELECT processed_count FROM sync_checkpoints WHERE session_id = ? AND section = ?",
+            [.text(sessionID), .text(LibrarySyncSection.tracks.rawValue)]
+        ).first?["processed_count"]?.int ?? 0)
+
+        try db.transaction {
+            if session.mode == .full {
+                try db.run("DELETE FROM artists WHERE server_id = ?", [.text(serverID)])
+                try db.run("DELETE FROM albums WHERE server_id = ?", [.text(serverID)])
+                try db.run("DELETE FROM tracks WHERE server_id = ?", [.text(serverID)])
+            }
+
+            try db.run(
+                """
+                INSERT OR REPLACE INTO artists (global_id, server_id, remote_id, name, payload, updated_at)
+                SELECT global_id, server_id, remote_id, name, payload, updated_at
+                FROM sync_staged_artists WHERE session_id = ?
+                """,
+                [.text(sessionID)]
+            )
+            try db.run(
+                """
+                INSERT OR REPLACE INTO albums
+                (global_id, server_id, remote_id, name, artist_name, payload, updated_at)
+                SELECT global_id, server_id, remote_id, name, artist_name, payload, updated_at
+                FROM sync_staged_albums WHERE session_id = ?
+                """,
+                [.text(sessionID)]
+            )
+            try db.run(
+                """
+                INSERT OR REPLACE INTO tracks
+                (global_id, server_id, remote_id, title, artist_name, album_title, duration, payload, updated_at)
+                SELECT global_id, server_id, remote_id, title, artist_name, album_title, duration, payload, updated_at
+                FROM sync_staged_tracks WHERE session_id = ?
+                """,
+                [.text(sessionID)]
+            )
+
+            // FTS is derived from the committed catalog. Rebuilding one server here keeps the
+            // searchable view atomic with the visible catalog and removes deleted full-sync rows.
+            let prefix = session.serverID.rawValue + ":%"
+            try db.run("DELETE FROM catalog_fts WHERE global_id LIKE ?", [.text(prefix)])
+            try db.run(
+                "INSERT INTO catalog_fts (kind, global_id, text) SELECT 'artist', global_id, name FROM artists WHERE server_id = ?",
+                [.text(serverID)]
+            )
+            try db.run(
+                "INSERT INTO catalog_fts (kind, global_id, text) SELECT 'album', global_id, name || ' ' || artist_name FROM albums WHERE server_id = ?",
+                [.text(serverID)]
+            )
+            try db.run(
+                "INSERT INTO catalog_fts (kind, global_id, text) SELECT 'track', global_id, title || ' ' || artist_name || ' ' || album_title FROM tracks WHERE server_id = ?",
+                [.text(serverID)]
+            )
+
+            try db.run(
+                """
+                INSERT INTO sync_meta (server_id, mode, last_completed_at, last_processed_count, next_retry_at)
+                VALUES (?, ?, ?, ?, NULL)
+                ON CONFLICT(server_id) DO UPDATE SET
+                    mode = excluded.mode,
+                    last_completed_at = excluded.last_completed_at,
+                    last_processed_count = excluded.last_processed_count,
+                    next_retry_at = NULL
+                """,
+                [
+                    .text(serverID), .text(session.mode.rawValue),
+                    .real(completedAt.timeIntervalSince1970), .integer(Int64(trackCount)),
+                ]
+            )
+            try discardSyncState(sessionID: sessionID)
+        }
     }
 
     public func suspendSync(_ session: LibrarySyncSession) async {
-        // 暂停的同步保留已写入数据，元数据保留为未完成（stale 由 UI 依据时间判断）。
+        // Session, staged pages, and checkpoints are intentionally retained. The next process
+        // reopens the same SQLite database and resumes from the last durable continuation.
     }
 
     public func discardSync(_ session: LibrarySyncSession) async {
-        try? db.run("DELETE FROM sync_checkpoints WHERE session_id = ?", [.text(session.id.uuidString)])
+        try? db.transaction {
+            try discardSyncState(sessionID: session.id.uuidString)
+        }
+    }
+
+    private func validateSession(_ session: LibrarySyncSession) throws {
+        let row = try db.query(
+            "SELECT server_id, mode FROM sync_sessions WHERE session_id = ?",
+            [.text(session.id.uuidString)]
+        ).first
+        guard let row else { throw LibrarySyncError.unknownSession(session.id) }
+        guard row["server_id"]?.string == session.serverID.rawValue,
+              row["mode"]?.string == session.mode.rawValue
+        else { throw LibrarySyncError.sessionMismatch }
+    }
+
+    private func discardSyncState(serverID: ServerID) throws {
+        let rows = try db.query(
+            "SELECT session_id FROM sync_sessions WHERE server_id = ?",
+            [.text(serverID.rawValue)]
+        )
+        for row in rows {
+            if let sessionID = row["session_id"]?.string {
+                try discardSyncState(sessionID: sessionID)
+            }
+        }
+    }
+
+    private func discardSyncState(sessionID: String) throws {
+        try db.run("DELETE FROM sync_checkpoints WHERE session_id = ?", [.text(sessionID)])
+        try db.run("DELETE FROM sync_staged_artists WHERE session_id = ?", [.text(sessionID)])
+        try db.run("DELETE FROM sync_staged_albums WHERE session_id = ?", [.text(sessionID)])
+        try db.run("DELETE FROM sync_staged_tracks WHERE session_id = ?", [.text(sessionID)])
+        try db.run("DELETE FROM sync_sessions WHERE session_id = ?", [.text(sessionID)])
     }
 
     // MARK: - Upserts

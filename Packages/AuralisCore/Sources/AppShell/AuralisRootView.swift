@@ -8,10 +8,80 @@ import CoreSpotlight
 import UIKit
 #endif
 
+/// Dock 手势只负责选择最终状态，不再把手指位移映射成动画进度。
+/// 因此同方向的快滑、慢滑都会以完全相同的时长完成展开或收拢。
+struct BottomDockProgressReducer: Sendable {
+    static let publicationEpsilon: CGFloat = 0.008
+    /// 采用接近标准触控目标高度的有效位移，轻微抖动和短划不会切换 Dock。
+    static let minimumVerticalSwipeDistance: CGFloat = 44
+
+    static func shouldPublish(current: CGFloat, next: CGFloat) -> Bool {
+        // 两端必须精确落在 0/1，确保最终布局和可访问性状态不漂移。
+        if next == 0 || next == 1 { return current != next }
+        return abs(next - current) >= publicationEpsilon
+    }
+
+    /// 纵向滑动结束后必须落到确定端点，不能把 Dock 留在半展开状态。
+    /// 横向货架手势不会触发，避免与首页横向卡片滚动冲突。
+    static func terminalProgress(for translation: CGSize) -> CGFloat? {
+        guard abs(translation.height) > abs(translation.width),
+              abs(translation.height) >= minimumVerticalSwipeDistance
+        else { return nil }
+        return translation.height < 0 ? 1 : 0
+    }
+}
+
+/// Dock 本体、页面预留空间和 AI 输入框共用同一套固定节奏。
+/// 动画只在手势结束、目标状态确定后启动，用户拖动速度不会改变它。
+enum BottomDockMotion {
+    static let duration: TimeInterval = 0.56
+
+    static func animation(reduceMotion: Bool) -> Animation {
+        reduceMotion
+            ? .linear(duration: 0.18)
+            : .smooth(duration: duration)
+    }
+}
+
+/// 首页 / 音乐库的滚动进度。类型保持跨平台可见，让共享页面和环境注入在 macOS
+/// 也能编译；只有 iOS 的 modifier 会真正向它报告滚动。
+@MainActor
+final class BottomDockScrollCoordinator: ObservableObject {
+    @Published private(set) var collapseProgress: CGFloat = 0
+
+    func finishInteraction(translation: CGSize) {
+        guard let terminal = BottomDockProgressReducer.terminalProgress(for: translation) else { return }
+        setCollapseProgress(terminal)
+    }
+
+    func reset() {
+        setCollapseProgress(0)
+    }
+
+    func setCollapseProgress(_ progress: CGFloat) {
+        let clamped = min(max(progress, 0), 1)
+        guard BottomDockProgressReducer.shouldPublish(current: collapseProgress, next: clamped) else { return }
+        collapseProgress = clamped
+    }
+}
+
+private struct BottomDockScrollCoordinatorEnvironmentKey: EnvironmentKey {
+    static let defaultValue: BottomDockScrollCoordinator? = nil
+}
+
+extension EnvironmentValues {
+    var bottomDockScrollCoordinator: BottomDockScrollCoordinator? {
+        get { self[BottomDockScrollCoordinatorEnvironmentKey.self] }
+        set { self[BottomDockScrollCoordinatorEnvironmentKey.self] = newValue }
+    }
+}
+
 public struct AuralisRootView: View {
     @StateObject private var model: AuralisAppModel
     @StateObject private var themeStore: ThemeStore
-    @StateObject private var bottomDockScroll = BottomDockScrollCoordinator()
+    /// 用 @State 只保持引用生命周期，不让每次滚动进度变化都使整个 AuralisRootView 失效。
+    /// 真正需要重绘的 Dock 子视图会单独 @ObservedObject 订阅它。
+    @State private var bottomDockScroll = BottomDockScrollCoordinator()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -29,7 +99,7 @@ public struct AuralisRootView: View {
             MacAuralisRootView(model: model, themeStore: themeStore)
 #elseif os(iOS)
             if horizontalSizeClass == .compact {
-                CompactShell(model: model, themeStore: themeStore)
+                CompactShell(model: model, themeStore: themeStore, bottomDockScroll: bottomDockScroll)
             } else {
                 DesktopShell(model: model, themeStore: themeStore)
             }
@@ -37,6 +107,7 @@ public struct AuralisRootView: View {
         }
         .environmentObject(model)
         .environmentObject(bottomDockScroll)
+        .environment(\.bottomDockScrollCoordinator, bottomDockScroll)
         .environment(model.artworkStore)
         .environmentObject(themeStore)
         .preferredColorScheme(themeStore.current.colorScheme)
@@ -76,13 +147,17 @@ let dockBottomPadding: CGFloat = 6
 private struct CompactShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
-    @EnvironmentObject private var bottomDockScroll: BottomDockScrollCoordinator
+    let bottomDockScroll: BottomDockScrollCoordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dockPresentation: DockPresentation = .expanded
 
     var body: some View {
         NavigationStack {
-            SectionContent(section: model.selectedSection, model: model, themeStore: themeStore)
+            DockReservedSectionContent(
+                model: model,
+                themeStore: themeStore,
+                coordinator: bottomDockScroll,
+                hasAccessory: hasDockAccessory
+            )
                 .navigationTitle(model.selectedSection.title)
                 // 顶部标题用系统大标题：字体大、与正文内容有明显区分（Apple Music 风格）。
                 // 不覆盖系统导航栏材质。iOS 26+ 会为标准导航栏自动采用 Liquid Glass；
@@ -96,7 +171,6 @@ private struct CompactShell: View {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
         }
-        .environment(\.bottomDockReservedHeight, dockReservedHeight)
         .sheet(isPresented: nowPlayingBinding) {
             NowPlayingView(model: model, theme: themeStore.current)
                 .presentationDragIndicator(.visible)
@@ -111,8 +185,6 @@ private struct CompactShell: View {
         // 设置页没有底部附件；离开首页 / 音乐库 / AI 助手时回到完整导航态。
         .onChange(of: model.selectedSection) { _, _ in
             bottomDockScroll.reset()
-            guard !hasDockAccessory, dockPresentation != .expanded else { return }
-            setDockPresentation(.expanded)
         }
         .alert("播放失败", isPresented: .init(
             get: { model.playbackError != nil },
@@ -139,15 +211,6 @@ private struct CompactShell: View {
         }
     }
 
-    /// 底部 Dock 的预留高度必须和当前两态 Dock 相同，避免首页 / 音乐库在缩放过渡后
-    /// 被底栏遮住。AI 助手有自己的输入栏，因此仍以完整导航栏高度避让。
-    private var dockReservedHeight: CGFloat {
-        let singleBar = bottomBarHeight + dockBottomPadding
-        guard hasDockAccessory else { return singleBar }
-        let expandedHeight = bottomBarHeight + dockSpacing + singleBar
-        return expandedHeight + (singleBar - expandedHeight) * bottomDockScroll.collapseProgress
-    }
-
     private var showsPlaybackAccessory: Bool {
         model.selectedSection == .home || model.selectedSection == .library
     }
@@ -170,11 +233,11 @@ private struct CompactShell: View {
     /// 内联到导航栏。它们在同一个 ZStack 内缩放淡入淡出，避免出现两套栏位同时抢手势。
     @ViewBuilder
     private var dockOverlay: some View {
-        MorphingBottomDock(
+        MorphingBottomDockProgressHost(
             model: model,
             theme: themeStore.current,
             accessory: collapsedDockAccessory,
-            progress: bottomDockScroll.collapseProgress,
+            coordinator: bottomDockScroll,
             onExpand: { setDockPresentation(.expanded) },
             onAssistant: {
                 model.selectedSection = .assistant
@@ -184,12 +247,11 @@ private struct CompactShell: View {
     }
 
     private var dockAnimation: Animation? {
-        reduceMotion ? .linear(duration: 0.22) : .spring(response: 0.58, dampingFraction: 0.88)
+        BottomDockMotion.animation(reduceMotion: reduceMotion)
     }
 
     private func setDockPresentation(_ presentation: DockPresentation) {
         withAnimation(dockAnimation) {
-            dockPresentation = presentation
             bottomDockScroll.setCollapseProgress(presentation == .compact ? 1 : 0)
         }
     }
@@ -217,47 +279,73 @@ private struct CompactShell: View {
 
 }
 
+/// 底部安全区的连续变化仍保留原有最终布局，但订阅被限制在当前 SectionContent，
+/// 不再使 NavigationStack、弹窗绑定和整个 RootView 跟随滚动重算。
+private struct DockReservedSectionContent: View {
+    @ObservedObject var model: AuralisAppModel
+    @ObservedObject var themeStore: ThemeStore
+    @ObservedObject var coordinator: BottomDockScrollCoordinator
+    let hasAccessory: Bool
+
+    var body: some View {
+        SectionContent(section: model.selectedSection, model: model, themeStore: themeStore)
+            .environment(\.bottomDockReservedHeight, reservedHeight)
+    }
+
+    private var reservedHeight: CGFloat {
+        let singleBar = bottomBarHeight + dockBottomPadding
+        guard hasAccessory else { return singleBar }
+        let expandedHeight = bottomBarHeight + dockSpacing + singleBar
+        return expandedHeight + (singleBar - expandedHeight) * coordinator.collapseProgress
+    }
+}
+
 private enum DockPresentation: Equatable {
     case expanded
     case compact
 }
 
-/// 首页 / 音乐库的滚动进度。它直接驱动 Dock 的连续形变，不在滚动结束后播放一段
-/// 离散动画；因此手指停在哪里，组件就停在对应的中间状态。
-@MainActor
-final class BottomDockScrollCoordinator: ObservableObject {
-    @Published private(set) var collapseProgress: CGFloat = 0
-    @Published private(set) var isCompact = false
+/// 应加在真正可纵向滚动的 ScrollView 或 List 上。手势与系统滚动同时识别，
+/// 只读取纵向位移来驱动 Dock，不接管列表点击和横向货架。
+struct BottomDockScrollReportingModifier: ViewModifier {
+    /// 普通 Environment 值只传递引用，不会订阅 objectWillChange；滚动内容自身不应因
+    /// Dock 的每次进度发布而重新计算。只有下方 ProgressHost 负责重绘。
+    @Environment(\.bottomDockScrollCoordinator) private var coordinator
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    func report(contentOffset: CGFloat) {
-        // 140pt 是完整双层 Dock 逐渐收拢所需的内容滚动距离。
-        // 负向橡皮筋回弹被钳制为 0，列表到底后也稳定保持 1，不会抖动。
-        setCollapseProgress(min(max(contentOffset / 140, 0), 1))
-    }
-
-    func reset() {
-        collapseProgress = 0
-        isCompact = false
-    }
-
-    func setCollapseProgress(_ progress: CGFloat) {
-        let clamped = min(max(progress, 0), 1)
-        collapseProgress = clamped
-        isCompact = clamped >= 0.999
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(
+                DragGesture(minimumDistance: BottomDockProgressReducer.minimumVerticalSwipeDistance)
+                    .onEnded { value in
+                        guard BottomDockProgressReducer.terminalProgress(for: value.translation) != nil else { return }
+                        withAnimation(BottomDockMotion.animation(reduceMotion: reduceMotion)) {
+                            coordinator?.finishInteraction(translation: value.translation)
+                        }
+                    }
+            )
     }
 }
 
-/// 应加在真正可纵向滚动的 ScrollView 或 List 上。iOS 26 在这里提供稳定的
-/// ScrollGeometry，避免用全屏 DragGesture 抢走列表点击、横向货架和系统回弹。
-struct BottomDockScrollReportingModifier: ViewModifier {
-    @EnvironmentObject private var coordinator: BottomDockScrollCoordinator
+/// 将高频进度订阅限制在 Dock 本身。CompactShell、NavigationStack 和当前页面不再
+/// 因为用户滚动一两个像素而整体重新求值。
+private struct MorphingBottomDockProgressHost: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+    let accessory: CollapsedDockAccessory?
+    @ObservedObject var coordinator: BottomDockScrollCoordinator
+    let onExpand: () -> Void
+    let onAssistant: () -> Void
 
-    func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: CGFloat.self, of: { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top
-        }) { _, offset in
-            coordinator.report(contentOffset: offset)
-        }
+    var body: some View {
+        MorphingBottomDock(
+            model: model,
+            theme: theme,
+            accessory: accessory,
+            progress: coordinator.collapseProgress,
+            onExpand: onExpand,
+            onAssistant: onAssistant
+        )
     }
 }
 
@@ -302,16 +390,32 @@ private struct MorphingBottomDock: View {
                 ZStack {
                     // 完整导航栏的玻璃底板在前半程保持完整，后半程收窄并淡出。
                     MorphingGlassCapsule { Color.clear }
-                        .frame(width: fullWidth * (1 - 0.16 * chromeFade), height: bottomBarHeight)
+                        .frame(width: fullWidth, height: bottomBarHeight)
+                        // 玻璃表面固定布局尺寸，只用渲染变换收缩，避免每帧重建材质纹理。
+                        .scaleEffect(x: 1 - 0.16 * chromeFade, y: 1, anchor: .center)
                         .position(x: playerCenterX, y: navCenterY)
                         .opacity(1 - chromeFade)
 
                     // 迷你播放器只有一个实例：从上层下降并持续缩短，最后抵达三件套的中间。
                     if accessory == .player {
-                        MorphingGlassCapsule {
-                            MiniPlayerContent(model: model, theme: theme, height: bottomBarHeight)
+                        ZStack {
+                            MorphingGlassCapsule { Color.clear }
+                                .frame(width: fullWidth, height: bottomBarHeight)
+                                .scaleEffect(
+                                    x: fullWidth > 0 ? max(playerWidth, bottomBarHeight) / fullWidth : 1,
+                                    y: 1,
+                                    anchor: .center
+                                )
+                            MiniPlayerContent(
+                                model: model,
+                                theme: theme,
+                                height: bottomBarHeight,
+                                skipControlsVisibility: 1 - smoothstep(from: 0.18, to: 0.58, value: p)
+                            )
+                            .frame(width: max(playerWidth, bottomBarHeight), height: bottomBarHeight)
+                            .clipShape(Capsule(style: .continuous))
                         }
-                        .frame(width: max(playerWidth, bottomBarHeight), height: bottomBarHeight)
+                        .frame(width: fullWidth, height: bottomBarHeight)
                         .position(x: playerCenterX, y: playerCenterY)
                         .contentShape(Rectangle())
                         .onTapGesture { model.isNowPlayingPresented = true }
@@ -360,6 +464,7 @@ private struct MorphingBottomDock: View {
         let scale = survives ? 1 : 1 - 0.16 * itemFade
         let titleOpacity = 1 - smoothstep(from: 0.08, to: 0.52, value: p)
         let icon = section == .assistant && p > 0.5 ? "sparkles" : section.symbol
+        let usesAccentColor = section == model.selectedSection || (section == .home && p >= 0.8)
         let selectedFill = section == model.selectedSection
             ? Color.primary.opacity((colorScheme == .dark ? 0.17 : 0.09) * (1 - chromeFade))
             : Color.clear
@@ -388,7 +493,7 @@ private struct MorphingBottomDock: View {
                     .frame(height: titleOpacity > 0.01 ? nil : 0)
             }
             .foregroundStyle(
-                section == .home
+                usesAccentColor
                     ? theme.colorTokens.accent.color
                     : theme.colorTokens.secondaryText.color
             )
@@ -397,9 +502,12 @@ private struct MorphingBottomDock: View {
                 Capsule(style: .continuous)
                     .fill(selectedFill)
                     .opacity(1 - eased)
-                if survives {
+                // 前半程仍由完整导航玻璃承载；独立圆形玻璃只在分裂阶段才加入，
+                // 可把常见滚动区间的玻璃采样层从四层降到两层。
+                if survives, p > 0.44 {
                     MorphingGlassCapsule { Color.clear }
-                        .opacity(eased)
+                        .frame(width: bottomBarHeight, height: bottomBarHeight)
+                        .opacity(smoothstep(from: 0.44, to: 0.82, value: p))
                 }
             }
             .contentShape(Rectangle())
@@ -733,6 +841,13 @@ private struct MainTabBarContent: View {
                 }
             }
     }
+}
+#endif
+
+#if !os(iOS)
+/// Dock 仅存在于紧凑 iOS 布局；其它平台保留同一调用点但不安装滚动监听。
+extension View {
+    func reportsBottomDockScroll() -> some View { self }
 }
 #endif
 
@@ -1418,7 +1533,10 @@ struct BrowseDetailSheet: View {
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
+                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(HapticPlainButtonStyle())
         }
@@ -1445,7 +1563,10 @@ struct BrowseDetailSheet: View {
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
+                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(HapticPlainButtonStyle())
         }

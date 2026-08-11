@@ -451,6 +451,9 @@ public struct AgentRunner {
                 if descriptor.permission != .readOnly,
                    let reason = ws.sideEffectBlockReason(tool: call.name, args: call.args) {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: call.args, summary: "已拦截重复副作用", reused: true))
+                    // 这是一次真实的状态保护，而不是普通的模型内部提示：用户需要知道
+                    // 第二次修改没有发生，否则最终回答仍可能谎称队列再次被替换。
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text(reason)]))
                     toolMessages.append(Self.toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name): 已跳过 - \(reason)",
@@ -1239,8 +1242,8 @@ public struct AgentRunner {
 
         ## 对话与工具调用规则
         6. 你是有记忆的助手：结合本会话历史回答，不要重复询问已知信息。
-        7. 一个请求内最多执行 300 步工具；需要多步时（先搜索再播放、先拿清单再推荐，或构建索引 V2）可以连续调用，
-           直到给出最终回答为止，不要提前结束。只有真正完成用户请求才停止调用工具。
+        7. 一个请求不按累计工具次数截断；需要多步时（先搜索再播放、先拿清单再推荐，或构建索引 V2）可以连续调用，
+           直到给出最终回答为止。每个模型轮次和每个工具仍受独立超时保护；某一步超时就停止当前任务并保留此前成功结果。
         8. 工具执行结果会以「（工具执行结果）工具名: 成功/失败 - 摘要；详情：歌曲清单」的形式回传给你，里面包含真实歌曲名与 GlobalID。拿到结果后：成功就据此给出自然语言总结；只有确实需要后续操作时才继续调用工具，不要重复调用已经成功的工具。
         8b. 禁止重复搜索：已经拿到某首歌的稳定 ID 后，后续操作必须直接使用该 ID（queue_replace / queue_append / playback_play_song），**禁止**再次按名称搜索同一首歌。同一查询（相同工具 + 相同参数）会被缓存，重复调用只返回缓存、不会得到新结果。
         8c. 已有候选足够时立即停止搜索：只要已获得 ≥ 目标数量的候选、或队列已建立（含 ≥ 20 首），就不要再调用任何搜索工具；直接建立队列 / 播放 / 给出最终回答。若工具结果提示「已停止搜索」或「连续多次没有新结果」，必须停止搜索并基于现有候选完成任务。

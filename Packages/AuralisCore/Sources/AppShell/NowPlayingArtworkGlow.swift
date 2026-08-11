@@ -107,11 +107,10 @@ final class ArtworkPaletteStore: @unchecked Sendable {
 // MARK: - 播放态动态光效（封面后方，3 层）
 
 /// “正在播放”封面的动态光效：静态柔光底 + 呼吸式主光晕 + 间歇波纹扩散。
-/// 只读 model 取封面用于取色；动画由 isPlaying 驱动，切歌时颜色随封面平滑过渡。
+/// 通过独立封面管线取色；动画由 isPlaying 驱动，切歌时颜色随封面平滑过渡。
 struct NowPlayingArtworkGlowView: View {
-    @EnvironmentObject var model: AuralisAppModel
-    /// 封面到达时只刷新光效自身，避免触发整个 Now Playing 页 / 首页重建。
     @Environment(ArtworkStore.self) private var artworkStore
+    @State private var artworkImage: PlatformImage?
     let isPlaying: Bool
     let artworkKey: String?
     let title: String
@@ -122,13 +121,15 @@ struct NowPlayingArtworkGlowView: View {
 
     private var pixelSize: Int { max(64, Int(size * 2)) }
 
+    private var requestIdentifier: String? {
+        artworkStore.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
+    }
+
     var body: some View {
         // 与封面同尺寸的“不可见”占位，光效从中心向外扩散，绝不遮挡封面/文字。
         let palette = ArtworkPaletteStore.shared.palette(
             for: artworkKey,
-            image: artworkKey.flatMap {
-                artworkStore.image(forKey: model.artworkCacheKey($0, pixelSize))
-            },
+            image: artworkImage,
             fallbackPrimary: colors.accent.color,
             fallbackSecondary: colors.accentSecondary.color
         )
@@ -153,6 +154,15 @@ struct NowPlayingArtworkGlowView: View {
         // 切歌/封面加载完成时颜色平滑过渡，不跳色。
         .animation(.easeInOut(duration: 0.8), value: palette.primary)
         .animation(.easeInOut(duration: 0.8), value: palette.secondary)
+        .task(id: requestIdentifier) {
+            artworkImage = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
+            if artworkImage == nil {
+                artworkImage = await artworkStore.load(
+                    remoteKey: artworkKey,
+                    targetPixelSize: pixelSize
+                )
+            }
+        }
     }
 }
 

@@ -8,6 +8,7 @@ import ThemeEngine
 /// 顶部分段切换：队列 / 歌词 / 音质 / 元数据。
 struct MacInspector: View {
     @ObservedObject var model: AuralisAppModel
+    @ObservedObject private var playbackStore: PlaybackStore
     let theme: BuiltInTheme
     @State private var section: InspectorTab
     let onTabChange: (InspectorTab) -> Void
@@ -16,6 +17,7 @@ struct MacInspector: View {
          initialTab: InspectorTab = .queue,
          onTabChange: @escaping (InspectorTab) -> Void = { _ in }) {
         self.model = model
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
         self.theme = theme
         self._section = State(initialValue: initialTab)
         self.onTabChange = onTabChange
@@ -95,7 +97,7 @@ struct MacInspector: View {
         // 当前行：最后一个 startTime <= 播放位置 的行。
         let currentIndex = lines.lastIndex { line in
             guard let start = line.startTime else { return false }
-            return start <= model.playbackPosition
+            return start <= playbackStore.position
         }
         return AnyView(
             ScrollViewReader { proxy in
@@ -122,7 +124,7 @@ struct MacInspector: View {
                     }
                     .padding(AuralisSpacing.large)
                 }
-                .onChange(of: model.playbackPosition) { _, _ in
+                .onChange(of: playbackStore.position) { _, _ in
                     if let currentIndex, currentIndex < lines.count {
                         withAnimation { proxy.scrollTo(currentIndex, anchor: .center) }
                     }

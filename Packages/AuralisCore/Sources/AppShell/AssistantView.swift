@@ -43,6 +43,7 @@ struct AssistantView: View {
 
     @EnvironmentObject private var bottomDockScroll: BottomDockScrollCoordinator
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: AuralisAppModel, theme: BuiltInTheme) {
         self.model = model
@@ -137,7 +138,9 @@ struct AssistantView: View {
             NavigationStack {
                 SearchView(model: model, theme: theme)
                     .navigationTitle("搜索音乐库")
+                    #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
+                    #endif
             }
         }
         .onChange(of: model.shouldPresentAssistantSearch) { _, shouldPresent in
@@ -158,17 +161,13 @@ struct AssistantView: View {
                     Task { await agent.newSession() }
                 } label: {
                     Image(systemName: "square.and.pencil")
+                        .font(.system(size: 24, weight: .semibold))
+                        .frame(width: 52, height: 52)
+                        .contentShape(Circle())
                 }
-                .buttonStyle(HapticPlainButtonStyle())
+                .buttonStyle(HapticBorderedButtonStyle())
                 .help("新建会话")
-                Button {
-                    isBatchManaging.toggle()
-                    if !isBatchManaging { selectedSessionIDs.removeAll() }
-                } label: {
-                    Image(systemName: isBatchManaging ? "checkmark.circle" : "ellipsis.circle")
-                }
-                .buttonStyle(HapticPlainButtonStyle())
-                .help(isBatchManaging ? "完成批量管理" : "批量管理")
+                batchManagementButton
             }
             .padding(.horizontal, AuralisSpacing.medium)
             .padding(.top, AuralisSpacing.medium)
@@ -184,12 +183,6 @@ struct AssistantView: View {
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
             .padding(.horizontal, AuralisSpacing.medium)
             .padding(.vertical, AuralisSpacing.small)
-
-            Toggle("只看当前服务器", isOn: $agent.filtersByActiveServer)
-                .toggleStyle(.switch)
-                .font(.caption)
-                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                .padding(.horizontal, AuralisSpacing.medium)
 
             Toggle("显示已归档", isOn: $agent.showArchivedSessions)
                 .toggleStyle(.switch)
@@ -210,30 +203,28 @@ struct AssistantView: View {
 
             if isBatchManaging {
                 HStack(spacing: AuralisSpacing.small) {
-                    Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? "取消全选" : "全选") {
-                        if selectedSessionIDs.count == agent.sessions.count {
-                            selectedSessionIDs.removeAll()
-                        } else {
-                            selectedSessionIDs = Set(agent.sessions.map(\.id))
-                        }
-                    }
-                    .buttonStyle(HapticPlainButtonStyle())
-                    Spacer(minLength: 0)
-                    Button("归档") {
+                    Button {
                         Task {
                             await agent.archive(Array(selectedSessionIDs))
                             selectedSessionIDs.removeAll()
                         }
+                    } label: {
+                        Label("归档", systemImage: "archivebox")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(HapticBorderedButtonStyle())
                     .disabled(selectedSessionIDs.isEmpty)
-                    Button("删除", role: .destructive) {
+                    Button(role: .destructive) {
                         confirmBatchDelete = true
+                    } label: {
+                        Label("删除", systemImage: "trash")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(HapticDestructiveButtonStyle())
                     .disabled(selectedSessionIDs.isEmpty)
                 }
-                .font(.caption)
                 .padding(.horizontal, AuralisSpacing.medium)
                 .padding(.vertical, AuralisSpacing.small)
             }
@@ -391,9 +382,9 @@ struct AssistantView: View {
         // 键盘打开时输入框底边停在距键盘顶 8pt 处。输入框宽度/高度/圆角始终不变。
         .safeAreaInset(edge: .bottom, spacing: 0) {
             DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: $assistantInputFocused)
-                // 收拢态时输入栏进入底部导航栏的中间槽位；左右保留给首页和 AI 入口。
-                // 展开态维持完整宽度，位于四个一级入口上方。
-                .padding(.horizontal, 64 * bottomDockScroll.collapseProgress)
+                // 收拢态时输入栏进入底部导航栏的中间槽位；一旦获得输入焦点、键盘弹出，
+                // 必须立即恢复完整输入宽度，而不能继续沿用窄胶囊。
+                .padding(.horizontal, assistantInputFocused ? 0 : 64 * bottomDockScroll.collapseProgress)
                 // 键盘关闭时：主菜单栏是独立的底部 overlay（忽略键盘），会覆盖在屏幕最底，
                 // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
                 // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
@@ -403,6 +394,12 @@ struct AssistantView: View {
                     assistantInputFocused
                         ? AuralisSpacing.small
                         : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - bottomDockScroll.collapseProgress)
+                )
+                // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
+                // 不再按拖动位移逐帧改变宽度，快滑和慢滑的视觉节奏完全一致。
+                .animation(
+                    BottomDockMotion.animation(reduceMotion: reduceMotion),
+                    value: bottomDockScroll.collapseProgress
                 )
         }
         #else
@@ -447,15 +444,6 @@ struct AssistantView: View {
                 .buttonStyle(HapticBorderedButtonStyle())
                 .controlSize(.small)
             }
-            // 新建会话按钮：与会话列表使用同一固定图标容器，避免 SF Symbol
-            // 的不同字形边界造成两枚按钮视觉上高低不齐。
-            assistantHeaderIconButton(
-                symbol: "square.and.pencil",
-                accessibilityLabel: "新建会话",
-                help: "新建会话"
-            ) {
-                Task { await agent.newSession() }
-            }
             assistantHeaderIconButton(
                 symbol: "magnifyingglass",
                 accessibilityLabel: "搜索音乐库",
@@ -467,6 +455,41 @@ struct AssistantView: View {
         }
         .padding(AuralisSpacing.large)
         .accessibilityElement(children: .contain)
+    }
+
+    /// 新建会话仅保留在会话页顶部；进入批量管理后，全选收纳到同一管理按钮中。
+    private var batchManagementButton: some View {
+        Group {
+            if isBatchManaging {
+                Menu {
+                    Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? "取消全选" : "全选") {
+                        if selectedSessionIDs.count == agent.sessions.count {
+                            selectedSessionIDs.removeAll()
+                        } else {
+                            selectedSessionIDs = Set(agent.sessions.map(\.id))
+                        }
+                    }
+                    Button("完成批量管理") {
+                        isBatchManaging = false
+                        selectedSessionIDs.removeAll()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 24, weight: .semibold))
+                        .frame(width: 52, height: 52)
+                }
+                .buttonStyle(HapticBorderedButtonStyle())
+                .help("批量管理：全选或完成")
+            } else {
+                Button { isBatchManaging = true } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 24, weight: .semibold))
+                        .frame(width: 52, height: 52)
+                }
+                .buttonStyle(HapticBorderedButtonStyle())
+                .help("批量管理")
+            }
+        }
     }
 
     private var sessionListButton: some View {

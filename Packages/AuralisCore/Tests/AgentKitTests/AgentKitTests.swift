@@ -734,14 +734,14 @@ func llmFailureDegrades() async throws {
 
 // MARK: - Agent 主循环（多轮 Tool Calling）
 
-@Test("Safety cap: stops at 30 tool steps with a clear pause message")
-func maxToolStepsSafetyCap() async throws {
+@Test("Large tool batches are not truncated by a fixed cumulative step cap")
+func largeToolBatchHasNoFixedStepCap() async throws {
     let store = try makeStore()
     let tracks = (1...320).map { makeTrack(serverID: "test-server", remoteID: "t-\($0)", title: "Song \($0)") }
     try await seed(store, tracks)
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
-    // 一批返回 305 个 ACTION：超过 300 步保护上限，验证在 300 步处明确暂停。
+    // 一批返回 305 个 ACTION：Agent 只按单轮/单工具超时停止，不再按累计数量截断。
     let actions = (1...305).map { "ACTION: {\"tool\":\"playTrack\",\"args\":{\"trackID\":\"test-server:t-\($0)\"}}" }
         .joined(separator: "\n")
     let provider = ScriptedAIProvider(actionBatches: [actions])
@@ -755,9 +755,8 @@ func maxToolStepsSafetyCap() async throws {
         confirm: { _ in true },
         emit: { await collector.record($0) }
     )
-    // 保护上限是异常保护而不是正常终止：应停在 30 步并明确提示。
-    #expect(await bridge.playedTracks.count == AgentRunner.maxToolSteps)
-    #expect(await collector.containsText("任务执行步骤异常过多，已暂停"))
+    #expect(await bridge.playedTracks.count == 305)
+    #expect(await collector.containsText("任务执行步骤异常过多，已暂停") == false)
 }
 
 @Test("Loop continues through 12+ tool steps and reaches final answer")

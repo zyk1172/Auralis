@@ -2,12 +2,11 @@ import Darwin
 import Domain
 import Foundation
 
-/// A dependency-free durable store intended for the first production slice.
+/// Durable account/configuration store plus a decoder for legacy music snapshots.
 ///
-/// It provides atomic archive replacement and actor isolation. The application must create one
-/// instance per archive URL. It deliberately does not pretend to be the final 100k-track database:
-/// GRDB-backed pagination/indexing can replace this implementation behind `AuralisPersisting`
-/// without changing repositories or sync use cases.
+/// Production catalog reads and synchronization use `LocalCatalogStore` (SQLite). The music
+/// entity fields remain decodable only so an existing `library.json` can be migrated without
+/// losing a user's offline catalog; ProductionServerConnector compacts them after that migration.
 public actor FileBackedPersistence: AuralisPersisting {
     private struct Archive: Codable, Sendable {
         var schemaVersion: Int
