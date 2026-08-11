@@ -57,7 +57,7 @@ public enum LocalNetworkProbe {
                 box.handle(state, connection: connection)
             }
             connection.start(queue: .global(qos: .userInitiated))
-            box.scheduleTimeout(after: timeout)
+            box.scheduleTimeout(after: timeout, connection: connection)
         }
     }
 }
@@ -122,7 +122,7 @@ private final class ProbeBox: @unchecked Sendable {
         }
     }
 
-    func scheduleTimeout(after interval: TimeInterval) {
+    func scheduleTimeout(after interval: TimeInterval, connection: NWConnection) {
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
         timer.schedule(deadline: .now() + interval)
         timer.setEventHandler { [weak self] in
@@ -134,6 +134,9 @@ private final class ProbeBox: @unchecked Sendable {
                 errorDescription: waitingError ?? "探测超时（\(Int(interval))s）",
                 timestamp: .now
             ))
+            // 结束 continuation 还不等于结束 NWConnection。旧实现超时后连接仍可能
+            // 留在 waiting，继续持有 state handler/ProbeBox；这里显式终止资源生命周期。
+            connection.cancel()
         }
         lock.lock()
         self.timer = timer

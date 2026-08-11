@@ -16,9 +16,6 @@ public struct AgentRunner {
     /// 模型每一轮的总响应时限。长回答、复杂规划和批量 JSON 分类都可能持续数分钟；
     /// 整项任务没有总轮数上限，但每个独立模型请求最多等待六分钟。
     public static let roundTimeout: TimeInterval = 6 * 60
-    /// 推荐索引 V2 与普通模型轮次采用相同的六分钟上限，保留独立常量便于未来
-    /// 按任务类型单独调节。
-    public static let recommendationIndexRoundTimeout: TimeInterval = 6 * 60
 
     public struct Context: Sendable {
         public let serverID: ServerID?
@@ -128,12 +125,15 @@ public struct AgentRunner {
         context: Context,
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
+        externalMusicService: (any AgentExternalMusicService)? = nil,
         intent: AgentTaskIntent? = nil,
         policy: AgentTaskPolicy? = nil,
+        initialTaskState: AgentTaskState? = nil,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
-        progress: @escaping @Sendable (AgentProgress) async -> Void = { _ in }
+        progress: @escaping @Sendable (AgentProgress) async -> Void = { _ in },
+        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
         // 用户消息先回显
         await emit(AgentChatMessage(role: .user, messages: [.text(userText)]))
@@ -148,12 +148,15 @@ public struct AgentRunner {
                 context: context,
                 history: history,
                 systemService: systemService,
+                externalMusicService: externalMusicService,
                 intent: intent ?? AgentIntentClassifier.classify(userText),
                 policy: policy ?? AgentTaskPolicy.policy(for: intent ?? AgentIntentClassifier.classify(userText)),
+                initialTaskState: initialTaskState,
                 confirm: confirm,
                 emit: emit,
                 log: log,
-                progress: progress
+                progress: progress,
+                state: state
             )
         } else {
             await runOffline(
@@ -193,25 +196,24 @@ public struct AgentRunner {
         context: Context,
         history: [AgentChatMessage],
         systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)?,
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
+        initialTaskState: AgentTaskState?,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
-        progress: @escaping @Sendable (AgentProgress) async -> Void
+        progress: @escaping @Sendable (AgentProgress) async -> Void,
+        state: @escaping @Sendable (AgentTaskState) async -> Void
     ) async {
         // 动态工具加载：只向模型暴露与本次意图相关的工具，降低 schema 对上下文的占用。
         let selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
-        let isRecommendationIndexTask = Self.isRecommendationIndexTask(userText, history: history)
-        let requiresCompleteRecommendationIndex = Self.requiresCompleteRecommendationIndex(userText, history: history)
-        let requestTimeout = isRecommendationIndexTask
-            ? recommendationIndexRoundTimeout
-            : roundTimeout
+        let requestTimeout = roundTimeout
         let toolDefinitions = provider.supportsToolCalling
             ? ToolSelector.toolDefinitions(from: selectedTools)
             : []
 
-        var taskState = AgentTaskState(intent: intent, goal: userText)
+        var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
         var privacy = AIPrivacyPermissions()
         privacy.allowsMetadata = context.allowsMetadata
         privacy.allowsLyrics = context.allowsLyrics
@@ -233,19 +235,14 @@ public struct AgentRunner {
 
         var toolStepCount = 0
         var nativeMode = provider.supportsToolCalling
-        // 索引任务没有至少一次真实的本地工具结果时，模型的自然语言不能被视为完成。
-        // 这能阻止「工具不可用 / 网络断开」之类的模型臆测伪装成任务执行结果。
-        var hasExecutedRecommendationIndexTool = false
-        var indexToolRepairAttempts = 0
-        // 全量索引任务中，只要状态仍有待分类或工具已经给出了下一批，模型不能用自然语言提前结束。
-        var recommendationIndexHasPendingWork = false
-        var recommendationIndexNextBatchIsAvailable = false
-        var indexCompletionRepairAttempts = 0
+        var completionRepairAttempts = 0
         // 音乐清单（歌曲/专辑/歌单提案）在整轮任务里累积，只在最终回答时展示一次，
         // 避免执行过程中（搜索/加歌等中间步骤）频繁弹出清单。
         var bufferedCards: [AgentMessage] = []
         // 任务工作集：任务级结果缓存、重复调用保护、候选/队列统计、诊断轨迹。
-        var ws = AgentTaskWorkingSet()
+        var ws = AgentTaskWorkingSet(
+            targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
+        )
 
         while true {
             if Task.isCancelled {
@@ -265,9 +262,8 @@ public struct AgentRunner {
             )
             conversation = ContextManager.trimByTokens(conversation, maxTokens: contextBudget)
 
-            // 显式指定输出上限：Agent 回复必须完整，不受历史默认 1_200 影响。
-            // 8_192 是主流 OpenAI 兼容模型通用的最大输出上限（见
-            // AIKit.auralisDefaultMaxOutputTokens 的注释依据）。
+            // 显式指定单次输出上限：当前模型使用 256K 上下文、16K 输出。
+            // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
             let request = AICompletionRequest(
                 model: model,
                 messages: conversation,
@@ -303,10 +299,6 @@ public struct AgentRunner {
                         await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                         return
                     } catch {
-                        if isRecommendationIndexTask {
-                            await emit(AgentChatMessage(role: .assistant, messages: [.error(Self.recommendationIndexFailureText(error: error))]))
-                            return
-                        }
                         await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已改用本地能力处理。")]))
                         await runOffline(
                             userText: userText,
@@ -319,10 +311,6 @@ public struct AgentRunner {
                         return
                     }
                 } else {
-                    if isRecommendationIndexTask {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.error(Self.recommendationIndexFailureText(error: error))]))
-                        return
-                    }
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已改用本地能力处理。")]))
                     await runOffline(
                         userText: userText,
@@ -345,6 +333,9 @@ public struct AgentRunner {
             taskState.progress.modelRounds += 1
             taskState.progress.inputTokens += outcome.inputTokens ?? 0
             taskState.progress.outputTokens += outcome.outputTokens ?? 0
+            taskState.status = .waitingForModel
+            taskState.updatedAt = .now
+            await state(taskState)
 
             // 解析本轮工具调用：原生 tool_calls 优先（流式事件收集），文本 ACTION 兜底。
             let streamedText = outcome.text
@@ -356,61 +347,35 @@ public struct AgentRunner {
                 // 流式收尾：Coordinator 会把 in-flight 流式气泡原地定型为该最终文本，
                 // 不会出现「流式半成品 + 成品」两条重复气泡。
                 let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
-                if isRecommendationIndexTask, !hasExecutedRecommendationIndexTool {
-                    // 原生接口偶尔会返回正文而非 function_call；先明确纠正一次，
-                    // 仍不调用工具时再如实失败，绝不把模型的解释当作索引结果。
-                    if indexToolRepairAttempts == 0 {
-                        indexToolRepairAttempts += 1
-                        conversation.append(AIMessage(role: .assistant, content: reply))
-                        conversation.append(AIMessage(
-                            role: .user,
-                            content: "系统校验：推荐索引 V2 尚未执行任何工具。不要解释工具是否可用，必须立即调用 library_index_v2_status；只有得到真实工具结果后才能回复。"
-                        ))
-                        continue
-                    }
-                    await emit(AgentChatMessage(role: .assistant, messages: [.error(
-                        "推荐索引 V2 未开始：模型连续两次没有返回工具调用，因此没有读取状态、没有取歌曲、也没有写入任何分类。请检查当前模型是否支持 OpenAI function calling；本次不会降级为普通推荐。"
-                    )]))
+                switch AgentCompletionEvaluator.evaluateModelAnswer(
+                    reply,
+                    state: &taskState,
+                    policy: policy,
+                    repairAttempts: completionRepairAttempts
+                ) {
+                case .accept:
+                    await state(taskState)
+                    await Self.emitBufferedCards(bufferedCards, emit: emit)
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text(reply)]))
+                    return
+                case let .continueTask(instruction):
+                    completionRepairAttempts += 1
+                    taskState.pendingActions = [instruction]
+                    taskState.status = .waitingForTool
+                    taskState.updatedAt = .now
+                    await state(taskState)
+                    conversation.append(AIMessage(role: .assistant, content: reply))
+                    conversation.append(AIMessage(role: .user, content: "系统完成条件校验：\(instruction)"))
+                    continue
+                case let .fail(message):
+                    taskState.status = .insufficient
+                    taskState.errorState = message
+                    taskState.updatedAt = .now
+                    await state(taskState)
+                    await Self.emitBufferedCards(bufferedCards, emit: emit)
+                    await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
                     return
                 }
-                if requiresCompleteRecommendationIndex, recommendationIndexHasPendingWork {
-                    if indexCompletionRepairAttempts == 0 {
-                        indexCompletionRepairAttempts += 1
-                        conversation.append(AIMessage(role: .assistant, content: reply))
-                        conversation.append(AIMessage(
-                            role: .user,
-                            content: recommendationIndexNextBatchIsAvailable
-                                ? "系统校验：推荐索引 V2 仍有待分类歌曲，当前任务要求一次性完成全部索引。上一条工具结果已经提供了下一批元数据；不要输出总结，必须立即调用 library_index_v2_write_batch 写回这一批。仅当工具结果明确显示待分类为 0 时才可结束。"
-                                : "系统校验：推荐索引 V2 仍有待分类歌曲，当前任务要求一次性完成全部索引。不要输出总结，必须立即调用 library_index_v2_next_batch(limit=80) 取得首批，再继续写入。仅当工具结果明确显示待分类为 0 时才可结束。"
-                        ))
-                        continue
-                    }
-                    await emit(AgentChatMessage(role: .assistant, messages: [.error(
-                        "推荐索引 V2 未完成：仍有待分类歌曲，但模型连续两次没有继续写入下一批。没有把任务误报为完成；请检查当前模型的 function calling 输出。"
-                    )]))
-                    return
-                }
-                guard !reply.isEmpty else {
-                    if isRecommendationIndexTask {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.error(
-                            "推荐索引 V2 未开始：模型返回了空内容，未执行任何索引工具，也没有写入分类。"
-                        )]))
-                        return
-                    }
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("模型这次返回了空内容，已改用本地能力处理。")]))
-                    await runOffline(
-                        userText: userText,
-                        bridge: bridge,
-                        catalog: catalog,
-                        context: context,
-                        emit: emit,
-                        log: log
-                    )
-                    return
-                }
-                await Self.emitBufferedCards(bufferedCards, emit: emit)
-                await emit(AgentChatMessage(role: .assistant, messages: [.text(reply)]))
-                return
             }
 
             // 有工具调用：先把 assistant 消息（含 tool_calls）写入对话，再逐条执行回灌。
@@ -522,7 +487,8 @@ public struct AgentRunner {
 
                 // ② 任务级缓存：同一工具 + 规范化参数已执行过 → 直接复用结果。
                 // 搜索类工具的重复调用同样记为「无新结果」，连续多次后触发停止搜索。
-                if let cachedText = ws.tryReuse(tool: call.name, args: call.args) {
+                if descriptor.cachePolicy == .task,
+                   let cachedText = ws.tryReuse(tool: call.name, args: call.args) {
                     var text = cachedText
                     if AgentTaskWorkingSet.isSearchTool(call.name) {
                         _ = ws.observeCandidates([])
@@ -540,6 +506,9 @@ public struct AgentRunner {
                     toolSteps: toolStepCount,
                     currentStep: "执行 \(call.name)"
                 ))
+                taskState.status = .waitingForTool
+                taskState.updatedAt = .now
+                await state(taskState)
                 let result: ToolResult
                 do {
                     result = try await Self.withTimeout(toolExecutionTimeout) {
@@ -548,7 +517,8 @@ public struct AgentRunner {
                             bridge: bridge,
                             catalog: catalog,
                             serverID: context.serverID,
-                            systemService: systemService
+                            systemService: systemService,
+                            externalMusicService: externalMusicService
                         )
                     }
                 } catch is CancellationError {
@@ -568,28 +538,12 @@ public struct AgentRunner {
                     )]))
                     return
                 }
-                if result.success, Self.recommendationIndexToolNames.contains(call.name) {
-                    hasExecutedRecommendationIndexTool = true
-                }
                 if result.success, result.permission != .readOnly {
                     ws.recordSuccessfulSideEffect(tool: call.name, args: call.args, summary: result.summary)
                 }
-                if result.success {
-                    taskState.recordProgress(action: "\(call.name): \(result.summary)")
-                } else {
-                    taskState.recordNoProgress()
-                    taskState.errors.append(result.summary)
-                }
-                if result.success, requiresCompleteRecommendationIndex {
-                    recommendationIndexHasPendingWork = Self.recommendationIndexResultHasPendingWork(
-                        tool: call.name,
-                        summary: result.summary
-                    ) ?? recommendationIndexHasPendingWork
-                    recommendationIndexNextBatchIsAvailable = Self.recommendationIndexNextBatchIsAvailable(
-                        tool: call.name,
-                        summary: result.summary
-                    ) ?? recommendationIndexNextBatchIsAvailable
-                }
+                let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
+                if madeProgress { completionRepairAttempts = 0 }
+                await state(taskState)
                 // 音乐清单只在整轮结束时统一展示；中间步骤只回灌给模型、不弹给用户。
                 if let payload = result.payload, Self.isPresentableCard(payload) {
                     bufferedCards.append(payload)
@@ -631,7 +585,7 @@ public struct AgentRunner {
                     let queued = AgentTaskWorkingSet.songIDs(from: call.args)
                     if !queued.isEmpty { ws.noteQueued(queued) }
                 }
-                resultText = ContextManager.truncateToolResult(resultText, limit: Self.toolResultLimit(for: call.name))
+                resultText = ContextManager.truncateToolResult(resultText, limit: descriptor.maxResultCharacters)
                 ws.recordExecution(tool: call.name, args: call.args, resultText: resultText)
                 ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: result.summary, reused: false))
                 toolMessages.append(Self.toolResultMessage(callID: call.id, content: resultText, native: nativeMode))
@@ -723,78 +677,6 @@ public struct AgentRunner {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
-    private static let recommendationIndexToolNames: Set<String> = [
-        "library_index_v2_status",
-        "library_index_v2_read",
-        "library_index_v2_next_batch",
-        "library_index_v2_write_batch",
-    ]
-
-    /// 除了本条输入外，也检查会话历史：用户在同一索引任务里只回复「继续」时，
-    /// 仍需沿用索引的长时限和「必须有真实工具结果」约束。
-    private static func isRecommendationIndexTask(_ userText: String, history: [AgentChatMessage]) -> Bool {
-        let markers = ["推荐索引", "索引 v2", "index v2", "library_index_v2", "构建索引", "重建索引"]
-        func containsMarker(_ text: String) -> Bool {
-            let lower = text.lowercased()
-            return markers.contains { lower.contains($0) }
-        }
-        if containsMarker(userText) { return true }
-        return history.contains { message in
-            message.messages.contains { item in
-                switch item {
-                case let .text(text), let .streaming(text), let .error(text):
-                    return containsMarker(text)
-                default:
-                    return false
-                }
-            }
-        }
-    }
-
-    /// 只有“构建/继续/全量处理”才强制跑到 0；单纯查看状态或读取分类仍允许正常结束。
-    private static func requiresCompleteRecommendationIndex(_ userText: String, history: [AgentChatMessage]) -> Bool {
-        let markers = ["构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
-        func hasMarker(_ text: String) -> Bool {
-            let lower = text.lowercased()
-            return markers.contains { lower.contains($0) }
-        }
-        if hasMarker(userText), isRecommendationIndexTask(userText, history: history) { return true }
-        return history.contains { message in
-            guard message.role == .user else { return false }
-            let text = message.messages.compactMap { item -> String? in
-                if case let .text(value) = item { return value }
-                return nil
-            }.joined(separator: " ")
-            return isRecommendationIndexTask(text, history: []) && hasMarker(text)
-        }
-    }
-
-    /// 返回 nil 表示该工具与“是否还有待处理批次”无关。
-    private static func recommendationIndexResultHasPendingWork(tool: String, summary: String) -> Bool? {
-        switch tool {
-        case "library_index_v2_status", "library_index_v2_next_batch", "library_index_v2_write_batch":
-            return !summary.contains("待分类 0") && !summary.contains("已完成，无待分类")
-        default:
-            return nil
-        }
-    }
-
-    /// next_batch 的成功结果、或未完成 write_batch 的直接回灌，都会附带可立即写回的曲目元数据。
-    private static func recommendationIndexNextBatchIsAvailable(tool: String, summary: String) -> Bool? {
-        switch tool {
-        case "library_index_v2_status":
-            return false
-        case "library_index_v2_next_batch", "library_index_v2_write_batch":
-            return !summary.contains("待分类 0") && !summary.contains("已完成，无待分类")
-        default:
-            return nil
-        }
-    }
-
-    private static func recommendationIndexFailureText(error: Error) -> String {
-        "推荐索引 V2 未开始：模型请求失败（\(errorText(error))）。索引工具完全在本机 SQLite 数据库执行，此错误发生在请求模型规划工具调用的阶段；没有读取状态、没有取歌曲、没有写入分类。本次不会降级为普通推荐。"
-    }
-
     /// 提示词负责“少用表情”，这里再做一次确定性兜底：每个句子最多保留一个 emoji。
     /// 句末和换行均视为新的句子；Markdown 原文、中文内容与链接保持不变。
     private static func formatAssistantReply(_ reply: String) -> String {
@@ -830,17 +712,6 @@ public struct AgentRunner {
             }
         }
         return result
-    }
-
-    /// 工具结果回灌上限：曲库索引/分类清单允许更大体积（否则模型看不到曲库全貌）。
-    private static func toolResultLimit(for tool: String) -> Int {
-        if tool == "library_get_catalog_index" || tool == "library_get_catalog_tracks" {
-            return ContextManager.maxIndexCharacters
-        }
-        if tool == "library_index_v2_next_batch" || tool == "library_index_v2_write_batch" || tool == "library_index_v2_read" {
-            return 24_000
-        }
-        return ContextManager.maxToolResultCharacters
     }
 
     // MARK: - LLM 调用鲁棒性
@@ -1275,8 +1146,7 @@ public struct AgentRunner {
         5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首候选（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里挑选。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
         5e. 热门 = 本地热度代理（播放次数/收藏/评分/最近播放），不是互联网排行榜。library_select_tracks 的 popularityProxy 已按此排序；语言标签缺失时会按热度返回候选，请按歌曲名/艺术家判断语言后再挑选。
         5f. 推荐前先了解曲库：先用 library_get_catalog_index 查看流派/语言/年代/歌手构成；需要具体候选时用 library_get_catalog_tracks(category, value, limit) 取该分类的歌曲清单（只含元数据，无歌词/海报）。按用户需求只取相关分类，不要把全部分类一次性拉进对话；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
-        5f-0. 歌曲鉴赏：主人要求鉴赏/赏析/乐评/大众评价时，必须调用 music_appreciate。没有指定歌曲则省略 trackID，鉴赏当前播放曲目；指定歌曲时先 library_search 取得真实 trackID，再调用 music_appreciate。输出使用：`## 《歌名》鉴赏`、`### 音乐性`、`### 听感与场景`、`### 大众评价`、`### 版本信息`、`### 一句话结论` 六段；只保留有依据的段落。专业分析要区分“工具已核验事实”和“听感/常见观点”，不编造调性、BPM、歌词含义、平台评分、榜单、奖项、评论引语。大众评价没有可靠把握时，明确说“未接入实时评论数据”，再给出本地播放/收藏/评分这一可核验反馈。
-        5f-1. AI 推荐索引 V2：仅当主人明确要求「构建 / 继续 / 更新 / 重建推荐索引 V2」时执行。先调 library_index_v2_status，再只调一次 library_index_v2_next_batch(limit=80) 取得首批。每次只能根据该批歌曲的标题、艺人、专辑、年份、流派、语言、时长、收藏、评分、播放次数分类，绝不请求或传输歌词、文件路径、播放地址。对本批每个 id 恰好生成一条 JSON：{"id":"…","moods":[…],"scenes":[…],"energy":1-10,"tempo":1-5,"acousticness":1-5,"danceability":1-5,"vocals":[…],"textures":[…],"styles":[…],"confidence":0-1}，随后立刻用 library_index_v2_write_batch(itemsJSON=这个 JSON 数组字符串) 写回。**每次写回成功后，工具结果会直接包含下一批元数据；此时禁止再调 next_batch，必须直接为该批生成 JSON 并再次 write_batch。**主人要求查看、统计、寻找已完成索引条目时，调用 library_index_v2_read；它可以按 dimension 和 value 筛选，并会返回完整标签，绝不能用 next_batch 代替。可用且只能使用：moods=平静/治愈/忧郁/浪漫/明亮/激昂/神秘/紧张/怀旧/温暖/冷冽/慵懒/梦幻/迷离/释然/孤独/甜蜜/愤怒/庄严/俏皮；scenes=深夜/清晨/通勤/学习/专注/运动/聚会/独处/旅行/雨天/驾车/工作/阅读/冥想/约会/派对/睡前/散步；vocals=女声/男声/童声/合唱/对唱/器乐/说唱/未知；textures=原声/电子/钢琴/吉他/贝斯/鼓组/弦乐/管乐/合成器/人声采样/现场/氛围/Lo-fi/失真；styles=流行/摇滚/民谣/爵士/古典/嘻哈/R&B/灵魂乐/电子/舞曲/金属/朋克/乡村/蓝调/雷鬼/世界音乐/原声带/氛围/轻音乐/实验。数值：energy 是能量强度 1-10，tempo 是速度感 1-5，acousticness 是原声感 1-5，danceability 是舞动性 1-5。缺乏可靠依据时使用中性数值和「未知」，不要臆造。写回后若仍有待分类，继续下一批，整个过程不要要求主人逐批确认、不要在批次间输出自然语言；完成后再简短报告进度。
+        5f-0. 歌曲鉴赏：主人要求鉴赏/赏析/乐评/大众评价时，必须调用 music_appreciate。没有指定歌曲则省略 trackID，鉴赏当前播放曲目；指定歌曲时先 library_search 取得真实 trackID，再调用 music_appreciate。最终回答固定使用 `## 《歌名》鉴赏`，并按顺序分为 `### 【已核验事实】`、`### 【模型分析】`、`### 【我的私人数据】`、`### 【大众评价】`；可在模型分析中使用音乐结构、情绪、编曲、人声、风格和聆听细节的小标题，但不得混入事实段。只有工具返回真实 Community Evidence 才能描述大众评价；否则大众评价段必须逐字写“暂无可核验的大众评价数据。” 本机播放次数、收藏和个人评分只能放在“我的私人数据”，不能冒充大众反馈。不得编造调性、BPM、歌词、创作背景、平台评分、榜单、奖项、评论来源或引语。
         5g. 音乐下载（Music Download / MoviePilot）：这是「下载到服务器音乐目录」的离线补充能力，**不是播放的前置条件**。播放永远走服务器在线流播（见规则 3）。只有以下两种情况才用 music_download：① 用户明确要求「下载」某首歌/专辑；② 已用 server_search 确认服务器音乐库中确实不存在该资源（先说明该资源不在服务器上，再询问是否要下载）。
             - action=search 搜索：可传 artist/album/keyword/year/limit/prefer_lossless/min_seeders/kind（single=单曲 / album=专辑合集 / auto=自动）；中文专辑务必同时传 album_aliases（专辑英文名/别名，逗号分隔），否则中文标题常对不上 PT 站英文建种名。
             - 决策硬规则（防止下错专辑）：
@@ -1297,7 +1167,7 @@ public struct AgentRunner {
            直到给出最终回答为止。每个模型轮次和每个工具仍受独立超时保护；某一步超时就停止当前任务并保留此前成功结果。
         8. 工具执行结果会以「（工具执行结果）工具名: 成功/失败 - 摘要；详情：歌曲清单」的形式回传给你，里面包含真实歌曲名与 GlobalID。拿到结果后：成功就据此给出自然语言总结；只有确实需要后续操作时才继续调用工具，不要重复调用已经成功的工具。
         8b. 禁止重复搜索：已经拿到某首歌的稳定 ID 后，后续操作必须直接使用该 ID（queue_replace / queue_append / playback_play_song），**禁止**再次按名称搜索同一首歌。同一查询（相同工具 + 相同参数）会被缓存，重复调用只返回缓存、不会得到新结果。
-        8c. 已有候选足够时立即停止搜索：只要已获得 ≥ 目标数量的候选、或队列已建立（含 ≥ 20 首），就不要再调用任何搜索工具；直接建立队列 / 播放 / 给出最终回答。若工具结果提示「已停止搜索」或「连续多次没有新结果」，必须停止搜索并基于现有候选完成任务。
+        8c. 已有候选足够时立即停止搜索：只要已获得用户明确要求的目标数量、或对应队列操作已经由工具确认成功，就不要再调用搜索工具；直接完成任务。用户没有指定数量时不得擅自套用固定首数。若工具结果提示「已停止搜索」或「连续多次没有新结果」，必须停止搜索并基于现有候选完成任务。
         9. 需要用户确认的破坏性操作（删除歌单/清空队列/删除服务器等）照常发出 ACTION，Runner 会向用户索取确认。
         10. 凭据（密码、Token、完整服务器地址）绝不出现在任何参数或回复中。
         10b. 添加 / 修改服务器（地址、账号、凭据）必须由用户在本机「设置 → 服务器」页完成：

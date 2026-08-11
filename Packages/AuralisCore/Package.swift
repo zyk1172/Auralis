@@ -69,7 +69,7 @@ let package = Package(
             ]
         ),
         .testTarget(name: "ObservabilityTests", dependencies: ["Observability"]),
-        .testTarget(name: "AppShellTests", dependencies: ["AppShell", "Application", "Domain", "TestSupport", "AgentKit", "LocalCatalog", "AIKit", "ImagePipeline", "MusicLibrary"]),
+        .testTarget(name: "AppShellTests", dependencies: ["AppShell", "Application", "Domain", "TestSupport", "AgentKit", "LocalCatalog", "AIKit", "ImagePipeline", "MusicLibrary", "OfflineManager"]),
         .testTarget(
             name: "SystemMediaIntegrationTests",
             dependencies: ["SystemMediaIntegration", "Domain"]

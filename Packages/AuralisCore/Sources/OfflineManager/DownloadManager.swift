@@ -109,6 +109,18 @@ public struct DownloadTaskInfo: Sendable, Equatable {
     }
 }
 
+/// 可跨进程恢复的下载快照。业务层用服务器作用域重新建立 GlobalID，
+/// 不再依赖只存在于 AppModel 内存中的 TrackID 映射。
+public struct ActiveDownloadSnapshot: Sendable, Equatable {
+    public let serverID: ServerID
+    public let info: DownloadTaskInfo
+
+    public init(serverID: ServerID, info: DownloadTaskInfo) {
+        self.serverID = serverID
+        self.info = info
+    }
+}
+
 /// 带进度与取消的下载管理器。
 /// 使用 URLSessionDownloadTask + delegate 汇报进度；完成后把临时文件移入 TrackCacheStore。
 /// 线程安全：delegate 回调可能来自任意队列，内部用锁保护状态。
@@ -140,6 +152,9 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
     private var serverIDs: [TrackID: ServerID] = [:]
     /// taskIdentifier 在进程重启后仍可由后台 URLSession 恢复；同时也覆盖“文件已下载、正搬入缓存”的窗口。
     private var taskIdentifiers: [TrackID: Int] = [:]
+    /// `getAllTasks` 的异步快照可能晚于用户取消返回。用 taskIdentifier 墓碑阻止恢复回调
+    /// 把已经取消的系统任务重新绑定成 downloading；消费后立即移除，集合保持有界。
+    private var cancelledTaskIdentifiers: Set<Int> = []
     /// URLSession 的事件结束不代表异步缓存搬运已经结束，必须等两者都结束再交还系统 completion。
     private var pendingCacheMoves = 0
     private var backgroundSessionEventsFinished = false
@@ -192,6 +207,16 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         return taskIdentifiers.count
     }
 
+    /// 返回持久化任务恢复后的服务器作用域状态。该接口不包含 URL 或认证信息。
+    public func activeSnapshots() -> [ActiveDownloadSnapshot] {
+        lock.lock()
+        defer { lock.unlock() }
+        return taskIdentifiers.keys.compactMap { trackID in
+            guard let serverID = serverIDs[trackID], let info = infos[trackID] else { return nil }
+            return ActiveDownloadSnapshot(serverID: serverID, info: info)
+        }
+    }
+
     /// 开始下载：trackID → url（带认证的 download 地址）；serverID 用于落盘时按服务器隔离。
     public func start(trackID: TrackID, url: URL, codec: String?, serverID: ServerID) {
         lock.lock()
@@ -221,6 +246,13 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         lock.lock()
         let task = tasks.removeValue(forKey: trackID)
         let taskIdentifier = taskIdentifiers.removeValue(forKey: trackID)
+        if let taskIdentifier {
+            cancelledTaskIdentifiers.insert(taskIdentifier)
+            if cancelledTaskIdentifiers.count > 256,
+               let oldestUnknown = cancelledTaskIdentifiers.first(where: { $0 != taskIdentifier }) {
+                cancelledTaskIdentifiers.remove(oldestUnknown)
+            }
+        }
         infos[trackID] = DownloadTaskInfo(trackID: trackID, status: .notDownloaded)
         codecs[trackID] = nil
         serverIDs[trackID] = nil
@@ -395,6 +427,15 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         var activeTaskIdentifiers = Set<Int>()
         for task in existingTasks {
             guard let downloadTask = task as? URLSessionDownloadTask else { continue }
+            lock.lock()
+            let wasCancelled = cancelledTaskIdentifiers.remove(downloadTask.taskIdentifier) != nil
+            lock.unlock()
+            if wasCancelled {
+                downloadTask.taskDescription = nil
+                metadataStore.remove(taskIdentifier: downloadTask.taskIdentifier)
+                downloadTask.cancel()
+                continue
+            }
             guard let metadata = metadata(for: downloadTask) else {
                 // 这是 Auralis 专用后台会话；无法恢复业务身份的孤儿任务即使完成也无法安全落盘。
                 downloadTask.cancel()

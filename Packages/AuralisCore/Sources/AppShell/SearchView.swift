@@ -9,6 +9,17 @@ import UIKit
 /// 统一搜索：歌曲 / 专辑 / 艺术家 / 歌单分类结果 + 搜索历史。
 /// 全部基于本地持久化资料库，离线可用；服务器在线搜索在后续阶段接入。
 struct SearchView: View {
+    private struct LocalResults {
+        var songs: [Track] = []
+        var albums: [Album] = []
+        var artists: [Artist] = []
+        var playlists: [Playlist] = []
+
+        var isEmpty: Bool {
+            songs.isEmpty && albums.isEmpty && artists.isEmpty && playlists.isEmpty
+        }
+    }
+
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @State private var query = ""
@@ -21,40 +32,30 @@ struct SearchView: View {
 
     private var needle: String { debouncedQuery.localizedLowercase.trimmingCharacters(in: .whitespaces) }
 
-    private var songResults: [Track] {
-        guard !needle.isEmpty else { return [] }
-        return model.catalog.tracks.filter {
-            matches($0.title, needle: needle)
-                || matches($0.artistName, needle: needle)
-                || matches($0.albumTitle, needle: needle)
-        }
-    }
-
-    private var albumResults: [Album] {
-        guard !needle.isEmpty else { return [] }
-        return model.catalog.albums.filter {
-            matches($0.title, needle: needle) || matches($0.artistName, needle: needle)
-        }
-    }
-
-    private var artistResults: [Artist] {
-        guard !needle.isEmpty else { return [] }
-        return model.catalog.artists.filter { matches($0.name, needle: needle) }
-    }
-
-    private var playlistResults: [Playlist] {
-        guard !needle.isEmpty else { return [] }
-        return model.catalog.playlists.filter { matches($0.name, needle: needle) }
-    }
-
-    private var hasAnyResults: Bool {
-        !songResults.isEmpty || !albumResults.isEmpty || !artistResults.isEmpty || !playlistResults.isEmpty
+    /// 每次 body 计算只扫描各集合一次。旧实现通过多个 computed property 在空态判断和
+    /// 列表构建时重复全库过滤，万首资料库输入一个字符会执行多轮相同主线程扫描。
+    private func localResults() -> LocalResults {
+        let query = needle
+        guard !query.isEmpty else { return LocalResults() }
+        return LocalResults(
+            songs: model.catalog.tracks.filter {
+                matches($0.title, needle: query)
+                    || matches($0.artistName, needle: query)
+                    || matches($0.albumTitle, needle: query)
+            },
+            albums: model.catalog.albums.filter {
+                matches($0.title, needle: query) || matches($0.artistName, needle: query)
+            },
+            artists: model.catalog.artists.filter { matches($0.name, needle: query) },
+            playlists: model.catalog.playlists.filter { matches($0.name, needle: query) }
+        )
     }
 
     var body: some View {
+        let results = localResults()
         VStack(spacing: 0) {
             searchField
-            content
+            content(results: results)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.colorTokens.background.color)
@@ -92,6 +93,7 @@ struct SearchView: View {
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                 .buttonStyle(HapticPlainButtonStyle())
                 .accessibilityLabel("清除搜索")
+                .frame(minWidth: 44, minHeight: 44)
             }
         }
         .padding(AuralisSpacing.medium)
@@ -103,10 +105,10 @@ struct SearchView: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(results: LocalResults) -> some View {
         if query.isEmpty {
             recentSearches
-        } else if !hasAnyResults {
+        } else if results.isEmpty {
             if model.isServerSearching {
                 ProgressView("正在服务器搜索…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,10 +130,10 @@ struct SearchView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                resultList
+                resultList(results: results)
             }
         } else {
-            resultList
+            resultList(results: results)
         }
     }
 
@@ -180,35 +182,41 @@ struct SearchView: View {
         }
     }
 
-    private var resultList: some View {
+    private func resultList(results: LocalResults) -> some View {
         List {
             if !model.serverSearchResults.isEmpty {
                 Section("服务器在线结果") {
                     ForEach(model.serverSearchResults) { track in
-                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
+                        Button {
                                 model.recordSearch(query)
                                 model.selectAndPlay(track)
-                            }
+                        } label: {
+                            TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(HapticPlainButtonStyle())
+                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
                     }
                 }
             }
-            if !songResults.isEmpty {
+            if !results.songs.isEmpty {
                 Section("歌曲") {
-                    ForEach(songResults) { track in
-                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
+                    ForEach(results.songs) { track in
+                        Button {
                                 model.recordSearch(query)
                                 model.selectAndPlay(track)
-                            }
+                        } label: {
+                            TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(HapticPlainButtonStyle())
+                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
                     }
                 }
             }
-            if !albumResults.isEmpty {
+            if !results.albums.isEmpty {
                 Section("专辑") {
-                    ForEach(albumResults) { album in
+                    ForEach(results.albums) { album in
                         Button {
                             model.recordSearch(query)
                             model.browseDestination = .album(album)
@@ -227,9 +235,9 @@ struct SearchView: View {
                     }
                 }
             }
-            if !artistResults.isEmpty {
+            if !results.artists.isEmpty {
                 Section("艺术家") {
-                    ForEach(artistResults) { artist in
+                    ForEach(results.artists) { artist in
                         Button {
                             model.recordSearch(query)
                             model.browseDestination = .artist(artist)
@@ -249,9 +257,9 @@ struct SearchView: View {
                     }
                 }
             }
-            if !playlistResults.isEmpty {
+            if !results.playlists.isEmpty {
                 Section("歌单") {
-                    ForEach(playlistResults) { playlist in
+                    ForEach(results.playlists) { playlist in
                         Button {
                             model.recordSearch(query)
                             model.browseDestination = .playlist(playlist)
@@ -281,4 +289,3 @@ struct SearchView: View {
         #endif
     }
 }
-

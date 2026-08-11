@@ -158,6 +158,17 @@ private struct CompactShell: View {
                 coordinator: bottomDockScroll,
                 hasAccessory: hasDockAccessory
             )
+                // Destination 必须注册在 NavigationStack 的内容树内。此前把 modifier
+                // 挂在 NavigationStack 外层，状态虽已写入，但 SwiftUI 不会执行导航，
+                // 因而首页、专辑、艺术家和歌单看起来都“点了没反应”。
+                .navigationDestination(item: browseDestinationBinding) { destination in
+                    BrowseDetailSheet(
+                        destination: destination,
+                        model: model,
+                        theme: themeStore.current,
+                        showsCloseButton: false
+                    )
+                }
                 .navigationTitle(model.selectedSection.title)
                 // 顶部标题用系统大标题：字体大、与正文内容有明显区分（Apple Music 风格）。
                 // 不覆盖系统导航栏材质。iOS 26+ 会为标准导航栏自动采用 Liquid Glass；
@@ -178,9 +189,6 @@ private struct CompactShell: View {
         }
         .sheet(isPresented: $model.shouldPresentServerSetup) {
             ServerConnectionSheet(model: model, theme: themeStore.current)
-        }
-        .sheet(item: browseDestinationBinding) { destination in
-            BrowseDetailSheet(destination: destination, model: model, theme: themeStore.current)
         }
         // 设置页没有底部附件；离开首页 / 音乐库 / AI 助手时回到完整导航态。
         .onChange(of: model.selectedSection) { _, _ in
@@ -540,14 +548,22 @@ private struct MorphingGlassCapsule<Content: View>: View {
     }
 
     var body: some View {
-        content
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .glassEffect(.regular, in: Capsule(style: .continuous))
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(Color.white.opacity(reduceTransparency ? 0.10 : 0.08), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(reduceTransparency ? 0.08 : 0.14), radius: 12, x: 0, y: 6)
+        Group {
+            if reduceTransparency {
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.background, in: Capsule(style: .continuous))
+            } else {
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .glassEffect(.regular, in: Capsule(style: .continuous))
+            }
+        }
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(reduceTransparency ? 0.14 : 0.08), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(reduceTransparency ? 0.05 : 0.14), radius: reduceTransparency ? 4 : 12, x: 0, y: reduceTransparency ? 2 : 6)
     }
 }
 
@@ -647,21 +663,32 @@ private struct CircularDockButton<Label: View>: View {
     @Environment(\.auralisReduceTransparency) private var reduceTransparency
 
     var body: some View {
+        Group {
+            if reduceTransparency {
+                button
+                    .background(.background, in: Circle())
+            } else {
+                button
+                    .glassEffect(.regular, in: Circle())
+            }
+        }
+        .overlay(
+            Circle()
+                .stroke(Color.white.opacity(reduceTransparency ? 0.14 : 0.08), lineWidth: 0.5)
+        )
+        .shadow(
+            color: Color.black.opacity(reduceTransparency ? 0.05 : 0.14),
+            radius: reduceTransparency ? 4 : 12, x: 0, y: reduceTransparency ? 2 : 6
+        )
+    }
+
+    private var button: some View {
         Button(action: action) {
             label
                 .frame(width: bottomBarHeight, height: bottomBarHeight)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular, in: Circle())
-        .overlay(
-            Circle()
-                .stroke(Color.white.opacity(reduceTransparency ? 0.10 : 0.08), lineWidth: 0.5)
-        )
-        .shadow(
-            color: Color.black.opacity(reduceTransparency ? 0.08 : 0.14),
-            radius: 12, x: 0, y: 6
-        )
     }
 }
 
@@ -699,7 +726,7 @@ struct DockAssistantInputBar: View {
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .accessibilityLabel(agent.isRunning ? "停止" : "发送")
-                .frame(width: 32, height: 32)
+                .frame(width: 44, height: 44)
             }
             .padding(.horizontal, 12)
         }
@@ -719,17 +746,28 @@ struct BottomGlassBarShell<Content: View>: View {
     @Environment(\.auralisReduceTransparency) private var reduceTransparency
 
     var body: some View {
+        Group {
+            if reduceTransparency {
+                framedContent
+                    .background(.background, in: RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous))
+            } else {
+                framedContent
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous))
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous)
+                .stroke(Color.white.opacity(reduceTransparency ? 0.14 : 0.08), lineWidth: 0.5)
+        )
+        .shadow(
+            color: Color.black.opacity(reduceTransparency ? 0.05 : 0.14),
+            radius: reduceTransparency ? 4 : 12, x: 0, y: reduceTransparency ? 2 : 6
+        )
+    }
+
+    private var framedContent: some View {
         content
             .frame(maxWidth: .infinity, minHeight: bottomBarHeight, maxHeight: bottomBarHeight)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: bottomBarHeight / 2, style: .continuous)
-                    .stroke(Color.white.opacity(reduceTransparency ? 0.10 : 0.08), lineWidth: 0.5)
-            )
-            .shadow(
-                color: Color.black.opacity(reduceTransparency ? 0.08 : 0.14),
-                radius: 12, x: 0, y: 6
-            )
     }
 }
 
@@ -1046,6 +1084,7 @@ struct BrowseDetailSheet: View {
     let destination: BrowseDestination
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    let showsCloseButton: Bool
     @State private var isConfirmingDownload = false
     /// 从歌单总览左滑后暂存目标；确认后才会删除服务器歌单。
     @State private var playlistPendingDeletion: Playlist?
@@ -1055,6 +1094,18 @@ struct BrowseDetailSheet: View {
     @State private var confirmsBatchPlaylistDeletion = false
     @State private var isDeletingPlaylists = false
     @Environment(\.dismiss) private var dismiss
+
+    init(
+        destination: BrowseDestination,
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        showsCloseButton: Bool = true
+    ) {
+        self.destination = destination
+        self.model = model
+        self.theme = theme
+        self.showsCloseButton = showsCloseButton
+    }
 
     private var tracks: [Track] {
         switch destination {
@@ -1170,31 +1221,15 @@ struct BrowseDetailSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle(title)
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        if isRandomDestination {
-                            Button {
-                                regenerateCurrentSample()
-                            } label: {
-                                Label("换一批", systemImage: "arrow.clockwise")
-                            }
-                        }
-                    }
-                    if isPlaylistDestination {
-                        ToolbarItem(placement: .primaryAction) {
-                            playlistManagementToolbar
-                        }
-                    }
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("关闭") { dismiss() }
-                    }
-                }
+        Group {
+            if showsCloseButton {
+                // 作为 sheet 呈现时需要自己的导航容器。
+                NavigationStack { navigationContent }
+            } else {
+                // 作为 navigationDestination 推入时复用外层容器，不能嵌套第二个
+                // NavigationStack，否则系统返回手势和后续 NavigationLink 会失效。
+                navigationContent
+            }
         }
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 480)
@@ -1230,6 +1265,35 @@ struct BrowseDetailSheet: View {
         } message: {
             Text("选中的歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。")
         }
+    }
+
+    private var navigationContent: some View {
+        content
+            .navigationTitle(title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    if isRandomDestination {
+                        Button {
+                            regenerateCurrentSample()
+                        } label: {
+                            Label("换一批", systemImage: "arrow.clockwise")
+                        }
+                    }
+                }
+                if isPlaylistDestination {
+                    ToolbarItem(placement: .primaryAction) {
+                        playlistManagementToolbar
+                    }
+                }
+                if showsCloseButton {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { dismiss() }
+                    }
+                }
+            }
     }
 
     private func estimatedSizeMB(_ count: Int) -> Int {
@@ -1393,13 +1457,16 @@ struct BrowseDetailSheet: View {
             }
             Section("歌曲") {
                 ForEach(tracks) { track in
-                    TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            model.queue = model.uniquedTracks(tracks)
-                            model.selectAndPlay(track)
-                            dismiss()
-                        }
+                    Button {
+                        model.queue = model.uniquedTracks(tracks)
+                        model.selectAndPlay(track)
+                        dismiss()
+                    } label: {
+                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                            .contentShape(Rectangle())
+                    }
+                        .buttonStyle(HapticPlainButtonStyle())
+                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
                 }
             }
         }
@@ -1520,9 +1587,13 @@ struct BrowseDetailSheet: View {
     /// 常听艺术家列表：按真实播放次数降序，点选进入艺术家详情。
     private var artistList: some View {
         List(model.homeTopArtists) { artist in
-            Button {
-                dismiss()
-                model.browseDestination = .artist(artist)
+            NavigationLink {
+                BrowseDetailSheet(
+                    destination: .artist(artist),
+                    model: model,
+                    theme: theme,
+                    showsCloseButton: false
+                )
             } label: {
                 HStack(spacing: AuralisSpacing.medium) {
                     ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: theme.colorTokens, size: 44, cornerRadius: AuralisRadius.small)
@@ -1546,9 +1617,13 @@ struct BrowseDetailSheet: View {
     /// 常听专辑列表：按真实播放次数降序，点选进入专辑详情。
     private var albumList: some View {
         List(model.homeTopAlbums) { album in
-            Button {
-                dismiss()
-                model.browseDestination = .album(album)
+            NavigationLink {
+                BrowseDetailSheet(
+                    destination: .album(album),
+                    model: model,
+                    theme: theme,
+                    showsCloseButton: false
+                )
             } label: {
                 HStack(spacing: AuralisSpacing.medium) {
                     ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: theme.colorTokens, size: 44, cornerRadius: AuralisRadius.small)
@@ -1620,12 +1695,15 @@ private struct PlaylistTracksView: View {
             } else {
                 List {
                     ForEach(tracks) { track in
-                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                model.queue = model.uniquedTracks(tracks)
-                                model.selectAndPlay(track)
-                            }
+                        Button {
+                            model.queue = model.uniquedTracks(tracks)
+                            model.selectAndPlay(track)
+                        } label: {
+                            TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(HapticPlainButtonStyle())
+                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
                     }
                     .onDelete { offsets in
                         // 滑动删除：把服务器歌单里的对应曲目移除（同步到服务器 + 本地目录）。

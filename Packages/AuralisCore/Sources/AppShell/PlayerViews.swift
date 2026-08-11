@@ -1,4 +1,5 @@
 import AVKit
+import AgentKit
 import DesignSystem
 import Domain
 import LocalCatalog
@@ -531,7 +532,7 @@ struct NowPlayingView: View {
             .accessibilityLabel("音频格式，点击切换采样率")
             Spacer()
             RoutePickerView()
-                .frame(width: 28, height: 28)
+                .frame(width: 44, height: 44)
                 .accessibilityLabel("AirPlay 输出设备")
         }
         .frame(maxWidth: 420)
@@ -606,7 +607,8 @@ struct NowPlayingView: View {
             if model.assistantIsRunning { model.cancelAssistant() }
             _ = await model.agentCoordinator.newSession()
             model.agentCoordinator.send(
-                "以当前歌曲《\(track.title)》—\(track.artistName)（trackID: \(globalID)）为种子，调用 library_get_similar_songs 查找相似歌曲，去重并优先保留高质量版本，生成约 20 首队列；最后只调用一次 queue_replace 替换当前播放队列并开始播放。不要只输出文字建议。"
+                "以当前歌曲《\(track.title)》—\(track.artistName)（trackID: \(globalID)）为种子，调用 library_get_similar_songs 查找相似歌曲，去重并优先保留高质量版本，生成约 20 首队列；最后只调用一次 queue_replace 替换当前播放队列并开始播放。不要只输出文字建议。",
+                intent: .musicDiscovery
             )
         }
     }
@@ -622,7 +624,8 @@ struct NowPlayingView: View {
             _ = await model.agentCoordinator.newSession()
             model.selectedSection = .assistant
             model.agentCoordinator.send(
-                "请调用 music_appreciate，专业鉴赏《\(track.title)》—\(track.artistName)（trackID: \(globalID)），并按应用规定的鉴赏格式输出，区分已核验事实、专业听感与大众评价。"
+                "请调用 music_appreciate，专业鉴赏《\(track.title)》—\(track.artistName)（trackID: \(globalID)），并按应用规定的鉴赏格式输出，区分已核验事实、专业听感与大众评价。",
+                intent: .musicAppreciation
             )
         }
     }
@@ -677,9 +680,14 @@ struct NowPlayingView: View {
     private var queue: some View {
         List {
             ForEach(model.queue) { track in
-                TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.selectAndPlay(track) }
+                Button {
+                    model.selectAndPlay(track)
+                } label: {
+                    TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                        .contentShape(Rectangle())
+                }
+                    .buttonStyle(HapticPlainButtonStyle())
+                    .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
                     .listRowBackground(Color.clear)
             }
 #if os(iOS)
@@ -833,6 +841,8 @@ private struct TrackInformationSheet: View {
     let theme: BuiltInTheme
     let track: Track
     @Environment(\.dismiss) private var dismiss
+    @State private var externalResult: AgentExternalMusicResult?
+    @State private var isLoadingExternalData = false
 
     var body: some View {
         NavigationStack {
@@ -864,6 +874,25 @@ private struct TrackInformationSheet: View {
                     infoRow("本地下载", model.isDownloaded(track) ? "已下载" : "未下载")
                     infoRow("歌词", model.currentLyrics == nil ? "无" : "已获取")
                 }
+                Section("大众评价") {
+                    if isLoadingExternalData && externalResult == nil {
+                        HStack(spacing: AuralisSpacing.small) {
+                            ProgressView()
+                            Text("正在按需查询公开音乐资料…")
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        }
+                    } else if let metrics = externalResult?.metrics, metrics.hasCommunityEvidence {
+                        communityMetricRow(.musicBrainz, in: metrics)
+                        communityMetricRow(.critiqueBrainz, in: metrics)
+                        communityMetricRow(.listenBrainz, in: metrics)
+                    } else {
+                        Text("暂无可核验的大众评价数据。")
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                    Text("各来源含义不同，评分、评论数和收听量不会合并为综合分。")
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
             }
             .scrollContentBackground(.hidden)
             .background(theme.colorTokens.background.color)
@@ -875,6 +904,11 @@ private struct TrackInformationSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
                 }
+            }
+            .task(id: "\(track.serverID.rawValue)|\(track.id.rawValue)") {
+                isLoadingExternalData = true
+                externalResult = await model.agentCoordinator.externalMusicData(for: track)
+                isLoadingExternalData = false
             }
         }
 #if os(macOS)
@@ -892,6 +926,36 @@ private struct TrackInformationSheet: View {
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
         }
+    }
+
+    @ViewBuilder
+    private func communityMetricRow(
+        _ source: CommunityMusicSource,
+        in metrics: CommunityMusicMetrics
+    ) -> some View {
+        if let metric = metrics.value(for: source), metric.status == .available {
+            infoRow(sourceTitle(source), metricDescription(metric))
+        }
+    }
+
+    private func sourceTitle(_ source: CommunityMusicSource) -> String {
+        switch source {
+        case .musicBrainz: "MusicBrainz"
+        case .critiqueBrainz: "CritiqueBrainz"
+        case .listenBrainz: "ListenBrainz"
+        }
+    }
+
+    private func metricDescription(_ metric: CommunityMusicMetric) -> String {
+        var values: [String] = []
+        if let rating = metric.rating {
+            values.append(String(format: "评分 %.1f/5", rating))
+        }
+        if let count = metric.ratingCount { values.append("\(count) 次评分") }
+        if let count = metric.reviewCount { values.append("\(count) 篇评论") }
+        if let count = metric.listenCount { values.append("\(count.formatted()) 次收听") }
+        if let count = metric.listenerCount { values.append("\(count.formatted()) 位听众") }
+        return values.isEmpty ? "暂无数据" : values.joined(separator: " · ")
     }
 }
 
@@ -915,21 +979,26 @@ struct AddToPlaylistSheet: View {
                     )
                 } else {
                     List(model.catalog.playlists) { playlist in
-                        HStack {
-                            Image(systemName: "music.note.list")
-                                .foregroundStyle(theme.colorTokens.accent.color)
-                            VStack(alignment: .leading) {
-                                Text(playlist.name)
-                                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                        Button {
+                            add(to: playlist)
+                        } label: {
+                            HStack {
+                                Image(systemName: "music.note.list")
+                                    .foregroundStyle(theme.colorTokens.accent.color)
+                                VStack(alignment: .leading) {
+                                    Text(playlist.name)
+                                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                                }
+                                Spacer()
+                                if feedback == playlist.name {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(theme.colorTokens.success.color)
+                                }
                             }
-                            Spacer()
-                            if feedback == playlist.name {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(theme.colorTokens.success.color)
-                            }
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { add(to: playlist) }
+                        .buttonStyle(HapticPlainButtonStyle())
+                        .accessibilityLabel("添加到歌单《\(playlist.name)》")
                     }
                     .listStyle(.plain)
                 }

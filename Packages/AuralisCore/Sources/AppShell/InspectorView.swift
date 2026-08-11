@@ -110,18 +110,10 @@ struct InspectorView: View {
                 metadataRow("收藏", value: model.currentTrack.isFavorite ? "已收藏" : "未收藏")
                 metadataRow("歌词", value: model.currentLyrics == nil ? "无" : "已获取")
                 metadataRow("离线", value: model.isDownloaded(model.currentTrack) ? "已下载" : "未下载")
-                HStack {
-                    Button("接受建议") {}
-                        .buttonStyle(HapticProminentButtonStyle())
-                        .disabled(true)
-                    Button("拒绝") {}
-                        .buttonStyle(HapticBorderedButtonStyle())
-                        .disabled(true)
-                    Button("恢复原始值") {}
-                        .buttonStyle(HapticBorderedButtonStyle())
-                        .disabled(true)
-                }
-                Text("元数据写入需要预览、备份和回滚机制，将在后续阶段实现。当前仅展示原始值与 AI 建议。")
+                Label("当前为只读信息页", systemImage: "lock.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                Text("元数据写入需要预览、备份和回滚机制。未实现前不再显示无法执行的假按钮。")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }

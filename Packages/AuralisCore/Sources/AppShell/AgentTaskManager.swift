@@ -106,7 +106,9 @@ public final class AgentTaskStore {
         toolSteps: Int? = nil,
         inputTokens: Int? = nil,
         outputTokens: Int? = nil,
-        error: String? = nil
+        error: String? = nil,
+        completedActions: [String]? = nil,
+        noProgressRounds: Int? = nil
     ) {
         guard var record = records[id] else { return }
         if let status { record.status = status }
@@ -115,6 +117,8 @@ public final class AgentTaskStore {
         if let inputTokens { record.inputTokens = inputTokens }
         if let outputTokens { record.outputTokens = outputTokens }
         if let error { record.errorSummary = error }
+        if let completedActions { record.completedActions = completedActions }
+        if let noProgressRounds { record.noProgressRounds = noProgressRounds }
         record.updatedAt = .now
         records[id] = record
         try? persist()

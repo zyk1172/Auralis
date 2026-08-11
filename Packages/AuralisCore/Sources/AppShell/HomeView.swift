@@ -45,7 +45,7 @@ struct HomeView: View {
                     Image(systemName: "gearshape")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(colors.accent.color)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
                 .accessibilityLabel("设置")
@@ -131,6 +131,7 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(HapticPlainButtonStyle())
+        .accessibilityLabel("\(module.title)，\(quickEntryCount(module)) 项")
     }
 
     private func quickEntryCount(_ module: HomeModule) -> String {

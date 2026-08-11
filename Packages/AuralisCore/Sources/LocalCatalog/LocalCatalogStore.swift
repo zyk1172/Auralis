@@ -207,6 +207,33 @@ public actor LocalCatalogStore: LibrarySyncStore {
             confidence REAL NOT NULL,
             PRIMARY KEY (global_id, dimension, value)
         );
+        CREATE TABLE IF NOT EXISTS external_music_identities (
+            global_track_id TEXT PRIMARY KEY,
+            recording_mbid TEXT,
+            release_mbid TEXT,
+            release_group_mbid TEXT,
+            artist_mbid TEXT,
+            isrc TEXT,
+            match_confidence REAL NOT NULL,
+            match_method TEXT NOT NULL,
+            verified_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS external_music_candidates (
+            global_track_id TEXT NOT NULL,
+            recording_mbid TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (global_track_id, recording_mbid)
+        );
+        CREATE TABLE IF NOT EXISTS community_music_metrics (
+            global_track_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL,
+            status TEXT NOT NULL,
+            PRIMARY KEY (global_track_id, source)
+        );
         CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(kind UNINDEXED, global_id UNINDEXED, text);
         CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id);
         CREATE INDEX IF NOT EXISTS idx_albums_server ON albums(server_id);
@@ -218,6 +245,9 @@ public actor LocalCatalogStore: LibrarySyncStore {
         CREATE INDEX IF NOT EXISTS idx_sync_staged_tracks_session ON sync_staged_tracks(session_id);
         CREATE INDEX IF NOT EXISTS idx_recommendation_v2_state_server ON recommendation_index_v2_state(server_id);
         CREATE INDEX IF NOT EXISTS idx_recommendation_v2_tags_dimension_value ON recommendation_index_v2_tags(dimension, value);
+        CREATE INDEX IF NOT EXISTS idx_external_identity_recording ON external_music_identities(recording_mbid);
+        CREATE INDEX IF NOT EXISTS idx_external_candidates_track ON external_music_candidates(global_track_id, confidence DESC);
+        CREATE INDEX IF NOT EXISTS idx_community_metrics_track ON community_music_metrics(global_track_id, fetched_at DESC);
         """)
         // Additive migration for databases created before revision-aware sync probes.
         try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_fingerprint TEXT")

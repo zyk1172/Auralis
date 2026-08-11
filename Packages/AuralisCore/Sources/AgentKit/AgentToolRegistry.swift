@@ -15,6 +15,30 @@ public struct ToolParameter: Sendable, Hashable {
     }
 }
 
+public enum ToolCachePolicy: String, Sendable, Hashable {
+    case none
+    case task
+}
+
+public enum ToolSideEffectPolicy: String, Sendable, Hashable {
+    case none
+    case playback
+    case queue
+    case playlist
+    case annotation
+    case server
+    case download
+    case memory
+}
+
+public enum ToolEvidencePolicy: String, Sendable, Hashable {
+    case none
+    case localCatalog
+    case playbackState
+    case server
+    case externalAPI
+}
+
 /// 工具元数据：分组、权限、是否需要确认、参数。
 public struct ToolDescriptor: Sendable, Hashable {
     public let name: String
@@ -23,6 +47,10 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let requiresConfirmation: Bool
     public let summary: String
     public let parameters: [ToolParameter]
+    public let cachePolicy: ToolCachePolicy
+    public let sideEffectPolicy: ToolSideEffectPolicy
+    public let evidencePolicy: ToolEvidencePolicy
+    public let maxResultCharacters: Int
 
     public init(
         name: String,
@@ -30,7 +58,11 @@ public struct ToolDescriptor: Sendable, Hashable {
         permission: ToolPermission,
         requiresConfirmation: Bool = false,
         summary: String,
-        parameters: [ToolParameter] = []
+        parameters: [ToolParameter] = [],
+        cachePolicy: ToolCachePolicy? = nil,
+        sideEffectPolicy: ToolSideEffectPolicy? = nil,
+        evidencePolicy: ToolEvidencePolicy? = nil,
+        maxResultCharacters: Int = ContextManager.maxToolResultCharacters
     ) {
         self.name = name
         self.group = group
@@ -38,6 +70,33 @@ public struct ToolDescriptor: Sendable, Hashable {
         self.requiresConfirmation = requiresConfirmation
         self.summary = summary
         self.parameters = parameters
+        self.cachePolicy = cachePolicy ?? (permission == .readOnly ? .task : .none)
+        self.sideEffectPolicy = sideEffectPolicy ?? Self.defaultSideEffectPolicy(name: name, group: group, permission: permission)
+        self.evidencePolicy = evidencePolicy ?? Self.defaultEvidencePolicy(group: group, permission: permission)
+        self.maxResultCharacters = maxResultCharacters
+    }
+
+    private static func defaultEvidencePolicy(group: ToolGroup, permission: ToolPermission) -> ToolEvidencePolicy {
+        guard permission == .readOnly else { return .none }
+        return switch group {
+        case .catalog: .localCatalog
+        case .playback: .playbackState
+        case .server, .download: .server
+        case .playlist, .annotation, .memory: .none
+        }
+    }
+
+    private static func defaultSideEffectPolicy(name: String, group: ToolGroup, permission: ToolPermission) -> ToolSideEffectPolicy {
+        guard permission != .readOnly else { return .none }
+        return switch group {
+        case .playback: name.hasPrefix("queue_") || name == "replaceQueue" || name == "addToQueue" || name == "playNext" || name == "clearQueue" ? .queue : .playback
+        case .playlist: .playlist
+        case .annotation: .annotation
+        case .server: .server
+        case .download: .download
+        case .memory: .memory
+        case .catalog: name == "library_index_v2_write_batch" ? .annotation : .none
+        }
     }
 }
 
@@ -219,24 +278,27 @@ public enum AgentToolRegistry {
                 .init(name: "onlyOffline", required: false, description: "只搜离线（true/false）"),
               ]),
         .init(name: "library_get_catalog_index", group: .catalog, permission: .readOnly, summary: "查看曲库分类索引（歌手/专辑/流派/语言/年代/总览），了解曲库里有什么，推荐前先用它",
-              parameters: [.init(name: "category", required: false, description: "artists/albums/genres/languages/years/overview，默认 overview")]),
+              parameters: [.init(name: "category", required: false, description: "artists/albums/genres/languages/years/overview，默认 overview")],
+              maxResultCharacters: ContextManager.maxIndexCharacters),
         .init(name: "library_get_catalog_tracks", group: .catalog, permission: .readOnly, summary: "按分类取歌曲清单（artist/album/genre/language/year/favorites/recent/popular/all），只含元数据，供推荐筛选",
               parameters: [
                 .init(name: "category", required: true, description: "artist/album/genre/language/year/favorites/recent/popular/all"),
                 .init(name: "value", required: false, description: "分类值（如 周杰伦 / 中文 / 摇滚 / 2020）"),
                 .init(name: "limit", required: false, description: "返回数量，默认 100，最多 500"),
-              ]),
-        .init(name: "library_index_v2_status", group: .catalog, permission: .readOnly, summary: "查看 AI 推荐索引 V2 的总数、已完成和待分类数"),
+              ], maxResultCharacters: ContextManager.maxIndexCharacters),
+        .init(name: "library_index_v2_status", group: .catalog, permission: .readOnly, summary: "查看 AI 推荐索引 V2 的总数、已完成和待分类数；完整构建任务必须先调用本工具，并持续到 pending=0", maxResultCharacters: 24_000),
         .init(name: "library_index_v2_read", group: .catalog, permission: .readOnly, summary: "读取已完成的 AI 推荐索引 V2 条目及全部分类标签，可按维度和标签筛选",
               parameters: [
                 .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability"),
                 .init(name: "value", required: false, description: "要匹配的标签值，如 通勤、深夜、平静"),
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
-              ]),
-        .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；仅在用户明确要求构建或继续 AI 推荐索引 V2 时使用",
-              parameters: [.init(name: "limit", required: false, description: "每批 1-100，建议 80")]),
-        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入 AI 推荐索引 V2 分类结果；itemsJSON 必须是严格 JSON 数组字符串，且只能写回上一批返回的歌曲 ID",
-              parameters: [.init(name: "itemsJSON", required: true, description: "JSON 数组字符串：[{id,moods,scenes,energy,tempo,acousticness,danceability,vocals,textures,styles,confidence}]")]),
+              ], maxResultCharacters: 24_000),
+        .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；仅在用户明确要求构建或继续索引时使用；每个真实 ID 必须恰好分类一次，不能加入歌词、路径或播放地址",
+              parameters: [.init(name: "limit", required: false, description: "每批 1-100，建议 80")],
+              maxResultCharacters: 24_000),
+        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；itemsJSON 必须严格覆盖上一批全部真实 ID 各一次；结果若直接附带下一批就继续写回，直到结构化事实 pending=0",
+              parameters: [.init(name: "itemsJSON", required: true, description: "JSON 数组字符串：[{id,moods,scenes,energy,tempo,acousticness,danceability,vocals,textures,styles,confidence}]")],
+              maxResultCharacters: 24_000),
         .init(name: "library_select_tracks", group: .catalog, permission: .readOnly, summary: "集合查询：一次筛选语言/流派/艺术家/年代，按本地热度代理排序，返回候选歌曲清单（多首任务优先用这个，不要逐个歌手搜索）",
               parameters: [
                 .init(name: "languages", required: false, description: "逗号分隔语言，如 中文,粤语"),
@@ -254,7 +316,7 @@ public enum AgentToolRegistry {
               ]),
         .init(name: "library_get_song", group: .catalog, permission: .readOnly, summary: "获取单曲详情（含格式/码率/收藏/评分/离线状态）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
-        .init(name: "music_appreciate", group: .catalog, permission: .readOnly, summary: "为正在播放或指定歌曲准备专业鉴赏素材：曲目元数据、音质版本与本地听众反馈；由模型据此输出音乐鉴赏和审慎的大众评价",
+        .init(name: "music_appreciate", group: .catalog, permission: .readOnly, summary: "为正在播放或指定歌曲准备分层鉴赏证据：已核验元数据、私人播放数据与可用的外部大众评价；没有 Community Evidence 时明确标记不可用",
               parameters: [.init(name: "trackID", required: false, description: "可选 GlobalTrackID；省略时鉴赏当前正在播放的歌曲")]),
         .init(name: "library_get_album", group: .catalog, permission: .readOnly, summary: "获取专辑详情",
               parameters: [.init(name: "albumID", required: true, description: "GlobalAlbumID")]),
@@ -436,7 +498,8 @@ public enum AgentToolRegistry {
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         serverID: ServerID?,
-        systemService: (any AgentSystemService)?
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)? = nil
     ) async -> ToolResult {
         guard let descriptor = descriptor(for: call.name) else {
             return ToolResult(
@@ -448,7 +511,7 @@ public enum AgentToolRegistry {
         }
         if SystemToolNames.contains(call.name) {
             guard let systemService else {
-                return ToolResult(call: call, permission: descriptor.permission, success: false, summary: "当前设备未提供该系统能力。")
+                return ToolResult(call: call, permission: descriptor.permission, success: false, summary: "系统服务不可用：当前设备未提供该系统能力。")
             }
             return await SystemToolExecutor.execute(call, descriptor: descriptor, systemService: systemService)
         }
@@ -457,7 +520,8 @@ public enum AgentToolRegistry {
             descriptor: descriptor,
             bridge: bridge,
             catalog: catalog,
-            serverID: serverID
+            serverID: serverID,
+            externalMusicService: externalMusicService
         )
     }
 }

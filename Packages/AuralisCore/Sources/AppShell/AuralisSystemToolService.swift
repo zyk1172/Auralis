@@ -478,9 +478,10 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func mostPlayed(limit: Int) async -> [TrackCard] {
         let counts = model.playCounts
+        let tracksByID = Dictionary(model.catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let sorted = counts.sorted { $0.value > $1.value }.prefix(min(max(limit, 1), 100))
         return sorted.compactMap { entry -> TrackCard? in
-            guard let track = model.catalog.tracks.first(where: { $0.id == entry.key }) else { return nil }
+            guard let track = tracksByID[entry.key] else { return nil }
             return Self.card(track)
         }
     }
@@ -490,11 +491,12 @@ public final class AuralisSystemToolService: AgentSystemService {
     public func topItems(kind: String, limit: Int) async -> [AgentTopItem] {
         let safeLimit = min(max(limit, 1), 50)
         let counts = model.playCounts
+        let tracksByID = Dictionary(model.catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         switch kind.lowercased() {
         case "artist":
             var artistCounts: [String: Int] = [:]
             for (trackID, count) in counts {
-                guard let track = model.catalog.tracks.first(where: { $0.id == trackID }) else { continue }
+                guard let track = tracksByID[trackID] else { continue }
                 artistCounts[track.artistName, default: 0] += count
             }
             return artistCounts.sorted { $0.value > $1.value }.prefix(safeLimit)
@@ -502,7 +504,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         case "album":
             var albumCounts: [String: Int] = [:]
             for (trackID, count) in counts {
-                guard let track = model.catalog.tracks.first(where: { $0.id == trackID }) else { continue }
+                guard let track = tracksByID[trackID] else { continue }
                 albumCounts["\(track.albumTitle) · \(track.artistName)", default: 0] += count
             }
             return albumCounts.sorted { $0.value > $1.value }.prefix(safeLimit)
@@ -510,7 +512,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         default:
             return counts.sorted { $0.value > $1.value }.prefix(safeLimit)
                 .compactMap { entry -> AgentTopItem? in
-                    guard let track = model.catalog.tracks.first(where: { $0.id == entry.key }) else { return nil }
+                    guard let track = tracksByID[entry.key] else { return nil }
                     return AgentTopItem(name: "\(track.title) · \(track.artistName)", value: entry.value)
                 }
         }
@@ -530,10 +532,11 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func listeningSummary() async -> AgentListeningSummary {
         let counts = model.playCounts
+        let tracksByID = Dictionary(model.catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let totalPlays = counts.values.reduce(0, +)
         let uniqueTracks = counts.count
         let totalSeconds = counts.reduce(0.0) { total, entry in
-            guard let track = model.catalog.tracks.first(where: { $0.id == entry.key }) else { return total }
+            guard let track = tracksByID[entry.key] else { return total }
             return total + Double(entry.value) * track.duration
         }
         let topArtist = mostPlayedArtist()
@@ -791,8 +794,9 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     private func mostPlayedArtist() -> String? {
         var artistCounts: [String: Int] = [:]
+        let tracksByID = Dictionary(model.catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (trackID, count) in model.playCounts {
-            guard let track = model.catalog.tracks.first(where: { $0.id == trackID }) else { continue }
+            guard let track = tracksByID[trackID] else { continue }
             artistCounts[track.artistName, default: 0] += count
         }
         return artistCounts.max { $0.value < $1.value }?.key

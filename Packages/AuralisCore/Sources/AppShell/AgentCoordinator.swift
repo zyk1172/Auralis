@@ -82,6 +82,8 @@ public final class AgentCoordinator: ObservableObject {
     private let runtime: AgentRuntime
     /// 系统服务工具适配：App / 设备 / 服务器 / 缓存 / 统计 / 诊断 / 记忆与技能。
     private let systemService: AuralisSystemToolService
+    /// 按需开放音乐数据；只在鉴赏/歌曲信息工具实际调用时联网。
+    private let externalMusicService: MusicBrainzExternalMusicService
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
     public let memoryStore: AgentMemoryStore
 
@@ -91,7 +93,7 @@ public final class AgentCoordinator: ObservableObject {
     /// 直到收到非流式消息（最终文本 / 工具进度 / 卡片等）把它原地定型为止。
     private var streamingMessageID: UUID?
 
-    /// 单次请求带给模型的最大 token 预算（超出时裁剪历史）。
+    /// 单次请求带给模型的总上下文上限（256K，超出时裁剪历史并预留输出）。
     public static let tokenBudget = ContextManager.maxContextTokens
     /// 首次外发确认的持久化标记键（UserDefaults，默认 false）。
     public static let consentGivenDefaultsKey = "auralis.ai.consentGiven"
@@ -106,6 +108,7 @@ public final class AgentCoordinator: ObservableObject {
         let memoryStore = AgentMemoryStore(directory: dir)
         self.memoryStore = memoryStore
         self.systemService = AuralisSystemToolService(model: model, memoryStore: memoryStore)
+        self.externalMusicService = MusicBrainzExternalMusicService(catalog: coordinator.store)
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
@@ -119,6 +122,13 @@ public final class AgentCoordinator: ObservableObject {
         let dir = base.appendingPathComponent("Auralis", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// 歌曲信息页与歌曲鉴赏共用同一按需服务和 SQLite 缓存。
+    /// 该入口不会被启动或整库同步调用，只有用户打开歌曲信息时才会联网。
+    public func externalMusicData(for track: Track) async -> AgentExternalMusicResult {
+        let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        return await externalMusicService.enrich(track: track, globalID: globalID)
     }
 
     // MARK: - Bootstrap
@@ -279,17 +289,21 @@ public final class AgentCoordinator: ObservableObject {
     /// - Parameter provider: 可选的注入式 AIProvider，便于测试；默认读取用户配置。
     ///
     /// 没有活动会话时自动新建一个会话再运行，避免「发送按钮点了没反应」。
-    public func send(_ text: String, provider: (any AIProvider)? = nil) {
+    public func send(
+        _ text: String,
+        provider: (any AIProvider)? = nil,
+        intent explicitIntent: AgentTaskIntent? = nil
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isRunning else { return }
         if let sessionID = activeSessionID {
-            startRun(text: trimmed, provider: provider, sessionID: sessionID)
+            startRun(text: trimmed, provider: provider, explicitIntent: explicitIntent, sessionID: sessionID)
         } else {
             // 会话列表尚未 bootstrap 完成（或没有选中任何会话）：先建会话再运行。
             Task { [weak self] in
                 guard let self else { return }
                 let sessionID = await self.newSession()
-                self.startRun(text: trimmed, provider: provider, sessionID: sessionID)
+                self.startRun(text: trimmed, provider: provider, explicitIntent: explicitIntent, sessionID: sessionID)
             }
         }
     }
@@ -298,7 +312,11 @@ public final class AgentCoordinator: ObservableObject {
     /// 供 Siri / 快捷指令等系统入口调用（此时 headless 临时置为 true）。
     /// 工具调用直接执行；调用结束恢复原值，不影响 App 内运行状态。
     @discardableResult
-    public func sendAndWait(_ text: String, provider: (any AIProvider)? = nil) async -> String {
+    public func sendAndWait(
+        _ text: String,
+        provider: (any AIProvider)? = nil,
+        intent explicitIntent: AgentTaskIntent? = nil
+    ) async -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         // 确保存在活动会话：send() 在有会话时同步创建 runTask，便于直接等待。
@@ -309,7 +327,7 @@ public final class AgentCoordinator: ObservableObject {
         let previousHeadless = headless
         headless = true
         defer { headless = previousHeadless }
-        send(trimmed, provider: provider)
+        send(trimmed, provider: provider, intent: explicitIntent)
         if let task = runTask {
             _ = await task.value
         } else {
@@ -327,8 +345,7 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     /// 无界面入口（Siri / 快捷指令）返回给系统调用方的最终文本长度上限。
-    /// Agent 输出上限已是 8_192 token：中文约 1 字/token、英文约 4 字符/token，
-    /// 完整回复约 8k–33k 字符。40_000 字符覆盖完整回复且留足余量，
+    /// Agent 单次输出上限为 16_000 token。无界面入口保留足够大的字符上限，
     /// 不会像旧值 500 字符那样把长回答截断成残句。
     private static let maxHeadlessReplyCharacters = 1_000_000
 
@@ -356,7 +373,12 @@ public final class AgentCoordinator: ObservableObject {
         return String(last.prefix(Self.maxHeadlessReplyCharacters))
     }
 
-    private func startRun(text: String, provider: (any AIProvider)?, sessionID: UUID) {
+    private func startRun(
+        text: String,
+        provider: (any AIProvider)?,
+        explicitIntent: AgentTaskIntent?,
+        sessionID: UUID
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isRunning else { return }
 
@@ -410,8 +432,11 @@ public final class AgentCoordinator: ObservableObject {
         let systemService = self.systemService
         let messageCountBeforeRun = messages.count
         // 创建并持久化任务记录（不依赖任何 View 生命周期）。
-        let taskIntent = AgentIntentClassifier.classify(trimmed)
-        let taskPolicy = AgentTaskPolicy.policy(for: taskIntent)
+        let taskPolicy = AgentTaskPolicyResolver.resolve(
+            text: trimmed,
+            explicitIntent: explicitIntent
+        )
+        let taskIntent = taskPolicy.intent
         let taskID = taskStore.start(
             conversationID: activeSessionID,
             intent: taskIntent,
@@ -460,6 +485,7 @@ public final class AgentCoordinator: ObservableObject {
             await self.runtime.run(
                 taskID: taskID,
                 userText: trimmed,
+                explicitIntent: explicitIntent,
                 provider: resolvedProvider,
                 model: modelName,
                 bridge: bridge,
@@ -467,6 +493,7 @@ public final class AgentCoordinator: ObservableObject {
                 context: context,
                 history: history,
                 systemService: systemService,
+                externalMusicService: externalMusicService,
                 confirm: { _ in true },
                 emit: { [weak self] message in
                     await self?.receive(message, sessionID: sessionID)
@@ -476,6 +503,9 @@ public final class AgentCoordinator: ObservableObject {
                 },
                 progress: { [weak self] p in
                     await self?.updateTaskProgress(p, taskID: taskID)
+                },
+                state: { [weak self] taskState in
+                    await self?.updateTaskState(taskState, taskID: taskID)
                 }
             )
             await MainActor.run { [weak self] in self?.isRunning = false }
@@ -497,6 +527,36 @@ public final class AgentCoordinator: ObservableObject {
             outputTokens: progress.outputTokens ?? 0
         )
         activeTask = taskStore.record(taskID)
+    }
+
+    /// Runtime 是任务状态的权威；把结构化状态同步进持久化仓库，App 重启后可审计
+    /// 已完成动作与停止原因，而不是只剩一条“正在执行工具”的 UI 文本。
+    private func updateTaskState(_ state: AgentTaskState, taskID: UUID) async {
+        taskStore.update(
+            taskID,
+            status: Self.persistedStatus(for: state.status),
+            step: state.pendingActions.last ?? state.completedActions.last,
+            toolSteps: state.progress.toolCalls,
+            inputTokens: state.progress.inputTokens,
+            outputTokens: state.progress.outputTokens,
+            error: state.errorState,
+            completedActions: state.completedActions,
+            noProgressRounds: state.progress.noProgressRounds
+        )
+        activeTask = taskStore.record(taskID)
+    }
+
+    private static func persistedStatus(for status: AgentTaskLifecycleStatus) -> AgentTaskStatus {
+        switch status {
+        case .queued: .queued
+        case .running: .running
+        case .waitingForModel: .waitingForModel
+        case .waitingForTool: .waitingForTool
+        case .completed: .completed
+        case .insufficient, .failed: .failed
+        case .cancelled: .cancelled
+        case .interrupted: .interrupted
+        }
     }
 
     /// 任务结束后按真实结果落盘。此前 Runner 已发出 `.error` 时仍被一律标为

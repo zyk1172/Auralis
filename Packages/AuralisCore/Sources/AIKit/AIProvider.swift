@@ -2,22 +2,15 @@ import Domain
 import Foundation
 import SecurityKit
 
-/// Agent 单次回复的默认输出 token 上限。
-///
-/// 依据：主流 OpenAI 兼容模型（GPT-4o/4.1、DeepSeek-V3/R1、Qwen、GLM、
-/// Gemini 等）的 `max_output_tokens` 常见上限为 8_192（部分模型为 4_096、
-/// 16_384 或 32_768）。取 8_192 作为 App 默认：相比旧值 1_200 大幅提高，
-/// 解决 Agent 长回答被截断的问题；同时不超出常见模型允许的最大输出，
-/// 避免请求被服务端拒绝。模型上下文允许时可在此基础上继续上调。
-public let auralisDefaultMaxOutputTokens = 8_192
+/// Agent 单次回复的输出 token 上限。当前用户配置的模型使用 256K 上下文，
+/// 其中每次模型回复最多保留 16K；所有 Provider、Runtime 和注释统一使用同一数值，
+/// 避免保存配置、原生 Responses 与兼容 Chat 请求之间出现不同上限。
+public let auralisDefaultMaxOutputTokens = 16_000
 
-/// OpenAI-compatible endpoints may advertise or accept a larger reply budget.
-/// Keep the app default conservative while permitting evidence-heavy tasks
-/// (such as music appreciation) to request up to 16K when the saved provider
-/// configuration explicitly allows it.
-public let auralisMaximumCompatibleOutputTokens = 16_384
+/// OpenAI 兼容接口的统一最大输出上限，与默认请求预算保持一致。
+public let auralisMaximumCompatibleOutputTokens = 16_000
 
-/// 模型能力的保守声明。未知 OpenAI 兼容端点不得假设拥有超大上下文或超大输出。
+/// Auralis 当前模型能力声明：256K 总上下文、16K 单次输出。
 public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
     public var maxOutputTokens: Int
@@ -27,7 +20,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var supportsJSONSchema: Bool
 
     public init(
-        maxContextTokens: Int = 32_768,
+        maxContextTokens: Int = 256_000,
         maxOutputTokens: Int = auralisDefaultMaxOutputTokens,
         supportsToolCalling: Bool = false,
         supportsStreaming: Bool = true,

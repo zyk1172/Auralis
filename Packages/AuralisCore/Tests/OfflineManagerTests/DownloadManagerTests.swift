@@ -152,6 +152,12 @@ struct DownloadManagerTests {
         )
         #expect(manager.isDownloading(metadata.trackID))
         #expect(manager.status(metadata.trackID)?.status == .downloading)
+        #expect(manager.activeSnapshots() == [
+            ActiveDownloadSnapshot(
+                serverID: metadata.serverID,
+                info: DownloadTaskInfo(trackID: metadata.trackID, status: .downloading)
+            ),
+        ])
 
         manager.restoreForTesting(existingTasks: [], pruneCandidates: [42])
 

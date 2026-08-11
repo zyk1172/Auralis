@@ -25,6 +25,8 @@ struct SettingsCategoryRow: View {
             Image(systemName: icon)
                 .symbolRenderingMode(.hierarchical)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 
@@ -122,13 +124,39 @@ struct DataSettingsPage: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
     let theme: BuiltInTheme
+    @State private var backupRoute: DataBackupRoute?
 
     var body: some View {
         SettingsDetailForm(title: "数据与备份", theme: theme) {
             CacheManagementSection(model: model, theme: theme)
-            SettingsBackupSection(model: model, themeStore: themeStore, theme: theme)
+            SettingsBackupSection(
+                model: model,
+                themeStore: themeStore,
+                theme: theme,
+                onExport: { backupRoute = .export },
+                onImport: { backupRoute = .import }
+            )
         }
+        #if os(iOS)
+        .sheet(item: $backupRoute) { route in
+            NavigationStack {
+                switch route {
+                case .export:
+                    BackupExportPage(model: model, themeStore: themeStore, theme: theme)
+                case .import:
+                    BackupImportPage(model: model, themeStore: themeStore, theme: theme)
+                }
+            }
+        }
+        #endif
     }
+}
+
+private enum DataBackupRoute: String, Identifiable {
+    case export
+    case `import`
+
+    var id: String { rawValue }
 }
 
 struct AgentSettingsPage: View {

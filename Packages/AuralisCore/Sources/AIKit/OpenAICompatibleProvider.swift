@@ -83,7 +83,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     public var supportsToolCalling: Bool { configuration.supportsToolCalling }
     public var capabilities: ModelCapabilities {
         ModelCapabilities(
-            maxContextTokens: 32_768,
+            maxContextTokens: 256_000,
             maxOutputTokens: min(configuration.maxTokens, auralisMaximumCompatibleOutputTokens),
             supportsToolCalling: configuration.supportsToolCalling,
             supportsStreaming: configuration.usesStreaming,

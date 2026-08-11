@@ -49,7 +49,9 @@ public enum GrantedScope: String, Codable, CaseIterable, Sendable, Hashable {
 
 public struct AgentTaskBudget: Codable, Equatable, Sendable {
     public var wallClockSeconds: TimeInterval
+    /// 单次模型请求允许使用的输入上下文上限，不是多轮任务的累计用量。
     public var maxInputTokens: Int
+    /// 单次模型回复上限，不是多轮任务的累计用量。
     public var maxOutputTokens: Int
     public var maxModelRounds: Int
     public var maxNoProgressRounds: Int
@@ -57,8 +59,8 @@ public struct AgentTaskBudget: Codable, Equatable, Sendable {
 
     public init(
         wallClockSeconds: TimeInterval = 6 * 60,
-        maxInputTokens: Int = 96_000,
-        maxOutputTokens: Int = 8_192,
+        maxInputTokens: Int = 256_000,
+        maxOutputTokens: Int = 16_000,
         maxModelRounds: Int = 24,
         maxNoProgressRounds: Int = 3,
         // The working-set guard asks the model to stop after three duplicate
@@ -154,11 +156,9 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .serverManagement:
             return .init(intent: intent, scopes: [.catalogRead, .serverRead, .serverWrite], allowedToolGroups: [.catalog, .server], allowedPermissions: destructive, maxRisk: .high, completion: .verifiedToolResult)
         case .diagnostics:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .diagnosticsRead], allowedToolGroups: [.catalog, .server], allowedPermissions: read, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback, .server], allowedPermissions: read, completion: .verifiedToolResult)
         case .musicAppreciation:
-            var budget = AgentTaskBudget()
-            budget.maxOutputTokens = 12_288
-            return .init(intent: intent, scopes: [.catalogRead, .externalRead], allowedToolGroups: [.catalog], allowedPermissions: read, completion: .appreciationWithEvidence, budget: budget)
+            return .init(intent: intent, scopes: [.catalogRead, .externalRead], allowedToolGroups: [.catalog], allowedPermissions: read, completion: .appreciationWithEvidence)
         case .musicDownload:
             return .init(intent: intent, scopes: [.catalogRead, .serverRead, .downloadWrite], allowedToolGroups: [.catalog, .server, .download], allowedPermissions: write, maxRisk: .medium, completion: .verifiedToolResult)
         case .memoryManagement:
@@ -169,9 +169,13 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
 
 public enum AgentEvidenceSource: String, Codable, Sendable {
     case localCatalog
+    case derivedLocalStatistic
     case playbackState
     case server
     case externalAPI
+    case musicBrainz
+    case listenBrainz
+    case critiqueBrainz
     case userStatement
     case modelInference
 }
@@ -205,19 +209,44 @@ public struct AgentTaskProgress: Codable, Sendable, Equatable {
     public var lastProgressAt = Date()
 }
 
+public enum AgentTaskLifecycleStatus: String, Codable, Sendable {
+    case queued
+    case running
+    case waitingForModel
+    case waitingForTool
+    case completed
+    case insufficient
+    case failed
+    case cancelled
+    case interrupted
+}
+
+public enum AgentTaskCompletionState: String, Codable, Sendable {
+    case pending
+    case satisfied
+    case insufficientEvidence
+    case failed
+}
+
 /// 与音乐领域工作集分离的通用任务状态。领域状态可增量附加，不再成为主循环本身。
 public struct AgentTaskState: Codable, Identifiable, Sendable {
     public let id: UUID
     public let intent: AgentTaskIntent
     public let goal: String
+    public var status: AgentTaskLifecycleStatus
     public var facts: [String: String]
     public var evidence: [AgentEvidence]
     public var candidateIDs: Set<String>
+    public var selectedIDs: Set<String>
     public var completedActions: [String]
+    public var pendingActions: [String]
     public var errors: [String]
     public var progress: AgentTaskProgress
     public var completed: Bool
+    public var completionState: AgentTaskCompletionState
+    public var errorState: String?
     public var startedAt: Date
+    public var updatedAt: Date
     public var recentToolSignatures: [String]
     public var repeatedToolPatternCount: Int
 
@@ -225,14 +254,20 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
         self.id = id
         self.intent = intent
         self.goal = goal
+        self.status = .running
         self.facts = [:]
         self.evidence = []
         self.candidateIDs = []
+        self.selectedIDs = []
         self.completedActions = []
+        self.pendingActions = []
         self.errors = []
         self.progress = AgentTaskProgress(lastProgressAt: startedAt)
         self.completed = false
+        self.completionState = .pending
+        self.errorState = nil
         self.startedAt = startedAt
+        self.updatedAt = startedAt
         self.recentToolSignatures = []
         self.repeatedToolPatternCount = 0
     }
@@ -241,9 +276,13 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
         if let action, !action.isEmpty { completedActions.append(action) }
         progress.noProgressRounds = 0
         progress.lastProgressAt = date
+        updatedAt = date
     }
 
-    public mutating func recordNoProgress() { progress.noProgressRounds += 1 }
+    public mutating func recordNoProgress() {
+        progress.noProgressRounds += 1
+        updatedAt = .now
+    }
 
     public mutating func recordToolCall(name: String, arguments: [String: String]) {
         let values = arguments.map { "\($0.key)=\($0.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())" }.sorted()
@@ -255,12 +294,14 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
         }
         recentToolSignatures.append(signature)
         if recentToolSignatures.count > 12 { recentToolSignatures.removeFirst(recentToolSignatures.count - 12) }
+        updatedAt = .now
     }
 
     public func budgetViolation(policy: AgentTaskPolicy, now: Date = .now) -> AgentRuntimeError? {
         if now.timeIntervalSince(startedAt) > policy.budget.wallClockSeconds { return .wallClockBudgetExceeded }
-        if progress.inputTokens > policy.budget.maxInputTokens { return .inputTokenBudgetExceeded }
-        if progress.outputTokens > policy.budget.maxOutputTokens { return .outputTokenBudgetExceeded }
+        // input/output token 是多轮累计统计；模型的 256K/16K 限制是单次请求限制，
+        // 由 ContextManager 裁剪和 AICompletionRequest 强制执行。不能拿累计值与单次
+        // 上限比较，否则合法的长工具任务会误报“达到输入 token 预算”。
         if progress.modelRounds >= policy.budget.maxModelRounds { return .modelRoundBudgetExceeded }
         if progress.noProgressRounds >= policy.budget.maxNoProgressRounds { return .noProgress }
         if repeatedToolPatternCount > policy.budget.maxRepeatedToolPattern { return .repeatedToolPattern }
@@ -271,8 +312,6 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
 public enum AgentRuntimeError: Error, LocalizedError, Equatable, Sendable {
     case toolOutsidePolicy(String)
     case wallClockBudgetExceeded
-    case inputTokenBudgetExceeded
-    case outputTokenBudgetExceeded
     case modelRoundBudgetExceeded
     case noProgress
     case repeatedToolPattern
@@ -281,8 +320,6 @@ public enum AgentRuntimeError: Error, LocalizedError, Equatable, Sendable {
         switch self {
         case let .toolOutsidePolicy(name): "工具 \(name) 不在当前任务获准范围内。"
         case .wallClockBudgetExceeded: "任务已达到总运行时间预算。"
-        case .inputTokenBudgetExceeded: "任务已达到输入 token 预算。"
-        case .outputTokenBudgetExceeded: "任务已达到输出 token 预算。"
         case .modelRoundBudgetExceeded: "任务已达到模型轮次预算。"
         case .noProgress: "任务连续多轮没有取得新进展。"
         case .repeatedToolPattern: "任务重复调用同一工具且没有形成新进展。"
@@ -341,9 +378,12 @@ public enum AgentIntentClassifier {
     public static func classify(_ text: String) -> AgentTaskIntent {
         let value = text.lowercased()
         func has(_ words: [String]) -> Bool { words.contains { value.contains($0) } }
+        // “推荐索引”是资料库维护任务，不是普通音乐推荐；优先于 discovery 关键词。
+        if has(["推荐索引", "索引 v2", "索引v2", "library_index_v2"]) { return .libraryManagement }
         if has(["鉴赏", "赏析", "乐评", "大众评价", "appreciate"]) { return .musicAppreciation }
         if has(["下载", "离线", "torrent", "moviepilot"]) { return .musicDownload }
         if has(["诊断", "为什么", "错误", "失败", "日志", "卡住"]) { return .diagnostics }
+        if has(["播放状态", "当前播放状态", "正在播放状态"]) { return .diagnostics }
         if has(["服务器", "同步", "连接", "navidrome", "nas"]) { return .serverManagement }
         if has(["歌单", "playlist"]) { return .playlistManagement }
         if has(["队列", "接下来播放", "替换队列", "清空队列"]) { return .queueManagement }
@@ -353,6 +393,212 @@ public enum AgentIntentClassifier {
         if has(["记住", "记忆", "忘记", "技能", "memory", "skill"]) { return .memoryManagement }
         if has(["找歌", "搜索", "查找", "哪首", "哪个专辑", "谁唱的"]) { return .librarySearch }
         return .conversation
+    }
+}
+
+/// 将文字入口或 UI 显式入口解析为单次任务策略。业务识别只发生在任务创建时，
+/// 低层模型循环只消费结构化 policy，不再包含推荐索引等业务分支。
+public enum AgentTaskPolicyResolver {
+    public static func resolve(
+        text: String,
+        historyText: String = "",
+        explicitIntent: AgentTaskIntent? = nil
+    ) -> AgentTaskPolicy {
+        let intent = explicitIntent ?? AgentIntentClassifier.classify(text)
+        let base = AgentTaskPolicy.policy(for: intent)
+        guard intent == .libraryManagement,
+              RecommendationIndexTaskRules.requiresCompleteBuild(text: text, historyText: historyText)
+        else { return base }
+
+        var budget = base.budget
+        budget.wallClockSeconds = 6 * 60 * 60
+        // 完整索引仍使用相同的单次 256K 输入 / 16K 输出限制；长任务通过更多轮次
+        // 完成，不能伪造超过模型能力的单次 token 预算。
+        budget.maxInputTokens = 256_000
+        budget.maxOutputTokens = 16_000
+        budget.maxModelRounds = 1_024
+        budget.maxNoProgressRounds = 3
+        return AgentTaskPolicy(
+            intent: intent,
+            scopes: base.scopes,
+            allowedToolGroups: base.allowedToolGroups,
+            allowedPermissions: base.allowedPermissions,
+            requiresConfirmationForDestructive: base.requiresConfirmationForDestructive,
+            maxRisk: base.maxRisk,
+            completion: .indexPendingCountIsZero,
+            budget: budget
+        )
+    }
+}
+
+/// Recommendation Index 是普通本地工具服务；这里只负责在任务创建边界选择完成条件，
+/// 不参与模型循环、重试、超时或工具分派。
+public enum RecommendationIndexTaskRules {
+    public static func requiresCompleteBuild(text: String, historyText: String = "") -> Bool {
+        let combined = (text + " " + historyText).lowercased()
+        let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
+        let actionMarkers = ["构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
+        return indexMarkers.contains(where: combined.contains) && actionMarkers.contains(where: combined.contains)
+    }
+}
+
+public enum AgentModelAnswerDecision: Sendable, Equatable {
+    case accept
+    case continueTask(String)
+    case fail(String)
+}
+
+/// 把工具输出归并为 TaskState。Runner 不再解析工具摘要中的中文数字或业务关键词。
+public enum AgentTaskReducer {
+    @discardableResult
+    public static func apply(
+        result: ToolResult,
+        descriptor: ToolDescriptor,
+        to state: inout AgentTaskState
+    ) -> Bool {
+        guard result.success else {
+            state.recordNoProgress()
+            state.errors.append(result.summary)
+            state.errorState = result.summary
+            return false
+        }
+
+        var changed = false
+        for (key, value) in result.facts where state.facts[key] != value {
+            state.facts[key] = value
+            changed = true
+        }
+
+        var evidence = result.evidence
+        if evidence.isEmpty, let source = evidenceSource(for: descriptor.evidencePolicy) {
+            evidence = [AgentEvidence(
+                source: source,
+                provenance: "tool:\(descriptor.name)",
+                confidence: 1,
+                claim: result.summary
+            )]
+        }
+        for item in evidence {
+            let duplicate = state.evidence.contains {
+                $0.source == item.source && $0.provenance == item.provenance && $0.claim == item.claim
+            }
+            if !duplicate {
+                state.evidence.append(item)
+                changed = true
+            }
+        }
+
+        if descriptor.sideEffectPolicy != .none {
+            let key = "sideEffect.\(descriptor.sideEffectPolicy.rawValue)"
+            if state.facts[key] != "success" {
+                state.facts[key] = "success"
+            }
+            // 每一次真正成功、且未被工作集幂等保护拦截的副作用都是实际进展。
+            // 即使完成事实已经是 success，不同参数的合法批量操作也不能被误判为停滞。
+            changed = true
+        }
+
+        if let payload = result.payload, case let .trackCards(cards) = payload {
+            let before = state.candidateIDs.count
+            state.candidateIDs.formUnion(cards.map { $0.globalID.description })
+            changed = changed || state.candidateIDs.count != before
+        }
+
+        if changed {
+            state.recordProgress(action: "\(descriptor.name): \(result.summary)")
+        } else {
+            state.recordNoProgress()
+        }
+        state.errorState = nil
+        return changed
+    }
+
+    private static func evidenceSource(for policy: ToolEvidencePolicy) -> AgentEvidenceSource? {
+        switch policy {
+        case .none: nil
+        case .localCatalog: .localCatalog
+        case .playbackState: .playbackState
+        case .server: .server
+        case .externalAPI: .externalAPI
+        }
+    }
+}
+
+/// Runtime 层的确定性完成判定。LLM 的自然语言只是一份候选答案；任务事实未满足时，
+/// Runtime 要求继续或明确失败，不能把“看起来完成”当成真实完成。
+public enum AgentCompletionEvaluator {
+    public static func evaluateModelAnswer(
+        _ answer: String,
+        state: inout AgentTaskState,
+        policy: AgentTaskPolicy,
+        repairAttempts: Int
+    ) -> AgentModelAnswerDecision {
+        guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return repairAttempts == 0
+                ? .continueTask("模型返回了空内容。请根据当前任务状态调用获准工具，或给出明确且完整的最终回答。")
+                : .fail("模型连续返回空内容，任务未完成。")
+        }
+
+        let satisfied: Bool
+        let continuation: String
+        switch policy.completion {
+        case .modelAnswer:
+            satisfied = true
+            continuation = ""
+        case .verifiedToolResult:
+            satisfied = state.evidence.contains { $0.source != .modelInference }
+            continuation = "当前任务需要至少一条真实工具证据。请调用当前任务获准的读取工具，再依据结果回答。"
+        case .queueMutation:
+            satisfied = state.facts["sideEffect.queue"] == "success"
+            continuation = "队列修改尚未得到成功工具结果。请执行获准的队列工具；不要仅用文字声称已经完成。"
+        case .playlistMutation:
+            satisfied = state.facts["sideEffect.playlist"] == "success"
+            continuation = "歌单修改尚未得到成功工具结果。请执行获准的歌单工具；不要仅用文字声称已经完成。"
+        case .playbackMutation:
+            satisfied = state.facts["sideEffect.playback"] == "success" || state.facts["sideEffect.queue"] == "success"
+            continuation = "播放操作尚未得到成功工具结果。请执行获准的播放工具；不要仅用文字声称已经完成。"
+        case .indexPendingCountIsZero:
+            satisfied = state.facts["recommendation.index.pending"] == "0"
+            if state.facts["recommendation.index.pending"] == nil {
+                continuation = "推荐索引完成事实尚未取得。请先调用 library_index_v2_status；只有真实工具结果显示 pending=0 才能结束。"
+            } else if state.facts["recommendation.index.nextBatchAvailable"] == "true" {
+                continuation = "推荐索引仍有待分类歌曲，上一条工具结果已提供下一批元数据。请直接调用 library_index_v2_write_batch 写回该批；pending=0 前不得结束。"
+            } else {
+                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch(limit=80) 并持续分类写回；pending=0 前不得结束。"
+            }
+        case .appreciationWithEvidence:
+            let metadataReady = state.facts["appreciation.metadata"] == "available"
+            let lyricsResolved = state.facts["appreciation.lyrics"] != nil
+            let communityResolved = state.facts["appreciation.community"] != nil
+            let requiredSections = ["【已核验事实】", "【模型分析】", "【我的私人数据】", "【大众评价】"]
+            let hasRequiredSections = requiredSections.allSatisfy(answer.contains)
+            let hasCommunityEvidence = state.facts["appreciation.community"] == "available"
+            let communityBoundarySatisfied = hasCommunityEvidence
+                || answer.contains("暂无可核验的大众评价数据。")
+            let unsupportedCommunityClaim = !hasCommunityEvidence && [
+                "大众普遍认为", "广受好评", "听众一致认为",
+            ].contains(where: answer.contains)
+            satisfied = metadataReady
+                && lyricsResolved
+                && communityResolved
+                && hasRequiredSections
+                && communityBoundarySatisfied
+                && !unsupportedCommunityClaim
+            continuation = "歌曲鉴赏必须先调用 music_appreciate，并以【已核验事实】【模型分析】【我的私人数据】【大众评价】分层回答。没有 Community Evidence 时，大众评价段必须写“暂无可核验的大众评价数据。”"
+        }
+
+        if satisfied {
+            state.completed = true
+            state.completionState = .satisfied
+            state.status = .completed
+            state.updatedAt = .now
+            return .accept
+        }
+        if repairAttempts == 0 { return .continueTask(continuation) }
+        state.completionState = .insufficientEvidence
+        state.status = .insufficient
+        state.errorState = continuation
+        return .fail("任务没有满足确定性完成条件：\(continuation)")
     }
 }
 
@@ -374,6 +620,7 @@ public actor AgentRuntime {
     public func run(
         taskID: UUID,
         userText: String,
+        explicitIntent: AgentTaskIntent? = nil,
         provider: (any AIProvider)?,
         model: String,
         bridge: AgentBridge,
@@ -381,15 +628,29 @@ public actor AgentRuntime {
         context: AgentRunner.Context,
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
+        externalMusicService: (any AgentExternalMusicService)? = nil,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
-        progress: @escaping @Sendable (AgentRunner.AgentProgress) async -> Void = { _ in }
+        progress: @escaping @Sendable (AgentRunner.AgentProgress) async -> Void = { _ in },
+        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
-        let intent = AgentIntentClassifier.classify(userText)
-        let policy = AgentTaskPolicy.policy(for: intent)
+        let historyText = history.flatMap(\.messages).compactMap { item -> String? in
+            switch item {
+            case let .text(value), let .streaming(value), let .error(value): value
+            default: nil
+            }
+        }.joined(separator: " ")
+        let policy = AgentTaskPolicyResolver.resolve(
+            text: userText,
+            historyText: historyText,
+            explicitIntent: explicitIntent
+        )
+        let intent = policy.intent
+        let taskState = AgentTaskState(id: taskID, intent: intent, goal: userText)
         runningTaskIDs.insert(taskID)
         defer { runningTaskIDs.remove(taskID) }
+        await state(taskState)
         await AgentRunner.run(
             userText: userText,
             provider: provider,
@@ -399,12 +660,15 @@ public actor AgentRuntime {
             context: context,
             history: history,
             systemService: systemService,
+            externalMusicService: externalMusicService,
             intent: intent,
             policy: policy,
+            initialTaskState: taskState,
             confirm: confirm,
             emit: emit,
             log: log,
-            progress: progress
+            progress: progress,
+            state: state
         )
     }
 }

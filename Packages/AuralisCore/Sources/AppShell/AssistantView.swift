@@ -691,7 +691,7 @@ struct AssistantView: View {
             }
             .buttonStyle(HapticPlainButtonStyle())
             .accessibilityLabel(model.assistantIsRunning ? "停止" : "发送")
-            .frame(width: 32, height: 32)
+            .frame(width: 44, height: 44)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)

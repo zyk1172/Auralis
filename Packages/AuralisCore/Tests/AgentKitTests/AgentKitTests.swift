@@ -1075,6 +1075,7 @@ func toolFailureDoesNotTerminate() async throws {
         bridge: bridge,
         catalog: store,
         context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        intent: .conversation,
         confirm: { _ in true },
         emit: { await collector.record($0) }
     )
@@ -1314,7 +1315,7 @@ func contextManagerTrimsByTokens() {
 
 @Test("WorkingSet: identical query is cached and counted as a duplicate")
 func workingSetCachesIdenticalQuery() {
-    var ws = AgentTaskWorkingSet()
+    var ws = AgentTaskWorkingSet(targetQueueCount: 20)
     let args = ["query": "周杰伦", "limit": "30"]
     let first = ws.tryReuse(tool: "library_search", args: args)
     #expect(first == nil)
@@ -1327,7 +1328,7 @@ func workingSetCachesIdenticalQuery() {
 
 @Test("WorkingSet: no-new-results streak stops searching after limit")
 func workingSetStopsSearchingAfterRepeatedNoNewResults() {
-    var ws = AgentTaskWorkingSet()
+    var ws = AgentTaskWorkingSet(targetQueueCount: 20)
     let gid = GlobalID(serverID: "test-server", remoteID: "x")
     // 第一次有候选：streak 归零。
     ws.observeCandidates([gid])
@@ -1343,7 +1344,7 @@ func workingSetStopsSearchingAfterRepeatedNoNewResults() {
 
 @Test("WorkingSet: queued songs reaching threshold stops searching")
 func workingSetStopsSearchingWhenQueueSatisfied() {
-    var ws = AgentTaskWorkingSet()
+    var ws = AgentTaskWorkingSet(targetQueueCount: 20)
     let ids = (1...20).map { GlobalID(serverID: "test-server", remoteID: "q-\($0)") }
     ws.noteQueued(ids)
     #expect(ws.stopSearching == true)
@@ -1351,7 +1352,7 @@ func workingSetStopsSearchingWhenQueueSatisfied() {
 
 @Test("WorkingSet: diagnostic summary is non-empty and counts tools")
 func workingSetDiagnosticSummary() {
-    var ws = AgentTaskWorkingSet()
+    var ws = AgentTaskWorkingSet(targetQueueCount: 20)
     ws.recordExecution(tool: "library_search", args: ["query": "周杰伦"], resultText: "ok")
     _ = ws.tryReuse(tool: "library_search", args: ["query": "周杰伦"])
     ws.observeCandidates([GlobalID(serverID: "s", remoteID: "1")])
@@ -1362,6 +1363,109 @@ func workingSetDiagnosticSummary() {
 }
 
 // MARK: - 集合查询 library_select_tracks
+
+private struct FixedCommunityMusicService: AgentExternalMusicService {
+    func enrich(track: Track, globalID: GlobalID) async -> AgentExternalMusicResult {
+        AgentExternalMusicResult(
+            identity: ExternalMusicIdentity(
+                globalTrackID: globalID,
+                recordingMBID: "recording-evidence",
+                releaseGroupMBID: "release-group-evidence",
+                matchConfidence: 1,
+                matchMethod: .embeddedRecordingMBID
+            ),
+            metrics: CommunityMusicMetrics(globalTrackID: globalID, values: [
+                CommunityMusicMetric(
+                    source: .musicBrainz,
+                    entityID: "recording-evidence",
+                    rating: 4.4,
+                    ratingCount: 12,
+                    status: .available
+                ),
+                CommunityMusicMetric(
+                    source: .critiqueBrainz,
+                    entityID: "release-group-evidence",
+                    rating: 4.1,
+                    ratingCount: 7,
+                    reviewCount: 3,
+                    status: .available
+                ),
+                CommunityMusicMetric(
+                    source: .listenBrainz,
+                    entityID: "release-group-evidence",
+                    listenCount: 1234,
+                    listenerCount: 321,
+                    status: .available
+                ),
+            ])
+        )
+    }
+}
+
+@Test("music_appreciate 严格区分事实、私人数据与大众评价")
+func musicAppreciateUsesEvidenceBoundaries() async throws {
+    let store = try makeStore()
+    var track = makeTrack(serverID: "test-server", remoteID: "appreciate-1", title: "Evidence Song")
+    track.artistName = "Evidence Artist"
+    track.albumTitle = "Evidence Album"
+    track.isFavorite = true
+    track.rating = 4
+    track.genres = ["Jazz"]
+    try await seed(store, [track])
+    try await store.recordPlay(GlobalID(serverID: "test-server", remoteID: "appreciate-1"), completed: true)
+
+    let result = await AgentToolkit.execute(
+        ToolCall(name: "music_appreciate", arguments: ["trackID": "test-server:appreciate-1"]),
+        bridge: MockAgentBridge(activeServerID: "test-server"),
+        catalog: store,
+        serverID: "test-server"
+    )
+
+    #expect(result.success)
+    #expect(result.facts["appreciation.metadata"] == "available")
+    #expect(result.facts["appreciation.privateData"] == "available")
+    #expect(result.facts["appreciation.community"] == "unavailable")
+    #expect(result.evidence.contains { $0.source == .localCatalog })
+    #expect(result.evidence.contains { $0.source == .derivedLocalStatistic })
+    if case let .text(text) = result.payload {
+        #expect(text.contains("【已核验事实】"))
+        #expect(text.contains("【我的私人数据】"))
+        #expect(text.contains("暂无可核验的大众评价数据。"))
+        #expect(!text.contains("大众普遍认为"))
+        #expect(!text.contains("广受好评"))
+    } else {
+        Issue.record("music_appreciate 应返回结构化鉴赏底稿")
+    }
+}
+
+@Test("music_appreciate 将三个外部来源分别转换为可追溯 Evidence")
+func musicAppreciateUsesProviderSpecificCommunityEvidence() async throws {
+    let store = try makeStore()
+    let track = makeTrack(serverID: "test-server", remoteID: "external-evidence", title: "Evidence Song")
+    try await seed(store, [track])
+
+    let result = await AgentToolkit.execute(
+        ToolCall(name: "music_appreciate", arguments: ["trackID": "test-server:external-evidence"]),
+        bridge: MockAgentBridge(activeServerID: "test-server"),
+        catalog: store,
+        serverID: "test-server",
+        externalMusicService: FixedCommunityMusicService()
+    )
+
+    #expect(result.success)
+    #expect(result.facts["appreciation.community"] == "available")
+    #expect(result.evidence.contains { $0.source == .musicBrainz && $0.entityID == "recording-evidence" })
+    #expect(result.evidence.contains { $0.source == .critiqueBrainz && $0.entityID == "release-group-evidence" })
+    #expect(result.evidence.contains { $0.source == .listenBrainz && $0.entityID == "release-group-evidence" })
+    if case let .text(text) = result.payload {
+        #expect(text.contains("MusicBrainz"))
+        #expect(text.contains("CritiqueBrainz"))
+        #expect(text.contains("ListenBrainz"))
+        #expect(!text.contains("综合"))
+    } else {
+        Issue.record("应输出来源分离的鉴赏底稿")
+    }
+}
 
 @Test("library_select_tracks filters and sorts by popularity proxy")
 func librarySelectTracksFiltersAndSorts() async throws {

@@ -25,6 +25,12 @@ public final class AuralisAppModel: ObservableObject {
     public static let shared = AuralisAppModel()
     @Published public var selectedSection: AppSection = .home
     public let playbackStore: PlaybackStore
+    /// 领域状态由独立 Store 持有；AppModel 保留兼容门面与跨领域编排。
+    let homeStore: HomeStore
+    let libraryStore: LibraryStore
+    let serverStore: ServerStore
+    let downloadStore: DownloadStore
+    private var childStoreSubscriptions: Set<AnyCancellable> = []
     public var currentTrack: Track {
         get { playbackStore.currentTrack }
         set {
@@ -78,14 +84,26 @@ public final class AuralisAppModel: ObservableObject {
     @Published public var browseDestination: BrowseDestination?
     /// 首页布局偏好（模块显示 / 排序）。持久化到 UserDefaults（HomeLayoutStore），
     /// App 完全退出重开仍保留；「恢复默认布局」只重置这一份偏好，不删任何数据。
-    @Published public private(set) var homeLayout: HomeLayoutPreference
+    public var homeLayout: HomeLayoutPreference { homeStore.layout }
     @Published public var inspector: InspectorSection = .queue
-    @Published public private(set) var serverConnectionState: ServerConnectionViewState = .idle
+    public private(set) var serverConnectionState: ServerConnectionViewState {
+        get { serverStore.connectionState }
+        set { serverStore.connectionState = newValue }
+    }
     /// 服务器认证是否可能已失效（流播放返回 authorizationFailed 时置位，
     /// 成功连接 / 切换服务器后清除）。用于提示用户重新登录。
-    @Published public private(set) var serverAuthenticationFailed = false
-    @Published public private(set) var serverCapabilities = ServerCapabilities()
-    @Published public private(set) var catalog: LibraryCatalog
+    public private(set) var serverAuthenticationFailed: Bool {
+        get { serverStore.authenticationFailed }
+        set { serverStore.authenticationFailed = newValue }
+    }
+    public private(set) var serverCapabilities: ServerCapabilities {
+        get { serverStore.capabilities }
+        set { serverStore.capabilities = newValue }
+    }
+    public private(set) var catalog: LibraryCatalog {
+        get { libraryStore.catalog }
+        set { libraryStore.catalog = newValue }
+    }
     /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
     @Published public private(set) var connectionDiagnostics: ConnectionDiagnosticsSnapshot?
 
@@ -194,14 +212,12 @@ public final class AuralisAppModel: ObservableObject {
         return playbackHistoryStore.counts(for: serverID)
     }
     /// 已下载到本地的歌曲。
-    @Published public private(set) var downloadedTrackIDs: Set<GlobalID> = []
+    public var downloadedTrackIDs: Set<GlobalID> { downloadStore.downloadedTrackIDs }
     /// 正在下载的歌曲。
-    @Published public private(set) var downloadingTrackIDs: Set<GlobalID> = []
+    public var downloadingTrackIDs: Set<GlobalID> { downloadStore.downloadingTrackIDs }
     /// 下载进度（0...1）。保留裸 TrackID 键以兼容 PlayerViews（非写权限文件）；
     /// DownloadManager 内部按裸 TrackID 串行化下载，进度键不会跨服务器并发冲突。
-    @Published public private(set) var downloadingProgress: [TrackID: Double] = [:]
-    /// 裸 TrackID → GlobalID 的下载映射（DownloadManager 回调用裸 TrackID，P0-1 隔离）。
-    private var downloadGlobalIDs: [TrackID: GlobalID] = [:]
+    public var downloadingProgress: [TrackID: Double] { downloadStore.progress }
     /// 随机播放模式，持久化到 UserDefaults。
     @Published public private(set) var isShuffled: Bool {
         didSet {
@@ -234,44 +250,59 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
     /// 已缓存歌单的完整曲目（按歌单 ID 索引），从服务器按需拉取。
-    @Published public private(set) var playlistTracks: [PlaylistID: [Track]] = [:]
+    public private(set) var playlistTracks: [PlaylistID: [Track]] {
+        get { libraryStore.playlistTracks }
+        set { libraryStore.playlistTracks = newValue }
+    }
     /// 正在加载曲目的歌单 ID。
-    @Published public private(set) var loadingPlaylistIDs: Set<PlaylistID> = []
+    public private(set) var loadingPlaylistIDs: Set<PlaylistID> {
+        get { libraryStore.loadingPlaylistIDs }
+        set { libraryStore.loadingPlaylistIDs = newValue }
+    }
     /// 服务器列表显示该歌单已有更新、但 getPlaylists 不含完整 entry 时，
     /// 需要随后通过 getPlaylist 拉取最新曲目顺序的歌单。
     private var playlistIDsNeedingContentRefresh: Set<PlaylistID> = []
     /// 当前进程内已成功删除的歌单。屏蔽并发请求里携带的过期列表，直到下次冷启动。
     private var deletedPlaylistIDs: Set<PlaylistID> = []
     /// 删除请求被服务器明确拒绝或验证仍存在时的可展示提示，避免 UI 静默失败。
-    @Published public private(set) var playlistDeletionError: String?
+    public private(set) var playlistDeletionError: String? {
+        get { libraryStore.playlistDeletionError }
+        set { libraryStore.playlistDeletionError = newValue }
+    }
     /// 随机音乐（首页「随机音乐」货架）：资料库载入时随机采样一次，避免界面频繁重排。
-    @Published public private(set) var randomTracks: [Track] = []
+    public var randomTracks: [Track] { homeStore.randomTracks }
     /// 首页「收藏 / 最常听 / 最近播放 / 最近添加」货架快照。
     /// 只在数据真正变化时刷新（资料库同步 / 播放记录 / 收藏切换），
     /// 避免滚动等场景下每次 body 重算都全库过滤 + 排序一遍——大曲库时
     /// 这是首页上下滑动卡顿的重要来源之一。
-    @Published public private(set) var homeFavoriteTracks: [Track] = []
-    @Published public private(set) var homeMostPlayedTracks: [Track] = []
-    @Published public private(set) var homeRecentlyPlayedTracks: [Track] = []
-    @Published public private(set) var homeRecentlyAddedTracks: [Track] = []
+    public var homeFavoriteTracks: [Track] { homeStore.favorites }
+    public var homeMostPlayedTracks: [Track] { homeStore.mostPlayed }
+    public var homeRecentlyPlayedTracks: [Track] { homeStore.recentlyPlayed }
+    public var homeRecentlyAddedTracks: [Track] { homeStore.recentlyAdded }
     /// 首页「很久没听」：播放过但较久未播放（快照，见 refreshHomeSnapshots 的规则注释）。
-    @Published public private(set) var homeLongUnplayedTracks: [Track] = []
+    public var homeLongUnplayedTracks: [Track] { homeStore.longUnplayed }
     /// 首页「从未播放」：播放次数为 0 且不在播放历史（快照）。
-    @Published public private(set) var homeNeverPlayedTracks: [Track] = []
+    public var homeNeverPlayedTracks: [Track] { homeStore.neverPlayed }
     /// 首页「收藏里随便听」：从真实收藏随机采样（刷新时采样一次，换一批时重新采样）。
-    @Published public private(set) var homeFavoriteRandomTracks: [Track] = []
+    public var homeFavoriteRandomTracks: [Track] { homeStore.favoriteRandom }
     /// 首页「最近添加」：近 30 天真正新增的歌曲（数量显示「近30天新增 N 首」，而非全库总数）。
-    @Published public private(set) var homeRecentlyAdded30DaysTracks: [Track] = []
+    public var homeRecentlyAdded30DaysTracks: [Track] { homeStore.recentlyAdded30Days }
     /// 首页「常听艺术家 / 常听专辑」：按真实播放次数聚合（仅含播放过的）。
-    @Published public private(set) var homeTopArtists: [Artist] = []
-    @Published public private(set) var homeTopAlbums: [Album] = []
+    public var homeTopArtists: [Artist] { homeStore.topArtists }
+    public var homeTopAlbums: [Album] { homeStore.topAlbums }
     /// 常听艺术家 / 常听专辑的累计播放次数（供详情页显示「N 次播放」）。
-    @Published public private(set) var homeTopArtistPlayCounts: [ArtistID: Int] = [:]
-    @Published public private(set) var homeTopAlbumPlayCounts: [AlbumID: Int] = [:]
+    public var homeTopArtistPlayCounts: [ArtistID: Int] { homeStore.artistPlayCounts }
+    public var homeTopAlbumPlayCounts: [AlbumID: Int] { homeStore.albumPlayCounts }
     /// 流派详情从服务器按需拉取的歌曲（本地按曲目标签筛选为空时回退到服务器）。
-    @Published public private(set) var genreTracks: [Track]? = nil
+    public private(set) var genreTracks: [Track]? {
+        get { libraryStore.genreTracks }
+        set { libraryStore.genreTracks = newValue }
+    }
     /// 当前正在按流派从服务器加载的流派；为 nil 表示没有进行中的加载。
-    @Published public private(set) var loadingGenre: Genre? = nil
+    public private(set) var loadingGenre: Genre? {
+        get { libraryStore.loadingGenre }
+        set { libraryStore.loadingGenre = newValue }
+    }
     /// 播放错误（streamURL 为 nil 等），供 UI 展示提示。
     @Published public private(set) var playbackError: PlaybackError? = nil
     /// 首次入库时间按 GlobalID 隔离，并由独立组件执行线性 reconcile / 迁移。
@@ -318,7 +349,6 @@ public final class AuralisAppModel: ObservableObject {
     private let engine: any PlaybackControlling
     private let connector: any ServerConnecting
     private let cacheStore: TrackCacheStore
-    private let downloadManager: DownloadManager
     /// 封面磁盘缓存：冷启动直接读本地，不再每次打开 App 都重下全部封面。
     public let artworkCache: ArtworkDiskCache
     /// 歌词磁盘缓存（含「确认无歌词」负缓存），避免重复空跑请求。
@@ -413,8 +443,11 @@ public final class AuralisAppModel: ObservableObject {
             albumID: "placeholder", artistID: "placeholder",
             title: "请先连接服务器", artistName: "", albumTitle: "", duration: 0
         )
-        self.catalog = catalog
         self.playbackStore = PlaybackStore(currentTrack: initialTrack)
+        self.homeStore = HomeStore(defaults: defaults)
+        self.libraryStore = LibraryStore(catalog: catalog)
+        self.serverStore = ServerStore()
+        self.downloadStore = DownloadStore(connector: connector, cacheStore: cacheStore)
         self.engine = engine
         self.connector = connector
         self.cacheStore = cacheStore
@@ -448,8 +481,6 @@ public final class AuralisAppModel: ObservableObject {
         self.recentSearches = defaults.array(forKey: Self.recentSearchesDefaultsKey) as? [String] ?? []
         self.repeatMode = RepeatMode(rawValue: defaults.string(forKey: Self.repeatModeDefaultsKey) ?? "") ?? .off
         self.isShuffled = defaults.bool(forKey: Self.shuffleDefaultsKey)
-        // 首页布局偏好：无配置时用默认布局，读取时自动归一化并补齐新模块。
-        self.homeLayout = HomeLayoutStore.load(from: defaults)
         // 最近播放按「serverID:trackID」组合键存储；旧格式（纯 trackID，无冒号）无法归属服务器，直接丢弃。
         let storedRecent = defaults.array(forKey: Self.recentlyPlayedDefaultsKey) as? [String] ?? []
         let legacyHistoryServerID = defaults.string(forKey: Self.lastActiveServerKey).map(ServerID.init(rawValue:))
@@ -461,8 +492,6 @@ public final class AuralisAppModel: ObservableObject {
         let storedAdded = defaults.dictionary(forKey: Self.libraryAddedDefaultsKey) as? [String: Double] ?? [:]
         let legacyAddedServerID = legacyHistoryServerID
         self.libraryAddedTracker = LibraryAddedTracker(stored: storedAdded, legacyServerID: legacyAddedServerID)
-        // 下载管理器：init 期不捕获 self，回调在下方 Task（init 完成）中注入。
-        self.downloadManager = DownloadManager(store: cacheStore)
         self.artworkStore.onArtworkLoaded = { [weak self] key, data in
             guard let self, key == self.currentTrack.artworkKey else { return }
             self.mediaIntegration.artworkLoaded(
@@ -481,32 +510,21 @@ public final class AuralisAppModel: ObservableObject {
         activity.requiredUserInfoKeys = ["serverID", "currentTrackID", "queueTrackIDs", "position"]
         handoffActivity = activity
         startMediaIntegration()
+        // 兼容现有观察模型的视图：领域 Store 在变更前转发一次全局失效通知。
+        // 新视图可以直接观察具体 Store，逐步缩小重绘范围；这里不复制任何状态。
+        homeStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &childStoreSubscriptions)
+        libraryStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &childStoreSubscriptions)
+        serverStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &childStoreSubscriptions)
+        downloadStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &childStoreSubscriptions)
         Task { [self] in
-            // init 完成后注入下载状态回调。
-            self.downloadManager.onStateChange = { [weak self] trackID, status, progress in
-                Task { @MainActor in
-                    guard let self else { return }
-                    // DownloadManager 回调仍使用裸 TrackID；经 download() 登记的映射
-                    // 还原成 GlobalID（P0-1 多服务器隔离）。
-                    guard let globalID = self.downloadGlobalIDs[trackID] else { return }
-                    switch status {
-                    case .downloading:
-                        self.downloadingTrackIDs.insert(globalID)
-                        self.downloadingProgress[trackID] = progress
-                    case .downloaded:
-                        self.downloadingTrackIDs.remove(globalID)
-                        self.downloadingProgress[trackID] = nil
-                        self.downloadedTrackIDs.insert(globalID)
-                        self.downloadGlobalIDs[trackID] = nil
-                    case .failed, .notDownloaded:
-                        self.downloadingTrackIDs.remove(globalID)
-                        self.downloadingProgress[trackID] = nil
-                        self.downloadGlobalIDs[trackID] = nil
-                    case .queued:
-                        break
-                    }
-                }
-            }
             await engine.setVolume(volume)
             await engine.setRate(playbackRate)
             await engine.configureReplayGain(replayGainSettings)
@@ -531,9 +549,7 @@ public final class AuralisAppModel: ObservableObject {
                 await cacheStore.migrateLegacyEntries(to: serverID)
                 await lyricsCache.migrateLegacyEntries(to: serverID)
             }
-            downloadedTrackIDs = Set(await cacheStore.cachedTrackIDs().map {
-                GlobalID(serverID: $0.serverID, remoteID: $0.trackID.rawValue)
-            })
+            await downloadStore.restoreCachedIDs()
         }
     }
 
@@ -1326,7 +1342,7 @@ public final class AuralisAppModel: ObservableObject {
     public func regenerateRandomMusic() {
         let tracks = catalog.tracks
         guard !tracks.isEmpty else { return }
-        randomTracks = Array(tracks.shuffled().prefix(18))
+        homeStore.regenerateRandom(from: tracks)
     }
 
 
@@ -1337,80 +1353,31 @@ public final class AuralisAppModel: ObservableObject {
     /// 这里只记录用户开关，数据为空时由 HomeView 暂不渲染但保持本配置开启。
     public func setHomeModuleVisible(_ moduleID: String, isVisible: Bool) {
         guard HomeModuleRegistry.module(forID: moduleID) != nil else { return }
-        var layout = homeLayout
-        func update(in group: HomeModuleGroup, keyPath: WritableKeyPath<HomeLayoutPreference, [HomeModulePreference]>) {
-            var list = layout[keyPath: keyPath]
-            guard let index = list.firstIndex(where: { $0.moduleID == moduleID }) else { return }
-            list[index].isVisible = isVisible
-            layout[keyPath: keyPath] = list
-        }
-        if HomeModuleRegistry.modules(in: .quickEntry).contains(where: { $0.id.rawValue == moduleID }) {
-            update(in: .quickEntry, keyPath: \.quickEntries)
-        } else {
-            update(in: .content, keyPath: \.contentModules)
-        }
-        homeLayout = layout
-        persistHomeLayout()
+        homeStore.setModuleVisible(moduleID, isVisible: isVisible)
     }
 
     /// 拖动排序：把分组内 fromOffsets 位置的模块移动到 toOffset。顺序立即生效并持久化。
     /// 语义与 SwiftUI List.onMove 的 Array.move(fromOffsets:toOffset:) 一致：
     /// 目标下标按「先移除再插入」调整，避免 onMove 与自实现位移不一致导致排序错乱。
     public func moveHomeModule(in group: HomeModuleGroup, fromOffsets: IndexSet, toOffset: Int) {
-        var layout = homeLayout
-        switch group {
-        case .quickEntry:
-            layout.quickEntries = Self.reordered(layout.quickEntries, fromOffsets: fromOffsets, toOffset: toOffset)
-        case .content:
-            layout.contentModules = Self.reordered(layout.contentModules, fromOffsets: fromOffsets, toOffset: toOffset)
-        }
-        homeLayout = layout
-        persistHomeLayout()
-    }
-
-    /// 复刻 Array.move(fromOffsets:toOffset:) 的位移语义（不依赖 SwiftUI 扩展，
-    /// 模型层可独立测试）：倒序移除被移动元素，再按调整后的目标下标整体插回。
-    private static func reordered<T>(_ array: [T], fromOffsets: IndexSet, toOffset: Int) -> [T] {
-        guard !fromOffsets.isEmpty else { return array }
-        let moving = array.indices.filter { fromOffsets.contains($0) }
-        let target: Int
-        if let first = moving.first, toOffset > first {
-            target = toOffset - moving.count
-        } else {
-            target = toOffset
-        }
-        var result = array
-        let removed: [T] = moving.reversed().map { result.remove(at: $0) }
-        result.insert(contentsOf: removed.reversed(), at: min(target, result.count))
-        return result
+        homeStore.moveModule(in: group, fromOffsets: fromOffsets, toOffset: toOffset)
     }
 
     /// 编辑页整组写回首页布局（本地数组为权威，排序与开关一次提交）。
     /// 编辑页的 List 以本地 @State 数组为数据源，拖动/开关后整组提交，
     /// 避免 onMove 期间增量写 @Published 与 SwiftUI 集合视图移动事务竞争导致的崩溃。
     public func replaceHomeLayout(quickEntries: [HomeModulePreference], contentModules: [HomeModulePreference]) {
-        homeLayout = HomeLayoutPreference(quickEntries: quickEntries, contentModules: contentModules)
-        persistHomeLayout()
+        homeStore.replaceLayout(quickEntries: quickEntries, contentModules: contentModules)
     }
 
     /// 恢复默认布局：仅重置首页布局偏好（HomeLayoutStore 键），不删任何数据 / 缓存 / 播放记录。
     public func resetHomeLayout() {
-        homeLayout = HomeModuleRegistry.defaultPreference()
-        persistHomeLayout()
-    }
-
-    private func persistHomeLayout() {
-        HomeLayoutStore.save(homeLayout, to: defaults)
+        homeStore.resetLayout()
     }
 
     /// 重新采样「收藏里随便听」：只在本机收藏里本地随机，不发网络请求、不重新下载服务器资料。
     public func regenerateFavoriteRandomMusic() {
-        homeFavoriteRandomTracks = favoriteRandomSample()
-    }
-
-    /// 从真实收藏随机采样 18 首。
-    private func favoriteRandomSample() -> [Track] {
-        Array(catalog.tracks.filter(\.isFavorite).shuffled().prefix(18))
+        homeStore.regenerateFavoriteRandom(from: catalog.tracks)
     }
 
     /// 清除播放错误（供 UI 在展示后调用）。
@@ -1500,7 +1467,10 @@ public final class AuralisAppModel: ObservableObject {
     /// 由 AgentRunner 的索引任务约束保证不会在中途把自然语言回复误报为完成。
     public func startOrContinueRecommendationIndexV2() {
         selectedSection = .assistant
-        agentCoordinator.send("开始并一次性完成推荐索引 V2：先读取状态，持续分批分类并写回，直到待分类为 0。")
+        agentCoordinator.send(
+            "开始并一次性完成推荐索引 V2：先读取状态，持续分批分类并写回，直到待分类为 0。",
+            intent: .libraryManagement
+        )
     }
 
     /// 助手是否正在运行（输入框按钮在「发送 / 停止」之间切换）。
@@ -1667,24 +1637,12 @@ public final class AuralisAppModel: ObservableObject {
     /// - 收藏里随便听：从真实收藏随机采样 18 首，刷新时采样一次，换一批时重新采样（不发网络请求）。
     /// - 常听艺术家 / 常听专辑：按真实播放次数聚合统计，仅包含播放过的。
     private func refreshHomeSnapshots() {
-        let snapshot = HomeSnapshotBuilder.build(
+        homeStore.refresh(
             catalog: catalog,
             playCounts: playCounts,
             recentIDs: recentlyPlayedIDs,
             addedDates: libraryAddedTracker.dates
         )
-        homeFavoriteTracks = snapshot.favorites
-        homeMostPlayedTracks = snapshot.mostPlayed
-        homeRecentlyPlayedTracks = snapshot.recentlyPlayed
-        homeRecentlyAddedTracks = snapshot.recentlyAdded
-        homeLongUnplayedTracks = snapshot.longUnplayed
-        homeNeverPlayedTracks = snapshot.neverPlayed
-        homeRecentlyAdded30DaysTracks = snapshot.recentlyAdded30Days
-        homeFavoriteRandomTracks = snapshot.favoriteRandom
-        homeTopArtists = snapshot.topArtists
-        homeTopAlbums = snapshot.topAlbums
-        homeTopArtistPlayCounts = snapshot.artistPlayCounts
-        homeTopAlbumPlayCounts = snapshot.albumPlayCounts
     }
 
     /// 按流派筛选：返回属于指定流派的曲目（名称大小写不敏感）。
@@ -1735,11 +1693,6 @@ public final class AuralisAppModel: ObservableObject {
 
     // MARK: - Downloads
 
-    /// Track 的 GlobalID（serverID:trackID），下载/缓存状态一律用它隔离（P0-1）。
-    private func globalID(for track: Track) -> GlobalID {
-        GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
-    }
-
     /// Track 的 TrackCacheStore 组合键（等价于 GlobalID.description）。
     private func cacheID(for track: Track) -> TrackCacheStore.TrackCacheID {
         TrackCacheStore.TrackCacheID(serverID: track.serverID, trackID: track.id)
@@ -1747,47 +1700,31 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 已下载到本地的曲目（首页「下载」快捷入口与下载浏览页的数据源）。
     public var downloadedTracks: [Track] {
-        catalog.tracks.filter { downloadedTrackIDs.contains(globalID(for: $0)) }
+        catalog.tracks.filter { downloadStore.isDownloaded($0) }
     }
 
-    public func isDownloaded(_ track: Track) -> Bool { downloadedTrackIDs.contains(globalID(for: track)) }
+    public func isDownloaded(_ track: Track) -> Bool { downloadStore.isDownloaded(track) }
 
     /// 当前本地缓存中的全部曲目 ID（供缓存维护 / 陈旧缓存检测）。
     public func allCachedTrackIDs() async -> Set<GlobalID> {
-        Set(await cacheStore.cachedTrackIDs().map {
-            GlobalID(serverID: $0.serverID, remoteID: $0.trackID.rawValue)
-        })
+        await downloadStore.allCachedTrackIDs()
     }
-    public func isDownloading(_ track: Track) -> Bool { downloadingTrackIDs.contains(globalID(for: track)) }
+    public func isDownloading(_ track: Track) -> Bool { downloadStore.isDownloading(track) }
 
     /// 下载歌曲到本地缓存；完成后该歌曲优先本地播放。
     public func download(_ track: Track) {
-        let globalID = globalID(for: track)
-        guard !downloadedTrackIDs.contains(globalID), !downloadingTrackIDs.contains(globalID) else { return }
-        Task { @MainActor in
-            guard let url = await self.connector.downloadURL(trackID: track.id) else { return }
-            // 同一裸 trackID 已有下载任务（可能属于另一台服务器）时不覆盖映射，
-            // 避免完成回调把下载结果记到错误服务器；DownloadManager 内部按裸 trackID 串行化。
-            guard !self.downloadManager.isDownloading(track.id) else { return }
-            self.downloadGlobalIDs[track.id] = globalID
-            self.downloadingTrackIDs.insert(globalID)
-            self.downloadingProgress[track.id] = 0
-            self.downloadManager.start(trackID: track.id, url: url, codec: track.sourceInfo.codec, serverID: track.serverID)
-        }
+        downloadStore.download(track)
     }
 
     /// 后台下载会话事件转发（系统在后台恢复下载后调用）。
     public func handleBackgroundDownloadEvents(identifier: String, completion: @escaping () -> Void) {
         // delegate 队列是主队列，completion 在 urlSessionDidFinishEvents 时直接调用。
-        downloadManager.handleEventsForBackgroundURLSession(identifier: identifier, completion: completion)
+        downloadStore.handleBackgroundEvents(identifier: identifier, completion: completion)
     }
 
     /// 取消正在进行的下载。
     public func cancelDownload(_ track: Track) {
-        downloadManager.cancel(track.id)
-        downloadingTrackIDs.remove(globalID(for: track))
-        downloadingProgress[track.id] = nil
-        downloadGlobalIDs[track.id] = nil
+        downloadStore.cancel(track)
     }
 
     /// 删除本地缓存文件。
@@ -1801,10 +1738,7 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     public func removeDownload(_ track: Track) {
-        Task {
-            try? await cacheStore.remove(for: cacheID(for: track))
-            downloadedTrackIDs.remove(globalID(for: track))
-        }
+        Task { await downloadStore.remove(track) }
     }
 
     // MARK: - Playlists
@@ -2185,7 +2119,7 @@ public final class AuralisAppModel: ObservableObject {
         playlistIDsNeedingContentRefresh = []
         lyricsInFlight = []
         lyricsUnavailable = []
-        downloadedTrackIDs = []
+        downloadStore.clearVisibleState()
         currentTrack = Track(
             id: "placeholder", serverID: "local",
             albumID: "placeholder", artistID: "placeholder",
@@ -2864,9 +2798,7 @@ public final class AuralisAppModel: ObservableObject {
             guard let self else { return }
             await self.cacheStore.migrateLegacyEntries(to: migrationServerID)
             await self.lyricsCache.migrateLegacyEntries(to: migrationServerID)
-            self.downloadedTrackIDs = Set(await self.cacheStore.cachedTrackIDs().map {
-                GlobalID(serverID: $0.serverID, remoteID: $0.trackID.rawValue)
-            })
+            await self.downloadStore.restoreCachedIDs()
         }
         catalog = LibraryCatalog(
             account: result.account,
@@ -2939,7 +2871,7 @@ public final class AuralisAppModel: ObservableObject {
         reconcileLibraryAddedDates(tracks: tracks, serverID: result.account.id)
 
         // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
-        randomTracks = Array(tracks.shuffled().prefix(18))
+        homeStore.regenerateRandom(from: tracks)
         // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
         refreshHomeSnapshots()
 
@@ -3334,13 +3266,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 清空已下载的音频缓存。
     public func clearAudioCache() async {
-        for globalID in downloadedTrackIDs {
-            try? await cacheStore.remove(for: TrackCacheStore.TrackCacheID(
-                serverID: globalID.serverID,
-                trackID: TrackID(rawValue: globalID.remoteID)
-            ))
-        }
-        downloadedTrackIDs = []
+        await downloadStore.removeAll()
     }
 
 }
@@ -3448,7 +3374,7 @@ public enum InspectorSection: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// 浏览目标：专辑、艺术家、单个歌单、歌单总览、收藏与最常听、流派和 AI 分类。
-public enum BrowseDestination: Identifiable {
+public enum BrowseDestination: Identifiable, Hashable, Sendable {
     case album(Album)
     case artist(Artist)
     case playlist(Playlist)

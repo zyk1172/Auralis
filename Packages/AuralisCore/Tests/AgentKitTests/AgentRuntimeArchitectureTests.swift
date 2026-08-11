@@ -1,6 +1,8 @@
 import AIKit
 @testable import AgentKit
+import Domain
 import Foundation
+import LocalCatalog
 import Testing
 
 @Suite("AgentRuntime architecture")
@@ -43,7 +45,7 @@ struct AgentRuntimeArchitectureTests {
         let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
         #expect(policy.authorizes(AgentToolRegistry.descriptor(for: "music_appreciate")!))
         #expect(!policy.authorizes(AgentToolRegistry.descriptor(for: "queue_replace")!))
-        #expect(policy.budget.maxOutputTokens == 12_288)
+        #expect(policy.budget.maxOutputTokens == 16_000)
     }
 
     @Test func runtimeRejectsToolBeyondScope() async {
@@ -105,17 +107,24 @@ struct AgentRuntimeArchitectureTests {
         #expect(low.confidence == 0)
     }
 
-    @Test func conservativeCapabilitiesSeparateContextAndOutput() {
+    @Test func configuredCapabilitiesUse256KContextAnd16KOutput() {
         let capabilities = ModelCapabilities.conservative
-        #expect(capabilities.maxContextTokens == 32_768)
-        #expect(capabilities.maxOutputTokens == 8_192)
+        #expect(capabilities.maxContextTokens == 256_000)
+        #expect(capabilities.maxOutputTokens == 16_000)
         #expect(capabilities.maxContextTokens > capabilities.maxOutputTokens)
     }
 
     @Test func contextBudgetReservesOutputAndProtocolSpace() {
-        let capabilities = ModelCapabilities(maxContextTokens: 32_768, maxOutputTokens: 8_192)
-        let budget = ContextManager.inputBudget(capabilities: capabilities, requestedInputBudget: 100_000, reservedOutputTokens: 8_192)
-        #expect(budget == 23_552)
+        let capabilities = ModelCapabilities(maxContextTokens: 256_000, maxOutputTokens: 16_000)
+        let budget = ContextManager.inputBudget(capabilities: capabilities, requestedInputBudget: 256_000, reservedOutputTokens: 16_000)
+        #expect(budget == 238_976)
+    }
+
+    @Test func cumulativeUsageDoesNotTripPerRequestTokenLimits() {
+        var state = AgentTaskState(intent: .conversation, goal: "long task")
+        state.progress.inputTokens = 900_000
+        state.progress.outputTokens = 80_000
+        #expect(state.budgetViolation(policy: .policy(for: .conversation)) == nil)
     }
 
     @Test func credentialsNeverEnterContext() {
@@ -235,5 +244,179 @@ struct AgentRuntimeArchitectureTests {
         #expect(redacted["token"] == "<redacted>")
         #expect(redacted["baseURL"] == "<redacted>")
         #expect(redacted["query"] == "music")
+    }
+
+    @Test func explicitIntentOverridesTextClassifier() {
+        let policy = AgentTaskPolicyResolver.resolve(
+            text: "播放并删除服务器",
+            explicitIntent: .musicAppreciation
+        )
+        #expect(policy.intent == .musicAppreciation)
+        #expect(!policy.authorizes(AgentToolRegistry.descriptor(for: "removeServer")!))
+    }
+
+    @Test func fullIndexRequestUsesDeterministicCompletion() {
+        let policy = AgentTaskPolicyResolver.resolve(text: "一次性完成全部推荐索引 V2")
+        #expect(policy.intent == .libraryManagement)
+        #expect(policy.completion == .indexPendingCountIsZero)
+    }
+
+    @Test func indexStatusQuestionDoesNotStartFullBuild() {
+        let policy = AgentTaskPolicyResolver.resolve(text: "查看推荐索引 V2 状态")
+        #expect(policy.completion == .verifiedToolResult)
+    }
+
+    @Test func descriptorDeclaresCacheAndEvidencePolicy() {
+        let descriptor = AgentToolRegistry.descriptor(for: "library_search")!
+        #expect(descriptor.cachePolicy == .task)
+        #expect(descriptor.evidencePolicy == .localCatalog)
+        #expect(descriptor.sideEffectPolicy == .none)
+    }
+
+    @Test func queueDescriptorDeclaresQueueSideEffect() {
+        let descriptor = AgentToolRegistry.descriptor(for: "queue_replace")!
+        #expect(descriptor.cachePolicy == .none)
+        #expect(descriptor.sideEffectPolicy == .queue)
+    }
+
+    @Test func taskReducerMergesFactsAndEvidence() {
+        var state = AgentTaskState(intent: .librarySearch, goal: "find")
+        let descriptor = AgentToolRegistry.descriptor(for: "library_index_v2_status")!
+        let call = ToolCall(name: descriptor.name)
+        let result = ToolResult(
+            call: call,
+            permission: .readOnly,
+            success: true,
+            summary: "pending 4",
+            facts: ["recommendation.index.pending": "4"]
+        )
+        let changed = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &state)
+        #expect(changed)
+        #expect(state.facts["recommendation.index.pending"] == "4")
+        #expect(state.evidence.count == 1)
+        #expect(state.evidence[0].source == .localCatalog)
+    }
+
+    @Test func failedToolDoesNotCreateEvidence() {
+        var state = AgentTaskState(intent: .librarySearch, goal: "find")
+        let descriptor = AgentToolRegistry.descriptor(for: "library_search")!
+        let result = ToolResult(call: .init(name: descriptor.name), permission: .readOnly, success: false, summary: "offline")
+        let changed = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &state)
+        #expect(!changed)
+        #expect(state.evidence.isEmpty)
+        #expect(state.progress.noProgressRounds == 1)
+    }
+
+    @Test func queueCompletionRequiresRealMutationFact() {
+        var state = AgentTaskState(intent: .queueManagement, goal: "replace")
+        let policy = AgentTaskPolicy.policy(for: .queueManagement)
+        let first = AgentCompletionEvaluator.evaluateModelAnswer("已经替换", state: &state, policy: policy, repairAttempts: 0)
+        #expect(first != .accept)
+        state.facts["sideEffect.queue"] = "success"
+        let second = AgentCompletionEvaluator.evaluateModelAnswer("已经替换", state: &state, policy: policy, repairAttempts: 0)
+        #expect(second == .accept)
+    }
+
+    @Test func indexCompletionReadsStructuredPendingFact() {
+        var state = AgentTaskState(intent: .libraryManagement, goal: "index")
+        let policy = AgentTaskPolicy(
+            intent: .libraryManagement,
+            scopes: [.catalogRead, .annotationWrite],
+            allowedToolGroups: [.catalog, .annotation],
+            allowedPermissions: [.readOnly, .reversible],
+            completion: .indexPendingCountIsZero
+        )
+        state.facts["recommendation.index.pending"] = "0"
+        let decision = AgentCompletionEvaluator.evaluateModelAnswer("完成", state: &state, policy: policy, repairAttempts: 0)
+        #expect(decision == .accept)
+        #expect(state.completionState == .satisfied)
+    }
+
+    @Test func appreciationRequiresResolvedEvidenceBoundaries() {
+        var state = AgentTaskState(intent: .musicAppreciation, goal: "appreciate")
+        let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
+        state.facts["appreciation.metadata"] = "available"
+        let incomplete = AgentCompletionEvaluator.evaluateModelAnswer("answer", state: &state, policy: policy, repairAttempts: 0)
+        #expect(incomplete != .accept)
+        state.facts["appreciation.lyrics"] = "unavailable"
+        state.facts["appreciation.community"] = "unavailable"
+        let complete = AgentCompletionEvaluator.evaluateModelAnswer(
+            """
+            ## 《Song》鉴赏
+            ### 【已核验事实】
+            metadata
+            ### 【模型分析】
+            listening analysis
+            ### 【我的私人数据】
+            1 play
+            ### 【大众评价】
+            暂无可核验的大众评价数据。
+            """,
+            state: &state,
+            policy: policy,
+            repairAttempts: 0
+        )
+        #expect(complete == .accept)
+    }
+
+    @Test func appreciationRejectsUnsupportedCommunityConsensus() {
+        var state = AgentTaskState(intent: .musicAppreciation, goal: "appreciate")
+        state.facts["appreciation.metadata"] = "available"
+        state.facts["appreciation.lyrics"] = "unavailable"
+        state.facts["appreciation.community"] = "unavailable"
+        let decision = AgentCompletionEvaluator.evaluateModelAnswer(
+            "【已核验事实】x【模型分析】x【我的私人数据】x【大众评价】大众普遍认为它广受好评。",
+            state: &state,
+            policy: .policy(for: .musicAppreciation),
+            repairAttempts: 0
+        )
+        #expect(decision != .accept)
+    }
+
+    @Test func modelInferenceAloneCannotSatisfyVerifiedToolResult() {
+        var state = AgentTaskState(intent: .librarySearch, goal: "find")
+        state.evidence = [.init(source: .modelInference, provenance: "model", confidence: 0.5, claim: "maybe")]
+        let decision = AgentCompletionEvaluator.evaluateModelAnswer(
+            "found",
+            state: &state,
+            policy: .policy(for: .librarySearch),
+            repairAttempts: 0
+        )
+        #expect(decision != .accept)
+    }
+
+    @Test func explicitQueueCountIsInferred() {
+        #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: "找 22 首适合通勤的歌") == 22)
+    }
+
+    @Test func unspecifiedQueueCountIsNotInvented() {
+        #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: "推荐几首适合通勤的歌") == nil)
+    }
+
+    @Test func workingSetStopsAtRequestedCountOnly() {
+        var state = AgentTaskWorkingSet(targetQueueCount: 2)
+        state.noteQueued([
+            .init(serverID: .init(rawValue: "s"), remoteID: "1"),
+            .init(serverID: .init(rawValue: "s"), remoteID: "2"),
+        ])
+        #expect(state.stopSearching)
+    }
+
+    @Test func workingSetWithoutTargetDoesNotUseLegacyTwentyLimit() {
+        var state = AgentTaskWorkingSet()
+        let ids = (0..<30).map { GlobalID(serverID: .init(rawValue: "s"), remoteID: "\($0)") }
+        state.noteQueued(ids)
+        #expect(!state.stopSearching)
+    }
+
+    @Test func redactorHandlesAuthorizationAndCookieVariants() {
+        let redacted = AgentSensitiveDataRedactor.arguments([
+            "Authorization": "Bearer abc",
+            "session_cookie": "secret",
+            "kind": "album",
+        ])
+        #expect(redacted["Authorization"] == "<redacted>")
+        #expect(redacted["session_cookie"] == "<redacted>")
+        #expect(redacted["kind"] == "album")
     }
 }

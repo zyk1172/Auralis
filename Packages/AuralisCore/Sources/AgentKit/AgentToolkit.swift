@@ -7,7 +7,7 @@ import LocalCatalog
 /// 职责：参数校验、Track ID 真实性校验、按权限分级执行本地操作，返回结构化结果。
 /// 权限确认由 Runner 在调用前裁决；本类只负责“已获授权”的执行。
 public struct AgentToolkit {
-    /// 执行单个工具调用。
+    /// 兼容入口。所有调用都转交注册表的唯一执行路径；这里不再自行查表或分流。
     /// - Parameters:
     ///   - call: 工具调用（名称 + 字符串参数）。
     ///   - bridge: 播放/服务器/标注桥接。
@@ -17,40 +17,36 @@ public struct AgentToolkit {
         _ call: ToolCall,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
-        serverID: ServerID?
+        serverID: ServerID?,
+        externalMusicService: (any AgentExternalMusicService)? = nil
     ) async -> ToolResult {
-        guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
-            return ToolResult(call: call, permission: .readOnly, success: false, summary: "未知工具：\(call.name)")
-        }
-
-        do {
-            return try await dispatch(call, descriptor: descriptor, bridge: bridge, catalog: catalog, serverID: serverID)
-        } catch {
-            return ToolResult(call: call, permission: descriptor.permission, success: false,
-                              summary: "执行失败：\(error.localizedDescription)")
-        }
+        await AgentToolRegistry.execute(
+            call,
+            bridge: bridge,
+            catalog: catalog,
+            serverID: serverID,
+            systemService: nil,
+            externalMusicService: externalMusicService
+        )
     }
 
-    /// 统一执行入口（v2）：系统服务工具走 SystemToolExecutor，其余走原有执行路径。
-    /// 未提供 systemService 时，系统服务工具返回「系统服务不可用」而非伪造成功。
+    /// 保留给既有调用方的兼容别名；与 `execute` 最终进入同一个注册表执行路径。
     public static func executeV2(
         _ call: ToolCall,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         serverID: ServerID?,
-        systemService: (any AgentSystemService)?
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)? = nil
     ) async -> ToolResult {
-        guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
-            return ToolResult(call: call, permission: .readOnly, success: false, summary: "未知工具：\(call.name)")
-        }
-        if SystemToolNames.contains(call.name) {
-            guard let systemService else {
-                return ToolResult(call: call, permission: descriptor.permission, success: false,
-                                  summary: "系统服务不可用：\(call.name)")
-            }
-            return await SystemToolExecutor.execute(call, descriptor: descriptor, systemService: systemService)
-        }
-        return await execute(call, bridge: bridge, catalog: catalog, serverID: serverID)
+        await AgentToolRegistry.execute(
+            call,
+            bridge: bridge,
+            catalog: catalog,
+            serverID: serverID,
+            systemService: systemService,
+            externalMusicService: externalMusicService
+        )
     }
 
     /// 仅供 AgentToolRegistry 调用的已解析执行入口，避免再次查表或再次分流。
@@ -59,10 +55,18 @@ public struct AgentToolkit {
         descriptor: ToolDescriptor,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
-        serverID: ServerID?
+        serverID: ServerID?,
+        externalMusicService: (any AgentExternalMusicService)?
     ) async -> ToolResult {
         do {
-            return try await dispatch(call, descriptor: descriptor, bridge: bridge, catalog: catalog, serverID: serverID)
+            return try await dispatch(
+                call,
+                descriptor: descriptor,
+                bridge: bridge,
+                catalog: catalog,
+                serverID: serverID,
+                externalMusicService: externalMusicService
+            )
         } catch {
             return ToolResult(
                 call: call,
@@ -80,8 +84,17 @@ public struct AgentToolkit {
         descriptor: ToolDescriptor,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
-        serverID: ServerID?
+        serverID: ServerID?,
+        externalMusicService: (any AgentExternalMusicService)?
     ) async throws -> ToolResult {
+        if RecommendationIndexToolService.handles(call.name) {
+            return try await RecommendationIndexToolService.execute(
+                call,
+                descriptor: descriptor,
+                catalog: catalog,
+                serverID: serverID
+            )
+        }
         switch call.name {
         // MARK: Catalog reads
         case "searchTracks":
@@ -508,8 +521,47 @@ public struct AgentToolkit {
             let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
             let popularity = (try? await catalog.popularityScores(serverID: track.serverID))?[gid]
             let downloaded = (try? await catalog.getDownloadedTracks(serverID: track.serverID).contains { $0.globalID == gid }) ?? false
-            let text = Self.appreciationBrief(track: track, globalID: gid, popularity: popularity, downloaded: downloaded)
-            return .ok(call, descriptor, "已准备《\(track.title)》的鉴赏素材", .text(text))
+            let external = await externalMusicService?.enrich(track: track, globalID: gid)
+            let text = Self.appreciationBrief(
+                track: track,
+                globalID: gid,
+                popularity: popularity,
+                downloaded: downloaded,
+                external: external
+            )
+            let hasCommunityEvidence = external?.metrics.hasCommunityEvidence == true
+            var evidence = [
+                AgentEvidence(
+                    source: .localCatalog,
+                    provenance: "tool:music_appreciate",
+                    confidence: 1,
+                    entityID: gid.description,
+                    claim: "已从本地目录核验《\(track.title)》的曲目元数据。"
+                ),
+                AgentEvidence(
+                    source: .derivedLocalStatistic,
+                    provenance: "localCatalog:play-history-and-user-state",
+                    confidence: 1,
+                    entityID: gid.description,
+                    claim: "本地私人数据：播放 \(popularity?.playCount ?? 0) 次，\(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { "，个人评分 \($0)/5" } ?? "")."
+                ),
+            ]
+            if let external {
+                evidence.append(contentsOf: Self.communityEvidence(from: external))
+            }
+            return .ok(
+                call,
+                descriptor,
+                "已准备《\(track.title)》的鉴赏素材",
+                .text(text),
+                facts: [
+                    "appreciation.metadata": "available",
+                    "appreciation.lyrics": "unavailable",
+                    "appreciation.privateData": "available",
+                    "appreciation.community": hasCommunityEvidence ? "available" : "unavailable",
+                ],
+                evidence: evidence
+            )
         case "library_get_album":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
             guard let album = try await catalog.getAlbum(gid) else { return .fail(call, descriptor, "专辑不存在") }
@@ -573,64 +625,6 @@ public struct AgentToolkit {
             }
             let cards = hits.prefix(limit).map(TrackCard.from)
             return .ok(call, descriptor, "「\(GenreLocalization.displayName(for: genre))」\(hits.count) 首", .trackCards(cards))
-        case "library_index_v2_status":
-            let status = try await catalog.recommendationIndexV2Status(serverID: serverID)
-            let text = "推荐索引 V2：共 \(status.totalTracks) 首；已完成 \(status.indexedTracks) 首；待分类 \(status.pendingTracks) 首；规则版本 \(status.rulesVersion)。"
-            return .ok(call, descriptor, text, .text(text))
-        case "library_index_v2_read":
-            let limit = min(max((try? intParam(call, "limit")) ?? 50, 1), 100)
-            let dimension = call.arguments["dimension"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = call.arguments["value"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let entries = try await catalog.readRecommendationIndexV2(
-                serverID: serverID,
-                dimension: dimension?.isEmpty == true ? nil : dimension,
-                value: value?.isEmpty == true ? nil : value,
-                limit: limit
-            )
-            guard !entries.isEmpty else {
-                let filter = [dimension, value].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " / ")
-                return .ok(call, descriptor, "没有符合条件的已索引条目", .text(filter.isEmpty ? "当前没有可读取的已索引条目。" : "没有匹配「\(filter)」的已索引条目。"))
-            }
-            let data = try JSONEncoder().encode(entries)
-            let payload = String(decoding: data, as: UTF8.self)
-            return .ok(call, descriptor, "已读取 \(entries.count) 条 V2 索引记录", .text("以下是已完成的 V2 索引记录（含完整分类标签）：\n\(payload)"))
-        case "library_index_v2_next_batch":
-            let limit = min(max((try? intParam(call, "limit")) ?? 80, 1), 100)
-            let batch = try await catalog.nextRecommendationIndexV2Batch(serverID: serverID, limit: limit)
-            guard !batch.tracks.isEmpty else {
-                return .ok(call, descriptor, "推荐索引 V2 已完成，无待分类歌曲", .text("pending=0"))
-            }
-            let data = try JSONEncoder().encode(batch.tracks)
-            let payload = String(decoding: data, as: UTF8.self)
-            let text = "待分类总数 \(batch.pendingTracks)，本批 \(batch.tracks.count) 首。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，并把 itemsJSON 传为严格 JSON 数组字符串，数组必须恰好覆盖本批每个 id 一次：\n\(payload)"
-            return .ok(call, descriptor, "V2 待分类 \(batch.pendingTracks)，已提供本批 \(batch.tracks.count) 首", .text(text))
-        case "library_index_v2_write_batch":
-            let raw = try require(call, "itemsJSON")
-            let cleaned = raw
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "```json", with: "")
-                .replacingOccurrences(of: "```", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let data = cleaned.data(using: .utf8),
-                  let items = try? JSONDecoder().decode([RecommendationIndexV2Classification].self, from: data)
-            else {
-                throw AgentToolError.invalidParameter("itemsJSON", "必须是 JSON 数组，且每项包含 id/moods/scenes/energy/tempo/acousticness/danceability/vocals/textures/styles/confidence")
-            }
-            let written = try await catalog.writeRecommendationIndexV2(items, serverID: serverID)
-            let status = try await catalog.recommendationIndexV2Status(serverID: serverID)
-            guard written > 0 else {
-                return .fail(call, descriptor, "没有可写入的分类：请只提交上一批真实 ID、规范标签；energy 为 1-10，其余数值维度为 1-5")
-            }
-            let text: String
-            if status.pendingTracks > 0 {
-                // 将下一批直接随写入结果回灌，省掉「模型先调 next_batch，再等工具返回」的一整轮。
-                let nextBatch = try await catalog.nextRecommendationIndexV2Batch(serverID: serverID, limit: 80)
-                let payload = String(decoding: try JSONEncoder().encode(nextBatch.tracks), as: UTF8.self)
-                text = "已写入 \(written) 首。尚待分类 \(status.pendingTracks) 首。下一批 \(nextBatch.tracks.count) 首已直接提供；不要调用 library_index_v2_next_batch，也不要输出自然语言。请立刻只根据下列元数据生成严格 JSON 数组，并调用 library_index_v2_write_batch(itemsJSON=该数组)：\n\(payload)"
-            } else {
-                text = "已写入 \(written) 首。尚待分类 0 首。索引 V2 已完成。"
-            }
-            return .ok(call, descriptor, "V2 已写入 \(written) 首，待分类 \(status.pendingTracks) 首", .text(text))
         case "library_get_catalog_index":
             // 曲库分类索引：让模型快速了解曲库构成（歌手/专辑/流派/语言/年代），只含元数据。
             let category = (try? require(call, "category"))?.lowercased() ?? "overview"
@@ -1136,7 +1130,8 @@ public struct AgentToolkit {
         track: Track,
         globalID: GlobalID,
         popularity: TrackPopularity?,
-        downloaded: Bool
+        downloaded: Bool,
+        external: AgentExternalMusicResult?
     ) -> String {
         var audio: [String] = []
         if let codec = track.sourceInfo.normalizedCodec { audio.append("编码 \(codec)") }
@@ -1145,18 +1140,74 @@ public struct AgentToolkit {
         if let bitRate = track.sourceInfo.bitRate, bitRate > 0 { audio.append("\(bitRate) bps") }
         if let channels = track.sourceInfo.channelCount, channels > 0 { audio.append("\(channels) 声道") }
 
-        let lines = [
-            "鉴赏事实底稿（只可把以下字段当作已核验事实）：",
+        var lines = [
+            "【已核验事实】",
             "- 曲目：\(track.title) · \(track.artistName) · 《\(track.albumTitle)》",
             "- 曲目 ID：\(globalID.description)",
             "- 时长：\(Int(track.duration)) 秒\(track.year.map { " · \($0) 年" } ?? "")",
             "- 流派：\(track.genres.isEmpty ? "未标注" : track.genres.joined(separator: " / "))\(track.language.map { " · \($0)" } ?? "")",
             "- 音源：\(audio.isEmpty ? "服务器未提供编码/规格" : audio.joined(separator: " · "))\(downloaded ? " · 已离线" : "")",
-            "- 本地听众反馈：播放 \(popularity?.playCount ?? 0) 次 · \(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { " · 个人评分 \($0)/5" } ?? "")",
-            "- 大众评价边界：本工具不访问实时评论平台。只有模型对该作品的公开信息有可靠把握时，才可使用“常被认为/常见评价”等审慎措辞；不得编造评分、榜单、奖项、评论来源或引语。",
-            "- 音乐分析边界：不得把调性、BPM、和声、编曲细节或歌词含义当作已核验事实；不确定时请明确说明，并以听感观察或聆听提示表达。"
+            "",
+            "【我的私人数据】",
+            "- 本机播放 \(popularity?.playCount ?? 0) 次 · \(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { " · 个人评分 \($0)/5" } ?? "")",
+            "",
+            "【大众评价】",
         ]
+        let communityLines = external.map(Self.communityBrief) ?? []
+        lines.append(contentsOf: communityLines.isEmpty ? ["暂无可核验的大众评价数据。"] : communityLines)
+        lines.append(contentsOf: [
+            "",
+            "【模型分析边界】",
+            "- 可以基于上述元数据给出专业的聆听分析，但必须明确这是模型分析。",
+            "- 歌词当前不可用；不得编造歌词内容、创作背景、调性、BPM、和声、榜单、奖项、平台评分、评论来源或引语。"
+        ])
         return lines.joined(separator: "\n")
+    }
+
+    private static func communityBrief(_ result: AgentExternalMusicResult) -> [String] {
+        result.metrics.values.compactMap { metric in
+            guard metric.status == .available else { return nil }
+            switch metric.source {
+            case .musicBrainz:
+                guard let rating = metric.rating, let count = metric.ratingCount else { return nil }
+                return "- MusicBrainz：评分 \(rating)/5（\(count) 票）"
+            case .critiqueBrainz:
+                var values: [String] = []
+                if let rating = metric.rating, let count = metric.ratingCount {
+                    values.append("评分 \(rating)/5（\(count) 票）")
+                }
+                if let reviews = metric.reviewCount { values.append("\(reviews) 篇评论") }
+                return values.isEmpty ? nil : "- CritiqueBrainz：" + values.joined(separator: " · ")
+            case .listenBrainz:
+                guard let listens = metric.listenCount else { return nil }
+                var text = "- ListenBrainz：\(listens) 次收听"
+                if let listeners = metric.listenerCount { text += " · \(listeners) 位听众" }
+                return text
+            }
+        }
+    }
+
+    private static func communityEvidence(from result: AgentExternalMusicResult) -> [AgentEvidence] {
+        result.metrics.values.compactMap { metric in
+            guard metric.status == .available else { return nil }
+            let source: AgentEvidenceSource = switch metric.source {
+            case .musicBrainz: .musicBrainz
+            case .critiqueBrainz: .critiqueBrainz
+            case .listenBrainz: .listenBrainz
+            }
+            guard let claim = communityBrief(AgentExternalMusicResult(
+                identity: result.identity,
+                metrics: CommunityMusicMetrics(globalTrackID: result.metrics.globalTrackID, values: [metric])
+            )).first else { return nil }
+            return AgentEvidence(
+                source: source,
+                provenance: "external:\(metric.source.rawValue)",
+                confidence: 1,
+                fetchedAt: metric.fetchedAt,
+                entityID: metric.entityID,
+                claim: claim
+            )
+        }
     }
 
     private static func requireReadOnlyPlaylist(_ gid: GlobalID, catalog: LocalCatalogStore) async throws {
@@ -1189,8 +1240,23 @@ public enum AgentToolError: Error, LocalizedError, Sendable {
 }
 
 extension ToolResult {
-    static func ok(_ call: ToolCall, _ descriptor: ToolDescriptor, _ summary: String, _ payload: AgentMessage? = nil) -> ToolResult {
-        ToolResult(call: call, permission: descriptor.permission, success: true, summary: summary, payload: payload)
+    static func ok(
+        _ call: ToolCall,
+        _ descriptor: ToolDescriptor,
+        _ summary: String,
+        _ payload: AgentMessage? = nil,
+        facts: [String: String] = [:],
+        evidence: [AgentEvidence] = []
+    ) -> ToolResult {
+        ToolResult(
+            call: call,
+            permission: descriptor.permission,
+            success: true,
+            summary: summary,
+            payload: payload,
+            facts: facts,
+            evidence: evidence
+        )
     }
 
     static func fail(_ call: ToolCall, _ descriptor: ToolDescriptor, _ summary: String) -> ToolResult {

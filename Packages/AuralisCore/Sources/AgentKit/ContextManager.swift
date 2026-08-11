@@ -14,10 +14,9 @@ public enum ContextManager {
     public static let maxConversationMessages = 40
     /// 曲库索引 / 分类歌曲清单允许回灌模型的更大上限（供模型了解曲库后推荐）。
     public static let maxIndexCharacters = 60_000
-    /// 按 token 预算裁剪的默认预算。
-    /// 面向 100 万 token 上下文模型（如 DeepSeek V4 Flash）设得比较宽，
-    /// 长任务（建歌单 → 逐批加歌 → 验证）不会因上下文被过早截断而丢失关键 ID。
-    public static let maxContextTokens = 24_000
+    /// 按 token 预算裁剪的模型总上下文上限。当前模型最大 256K；实际输入还会由
+    /// `inputBudget` 为 16K 输出和协议字段预留空间。
+    public static let maxContextTokens = 256_000
 
     /// 为输入计算真实可用预算：上下文窗口必须为输出、工具 schema 与协议开销留空间。
     public static func inputBudget(

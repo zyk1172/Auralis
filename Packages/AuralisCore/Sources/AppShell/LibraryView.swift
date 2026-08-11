@@ -55,9 +55,14 @@ struct LibraryView: View {
                 )
             } else {
                 List(model.catalog.tracks) { track in
-                    TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, isDownloaded: model.isDownloaded(track), theme: theme)
-                        .contentShape(Rectangle())
-                        .onTapGesture { model.selectAndPlay(track) }
+                    Button {
+                        model.selectAndPlay(track)
+                    } label: {
+                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, isDownloaded: model.isDownloaded(track), theme: theme)
+                            .contentShape(Rectangle())
+                    }
+                        .buttonStyle(HapticPlainButtonStyle())
+                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
                         .contextMenu {
                             Button("立即播放") { model.selectAndPlay(track) }
                             Button("下一首播放") { insertNext(track) }
@@ -98,19 +103,24 @@ struct LibraryView: View {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 142), spacing: AuralisSpacing.medium)], spacing: AuralisSpacing.large) {
                         ForEach(model.catalog.albums) { album in
-                            VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
-                                GeometryReader { geo in
-                                    ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: theme.colorTokens, size: max(geo.size.width, 1))
+                            Button {
+                                model.browseDestination = .album(album)
+                            } label: {
+                                VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
+                                    GeometryReader { geo in
+                                        ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: theme.colorTokens, size: max(geo.size.width, 1))
+                                    }
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .frame(minHeight: 1)
+                                    Text(album.title).font(.headline).lineLimit(1)
+                                    Text(album.artistName).font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color).lineLimit(1)
                                 }
-                                .aspectRatio(1, contentMode: .fit)
-                                .frame(minHeight: 1)
-                                Text(album.title).font(.headline).lineLimit(1)
-                                Text(album.artistName).font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color).lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundStyle(theme.colorTokens.primaryText.color)
+                                .contentShape(Rectangle())
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundStyle(theme.colorTokens.primaryText.color)
-                            .contentShape(Rectangle())
-                            .onTapGesture { model.browseDestination = .album(album) }
+                            .buttonStyle(HapticPlainButtonStyle())
+                            .accessibilityLabel("专辑《\(album.title)》，艺术家 \(album.artistName)")
                             .contextMenu {
                                 Button("播放全部") {
                                     let tracks = model.catalog.tracks.filter { $0.albumID == album.id }
@@ -141,18 +151,23 @@ struct LibraryView: View {
                 )
             } else {
                 List(model.catalog.artists) { artist in
-                    HStack {
-                        ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: theme.colorTokens, size: 48, cornerRadius: 24)
-                        VStack(alignment: .leading) {
-                            Text(artist.name).font(.headline)
-                            Text("\(artist.albumCount) 张专辑").font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color)
+                    Button {
+                        model.browseDestination = .artist(artist)
+                    } label: {
+                        HStack {
+                            ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: theme.colorTokens, size: 48, cornerRadius: 24)
+                            VStack(alignment: .leading) {
+                                Text(artist.name).font(.headline)
+                                Text("\(artist.albumCount) 张专辑").font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        Spacer(minLength: 0)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                        .contentShape(Rectangle())
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(theme.colorTokens.primaryText.color)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.browseDestination = .artist(artist) }
+                    .buttonStyle(HapticPlainButtonStyle())
+                    .accessibilityLabel("艺术家 \(artist.name)，\(artist.albumCount) 张专辑")
                     .contextMenu {
                         Button("播放全部") {
                             model.playTracks(model.catalog.tracks.filter { $0.artistID == artist.id })
@@ -373,30 +388,35 @@ struct LibraryView: View {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 142), spacing: AuralisSpacing.medium)], spacing: AuralisSpacing.large) {
                         ForEach(model.catalog.playlists) { playlist in
-                            VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous)
-                                        .fill(theme.colorTokens.surface.color)
-                                        .aspectRatio(1, contentMode: .fit)
-                                    if let coverKey = Self.firstTrackArtworkKey(model, playlist) {
-                                        GeometryReader { geo in
-                                            ArtworkView(title: playlist.name, artworkKey: coverKey, colors: theme.colorTokens, size: max(geo.size.width, 1))
+                            Button {
+                                model.browseDestination = .playlist(playlist)
+                            } label: {
+                                VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous)
+                                            .fill(theme.colorTokens.surface.color)
+                                            .aspectRatio(1, contentMode: .fit)
+                                        if let coverKey = Self.firstTrackArtworkKey(model, playlist) {
+                                            GeometryReader { geo in
+                                                ArtworkView(title: playlist.name, artworkKey: coverKey, colors: theme.colorTokens, size: max(geo.size.width, 1))
+                                            }
+                                            .aspectRatio(1, contentMode: .fit)
+                                            .frame(minHeight: 1)
+                                            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
+                                        } else {
+                                            Image(systemName: "music.note.list")
+                                                .font(.system(size: 40))
+                                                .foregroundStyle(theme.colorTokens.accent.color)
                                         }
-                                        .aspectRatio(1, contentMode: .fit)
-                                        .frame(minHeight: 1)
-                                        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
-                                    } else {
-                                        Image(systemName: "music.note.list")
-                                            .font(.system(size: 40))
-                                            .foregroundStyle(theme.colorTokens.accent.color)
                                     }
+                                    Text(playlist.name).font(.headline).lineLimit(1)
                                 }
-                                Text(playlist.name).font(.headline).lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundStyle(theme.colorTokens.primaryText.color)
+                                .contentShape(Rectangle())
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundStyle(theme.colorTokens.primaryText.color)
-                            .contentShape(Rectangle())
-                            .onTapGesture { model.browseDestination = .playlist(playlist) }
+                            .buttonStyle(HapticPlainButtonStyle())
+                            .accessibilityLabel("歌单《\(playlist.name)》")
                         }
                     }
                     .padding()
@@ -417,9 +437,14 @@ struct LibraryView: View {
                 )
             } else {
                 List(model.favoriteTracks) { track in
-                    TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
-                        .contentShape(Rectangle())
-                        .onTapGesture { model.selectAndPlay(track) }
+                    Button {
+                        model.selectAndPlay(track)
+                    } label: {
+                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                            .contentShape(Rectangle())
+                    }
+                        .buttonStyle(HapticPlainButtonStyle())
+                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
                         .contextMenu {
                             Button("立即播放") { model.selectAndPlay(track) }
                             Button("下一首播放") { insertNext(track) }

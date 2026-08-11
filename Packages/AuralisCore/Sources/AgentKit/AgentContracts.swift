@@ -57,13 +57,27 @@ public struct ToolResult: Sendable {
     public let success: Bool
     public let summary: String
     public let payload: AgentMessage?
+    /// 可直接归并到任务状态的结构化事实。键由工具域拥有，Runtime 不解析自然语言摘要。
+    public let facts: [String: String]
+    /// 工具产生的可追溯证据。模型推断不能伪装成这里的事实。
+    public let evidence: [AgentEvidence]
 
-    public init(call: ToolCall, permission: ToolPermission, success: Bool, summary: String, payload: AgentMessage? = nil) {
+    public init(
+        call: ToolCall,
+        permission: ToolPermission,
+        success: Bool,
+        summary: String,
+        payload: AgentMessage? = nil,
+        facts: [String: String] = [:],
+        evidence: [AgentEvidence] = []
+    ) {
         self.call = call
         self.permission = permission
         self.success = success
         self.summary = summary
         self.payload = payload
+        self.facts = facts
+        self.evidence = evidence
     }
 }
 

@@ -19,7 +19,9 @@ public struct AgentToolTrace: Codable, Sendable {
     }
 }
 
-/// 单个 Agent Task 的工作集与防“工具调用爆炸”状态机（纯值类型，可独立测试）。
+/// 音乐候选/队列任务的轻量领域工作集（纯值类型，可独立测试）。
+/// 通用生命周期、完成条件、Evidence 与预算由 `AgentTaskState` / `AgentRuntime` 持有；
+/// 本类型不再充当 Runtime 核心状态，也不假设所有任务都要凑固定数量的歌曲。
 ///
 /// 职责：
 /// 1. **任务级 Tool Result Cache**：同一工具 + 规范化参数再次出现时直接复用结果，
@@ -46,6 +48,8 @@ public struct AgentTaskWorkingSet: Sendable {
     public private(set) var lastTraces: [AgentToolTrace] = []
     /// 是否已要求模型停止搜索。
     public private(set) var stopSearching = false
+    /// 本次任务明确要求的队列数量。未明确数量时为 nil，不以任意固定常量判定完成。
+    public let targetQueueCount: Int?
     /// 已成功执行的修改型操作：同一语义与参数在一个任务内只能执行一次。
     private var successfulSideEffects: [String: String] = [:]
     /// 本任务中已经完成的互斥操作。当前只有“替换队列”是互斥的；追加歌曲仍可多次调用。
@@ -55,8 +59,6 @@ public struct AgentTaskWorkingSet: Sendable {
     public static let maxCacheSize = 60
     /// 连续多少次“无新结果”后提示模型停止搜索。
     public static let noNewResultsLimit = 3
-    /// 已入队多少首后禁止继续搜索（防止“已经凑够还继续搜”）。
-    public static let queueSatisfiedThreshold = 20
     /// 允许缓存的只读查询工具（缓存仅限查询，绝不含播放/收藏/评分等可变操作）。
     public static let cacheableTools: Set<String> = [
         "library_search", "library_select_tracks", "server_search", "searchTracks",
@@ -81,7 +83,26 @@ public struct AgentTaskWorkingSet: Sendable {
         "playback_play_playlist", "playback_play_random", "playTrack",
     ]
 
-    public init() {}
+    public init(targetQueueCount: Int? = nil) {
+        if let targetQueueCount, targetQueueCount > 0 {
+            self.targetQueueCount = targetQueueCount
+        } else {
+            self.targetQueueCount = nil
+        }
+    }
+
+    /// 只从用户明确写出的“首/首歌/歌曲”数量建立目标；没有明确数量就保持开放，
+    /// 由 Intent 的 Completion Predicate 决定何时完成。
+    public static func inferredTargetQueueCount(from text: String) -> Int? {
+        let pattern = #"(?:找|推荐|选择|播放|来|给我)?\s*(\d{1,3})\s*首(?:歌|歌曲)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text),
+              let count = Int(text[range]),
+              (1...200).contains(count)
+        else { return nil }
+        return count
+    }
 
     // MARK: - 签名与缓存
 
@@ -171,7 +192,7 @@ public struct AgentTaskWorkingSet: Sendable {
             noNewResultsStreak = 0
         }
         // 队列已满足目标 或 连续无新结果达到上限 → 停止搜索。
-        if queuedSongIDs.count >= Self.queueSatisfiedThreshold || noNewResultsStreak >= Self.noNewResultsLimit {
+        if targetQueueCount.map({ queuedSongIDs.count >= $0 }) == true || noNewResultsStreak >= Self.noNewResultsLimit {
             stopSearching = true
         }
         return new.isEmpty
@@ -180,7 +201,7 @@ public struct AgentTaskWorkingSet: Sendable {
     /// 记录一次入队 / 播放的歌曲 ID。
     public mutating func noteQueued(_ ids: [GlobalID]) {
         queuedSongIDs.formUnion(ids)
-        if queuedSongIDs.count >= Self.queueSatisfiedThreshold {
+        if targetQueueCount.map({ queuedSongIDs.count >= $0 }) == true {
             stopSearching = true
         }
     }
