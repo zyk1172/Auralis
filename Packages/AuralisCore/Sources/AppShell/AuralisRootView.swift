@@ -93,6 +93,13 @@ public struct AuralisRootView: View {
         _themeStore = StateObject(wrappedValue: ThemeStore())
     }
 
+    /// 依赖注入：macOS 组合根创建唯一长期 ThemeStore / AppModel，
+    /// 主窗口与 Settings Scene 共享同一实例（改主题后主窗口实时生效）。
+    public init(model: AuralisAppModel, themeStore: ThemeStore) {
+        _model = StateObject(wrappedValue: model)
+        _themeStore = StateObject(wrappedValue: themeStore)
+    }
+
     public var body: some View {
         Group {
 #if os(macOS)
@@ -199,7 +206,7 @@ private struct CompactShell: View {
             set: { if !$0 { model.dismissPlaybackError() } }
         )) {
             Button("重试") { model.retryPlayback() }
-            if model.hasNext {
+            if model.canGoNext {
                 Button("下一首") { model.next() }
             }
             Button("确定") { model.dismissPlaybackError() }
@@ -945,7 +952,7 @@ private struct DesktopShell: View {
             set: { if !$0 { model.dismissPlaybackError() } }
         )) {
             Button("重试") { model.retryPlayback() }
-            if model.hasNext {
+            if model.canGoNext {
                 Button("下一首") { model.next() }
             }
             Button("确定") { model.dismissPlaybackError() }

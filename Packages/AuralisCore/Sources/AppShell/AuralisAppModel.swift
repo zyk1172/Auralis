@@ -854,13 +854,15 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 执行解析后的 Siri 意图。所有分支都落到同一个播放服务（AppModel），
     /// 控制中心 / 锁屏 / 迷你播放条自动同步。
-    private func executeSiriIntent(_ raw: String) async {
+    func executeSiriIntent(_ raw: String) async {
+        // 自动选歌前刷新 dislike 镜像：Siri/快捷指令必须遵循 Hard Exclusion。
+        await refreshDislikedState()
         switch parseSiriIntent(raw) {
         case .playMusic:
             if playbackState == .playing { return }
             if currentTrack.id.rawValue != "placeholder" {
                 togglePlayback()
-            } else if let first = queue.first ?? catalog.tracks.first {
+            } else if let first = queue.first ?? autoCandidate(catalog.tracks).first {
                 selectAndPlay(first)
             }
         case let .control(action):
@@ -876,21 +878,22 @@ public final class AuralisAppModel: ObservableObject {
             let favorites = favoriteTracks
             if favorites.isEmpty {
                 let list = catalog.tracks.filter(\.isFavorite)
-                playTracks(list.isEmpty ? Array(catalog.tracks.prefix(20)) : list)
+                playTracks(list.isEmpty ? autoCandidate(catalog.tracks).prefix(20).map { $0 } : list)
             } else {
                 playTracks(favorites)
             }
         case .playRecent:
             let recent = recentlyPlayedTracks
             if recent.isEmpty {
-                // 没有最近播放记录时退到收藏 / 随机，避免 Siri 报失败。
+                // 没有最近播放记录时退到收藏 / 随机，避免 Siri 报失败；自动兜底排除 disliked。
                 let favorites = favoriteTracks
-                playTracks(favorites.isEmpty ? Array(catalog.tracks.prefix(20)) : favorites)
+                playTracks(favorites.isEmpty ? autoCandidate(catalog.tracks).prefix(20).map { $0 } : favorites)
             } else {
                 playTracks(recent)
             }
         case .playRandom:
-            playTracks(Array(catalog.tracks.shuffled().prefix(30)))
+            // 整库随机属于自动发现：排除 disliked。
+            playTracks(autoCandidate(catalog.tracks).shuffled().prefix(30).map { $0 })
         case let .playGenre(name):
             let tracks = tracks(for: Genre(name: name, songCount: 0))
             if tracks.isEmpty {
@@ -909,6 +912,12 @@ public final class AuralisAppModel: ObservableObject {
         case let .playSong(title):
             playSongMatching(title)
         }
+    }
+
+    /// 自动选歌候选：硬排除“不喜欢”（Siri 兜底 / 随机等自动发现路径专用；
+    /// 用户明确指定歌曲/专辑/歌单/艺术家不经过这里）。
+    private func autoCandidate(_ tracks: [Track]) -> [Track] {
+        tracks.filter { !dislikedTrackIDs.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue)) }
     }
 
     /// 快捷指令 / Siri 通用播放入口：把用户语音/快捷指令文本交给统一的意图引擎执行，
@@ -1106,19 +1115,33 @@ public final class AuralisAppModel: ObservableObject {
         set { seek(toProgress: newValue) }
     }
 
+    /// 物理队列中是否存在相邻的下一首（不包含 shuffle / repeat 语义）。
     public var hasNext: Bool {
         guard let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return false }
         return queue.indices.contains(index + 1)
     }
 
-    /// 列表循环时到队尾还能绕回第一首，下一首按钮不置灰。
+    /// 用户当前是否可以执行“下一首”动作。
+    /// 除物理相邻项外，shuffle 模式下 next() 会从队列随机选一首非当前曲目，
+    /// 列表循环到队尾也能绕回第一首——这些都必须反映在 capability 里。
     public var canGoNext: Bool {
-        hasNext || (repeatMode == .all && queue.count > 1)
+        guard hasCurrentTrack else { return false }
+        if hasNext { return true }
+        if isShuffled && queue.count > 1 { return true }
+        if repeatMode == .all && queue.count > 1 { return true }
+        return false
     }
 
+    /// 物理队列中是否存在相邻的上一首（不包含 repeat 语义）。
     public var hasPrevious: Bool {
         guard let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return false }
         return queue.indices.contains(index - 1)
+    }
+
+    /// 用户当前是否可以执行“上一首”动作：只要有正在播放的曲目，
+    /// previous() 要么回本曲开头、要么去物理上一首、要么列表循环绕回队尾，总是可执行。
+    public var canGoPrevious: Bool {
+        hasCurrentTrack
     }
 
     /// 播放一组曲目（用于 macOS 表格「播放全部」等）。
@@ -1126,6 +1149,12 @@ public final class AuralisAppModel: ObservableObject {
         guard !tracks.isEmpty else { return }
         queue = tracks
         selectAndPlay(tracks[0])
+    }
+
+    /// 在用户明确选择的集合内随机播放（最近播放 / 最近添加 / 收藏等页面）。
+    /// 只随机传入的集合，绝不回退到整库 discovery playRandom()。
+    public func playShuffledQueue(_ tracks: [Track]) {
+        playQueue(Array(tracks.shuffled()))
     }
 
     /// 随机播放（30 首）。整库随机属于自动发现：必须排除“不喜欢”的歌曲。
@@ -1137,16 +1166,24 @@ public final class AuralisAppModel: ObservableObject {
         selectAndPlay(tracks[0])
     }
 
+    /// GlobalID → 内存 catalog 中 Track 的统一解析：必须同时匹配 serverID 与 remoteID。
+    /// 禁止 API 声明 GlobalID、内部却只按 remoteID（TrackID）查找导致跨服务器误匹配。
+    public func track(for globalID: GlobalID) -> Track? {
+        catalog.tracks.first {
+            $0.serverID == globalID.serverID && $0.id.rawValue == globalID.remoteID
+        }
+    }
+
     /// 把歌曲加入队列末尾（macOS 表格右键 / 双击等）。
     public func addToQueue(globalID: GlobalID) {
-        guard let track = catalog.tracks.first(where: { $0.id.rawValue == globalID.remoteID }),
+        guard let track = track(for: globalID),
               !queue.contains(where: { $0.id == track.id }) else { return }
         queue.append(track)
     }
 
     /// 下一首播放：插入到当前歌曲之后。
     public func playNext(globalID: GlobalID) {
-        guard let track = catalog.tracks.first(where: { $0.id.rawValue == globalID.remoteID }) else { return }
+        guard let track = track(for: globalID) else { return }
         queue.removeAll { $0.id == track.id }
         if let index = queue.firstIndex(where: { $0.id == currentTrack.id }) {
             queue.insert(track, at: index + 1)

@@ -16,68 +16,147 @@ private enum MacMusicLayout {
 // MARK: - 歌曲表格（macOS 原生 Table）
 
 /// 适合鼠标的歌曲表格：可调列宽、多选（Shift/Cmd）、双击播放、右键菜单、悬停反馈。
+/// 桌面表格行：以 GlobalID 作为长期选择身份，避免两台服务器同 TrackID 互相污染。
+struct MacTrackRow: Identifiable, Hashable {
+    let id: GlobalID
+    let track: Track
+    /// 可排序的稳定投影（Optional 字段不能直接作为 TableColumn value）。
+    var yearSort: Int { track.year ?? Int.max }
+    var codecSort: String { track.sourceInfo.normalizedCodec ?? "" }
+    var favoriteSort: Int { track.isFavorite ? 1 : 0 }
+}
+
 struct MacSongTable: View {
     let tracks: [Track]
-    @Binding var selection: Set<TrackID>
+    @Binding var selection: Set<GlobalID>
     let model: AuralisAppModel
     let theme: BuiltInTheme
+    @State private var sortOrder: [KeyPathComparator<MacTrackRow>] = [KeyPathComparator(\.track.title, order: .forward)]
+
+    private var rows: [MacTrackRow] {
+        let rows = tracks.map { MacTrackRow(id: GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue), track: $0) }
+        return rows.sorted(using: sortOrder)
+    }
+
+    private func row(for gid: GlobalID) -> MacTrackRow? {
+        rows.first { $0.id == gid }
+    }
 
     var body: some View {
-        Table(tracks, selection: $selection) {
-            TableColumn("标题") { track in
-                Text(track.title)
-                    .fontWeight(track.id == model.currentTrack.id ? .semibold : .regular)
+        tableBody
+            .contextMenu(forSelectionType: GlobalID.self) { ids in
+                if let id = ids.first, let row = row(for: id) {
+                    contextMenu(for: row)
+                }
+            } primaryAction: { ids in
+                if let id = ids.first, let row = row(for: id) {
+                    model.selectAndPlay(row.track)
+                }
+            }
+            .onTapGesture(count: 2) {
+                if let first = selection.first, let row = row(for: first) {
+                    model.selectAndPlay(row.track)
+                }
+            }
+    }
+
+    private var currentTrackGID: GlobalID? {
+        model.currentTrack.id.rawValue == "placeholder"
+            ? nil
+            : GlobalID(serverID: model.currentTrack.serverID, remoteID: model.currentTrack.id.rawValue)
+    }
+
+    private var tableBody: some View {
+        Table(rows, selection: $selection, sortOrder: $sortOrder) {
+            TableColumn("标题", value: \.track.title) { row in
+                Text(row.track.title)
+                    .fontWeight(row.id == currentTrackGID ? .semibold : .regular)
                     .lineLimit(1)
             }
-            TableColumn("艺术家", value: \.artistName)
-            TableColumn("专辑", value: \.albumTitle)
-            TableColumn("时长") { track in
-                Text(Self.timeText(track.duration))
+            TableColumn("艺术家", value: \.track.artistName) { row in
+                Text(row.track.artistName)
+            }
+            TableColumn("专辑", value: \.track.albumTitle) { row in
+                Text(row.track.albumTitle)
+            }
+            TableColumn("时长", value: \.track.duration) { row in
+                Text(Self.timeText(row.track.duration))
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
             .width(60)
-            TableColumn("年份") { track in
-                if let year = track.year {
+            TableColumn("年份", value: \.yearSort) { row in
+                if let year = row.track.year {
                     Text(String(year)).foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             }
             .width(50)
-            TableColumn("格式") { track in
-                if let codec = track.sourceInfo.normalizedCodec, !codec.isEmpty {
+            TableColumn("格式", value: \.codecSort) { row in
+                if let codec = row.track.sourceInfo.normalizedCodec, !codec.isEmpty {
                     Text(codec.uppercased()).font(.caption2)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             }
             .width(64)
-            TableColumn("收藏") { track in
-                Image(systemName: track.isFavorite ? "heart.fill" : "heart")
-                    .foregroundStyle(track.isFavorite ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color.opacity(0.5))
+            TableColumn("收藏", value: \.favoriteSort) { row in
+                Image(systemName: row.track.isFavorite ? "heart.fill" : "heart")
+                    .foregroundStyle(row.track.isFavorite ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color.opacity(0.5))
+            }
+            .width(44)
+            TableColumn("不喜欢") { row in
+                if model.isDisliked(row.track) {
+                    Image(systemName: "heart.slash.fill")
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                }
             }
             .width(44)
         }
-        .contextMenu(forSelectionType: TrackID.self) { ids in
-            if let first = tracks.first(where: { $0.id == ids.first }) {
-                Button("播放") { model.selectAndPlay(first) }
-                Button("下一首播放") { model.playNext(globalID: GlobalID(serverID: first.serverID, remoteID: first.id.rawValue)) }
-                Button("加入队列") { model.addToQueue(globalID: GlobalID(serverID: first.serverID, remoteID: first.id.rawValue)) }
-                Divider()
-                Button(trackIsFavorite(first) ? "取消收藏" : "收藏") { model.toggleFavorite(first) }
-                Button("下载") { model.download(first) }
-            }
-        } primaryAction: { ids in
-            if let first = tracks.first(where: { $0.id == ids.first }) {
-                model.selectAndPlay(first)
-            }
-        }
-        .onTapGesture(count: 2) {
-            if let first = selection.first, let track = tracks.first(where: { $0.id == first }) {
-                model.selectAndPlay(track)
-            }
-        }
     }
 
-    private func trackIsFavorite(_ track: Track) -> Bool {
-        model.catalog.tracks.first(where: { $0.id == track.id })?.isFavorite ?? track.isFavorite
+    @ViewBuilder
+    private func contextMenu(for row: MacTrackRow) -> some View {
+        let track = row.track
+        let gid = row.id
+        let isFavorite = model.catalog.tracks.first(where: { $0.serverID == track.serverID && $0.id == track.id })?.isFavorite ?? track.isFavorite
+        let isDisliked = model.isDisliked(track)
+        let isDownloaded = model.isDownloaded(track)
+        Button("播放") { model.selectAndPlay(track) }
+        Button("下一首播放") { model.playNext(globalID: gid) }
+        Button("加入队列") { model.addToQueue(globalID: gid) }
+        Divider()
+        Button("前往专辑") {
+            if let album = model.catalog.albums.first(where: { $0.id == track.albumID }) {
+                model.browseDestination = .album(album)
+            }
+        }
+        .disabled(!(model.catalog.albums.contains { $0.id == track.albumID }))
+        Button("前往艺术家") {
+            if let artist = model.catalog.artists.first(where: { $0.id == track.artistID }) {
+                model.browseDestination = .artist(artist)
+            }
+        }
+        .disabled(!(model.catalog.artists.contains { $0.id == track.artistID }))
+        Divider()
+        Button(isFavorite ? "取消收藏" : "收藏") {
+            model.toggleFavorite(track)
+        }
+        Button(isDisliked ? "取消不喜欢" : "不喜欢") {
+            model.setDisliked(track, value: !isDisliked, source: "user")
+        }
+        Divider()
+        Button(isDownloaded ? "删除下载" : "下载") {
+            if isDownloaded {
+                model.removeDownload(track)
+            } else {
+                model.download(track)
+            }
+        }
+        Divider()
+        Button("歌曲鉴赏") {
+            NotificationCenter.default.post(name: MacCommandNotification.songAppreciation, object: track)
+        }
+        Button("歌曲信息") {
+            NotificationCenter.default.post(name: MacCommandNotification.showTrackInformation, object: track)
+        }
     }
 
     private static func timeText(_ seconds: TimeInterval) -> String {
@@ -92,7 +171,7 @@ struct MacSongTable: View {
 struct MacTrackListPage: View {
     let title: String
     let tracks: [Track]
-    @Binding var selection: Set<TrackID>
+    @Binding var selection: Set<GlobalID>
     let model: AuralisAppModel
     let theme: BuiltInTheme
 
@@ -104,7 +183,7 @@ struct MacTrackListPage: View {
                 Spacer()
                 Button("播放全部") { model.playQueue(tracks) }
                     .disabled(tracks.isEmpty)
-                Button("随机播放") { model.playRandom() }
+                Button("随机播放") { model.playShuffledQueue(tracks) }
                     .disabled(tracks.isEmpty)
             }
             .padding(.horizontal, AuralisSpacing.large)
@@ -128,7 +207,7 @@ struct MacLibraryPage: View {
     let scope: MacLibraryScope
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    @Binding var selection: Set<TrackID>
+    @Binding var selection: Set<GlobalID>
 
     var body: some View {
         VStack(spacing: 0) {
@@ -158,7 +237,10 @@ struct MacLibraryPage: View {
             Spacer()
             if scope == .songs, !model.catalog.tracks.isEmpty {
                 Button("播放全部") { model.playQueue(model.catalog.tracks) }
-                Button("随机播放") { model.playRandom() }
+                Button("随机播放") {
+                    // 整库随机属于自动发现：排除 disliked。
+                    model.playShuffledQueue(model.catalog.tracks.filter { !model.isDisliked($0) })
+                }
             }
         }
         .padding(.horizontal, MacMusicLayout.pageInset)
@@ -618,7 +700,7 @@ struct MacPlaylistPage: View {
 struct MacDownloadsPage: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    @State private var selection: Set<TrackID> = []
+    @State private var selection: Set<GlobalID> = []
     @State private var usage = AuralisAppModel.CacheUsage()
 
     var body: some View {
@@ -651,7 +733,7 @@ struct MacDownloadsPage: View {
 struct MacHomePage: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    @Binding var selection: Set<TrackID>
+    @Binding var selection: Set<GlobalID>
     let onOpenServer: () -> Void
 
     private let gridColumns = [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: AuralisSpacing.large)]
@@ -663,10 +745,8 @@ struct MacHomePage: View {
                     emptyLibrary
                 } else {
                     LazyVStack(alignment: .leading, spacing: AuralisSpacing.xLarge) {
-                        if model.currentTrack.id.rawValue != "placeholder" {
-                            continuePlaying
-                        }
-                        serverStatusRow
+                        // 底部已有永久 Desktop Player：首页不再重复“继续播放”大卡片，
+                        // 服务器入口在 Sidebar，首页不再放 serverStatusRow。
                         if !model.recentlyPlayedTracks.isEmpty {
                             songShelf(title: "最近播放", tracks: model.recentlyPlayedTracks.prefix(12).map { $0 }) {
                                 model.browseDestination = .recentlyPlayed
@@ -722,9 +802,6 @@ struct MacHomePage: View {
                 emptyArtwork(symbol: "headphones")
             }
             .padding(.top, 10)
-
-            serverStatusRow
-                .padding(.top, 4)
         }
         .padding(40)
         .frame(maxWidth: 760, minHeight: 460, alignment: .leading)
@@ -744,56 +821,6 @@ struct MacHomePage: View {
             .foregroundStyle(theme.colorTokens.accent.color.opacity(0.8))
             .frame(width: 74, height: 74)
             .background(theme.colorTokens.surface.color.opacity(0.85), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-    }
-
-    private var continuePlaying: some View {
-        Button {
-            model.togglePlayback()
-        } label: {
-            HStack(spacing: AuralisSpacing.medium) {
-                ArtworkView(title: model.currentTrack.albumTitle,
-                            artworkKey: model.currentTrack.artworkKey,
-                            colors: theme.colorTokens, size: 64, cornerRadius: 10)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("继续播放").font(.caption)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    Text(model.currentTrack.title).font(.title3.bold()).lineLimit(1)
-                        .foregroundStyle(theme.colorTokens.primaryText.color)
-                    Text(model.currentTrack.artistName).font(.subheadline).lineLimit(1)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                }
-                Spacer()
-                Image(systemName: model.playbackState == .playing ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 40))
-                    .foregroundStyle(theme.colorTokens.accent.color)
-            }
-            .padding(AuralisSpacing.large)
-            .background(theme.colorTokens.surface.color.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var serverStatusRow: some View {
-        HStack(spacing: AuralisSpacing.small) {
-            if case .connected = model.serverConnectionState {
-                Label("已连接", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(theme.colorTokens.success.color)
-            } else if case .failed = model.serverConnectionState {
-                Label("服务器离线", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(theme.colorTokens.warning.color)
-            } else {
-                Label("未连接服务器", systemImage: "server.rack")
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-            }
-            Spacer()
-            if model.catalog.isConnected {
-                Text("\(model.catalog.tracks.count) 首歌曲")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-            }
-        }
-        .font(.caption)
     }
 
     private func songShelf(title: String, tracks: [Track], onMore: @escaping () -> Void) -> some View {
@@ -882,7 +909,7 @@ struct MacSearchPage: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     let query: String
-    @Binding var selection: Set<TrackID>
+    @Binding var selection: Set<GlobalID>
 
     @State private var tracks: [CatalogTrackSummary] = []
     @State private var albums: [CatalogAlbumSummary] = []
@@ -959,16 +986,7 @@ struct MacSearchPage: View {
                             .foregroundStyle(theme.colorTokens.primaryText.color)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 240), spacing: AuralisSpacing.medium)], alignment: .leading) {
                             ForEach(recentArtists, id: \.self) { artist in
-                                HStack(spacing: AuralisSpacing.small) {
-                                    Image(systemName: "person.crop.circle")
-                                        .font(.title2)
-                                        .foregroundStyle(theme.colorTokens.accent.color)
-                                    Text(artist).lineLimit(1)
-                                        .foregroundStyle(theme.colorTokens.primaryText.color)
-                                }
-                                .padding(8)
-                                .background(theme.colorTokens.surface.color.opacity(0.5))
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                recentArtistRow(artist)
                             }
                         }
                     }
@@ -1033,25 +1051,7 @@ struct MacSearchPage: View {
                     sectionTitle("专辑（\(albums.count)）")
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 220), spacing: AuralisSpacing.large)], alignment: .leading) {
                         ForEach(albums.prefix(12)) { album in
-                            Button {
-                                if let real = model.catalog.albums.first(where: { $0.id.rawValue == album.globalID.remoteID }) {
-                                    model.browseDestination = .album(real)
-                                }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    GeometryReader { geo in
-                                        ArtworkView(title: album.title, artworkKey: nil, colors: theme.colorTokens, size: max(geo.size.width, 1), cornerRadius: AuralisRadius.medium)
-                                    }
-                                    .aspectRatio(1, contentMode: .fit)
-                                    Text(album.title).font(.subheadline.weight(.medium)).lineLimit(1)
-                                        .foregroundStyle(theme.colorTokens.primaryText.color)
-                                    Text(album.artistName).font(.caption).lineLimit(1)
-                                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                            albumResultRow(album)
                         }
                     }
                 }
@@ -1059,16 +1059,7 @@ struct MacSearchPage: View {
                     sectionTitle("艺术家（\(artists.count)）")
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 220), spacing: AuralisSpacing.medium)], alignment: .leading) {
                         ForEach(artists.prefix(12)) { artist in
-                            HStack(spacing: AuralisSpacing.small) {
-                                Image(systemName: "person.crop.circle")
-                                    .font(.title2)
-                                    .foregroundStyle(theme.colorTokens.accent.color)
-                                Text(artist.name).lineLimit(1)
-                                    .foregroundStyle(theme.colorTokens.primaryText.color)
-                            }
-                            .padding(8)
-                            .background(theme.colorTokens.surface.color.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            artistResultRow(artist)
                         }
                     }
                 }
@@ -1109,13 +1100,14 @@ struct MacSearchPage: View {
     }
 
     private func resultSongRow(_ summary: CatalogTrackSummary) -> some View {
-        Button {
-            if let track = model.catalog.tracks.first(where: { $0.id.rawValue == summary.globalID.remoteID }) {
+        let resolved = model.track(for: summary.globalID)
+        return Button {
+            if let track = resolved {
                 model.playQueue([track])
             }
         } label: {
             HStack(spacing: AuralisSpacing.medium) {
-                ArtworkView(title: summary.albumTitle, artworkKey: nil, colors: theme.colorTokens, size: 40, cornerRadius: 6)
+                ArtworkView(title: summary.albumTitle, artworkKey: resolved?.artworkKey, colors: theme.colorTokens, size: 40, cornerRadius: 6)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(summary.title).font(.body)
                         .foregroundStyle(theme.colorTokens.primaryText.color)
@@ -1128,6 +1120,102 @@ struct MacSearchPage: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - 搜索结果解析：一律按 serverID + remoteID 双键匹配，禁止只按 remoteID 查找。
+
+    private func resolveAlbum(_ summary: CatalogAlbumSummary) -> Album? {
+        model.catalog.albums.first {
+            $0.serverID == summary.globalID.serverID && $0.id.rawValue == summary.globalID.remoteID
+        }
+    }
+
+    private func resolveArtist(_ summary: CatalogArtistSummary) -> Artist? {
+        model.catalog.artists.first {
+            $0.serverID == summary.globalID.serverID && $0.id.rawValue == summary.globalID.remoteID
+        }
+    }
+
+    /// 最近播放艺术家只有名称，没有 GlobalID：只在当前活动服务器上按名称匹配。
+    private func resolveArtist(named name: String) -> Artist? {
+        guard let serverID = model.catalog.activeServerID else { return nil }
+        return model.catalog.artists.first {
+            $0.serverID == serverID && $0.name == name
+        }
+    }
+
+    private func albumResultRow(_ summary: CatalogAlbumSummary) -> some View {
+        let resolved = resolveAlbum(summary)
+        return Button {
+            if let real = resolved {
+                model.browseDestination = .album(real)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                GeometryReader { geo in
+                    ArtworkView(
+                        title: summary.title,
+                        artworkKey: resolved?.artworkKey,
+                        colors: theme.colorTokens,
+                        size: max(geo.size.width, 1),
+                        cornerRadius: AuralisRadius.medium
+                    )
+                }
+                .aspectRatio(1, contentMode: .fit)
+                Text(summary.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                Text(summary.artistName).font(.caption).lineLimit(1)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func artistResultRow(_ summary: CatalogArtistSummary) -> some View {
+        let resolved = resolveArtist(summary)
+        return Button {
+            if let real = resolved {
+                model.browseDestination = .artist(real)
+            }
+        } label: {
+            HStack(spacing: AuralisSpacing.small) {
+                Image(systemName: "person.crop.circle")
+                    .font(.title2)
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                Text(summary.name).lineLimit(1)
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+            }
+            .padding(8)
+            .background(theme.colorTokens.surface.color.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func recentArtistRow(_ name: String) -> some View {
+        let resolved = resolveArtist(named: name)
+        return Button {
+            if let real = resolved {
+                model.browseDestination = .artist(real)
+            }
+        } label: {
+            HStack(spacing: AuralisSpacing.small) {
+                Image(systemName: "person.crop.circle")
+                    .font(.title2)
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                Text(name).lineLimit(1)
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+            }
+            .padding(8)
+            .background(theme.colorTokens.surface.color.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(resolved == nil)
     }
 }
 

@@ -97,7 +97,6 @@ struct MacServerPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: AuralisSpacing.large) {
                 summary
-                localNetworkAccess
                 errorArea
                 actions
                 if model.catalog.isConnected {
@@ -109,33 +108,6 @@ struct MacServerPage: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    /// 本地网络授权由 macOS 管理；这里说明触发时机，并提供被拒绝后的直达入口。
-    private var localNetworkAccess: some View {
-        HStack(alignment: .top, spacing: AuralisSpacing.medium) {
-            Image(systemName: "network.badge.shield.half.filled")
-                .font(.title3)
-                .foregroundStyle(theme.colorTokens.accent.color)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("局域网访问")
-                    .font(.headline)
-                    .foregroundStyle(theme.colorTokens.primaryText.color)
-                Text("首次连接内网服务器时，macOS 会显示“本地网络”授权提示。若之前选择了不允许，可在系统设置中重新开启。")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            Button("打开设置") {
-                PlatformLocalNetworkSettings.open()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(AuralisSpacing.medium)
-        .background(theme.colorTokens.accent.color.opacity(0.08), in: RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
     }
 
     private var summary: some View {

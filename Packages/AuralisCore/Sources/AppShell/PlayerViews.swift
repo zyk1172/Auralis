@@ -99,7 +99,7 @@ struct MiniPlayerContent: View {
                 skipControl(
                     systemImage: "backward.fill",
                     action: model.previous,
-                    isEnabled: model.hasPrevious,
+                    isEnabled: model.canGoPrevious,
                     accessibilityLabel: "上一首"
                 )
 
@@ -114,7 +114,7 @@ struct MiniPlayerContent: View {
                 skipControl(
                     systemImage: "forward.fill",
                     action: model.next,
-                    isEnabled: model.hasNext,
+                    isEnabled: model.canGoNext,
                     accessibilityLabel: "下一首"
                 )
             }
@@ -501,7 +501,7 @@ struct NowPlayingView: View {
                 Button(action: model.previous) {
                     Image(systemName: "backward.fill").font(.title2)
                 }
-                .disabled(!model.hasPrevious)
+                .disabled(!model.canGoPrevious)
                 .accessibilityLabel("上一首")
             }
             transportItem {

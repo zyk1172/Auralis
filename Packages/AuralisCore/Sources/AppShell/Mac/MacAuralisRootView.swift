@@ -1,6 +1,7 @@
 #if os(macOS)
 import DesignSystem
 import Domain
+import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
@@ -13,66 +14,10 @@ public enum MacCommandNotification {
     public static let previous = Notification.Name("auralis.mac.command.previous")
     public static let next = Notification.Name("auralis.mac.command.next")
     public static let togglePlay = Notification.Name("auralis.mac.command.togglePlay")
-}
-
-/// macOS 侧边栏导航项（独立于 iOS 的 AppSection）。
-enum MacNavItem: Hashable, Identifiable {
-    case home
-    case recentlyPlayed
-    case recentlyAdded
-    case library(MacLibraryScope)
-    case favorites
-    case playlists
-    case search
-    case assistant
-    case downloads
-    case server
-
-    var id: String { stableID }
-    var stableID: String {
-        switch self {
-        case .home: "home"
-        case .recentlyPlayed: "recentlyPlayed"
-        case .recentlyAdded: "recentlyAdded"
-        case let .library(scope): "library.\(scope.rawValue)"
-        case .favorites: "favorites"
-        case .playlists: "playlists"
-        case .search: "search"
-        case .assistant: "assistant"
-        case .downloads: "downloads"
-        case .server: "server"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .home: "首页"
-        case .recentlyPlayed: "最近播放"
-        case .recentlyAdded: "最近添加"
-        case let .library(scope): scope.title
-        case .favorites: "收藏歌曲"
-        case .playlists: "我的歌单"
-        case .search: "搜索"
-        case .assistant: "AI 助手"
-        case .downloads: "下载"
-        case .server: "服务器"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .home: "house"
-        case .recentlyPlayed: "clock"
-        case .recentlyAdded: "tray.and.arrow.down"
-        case let .library(scope): scope.symbol
-        case .favorites: "heart"
-        case .playlists: "music.note.list"
-        case .search: "magnifyingglass"
-        case .assistant: "sparkles"
-        case .downloads: "arrow.down.circle"
-        case .server: "server.rack"
-        }
-    }
+    /// object = Track：对指定歌曲发起歌曲鉴赏（切换到 AI 助手并调用 music_appreciate）。
+    public static let songAppreciation = Notification.Name("auralis.mac.command.songAppreciation")
+    /// object = Track：在检查器中打开该歌曲的“详情”页。
+    public static let showTrackInformation = Notification.Name("auralis.mac.command.showTrackInformation")
 }
 
 enum MacLibraryScope: String, CaseIterable, Hashable, Identifiable {
@@ -96,8 +41,86 @@ enum MacLibraryScope: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
-/// macOS 主窗口：资料库侧边栏、主内容、按需检查器，以及固定在底部的桌面播放控制条。
-/// 设置通过独立设置窗口打开；检查器只通过工具栏按钮或选中/播放上下文显示。
+/// macOS 侧边栏导航项（独立于 iOS 的 AppSection）。
+enum MacNavItem: Hashable, Identifiable {
+    case home
+    case recentlyPlayed
+    case recentlyAdded
+    case library(MacLibraryScope)
+    case favorites
+    case disliked
+    case playlists
+    case categories
+    case search
+    case assistant
+    case downloads
+    case server
+
+    var id: String { stableID }
+    var stableID: String {
+        switch self {
+        case .home: "home"
+        case .recentlyPlayed: "recentlyPlayed"
+        case .recentlyAdded: "recentlyAdded"
+        case let .library(scope): "library.\(scope.rawValue)"
+        case .favorites: "favorites"
+        case .disliked: "disliked"
+        case .playlists: "playlists"
+        case .categories: "categories"
+        case .search: "search"
+        case .assistant: "assistant"
+        case .downloads: "downloads"
+        case .server: "server"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .home: "首页"
+        case .recentlyPlayed: "最近播放"
+        case .recentlyAdded: "最近添加"
+        case let .library(scope): scope.title
+        case .favorites: "收藏歌曲"
+        case .disliked: "不喜欢"
+        case .playlists: "我的歌单"
+        case .categories: "分类"
+        case .search: "搜索"
+        case .assistant: "AI 助手"
+        case .downloads: "下载"
+        case .server: "服务器"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .home: "house"
+        case .recentlyPlayed: "clock"
+        case .recentlyAdded: "tray.and.arrow.down"
+        case let .library(scope): scope.symbol
+        case .favorites: "heart"
+        case .disliked: "heart.slash"
+        case .playlists: "music.note.list"
+        case .categories: "square.grid.2x2"
+        case .search: "magnifyingglass"
+        case .assistant: "sparkles"
+        case .downloads: "arrow.down.circle"
+        case .server: "server.rack"
+        }
+    }
+}
+
+/// 主内容区正常导航路由：专辑 / 艺术家 / 流派 / 歌单 / 正在播放。
+/// 由主内容 NavigationStack 承接，不再用通用 Sheet。
+enum MacContentRoute: Hashable {
+    case album(Album)
+    case artist(Artist)
+    case genre(Genre)
+    case playlist(Playlist)
+    case nowPlaying
+}
+
+/// macOS 主窗口：系统 Sidebar + 主内容 NavigationStack + 真正 SwiftUI Inspector，
+/// 以及固定在底部的桌面播放控制条。
 struct MacAuralisRootView: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
@@ -105,9 +128,11 @@ struct MacAuralisRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showInspector = false
     @State private var inspectorTab: MacInspector.InspectorTab = .queue
-    @State private var selectedTracks: Set<TrackID> = []
+    @State private var selectedTracks: Set<GlobalID> = []
     @State private var sidebarSearch = ""
     @State private var isSidebarSearchPresented = false
+    @State private var path: [MacContentRoute] = []
+    @State private var isTypingInSearchField = false
 
     private var theme: BuiltInTheme { themeStore.current }
 
@@ -115,53 +140,67 @@ struct MacAuralisRootView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 320)
-        } content: {
-            ZStack(alignment: .topTrailing) {
+        } detail: {
+            NavigationStack(path: $path) {
                 content
-                    .padding(.top, isShowingAlbumDetail ? 0 : 42)
-                if !isShowingAlbumDetail {
-                    contentActionBar
+                    .navigationDestination(for: MacContentRoute.self) { route in
+                        routeView(route)
+                    }
+            }
+            .navigationTitle(selection?.title ?? "澜音")
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        showInspector.toggle()
+                    } label: {
+                        Label("检查器", systemImage: "sidebar.right")
+                    }
+                    .help("显示或隐藏检查器（Command-Option-I）")
                 }
             }
-                .navigationTitle(selection?.title ?? "澜音")
-                .navigationSplitViewColumnWidth(min: 560, ideal: 800)
-        } detail: {
-            if showInspector {
-                MacInspector(model: model, theme: theme, initialTab: inspectorTab, onTabChange: { inspectorTab = $0 })
-                    .navigationSplitViewColumnWidth(min: 300, ideal: 330, max: 380)
+            .inspector(isPresented: $showInspector) {
+                MacInspector(
+                    model: model,
+                    theme: theme,
+                    initialTab: inspectorTab,
+                    onTabChange: { inspectorTab = $0 },
+                    selectedTracks: selectedTracks
+                )
+                .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
             }
         }
-        // 这个 macOS Beta 会强制为 NavigationSplitView 注入一枚纵向 sidebarToggle，
-        // 即使使用 `.toolbar(removing:)` 也无法移除。隐藏系统窗口工具栏，改由内容区
-        // 自己的无边框操作条承接控制，避免出现不对称的标题栏胶囊按钮。
-        .toolbarVisibility(.hidden, for: .windowToolbar)
-        // 桌面播放器固定在窗口底部，避免把歌曲信息、进度与播放键挤进狭窄的标题栏。
+        // 桌面播放器固定在窗口底部，提供持久 transport；主内容页不再复制大号控制。
         .safeAreaInset(edge: .bottom, spacing: 0) {
             MacDesktopPlayerBar(model: model, theme: theme)
         }
-        // Mac 端此前缺少这些 presentation，状态会被写入却没有界面承接。
-        .sheet(isPresented: $model.isNowPlayingPresented) {
-            NowPlayingView(model: model, theme: theme)
-                .frame(minWidth: 640, minHeight: 680)
-        }
+        // 只保留真正临时的系统弹窗：首次服务器配置。
         .sheet(isPresented: $model.shouldPresentServerSetup) {
             ServerConnectionSheet(model: model, theme: theme)
                 .frame(minWidth: 560, minHeight: 500)
         }
-        .sheet(item: browseDestinationSheetBinding) { destination in
-            BrowseDetailSheet(destination: destination, model: model, theme: theme)
-                .frame(minWidth: 640, minHeight: 560)
-        }
         .onChange(of: selection) { _, newValue in
             if newValue != nil { model.browseDestination = nil }
-            if newValue == .server { showInspector = false }
-            if newValue == .search { sidebarSearch = model.macSearchQuery }
+            if newValue == .search {
+                sidebarSearch = model.macSearchQuery
+                isSidebarSearchPresented = true
+            }
+        }
+        .onChange(of: model.browseDestination) { _, destination in
+            guard let destination else { return }
+            let route: MacContentRoute? = switch destination {
+            case let .album(album): .album(album)
+            case let .artist(artist): .artist(artist)
+            case let .genre(genre): .genre(genre)
+            case let .playlist(playlist): .playlist(playlist)
+            default: nil
+            }
+            if let route {
+                path.append(route)
+                model.browseDestination = nil
+            }
         }
         .onChange(of: selectedTracks) { _, newValue in
             if !newValue.isEmpty { showInspector = true }
-        }
-        .onChange(of: model.currentTrack.id) { _, _ in
-            if model.currentTrack.id.rawValue != "placeholder" { showInspector = true }
         }
         .onChange(of: sidebarSearch) { _, newValue in
             model.macSearchQuery = newValue
@@ -174,7 +213,7 @@ struct MacAuralisRootView: View {
             isSidebarSearchPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: MacCommandNotification.revealNowPlaying)) { _ in
-            model.isNowPlayingPresented = true
+            path.append(.nowPlaying)
         }
         .onReceive(NotificationCenter.default.publisher(for: MacCommandNotification.toggleInspector)) { _ in
             showInspector.toggle()
@@ -191,29 +230,33 @@ struct MacAuralisRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: MacCommandNotification.togglePlay)) { _ in
             model.togglePlayback()
         }
-        // 空格播放/暂停：仅在未编辑文本时响应（TextField 聚焦时不会到达这里）。
-        .onKeyPress(.space) {
-            model.togglePlayback()
-            return .handled
+        .onReceive(NotificationCenter.default.publisher(for: MacCommandNotification.songAppreciation)) { note in
+            guard let track = note.object as? Track else { return }
+            beginSongAppreciation(track)
         }
+        .onReceive(NotificationCenter.default.publisher(for: MacCommandNotification.showTrackInformation)) { note in
+            guard let track = note.object as? Track else { return }
+            let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+            selectedTracks = [gid]
+            inspectorTab = .details
+            showInspector = true
+        }
+        // 空格播放/暂停唯一入口在 Menu Bar 的 CommandMenu（带 .space 快捷键）。
+        // 系统会优先把按键交给聚焦的 TextField / SearchField，输入框内不会触发播放。
     }
 
-    /// 专辑在 Mac 主内容区内导航，保留与 Apple Music 相同的「网格 → 专辑详情」层级；
-    /// 其余临时浏览目标仍采用已有的通用弹窗，避免影响 iOS 路由。
-    private var browseDestinationSheetBinding: Binding<BrowseDestination?> {
-        Binding(
-            get: {
-                guard !model.shouldPresentServerSetup, let destination = model.browseDestination else { return nil }
-                if case .album = destination { return nil }
-                return destination
-            },
-            set: { model.browseDestination = $0 }
-        )
-    }
-
-    private var isShowingAlbumDetail: Bool {
-        if case .album = model.browseDestination { return true }
-        return false
+    /// 对指定歌曲发起歌曲鉴赏：切换到 AI 助手并调用 music_appreciate。
+    private func beginSongAppreciation(_ track: Track) {
+        selection = .assistant
+        if model.assistantIsRunning { model.cancelAssistant() }
+        let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description
+        Task { @MainActor in
+            _ = await model.agentCoordinator.newSession()
+            model.agentCoordinator.send(
+                "请调用 music_appreciate，专业鉴赏《\(track.title)》—\(track.artistName)（trackID: \(gid)），并按应用规定的鉴赏格式输出，区分已核验事实、专业听感与大众评价。",
+                intent: .musicAppreciation
+            )
+        }
     }
 
     // MARK: - 侧边栏
@@ -230,11 +273,14 @@ struct MacAuralisRootView: View {
                     sidebarItem(.library(scope))
                 }
                 sidebarItem(.favorites)
+                sidebarItem(.disliked)
                 sidebarItem(.playlists)
+                sidebarItem(.categories)
             }
             Section("实用工具") {
                 sidebarItem(.downloads)
                 sidebarItem(.assistant)
+                sidebarItem(.server)
             }
         }
         .listStyle(.sidebar)
@@ -247,12 +293,6 @@ struct MacAuralisRootView: View {
         .onSubmit(of: .text) {
             selection = .search
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            MacServerStatusEntry(model: model, theme: theme) {
-                selection = .server
-                showInspector = false
-            }
-        }
     }
 
     @ViewBuilder
@@ -264,157 +304,65 @@ struct MacAuralisRootView: View {
     // MARK: - 内容路由
 
     @ViewBuilder
-    private var content: some View {
-        if case let .album(album) = model.browseDestination {
+    private func routeView(_ route: MacContentRoute) -> some View {
+        switch route {
+        case let .album(album):
             MacAlbumDetailPage(album: album, model: model, theme: theme) {
-                model.browseDestination = nil
+                if !path.isEmpty { path.removeLast() }
             }
-        } else {
-            switch selection {
-            case .home:
-                MacHomePage(model: model, theme: theme, selection: $selectedTracks) {
-                    selection = .server
-                    showInspector = false
-                }
-            case .recentlyPlayed:
-                MacTrackListPage(title: "最近播放", tracks: model.recentlyPlayedTracks,
-                                 selection: $selectedTracks, model: model, theme: theme)
-            case .recentlyAdded:
-                MacTrackListPage(title: "最近添加", tracks: Array(model.recentlyAddedTracks.prefix(300)),
-                                 selection: $selectedTracks, model: model, theme: theme)
-            case let .library(scope):
-                MacLibraryPage(scope: scope, model: model, theme: theme, selection: $selectedTracks)
-            case .favorites:
-                MacTrackListPage(title: "收藏歌曲", tracks: model.favoriteTracks,
-                                 selection: $selectedTracks, model: model, theme: theme)
-            case .playlists:
-                MacPlaylistPage(model: model, theme: theme)
-            case .search:
-                MacSearchPage(model: model, theme: theme, query: sidebarSearch, selection: $selectedTracks)
-            case .assistant:
-                AssistantView(model: model, theme: theme)
-            case .downloads:
-                MacDownloadsPage(model: model, theme: theme)
-            case .server:
-                MacServerPage(model: model, theme: theme)
-            case nil:
-                ContentUnavailableView("选择一个项目", systemImage: "music.note.list",
-                                       description: Text("从左侧选择资料库或工具开始"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+        case let .artist(artist):
+            MacArtistDetailPage(artist: artist, model: model, theme: theme, selection: $selectedTracks)
+        case let .genre(genre):
+            MacGenreDetailPage(genre: genre, model: model, theme: theme, selection: $selectedTracks)
+        case let .playlist(playlist):
+            MacPlaylistDetailPage(playlist: playlist, model: model, theme: theme, selection: $selectedTracks)
+        case .nowPlaying:
+            MacNowPlayingPage(model: model, theme: theme)
         }
     }
 
-    // MARK: - 内容区操作条
-
-    private var contentActionBar: some View {
-        HStack(spacing: 2) {
-            MacToolbarIconButton(symbol: "sidebar.left", help: "显示或隐藏侧边栏") {
-                withAnimation {
-                    columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
-                }
+    @ViewBuilder
+    private var content: some View {
+        switch selection {
+        case .home:
+            MacHomePage(model: model, theme: theme, selection: $selectedTracks) {
+                selection = .server
             }
-            MacToolbarIconButton(symbol: "text.quote", help: "歌词") {
-                inspectorTab = .lyrics
-                showInspector = true
-            }
-            MacToolbarIconButton(symbol: "list.bullet", help: "播放队列") {
-                inspectorTab = .queue
-                showInspector = true
-            }
-            Menu {
-                Button("显示或隐藏检查器") { showInspector.toggle() }
-                Button("音频输出…") { openAudioOutput() }
-                Divider()
-                Button("设置…") { openSettings() }
-                    .keyboardShortcut(",", modifiers: .command)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 28, height: 28)
-                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .tint(.primary)
-            .help("更多")
-        }
-        .padding(.top, 7)
-        .padding(.trailing, 12)
-    }
-
-    private func openSettings() {
-        if #available(macOS 14.0, *) {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } else {
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
-    }
-
-    private func openAudioOutput() {
-        // macOS 没有与 iOS 等价的系统输出选择器；打开系统声音偏好设置。
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.sound") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-}
-
-/// 侧边栏底部服务器状态入口（紧凑）：名称 + 在线状态 + 同步状态。
-private struct MacServerStatusEntry: View {
-    @ObservedObject var model: AuralisAppModel
-    let theme: BuiltInTheme
-    let onTap: () -> Void
-    @State private var hovering = false
-
-    private var isOnline: Bool {
-        if case .connected = model.serverConnectionState { return true }
-        if case .connecting = model.serverConnectionState { return true }
-        return false
-    }
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(isOnline ? theme.colorTokens.success.color : theme.colorTokens.warning.color)
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(model.catalog.activeAccount?.displayName ?? "未连接服务器")
-                        .font(.caption.weight(.medium))
-                        .lineLimit(1)
-                        .foregroundStyle(theme.colorTokens.primaryText.color)
-                    Text(statusLine)
-                        .font(.caption2)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-            .background(hovering ? theme.colorTokens.surface.color.opacity(0.5) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .onHover { hovering = $0 }
-    }
-
-    private var statusLine: String {
-        switch model.serverConnectionState {
-        case .idle: "未添加服务器"
-        case .connecting(let stage): stage.title
-        case let .connected(_, type, version, count):
-            ([type, version].compactMap { $0 }.joined(separator: " · ") + " · \(count) 首")
-        case .failed: "连接失败"
+        case .recentlyPlayed:
+            MacTrackListPage(title: "最近播放", tracks: model.recentlyPlayedTracks,
+                             selection: $selectedTracks, model: model, theme: theme)
+        case .recentlyAdded:
+            MacTrackListPage(title: "最近添加", tracks: Array(model.recentlyAddedTracks.prefix(300)),
+                             selection: $selectedTracks, model: model, theme: theme)
+        case let .library(scope):
+            MacLibraryPage(scope: scope, model: model, theme: theme, selection: $selectedTracks)
+        case .favorites:
+            MacTrackListPage(title: "收藏歌曲", tracks: model.favoriteTracks,
+                             selection: $selectedTracks, model: model, theme: theme)
+        case .disliked:
+            MacDislikedPage(model: model, theme: theme, selection: $selectedTracks)
+        case .playlists:
+            MacPlaylistPage(model: model, theme: theme)
+        case .categories:
+            MacV2CategoriesPage(model: model, theme: theme, selection: $selectedTracks)
+        case .search:
+            MacSearchPage(model: model, theme: theme, query: sidebarSearch, selection: $selectedTracks)
+        case .assistant:
+            AssistantView(model: model, theme: theme)
+        case .downloads:
+            MacDownloadsPage(model: model, theme: theme)
+        case .server:
+            MacServerPage(model: model, theme: theme)
+        case nil:
+            ContentUnavailableView("选择一个项目", systemImage: "music.note.list",
+                                   description: Text("从左侧选择资料库或工具开始"))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
 
 /// 固定在窗口底部的桌面播放条。
-/// 让播放信息、进度和核心控制拥有稳定的水平空间，而不是与窗口工具栏的系统按钮争抢位置。
+/// 播放信息、进度与核心控制拥有稳定的水平空间；Previous/Next 使用统一 capability。
 private struct MacDesktopPlayerBar: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
@@ -428,6 +376,9 @@ private struct MacDesktopPlayerBar: View {
 
     private var hasTrack: Bool { model.currentTrack.id.rawValue != "placeholder" }
     private var duration: TimeInterval { max(model.currentTrack.duration, 1) }
+    private var currentGID: GlobalID? {
+        hasTrack ? GlobalID(serverID: model.currentTrack.serverID, remoteID: model.currentTrack.id.rawValue) : nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -465,12 +416,39 @@ private struct MacDesktopPlayerBar: View {
                                 .lineLimit(1)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                         }
-                        .frame(maxWidth: 260, alignment: .leading)
+                        .frame(maxWidth: 200, alignment: .leading)
+                        // 当前歌曲的私人状态：不喜欢 / 收藏（不进入 transport 三键）。
+                        if currentGID != nil {
+                            HStack(spacing: 8) {
+                                Button {
+                                    model.toggleDisliked(model.currentTrack)
+                                } label: {
+                                    Image(systemName: model.isDisliked(model.currentTrack) ? "heart.slash.fill" : "heart.slash")
+                                        .foregroundStyle(model.isDisliked(model.currentTrack) ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
+                                }
+                                .buttonStyle(.plain)
+                                .help(model.isDisliked(model.currentTrack) ? "取消不喜欢" : "不喜欢")
+                                .accessibilityLabel(model.isDisliked(model.currentTrack) ? "取消不喜欢" : "不喜欢")
+
+                                Button {
+                                    model.toggleFavorite(model.currentTrack)
+                                } label: {
+                                    Image(systemName: model.currentTrack.isFavorite ? "heart.fill" : "heart")
+                                        .foregroundStyle(model.currentTrack.isFavorite ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
+                                }
+                                .buttonStyle(.plain)
+                                .help(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+                                .accessibilityLabel(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+                            }
+                        }
                     }
                 }
                 .buttonStyle(.plain)
                 .disabled(!hasTrack)
                 .help("打开正在播放")
+                .onTapGesture {
+                    if hasTrack { pathlessOpenNowPlaying() }
+                }
 
                 Spacer(minLength: 20)
 
@@ -480,7 +458,7 @@ private struct MacDesktopPlayerBar: View {
                             .frame(width: 28, height: 28)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!hasTrack || !model.hasPrevious)
+                    .disabled(!model.canGoPrevious)
                     .help("上一首（Command-Left）")
 
                     Button { if hasTrack { model.togglePlayback() } } label: {
@@ -500,7 +478,7 @@ private struct MacDesktopPlayerBar: View {
                             .frame(width: 28, height: 28)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!hasTrack || !model.hasNext)
+                    .disabled(!model.canGoNext)
                     .help("下一首（Command-Right）")
                 }
 
@@ -531,150 +509,9 @@ private struct MacDesktopPlayerBar: View {
         }
     }
 
-    private static func timeText(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds))
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-/// 工具栏中的图标操作固定为同一触控尺寸；没有默认边框，悬停时才给出轻微背景。
-private struct MacToolbarIconButton: View {
-    let symbol: String
-    let help: String
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 28, height: 28)
-                .background(isHovering ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .help(help)
-    }
-}
-
-/// 顶部工具栏播放器控制区（视觉中心）：空状态与播放状态保持基本尺寸，避免重排。
-private struct MacToolbarPlayback: View {
-    @ObservedObject var model: AuralisAppModel
-    @ObservedObject private var playbackStore: PlaybackStore
-    let theme: BuiltInTheme
-    @State private var hovering = false
-
-    init(model: AuralisAppModel, theme: BuiltInTheme) {
-        self.model = model
-        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
-        self.theme = theme
-    }
-
-    private var isPlaying: Bool { model.currentTrack.id.rawValue != "placeholder" }
-    private var duration: TimeInterval { model.currentTrack.duration > 0 ? model.currentTrack.duration : 1 }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            // 上一首
-            Button {
-                if isPlaying { model.previous() }
-            } label: {
-                Image(systemName: "backward.fill")
-            }
-            .buttonStyle(.plain)
-            .disabled(!isPlaying)
-            .help("上一首（Command-Left）")
-
-            // 播放 / 暂停
-            Button {
-                if isPlaying { model.togglePlayback() }
-            } label: {
-                Image(systemName: isPlaying ? (model.playbackState == .playing ? "pause.fill" : "play.fill") : "play.fill")
-                    .font(.title2)
-                    .frame(width: 20)
-            }
-            .buttonStyle(.plain)
-            .disabled(!isPlaying)
-            .help("播放 / 暂停（Space）")
-
-            // 下一首
-            Button {
-                if isPlaying { model.next() }
-            } label: {
-                Image(systemName: "forward.fill")
-            }
-            .buttonStyle(.plain)
-            .disabled(!isPlaying)
-            .help("下一首（Command-Right）")
-
-            Divider().frame(height: 28)
-
-            if isPlaying {
-                // 当前歌曲信息（可点击打开正在播放）
-                Button {
-                    model.isNowPlayingPresented = true
-                } label: {
-                    HStack(spacing: 8) {
-                        ArtworkView(title: model.currentTrack.albumTitle,
-                                    artworkKey: model.currentTrack.artworkKey,
-                                    colors: theme.colorTokens, size: 40, cornerRadius: 6)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(model.currentTrack.title)
-                                .font(.callout.weight(.semibold))
-                                .lineLimit(1)
-                                .foregroundStyle(theme.colorTokens.primaryText.color)
-                            Text(model.currentTrack.artistName)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                        }
-                        .frame(maxWidth: 180, alignment: .leading)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(hovering ? theme.colorTokens.surface.color.opacity(0.6) : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .help("打开正在播放")
-                .onHover { hovering = $0 }
-
-                // 进度（可拖动）
-                VStack(spacing: 2) {
-                    Slider(value: Binding(
-                        get: { playbackStore.position },
-                        set: { model.seek(toProgress: $0 / duration) }
-                    ), in: 0...duration)
-                    .frame(width: 160)
-                    .controlSize(.mini)
-                    HStack {
-                        Text(Self.timeText(playbackStore.position))
-                        Spacer()
-                        Text(Self.timeText(model.currentTrack.duration))
-                    }
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                }
-            } else {
-                // 空状态：保留播放器区域基本尺寸
-                HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(theme.colorTokens.surface.color.opacity(0.5))
-                        .frame(width: 40, height: 40)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("未在播放")
-                            .font(.callout)
-                            .foregroundStyle(theme.colorTokens.secondaryText.color)
-                        Text("从左侧选择一首歌曲开始")
-                            .font(.caption2)
-                            .foregroundStyle(theme.colorTokens.secondaryText.color.opacity(0.7))
-                    }
-                    .frame(width: 180, alignment: .leading)
-                }
-                .frame(height: 48)
-            }
-        }
+    /// 打开正在播放页：通过浏览入口（revealNowPlaying 命令同路径）。
+    private func pathlessOpenNowPlaying() {
+        NotificationCenter.default.post(name: MacCommandNotification.revealNowPlaying, object: nil)
     }
 
     private static func timeText(_ seconds: TimeInterval) -> String {

@@ -325,9 +325,11 @@ public final class AuralisAgentBridge: AgentBridge {
     }
 
     /// 曲目解析：先内存 catalog，未命中再从本地目录库按 GlobalID 取（Agent 查询到的曲目）。
+    /// 必须同时匹配 serverID 与 remoteID，禁止退化成 TrackID 查找。
     private func resolveTrackAnywhere(_ globalID: GlobalID) async -> Track? {
-        if let active = model.catalog.activeServerID, active != globalID.serverID { return nil }
-        if let track = model.catalog.tracks.first(where: { $0.id.rawValue == globalID.remoteID }) {
+        if let track = model.catalog.tracks.first(where: {
+            $0.serverID == globalID.serverID && $0.id.rawValue == globalID.remoteID
+        }) {
             return track
         }
         return try? await catalog.getTrack(globalID)
@@ -335,9 +337,10 @@ public final class AuralisAgentBridge: AgentBridge {
 
     // MARK: - Resolution
 
-    /// GlobalID → 内存 catalog 中的 Track。多服务器隔离：serverID 必须匹配当前账户。
+    /// GlobalID → 内存 catalog 中的 Track。多服务器隔离：serverID 必须精确匹配。
     private func resolveTrack(_ globalID: GlobalID) -> Track? {
-        if let active = model.catalog.activeServerID, active != globalID.serverID { return nil }
-        return model.catalog.tracks.first { $0.id.rawValue == globalID.remoteID }
+        model.catalog.tracks.first {
+            $0.serverID == globalID.serverID && $0.id.rawValue == globalID.remoteID
+        }
     }
 }
