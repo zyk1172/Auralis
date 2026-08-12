@@ -1,6 +1,5 @@
 # Auralis Agent 架构
 
-
 # Execution Philosophy
 
 Auralis uses a permissive direct-execution agent runtime.
@@ -33,6 +32,10 @@ User cancellation and per-request timeouts remain supported.
 - 单工具超时/异常回灌结构化失败结果，模型可换工具、换参数、换策略继续。
 - `queue_replace` 可用不同参数多次调用；相同工具 + 相同参数幂等复用。
 - 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认。
+- `ToolSelector` 是纯 Schema 优化器：§6.1 常用工具（查询/推荐/播放/队列/歌单/收藏/
+  服务器/歌词/公开资料）常驻 schema，保证原生 function calling 始终可用；旧式驼峰别名
+  （searchTracks、playTrack 等）统一映射回 canonical 名称，不再重复暴露，执行兼容由
+  注册表保留。
 
 ## 目标
 

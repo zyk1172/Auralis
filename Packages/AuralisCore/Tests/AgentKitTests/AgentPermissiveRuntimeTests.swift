@@ -805,6 +805,49 @@ struct AgentPermissiveRuntimeTests {
         #expect(provider.requests[1].messages.contains { $0.role == .user && $0.content.contains("（工具执行结果）recommend_by_mood") })
     }
 
+    // MARK: - TEST 27 / 28：Schema 只暴露 canonical，重复别名不占 schema
+
+    @Test("TEST27 旧别名映射回 canonical，不再重复暴露")
+    func schemaPrefersCanonicalOverAlias() {
+        let search = ToolSelector.select(for: "搜索周杰伦", all: AgentToolRegistry.all)
+        let searchNames = Set(search.map(\.name))
+        #expect(searchNames.contains("library_search"))
+        #expect(!searchNames.contains("searchTracks"))
+
+        let play = ToolSelector.select(for: "播放这首歌", all: AgentToolRegistry.all)
+        let playNames = Set(play.map(\.name))
+        #expect(playNames.contains("playback_play_song"))
+        #expect(!playNames.contains("playTrack"))
+
+        let favorites = ToolSelector.select(for: "我的收藏", all: AgentToolRegistry.all)
+        let favNames = Set(favorites.map(\.name))
+        #expect(favNames.contains("library_get_starred"))
+        #expect(!favNames.contains("getFavorites"))
+    }
+
+    @Test("TEST28 发现/播放/队列/歌单/收藏/不喜欢等常用工具均可获得")
+    func commonToolsAreObtainable() {
+        // §6.1：音乐发现任务一次就能拿到推荐、队列、播放、收藏、不喜欢等工具。
+        let discovery = ToolSelector.select(
+            for: "给我放一组适合开车提神的歌",
+            intent: .musicDiscovery,
+            policy: AgentTaskPolicy.policy(for: .musicDiscovery),
+            all: AgentToolRegistry.all
+        )
+        let names = Set(discovery.map(\.name))
+        #expect(names.contains("recommend_by_mood"))
+        #expect(names.contains("recommend_by_constraints"))
+        #expect(names.contains("library_select_tracks"))
+        #expect(names.contains("library_get_catalog_index"))
+        #expect(names.contains("queue_replace"))
+        #expect(names.contains("queue_append"))
+        #expect(names.contains("playback_play_song"))
+        #expect(names.contains("playback_play_playlist"))
+        #expect(names.contains("favorite_set"))
+        #expect(names.contains("preference_set_disliked"))
+        #expect(names.contains("lyrics_get"))
+    }
+
     // MARK: - TEST 23 / 24：隐私与凭据
 
     @Test("TEST23 allowsLyrics=false 时歌词正文不进入 Provider 请求")

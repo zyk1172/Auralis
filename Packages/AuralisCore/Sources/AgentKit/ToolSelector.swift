@@ -1,37 +1,60 @@
 import AIKit
 import Foundation
 
-/// 动态工具加载：根据用户意图只向模型暴露相关工具，降低 tool schema 对上下文的占用。
+/// 动态工具加载：Schema 优化器，只决定“这次把哪些工具的 JSON Schema 给模型”，
+/// 绝不决定 Agent 能否完成任务（permissive runtime 里已注册工具默认全部可执行）。
 ///
-/// 规则集中维护：核心工具常驻，其余工具按关键词分组按需加入。
+/// 规则：CommonSafeTools ∪ IntentSuggestedTools ∪ KeywordSuggestedTools ∪
+/// TaskRequiredTools（纯加法）。任务进行中由 AgentRunner 每轮用「用户原文 + 模型
+/// 已输出文本 + 已执行工具」重新展开，第一轮没选中的工具不会永久缺失。
+///
 /// 选择结果同时驱动：
 /// 1) 原生 function calling 的 `tools` 请求体；
 /// 2) 系统提示词中的工具清单。
-/// 未选中的工具仍然注册、可执行（模型若误用也不会报错），只是不再展示。
+///
+/// 旧式驼峰别名（searchTracks、playTrack 等）仍注册、可执行，但在此处统一映射回
+/// 新式 canonical 名称，避免同一语义的重复 schema 同时暴露给模型。
 public enum ToolSelector {
     // MARK: - 工具组（新式名称为主，含无新式替代的旧式名称）
 
-    /// 任何请求都可能需要的基础查询 / 播放能力。
+    /// 长期可获得（CommonSafeTools）：核心 + 需求文档 §6.1 的常用工具全部常驻 schema。
+    /// 原生 function calling 只能调用 schema 内工具；为了让模型在任意任务中都能直接
+    /// 使用这些能力（而不依赖脆弱的关键词命中），它们必须常驻。仍保持远小于全量注册表
+    /// 的有界子集（旧别名在此统一映射回 canonical，不重复占位）。
     static let coreNames: [String] = [
-        "library_get_summary",
-        "library_search", "library_select_tracks", "library_get_catalog_index", "library_get_catalog_tracks", "library_get_song", "music_appreciate",
-        // 推荐索引 V2 是一个长任务：后续轮次的输入往往只写「继续」或「开始」，
-        // 不能仅靠本条文字匹配，否则 OpenAI Responses 的 tools 请求会漏掉它们。
-        // 三个工具的实际执行仍受 AgentRunner 的明确意图规则约束。
+        // 本地库查询
+        "library_get_summary", "library_search", "library_select_tracks",
+        "library_get_catalog_index", "library_get_catalog_tracks", "library_get_song",
+        "library_get_album", "library_get_artist", "library_get_playlist",
+        "library_get_starred", "library_get_recently_played", "library_get_random_songs",
+        "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre",
+        "music_appreciate",
+        // 推荐索引 V2（长任务：后续轮次可能只写「继续」，必须常驻 schema）
         "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch",
+        // 推荐 / 发现
+        "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
+        // 播放
         "playback_get_state",
         "playback_play_song", "playback_play_album", "playback_play_artist",
         "playback_play_playlist", "playback_play_random",
-        // 常驻新式歌单加歌工具；旧式别名与按下标删除只在明确歌单意图时提供，
-        // 避免每个请求都携带重复 schema，保持原生接口工具集有界。
-        "playlist_add_songs",
         "playback_pause", "playback_resume",
         "playback_next", "playback_previous", "playback_seek",
         "playback_set_shuffle", "playback_set_repeat",
+        // 队列
         "queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear",
-        // 音乐下载（MoviePilot）：用户点播不在库中的歌曲 / 直接要求下载时使用
+        "queue_move", "queue_shuffle_remaining",
+        // 歌单
+        "listPlaylists", "playlist_create", "playlist_add_songs",
+        "removeTracksFromPlaylist", "deletePlaylist",
+        // 收藏 / 不喜欢
+        "favorite_set", "preference_set_disliked", "library_get_disliked",
+        // 服务器
+        "server_get_current", "server_list", "server_search", "server_sync_status",
+        // 歌词 / 公开音乐资料
+        "lyrics_get", "music_get_public_evidence",
+        // 音乐下载（MoviePilot）
         "music_download",
-        // 记忆与技能：主人报出个人信息 / 创建、读取 skill 时使用（常驻，保证原生模式可用）
+        // 记忆与技能
         "memory_save", "memory_list", "memory_delete", "memory_clear",
         "skill_create", "skill_list", "skill_read", "skill_delete",
     ]
@@ -81,7 +104,53 @@ public enum ToolSelector {
         "cache_get_status",
     ]
 
-    /// 按用户请求选择工具集（去重保序）。
+    /// 旧式别名 → 新式 canonical 名称（执行兼容由注册表保留，schema 只暴露 canonical）。
+    /// 只在两个工具语义完全等价时映射；无新式替代的旧工具（deletePlaylist、
+    /// removeTracksFromPlaylist、setRating、removeServer 等）不在映射中。
+    static let canonicalAliases: [String: String] = [
+        "searchTracks": "library_search",
+        "searchAlbums": "library_search",
+        "searchArtists": "library_search",
+        "getTrack": "library_get_song",
+        "getAlbum": "library_get_album",
+        "getArtist": "library_get_artist",
+        "getFavorites": "library_get_starred",
+        "getRecentHistory": "library_get_recently_played",
+        "getSimilarTracks": "library_get_similar_songs",
+        "getPlaylist": "library_get_playlist",
+        "playTrack": "playback_play_song",
+        "playAlbum": "playback_play_album",
+        "playPlaylist": "playback_play_playlist",
+        "pause": "playback_pause",
+        "resume": "playback_resume",
+        "next": "playback_next",
+        "previous": "playback_previous",
+        "seek": "playback_seek",
+        "addToQueue": "queue_append",
+        "playNext": "queue_play_next",
+        "replaceQueue": "queue_replace",
+        "clearQueue": "queue_clear",
+        "addTracksToPlaylist": "playlist_add_songs",
+        "listServers": "server_list",
+        "getActiveServer": "server_get_current",
+        "testServerConnection": "server_test_connection",
+        "likeTrack": "favorite_set",
+        "unlikeTrack": "favorite_set",
+        "favoriteAlbum": "favorite_set",
+        "unfavoriteAlbum": "favorite_set",
+        "favoriteArtist": "favorite_set",
+        "unfavoriteArtist": "favorite_set",
+    ]
+
+    /// 把旧别名映射为 canonical 并按首次出现顺序去重。
+    static func resolvedNames(_ names: [String]) -> [String] {
+        var seen = Set<String>()
+        return names
+            .map { canonicalAliases[$0] ?? $0 }
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// 按用户请求选择工具集（去重保序；旧别名映射回 canonical）。
     public static func select(for userText: String, all: [ToolDescriptor]) -> [ToolDescriptor] {
         let lower = userText.lowercased()
         var names = coreNames
@@ -95,8 +164,7 @@ public enum ToolSelector {
         if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
         if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
 
-        var seen = Set<String>()
-        let unique = names.filter { seen.insert($0).inserted }
+        let unique = Self.resolvedNames(names)
         let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
         return unique.compactMap { byName[$0] }
     }
@@ -137,9 +205,10 @@ public enum ToolSelector {
         case .memoryManagement:
             intentNames = ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
         }
-        let existing = Set(selected.map(\.name))
-        selected.append(contentsOf: all.filter { intentNames.contains($0.name) && !existing.contains($0.name) })
-        return selected
+        let names = selected.map(\.name) + intentNames.sorted()
+        let unique = Self.resolvedNames(names)
+        let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
+        return unique.compactMap { byName[$0] }
     }
 
     /// 把选中的工具描述转为原生 function calling 定义。
