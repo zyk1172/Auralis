@@ -103,10 +103,11 @@ private struct MacV2DimensionPane: View {
     @State private var selectedCategory: RecommendationIndexV2Category?
     @State private var selection: Set<GlobalID> = []
     @State private var tracks: [Track] = []
-    /// AI 标签独立浏览：搜索 + 分页（读取优化，不代表标签数量限制）。
+    /// AI 标签独立浏览：offset 游标分页（读取优化，不代表标签数量限制）。
     @State private var tagQuery = ""
-    @State private var tagLimit = 30
-    @State private var tagExhausted = false
+    @State private var tagNextOffset: Int? = 0
+    @State private var isLoadingMoreTags = false
+    private static let tagPageSize = 30
 
     /// 展示给列表的分类：tag 维度按需搜索/分页加载，其余维度用传入的全部 categories。
     @State private var displayedCategories: [RecommendationIndexV2Category] = []
@@ -141,11 +142,14 @@ private struct MacV2DimensionPane: View {
                     .tag(category)
                 }
                 .listStyle(.sidebar)
-                if isTagDimension, !tagExhausted {
+                if isTagDimension, tagNextOffset != nil {
                     Button {
                         Task { await loadTagPage(reset: false) }
                     } label: {
-                        Text("加载更多标签")
+                        HStack {
+                            if isLoadingMoreTags { ProgressView().controlSize(.small) }
+                            Text("加载更多标签")
+                        }
                     }
                     .buttonStyle(.bordered)
                     .padding(6)
@@ -166,13 +170,24 @@ private struct MacV2DimensionPane: View {
 
     private func loadTagPage(reset: Bool) async {
         guard isTagDimension, let serverID = model.catalog.activeServerID else { return }
-        if reset { tagLimit = 30 }
+        if reset {
+            displayedCategories = []
+            tagNextOffset = 0
+        }
+        guard let offset = tagNextOffset else {
+            isLoadingMoreTags = false
+            return
+        }
         let query = tagQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fetched = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
-            serverID: serverID, query: query.isEmpty ? nil : query, limit: tagLimit
-        )) ?? []
-        displayedCategories = fetched
-        tagExhausted = fetched.count < tagLimit
+        let page = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
+            serverID: serverID, query: query.isEmpty ? nil : query, limit: Self.tagPageSize, offset: offset
+        )) ?? RecommendationIndexV2TagPage(items: [], nextOffset: nil, hasMore: false)
+        var merged = reset ? page.items : displayedCategories + page.items
+        var seen = Set<String>()
+        merged = merged.filter { seen.insert($0.id).inserted }
+        displayedCategories = merged
+        tagNextOffset = page.nextOffset
+        isLoadingMoreTags = false
     }
 
     private func loadTracks(_ category: RecommendationIndexV2Category) async {

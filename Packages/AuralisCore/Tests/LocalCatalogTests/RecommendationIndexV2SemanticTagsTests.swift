@@ -132,6 +132,247 @@ struct RecommendationIndexV2SemanticTagsTests {
         #expect(rows.contains { $0.dimension == "tag" && $0.value == "夜行感" })
     }
 
+    @Test("TEST V2-PAGE-01 620 个标签逐页读取，无 500 上限")
+    func sixHundredTwentyTagsPaginate() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
+        // 建立 state（让 tag_catalog join 到 state）。
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let id = try #require(batch.tracks.first?.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
+        ], serverID: serverID)
+        // 直接插入 620 个不同标签。
+        let db = try await store.db
+        for index in 1...620 {
+            try db.run(
+                "INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+                [.text(id), .text(String(format: "测试标签%04d", index)), .real(0.5)]
+            )
+        }
+        // 逐页读取直到结束。
+        var collected: [String] = []
+        var offset = 0
+        while true {
+            let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID, limit: 50, offset: offset)
+            collected.append(contentsOf: page.items.map(\.value))
+            guard let next = page.nextOffset else { break }
+            offset = next
+        }
+        #expect(collected.count == 620)
+        #expect(Set(collected).count == 620)
+        // 第 501 个标签可读取。
+        #expect(collected.contains("测试标签0501"))
+        #expect(collected.contains("测试标签0620"))
+    }
+
+    @Test("TEST V2-PAGE-03 搜索结果超过一页仍能完整翻页")
+    func searchPaginationOverOnePage() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let id = try #require(batch.tracks.first?.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
+        ], serverID: serverID)
+        let db = try await store.db
+        for index in 1...150 {
+            try db.run(
+                "INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+                [.text(id), .text("夜行测试\(String(format: "%03d", index))"), .real(0.5)]
+            )
+        }
+        for index in 1...150 {
+            try db.run(
+                "INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+                [.text(id), .text("白天测试\(String(format: "%03d", index))"), .real(0.5)]
+            )
+        }
+        var collected: [String] = []
+        var offset = 0
+        while true {
+            let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID, query: "夜行", limit: 40, offset: offset)
+            collected.append(contentsOf: page.items.map(\.value))
+            guard let next = page.nextOffset else { break }
+            offset = next
+        }
+        #expect(collected.count == 150)
+        #expect(Set(collected).count == 150)
+    }
+
+    @Test("TEST V2-PENDING-01/02/03 unique 不重复计数")
+    func pendingUniqueSemantics() async throws {
+        let serverID: ServerID = "s1"
+        // 100 首新歌：fixed=100, semantic=100, unique=100。
+        let store1 = try semStore()
+        try await semSeed(store1, (0..<100).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
+        let s1 = try await store1.recommendationIndexV2Status(serverID: serverID)
+        #expect(s1.pendingTracks == 100)
+        #expect(s1.pendingSemanticTagTracks == 100)
+        #expect(s1.pendingUniqueTracks == 100)
+        let b1 = try await store1.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        #expect(b1.mode == "full")
+        #expect(b1.pendingFixedTracks == 100)
+        #expect(b1.pendingSemanticTagTracks == 100)
+        #expect(b1.pendingUniqueTracks == 100)
+
+        // 固定完成、语义版本回退为 0：fixed=0, semantic=100, unique=100, mode=semanticTagsOnly。
+        let store2 = try semStore()
+        try await semSeed(store2, (0..<100).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
+        let batch2 = try await store2.nextRecommendationIndexV2Batch(serverID: serverID, limit: 100)
+        let ids2 = batch2.tracks.map(\.id)
+        _ = try await store2.writeRecommendationIndexV2(
+            ids2.map { RecommendationIndexV2Classification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
+            serverID: serverID
+        )
+        try await store2.db.run("UPDATE recommendation_index_v2_state SET semantic_tag_rules_version = 0")
+        let s2 = try await store2.recommendationIndexV2Status(serverID: serverID)
+        #expect(s2.pendingTracks == 0)
+        #expect(s2.pendingSemanticTagTracks == 100)
+        #expect(s2.pendingUniqueTracks == 100)
+        let b2 = try await store2.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        #expect(b2.mode == "semanticTagsOnly")
+
+        // 20 首 fixed pending + 100 首 semantic pending：unique=100，不是 120；mode=full。
+        let store3 = try semStore()
+        try await semSeed(store3, (0..<100).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
+        let batch3 = try await store3.nextRecommendationIndexV2Batch(serverID: serverID, limit: 80)
+        let ids3 = batch3.tracks.map(\.id)
+        _ = try await store3.writeRecommendationIndexV2(
+            ids3.map { RecommendationIndexV2Classification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
+            serverID: serverID
+        )
+        try await store3.db.run("UPDATE recommendation_index_v2_state SET semantic_tag_rules_version = 0")
+        let s3 = try await store3.recommendationIndexV2Status(serverID: serverID)
+        #expect(s3.pendingTracks == 20)
+        #expect(s3.pendingSemanticTagTracks == 100)
+        #expect(s3.pendingUniqueTracks == 100)
+        let b3 = try await store3.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        #expect(b3.mode == "full")
+        #expect(b3.pendingUniqueTracks == 100)
+    }
+
+    @Test("TEST V2-CANONICAL-01 出现次数最多者作为 canonical display")
+    func canonicalByUsageCount() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        // 11 首歌：Lo-fi ×8 / LO-FI ×2 / lo-fi ×1。
+        try await semSeed(store, (0..<11).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 20)
+        let ids = batch.tracks.map(\.id)
+        _ = try await store.writeRecommendationIndexV2(
+            ids.map { RecommendationIndexV2Classification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
+            serverID: serverID
+        )
+        let db = try await store.db
+        for index in 0..<8 {
+            try db.run("INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+                [.text(ids[index]), .text("Lo-fi"), .real(0.6)])
+        }
+        for index in 8..<10 {
+            try db.run("INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+                [.text(ids[index]), .text("LO-FI"), .real(0.7)])
+        }
+        try db.run("INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+            [.text(ids[10]), .text("lo-fi"), .real(0.7)])
+        // 强制重跑迁移（模拟 legacy 库）。
+        try db.run("DELETE FROM catalog_migrations")
+        try await store.migrateRecommendationSemanticCanonicalIfNeeded()
+        // 所有 11 行都归一到 canonical "Lo-fi"。
+        let values = try await store.db.query(
+            "SELECT DISTINCT value FROM recommendation_index_v2_tags WHERE dimension = 'tag'"
+        ).compactMap { $0["value"]?.string }
+        #expect(values == ["Lo-fi"])
+        let vocab = try await store.db.query(
+            "SELECT display_value FROM recommendation_index_v2_tag_vocabulary WHERE normalized_key = 'lo-fi'"
+        )
+        #expect(vocab.first?["display_value"]?.string == "Lo-fi")
+    }
+
+    @Test("TEST V2-CANONICAL-02 同歌曲 casing 变体：只剩一行，confidence 取最高")
+    func canonicalSameTrackMaxConfidence() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let id = try #require(batch.tracks.first?.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
+        ], serverID: serverID)
+        let db = try await store.db
+        try db.run("INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+            [.text(id), .text("Lo-fi"), .real(0.6)])
+        try db.run("INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+            [.text(id), .text("LO-FI"), .real(0.8)])
+        try db.run("DELETE FROM catalog_migrations")
+        try await store.migrateRecommendationSemanticCanonicalIfNeeded()
+        let rows = try await store.db.query(
+            "SELECT value, confidence FROM recommendation_index_v2_tags WHERE global_id = ? AND dimension = 'tag'",
+            [.text(id)]
+        )
+        #expect(rows.count == 1)
+        #expect(rows.first?["value"]?.string == "Lo-fi")
+        #expect(rows.first?["confidence"]?.double == 0.8)
+    }
+
+    @Test("TEST V2-CANONICAL-03 二次打开不再重跑 migration，数据不变")
+    func migrationIdempotentAcrossReopen() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let storeURL = dir.appendingPathComponent("catalog.sqlite")
+        let store = try LocalCatalogStore(url: storeURL)
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let id = try #require(batch.tracks.first?.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3,
+                semanticTags: [.init(value: "Lo-fi", confidence: 0.8), .init(value: "LO-FI", confidence: 0.7)],
+                confidence: 0.8)
+        ], serverID: serverID)
+        // 首次打开时 init 已跑 migration；记录当前值。
+        let version1 = try await store.db.query("SELECT version FROM catalog_migrations WHERE key = ?",
+            [.text(LocalCatalogStore.semanticCanonicalMigrationKey)]).first?["version"]?.int ?? 0
+        #expect(version1 >= 1)
+        let values1 = try await store.db.query("SELECT value FROM recommendation_index_v2_tags WHERE dimension = 'tag' ORDER BY value")
+            .compactMap { $0["value"]?.string }
+        // 重新打开：不再重跑、数据不变。
+        let reopened = try LocalCatalogStore(url: storeURL)
+        let version2 = try await reopened.db.query("SELECT version FROM catalog_migrations WHERE key = ?",
+            [.text(LocalCatalogStore.semanticCanonicalMigrationKey)]).first?["version"]?.int ?? 0
+        #expect(version2 == version1)
+        let values2 = try await reopened.db.query("SELECT value FROM recommendation_index_v2_tags WHERE dimension = 'tag' ORDER BY value")
+            .compactMap { $0["value"]?.string }
+        #expect(values2 == values1)
+    }
+
+    @Test("TEST V2-CANONICAL-04 跨服务器新写入复用统一 vocabulary canonical")
+    func crossServerVocabularyReuse() async throws {
+        let store = try semStore()
+        try await semSeed(store, [semTrack(serverID: "serverA", remoteID: "a1", title: "Song A")])
+        try await semSeed(store, [semTrack(serverID: "serverB", remoteID: "b1", title: "Song B")])
+        let batchA = try await store.nextRecommendationIndexV2Batch(serverID: "serverA", limit: 10)
+        let idA = try #require(batchA.tracks.first?.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: idA, moods: ["平静"], energy: 3,
+                semanticTags: [.init(value: "Lo-fi", confidence: 0.8)])
+        ], serverID: "serverA")
+        // 服务器 B 输出 LO-FI：vocabulary 应统一为 Lo-fi。
+        let batchB = try await store.nextRecommendationIndexV2Batch(serverID: "serverB", limit: 10)
+        let idB = try #require(batchB.tracks.first?.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: idB, moods: ["平静"], energy: 3,
+                semanticTags: [.init(value: "LO-FI", confidence: 0.7)])
+        ], serverID: "serverB")
+        let rowsB = try await store.db.query(
+            "SELECT value FROM recommendation_index_v2_tags WHERE global_id = ? AND dimension = 'tag'",
+            [.text(idB)]
+        )
+        #expect(rowsB.first?["value"]?.string == "Lo-fi")
+    }
+
     @Test("TEST7 V2 export/import 保留 semantic tags")
     func transferPreservesSemanticTags() async throws {
         let store = try semStore()
@@ -242,10 +483,12 @@ struct RecommendationIndexV2SemanticTagsTests {
             "INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
             [.text(ids[1]), .text("LO-FI"), .real(0.7)]
         )
-        // 幂等迁移。
-        try await store.recommendationIndexV2MigrateSemanticCanonical()
+        // 幂等迁移（先重置版本模拟 legacy 库）。
+        try await store.db.run("DELETE FROM catalog_migrations")
+        try await store.migrateRecommendationSemanticCanonicalIfNeeded()
         // 数据库内部已 canonical：tag_catalog 显示 2 首，且点进去能取到 2 首。
-        let catalog = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let catalog = page.items
         let lofi = catalog.filter { RecommendationIndexV2.semanticTagKey($0.value) == "lo-fi" }
         #expect(lofi.count == 1)
         #expect(lofi.first?.trackCount == 2)
@@ -292,7 +535,8 @@ struct RecommendationIndexV2SemanticTagsTests {
             RecommendationIndexV2Classification(id: ids[1], moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "LO-FI", confidence: 0.7)]),
         ], serverID: serverID)
-        let catalog = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let catalog = page.items
         let lofi = catalog.filter { $0.dimension == "tag" && RecommendationIndexV2.semanticTagKey($0.value) == "lo-fi" }
         #expect(lofi.count == 1)
         #expect(lofi.first?.trackCount == 2)
@@ -340,7 +584,8 @@ struct RecommendationIndexV2SemanticTagsTests {
         let rows = try await semTagRows(store, id)
         #expect(rows.contains { $0.dimension == "mood" && $0.value == "平静" })
         // tag_catalog 可见。
-        let catalog = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let catalog = page.items
         #expect(catalog.contains { $0.dimension == "tag" && $0.value == "夜行感" && $0.trackCount == 1 })
     }
 }

@@ -263,6 +263,8 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
     public let semanticProcessedTracks: Int
     /// 尚需处理开放语义标签的歌曲数（semanticTagRulesVersion 低于当前版本）。
     public let pendingSemanticTagTracks: Int
+    /// 至少有一项工作（固定分类或开放语义标签）尚未完成的唯一歌曲数。
+    public let pendingUniqueTracks: Int
 
     public init(
         totalTracks: Int,
@@ -272,7 +274,8 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
         semanticTagRulesVersion: Int = RecommendationIndexV2.semanticTagRulesVersion,
         semanticTaggedTracks: Int = 0,
         semanticProcessedTracks: Int = 0,
-        pendingSemanticTagTracks: Int = 0
+        pendingSemanticTagTracks: Int = 0,
+        pendingUniqueTracks: Int = 0
     ) {
         self.totalTracks = totalTracks
         self.indexedTracks = indexedTracks
@@ -282,20 +285,37 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
         self.semanticTaggedTracks = semanticTaggedTracks
         self.semanticProcessedTracks = semanticProcessedTracks
         self.pendingSemanticTagTracks = pendingSemanticTagTracks
+        self.pendingUniqueTracks = pendingUniqueTracks
     }
 }
 
 public struct RecommendationIndexV2Batch: Sendable, Hashable {
     public let tracks: [CatalogTrackLine]
-    public let pendingTracks: Int
+    /// 固定分类待处理歌曲数。
+    public let pendingFixedTracks: Int
+    /// 开放语义标签待处理歌曲数。
+    public let pendingSemanticTagTracks: Int
+    /// 至少有一项工作尚未完成的唯一歌曲数（不重复计数）。
+    public let pendingUniqueTracks: Int
     public let rulesVersion: String
-    /// 本批主要需要的工作：full=固定维度+开放标签；semanticTagsOnly=只补开放标签；
-    /// mixed=混合。
+    /// 本批主要需要的工作：full=固定维度+开放标签；semanticTagsOnly=只补开放标签；done=无待处理。
     public let mode: String
 
-    public init(tracks: [CatalogTrackLine], pendingTracks: Int, rulesVersion: String, mode: String = "full") {
+    @available(*, deprecated, message: "Use pendingUniqueTracks")
+    public var pendingTracks: Int { pendingUniqueTracks }
+
+    public init(
+        tracks: [CatalogTrackLine],
+        pendingFixedTracks: Int,
+        pendingSemanticTagTracks: Int,
+        pendingUniqueTracks: Int,
+        rulesVersion: String,
+        mode: String = "full"
+    ) {
         self.tracks = tracks
-        self.pendingTracks = pendingTracks
+        self.pendingFixedTracks = pendingFixedTracks
+        self.pendingSemanticTagTracks = pendingSemanticTagTracks
+        self.pendingUniqueTracks = pendingUniqueTracks
         self.rulesVersion = rulesVersion
         self.mode = mode
     }
@@ -326,6 +346,20 @@ public struct RecommendationIndexV2Category: Sendable, Hashable, Identifiable {
         self.dimension = dimension
         self.value = value
         self.trackCount = trackCount
+    }
+}
+
+/// AI 标签（dimension='tag'）的一页结果：offset 游标分页，总量不受页大小限制。
+public struct RecommendationIndexV2TagPage: Sendable, Hashable {
+    public let items: [RecommendationIndexV2Category]
+    /// 下一页起始 offset；nil 表示没有更多。
+    public let nextOffset: Int?
+    public let hasMore: Bool
+
+    public init(items: [RecommendationIndexV2Category], nextOffset: Int?, hasMore: Bool) {
+        self.items = items
+        self.nextOffset = nextOffset
+        self.hasMore = hasMore
     }
 }
 

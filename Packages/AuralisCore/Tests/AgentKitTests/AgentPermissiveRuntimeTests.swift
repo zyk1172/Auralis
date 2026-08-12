@@ -905,6 +905,34 @@ struct AgentPermissiveRuntimeTests {
 
     // MARK: - TEST 31：musicDiscovery 无显式 final 时要求 result_present_tracks
 
+    @Test("TEST COUNT-02 中文数量 12：模型忘调 final → Runtime 兜底显示 12 首（不是 5）")
+    func chineseCountFallbackUsesTwelve() async throws {
+        let store = try makePermStore()
+        try await seedPerm(store, (0..<20).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") })
+        let bridge = PermissiveBridge()
+        let system = PermissiveSystemService()
+        system.recommendationTracks = (0..<20).map { permCard(GlobalID(serverID: "test-server", remoteID: "t\($0)"), title: "歌\($0)") }
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
+            "已经为你选好了。",
+        ])
+        await AgentRunner.run(
+            userText: "推荐十二首开车提神的歌给我看看",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            systemService: system,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        // 中文数量 12 被识别；模型仍不调用 final → Runtime 兜底取前 12 首。
+        let groups = await collector.trackCardGroupCounts()
+        #expect(groups == [12])
+    }
+
     @Test("TEST31 纯推荐忘调 result_present_tracks → Runtime 提示一次后再放行")
     func discoveryForcesFinalSelection() async throws {
         let store = try makePermStore()

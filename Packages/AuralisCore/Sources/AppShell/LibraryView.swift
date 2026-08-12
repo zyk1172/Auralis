@@ -11,12 +11,12 @@ struct LibraryView: View {
     @State private var playlistTarget: Track?
     @State private var recommendationCategories: [RecommendationIndexV2Category] = []
     @State private var isLoadingRecommendationCategories = false
-    /// AI 标签独立区：搜索 + 分页（读取优化，不代表标签数量限制）。
+    /// AI 标签独立区：offset 游标分页（读取优化，不代表标签数量限制）。
     @State private var aiTags: [RecommendationIndexV2Category] = []
     @State private var aiTagSearch = ""
-    @State private var aiTagLimit = 30
-    @State private var aiTagsExhausted = false
+    @State private var aiTagNextOffset: Int? = 0
     @State private var isLoadingMoreTags = false
+    private static let aiTagPageSize = 30
 
     var body: some View {
         VStack(spacing: 0) {
@@ -371,7 +371,7 @@ struct LibraryView: View {
                         .padding(.horizontal, AuralisSpacing.medium)
                         .padding(.top, AuralisSpacing.small)
 
-                        if !aiTagsExhausted {
+                        if aiTagNextOffset != nil {
                             Button {
                                 Task { await loadMoreAITags() }
                             } label: {
@@ -416,20 +416,30 @@ struct LibraryView: View {
 
     private func loadAITags(reset: Bool) async {
         guard let serverID = model.catalog.activeAccount?.id else { return }
-        if reset { aiTagLimit = 30 }
+        if reset {
+            aiTags = []
+            aiTagNextOffset = 0
+        }
+        guard let offset = aiTagNextOffset else {
+            isLoadingMoreTags = false
+            return
+        }
         let query = aiTagSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fetched = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
-            serverID: serverID, query: query.isEmpty ? nil : query, limit: aiTagLimit
-        )) ?? []
-        aiTags = fetched
-        aiTagsExhausted = fetched.count < aiTagLimit
+        let page = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
+            serverID: serverID, query: query.isEmpty ? nil : query, limit: Self.aiTagPageSize, offset: offset
+        )) ?? RecommendationIndexV2TagPage(items: [], nextOffset: nil, hasMore: false)
+        var merged = reset ? page.items : aiTags + page.items
+        // 防御性去重。
+        var seen = Set<String>()
+        merged = merged.filter { seen.insert($0.id).inserted }
+        aiTags = merged
+        aiTagNextOffset = page.nextOffset
         isLoadingMoreTags = false
     }
 
     private func loadMoreAITags() async {
-        guard !isLoadingMoreTags, !aiTagsExhausted else { return }
+        guard !isLoadingMoreTags, aiTagNextOffset != nil else { return }
         isLoadingMoreTags = true
-        aiTagLimit += 30
         await loadAITags(reset: false)
     }
 

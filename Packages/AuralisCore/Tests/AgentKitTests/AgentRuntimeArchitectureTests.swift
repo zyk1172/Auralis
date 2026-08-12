@@ -477,6 +477,31 @@ struct AgentRuntimeArchitectureTests {
         #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: "找 22 首适合通勤的歌") == 22)
     }
 
+    @Test(arguments: [
+        ("推荐12首歌", 12),
+        ("推荐十二首歌", 12),
+        ("给我十首", 10),
+        ("来二十首", 20),
+        ("来二十三首歌曲", 23),
+        ("推荐一百首", 100),
+        ("来一百二十三首", 123),
+        ("来两百首", 200),
+        ("来一百零二首", 102),
+    ])
+    func chineseQueueCounts(_ text: String, _ expected: Int) {
+        #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: text) == expected)
+    }
+
+    @Test(arguments: [
+        "来两百零一首",
+        "2020年的歌",
+        "给我一些歌",
+        "晚上十点提醒我",
+    ])
+    func invalidQueueCountsAreNil(_ text: String) {
+        #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: text) == nil)
+    }
+
     @Test func unspecifiedQueueCountIsNotInvented() {
         #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: "推荐几首适合通勤的歌") == nil)
     }

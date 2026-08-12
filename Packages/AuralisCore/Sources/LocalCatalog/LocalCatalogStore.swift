@@ -18,8 +18,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
         try createSchema()
         try cleanupOrphanedSyncState()
         // 开放语义标签已恢复（dimension='tag'）：不再清理任何非固定维度，保留全部标签。
-        // 幂等归并历史标签变体为 canonical（Lo-fi/LO-FI → Lo-fi），保证数量与点击结果一致。
-        try recommendationIndexV2MigrateSemanticCanonical()
+        // 一次性、可版本化的 canonical migration（catalog_migrations 记录，后续启动 O(1) 跳过）。
+        try runCatalogMigrations()
     }
 
     /// Canonical on-device catalog location shared by the app and extensions.
@@ -210,6 +210,17 @@ public actor LocalCatalogStore: LibrarySyncStore {
             value TEXT NOT NULL,
             confidence REAL NOT NULL,
             PRIMARY KEY (global_id, dimension, value)
+        );
+        CREATE TABLE IF NOT EXISTS catalog_migrations (
+            key TEXT PRIMARY KEY,
+            version INTEGER NOT NULL,
+            applied_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS recommendation_index_v2_tag_vocabulary (
+            normalized_key TEXT PRIMARY KEY,
+            display_value TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS external_music_identities (
             global_track_id TEXT PRIMARY KEY,

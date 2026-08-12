@@ -92,14 +92,52 @@ public struct AgentTaskWorkingSet: Sendable {
     /// 只从用户明确写出的“首/首歌/歌曲”数量建立目标；没有明确数量就保持开放，
     /// 由 Intent 的 Completion Predicate 决定何时完成。
     public static func inferredTargetQueueCount(from text: String) -> Int? {
+        // 1) 阿拉伯数字：12首 / 20首歌 / 给我12首 / 推荐20首歌曲
         let pattern = #"(?:找|推荐|选择|播放|来|给我)?\s*(\d{1,3})\s*首(?:歌|歌曲)?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let range = Range(match.range(at: 1), in: text),
-              let count = Int(text[range]),
-              (1...200).contains(count)
+        if let regex = try? NSRegularExpression(pattern: pattern),
+           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range(at: 1), in: text),
+           let count = Int(text[range]),
+           (1...200).contains(count) {
+            return count
+        }
+        // 2) 中文数字：十二首 / 二十三首 / 一百二十三首 / 两百首（紧邻“首/首歌/首歌曲”才计）
+        let chinesePattern = #"([零〇一二两三四五六七八九十百]{1,8})\s*首(?:歌|歌曲)?"#
+        guard let chineseRegex = try? NSRegularExpression(pattern: chinesePattern),
+              let match = chineseRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text)
         else { return nil }
-        return count
+        return parseChineseCount(String(text[range]))
+    }
+
+    /// 中文数字解析：支持 零〇一二两三四五六七八九十百（最大 200）。
+    /// “2020年的歌”不会命中（必须紧邻 首/首歌/首歌曲）。
+    static func parseChineseCount(_ value: String) -> Int? {
+        let digits: [Character: Int] = [
+            "零": 0, "〇": 0,
+            "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+            "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+        ]
+        var total = 0
+        var digit: Int?
+        for ch in value {
+            if let number = digits[ch] {
+                digit = number
+                continue
+            }
+            switch ch {
+            case "十":
+                total += (digit ?? 1) * 10
+                digit = nil
+            case "百":
+                total += (digit ?? 1) * 100
+                digit = nil
+            default:
+                return nil
+            }
+        }
+        total += digit ?? 0
+        return (1...200).contains(total) ? total : nil
     }
 
     // MARK: - 签名与缓存

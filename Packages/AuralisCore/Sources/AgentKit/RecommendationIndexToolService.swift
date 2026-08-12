@@ -72,16 +72,17 @@ enum RecommendationIndexToolService {
             default: modeHint = "本批需要完整分类（mode=\"full\"）：固定维度 + 开放语义标签。"
             }
             let tagRules = "开放语义标签规则：固定维度（moods/scenes/vocals/textures/styles 与 energy/tempo/acousticness/danceability 数值）保持规范；此外可以根据音乐属性创建开放 semantic tags（value 为规范化中文或常见英文词，如 夜行感/公路感/城市霓虹/复古合成器/电影感），标签数量没有硬上限；优先复用已有 canonical 标签（可用 library_index_v2_tag_catalog 查看）；不要用歌曲名/艺术家名/专辑名/ID 或收藏评分播放历史当标签；同一概念不要拆成多个写法。"
-            let text = "待分类总数 \(batch.pendingTracks)，本批 \(batch.tracks.count) 首；本批模式：\(batch.mode)。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，把结构化 items 数组直接传入，数组必须恰好覆盖本批每个 id 一次。\(modeHint) \(tagRules)：\n\(payload)"
+            let text = "唯一待处理歌曲 \(batch.pendingUniqueTracks) 首（固定分类待处理 \(batch.pendingFixedTracks) 首；开放语义标签待处理 \(batch.pendingSemanticTagTracks) 首），本批 \(batch.tracks.count) 首；本批模式：\(batch.mode)。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，把结构化 items 数组直接传入，数组必须恰好覆盖本批每个 id 一次。\(modeHint) \(tagRules)：\n\(payload)"
             let batchStatus = try await catalog.recommendationIndexV2Status(serverID: serverID)
             return .ok(
                 call,
                 descriptor,
-                "V2 待分类 \(batch.pendingTracks)，已提供本批 \(batch.tracks.count) 首",
+                "V2 唯一待处理 \(batch.pendingUniqueTracks)，已提供本批 \(batch.tracks.count) 首",
                 .text(text),
                 facts: [
-                    "recommendation.index.pending": "\(batch.pendingTracks)",
+                    "recommendation.index.pending": "\(batchStatus.pendingTracks)",
                     "recommendation.index.pendingSemantic": "\(batchStatus.pendingSemanticTagTracks)",
+                    "recommendation.index.pendingUnique": "\(batchStatus.pendingUniqueTracks)",
                     "recommendation.index.nextBatchAvailable": "true",
                 ]
             )
@@ -99,12 +100,12 @@ enum RecommendationIndexToolService {
                 .replacingOccurrences(of: "```", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard let items = decodeClassifications(cleaned) else {
-                throw AgentToolError.invalidParameter("items", "必须是结构化数组；每项至少包含 id/energy，可包含内置标签与 confidence")
+                throw AgentToolError.invalidParameter("items", "items 必须是结构化数组。每项必须包含真实 id；mode=full 时需要完整固定分类字段；mode=semanticTagsOnly 时只需要 id、mode 和 semanticTags，不得伪造 energy/tempo 等固定维度。")
             }
             let written = try await catalog.writeRecommendationIndexV2(items, serverID: serverID)
             let status = try await catalog.recommendationIndexV2Status(serverID: serverID)
             guard written > 0 else {
-                return .fail(call, descriptor, "没有可写入的分类：请只提交上一批真实 ID、规范标签；energy 为 1-10，其余数值维度为 1-5")
+                return .fail(call, descriptor, "没有可写入的分类。请确认：1. id 必须来自上一批；2. mode=full 时固定分类字段必须合法；3. mode=semanticTagsOnly 时只提交开放 semanticTags；4. 不要修改或伪造歌曲 ID。")
             }
 
             let text: String
@@ -130,15 +131,25 @@ enum RecommendationIndexToolService {
             )
 
         case "library_index_v2_tag_catalog":
-            let limit = min(max(int(call, "limit") ?? 50, 1), 500)
+            let limit = min(max(int(call, "limit") ?? 50, 1), 100)
+            let offset = max(int(call, "offset") ?? 0, 0)
             let query = normalized(call.arguments["query"])
-            let tags = try await catalog.recommendationIndexV2TagCatalog(serverID: serverID, query: query, limit: limit)
-            guard !tags.isEmpty else {
-                return .ok(call, descriptor, "还没有开放语义标签", .text("当前没有已存在的开放语义标签；可以开始为歌曲创建规范标签。"))
+            let page = try await catalog.recommendationIndexV2TagCatalog(
+                serverID: serverID, query: query, limit: limit, offset: offset
+            )
+            guard !page.items.isEmpty else {
+                let hint = offset > 0 ? "（offset=\(offset) 之后没有更多）" : ""
+                return .ok(call, descriptor, "没有更多开放语义标签", .text("当前没有已存在的开放语义标签\(hint)；可以开始为歌曲创建规范标签。"))
             }
-            let lines = tags.map { "「\($0.value)」× \($0.trackCount) 首" }.joined(separator: "、")
+            let lines = page.items.map { "「\($0.value)」× \($0.trackCount) 首" }.joined(separator: "、")
             let filter = query.map { "（匹配：\($0)）" } ?? ""
-            return .ok(call, descriptor, "开放语义标签 \(tags.count) 个", .text("已有开放语义标签\(filter)：\(lines)"))
+            let nextHint = page.nextOffset.map { "；还有下一页，nextOffset=\($0)" } ?? "；已到最后一页"
+            return .ok(
+                call,
+                descriptor,
+                "开放语义标签，本页 \(page.items.count) 个，offset=\(offset)\(nextHint)",
+                .text("已有开放语义标签\(filter)（本页 \(page.items.count) 个）：\(lines)")
+            )
 
         default:
             return .fail(call, descriptor, "推荐索引工具不受支持：\(call.name)")
@@ -179,6 +190,7 @@ enum RecommendationIndexToolService {
             "recommendation.index.indexed": "\(status.indexedTracks)",
             "recommendation.index.pending": "\(status.pendingTracks)",
             "recommendation.index.pendingSemantic": "\(status.pendingSemanticTagTracks)",
+            "recommendation.index.pendingUnique": "\(status.pendingUniqueTracks)",
             "recommendation.index.nextBatchAvailable": nextBatchAvailable ? "true" : "false",
         ]
     }
