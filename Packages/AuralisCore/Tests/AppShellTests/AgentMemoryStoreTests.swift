@@ -62,6 +62,23 @@ struct AgentMemoryStoreTests {
         #expect(store.clearMemory() == 0)
     }
 
+    @Test("超过 200 条记忆不静默淘汰：全部保留")
+    func memoryNoSilentEviction() {
+        let dir = makeTempDirectory()
+        let store = AgentMemoryStore(directory: dir)
+        for index in 0..<250 {
+            #expect(store.saveMemory(key: "记忆\(index)", value: "值\(index)"))
+        }
+        #expect(store.memories.count == 250)
+        // 最旧的一条仍然存在。
+        #expect(store.memories.contains { $0.key == "记忆0" })
+        #expect(store.memories.contains { $0.key == "记忆249" })
+
+        // 重新实例化仍全部保留。
+        let reloaded = AgentMemoryStore(directory: dir)
+        #expect(reloaded.memories.count == 250)
+    }
+
     @Test("技能：创建 / 列表 / 读取 / 删除，且跨实例持久化")
     func skillLifecycle() {
         let dir = makeTempDirectory()

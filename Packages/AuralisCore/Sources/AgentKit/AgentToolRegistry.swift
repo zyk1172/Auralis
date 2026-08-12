@@ -43,20 +43,23 @@ public enum ToolEvidencePolicy: String, Sendable, Hashable {
     case externalAPI
 }
 
-/// 工具元数据：分组、权限、是否需要确认、参数。
+/// 工具元数据：分组、权限、展示角色、参数。
 public struct ToolDescriptor: Sendable, Hashable {
     public let name: String
     public let group: ToolGroup
     public let permission: ToolPermission
+    /// deprecated / diagnostics-only：permissive runtime 不再因它触发确认。
     public let requiresConfirmation: Bool
     public let summary: String
     public let parameters: [ToolParameter]
     public let cachePolicy: ToolCachePolicy
     public let sideEffectPolicy: ToolSideEffectPolicy
     public let evidencePolicy: ToolEvidencePolicy
-    /// 执行该工具必须具备的任务能力域。工具组用于减少模型可见 schema，scope 才是
-    /// 与具体副作用对应的最终能力门禁，二者不能互相替代。
+    /// 执行该工具必须具备的任务能力域（deprecated / diagnostics-only）：
+    /// permissive runtime 不再因缺少 scope 拒绝已注册工具，保留仅为迁移/日志兼容。
     public let requiredScopes: Set<GrantedScope>
+    /// 默认展示角色：决定工具结果进入候选池 / 最终 / 歧义（Tool 执行可覆盖）。
+    public let defaultPresentationRole: ToolPresentationRole
     public let maxResultCharacters: Int
 
     public init(
@@ -70,6 +73,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         sideEffectPolicy: ToolSideEffectPolicy? = nil,
         evidencePolicy: ToolEvidencePolicy? = nil,
         requiredScopes: Set<GrantedScope>? = nil,
+        defaultPresentationRole: ToolPresentationRole = .candidate,
         maxResultCharacters: Int = ContextManager.maxToolResultCharacters
     ) {
         self.name = name
@@ -88,6 +92,7 @@ public struct ToolDescriptor: Sendable, Hashable {
             permission: permission,
             sideEffectPolicy: resolvedSideEffectPolicy
         )
+        self.defaultPresentationRole = defaultPresentationRole
         self.maxResultCharacters = maxResultCharacters
     }
 
@@ -154,9 +159,9 @@ public struct ToolDescriptor: Sendable, Hashable {
 
 /// 全部 Agent 工具注册表。集中声明权限与确认要求，供 Runner 校验与 UI 展示。
 public enum AgentToolRegistry {
-    /// 原生 Function Calling 直接接收数组。只保留固定音乐分析维度
-    /// （mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability），
-    /// 不提供 customTags 动态标签能力。
+    /// 原生 Function Calling 直接接收数组。固定音乐分析维度
+    /// （mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability）保持规范；
+    /// 另外支持开放语义标签 semanticTags（dimension='tag'，数量无硬上限）。
     static let recommendationClassificationArraySchema = #"""
     {
       "type": "array",
@@ -176,6 +181,19 @@ public enum AgentToolRegistry {
           "vocals": {"type": "array", "items": {"type": "string"}},
           "textures": {"type": "array", "items": {"type": "string"}},
           "styles": {"type": "array", "items": {"type": "string"}},
+          "semanticTags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "value": {"type": "string"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+              },
+              "required": ["value", "confidence"]
+            }
+          },
+          "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         },
         "required": ["id", "energy"]
@@ -207,6 +225,51 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "getCurrentTrack", group: .catalog, permission: .readOnly, summary: "获取当前播放的单曲"),
         .init(name: "getCurrentQueue", group: .catalog, permission: .readOnly, summary: "获取当前播放队列"),
+
+        // MARK: 最终展示协议（确定性 Presentation，模型不能决定 UI）
+        .init(name: "result_present_tracks", group: .catalog, permission: .readOnly,
+              summary: "明确把一组歌曲作为本次任务的最终展示结果（只传入真正打算展示给用户的最终歌曲，不要传整个候选池）",
+              parameters: [
+                .init(name: "trackIDs", required: true, description: "最终歌曲的 GlobalTrackID 数组",
+                      schemaJSON: #"{"type":"array","items":{"type":"string"}}"#),
+                .init(name: "kind", required: false, description: "final=最终推荐结果（默认）；disambiguation=存在多个匹配需要用户选择",
+                      schemaJSON: #"{"type":"string","enum":["final","disambiguation"]}"#),
+              ],
+              defaultPresentationRole: .finalResult),
+
+        // MARK: Canonical 新式工具（旧别名仍注册，仅供执行兼容；schema 只暴露 canonical）
+        .init(name: "library_get_least_played", group: .catalog, permission: .readOnly, summary: "获取最少播放的单曲",
+              parameters: [.init(name: "limit", required: false, description: "返回数量，默认 50")]),
+        .init(name: "library_get_downloaded", group: .catalog, permission: .readOnly, summary: "获取已下载的单曲"),
+        .init(name: "queue_remove", group: .playback, permission: .reversible, summary: "从队列移除指定位置",
+              parameters: [.init(name: "index", required: true, description: "队列索引（从 0）")]),
+        .init(name: "playlist_rename", group: .playlist, permission: .reversible, summary: "重命名歌单",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
+                           .init(name: "name", required: true, description: "新名称")]),
+        .init(name: "playlist_remove_songs", group: .playlist, permission: .reversible, summary: "从歌单移除曲目",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
+                           .init(name: "indices", required: false, description: "要移除的曲目索引数组（歌单内 0 基索引）",
+                                 schemaJSON: #"{"type":"array","items":{"type":"integer","minimum":0}}"#)]),
+        .init(name: "playlist_move", group: .playlist, permission: .reversible, summary: "调整歌单内曲目顺序",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
+                           .init(name: "from", required: true, description: "原索引"),
+                           .init(name: "to", required: true, description: "目标索引")]),
+        .init(name: "playlist_duplicate", group: .playlist, permission: .reversible, summary: "复制歌单",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "playlist_merge", group: .playlist, permission: .reversible, summary: "把多个歌单合并成新歌单",
+              parameters: [.init(name: "name", required: true, description: "新歌单名称"),
+                           .init(name: "sourceIDs", required: true, description: "源歌单 GlobalPlaylistID 数组",
+                                 schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)]),
+        .init(name: "playlist_delete", group: .playlist, permission: .destructive, summary: "删除歌单",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "rating_set", group: .annotation, permission: .reversible, summary: "设置单曲评分（value 0 表示清除）",
+              parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID"),
+                           .init(name: "value", required: true, description: "评分 1-5；0 表示清除评分",
+                                 schemaJSON: #"{"type":"integer","minimum":0,"maximum":5}"#)]),
+        .init(name: "server_switch", group: .server, permission: .reversible, summary: "切换服务器",
+              parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
+        .init(name: "server_remove", group: .server, permission: .destructive, summary: "删除服务器（仅本地清理）",
+              parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
 
         // MARK: Playback
         .init(name: "playTrack", group: .playback, permission: .reversible, summary: "播放指定单曲",
@@ -370,14 +433,14 @@ public enum AgentToolRegistry {
         .init(name: "library_index_v2_status", group: .catalog, permission: .readOnly, summary: "查看 AI 推荐索引 V2 的总数、已完成和待分类数；完整构建任务必须先调用本工具，并持续到 pending=0", maxResultCharacters: 24_000),
         .init(name: "library_index_v2_read", group: .catalog, permission: .readOnly, summary: "读取已完成的 AI 推荐索引 V2 条目及全部分类标签，可按维度和标签筛选",
               parameters: [
-                .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability"),
+                .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability/tag"),
                 .init(name: "value", required: false, description: "要匹配的标签值，如 通勤、深夜、平静"),
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
               ], maxResultCharacters: 24_000),
         .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；仅在用户明确要求构建或继续索引时使用；每个真实 ID 必须恰好分类一次，不能加入歌词、路径或播放地址",
               parameters: [.init(name: "limit", required: false, description: "每批 1-100，建议 80")],
               maxResultCharacters: 24_000),
-        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；items 必须严格覆盖上一批全部真实 ID 各一次。只使用固定维度（情绪/场景/人声/质感/风格/能量/节奏/原声度/舞动感），不接受自定义维度；结果若直接附带下一批就继续写回，直到 pending=0",
+        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；items 必须严格覆盖上一批全部真实 ID 各一次。固定维度（情绪/场景/人声/质感/风格/能量/节奏/原声度/舞动感）保持规范，此外可根据音乐属性创建开放 semanticTags（不设数量上限，优先复用已有标签）；结果若直接附带下一批就继续写回，直到 pending=0",
               parameters: [.init(
                 name: "items",
                 required: true,
@@ -387,19 +450,28 @@ public enum AgentToolRegistry {
               maxResultCharacters: 24_000),
         .init(name: "library_select_tracks", group: .catalog, permission: .readOnly, summary: "集合查询：一次筛选语言/流派/艺术家/年代，按本地热度代理排序，返回候选歌曲清单（多首任务优先用这个，不要逐个歌手搜索）",
               parameters: [
-                .init(name: "languages", required: false, description: "逗号分隔语言，如 中文,粤语"),
-                .init(name: "genres", required: false, description: "逗号分隔流派"),
-                .init(name: "artists", required: false, description: "逗号分隔艺术家"),
+                .init(name: "languages", required: false, description: "语言数组，如 [\"中文\",\"粤语\"]",
+                      schemaJSON: #"{"type":"array","items":{"type":"string"}}"#),
+                .init(name: "genres", required: false, description: "流派数组",
+                      schemaJSON: #"{"type":"array","items":{"type":"string"}}"#),
+                .init(name: "artists", required: false, description: "艺术家数组",
+                      schemaJSON: #"{"type":"array","items":{"type":"string"}}"#),
                 .init(name: "yearFrom", required: false, description: "起始年份"),
                 .init(name: "yearTo", required: false, description: "结束年份"),
                 .init(name: "favoritesOnly", required: false, description: "true=只要收藏"),
                 .init(name: "excludeRecentlyPlayed", required: false, description: "true=排除最近播放"),
                 .init(name: "recentDays", required: false, description: "排除最近 N 天，默认 7"),
-                .init(name: "excludeTrackIDs", required: false, description: "逗号分隔要排除的 GlobalID"),
-                .init(name: "playableOnly", required: false, description: "true=只要可播放（默认 true）"),
-                .init(name: "sort", required: false, description: "popularityProxy/favorites/recentlyPlayed/title/recentlyAdded/random，默认 popularityProxy"),
+                .init(name: "excludeTrackIDs", required: false, description: "要排除的 GlobalID 数组",
+                      schemaJSON: #"{"type":"array","items":{"type":"string"}}"#),
+                .init(name: "playableOnly", required: false, description: "deprecated：不再按瞬时 streamURL 过滤；Auralis 播放时会向服务器刷新/在线流播（默认 false）"),
+                .init(name: "sort", required: false, description: "popularityProxy/favorites/recentlyPlayed/title/random，默认 popularityProxy（recentlyAdded 由 library_get_recently_added 提供）"),
                 .init(name: "limit", required: false, description: "返回数量，默认 50，最多 100"),
               ]),
+        .init(name: "library_index_v2_tag_catalog", group: .catalog, permission: .readOnly, summary: "查看当前已有的开放语义标签词库及使用次数，便于构建 V2 时优先复用 canonical 标签",
+              parameters: [
+                .init(name: "query", required: false, description: "可选：按标签名筛选"),
+                .init(name: "limit", required: false, description: "返回 1-500 条，默认 50"),
+              ], maxResultCharacters: 16_000),
         .init(name: "library_get_song", group: .catalog, permission: .readOnly, summary: "获取单曲详情（含格式/码率/收藏/评分/离线状态）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "music_appreciate", group: .catalog, permission: .readOnly, summary: "为正在播放或指定歌曲准备分层鉴赏证据：已核验元数据、私人播放数据与可用的外部大众评价；没有 Community Evidence 时明确标记不可用",
@@ -474,7 +546,8 @@ public enum AgentToolRegistry {
         .init(name: "queue_play_next", group: .playback, permission: .reversible, summary: "把歌曲插入到当前歌曲之后播放",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "queue_replace", group: .playback, permission: .reversible, summary: "替换整个播放队列",
-              parameters: [.init(name: "trackIDs", required: true, description: "逗号分隔的 GlobalTrackID 列表")]),
+              parameters: [.init(name: "trackIDs", required: true, description: "GlobalTrackID 数组",
+                                 schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)]),
         .init(name: "queue_clear", group: .playback, permission: .reversible, summary: "清空播放队列"),
         .init(name: "queue_shuffle_remaining", group: .playback, permission: .reversible, summary: "只随机尚未播放的剩余队列"),
         .init(name: "queue_move", group: .playback, permission: .reversible, summary: "调整队列中歌曲顺序",
@@ -497,7 +570,8 @@ public enum AgentToolRegistry {
         .init(name: "playlist_add_songs", group: .playlist, permission: .reversible, summary: "把歌曲加入歌单",
               parameters: [
                 .init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
-                .init(name: "trackIDs", required: true, description: "逗号分隔的 GlobalTrackID 列表"),
+                .init(name: "trackIDs", required: true, description: "GlobalTrackID 数组",
+                      schemaJSON: #"{"type":"array","items":{"type":"string"}}"#),
               ]),
         .init(name: "preference_set_disliked", group: .annotation, permission: .reversible, summary: "设置/取消“不喜欢”：不喜欢的歌曲不会再出现在任何自动推荐、随机播放、相似歌曲、智能队列或发现模块中；显式搜索、打开专辑/歌单或直接点播仍然允许播放",
               parameters: [

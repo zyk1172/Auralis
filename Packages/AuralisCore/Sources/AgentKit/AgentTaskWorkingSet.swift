@@ -194,12 +194,20 @@ public struct AgentTaskWorkingSet: Sendable {
     }
 
     /// 从工具参数里解析歌曲 ID 列表（trackIDs / trackID / songIDs / songID）。
+    /// 兼容 native JSON 数组（["srv:1","srv:2"]）与文本 ACTION 逗号字符串。
     public static func songIDs(from args: [String: String]) -> [GlobalID] {
         var result: [GlobalID] = []
         for key in ["trackIDs", "trackID", "songIDs", "songID"] {
             guard let raw = args[key] else { continue }
-            for piece in raw.split(separator: ",") {
-                let trimmed = String(piece).trimmingCharacters(in: .whitespaces)
+            var pieces: [String] = []
+            if let data = raw.data(using: .utf8),
+               let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
+                pieces = array
+            } else {
+                pieces = raw.split(separator: ",").map(String.init)
+            }
+            for piece in pieces {
+                let trimmed = piece.trimmingCharacters(in: .whitespaces)
                 if let gid = GlobalID(trimmed) { result.append(gid) }
             }
         }

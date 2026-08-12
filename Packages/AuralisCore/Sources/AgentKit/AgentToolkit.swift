@@ -138,11 +138,11 @@ public struct AgentToolkit {
             let limit = (try? intParam(call, "limit")) ?? 50
             let list = try await catalog.getRecentHistory(serverID: serverID, limit: max(1, limit))
             return .ok(call, descriptor, "最近播放 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
-        case "getLeastPlayed":
+        case "getLeastPlayed", "library_get_least_played":
             let limit = (try? intParam(call, "limit")) ?? 50
             let list = try await catalog.getLeastPlayed(serverID: serverID, limit: max(1, limit))
             return .ok(call, descriptor, "最少播放 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
-        case "getDownloadedTracks":
+        case "getDownloadedTracks", "library_get_downloaded":
             let list = try await catalog.getDownloadedTracks(serverID: serverID)
             return .ok(call, descriptor, "已下载 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "getSimilarTracks":
@@ -157,6 +157,22 @@ public struct AgentToolkit {
         case "getCurrentQueue":
             let queue = await bridge.currentQueue()
             return .ok(call, descriptor, "队列 \(queue.count) 首", .text("队列共 \(queue.count) 首"))
+
+        // MARK: 最终展示协议
+        case "result_present_tracks":
+            let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
+            var resolvedCards: [TrackCard] = []
+            for id in gids {
+                if let track = try? await catalog.getTrack(id) {
+                    resolvedCards.append(TrackCard.from(track))
+                }
+            }
+            let cards = resolvedCards
+            let kind = call.arguments["kind"]?.lowercased()
+            if kind == "disambiguation" {
+                return .ok(call, descriptor, "已列出 \(cards.count) 个匹配供选择", .trackCards(cards), presentationRole: .disambiguation)
+            }
+            return .ok(call, descriptor, "已确定最终展示 \(cards.count) 首", .trackCards(cards), presentationRole: .finalResult)
 
         // MARK: Playback
         case "playTrack":
@@ -204,7 +220,7 @@ public struct AgentToolkit {
         case "replaceQueue":
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
             await bridge.replaceQueue(globalIDs: gids); return .ok(call, descriptor, "已替换队列（\(gids.count) 首）")
-        case "removeFromQueue":
+        case "removeFromQueue", "queue_remove":
             let index = try intParam(call, "index")
             await bridge.removeFromQueue(at: index); return .ok(call, descriptor, "已移除队列第 \(index) 项")
         case "reorderQueue":
@@ -235,7 +251,7 @@ public struct AgentToolkit {
                 return .fail(call, descriptor, "创建歌单失败")
             }
             return .ok(call, descriptor, "已创建歌单", .text("\(name) · \(gid.description)"))
-        case "renamePlaylist":
+        case "renamePlaylist", "playlist_rename":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             let name = try require(call, "name")
             await bridge.renamePlaylist(globalID: gid, name: name)
@@ -248,29 +264,29 @@ public struct AgentToolkit {
                 return .fail(call, descriptor, "添加失败：歌单或曲目在本地目录不存在（可能尚未同步），请先 listPlaylists / library_search 确认后重试")
             }
             return .ok(call, descriptor, "已添加 \(gids.count) 首")
-        case "removeTracksFromPlaylist":
+        case "removeTracksFromPlaylist", "playlist_remove_songs":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let indices = try intsParam(call, "indices")
             await bridge.removeTracksFromPlaylist(playlistGID: gid, atIndices: indices)
             return .ok(call, descriptor, "已移除 \(indices.count) 首")
-        case "reorderPlaylist":
+        case "reorderPlaylist", "playlist_move":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let from = try intParam(call, "from")
             let to = try intParam(call, "to")
             await bridge.reorderPlaylist(playlistGID: gid, from: from, to: to)
             return .ok(call, descriptor, "已调整顺序")
-        case "duplicatePlaylist":
+        case "duplicatePlaylist", "playlist_duplicate":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             await bridge.duplicatePlaylist(playlistGID: gid)
             return .ok(call, descriptor, "已复制歌单")
-        case "mergePlaylists":
+        case "mergePlaylists", "playlist_merge":
             let gids = try await requirePlaylistIDs(call, "sourceIDs", catalog: catalog, serverID: serverID)
             let name = try require(call, "name")
             await bridge.mergePlaylists(sourceGIDs: gids, into: name)
             return .ok(call, descriptor, "已合并歌单")
-        case "deletePlaylist":
+        case "deletePlaylist", "playlist_delete":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             await bridge.deletePlaylist(globalID: gid)
             return .ok(call, descriptor, "已删除歌单")
@@ -302,6 +318,15 @@ public struct AgentToolkit {
         case "clearRating":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             await bridge.clearRating(globalID: gid); return .ok(call, descriptor, "已清除评分")
+        case "rating_set":
+            let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
+            let raw = try require(call, "value")
+            if let value = Int(raw), value > 0 {
+                await bridge.setRating(globalID: gid, rating: min(max(value, 1), 5))
+                return .ok(call, descriptor, "已评分 \(value)")
+            }
+            await bridge.clearRating(globalID: gid)
+            return .ok(call, descriptor, "已清除评分")
         case "preference_set_disliked":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             let value = try boolParam(call, "value")
@@ -388,7 +413,7 @@ public struct AgentToolkit {
             let sid = try requireServerID(call, "serverID")
             let ok = await bridge.updateServer(serverID: sid, displayName: nil, baseURL: nil, username: nil, token: nil)
             return .ok(call, descriptor, ok ? "已更新服务器" : "更新失败")
-        case "switchServer":
+        case "switchServer", "server_switch":
             let sid = try requireServerID(call, "serverID")
             await bridge.switchServer(serverID: sid)
             return .ok(call, descriptor, "已切换服务器")
@@ -398,7 +423,7 @@ public struct AgentToolkit {
         case "getSyncStatus":
             let statuses = await bridge.getSyncStatus()
             return .ok(call, descriptor, "同步状态 \(statuses.count) 个", .text(statuses.map { "\($0.serverID.rawValue): \($0.isRunning ? "同步中" : "空闲")" }.joined(separator: "；")))
-        case "removeServer":
+        case "removeServer", "server_remove":
             let sid = try requireServerID(call, "serverID")
             await bridge.removeServer(serverID: sid)
             return .ok(call, descriptor, "已删除服务器（仅本地清理）")
@@ -467,7 +492,8 @@ public struct AgentToolkit {
             let excludeRecentlyPlayed = (try? boolParam(call, "excludeRecentlyPlayed")) ?? false
             let recentDays = (try? intParam(call, "recentDays")) ?? 7
             let excludeTrackIDs = try listParam(call, "excludeTrackIDs")
-            let playableOnly = (try? boolParam(call, "playableOnly")) ?? true
+            // playableOnly 已弃用（deprecated）：不因瞬时未缓存 streamURL 排除可播放歌曲。
+            let playableOnly = (try? boolParam(call, "playableOnly")) ?? false
             let sort = (try? require(call, "sort"))?.lowercased() ?? "popularityProxy"
 
             var tracks = try await catalog.allTracks(serverID: serverID, limit: 20000)
@@ -486,7 +512,8 @@ public struct AgentToolkit {
             }
             if let yearFrom { tracks = tracks.filter { ($0.year ?? 0) >= yearFrom } }
             if let yearTo { tracks = tracks.filter { ($0.year ?? 9999) <= yearTo } }
-            if playableOnly { tracks = tracks.filter { $0.streamURL != nil } }
+            // playableOnly 不再按瞬时 streamURL 过滤：Auralis 播放时会向服务器刷新/在线流播，
+            // streamURL == nil 不表示不可播放。真正“不可播放”需要服务器实体/刷新失败等证据。
             if !excludeTrackIDs.isEmpty {
                 let excluded = Set(excludeTrackIDs)
                 tracks = tracks.filter {
@@ -547,9 +574,11 @@ public struct AgentToolkit {
                 tracks.sort { (recentRank[gidOf($0)] ?? Int.max) < (recentRank[gidOf($1)] ?? Int.max) }
             case "title":
                 tracks.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-            case "recentlyAdded", "random":
+            case "random":
                 tracks.shuffle()
             default:
+                // Track 模型暂无稳定 addedAt 时间戳：recentlyAdded 不再伪造成随机，
+                // 回退到热度代理排序；真正的“最近添加”由 library_get_recently_added 提供。
                 tracks.sort { proxyScore($0) > proxyScore($1) }
             }
 
@@ -804,16 +833,18 @@ public struct AgentToolkit {
             let limit = min(max((try? intParam(call, "limit")) ?? 10, 1), 50)
             let tracks = try await catalog.allTracks(serverID: serverID)
             let downloaded = Set(try await catalog.getDownloadedTracks(serverID: serverID).map(\.globalID))
-            let bad = tracks.filter {
+            // streamURL == nil 只表示“本地尚未缓存播放地址”，不代表不可播放：
+            // App 播放时会向服务器刷新 / 在线流播。这里明确区分，不用“危险歌曲”误导用户。
+            let missing = tracks.filter {
                 $0.streamURL == nil
                     && !downloaded.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))
             }.prefix(limit)
-            let text = bad.isEmpty
-                ? "未发现无法播放的歌曲"
-                : "无播放地址且未离线：" + bad.map { "《\($0.title)》" }.joined(separator: "、")
+            let text = missing.isEmpty
+                ? "所有歌曲都有已缓存的播放地址或已离线"
+                : "以下 \(missing.count) 首尚未缓存播放地址（播放时 App 会向服务器刷新/在线流播，通常仍可播放）：" + missing.map { "《\($0.title)》" }.joined(separator: "、")
             return .ok(call, descriptor, text, .text(text))
         case "smart_queue_generate":
-            // 只返回队列预览，不替换当前队列；用户确认后由 queue_replace（需确认）应用。
+            // 只返回队列预览，不替换当前队列；由 queue_replace 直接应用（permissive runtime 无需二次确认）。
             let limit = min(max((try? intParam(call, "limit")) ?? 20, 1), 100)
             let all = try await catalog.allTracks(serverID: serverID, limit: 20_000)
             let recent = Set(try await catalog.getRecentHistory(serverID: serverID, limit: 50).map(\.globalID))
@@ -1045,8 +1076,13 @@ public struct AgentToolkit {
         return value
     }
 
+    /// 多值参数解析：native function calling 传 JSON 数组，文本 ACTION 传逗号字符串。
     private static func listParam(_ call: ToolCall, _ key: String) throws -> [String] {
         guard let raw = call.arguments[key], !raw.isEmpty else { return [] }
+        if let data = raw.data(using: .utf8),
+           let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
+            return array.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
         return raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 
@@ -1075,8 +1111,22 @@ public struct AgentToolkit {
         return value
     }
 
+    /// 整型数组参数：优先 JSON 数组（native），兼容逗号字符串（文本 ACTION）。
     private static func intsParam(_ call: ToolCall, _ key: String) throws -> [Int] {
         let raw = try require(call, key)
+        if let data = raw.data(using: .utf8),
+           let array = try? JSONSerialization.jsonObject(with: data) as? [Int] {
+            return array
+        }
+        if let data = raw.data(using: .utf8),
+           let strings = try? JSONSerialization.jsonObject(with: data) as? [String] {
+            return try strings.map { piece in
+                guard let value = Int(piece.trimmingCharacters(in: .whitespaces)) else {
+                    throw AgentToolError.invalidParameter(key, piece)
+                }
+                return value
+            }
+        }
         return try raw.split(separator: ",").map { piece in
             guard let value = Int(piece.trimmingCharacters(in: .whitespaces)) else {
                 throw AgentToolError.invalidParameter(key, String(piece))
@@ -1385,7 +1435,8 @@ extension ToolResult {
         _ summary: String,
         _ payload: AgentMessage? = nil,
         facts: [String: String] = [:],
-        evidence: [AgentEvidence] = []
+        evidence: [AgentEvidence] = [],
+        presentationRole: ToolPresentationRole? = nil
     ) -> ToolResult {
         ToolResult(
             call: call,
@@ -1394,7 +1445,8 @@ extension ToolResult {
             summary: summary,
             payload: payload,
             facts: facts,
-            evidence: evidence
+            evidence: evidence,
+            presentationRole: presentationRole ?? descriptor.defaultPresentationRole
         )
     }
 

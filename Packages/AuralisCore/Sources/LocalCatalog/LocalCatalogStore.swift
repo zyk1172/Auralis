@@ -17,8 +17,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
         self.db = try SQLiteDatabase(url: url)
         try createSchema()
         try cleanupOrphanedSyncState()
-        // customTags 动态维度已下线：清理历史遗留的非固定维度标签（幂等）。
-        try cleanupRecommendationIndexV2DynamicDimensions()
+        // 开放语义标签已恢复（dimension='tag'）：不再清理任何非固定维度，保留全部标签。
     }
 
     /// Canonical on-device catalog location shared by the app and extensions.

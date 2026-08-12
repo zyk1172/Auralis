@@ -85,7 +85,8 @@ public struct AgentTaskBudget: Codable, Equatable, Sendable {
 
 public enum AgentCompletionPredicate: Codable, Equatable, Sendable {
     case modelAnswer
-    case verifiedToolResult
+    /// 真实成功执行了至少一个工具（Tool Success ≠ Evidence）。
+    case successfulToolResult
     case queueMutation
     case playlistMutation
     case playbackMutation
@@ -148,27 +149,27 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .conversation:
             return .init(intent: intent, scopes: [.catalogRead, .memoryRead], allowedToolGroups: [.catalog, .memory], allowedPermissions: read)
         case .librarySearch:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead], allowedToolGroups: [.catalog, .server], allowedPermissions: read, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead], allowedToolGroups: [.catalog, .server], allowedPermissions: read, completion: .successfulToolResult)
         case .playbackControl:
             return .init(intent: intent, scopes: [.catalogRead, .playbackWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: write, maxRisk: .medium, completion: .playbackMutation)
         case .musicDiscovery:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
         case .queueManagement:
             return .init(intent: intent, scopes: [.catalogRead, .playbackWrite, .queueWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: destructive, maxRisk: .high, completion: .queueMutation)
         case .playlistManagement:
             return .init(intent: intent, scopes: [.catalogRead, .playlistWrite], allowedToolGroups: [.catalog, .playlist], allowedPermissions: destructive, maxRisk: .high, completion: .playlistMutation)
         case .libraryManagement:
-            return .init(intent: intent, scopes: [.catalogRead, .annotationWrite], allowedToolGroups: [.catalog, .annotation], allowedPermissions: write, maxRisk: .medium, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .annotationWrite], allowedToolGroups: [.catalog, .annotation], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
         case .serverManagement:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .serverWrite], allowedToolGroups: [.catalog, .server], allowedPermissions: destructive, maxRisk: .high, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .serverWrite], allowedToolGroups: [.catalog, .server], allowedPermissions: destructive, maxRisk: .high, completion: .successfulToolResult)
         case .diagnostics:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback, .server], allowedPermissions: read, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback, .server], allowedPermissions: read, completion: .successfulToolResult)
         case .musicAppreciation:
             return .init(intent: intent, scopes: [.catalogRead, .externalRead], allowedToolGroups: [.catalog], allowedPermissions: read, completion: .appreciationWithEvidence)
         case .musicDownload:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .downloadWrite], allowedToolGroups: [.catalog, .server, .download], allowedPermissions: write, maxRisk: .medium, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .downloadWrite], allowedToolGroups: [.catalog, .server, .download], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
         case .memoryManagement:
-            return .init(intent: intent, scopes: [.memoryRead, .memoryWrite], allowedToolGroups: [.memory], allowedPermissions: destructive, maxRisk: .high, completion: .verifiedToolResult)
+            return .init(intent: intent, scopes: [.memoryRead, .memoryWrite], allowedToolGroups: [.memory], allowedPermissions: destructive, maxRisk: .high, completion: .successfulToolResult)
         }
     }
 }
@@ -255,6 +256,10 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
     public var updatedAt: Date
     public var recentToolSignatures: [String]
     public var repeatedToolPatternCount: Int
+    /// 真实成功执行过的工具名（每次成功追加）。
+    public var successfulToolNames: [String]
+    /// 真实成功执行的工具总数（Tool Success 是独立于 Evidence 的事实）。
+    public var successfulToolCount: Int
 
     public init(id: UUID = UUID(), intent: AgentTaskIntent, goal: String, startedAt: Date = .now) {
         self.id = id
@@ -276,6 +281,8 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
         self.updatedAt = startedAt
         self.recentToolSignatures = []
         self.repeatedToolPatternCount = 0
+        self.successfulToolNames = []
+        self.successfulToolCount = 0
     }
 
     public mutating func recordProgress(action: String? = nil, at date: Date = .now) {
@@ -470,6 +477,10 @@ public enum AgentTaskReducer {
             return false
         }
 
+        // 真实成功工具结果：独立于 Evidence 的事实（memory_list 等不产生 Evidence 但确实执行成功）。
+        state.successfulToolNames.append(descriptor.name)
+        state.successfulToolCount += 1
+
         var changed = false
         for (key, value) in result.facts where state.facts[key] != value {
             state.facts[key] = value
@@ -552,9 +563,11 @@ public enum AgentCompletionEvaluator {
         case .modelAnswer:
             satisfied = true
             continuation = ""
-        case .verifiedToolResult:
-            satisfied = state.evidence.contains { $0.source != .modelInference }
-            continuation = "当前任务需要至少一条真实工具证据。请调用当前任务获准的读取工具，再依据结果回答。"
+        case .successfulToolResult:
+            // Tool Success ≠ Evidence：只要真实成功执行过工具就算完成条件达成。
+            // Evidence 只用于外部事实/大众评价/诊断 provenance，不承担“工具是否执行过”的语义。
+            satisfied = state.successfulToolCount > 0
+            continuation = "当前任务需要至少一次真实成功的工具结果。请调用相关工具后再依据真实结果回答。"
         case .queueMutation:
             satisfied = state.facts["sideEffect.queue"] == "success"
             continuation = "队列修改尚未得到成功工具结果。请执行获准的队列工具；不要仅用文字声称已经完成。"

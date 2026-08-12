@@ -246,9 +246,9 @@ public struct AgentRunner {
         var toolStepCount = 0
         var nativeMode = provider.supportsToolCalling
         var completionRepairAttempts = 0
-        // 音乐清单（歌曲/专辑/歌单提案）在整轮任务里累积，只在最终回答时展示一次，
-        // 避免执行过程中（搜索/加歌等中间步骤）频繁弹出清单。
-        var bufferedCards: [AgentMessage] = []
+        // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
+        // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
+        var presentation = AgentPresentationState()
         // 任务工作集：任务级结果缓存、重复调用保护、候选/队列统计、诊断轨迹。
         var ws = AgentTaskWorkingSet(
             targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
@@ -391,7 +391,15 @@ public struct AgentRunner {
                 ) {
                 case .accept:
                     await state(taskState)
-                    await Self.emitBufferedCards(bufferedCards, emit: emit)
+                    // 查看类任务的收尾合并（搜索 / 资料库浏览如“我的收藏”）：没有明确 final
+                    // 时把候选合成一组；推荐/播放/建歌单/改队列等任务必须走显式 final。
+                    if intent == .librarySearch || intent == .libraryManagement {
+                        presentation.applySearchFallback()
+                    }
+                    presentation.applyAlbumFallbackIfNeeded()
+                    if let finalMessage = presentation.finalMessage() {
+                        await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
+                    }
                     await emit(AgentChatMessage(role: .assistant, messages: [.text(reply)]))
                     return
                 case let .continueTask(instruction):
@@ -408,7 +416,7 @@ public struct AgentRunner {
                     taskState.errorState = message
                     taskState.updatedAt = .now
                     await state(taskState)
-                    await Self.emitBufferedCards(bufferedCards, emit: emit)
+                    // 失败不倾倒候选池，只显示失败原因。
                     await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
                     return
                 }
@@ -444,7 +452,6 @@ public struct AgentRunner {
                 taskState.recordToolCall(name: call.name, arguments: call.args)
                 let diagnosticArgs = AgentSensitiveDataRedactor.arguments(call.args)
                 if let violation = taskState.budgetViolation(policy: policy) {
-                    await Self.emitBufferedCards(bufferedCards, emit: emit)
                     await emit(AgentChatMessage(role: .assistant, messages: [.error(violation.localizedDescription)]))
                     return
                 }
@@ -516,7 +523,6 @@ public struct AgentRunner {
                         )
                     }
                 } catch is CancellationError {
-                    await Self.emitBufferedCards(bufferedCards, emit: emit)
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                     return
                 } catch {
@@ -538,9 +544,42 @@ public struct AgentRunner {
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
                 if madeProgress { completionRepairAttempts = 0 }
                 await state(taskState)
-                // 音乐清单只在整轮结束时统一展示；中间步骤只回灌给模型、不弹给用户。
-                if let payload = result.payload, Self.isPresentableCard(payload) {
-                    bufferedCards.append(payload)
+                // 展示状态：候选进内部池（绝不上屏）；最终/歧义由工具声明；真实副作用写 final。
+                if result.success {
+                    let role = result.presentationRole == .none ? descriptor.defaultPresentationRole : result.presentationRole
+                    if let payload = result.payload {
+                        switch (role, payload) {
+                        case (.candidate, let .trackCards(cards)):
+                            presentation.addCandidateTracks(cards)
+                        case (.candidate, let .albumCards(albums)):
+                            presentation.addCandidateAlbums(albums)
+                        case (.candidate, let .playlistProposal(name, tracks)):
+                            presentation.addCandidateTracks(tracks)
+                            presentation.setFinalPlaylistProposal(name, tracks)
+                        case (.finalResult, let .trackCards(cards)):
+                            presentation.setFinalTracks(cards)
+                            taskState.selectedIDs = Set(cards.map { $0.globalID.description })
+                        case (.disambiguation, let .trackCards(cards)):
+                            presentation.setDisambiguation(cards)
+                        default:
+                            break
+                        }
+                    }
+                    // 真实副作用：queue / playlist 写成功 → 以实际入队/入歌单的 ID 确定 final。
+                    if let gids = Self.sideEffectFinalIDs(name: call.name, args: call.args, descriptor: descriptor) {
+                        var cards = await Self.resolveTrackCards(gids, presentation: presentation, catalog: catalog)
+                        let append = descriptor.sideEffectPolicy == .queue
+                            && call.name != "queue_replace" && call.name != "replaceQueue"
+                        if append, !presentation.finalTrackIDs.isEmpty {
+                            cards = presentation.finalTrackIDs.compactMap { presentation.candidateTracks[$0] } + cards
+                        }
+                        presentation.setFinalTracks(cards)
+                        taskState.selectedIDs = Set(cards.map { $0.globalID.description })
+                    }
+                    if call.name == "queue_clear" || call.name == "clearQueue" {
+                        presentation.setFinalTracks([])
+                        taskState.selectedIDs = []
+                    }
                 }
                 // 只读查询不入日志；修改型操作全部落盘，供「操作记录」查看与撤销。
                 if result.permission != .readOnly, result.success {
@@ -598,43 +637,40 @@ public struct AgentRunner {
         }
     }
 
-    /// 只有展示型结果（歌曲/专辑清单、歌单提案）才值得在最终回答时展示。
-    private static func isPresentableCard(_ message: AgentMessage) -> Bool {
-        switch message {
-        case .trackCards, .albumCards, .playlistProposal:
-            return true
+    /// 从真实副作用（队列写入 / 歌单加歌）解析最终展示用的歌曲 ID。
+    /// 只解析成功副作用涉及的实际 ID；读取型工具返回 nil（不改变 final）。
+    private static func sideEffectFinalIDs(name: String, args: [String: String], descriptor: ToolDescriptor) -> [GlobalID]? {
+        switch descriptor.sideEffectPolicy {
+        case .queue:
+            if ["queue_replace", "replaceQueue", "queue_append", "queue_play_next",
+                "addToQueue", "playNext"].contains(name) {
+                let ids = AgentTaskWorkingSet.songIDs(from: args)
+                return ids.isEmpty ? nil : ids
+            }
+            return nil
+        case .playlist:
+            if ["playlist_add_songs", "addTracksToPlaylist"].contains(name) {
+                let ids = AgentTaskWorkingSet.songIDs(from: args)
+                return ids.isEmpty ? nil : ids
+            }
+            return nil
         default:
-            return false
+            return nil
         }
     }
 
-    /// 在整轮结束时统一展示缓冲的音乐清单（去重、限量）。
-    private static func emitBufferedCards(
-        _ cards: [AgentMessage],
-        emit: @escaping @Sendable (AgentChatMessage) async -> Void
-    ) async {
-        let deduped = Self.dedupeCards(cards)
-        guard !deduped.isEmpty else { return }
-        await emit(AgentChatMessage(role: .assistant, messages: deduped))
-    }
-
-    /// 去重：同一首歌 / 同一张专辑只出现一次；歌曲清单每份最多 60 首，避免整库倾倒。
-    private static func dedupeCards(_ cards: [AgentMessage]) -> [AgentMessage] {
-        var seenTracks: Set<GlobalID> = []
-        var seenAlbums: Set<GlobalID> = []
-        var result: [AgentMessage] = []
-        for card in cards {
-            switch card {
-            case let .trackCards(list):
-                let fresh = list.filter { seenTracks.insert($0.globalID).inserted }.prefix(60)
-                if !fresh.isEmpty { result.append(.trackCards(Array(fresh))) }
-            case let .albumCards(list):
-                let fresh = list.filter { seenAlbums.insert($0.globalID).inserted }
-                if !fresh.isEmpty { result.append(.albumCards(Array(fresh))) }
-            case .playlistProposal:
+    /// 把 ID 解析成有序卡片：优先用内部候选池，缺失时从本地目录补查。
+    private static func resolveTrackCards(
+        _ ids: [GlobalID],
+        presentation: AgentPresentationState,
+        catalog: LocalCatalogStore
+    ) async -> [TrackCard] {
+        var result: [TrackCard] = []
+        for id in ids {
+            if let card = presentation.candidateTracks[id] {
                 result.append(card)
-            default:
-                break
+            } else if let track = try? await catalog.getTrack(id) {
+                result.append(TrackCard.from(track))
             }
         }
         return result
@@ -1111,11 +1147,17 @@ public struct AgentRunner {
         } else {
             recentLine = context.recentlyPlayedTitles.prefix(5).joined(separator: "、")
         }
+        // 记忆注入是 Context 优化：存储不设数量上限，但每轮只注入最近更新的核心记忆，
+        // 剩余空间受单次 input token budget 控制（需要更多时模型用 memory_list 精确查询）。
         let memoryLines: String
         if context.memories.isEmpty {
             memoryLines = "（还没有记住关于主人的事情。主人告诉你名字或喜好时，主动用 memory_save 记下来喵）"
         } else {
-            memoryLines = context.memories.map { "• \($0.key)：\($0.value)" }.joined(separator: "\n")
+            let injected = Array(context.memories.prefix(40))
+            let joined = injected.map { "• \($0.key)：\($0.value)" }.joined(separator: "\n")
+            memoryLines = injected.count < context.memories.count
+                ? joined + "\n（另有 \(context.memories.count - injected.count) 条记忆，可用 memory_list 查看全部）"
+                : joined
         }
         let skillLines: String
         if context.skills.isEmpty {
@@ -1151,7 +1193,7 @@ public struct AgentRunner {
         5. 同步：用户问「服务器在线吗」用 server_test_connection；问「同步到哪了」用 server_sync_status；要求「同步音乐库」用 server_sync_start。
         5b. 推荐：用户给心情/场景/用途（如开车、提神、通勤、睡前、运动）时，优先直接调用 recommend_by_mood 或 recommend_by_constraints 获取真实歌曲清单；复杂过滤条件用 library_select_tracks；需要了解曲库结构时再用 library_get_catalog_index。拿到清单后基于真实歌曲给出推荐和理由；绝不编造不存在的歌曲。
         5c. 流派：用户问「有哪些流派/按流派找歌」时，用 library_get_genres 列出流派及歌曲数（返回中文显示名），用 library_get_tracks_by_genre 取某流派下的歌。流派来自音乐文件内嵌标签（Navidrome 的 getGenres / 曲目 genre 字段）；如果流派列表为空，说明服务器可能没写入流派标签，提示用户让 Navidrome 重新扫描，不要编造流派。
-        5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首候选（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里挑选。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
+        5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首**候选**（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里筛选出用户要求的 N 首。注意：40～60 是内部候选池，不是给主人显示 40～60 首；最终展示只通过 result_present_tracks / 真实建队/建歌单副作用确定。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
         5e. 热门 = 本地热度代理（播放次数/收藏/评分/最近播放），不是互联网排行榜。library_select_tracks 的 popularityProxy 已按此排序；语言标签缺失时会按热度返回候选，请按歌曲名/艺术家判断语言后再挑选。
         5f. 推荐时不需要每次都先 catalog_index：只有确实需要了解曲库结构（流派/语言/年代构成）时才调用 library_get_catalog_index；能直接用 recommend_by_mood / recommend_by_constraints / library_select_tracks 得到候选时就先用它们。按用户需求只取相关分类；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
         5e-0. 不喜欢（dislike）：用户说「我不喜欢这首」「这首以后不要给我推荐」「别再推荐这首歌」「把当前歌曲标记为不喜欢」时，调用 preference_set_disliked(trackID, value=true)；「取消不喜欢」调用 value=false。查询用 library_get_disliked。**不喜欢只影响自动推荐/随机/相似/智能队列/发现**；用户明确要「播放」「搜索」「打开专辑/歌单」某首不喜欢歌曲时，必须正常执行，不得以「你不喜欢」为由拒绝。所有自动推荐工具的返回候选已经由 Swift/SQLite 层排除了不喜欢歌曲，你不需要也不应该把不喜欢的歌塞回推荐。
@@ -1172,11 +1214,14 @@ public struct AgentRunner {
 
         ## 对话与工具调用规则
         6. 你是有记忆的助手：结合本会话历史回答，不要重复询问已知信息。
+        6b. 记忆 vs 技能：Memory 是主人长期信息（名字/偏好/喜欢的歌手等）；Skill 是可复用工作指令。用户问「你记得什么/你的记忆里有什么」→ 只调用 memory_list；用户问「你有哪些技能/skill 里有什么」→ 才调用 skill_list。两者不要混为一谈，也不要互相替代。
         7. 一个请求不按累计工具次数截断；需要多步时（先搜索再播放、先拿清单再推荐，或构建索引 V2）可以连续调用，
-           直到给出最终回答为止。每个模型轮次和每个工具仍受独立超时保护；某一步超时就停止当前任务并保留此前成功结果。
+           直到给出最终回答为止。每个模型轮次和每个工具仍受独立超时保护；单个工具失败或超时后，根据返回结果换工具/换参数继续，不要因为一个步骤失败就自行终止整个任务。
         8. 工具执行结果会以「（工具执行结果）工具名: 成功/失败 - 摘要；详情：歌曲清单」的形式回传给你，里面包含真实歌曲名与 GlobalID。拿到结果后：成功就据此给出自然语言总结；只有确实需要后续操作时才继续调用工具，不要重复调用已经成功的工具。
         8b. 禁止重复搜索：已经拿到某首歌的稳定 ID 后，后续操作必须直接使用该 ID（queue_replace / queue_append / playback_play_song），**禁止**再次按名称搜索同一首歌。同一查询（相同工具 + 相同参数）会被缓存，重复调用只返回缓存、不会得到新结果。
         8c. 候选足够时即可收尾：已获得用户要求的目标数量、或对应队列操作已由工具确认成功时，直接完成任务，不要继续无意义搜索。同一搜索重复多次没有新结果时，可以基于现有候选回答，或换一个搜索词/换一种策略继续；不要死磕同一条搜索。
+        8d. 最终展示协议：搜索/推荐工具产生的是内部候选，不会直接展示给主人。当主人只要求「推荐给我看看」而没有播放/建歌单/改队列时，完成筛选后必须调用 result_present_tracks(trackIDs=[最终选中的真实 ID]) 一次；只能把真正打算推荐给主人的歌曲传入，不要把整个候选池传入。如果已经 queue_replace / playlist_add_songs 成功确定最终集合，不必再额外调用 result_present_tracks。多个同名/相似对象无法确定时，用 result_present_tracks(trackIDs=[候选], kind=\"disambiguation\") 列出候选供主人选择。
+        8e. 最终回答文字：当 Runtime 会用歌曲卡片展示最终结果时，最终文字只做简短总结（如「已经为你选好 12 首适合开车提神的歌曲」），可以说明整体风格/筛选逻辑，最多举 2～3 首代表；不要逐首完整罗列 12 个歌名，避免与卡片重复。
         9. 执行哲学：用户明确要求且目标唯一时，删除歌单、清空队列、删除下载、删除服务器、清空记忆等操作直接执行，不再索要二次确认；不要擅自扩大用户指令范围。多个同名/相似对象无法确定时，先列出候选让用户选择目标，再执行。
         10. 凭据（密码、Token、完整服务器地址）绝不出现在任何参数或回复中。
         10b. 添加 / 修改服务器（地址、账号、凭据）必须由用户在本机「设置 → 服务器」页完成：

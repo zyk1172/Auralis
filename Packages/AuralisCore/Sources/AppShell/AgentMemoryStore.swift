@@ -17,7 +17,6 @@ public final class AgentMemoryStore {
 
     public static let maxValueLength = 2_000
     public static let maxInstructionsLength = 20_000
-    public static let maxMemoryCount = 200
 
     public init(directory: URL? = nil) {
         let dir = directory ?? Self.defaultDirectory()
@@ -58,11 +57,8 @@ public final class AgentMemoryStore {
         if let index = entries.firstIndex(where: { $0.key == trimmedKey }) {
             entries[index] = entry
         } else {
+            // 不设普通数量硬上限：用户没有要求删除，系统绝不静默淘汰旧记忆。
             entries.append(entry)
-            if entries.count > Self.maxMemoryCount {
-                entries.sort { $0.updatedAt > $1.updatedAt }
-                entries = Array(entries.prefix(Self.maxMemoryCount))
-            }
         }
         return persistMemory()
     }

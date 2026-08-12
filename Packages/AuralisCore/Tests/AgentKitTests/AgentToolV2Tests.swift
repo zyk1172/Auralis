@@ -631,7 +631,7 @@ struct MaintenanceToolTests {
             bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
         )
         #expect(result.success)
-        #expect(result.summary.contains("无播放地址"))
+        #expect(result.summary.contains("尚未缓存播放地址"))
     }
 }
 

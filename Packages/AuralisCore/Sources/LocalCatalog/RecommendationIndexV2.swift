@@ -10,6 +10,9 @@ public enum RecommendationIndexV2 {
         "energy", "tempo", "acousticness", "danceability",
     ]
     public static let rulesVersion = "2.1"
+    /// 开放语义标签规则版本：只描述“开放标签生成/规范化规则”的版本，与
+    /// rulesVersion（固定分类 taxonomy）相互独立。旧数据无开放标签视为 semanticTagRulesVersion = 0。
+    public static let semanticTagRulesVersion = 1
     /// 内容指纹算法版本：只描述“判断歌曲内容是否变化”的指纹算法，与
     /// rulesVersion（分类 taxonomy / prompt / schema 版本）相互独立。
     public static let contentHashVersion = 2
@@ -18,6 +21,26 @@ public enum RecommendationIndexV2 {
     public static let vocals: Set<String> = ["女声", "男声", "童声", "合唱", "对唱", "器乐", "说唱", "未知"]
     public static let textures: Set<String> = ["原声", "电子", "钢琴", "吉他", "贝斯", "鼓组", "弦乐", "管乐", "合成器", "人声采样", "现场", "氛围", "Lo-fi", "失真"]
     public static let styles: Set<String> = ["流行", "摇滚", "民谣", "爵士", "古典", "嘻哈", "R&B", "灵魂乐", "电子", "舞曲", "金属", "朋克", "乡村", "蓝调", "雷鬼", "世界音乐", "原声带", "氛围", "轻音乐", "实验"]
+
+    /// 开放语义标签规范化（唯一实现）：trim → Unicode 规范化 → 去掉无意义首尾 # →
+    /// 折叠连续空白 → 空值过滤。展示值保留 canonical form；比较时按小写归一避免同义分叉。
+    public static func normalizeSemanticTag(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let unicodeNormalized = trimmed.precomposedStringWithCanonicalMapping
+        var cleaned = unicodeNormalized
+        while cleaned.hasPrefix("#") { cleaned.removeFirst() }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 折叠连续空白（含全角空格）。
+        cleaned = cleaned.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        guard !cleaned.isEmpty else { return nil }
+        return cleaned
+    }
+
+    /// 开放标签比较键（大小写不敏感 + 规范化）。
+    public static func semanticTagKey(_ canonical: String) -> String {
+        canonical.lowercased()
+    }
 }
 
 extension LocalCatalogStore {
@@ -26,26 +49,70 @@ extension LocalCatalogStore {
         let indexed = snapshot.lines.filter { line in
             snapshot.states[line.id]?.hash == recommendationIndexV2ContentHash(line)
         }.count
+        let semanticTagged = try recommendationIndexV2SemanticTaggedIDs(serverID: serverID).count
         return RecommendationIndexV2Status(
             totalTracks: snapshot.lines.count,
             indexedTracks: indexed,
             pendingTracks: snapshot.lines.count - indexed,
-            rulesVersion: RecommendationIndexV2.rulesVersion
+            rulesVersion: RecommendationIndexV2.rulesVersion,
+            semanticTaggedTracks: semanticTagged,
+            pendingSemanticTagTracks: max(snapshot.lines.count - semanticTagged, 0)
         )
+    }
+
+    /// 已有开放语义标签（dimension='tag'）的曲目 ID 集合（按服务器过滤，tags 表无 server_id 列）。
+    func recommendationIndexV2SemanticTaggedIDs(serverID: ServerID?) throws -> Set<String> {
+        let rows: [[String: SQLiteValue]]
+        if let serverID {
+            rows = try db.query(
+                """
+                SELECT DISTINCT t.global_id FROM recommendation_index_v2_tags t
+                JOIN recommendation_index_v2_state s ON s.global_id = t.global_id
+                WHERE t.dimension = 'tag' AND s.server_id = ?
+                """,
+                [.text(serverID.rawValue)]
+            )
+        } else {
+            rows = try db.query("SELECT DISTINCT global_id FROM recommendation_index_v2_tags WHERE dimension = 'tag'")
+        }
+        return Set(rows.compactMap { $0["global_id"]?.string })
     }
 
     /// 取得下一批待分类元数据。批次稳定排序，失败重试不会跳过歌曲。
     public func nextRecommendationIndexV2Batch(serverID: ServerID?, limit: Int = 80) throws -> RecommendationIndexV2Batch {
         let snapshot = try recommendationIndexV2Snapshot(serverID: serverID)
         let pending = snapshot.lines.filter { snapshot.states[$0.id]?.hash != recommendationIndexV2ContentHash($0) }
+        let semanticTagged = try recommendationIndexV2SemanticTaggedIDs(serverID: serverID)
+        let batch = Array(pending.prefix(min(max(limit, 1), 100)))
+        // 本批工作模式：全缺 → full；已有固定但缺开放标签 → semanticTagsOnly；混合 → mixed。
+        var needsFull = false
+        var needsSemanticOnly = false
+        for line in batch {
+            let hasFixed = snapshot.states[line.id]?.hash != nil
+            if hasFixed && !semanticTagged.contains(line.id) {
+                needsSemanticOnly = true
+            } else if !hasFixed {
+                needsFull = true
+            }
+        }
+        let mode: String
+        if needsFull && needsSemanticOnly { mode = "mixed" }
+        else if needsSemanticOnly { mode = "semanticTagsOnly" }
+        else { mode = "full" }
         return RecommendationIndexV2Batch(
-            tracks: Array(pending.prefix(min(max(limit, 1), 100))),
+            tracks: batch,
             pendingTracks: pending.count,
-            rulesVersion: RecommendationIndexV2.rulesVersion
+            rulesVersion: RecommendationIndexV2.rulesVersion,
+            mode: mode
         )
     }
 
-    /// 校验模型返回后一次性落库。未知 ID 或不在规范中的标签不会污染索引。
+    /// 校验模型返回后落库。固定维度（mood/scene/vocal/texture/style + 数值维度）受白名单；
+    /// 开放语义标签统一写 dimension = "tag"，不设数量上限，只做规范化 + 语义规则校验。
+    ///
+    /// mode 语义：
+    /// - "full"（默认）：替换该曲目的固定维度 + 开放标签；
+    /// - "semanticTagsOnly"：只替换开放标签（dimension='tag'），绝不删除旧的固定维度。
     @discardableResult
     public func writeRecommendationIndexV2(
         _ classifications: [RecommendationIndexV2Classification],
@@ -55,8 +122,12 @@ extension LocalCatalogStore {
         let snapshot = try recommendationIndexV2Snapshot(serverID: serverID)
         let byID = Dictionary(uniqueKeysWithValues: snapshot.lines.map { ($0.id, $0) })
         let valid = classifications.prefix(100).compactMap { item -> (RecommendationIndexV2Classification, CatalogTrackLine)? in
-            guard let line = byID[item.id],
-                  (1...10).contains(item.energy),
+            guard let line = byID[item.id] else { return nil }
+            if item.mode == "semanticTagsOnly" {
+                // 只补开放标签：不要求固定维度合法，也绝不触碰旧固定维度。
+                return (item, line)
+            }
+            guard (1...10).contains(item.energy),
                   (1...5).contains(item.tempo),
                   (1...5).contains(item.acousticness),
                   (1...5).contains(item.danceability),
@@ -72,7 +143,12 @@ extension LocalCatalogStore {
         try db.transaction {
             for (item, line) in valid {
                 let confidence = min(max(item.confidence, 0), 1)
-                try db.run("DELETE FROM recommendation_index_v2_tags WHERE global_id = ?", [.text(item.id)])
+                let mode = item.mode == "semanticTagsOnly" ? "semanticTagsOnly" : "full"
+                if mode == "semanticTagsOnly" {
+                    try db.run("DELETE FROM recommendation_index_v2_tags WHERE global_id = ? AND dimension = 'tag'", [.text(item.id)])
+                } else {
+                    try db.run("DELETE FROM recommendation_index_v2_tags WHERE global_id = ?", [.text(item.id)])
+                }
                 try db.run(
                     """
                     INSERT INTO recommendation_index_v2_state (global_id, server_id, source_hash, rules_version, classifier, classified_at, source_hash_version)
@@ -85,12 +161,15 @@ extension LocalCatalogStore {
                      .text(RecommendationIndexV2.rulesVersion), .text(classifier), .real(Date.now.timeIntervalSince1970),
                      .integer(Int64(RecommendationIndexV2.contentHashVersion))]
                 )
-                try recommendationIndexV2InsertTags(item.moods, dimension: "mood", allowed: RecommendationIndexV2.moods, id: item.id, confidence: confidence)
-                try recommendationIndexV2InsertTags(item.scenes, dimension: "scene", allowed: RecommendationIndexV2.scenes, id: item.id, confidence: confidence)
-                try recommendationIndexV2InsertTags(item.vocals, dimension: "vocal", allowed: RecommendationIndexV2.vocals, id: item.id, confidence: confidence)
-                try recommendationIndexV2InsertTags(item.textures, dimension: "texture", allowed: RecommendationIndexV2.textures, id: item.id, confidence: confidence)
-                try recommendationIndexV2InsertTags(item.styles, dimension: "style", allowed: RecommendationIndexV2.styles, id: item.id, confidence: confidence)
-                try recommendationIndexV2InsertNumericTags(item, id: item.id, confidence: confidence)
+                if mode == "full" {
+                    try recommendationIndexV2InsertTags(item.moods, dimension: "mood", allowed: RecommendationIndexV2.moods, id: item.id, confidence: confidence)
+                    try recommendationIndexV2InsertTags(item.scenes, dimension: "scene", allowed: RecommendationIndexV2.scenes, id: item.id, confidence: confidence)
+                    try recommendationIndexV2InsertTags(item.vocals, dimension: "vocal", allowed: RecommendationIndexV2.vocals, id: item.id, confidence: confidence)
+                    try recommendationIndexV2InsertTags(item.textures, dimension: "texture", allowed: RecommendationIndexV2.textures, id: item.id, confidence: confidence)
+                    try recommendationIndexV2InsertTags(item.styles, dimension: "style", allowed: RecommendationIndexV2.styles, id: item.id, confidence: confidence)
+                    try recommendationIndexV2InsertNumericTags(item, id: item.id, confidence: confidence)
+                }
+                try recommendationIndexV2InsertSemanticTags(item.semanticTags, id: item.id, line: line, confidence: confidence)
             }
         }
         return valid.count
@@ -193,6 +272,41 @@ extension LocalCatalogStore {
             else { return nil }
             return RecommendationIndexV2Category(
                 dimension: dimension,
+                value: value,
+                trackCount: Int(row["track_count"]?.int ?? 0)
+            )
+        }
+    }
+
+    /// 开放语义标签词库：已存在的 canonical 标签 + 使用次数（按需分页，不是系统上限）。
+    public func recommendationIndexV2TagCatalog(
+        serverID: ServerID?,
+        query: String? = nil,
+        limit: Int = 50
+    ) throws -> [RecommendationIndexV2Category] {
+        let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var sql = """
+            SELECT t.value, COUNT(DISTINCT t.global_id) AS track_count
+            FROM recommendation_index_v2_tags t
+            JOIN recommendation_index_v2_state s ON s.global_id = t.global_id
+            WHERE t.dimension = 'tag'
+        """
+        var values: [SQLiteValue] = []
+        if let serverID {
+            sql += " AND s.server_id = ?"
+            values.append(.text(serverID.rawValue))
+        }
+        if let trimmed, !trimmed.isEmpty {
+            sql += " AND t.value LIKE ?"
+            values.append(.text("%\(trimmed)%"))
+        }
+        sql += " GROUP BY t.value ORDER BY track_count DESC, t.value ASC LIMIT ?"
+        values.append(.integer(Int64(min(max(limit, 1), 500))))
+        let rows = try db.query(sql, values)
+        return rows.compactMap { row in
+            guard let value = row["value"]?.string, !value.isEmpty else { return nil }
+            return RecommendationIndexV2Category(
+                dimension: "tag",
                 value: value,
                 trackCount: Int(row["track_count"]?.int ?? 0)
             )
@@ -309,15 +423,32 @@ extension LocalCatalogStore {
         Array(Set(values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(allowed.contains))).sorted()
     }
 
-    /// 清理历史遗留的动态维度标签（customTags 已下线）：
-    /// 只删除不属于固定 allowed dimensions 的 recommendation_index_v2_tags 行，
-    /// 不删除 state、不删除固定维度、不重新运行 V2。
-    nonisolated func cleanupRecommendationIndexV2DynamicDimensions() throws {
-        let placeholders = RecommendationIndexV2.fixedDimensions.map { _ in "?" }.joined(separator: ",")
-        try db.run(
-            "DELETE FROM recommendation_index_v2_tags WHERE dimension NOT IN (\(placeholders))",
-            RecommendationIndexV2.fixedDimensions.sorted().map { SQLiteValue.text($0) }
-        )
+    /// 写入开放语义标签（dimension = 'tag'）：规范化 + 语义规则校验 + 按 (global_id, dimension, value)
+    /// 唯一键去重（PRIMARY KEY 保证不会产生重复行）。不设每首/全局数量上限。
+    private func recommendationIndexV2InsertSemanticTags(
+        _ tags: [RecommendationIndexV2SemanticTag],
+        id: String,
+        line: CatalogTrackLine,
+        confidence: Double
+    ) throws {
+        var seen = Set<String>()
+        for tag in tags {
+            guard let canonical = RecommendationIndexV2.normalizeSemanticTag(tag.value) else { continue }
+            // 语义规则：不能用歌曲名/艺术家/专辑/GlobalID 作为标签，也不能把个人行为当标签。
+            let lower = canonical.lowercased()
+            let forbidden = [
+                line.title.lowercased(), line.artist.lowercased(), line.album.lowercased(),
+                line.id.lowercased(),
+            ]
+            if forbidden.contains(where: { !$0.isEmpty && $0 == lower }) { continue }
+            if ["收藏", "不喜欢", "已播放", "播放很多", "评分", "跳过", "下载"].contains(where: { canonical.contains($0) }) { continue }
+            let key = lower
+            guard seen.insert(key).inserted else { continue }
+            try db.run(
+                "INSERT OR REPLACE INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+                [.text(id), .text(canonical), .real(min(max(tag.confidence, 0), 1))]
+            )
+        }
     }
 
     /// V2 内容指纹：只包含相对稳定的音乐内容身份字段。

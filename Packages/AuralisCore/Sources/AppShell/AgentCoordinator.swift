@@ -89,9 +89,15 @@ public final class AgentCoordinator: ObservableObject {
 
     private var runTask: Task<Void, Never>?
     private var consentContinuation: CheckedContinuation<AIConsentDecision, Never>?
-    /// 当前正在流式输出的 assistant 气泡 id：`.streaming` 增量累加进该消息，
+    /// 当前运行身份：任何迟到 callback 只要 runID 不匹配就丢弃，绝不污染新运行/新会话。
+    var currentRunID: UUID?
+    /// 每个 Run 独立的流式状态（key = runID）。`.streaming` 增量累加进该 run 的气泡，
     /// 直到收到非流式消息（最终文本 / 工具进度 / 卡片等）把它原地定型为止。
-    private var streamingMessageID: UUID?
+    /// 用 runID 隔离后，Session A 的流式气泡永远不会与 Session B 共享。
+    private struct AgentStreamingState {
+        var messageID: UUID?
+    }
+    private var streamingStates: [UUID: AgentStreamingState] = [:]
 
     /// 单次请求带给模型的总上下文上限（256K，超出时裁剪历史并预留输出）。
     public static let tokenBudget = ContextManager.maxContextTokens
@@ -454,39 +460,42 @@ public final class AgentCoordinator: ObservableObject {
         )
         let bridge = self.bridge
         let catalog = self.catalog
-        let history = messages
         let systemService = self.systemService
-        let messageCountBeforeRun = messages.count
         // 创建并持久化任务记录（不依赖任何 View 生命周期）。
-        let historyText = messages.flatMap(\.messages).compactMap { item -> String? in
-            switch item {
-            case let .text(value), let .streaming(value), let .error(value): value
-            default: nil
-            }
-        }.joined(separator: " ")
-        let taskPolicy = AgentTaskPolicyResolver.resolve(
-            text: trimmed,
-            historyText: historyText,
-            explicitIntent: explicitIntent
-        )
-        let taskIntent = taskPolicy.intent
-        let taskID = taskStore.start(
-            conversationID: activeSessionID,
-            intent: taskIntent,
-            goal: trimmed,
-            budget: taskPolicy.budget
-        ).id
-        activeTask = taskStore.record(taskID)
-
+        // 历史只从 SessionStore 读取（Session A 只能看到 A 的历史），不依赖全局 messages。
         runTask = Task { [weak self] in
             guard let self else { return }
+            let runID = UUID()
+            self.currentRunID = runID
             // 用户在任务真正开始前点了停止：直接结束，不回任何消息。
             if Task.isCancelled {
                 await MainActor.run { [weak self] in self?.isRunning = false }
+                self.currentRunID = nil
                 self.runTask = nil
                 return
             }
-
+            // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
+            let history = await self.sessionStore.session(sessionID)?.messages ?? []
+            let historyText = history.flatMap(\.messages).compactMap { item -> String? in
+                switch item {
+                case let .text(value), let .streaming(value), let .error(value): value
+                default: nil
+                }
+            }.joined(separator: " ")
+            let resolvedPolicy = AgentTaskPolicyResolver.resolve(
+                text: trimmed,
+                historyText: historyText,
+                explicitIntent: explicitIntent
+            )
+            let taskID = self.taskStore.start(
+                conversationID: sessionID,
+                intent: resolvedPolicy.intent,
+                goal: trimmed,
+                budget: resolvedPolicy.budget
+            ).id
+            if self.activeSessionID == sessionID {
+                self.activeTask = self.taskStore.record(taskID)
+            }
             // 首次外发确认门槛（B5）：只有真实网络请求需要确认。
             if needsFirstSendConsent {
                 let consent = Self.consentRequest(
@@ -499,15 +508,17 @@ public final class AgentCoordinator: ObservableObject {
                     // 不发起网络请求，只回本地提示（用户消息回显 + 隐私说明）。
                     await self.receive(
                         AgentChatMessage(role: .user, messages: [.text(trimmed)]),
-                        sessionID: sessionID
+                        sessionID: sessionID,
+                        runID: runID
                     )
                     await self.receive(
                         AgentChatMessage(role: .assistant, messages: [.text(Self.consentDeniedText(consent))]),
-                        sessionID: sessionID
+                        sessionID: sessionID,
+                        runID: runID
                     )
                     taskStore.update(taskID, status: .cancelled, error: "用户未授权首次外发请求。")
-                    activeTask = taskStore.record(taskID)
                     await MainActor.run { [weak self] in self?.isRunning = false }
+                    self.currentRunID = nil
                     self.runTask = nil
                     return
                 case .allowOnce, .allowAndRemember:
@@ -519,7 +530,7 @@ public final class AgentCoordinator: ObservableObject {
                 taskID: taskID,
                 userText: trimmed,
                 explicitIntent: explicitIntent,
-                policy: taskPolicy,
+                policy: resolvedPolicy,
                 provider: resolvedProvider,
                 model: modelName,
                 bridge: bridge,
@@ -530,29 +541,32 @@ public final class AgentCoordinator: ObservableObject {
                 externalMusicService: externalMusicService,
                 confirm: { _ in true },
                 emit: { [weak self] message in
-                    await self?.receive(message, sessionID: sessionID)
+                    await self?.receive(message, sessionID: sessionID, runID: runID)
                 },
                 log: { [weak self] record in
                     await self?.record(record)
                 },
                 progress: { [weak self] p in
-                    await self?.updateTaskProgress(p, taskID: taskID)
+                    await self?.updateTaskProgress(p, taskID: taskID, sessionID: sessionID)
                 },
                 state: { [weak self] taskState in
-                    await self?.updateTaskState(taskState, taskID: taskID)
+                    await self?.updateTaskState(taskState, taskID: taskID, sessionID: sessionID)
                 }
             )
             await MainActor.run { [weak self] in self?.isRunning = false }
-            let failure = Self.failureSummary(in: self.messages.dropFirst(messageCountBeforeRun))
+            let sessionMessages = await self.sessionStore.session(sessionID)?.messages ?? []
+            let failure = Self.failureSummary(in: sessionMessages.dropFirst(history.count))
             await self.finishTask(taskID, failure: failure)
-            await self.summarizeActiveSession()
-            // 任务结束即释放对 self 的强引用，避免 runTask 长期持有协调器。
+            if self.activeSessionID == sessionID {
+                await self.summarizeActiveSession()
+            }
+            self.currentRunID = nil
             self.runTask = nil
         }
     }
 
     /// 更新任务进度（工具步骤 / 当前阶段 / token 用量）。
-    private func updateTaskProgress(_ progress: AgentRunner.AgentProgress, taskID: UUID) async {
+    private func updateTaskProgress(_ progress: AgentRunner.AgentProgress, taskID: UUID, sessionID: UUID) async {
         taskStore.update(
             taskID,
             step: progress.currentStep,
@@ -560,12 +574,15 @@ public final class AgentCoordinator: ObservableObject {
             inputTokens: progress.inputTokens ?? 0,
             outputTokens: progress.outputTokens ?? 0
         )
-        activeTask = taskStore.record(taskID)
+        // 只有属于当前活动会话的任务才更新 UI 进度，避免 Session A 的步骤显示在 B 界面。
+        if activeSessionID == sessionID {
+            activeTask = taskStore.record(taskID)
+        }
     }
 
     /// Runtime 是任务状态的权威；把结构化状态同步进持久化仓库，App 重启后可审计
     /// 已完成动作与停止原因，而不是只剩一条“正在执行工具”的 UI 文本。
-    private func updateTaskState(_ state: AgentTaskState, taskID: UUID) async {
+    private func updateTaskState(_ state: AgentTaskState, taskID: UUID, sessionID: UUID) async {
         taskStore.update(
             taskID,
             status: Self.persistedStatus(for: state.status),
@@ -577,7 +594,9 @@ public final class AgentCoordinator: ObservableObject {
             completedActions: state.completedActions,
             noProgressRounds: state.progress.noProgressRounds
         )
-        activeTask = taskStore.record(taskID)
+        if activeSessionID == sessionID {
+            activeTask = taskStore.record(taskID)
+        }
     }
 
     private static func persistedStatus(for status: AgentTaskLifecycleStatus) -> AgentTaskStatus {
@@ -624,6 +643,8 @@ public final class AgentCoordinator: ObservableObject {
     public func cancel() {
         runTask?.cancel()
         runTask = nil
+        currentRunID = nil
+        streamingStates.removeAll()
         resolveConsent(.deny)
         isRunning = false
         if let taskID = activeTask?.id {
@@ -639,38 +660,59 @@ public final class AgentCoordinator: ObservableObject {
     /// - 非流式消息（最终 `.text` / 工具进度 / 卡片 / 错误等）→ 若存在 in-flight
     ///   气泡，则**原地替换**该气泡（同一位置，不另起一条），并持久化最终消息。
     ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
-    private func receive(_ message: AgentChatMessage, sessionID: UUID) async {
-        // 流式增量：累加进 in-flight 气泡（或在没有气泡时新建一条）。
+    /// 接收 Runner 发出的消息。消息先绑定 sessionID + runID：
+    /// 1. 只有 currentRunID == runID 的 callback 才被接受（迟到/过期 callback 一律丢弃）；
+    /// 2. 持久化永远写入目标 session 的 SessionStore；
+    /// 3. 只有 activeSessionID == sessionID 时才更新当前屏幕的 `messages`。
+    ///
+    /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
+    /// - `.streaming` 增量 → 累加进该 run 的 in-flight 气泡（key = runID）；
+    /// - 非流式消息（最终 `.text` / 工具进度 / 卡片 / 错误等）→ 原地定型 in-flight 气泡并持久化。
+    ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
+    func receive(_ message: AgentChatMessage, sessionID: UUID, runID: UUID) async {
+        // 过期 callback（旧 run 的迟到 token / 旧 run 的 final answer）→ 丢弃，不污染新运行。
+        guard currentRunID == runID else { return }
+        let isActiveSession = activeSessionID == sessionID
+
+        // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
         if let delta = Self.streamingDeltaText(from: message) {
-            if let streamingID = streamingMessageID,
-               let index = messages.lastIndex(where: { $0.id == streamingID }) {
-                var existing = messages[index]
-                let accumulated = Self.accumulatedStreamingText(existing) + delta
-                existing = AgentChatMessage(
-                    id: existing.id,
-                    role: .assistant,
-                    messages: [.streaming(accumulated)],
-                    createdAt: existing.createdAt
-                )
-                messages[index] = existing
-            } else {
-                streamingMessageID = message.id
-                messages.append(message)
+            var state = streamingStates[runID] ?? AgentStreamingState(messageID: nil)
+            if isActiveSession {
+                if let streamingID = state.messageID,
+                   let index = messages.lastIndex(where: { $0.id == streamingID }) {
+                    var existing = messages[index]
+                    let accumulated = Self.accumulatedStreamingText(existing) + delta
+                    existing = AgentChatMessage(
+                        id: existing.id,
+                        role: .assistant,
+                        messages: [.streaming(accumulated)],
+                        createdAt: existing.createdAt
+                    )
+                    messages[index] = existing
+                } else {
+                    state.messageID = message.id
+                    messages.append(message)
+                }
+            } else if state.messageID == nil {
+                state.messageID = message.id
             }
+            streamingStates[runID] = state
             return
         }
 
-        // 非流式消息：把 in-flight 气泡原地定型为这条最终消息（同一位置，不另起一条）。
-        if let streamingID = streamingMessageID {
-            streamingMessageID = nil
-            if let index = messages.lastIndex(where: { $0.id == streamingID }) {
-                messages[index] = message
-                await sessionStore.append(message, to: sessionID)
-                await trimHistoryIfNeeded(sessionID: sessionID)
-                return
-            }
+        // 非流式消息：把该 run 的 in-flight 气泡原地定型并持久化。
+        let state = streamingStates[runID]
+        streamingStates[runID] = nil
+        if let streamingID = state?.messageID, isActiveSession,
+           let index = messages.lastIndex(where: { $0.id == streamingID }) {
+            messages[index] = message
+            await sessionStore.append(message, to: sessionID)
+            await trimHistoryIfNeeded(sessionID: sessionID)
+            return
         }
-        messages.append(message)
+        if isActiveSession {
+            messages.append(message)
+        }
         await sessionStore.append(message, to: sessionID)
         await trimHistoryIfNeeded(sessionID: sessionID)
     }
@@ -704,7 +746,8 @@ public final class AgentCoordinator: ObservableObject {
         let kept = Array(session.messages.suffix(12))
         await sessionStore.clearMessages(sessionID)
         for message in kept { await sessionStore.append(message, to: sessionID) }
-        messages = kept
+        // 只有被裁剪的会话正是当前活动会话时，才更新屏幕上的 messages。
+        if activeSessionID == sessionID { messages = kept }
     }
 
     private func record(_ record: AgentActionRecord) async {

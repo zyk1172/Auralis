@@ -132,9 +132,10 @@ Evidence 来源包括本地目录、播放状态、服务器、外部 API、用�
 推荐索引 V2 是普通目录工具服务。它的批次规则属于工具描述与工具结果，Runtime 的
 通用模型循环不解析索引摘要、不采用索引专属超时，也不维护索引专属轮次状态。
 原生工具调用直接把分类批次作为结构化 `items` 数组写回；旧版 `itemsJSON` 仍可读取。
-V2 是结构化音乐分析索引，只保留固定维度：情绪、场景、人声、质感、风格与
-energy/tempo/acousticness/danceability 数值；不再提供 customTags 动态标签能力，
-历史遗留的非固定维度标签在打开数据库时清理。
+V2 是结构化音乐分析索引：固定维度（情绪、场景、人声、质感、风格与
+energy/tempo/acousticness/danceability 数值）保持规范；此外开放语义标签
+（dimension="tag"）由 Agent 自主创建，不设数量上限，质量通过规范化、复用 canonical
+与语义规则控制。详见 `Docs/RecommendationIndexV2.md`。
 
 ## 持久化、取消与重启
 
@@ -160,3 +161,46 @@ token、cookie 和 authorization 参数在日志边界统一脱敏。歌词和�
 
 MANUAL-VERIFY: 使用真实 OpenAI 原生接口分别执行播放、歌曲鉴赏、完整索引和取消任务，
 确认 UI 事件映射、原生 tool_call_id 和首次隐私授权与自动测试一致。
+
+
+## Session Isolation
+
+消息状态以 Session 为唯一归属，运行以 `runID` 为唯一身份：
+
+- `AgentCoordinator.receive(message, sessionID, runID)` 永远先写入目标 Session 的
+  SessionStore；只有 `activeSessionID == sessionID` 才更新当前屏幕 `messages`。
+- 流式状态按 `runID` 隔离（`streamingStates[runID]`），Session A 的流式气泡不可能
+  出现在 Session B。
+- 迟到 callback（旧 runID）一律丢弃，不污染新运行 / 新会话。
+- 任务历史从 SessionStore 读取，不依赖全局 `messages`；`trimHistoryIfNeeded` 只更新
+  被裁剪会话自己的 UI 投影；任务进度（activeTask）只对活动会话更新。
+- 唯一允许跨会话的是 `AgentMemoryStore` 中用户明确保存的长期 Memory（显式跨会话通道）。
+
+## Memory vs Session History
+
+- Session History：局部，不跨会话。
+- 长期 Memory：显式跨会话，由 `memory_save` 写入、`memory_list` 读取，跨会话注入。
+- Memory 存储不设普通数量硬上限（不再 200 条静默淘汰旧记忆）；Context 注入按 token
+  budget 裁剪（每轮只注入最近更新的核心记忆，其余用 `memory_list` 精确查询）。
+- Memory（主人长期信息）与 Skill（可复用工作指令）是两个概念，`memory_list` 与
+  `skill_list` 不得互相替代。
+
+## Tool Success vs Evidence
+
+- `AgentTaskState.successfulToolCount` / `successfulToolNames`：真实成功执行过的工具
+  结果（Tool Success）。
+- `AgentEvidence`：事实来源 provenance（外部音乐数据、大众评价、诊断等）。
+- 完成条件 `successfulToolResult`：至少一次真实成功 ToolResult（`successfulToolCount > 0`），
+  不再要求“必须有 AgentEvidence”——`memory_list` 等查询成功即可通过，不再误报
+  “没有真实工具证据”。
+
+## Result Presentation
+
+- `AgentPresentationState` 把内部候选池与最终展示彻底分离：
+  - candidate：中间候选，只回灌模型，绝不上屏；
+  - final：`result_present_tracks` / 真实副作用（queue_replace、playlist_add_songs）
+    / 查看类任务收尾合并；
+  - disambiguation：多个匹配供用户选择；
+- 一个任务最终最多一组 TrackCards（`finalMessage()` 只返回一个消息）。
+- Cancel / Fail 不倾倒候选池；Session History 只保存最终可见结果。
+- UI：<=5 全部显示；>5 默认 5 首 + “展开其余 N 首”/“收起”。

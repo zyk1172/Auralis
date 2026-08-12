@@ -138,37 +138,52 @@ struct DislikedTracksTests {
         #expect(package.trackCount == 1)
     }
 
-    @Test("legacy dynamic dimensions are cleaned, fixed dimensions and state preserved")
-    func legacyCustomTagDimensionsCleaned() async throws {
+    @Test("semantic tags (dimension=tag) are preserved and counted in status")
+    func semanticTagsPersistAndCount() async throws {
         let store = try makeStore()
         let serverID: ServerID = "s1"
         try await seed(store, [track(serverID: serverID, remoteID: "t1", title: "Song")])
         let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
+        // 完整分类：固定维度 + 开放语义标签。
         _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, textures: ["钢琴"], confidence: 0.9)
+            RecommendationIndexV2Classification(
+                id: id,
+                moods: ["平静"],
+                energy: 3,
+                textures: ["钢琴"],
+                semanticTags: [
+                    .init(value: "夜行感", confidence: 0.8),
+                    .init(value: " 夜行感 ", confidence: 0.7),   // 规范化去重
+                    .init(value: "#公路感", confidence: 0.6),    // 去掉前导 #
+                ],
+                confidence: 0.9
+            )
         ], serverID: serverID)
-        // 手工注入一条历史动态维度（旧 customTags 写入）。
+
         let db = await store.db
-        try await db.run(
-            "INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, ?, ?, ?)",
-            [.text(id), .text("编制"), .text("室内乐"), .real(0.9)]
-        )
-
-        // 执行清理：只删除非固定维度，固定维度与 state 保留。
-        try await store.cleanupRecommendationIndexV2DynamicDimensions()
-
         let rows = try await db.query(
-            "SELECT dimension FROM recommendation_index_v2_tags WHERE global_id = ?",
+            "SELECT dimension, value FROM recommendation_index_v2_tags WHERE global_id = ? AND dimension = 'tag' ORDER BY value",
             [.text(id)]
         )
-        let dimensions = rows.compactMap { $0["dimension"]?.string }
-        #expect(!dimensions.contains("编制"))
-        #expect(dimensions.contains("mood"))
-        #expect(dimensions.contains("texture"))
-        // state 保留，索引仍有效（不重新运行 V2）。
+        let values = rows.compactMap { $0["value"]?.string }
+        // 去重后只有 2 个 tag（夜行感 出现两次归一成一条，公路感 一条）。
+        #expect(values.count == 2)
+        #expect(values.contains("夜行感"))
+        #expect(values.contains("公路感"))
+
+        // 固定维度保留。
+        let dims = try await db.query(
+            "SELECT dimension FROM recommendation_index_v2_tags WHERE global_id = ?",
+            [.text(id)]
+        ).compactMap { $0["dimension"]?.string }
+        #expect(dims.contains("mood"))
+        #expect(dims.contains("texture"))
+
+        // status 统计开放标签。
         let status = try await store.recommendationIndexV2Status(serverID: serverID)
         #expect(status.indexedTracks == 1)
-        #expect(status.pendingTracks == 0)
+        #expect(status.semanticTaggedTracks == 1)
+        #expect(status.pendingSemanticTagTracks == 0)
     }
 }

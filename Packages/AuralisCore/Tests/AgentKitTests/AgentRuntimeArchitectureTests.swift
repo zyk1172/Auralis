@@ -86,8 +86,9 @@ struct AgentRuntimeArchitectureTests {
         let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
         let tools = ToolSelector.select(for: "鉴赏并删除服务器", intent: .musicAppreciation, policy: policy, all: AgentToolRegistry.all)
         #expect(tools.contains { $0.name == "music_appreciate" })
-        // 关键词命中服务器工具时，不再被 policy 过滤掉。
-        #expect(tools.contains { $0.name == "removeServer" })
+        // 关键词命中服务器工具时，不再被 policy 过滤掉；只暴露 canonical 名（server_remove）。
+        #expect(tools.contains { $0.name == "server_remove" })
+        #expect(!tools.contains { $0.name == "removeServer" })
         #expect(tools.allSatisfy(policy.authorizes))
     }
 
@@ -308,7 +309,7 @@ struct AgentRuntimeArchitectureTests {
 
     @Test func indexStatusQuestionDoesNotStartFullBuild() {
         let policy = AgentTaskPolicyResolver.resolve(text: "查看推荐索引 V2 状态")
-        #expect(policy.completion == .verifiedToolResult)
+        #expect(policy.completion == .successfulToolResult)
     }
 
     @Test func descriptorDeclaresCacheAndEvidencePolicy() {
@@ -420,7 +421,7 @@ struct AgentRuntimeArchitectureTests {
         #expect(decision != .accept)
     }
 
-    @Test func modelInferenceAloneCannotSatisfyVerifiedToolResult() {
+    @Test func modelInferenceAloneCannotSatisfySuccessfulToolResult() {
         var state = AgentTaskState(intent: .librarySearch, goal: "find")
         state.evidence = [.init(source: .modelInference, provenance: "model", confidence: 0.5, claim: "maybe")]
         let decision = AgentCompletionEvaluator.evaluateModelAnswer(
@@ -429,7 +430,25 @@ struct AgentRuntimeArchitectureTests {
             policy: .policy(for: .librarySearch),
             repairAttempts: 0
         )
+        // 只有 Evidence 而没有真实成功 ToolResult → 不满足。
         #expect(decision != .accept)
+    }
+
+    @Test func memoryListSuccessSatisfiesWithoutEvidence() {
+        // 截图回归：memory_list 成功但没有任何 AgentEvidence 时，任务必须通过完成条件。
+        var state = AgentTaskState(intent: .memoryManagement, goal: "你能记得什么")
+        let descriptor = AgentToolRegistry.descriptor(for: "memory_list")!
+        let result = ToolResult(call: .init(name: "memory_list"), permission: .readOnly, success: true, summary: "记忆 2 条")
+        _ = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &state)
+        #expect(state.successfulToolCount == 1)
+        #expect(state.evidence.isEmpty)
+        let decision = AgentCompletionEvaluator.evaluateModelAnswer(
+            "我记得：名字 = 小明；喜欢的歌手 = 王菲。",
+            state: &state,
+            policy: .policy(for: .memoryManagement),
+            repairAttempts: 0
+        )
+        #expect(decision == .accept)
     }
 
     @Test func explicitQueueCountIsInferred() {

@@ -28,9 +28,10 @@ public enum ToolSelector {
         "library_get_album", "library_get_artist", "library_get_playlist",
         "library_get_starred", "library_get_recently_played", "library_get_random_songs",
         "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre",
+        "library_get_least_played", "library_get_downloaded",
         "music_appreciate",
         // 推荐索引 V2（长任务：后续轮次可能只写「继续」，必须常驻 schema）
-        "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch",
+        "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "library_index_v2_tag_catalog",
         // 推荐 / 发现
         "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
         // 播放
@@ -42,16 +43,20 @@ public enum ToolSelector {
         "playback_set_shuffle", "playback_set_repeat",
         // 队列
         "queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear",
-        "queue_move", "queue_shuffle_remaining",
+        "queue_remove", "queue_move", "queue_shuffle_remaining",
         // 歌单
         "listPlaylists", "playlist_create", "playlist_add_songs",
-        "removeTracksFromPlaylist", "deletePlaylist",
-        // 收藏 / 不喜欢
-        "favorite_set", "preference_set_disliked", "library_get_disliked",
+        "playlist_rename", "playlist_remove_songs", "playlist_move",
+        "playlist_duplicate", "playlist_merge", "playlist_delete",
+        // 收藏 / 不喜欢 / 评分
+        "favorite_set", "preference_set_disliked", "library_get_disliked", "rating_set",
         // 服务器
         "server_get_current", "server_list", "server_search", "server_sync_status",
+        "server_switch", "server_remove",
         // 歌词 / 公开音乐资料
         "lyrics_get", "music_get_public_evidence",
+        // 最终展示协议
+        "result_present_tracks",
         // 音乐下载（MoviePilot）
         "music_download",
         // 记忆与技能
@@ -140,6 +145,19 @@ public enum ToolSelector {
         "unfavoriteAlbum": "favorite_set",
         "favoriteArtist": "favorite_set",
         "unfavoriteArtist": "favorite_set",
+        "getLeastPlayed": "library_get_least_played",
+        "getDownloadedTracks": "library_get_downloaded",
+        "removeFromQueue": "queue_remove",
+        "renamePlaylist": "playlist_rename",
+        "removeTracksFromPlaylist": "playlist_remove_songs",
+        "reorderPlaylist": "playlist_move",
+        "duplicatePlaylist": "playlist_duplicate",
+        "mergePlaylists": "playlist_merge",
+        "deletePlaylist": "playlist_delete",
+        "setRating": "rating_set",
+        "clearRating": "rating_set",
+        "switchServer": "server_switch",
+        "removeServer": "server_remove",
     ]
 
     /// 把旧别名映射为 canonical 并按首次出现顺序去重。
@@ -193,7 +211,7 @@ public enum ToolSelector {
         case .playlistManagement:
             intentNames = ["listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
         case .libraryManagement:
-            intentNames = ["library_get_summary", "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked"]
+            intentNames = ["library_get_summary", "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "library_index_v2_tag_catalog", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked"]
         case .serverManagement:
             intentNames = Set(serverNames)
         case .diagnostics:

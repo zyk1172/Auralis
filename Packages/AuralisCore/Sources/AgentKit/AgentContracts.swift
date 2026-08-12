@@ -2,13 +2,15 @@ import Domain
 import Foundation
 import LocalCatalog
 
-/// Agent 工具权限分级。
+/// Agent 工具权限分级（deprecated / diagnostics-only）。
+/// permissive runtime 不再依据权限拒绝已注册工具，也不再触发确认；
+/// 保留枚举仅为旧任务记录 / 日志 / UI 分类兼容。
 public enum ToolPermission: String, Codable, Sendable, Hashable {
-    /// 只读：查询本地目录、当前播放状态等，无需确认。
+    /// 只读：查询本地目录、当前播放状态等。
     case readOnly
     /// 可逆：收藏、评分、加入队列等，可撤销/可恢复。
     case reversible
-    /// 破坏性：删除歌单、删除服务器、清空队列等，必须确认。
+    /// 破坏性：删除歌单、删除服务器、清空队列等（仅元数据分类，不再触发确认）。
     case destructive
 }
 
@@ -61,6 +63,8 @@ public struct ToolResult: Sendable {
     public let facts: [String: String]
     /// 工具产生的可追溯证据。模型推断不能伪装成这里的事实。
     public let evidence: [AgentEvidence]
+    /// 展示角色（候选 / 最终 / 歧义 / 无）。由 Tool 执行或 Descriptor 声明，模型不能决定。
+    public let presentationRole: ToolPresentationRole
 
     public init(
         call: ToolCall,
@@ -69,7 +73,8 @@ public struct ToolResult: Sendable {
         summary: String,
         payload: AgentMessage? = nil,
         facts: [String: String] = [:],
-        evidence: [AgentEvidence] = []
+        evidence: [AgentEvidence] = [],
+        presentationRole: ToolPresentationRole = .none
     ) {
         self.call = call
         self.permission = permission
@@ -78,6 +83,7 @@ public struct ToolResult: Sendable {
         self.payload = payload
         self.facts = facts
         self.evidence = evidence
+        self.presentationRole = presentationRole
     }
 }
 

@@ -184,6 +184,23 @@ private actor PermissiveCollector {
     private(set) var messages: [AgentChatMessage] = []
     func record(_ message: AgentChatMessage) { messages.append(message) }
     func all() -> [AgentChatMessage] { messages }
+    /// 每条消息里 trackCards 分组的卡片数量（按出现顺序）。
+    func trackCardGroupCounts() -> [Int] {
+        messages.flatMap { message in
+            message.messages.compactMap { item in
+                if case let .trackCards(cards) = item { return cards.count }
+                return nil
+            }
+        }
+    }
+    func containsAnyTrackCards() -> Bool {
+        messages.contains { message in
+            message.messages.contains { item in
+                if case .trackCards = item { return true }
+                return false
+            }
+        }
+    }
     func containsText(_ substring: String) -> Bool {
         messages.contains { message in
             message.messages.contains { item in
@@ -848,6 +865,44 @@ struct AgentPermissiveRuntimeTests {
         #expect(names.contains("lyrics_get"))
     }
 
+    // MARK: - TEST 29：Typed Array Schema + canonical-only
+
+    @Test("TEST29 多值参数使用 JSON array schema，不再依赖逗号字符串")
+    func typedArraySchemas() throws {
+        func schemaType(_ tool: String, _ param: String) -> String? {
+            guard let descriptor = AgentToolRegistry.descriptor(for: tool),
+                  let parameter = descriptor.parameters.first(where: { $0.name == param }),
+                  let json = parameter.schemaJSON,
+                  let data = json.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            return object["type"] as? String
+        }
+        #expect(schemaType("queue_replace", "trackIDs") == "array")
+        #expect(schemaType("playlist_add_songs", "trackIDs") == "array")
+        #expect(schemaType("playlist_remove_songs", "indices") == "array")
+        #expect(schemaType("library_select_tracks", "languages") == "array")
+        #expect(schemaType("library_select_tracks", "genres") == "array")
+        #expect(schemaType("library_select_tracks", "artists") == "array")
+        #expect(schemaType("library_select_tracks", "excludeTrackIDs") == "array")
+        #expect(schemaType("result_present_tracks", "trackIDs") == "array")
+    }
+
+    @Test("TEST30 模型只看到一套 canonical 工具（旧别名不同时暴露）")
+    func canonicalOnlyInSchema() {
+        let selected = ToolSelector.select(for: "删除歌单并移动队列", intent: .playlistManagement, policy: AgentTaskPolicy.policy(for: .playlistManagement), all: AgentToolRegistry.all)
+        let names = Set(selected.map(\.name))
+        #expect(names.contains("playlist_delete"))
+        #expect(!names.contains("deletePlaylist"))
+        #expect(!names.contains("reorderPlaylist"))
+        #expect(!names.contains("removeTracksFromPlaylist"))
+        #expect(!names.contains("renamePlaylist"))
+        #expect(!names.contains("duplicatePlaylist"))
+        #expect(!names.contains("mergePlaylists"))
+        #expect(!names.contains("switchServer"))
+        #expect(!names.contains("removeServer"))
+    }
+
     // MARK: - TEST 23 / 24：隐私与凭据
 
     @Test("TEST23 allowsLyrics=false 时歌词正文不进入 Provider 请求")
@@ -955,6 +1010,168 @@ struct AgentPermissiveRuntimeTests {
     }
 
     // MARK: - TEST 26：无公开 Evidence 时不得编造大众评价
+
+    // MARK: - TEST 64-66：候选不可见 / 最终只有一组 / Cancel/Fail 不倾倒
+
+    @Test("TEST64 纯推荐：30+20+50 候选 → result_present_tracks 12 → 只显示一组 12")
+    func pureRecommendationShowsOnlyFinalGroup() async throws {
+        let store = try makePermStore()
+        let tracks = (0..<50).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
+        try await seedPerm(store, tracks)
+        let bridge = PermissiveBridge()
+        let system = PermissiveSystemService()
+        system.recommendationTracks = (0..<30).map { permCard(GlobalID(serverID: "test-server", remoteID: "t\($0)"), title: "歌\($0)") }
+        let collector = PermissiveCollector()
+        // 12 首最终 ID。
+        let finalIDs = (0..<12).map { "test-server:t\($0)" }.joined(separator: ",")
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"recommend_by_constraints","args":{"limit":"30"}}"#,
+            #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
+            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"50"}}"#,
+            #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":"\#(finalIDs)"}}"#,
+        ], closing: "已经为你选好 12 首适合开车提神的歌曲。")
+        await AgentRunner.run(
+            userText: "推荐 12 首开车提神的歌给我看看",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            systemService: system,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        // 最终只收到一组 12 首，绝不能收到 30/20/50 候选组。
+        let groups = await collector.trackCardGroupCounts()
+        #expect(groups == [12])
+    }
+
+    @Test("TEST65 创建歌单：60 候选 → playlist_add_songs 12 → 只显示 12")
+    func playlistCreationShowsOnlyAdded() async throws {
+        let store = try makePermStore()
+        let tracks = (0..<60).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
+        try await seedPerm(store, tracks)
+        try await store.upsertPlaylist(Playlist(id: "pl-a", serverID: "test-server", name: "开车提神", trackIDs: []), serverID: "test-server")
+        let bridge = PermissiveBridge()
+        let collector = PermissiveCollector()
+        let ids = (0..<12).map { "test-server:t\($0)" }.joined(separator: ",")
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"60"}}"#,
+            #"ACTION: {"tool":"playlist_add_songs","args":{"playlistID":"test-server:pl-a","trackIDs":"\#(ids)"}}"#,
+        ], closing: "已创建歌单《开车提神》· 12 首。")
+        await AgentRunner.run(
+            userText: "帮我建一个 12 首开车提神歌单",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        #expect(await bridge.addedToPlaylist.count == 1)
+        let groups = await collector.trackCardGroupCounts()
+        #expect(groups == [12])
+    }
+
+    @Test("TEST66 queue_replace：40 候选 → 10 入队 → 只显示 10")
+    func queueReplaceShowsOnlyQueued() async throws {
+        let store = try makePermStore()
+        let tracks = (0..<40).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
+        try await seedPerm(store, tracks)
+        let bridge = PermissiveBridge()
+        let collector = PermissiveCollector()
+        let ids = (0..<10).map { "test-server:t\($0)" }.joined(separator: ",")
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"40"}}"#,
+            #"ACTION: {"tool":"queue_replace","args":{"trackIDs":"\#(ids)"}}"#,
+        ], closing: "队列已替换为 10 首。")
+        await AgentRunner.run(
+            userText: "放一组 10 首提神的歌",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        #expect(bridge.replacedQueues.count == 1)
+        let groups = await collector.trackCardGroupCounts()
+        #expect(groups == [10])
+    }
+
+    @Test("TEST-Cancel Cancel 不倾倒候选池")
+    func cancelDoesNotDumpCandidates() async throws {
+        let store = try makePermStore()
+        let tracks = (0..<80).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
+        try await seedPerm(store, tracks)
+        let bridge = PermissiveBridge()
+        let system = PermissiveSystemService()
+        system.slowTestConnection = true
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"80"}}"#,
+            #"ACTION: {"tool":"server_test_connection","args":{"serverID":"test-server"}}"#,
+        ])
+        let task = Task {
+            await AgentRunner.run(
+                userText: "搜索 80 首候选",
+                provider: provider,
+                model: "scripted-model",
+                bridge: bridge,
+                catalog: store,
+                context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+                systemService: system,
+                intent: .conversation,
+                toolTimeout: 30,
+                confirm: { _ in true },
+                emit: { await collector.record($0) }
+            )
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        task.cancel()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { await task.value }
+            group.addTask {
+                try await Task.sleep(for: .seconds(10))
+                throw CancellationError()
+            }
+            do { _ = try await group.next() } catch { Issue.record("取消后任务未能及时结束") }
+            group.cancelAll()
+        }
+        // Cancel 时绝不倾倒 80 首候选。
+        #expect(await collector.containsAnyTrackCards() == false)
+        #expect(await collector.containsText("已取消"))
+    }
+
+    @Test("TEST-Fail 任务失败不倾倒候选池")
+    func failureDoesNotDumpCandidates() async throws {
+        let store = try makePermStore()
+        let tracks = (0..<30).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
+        try await seedPerm(store, tracks)
+        let bridge = PermissiveBridge()
+        let collector = PermissiveCollector()
+        // 收集候选后，歌单操作失败（不存在该歌单）→ 完成条件不满足 → 任务失败。
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"30"}}"#,
+            #"ACTION: {"tool":"playlist_add_songs","args":{"playlistID":"test-server:missing","trackIDs":"test-server:t1"}}"#,
+        ])
+        await AgentRunner.run(
+            userText: "把候选加入一个不存在的歌单",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            intent: .playlistManagement,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        // 失败只显示失败原因，绝不倾倒 30 首候选。
+        #expect(await collector.containsAnyTrackCards() == false)
+        #expect(await collector.containsError("没有满足确定性完成条件"))
+    }
 
     @Test("TEST26 无公开 Evidence 时任务不允许编造大众共识")
     func appreciationCannotFabricateConsensus() async throws {

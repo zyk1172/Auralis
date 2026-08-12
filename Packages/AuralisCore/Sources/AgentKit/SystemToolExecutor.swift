@@ -189,6 +189,7 @@ public struct SystemToolExecutor {
 
             case "lyrics_get":
                 let gid = try parseGlobalID(call, "trackID")
+                try await Self.requireActiveServerMatches(gid.serverID, systemService: systemService, call: call)
                 let result = await systemService.lyrics(for: TrackID(rawValue: gid.remoteID))
                 let text = result.hasLyrics
                     ? "有歌词（\(result.isSynced ? "逐行" : "纯文本") · \(result.lineCount) 行\(result.language.map { " · \($0)" } ?? "")）"
@@ -196,6 +197,7 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, text, .text(text))
             case "media_download_offline":
                 let gid = try parseGlobalID(call, "trackID")
+                try await Self.requireActiveServerMatches(gid.serverID, systemService: systemService, call: call)
                 let ok = await systemService.downloadOffline(trackID: TrackID(rawValue: gid.remoteID))
                 return ok ? .ok(call, descriptor, "已开始下载到离线缓存") : .fail(call, descriptor, "下载失败或已在下载")
             case "cache_get_status":
@@ -373,6 +375,19 @@ public struct SystemToolExecutor {
     }
 
     // MARK: - Helpers
+
+    /// 系统服务只操作当前活动服务器：GlobalID 的 serverID 必须与活动服务器一致，
+    /// 不能默默跨服务器把 remoteID 传给 service。
+    private static func requireActiveServerMatches(
+        _ serverID: ServerID,
+        systemService: any AgentSystemService,
+        call: ToolCall
+    ) async throws {
+        guard let active = await systemService.currentServer() else { return }
+        guard active.id == serverID.rawValue else {
+            throw SystemToolError.invalidParameter("trackID", "歌曲属于其他服务器（\(serverID.rawValue)），当前活动服务器为 \(active.id)")
+        }
+    }
 
     private static func require(_ call: ToolCall, _ key: String) throws -> String {
         guard let value = call.arguments[key], !value.isEmpty else {

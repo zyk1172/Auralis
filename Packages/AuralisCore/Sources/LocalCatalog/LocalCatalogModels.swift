@@ -165,6 +165,18 @@ public struct CatalogTrackLine: Codable, Sendable, Hashable {
     }
 }
 
+/// 一条开放语义标签（AI 自建）：value 为规范化的中文/常见英文标签，confidence 为模型置信度。
+/// 标签数量没有硬上限；质量通过规范化、复用 canonical 与语义规则控制。
+public struct RecommendationIndexV2SemanticTag: Codable, Sendable, Hashable {
+    public let value: String
+    public let confidence: Double
+
+    public init(value: String, confidence: Double) {
+        self.value = value
+        self.confidence = min(max(confidence, 0), 1)
+    }
+}
+
 /// 推荐索引 V2 由已配置的 Agent 模型写入的多维标签。
 /// 这些标签只基于曲目元数据，不保存歌词、文件路径或播放地址。
 public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
@@ -178,11 +190,15 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
     public let vocals: [String]
     public let textures: [String]
     public let styles: [String]
+    /// 开放语义标签（dimension = "tag"），不设数量上限。
+    public let semanticTags: [RecommendationIndexV2SemanticTag]
+    /// "full"=完整分类（固定维度 + 语义标签）；"semanticTagsOnly"=只补开放标签（不触碰旧固定维度）。
+    public let mode: String
     public let confidence: Double
 
     private enum CodingKeys: String, CodingKey {
         case id, moods, scenes, energy, tempo, acousticness, danceability
-        case vocals, textures, styles, confidence
+        case vocals, textures, styles, semanticTags, mode, confidence
     }
 
     public init(
@@ -196,6 +212,8 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         vocals: [String] = [],
         textures: [String] = [],
         styles: [String] = [],
+        semanticTags: [RecommendationIndexV2SemanticTag] = [],
+        mode: String = "full",
         confidence: Double = 0.5
     ) {
         self.id = id
@@ -208,6 +226,8 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         self.vocals = vocals
         self.textures = textures
         self.styles = styles
+        self.semanticTags = semanticTags
+        self.mode = mode
         self.confidence = confidence
     }
 
@@ -225,6 +245,8 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         vocals = try container.decodeIfPresent([String].self, forKey: .vocals) ?? []
         textures = try container.decodeIfPresent([String].self, forKey: .textures) ?? []
         styles = try container.decodeIfPresent([String].self, forKey: .styles) ?? []
+        semanticTags = try container.decodeIfPresent([RecommendationIndexV2SemanticTag].self, forKey: .semanticTags) ?? []
+        mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "full"
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
     }
 }
@@ -234,12 +256,28 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
     public let indexedTracks: Int
     public let pendingTracks: Int
     public let rulesVersion: String
+    public let semanticTagRulesVersion: Int
+    /// 已有开放语义标签（dimension='tag'）的歌曲数。
+    public let semanticTaggedTracks: Int
+    /// 尚缺开放语义标签的歌曲数。
+    public let pendingSemanticTagTracks: Int
 
-    public init(totalTracks: Int, indexedTracks: Int, pendingTracks: Int, rulesVersion: String) {
+    public init(
+        totalTracks: Int,
+        indexedTracks: Int,
+        pendingTracks: Int,
+        rulesVersion: String,
+        semanticTagRulesVersion: Int = RecommendationIndexV2.semanticTagRulesVersion,
+        semanticTaggedTracks: Int = 0,
+        pendingSemanticTagTracks: Int = 0
+    ) {
         self.totalTracks = totalTracks
         self.indexedTracks = indexedTracks
         self.pendingTracks = pendingTracks
         self.rulesVersion = rulesVersion
+        self.semanticTagRulesVersion = semanticTagRulesVersion
+        self.semanticTaggedTracks = semanticTaggedTracks
+        self.pendingSemanticTagTracks = pendingSemanticTagTracks
     }
 }
 
@@ -247,11 +285,15 @@ public struct RecommendationIndexV2Batch: Sendable, Hashable {
     public let tracks: [CatalogTrackLine]
     public let pendingTracks: Int
     public let rulesVersion: String
+    /// 本批主要需要的工作：full=固定维度+开放标签；semanticTagsOnly=只补开放标签；
+    /// mixed=混合。
+    public let mode: String
 
-    public init(tracks: [CatalogTrackLine], pendingTracks: Int, rulesVersion: String) {
+    public init(tracks: [CatalogTrackLine], pendingTracks: Int, rulesVersion: String, mode: String = "full") {
         self.tracks = tracks
         self.pendingTracks = pendingTracks
         self.rulesVersion = rulesVersion
+        self.mode = mode
     }
 }
 

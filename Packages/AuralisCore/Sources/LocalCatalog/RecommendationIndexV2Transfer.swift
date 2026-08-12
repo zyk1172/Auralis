@@ -346,7 +346,7 @@ extension LocalCatalogStore {
         for tag in tags {
             guard tag.confidence.isFinite, (0...1).contains(tag.confidence) else { continue }
             let rawDimension = tag.dimension.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let rawValue = tag.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            var rawValue = tag.value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !rawDimension.isEmpty, !rawValue.isEmpty,
                   rawDimension.count <= 64, rawValue.count <= 128,
                   !rawValue.contains("\n"), !rawValue.contains("\t")
@@ -366,6 +366,10 @@ extension LocalCatalogStore {
                 guard let number = Int(rawValue), (1...10).contains(number) else { continue }
             case "tempo", "acousticness", "danceability":
                 guard let number = Int(rawValue), (1...5).contains(number) else { continue }
+            case "tag":
+                // 开放语义标签：规范化后入库，保持与写回路径一致。
+                guard let canonical = RecommendationIndexV2.normalizeSemanticTag(rawValue) else { continue }
+                if rawValue != canonical { rawValue = canonical }
             default:
                 // 自建维度：非保留名、长度限制、无换行制表符。
                 let reserved = Set(["mood", "scene", "vocal", "texture", "style", "energy", "tempo", "acousticness", "danceability"])

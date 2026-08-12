@@ -851,7 +851,7 @@ private struct TrackCardList: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
                 } label: {
-                    Label(expanded ? "收起" : "展开全部（\(cards.count) 首）", systemImage: expanded ? "chevron.up" : "chevron.down")
+                    Label(expanded ? "收起" : "展开其余 \(cards.count - 5) 首", systemImage: expanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.accent.color)
                 }
@@ -890,7 +890,7 @@ private struct AlbumCardList: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
                 } label: {
-                    Label(expanded ? "收起" : "展开全部专辑（\(cards.count) 张）", systemImage: expanded ? "chevron.up" : "chevron.down")
+                    Label(expanded ? "收起" : "展开其余 \(cards.count - 5) 张", systemImage: expanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.accent.color)
                 }
