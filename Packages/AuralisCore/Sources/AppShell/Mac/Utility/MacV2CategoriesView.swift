@@ -9,7 +9,7 @@ import Domain
 struct MacV2CategoriesView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
     @State private var categories: [RecommendationIndexV2Category] = []
     @State private var isLoading = true
     @State private var selectedDimension: String?
@@ -94,7 +94,7 @@ private struct MacV2DimensionPane: View {
     let categories: [RecommendationIndexV2Category]
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
     @State private var selectedCategory: RecommendationIndexV2Category?
     @State private var selection: Set<GlobalID> = []
     @State private var tracks: [Track] = []

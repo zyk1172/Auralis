@@ -4,8 +4,7 @@ import ThemeEngine
 
 @main
 struct AuralisMacApp: App {
-    /// 唯一长期 ThemeStore：主窗口与 Settings Scene 共享，
-    /// 避免设置里换主题后主窗口不刷新（ThemeStore 不跨实例监听）。
+    /// 唯一长期 ThemeStore：主窗口与 Settings Scene 共享。
     @StateObject private var themeStore = ThemeStore()
 
     var body: some Scene {
@@ -17,8 +16,7 @@ struct AuralisMacApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("播放") {
-                // Space 播放/暂停的唯一入口在 MacMusicShell 的 .onKeyPress(.space)，
-                // 这里不注册裸 Space 菜单快捷键，避免 AppKit 菜单 key-equivalent 在文本输入框抢键。
+                // Space 播放/暂停唯一入口在 MacMusicShell 的 .onKeyPress(.space)。
                 Button("播放 / 暂停") { post(MacCommand.togglePlay) }
                 Button("上一首") { post(MacCommand.previous) }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
@@ -27,6 +25,11 @@ struct AuralisMacApp: App {
                 Divider()
                 Button("随机播放") { post(MacCommand.toggleShuffle) }
                 Button("循环模式") { post(MacCommand.cycleRepeat) }
+                Divider()
+                Button("音量提高") { adjustVolume(+0.05) }
+                    .keyboardShortcut(.upArrow, modifiers: .command)
+                Button("音量降低") { adjustVolume(-0.05) }
+                    .keyboardShortcut(.downArrow, modifiers: .command)
             }
             CommandMenu("歌曲") {
                 Button("收藏当前歌曲") {
@@ -45,25 +48,33 @@ struct AuralisMacApp: App {
                     guard model.hasCurrentTrack else { return }
                     NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
                 }
+                .keyboardShortcut("i", modifiers: .command)
             }
-            CommandGroup(after: .sidebar) {
-                Divider()
-                Button("搜索") { post(MacCommand.search) }
-                    .keyboardShortcut("f", modifiers: .command)
-                Button("正在播放") { post(MacCommand.revealNowPlaying) }
-                    .keyboardShortcut("l", modifiers: .command)
-                Button("显示或隐藏歌词") { post(MacCommand.toggleLyrics) }
-                    .keyboardShortcut("l", modifiers: [.command, .shift])
-                Button("显示或隐藏队列") { post(MacCommand.toggleQueue) }
-                    .keyboardShortcut("q", modifiers: [.command, .shift])
-                Button("显示或隐藏检查器") { post(MacCommand.toggleInspector) }
-                    .keyboardShortcut("i", modifiers: [.command, .option])
+            CommandMenu("显示") {
                 Button("显示或隐藏侧边栏") { post(MacCommand.toggleSidebar) }
                     .keyboardShortcut("s", modifiers: [.command, .control])
-                Divider()
-                Button("进入全屏播放") { post(MacCommand.showFullScreenPlayer) }
-                    .keyboardShortcut("f", modifiers: [.command, .control])
+                Button("歌词") { post(MacCommand.toggleLyrics) }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                Button("队列") { post(MacCommand.toggleQueue) }
+                    .keyboardShortcut("u", modifiers: [.command, .option])
+                Button("正在播放") { post(MacCommand.revealNowPlaying) }
+                    .keyboardShortcut("l", modifiers: .command)
+                Button("搜索") { post(MacCommand.search) }
+                    .keyboardShortcut("f", modifiers: .command)
             }
+            CommandMenu("窗口") {
+                Button("迷你播放器") { post(MacCommand.showMiniPlayer) }
+                    .keyboardShortcut("m", modifiers: [.command, .option])
+                Button("全屏播放") { post(MacCommand.showFullScreenPlayer) }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+            }
+        }
+        Window("迷你播放器", id: MacWindowID.miniPlayer) {
+            MacMiniPlayerView(model: .shared, themeStore: themeStore)
+        }
+        .windowResizability(.contentSize)
+        Window("全屏播放", id: MacWindowID.fullScreenPlayer) {
+            MacFullScreenPlayerView(model: .shared, theme: themeStore.current)
         }
         Settings {
             MacSettingsHost(themeStore: themeStore)
@@ -72,6 +83,11 @@ struct AuralisMacApp: App {
 
     private func post(_ name: Notification.Name) {
         NotificationCenter.default.post(name: name, object: nil)
+    }
+
+    private func adjustVolume(_ delta: Float) {
+        let model = AuralisAppModel.shared
+        model.setVolume(min(1, max(0, model.volume + delta)))
     }
 }
 

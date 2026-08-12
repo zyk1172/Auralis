@@ -12,7 +12,7 @@ struct MacTrackCollectionView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
     var showsDislike = false
 
     var body: some View {
@@ -57,7 +57,7 @@ struct MacDislikedView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     private var tracks: [Track] {
         model.dislikedTrackIDs.compactMap { model.track(for: $0) }

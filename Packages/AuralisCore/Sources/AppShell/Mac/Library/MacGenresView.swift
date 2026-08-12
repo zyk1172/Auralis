@@ -6,7 +6,7 @@ import ThemeEngine
 struct MacGenresView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {

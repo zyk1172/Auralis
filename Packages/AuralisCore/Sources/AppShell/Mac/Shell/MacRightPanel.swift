@@ -1,21 +1,20 @@
 #if os(macOS)
+import Domain
 import SwiftUI
 import ThemeEngine
-import Domain
 
-/// Apple Music 式右侧面板：只承担高频音乐上下文（歌词 / 队列），
-/// 详情信息走「歌曲信息」独立视图。
+/// 右侧面板：歌词 / 队列。`mode` 是值（由 Player/Toolbar 决定），面板内不做 segmented 切换。
 struct MacRightPanel: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    @Binding var mode: MacRightPanelMode
+    let mode: MacRightPanelMode
 
     @ObservedObject private var playbackStore: PlaybackStore
 
-    init(model: AuralisAppModel, theme: BuiltInTheme, mode: Binding<MacRightPanelMode>) {
+    init(model: AuralisAppModel, theme: BuiltInTheme, mode: MacRightPanelMode) {
         self.model = model
         self.theme = theme
-        self._mode = mode
+        self.mode = mode
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
     }
 
@@ -28,38 +27,32 @@ struct MacRightPanel: View {
             case .queue: queueContent
             }
         }
-        .background(.background)
         .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
     }
 
     private var header: some View {
         HStack {
-            Picker("", selection: $mode) {
-                Text("歌词").tag(MacRightPanelMode.lyrics)
-                Text("队列").tag(MacRightPanelMode.queue)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 180)
+            Text(mode == .lyrics ? "歌词" : "待播队列")
+                .font(.system(size: 15, weight: .semibold))
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
     }
 
-    // MARK: - Lyrics
+    // MARK: - 歌词
 
     private var lyricsContent: some View {
         Group {
             if let lyrics = model.currentLyrics, !lyrics.lines.isEmpty {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
+                        LazyVStack(alignment: .leading, spacing: 16) {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                                 let isCurrent = isCurrentLyric(line)
                                 Text(line.text)
-                                    .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
-                                    .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.secondary)
+                                    .font(.system(size: isCurrent ? 23 : 18, weight: isCurrent ? .semibold : .regular))
+                                    .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.primary.opacity(0.72))
                                     .multilineTextAlignment(.leading)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
@@ -69,15 +62,19 @@ struct MacRightPanel: View {
                                         }
                                     }
                                     .id(index)
+                                    .accessibilityElement(children: .ignore)
+                                    .accessibilityLabel(line.text)
+                                    .accessibilityValue(isCurrent ? "当前歌词" : "")
                             }
                         }
-                        .padding(18)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 18)
                     }
+                    // 只在当前歌词真正变化时滚动，避免随播放位置高频动画。
                     .onChange(of: currentLyricIndex) { _, index in
-                        if let index {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(index, anchor: .center)
-                            }
+                        guard let index else { return }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(index, anchor: .center)
                         }
                     }
                 }
@@ -104,58 +101,74 @@ struct MacRightPanel: View {
         return idx < lyrics.lines.count && lyrics.lines[idx].id == line.id
     }
 
-    // MARK: - Queue
+    // MARK: - 队列
+
+    private var currentIndex: Int? { model.currentQueueIndex }
+    private var upcoming: [Track] { model.upcomingTracks }
 
     private var queueContent: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("播放下一首")
-                    .font(.system(size: 15, weight: .semibold))
-                Spacer()
-                if !model.queue.isEmpty {
-                    Button("清空") {
-                        model.removeFromQueue(atOffsets: IndexSet(integersIn: 0..<model.queue.count))
+        List {
+            if model.hasCurrentTrack {
+                Section("正在播放") {
+                    queueRow(model.currentTrack, isCurrent: true)
+                }
+            }
+            Section {
+                if upcoming.isEmpty {
+                    Text("没有待播放的歌曲。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(upcoming.enumerated()), id: \.element.id) { offset, track in
+                        queueRow(track, isCurrent: false)
+                            .contextMenu {
+                                Button("立即播放") { model.selectAndPlay(track) }
+                                Button("从队列移除") { removeUpcoming(at: [offset]) }
+                            }
                     }
-                    .buttonStyle(.link)
+                    .onMove { source, destination in
+                        moveUpcoming(from: source, to: destination)
+                    }
+                    .onDelete { offsets in
+                        removeUpcoming(at: offsets)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("播放下一首")
+                    Spacer()
+                    if !upcoming.isEmpty {
+                        Button("清空") { model.clearUpcoming() }
+                            .buttonStyle(.link)
+                    }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-
-            List {
-                ForEach(Array(model.queue.enumerated()), id: \.element.id) { index, track in
-                    queueRow(track, index: index)
-                        .tag(track.id)
-                }
-                .onMove { source, destination in
-                    model.moveQueue(from: source, to: destination)
-                }
-                .onDelete { offsets in
-                    model.removeFromQueue(atOffsets: offsets)
+            if !historyTracks.isEmpty {
+                Section("历史记录") {
+                    ForEach(historyTracks) { track in
+                        queueRow(track, isCurrent: false)
+                    }
                 }
             }
-            .listStyle(.inset)
         }
+        .listStyle(.inset)
     }
 
-    private func queueRow(_ track: Track, index: Int) -> some View {
-        let isCurrent = model.currentTrack.serverID == track.serverID && model.currentTrack.id == track.id
-        return HStack(spacing: 10) {
-            ArtworkView(
-                title: track.albumTitle,
-                artworkKey: track.artworkKey,
-                colors: theme.colorTokens,
-                size: 36,
-                cornerRadius: 4
-            )
-            .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+    /// 近似历史：最近播放记录（最近在前）。非完整历史，仅用于上下文参考。
+    private var historyTracks: [Track] {
+        Array(model.recentlyPlayedTracks.prefix(8))
+    }
+
+    private func queueRow(_ track: Track, isCurrent: Bool) -> some View {
+        HStack(spacing: 10) {
+            ArtworkView(title: track.albumTitle, artworkKey: track.artworkKey, colors: theme.colorTokens, size: 32, cornerRadius: 4)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(track.title)
-                    .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
-                    .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.primary)
+                    .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
                     .lineLimit(1)
                 Text(track.artistName)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
             }
@@ -165,16 +178,34 @@ struct MacRightPanel: View {
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.accent.color)
                     .accessibilityLabel("正在播放")
+            } else {
+                Text(MacFormat.time(track.duration))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
         }
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             model.selectAndPlay(track)
         }
-        .contextMenu {
-            Button("立即播放") { model.selectAndPlay(track) }
-            Button("从队列移除") { model.removeFromQueue(track) }
-        }
+    }
+
+    /// 待播队列显示下标 → 真实队列下标（current 之后）。
+    private func realQueueIndex(_ displayOffset: Int) -> Int {
+        (currentIndex ?? -1) + 1 + displayOffset
+    }
+
+    private func removeUpcoming(at offsets: IndexSet) {
+        let real = IndexSet(offsets.map { realQueueIndex($0) })
+        model.removeFromQueue(atOffsets: real)
+    }
+
+    private func moveUpcoming(from source: IndexSet, to destination: Int) {
+        guard let current = currentIndex else { return }
+        let realSource = IndexSet(source.map { current + 1 + $0 })
+        let realDestination = current + 1 + destination
+        model.moveQueue(from: realSource, to: realDestination)
     }
 }
 #endif

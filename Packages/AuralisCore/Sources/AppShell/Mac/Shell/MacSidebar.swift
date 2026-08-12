@@ -2,11 +2,12 @@
 import Domain
 import SwiftUI
 
-/// Apple Music 式侧边栏：浏览 / 资料库 / 播放列表 / Auralis。
-/// 系统 `.sidebar`，不手工涂背景；真实播放列表直接内联，可折叠由系统滚动处理。
+/// 侧边栏：一级目的地 + 播放列表（含「收藏歌曲」智能集合）内联。
+/// 使用系统 `.sidebar` 与系统 accent；不手工涂色。
 struct MacSidebar: View {
     @ObservedObject var model: AuralisAppModel
-    @Binding var selection: MacRoute?
+    @Binding var selection: MacSidebarDestination?
+    var onOpenPlaylist: (Playlist) -> Void = { _ in }
 
     private var playlists: [Playlist] {
         model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -14,38 +15,62 @@ struct MacSidebar: View {
 
     var body: some View {
         List(selection: $selection) {
-            Section("浏览") {
+            Section {
                 sidebarRow(.home)
-                sidebarRow(.recentlyPlayed)
-                sidebarRow(.recentlyAdded)
             }
             Section("资料库") {
-                sidebarRow(.songs)
-                sidebarRow(.albums)
+                sidebarRow(.recentlyAdded)
+                sidebarRow(.recentlyPlayed)
                 sidebarRow(.artists)
+                sidebarRow(.albums)
+                sidebarRow(.songs)
                 sidebarRow(.genres)
-                sidebarRow(.favorites)
-                sidebarRow(.disliked)
                 sidebarRow(.downloads)
             }
             Section("播放列表") {
+                sidebarRow(.favorites)
                 ForEach(playlists) { playlist in
-                    sidebarRow(.playlist(playlist))
+                    sidebarRow(playlist)
                 }
             }
             Section("Auralis") {
                 sidebarRow(.categories)
+                sidebarRow(.disliked)
                 sidebarRow(.assistant)
                 sidebarRow(.server)
             }
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: MacLayout.sidebarMin, ideal: MacLayout.sidebarIdeal, max: MacLayout.sidebarMax)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
     }
 
-    private func sidebarRow(_ item: MacRoute) -> some View {
+    private func sidebarRow(_ item: MacSidebarDestination) -> some View {
         Label(item.title, systemImage: item.symbol)
             .tag(item)
+    }
+
+    private func sidebarRow(_ playlist: Playlist) -> some View {
+        Button {
+            onOpenPlaylist(playlist)
+        } label: {
+            Label(playlist.name, systemImage: "music.note.list")
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("播放") {
+                let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
+                if !tracks.isEmpty { model.playQueue(tracks) }
+            }
+            Button("随机播放") {
+                let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
+                if !tracks.isEmpty { model.playShuffledQueue(tracks) }
+            }
+            Divider()
+            Button("删除歌单", role: .destructive) {
+                Task { _ = await model.deletePlaylist(id: playlist.id) }
+            }
+        }
     }
 }
 #endif

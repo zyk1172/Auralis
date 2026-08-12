@@ -371,3 +371,39 @@
 【步骤】对 Home / Songs / Albums / Album Detail / Artist Detail / Playlist / Search / Lyrics Panel / Queue Panel / AI Assistant / Server / Settings 各生成 1280×820、窄窗口、宽窗口、Dark、Light 截图。逐张问“去掉 Auralis 文字后是否明显像 Apple 原生 macOS 音乐播放器”；答案是否则记录并返回修改。
 
 【失败时需要提供】截图、窗口尺寸、系统外观模式。
+
+---
+
+# Mac Apple Music Parity（Round-2 人工验收）
+
+逐页检查：Structure / Density / System Controls / Cards / Typography / Resize / Keyboard / Hover / Light-Dark。判据：去掉 Auralis 文字后是否像 Apple 原生 macOS 音乐播放器。
+
+## P0
+
+### `MANUAL-VERIFY` 导航与搜索
+
+【步骤】Home「查看全部专辑」→ 进入专辑一级页（不是详情 push）；Search 浏览「歌曲/专辑/艺术家/流派/播放列表」→ 真正离开搜索进入对应一级页；Album/Artist/Playlist 卡片 → 详情 push 且 Sidebar 高亮不变。⌘F 聚焦系统搜索框；输入空格类内容不误触发播放；空查询显示 Landing（最近搜索/浏览资料库）；提交后历史记录出现；关闭搜索回到原页面。
+
+### `MANUAL-VERIFY` 详情页滚动模型
+
+【步骤】Album / Artist / Playlist / Genre 详情整页只有一个纵向滚动；曲目行 hover 显示 Play/More；行高约 34–38；双击行播放；右键菜单完整；无嵌套 Table 造成的双层滚动。
+
+### `MANUAL-VERIFY` Full Screen Player / MiniPlayer
+
+【步骤】播放一首歌 → 菜单 窗口→全屏播放（⇧⌘F）：先出现沉浸播放器再进入系统全屏；背景为整窗 Artwork 派生（无矩形边界/无霓虹）；Esc 退出全屏不退出 App；无 MusicBrainz/码率等 Dashboard 信息。菜单 窗口→迷你播放器（⌥⌘M）：独立小窗，封面+标题+进度+控制+音量；「隐藏封面」切紧凑；播放状态与主窗口一致。
+
+### `MANUAL-VERIFY` Player Bar 三区
+
+【步骤】Shuffle/Previous/Play/Next/Repeat 为 LEFT；当前歌曲 Artwork/Title/Artist/进度 为 CENTER 且视觉居中；Favorite/Lyrics/Queue/Volume 为 RIGHT。窄窗口先隐藏时间文字与音量滑杆（音量变按钮），transport 三键不压缩。
+
+### `MANUAL-VERIFY` Lyrics / Queue / Get Info
+
+【步骤】⌥⌘L 打开歌词：普通行 18pt、当前行 23pt 高亮；行距充足；点击 timed 行 seek；自动滚动只在当前行变化时。⌥⌘U 打开队列：正在播放 / 播放下一首 / 历史记录 三段；清空只清待播保留当前；拖动/Delete 只作用待播。⌘I Get Info：TabView 五页（详细信息/插图/歌词/文件/Auralis），Auralis 页含公开音乐三来源与歌曲鉴赏；不显示服务器凭据/私有 URL。
+
+### `MANUAL-VERIFY` 外观与 Tiles
+
+【步骤】Light/Dark 切换跟随系统（不强制 Theme）；Sidebar/Toolbar/Search/Inspector 用系统材质（Liquid Glass 由系统提供）；Home 最近播放/最近添加显示专辑（去重封面）；收藏为紧凑歌曲列表；Playlist 封面为真实 2×2 mosaic（4 首不同封面）；Album/Artist/Playlist 卡片视觉区分（Artist 圆形/mosaic，非方形专辑卡）。
+
+### `MANUAL-VERIFY` 键盘 / 无障碍
+
+【步骤】Space 播放暂停（输入框内为空格）；Return 播放选中曲目；←/→ 上一首/下一首；⌘↑/⌘↓ 音量；⌘I 信息；⌥⌘U 队列；⇧⌘F 全屏播放；⌥⌘M 迷你播放器；⌘, 设置。VoiceOver 遍历 Sidebar/Table/播放条/Get Info；Play/More 可通过右键与键盘访问（非 hover-only）；当前歌词 accessibilityValue=“当前歌词”；收藏/不喜欢有 symbol + accessibility state。

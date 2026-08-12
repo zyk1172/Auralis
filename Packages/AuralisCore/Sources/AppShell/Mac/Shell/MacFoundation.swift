@@ -24,12 +24,14 @@ public enum MacCommand {
     /// object = Track：打开该歌曲的 Get Info（含公开音乐资料）。
     public static let showTrackInformation = Notification.Name("auralis.mac.command.showTrackInformation")
     public static let showFullScreenPlayer = Notification.Name("auralis.mac.command.showFullScreenPlayer")
+    public static let showMiniPlayer = Notification.Name("auralis.mac.command.showMiniPlayer")
 }
 
-// MARK: - 主内容路由
+// MARK: - 主内容导航
 
-/// Apple Music 式导航：Sidebar 一级目的地 + 主内容可推入的详情路由。
-enum MacRoute: Hashable, Identifiable {
+/// Sidebar 一级目的地。与可推入的 Detail Route 分离：
+/// 一级页面切换 selection、清空 path；实体详情才 push。
+enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
     case home
     case recentlyPlayed
     case recentlyAdded
@@ -44,35 +46,8 @@ enum MacRoute: Hashable, Identifiable {
     case categories
     case assistant
     case server
-    case playlist(Playlist)
-    case album(Album)
-    case artist(Artist)
-    case genre(Genre)
-    case nowPlaying
 
-    var id: String {
-        switch self {
-        case .home: "home"
-        case .recentlyPlayed: "recentlyPlayed"
-        case .recentlyAdded: "recentlyAdded"
-        case .songs: "songs"
-        case .albums: "albums"
-        case .artists: "artists"
-        case .genres: "genres"
-        case .favorites: "favorites"
-        case .disliked: "disliked"
-        case .downloads: "downloads"
-        case .playlists: "playlists"
-        case .categories: "categories"
-        case .assistant: "assistant"
-        case .server: "server"
-        case let .playlist(p): "playlist:\(p.serverID):\(p.id)"
-        case let .album(a): "album:\(a.serverID):\(a.id)"
-        case let .artist(a): "artist:\(a.serverID):\(a.id)"
-        case let .genre(g): "genre:\(g.id)"
-        case .nowPlaying: "nowPlaying"
-        }
-    }
+    var id: String { rawValue }
 
     var title: String {
         switch self {
@@ -83,18 +58,13 @@ enum MacRoute: Hashable, Identifiable {
         case .albums: "专辑"
         case .artists: "艺术家"
         case .genres: "流派"
-        case .favorites: "收藏"
+        case .favorites: "收藏歌曲"
         case .disliked: "不喜欢"
         case .downloads: "下载"
         case .playlists: "播放列表"
         case .categories: "分类"
         case .assistant: "AI 助手"
         case .server: "服务器"
-        case let .playlist(p): p.name
-        case let .album(a): a.title
-        case let .artist(a): a.name
-        case let .genre(g): g.name
-        case .nowPlaying: "正在播放"
         }
     }
 
@@ -114,12 +84,84 @@ enum MacRoute: Hashable, Identifiable {
         case .categories: "square.grid.2x2"
         case .assistant: "sparkles"
         case .server: "server.rack"
-        case .playlist: "music.note.list"
-        case .album: "square.stack"
-        case .artist: "person.2"
-        case .genre: "music.quarternote.3"
-        case .nowPlaying: "play.circle"
         }
+    }
+}
+
+/// 详情路由的实体身份：serverID + remoteID。
+/// Navigation path 只保存身份，不保存旧 model snapshot；
+/// 渲染时从当前 Catalog 解析最新实体。
+struct MacEntityRouteID: Hashable, Codable {
+    let serverID: ServerID
+    let remoteID: String
+}
+
+enum MacDetailRoute: Hashable {
+    case album(MacEntityRouteID)
+    case artist(MacEntityRouteID)
+    case playlist(MacEntityRouteID)
+    case genre(String)
+    case nowPlaying
+}
+
+/// 页面发起的统一导航目标。
+enum MacNavigationTarget: Hashable {
+    case sidebar(MacSidebarDestination)
+    case detail(MacDetailRoute)
+}
+
+/// 主内容导航状态机：一级 selection + 可推入 path。
+/// 独立成可测试类型；Shell 持有并双向绑定。
+@MainActor
+final class MacNavigationModel: ObservableObject {
+    @Published var selection: MacSidebarDestination? = .home
+    @Published var path: [MacDetailRoute] = []
+    /// 搜索状态的唯一事实源（Search Text + Presentation）。
+    @Published var searchQuery = ""
+    @Published var isSearchPresented = false
+    /// 退出搜索后恢复的一级目的地。
+    var searchReturnDestination: MacSidebarDestination? = nil
+
+    var isSearching: Bool {
+        isSearchPresented || !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 点击最近搜索词：直接写入搜索词并打开搜索（不写第二份状态）。
+    func selectRecentSearch(_ term: String) {
+        searchQuery = term
+        isSearchPresented = true
+    }
+
+    /// 一级页面：切换 selection，清空 path。
+    func selectSidebar(_ destination: MacSidebarDestination) {
+        selection = destination
+        path.removeAll()
+        searchReturnDestination = destination
+    }
+
+    /// 实体详情：push 到主内容栈，不改一级 selection。
+    func push(_ route: MacDetailRoute) {
+        if case .nowPlaying = route {
+            if !path.contains(.nowPlaying) {
+                path.append(route)
+            }
+            return
+        }
+        path.append(route)
+    }
+
+    /// 统一入口：一级 vs 详情。
+    func navigate(_ target: MacNavigationTarget) {
+        switch target {
+        case let .sidebar(destination):
+            selectSidebar(destination)
+        case let .detail(route):
+            push(route)
+        }
+    }
+
+    func back() {
+        if !path.isEmpty { path.removeLast() }
     }
 }
 
@@ -197,6 +239,15 @@ enum MacLibraryQuery {
             model.catalog.tracks.first { $0.id == id && $0.serverID == playlist.serverID }
         }
     }
+
+    /// 流派专辑：按 (serverID, albumID) 双键过滤，避免跨服务器 albumID 串库。
+    static func genreAlbums(_ genre: Genre, model: AuralisAppModel) -> [Album] {
+        let tracks = model.tracks(for: genre)
+        let identities = Set(tracks.map { AlbumRouteIdentity(serverID: $0.serverID, remoteID: $0.albumID.rawValue) })
+        return model.catalog.albums.filter {
+            identities.contains(AlbumRouteIdentity(serverID: $0.serverID, remoteID: $0.id.rawValue))
+        }
+    }
 }
 
 // MARK: - 右侧面板模式
@@ -205,4 +256,22 @@ enum MacRightPanelMode: String, Hashable {
     case lyrics
     case queue
 }
+
+// MARK: - 导航便捷构造（页面内保持简短调用）
+
+extension MacNavigationTarget {
+    static func album(_ album: Album) -> MacNavigationTarget {
+        .detail(.album(MacEntityRouteID(serverID: album.serverID, remoteID: album.id.rawValue)))
+    }
+    static func artist(_ artist: Artist) -> MacNavigationTarget {
+        .detail(.artist(MacEntityRouteID(serverID: artist.serverID, remoteID: artist.id.rawValue)))
+    }
+    static func playlist(_ playlist: Playlist) -> MacNavigationTarget {
+        .detail(.playlist(MacEntityRouteID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)))
+    }
+    static func genre(_ genre: Genre) -> MacNavigationTarget {
+        .detail(.genre(genre.name))
+    }
+}
+
 #endif

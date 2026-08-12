@@ -1,79 +1,52 @@
 #if os(macOS)
-import SwiftUI
-import ThemeEngine
 import Domain
 import LocalCatalog
+import SwiftUI
+import ThemeEngine
 
-/// Genre Detail：大标题 + 歌曲数 + Play/Shuffle + Songs + Albums。保持简单，不做彩色卡片墙。
+/// Genre Detail：标题 + 歌曲数 + Play/Shuffle + 曲目行 + 专辑网格。
+/// Album 过滤使用 (serverID, albumID) 双键，避免跨服务器 albumID 串库。
 struct MacGenreView: View {
     let genre: Genre
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     private var tracks: [Track] { model.tracks(for: genre) }
-    private var albums: [Album] {
-        let albumIDs = Set(tracks.map(\.albumID))
-        return model.catalog.albums.filter { albumIDs.contains($0.id) }
-    }
+    private var albums: [Album] { MacLibraryQuery.genreAlbums(genre, model: model) }
 
     private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: MacLayout.artworkGridGap)]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                HStack(alignment: .center, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(genre.name)
-                            .font(.system(size: 30, weight: .bold, design: .default))
-                        Text("\(tracks.count) 首歌曲 · \(albums.count) 张专辑")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 12) {
-                            MacPrimaryButton(title: "播放", systemImage: "play.fill") {
-                                model.playQueue(tracks)
-                            }
-                            MacPrimaryButton(title: "随机播放", systemImage: "shuffle", prominent: false) {
-                                model.playShuffledQueue(tracks)
-                            }
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(.top, 20)
-
+                header
                 if !tracks.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text("歌曲")
                             .font(.system(size: MacLayout.sectionTitleSize, weight: .bold))
-                        MacSongTable(
+                        MacDetailTrackList(
                             tracks: tracks,
-                            selection: $selection,
                             model: model,
                             theme: theme,
-                            onNavigate: onNavigate,
-                            showYearColumn: false,
-                            showGenreColumn: false,
-                            showFormatColumn: false,
-                            showArtwork: false,
-                            rowHeight: 34
+                            showArtist: true,
+                            showAlbum: true,
+                            onNavigate: onNavigate
                         )
                     }
                 }
-
                 if !albums.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("专辑")
                             .font(.system(size: MacLayout.sectionTitleSize, weight: .bold))
                         LazyVGrid(columns: columns, spacing: 24) {
                             ForEach(albums) { album in
-                                MacArtworkCard(
-                                    title: album.title,
-                                    subtitle: album.artistName,
-                                    artworkKey: album.artworkKey,
+                                MacAlbumTile(
+                                    album: album,
+                                    model: model,
+                                    theme: theme,
                                     size: 150,
-                                    colors: theme.colorTokens,
                                     onOpen: { onNavigate(.album(album)) },
                                     onPlay: { model.playQueue(MacLibraryQuery.albumTracks(album, model: model)) }
                                 )
@@ -87,5 +60,41 @@ struct MacGenreView: View {
         }
         .navigationTitle(genre.name)
     }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(genre.name)
+                    .font(.system(size: 30, weight: .bold, design: .default))
+                Text("\(tracks.count) 首歌曲 · \(albums.count) 张专辑")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Button {
+                        model.playQueue(tracks)
+                    } label: {
+                        Label("播放", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    Button {
+                        model.playShuffledQueue(tracks)
+                    } label: {
+                        Label("随机播放", systemImage: "shuffle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                }
+            }
+            Spacer()
+        }
+        .padding(.top, 20)
+    }
+}
+
+/// (serverID, albumID) 双键身份，供跨服务器 Album 过滤。
+struct AlbumRouteIdentity: Hashable {
+    let serverID: ServerID
+    let remoteID: String
 }
 #endif

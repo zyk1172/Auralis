@@ -9,7 +9,7 @@ struct MacMusicDownloadsView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
     @State private var usage = AuralisAppModel.CacheUsage()
 
     private var tracks: [Track] {

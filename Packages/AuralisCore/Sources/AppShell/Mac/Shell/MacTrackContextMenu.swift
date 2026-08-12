@@ -9,7 +9,7 @@ import SwiftUI
 func macTrackMenuContent(
     track: Track,
     model: AuralisAppModel,
-    onNavigate: @escaping (MacRoute) -> Void
+    onNavigate: @escaping (MacNavigationTarget) -> Void
 ) -> some View {
     let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
     let isFavorite = model.catalog.tracks.first(where: { $0.serverID == track.serverID && $0.id == track.id })?.isFavorite ?? track.isFavorite
@@ -76,7 +76,7 @@ extension View {
     func macTrackContextMenu(
         track: Track,
         model: AuralisAppModel,
-        onNavigate: @escaping (MacRoute) -> Void
+        onNavigate: @escaping (MacNavigationTarget) -> Void
     ) -> some View {
         contextMenu {
             macTrackMenuContent(track: track, model: model, onNavigate: onNavigate)

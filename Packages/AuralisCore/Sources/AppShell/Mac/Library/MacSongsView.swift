@@ -9,7 +9,7 @@ struct MacSongsView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,7 +27,10 @@ struct MacSongsView: View {
                 model: model,
                 theme: theme,
                 onNavigate: onNavigate,
-                numberText: { _ in nil }
+                numberText: { _ in nil },
+                showYearColumn: false,
+                showGenreColumn: false,
+                showFormatColumn: false
             )
         }
     }

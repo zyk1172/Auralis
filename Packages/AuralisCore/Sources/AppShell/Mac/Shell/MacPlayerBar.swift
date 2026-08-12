@@ -49,25 +49,35 @@ struct MacPlayerBar: View {
 
     // MARK: - 完整布局
 
+    /// 三区稳定布局：LEFT / CENTER / RIGHT 各占一等宽，CENTER 真正居中。
     private var fullLayout: some View {
-        HStack(spacing: 18) {
-            transportGroup
-            Spacer(minLength: 24)
-            trackIdentity
-            Spacer(minLength: 24)
-            contextGroup
+        HStack(spacing: 12) {
+            HStack {
+                transportGroup
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+            HStack(spacing: 12) {
+                trackIdentity
+            }
+            .frame(maxWidth: .infinity)
+            HStack {
+                Spacer(minLength: 0)
+                contextGroup
+            }
+            .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 16)
     }
 
-    // MARK: - 紧凑布局（窄窗口：隐藏时间文字 / 音量滑杆）
+    // MARK: - 紧凑布局（窄窗口：隐藏时间文字 / 音量滑杆，保留 transport）
 
     private var compactLayout: some View {
         HStack(spacing: 12) {
             transportGroup
-            Spacer(minLength: 10)
+            Spacer(minLength: 8)
             trackIdentityCompact
-            Spacer(minLength: 10)
+            Spacer(minLength: 8)
             HStack(spacing: 8) {
                 favoriteButton
                 lyricsButton

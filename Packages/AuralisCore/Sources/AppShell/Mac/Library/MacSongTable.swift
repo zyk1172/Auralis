@@ -26,7 +26,7 @@ struct MacSongTable: View {
     @Binding var selection: Set<GlobalID>
     let model: AuralisAppModel
     let theme: BuiltInTheme
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
     var numberText: (Track) -> String? = { _ in nil }
     var showAlbumColumn = true
     var showYearColumn = true
@@ -131,11 +131,6 @@ struct MacSongTable: View {
             }
         } primaryAction: { ids in
             if let gid = ids.first, let track = model.track(for: gid) {
-                model.selectAndPlay(track)
-            }
-        }
-        .onTapGesture(count: 2) {
-            if let gid = selection.first, let track = model.track(for: gid) {
                 model.selectAndPlay(track)
             }
         }

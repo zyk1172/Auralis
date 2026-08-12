@@ -2508,6 +2508,23 @@ public final class AuralisAppModel: ObservableObject {
 
     // MARK: - Queue editing
 
+    /// 当前曲目在播放队列中的下标（按 serverID + trackID 匹配）。
+    public var currentQueueIndex: Int? {
+        queue.firstIndex { $0.id == currentTrack.id && $0.serverID == currentTrack.serverID }
+    }
+
+    /// 待播队列：当前曲目之后的部分。
+    public var upcomingTracks: [Track] {
+        guard let index = currentQueueIndex else { return queue }
+        return Array(queue.dropFirst(index + 1))
+    }
+
+    /// 清空待播队列：保留当前曲目，不删除队列里正在播放的歌曲。
+    public func clearUpcoming() {
+        guard let index = currentQueueIndex, index + 1 < queue.count else { return }
+        queue.removeSubrange((index + 1)...)
+    }
+
     /// 拖动调整队列顺序：保持当前曲目位置，移动后持久化播放会话。
     public func moveQueue(from source: IndexSet, to destination: Int) {
         let moving = source.sorted().compactMap { queue.indices.contains($0) ? queue[$0] : nil }

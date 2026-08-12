@@ -9,15 +9,16 @@ struct MacSearchView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     let query: String
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     @State private var tracks: [CatalogTrackSummary] = []
     @State private var albums: [CatalogAlbumSummary] = []
     @State private var artists: [CatalogArtistSummary] = []
     @State private var playlists: [Playlist] = []
 
+    var onSelectRecent: (String) -> Void = { _ in }
+
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private let recentKey = "auralis.mac.recentSearches"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,12 +35,7 @@ struct MacSearchView: View {
                 resultsContent
             }
         }
-        .onAppear { loadRecent() }
         .task(id: trimmedQuery) { await runSearch() }
-    }
-
-    private func loadRecent() {
-        // 最近搜索由 searchOnServer 记录；这里读取本地历史展示。
     }
 
     private func runSearch() async {
@@ -67,8 +63,7 @@ struct MacSearchView: View {
                         HStack(spacing: 8) {
                             ForEach(model.recentSearches.prefix(8), id: \.self) { term in
                                 Button(term) {
-                                    model.macSearchQuery = term
-                                    NotificationCenter.default.post(name: MacCommand.search, object: nil)
+                                    onSelectRecent(term)
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -150,9 +145,9 @@ struct MacSearchView: View {
         return result
     }
 
-    private func browseEntry(_ title: String, _ route: MacRoute) -> some View {
+    private func browseEntry(_ title: String, _ route: MacSidebarDestination) -> some View {
         Button {
-            onNavigate(route)
+            onNavigate(.sidebar(route))
         } label: {
             Label(title, systemImage: route.symbol)
                 .padding(.vertical, 6)
@@ -251,12 +246,11 @@ struct MacSearchView: View {
 
     private func albumResultCard(_ summary: CatalogAlbumSummary) -> some View {
         let album = model.catalog.albums.first { $0.serverID == summary.globalID.serverID && $0.id.rawValue == summary.globalID.remoteID }
-        return MacArtworkCard(
-            title: summary.title,
-            subtitle: summary.artistName,
-            artworkKey: album?.artworkKey,
-            size: MacLayout.albumArtworkSize,
-            colors: theme.colorTokens,
+        let placeholderAlbum = Album(id: AlbumID(rawValue: summary.globalID.remoteID), serverID: summary.globalID.serverID, artistID: ArtistID(rawValue: ""), title: summary.title, artistName: summary.artistName, artworkKey: album?.artworkKey)
+        return MacAlbumTile(
+            album: album ?? placeholderAlbum,
+            model: model,
+            theme: theme,
             onOpen: { if let album { onNavigate(.album(album)) } },
             onPlay: { if let album { model.playQueue(MacLibraryQuery.albumTracks(album, model: model)) } }
         )

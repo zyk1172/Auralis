@@ -1,17 +1,18 @@
 #if os(macOS)
-import SwiftUI
-import ThemeEngine
 import Domain
 import LocalCatalog
+import SwiftUI
+import ThemeEngine
 
-/// Apple Music 式 Playlist Detail：大封面（真实歌单封面或前 4 首 2×2 mosaic）
-/// + 名称/描述/曲目数/时长 + Play/Shuffle/More + Song Table。
+/// Playlist Detail：Hero（真实 mosaic 封面）+ 曲目行 + 删除确认。
 struct MacPlaylistView: View {
     let playlist: Playlist
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
-    var onNavigate: (MacRoute) -> Void = { _ in }
+    var onNavigate: (MacNavigationTarget) -> Void = { _ in }
+
+    @State private var isConfirmingDelete = false
 
     private var tracks: [Track] { MacLibraryQuery.playlistTracks(playlist, model: model) }
 
@@ -20,29 +21,38 @@ struct MacPlaylistView: View {
             VStack(alignment: .leading, spacing: 18) {
                 hero
                 Divider()
-                MacSongTable(
-                    tracks: tracks,
-                    selection: $selection,
-                    model: model,
-                    theme: theme,
-                    onNavigate: onNavigate,
-                    numberText: { _ in nil },
-                    showGenreColumn: false,
-                    showFormatColumn: false,
-                    showArtwork: true,
-                    rowHeight: 40
-                )
+                if tracks.isEmpty {
+                    ContentUnavailableView("歌单为空", systemImage: "music.note.list",
+                                           description: Text("这个歌单还没有歌曲。"))
+                } else {
+                    MacDetailTrackList(
+                        tracks: tracks,
+                        model: model,
+                        theme: theme,
+                        showArtist: true,
+                        showAlbum: true,
+                        onNavigate: onNavigate
+                    )
+                }
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
         }
         .navigationTitle(playlist.name)
+        .confirmationDialog("删除歌单「\(playlist.name)」？", isPresented: $isConfirmingDelete, titleVisibility: .visible) {
+            Button("删除歌单", role: .destructive) {
+                Task { _ = await model.deletePlaylist(id: playlist.id) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只会删除歌单本身，不会删除其中的歌曲。")
+        }
     }
 
     private var hero: some View {
         HStack(alignment: .center, spacing: 24) {
-            artwork
-                .frame(width: 220, height: 220)
+            MacPlaylistArtwork(playlist: playlist, model: model, theme: theme, size: 200)
+                .frame(width: 200, height: 200)
             VStack(alignment: .leading, spacing: 10) {
                 Text(playlist.name)
                     .font(.system(size: 30, weight: .bold, design: .default))
@@ -51,26 +61,36 @@ struct MacPlaylistView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                Text("\(tracks.count) 首 · \(MacFormat.durationSum(tracks))")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    MacPrimaryButton(title: "播放", systemImage: "play.fill") {
+                if !tracks.isEmpty {
+                    Text("\(tracks.count) 首 · \(MacFormat.durationSum(tracks))")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) {
+                    Button {
                         model.playQueue(tracks)
+                    } label: {
+                        Label("播放", systemImage: "play.fill")
                     }
-                    MacPrimaryButton(title: "随机播放", systemImage: "shuffle", prominent: false) {
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    Button {
                         model.playShuffledQueue(tracks)
+                    } label: {
+                        Label("随机播放", systemImage: "shuffle")
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
                     Menu {
                         Button("添加到队列") {
-                            for track in tracks { model.addToQueue(globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)) }
+                            for track in tracks {
+                                model.addToQueue(globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
+                            }
                         }
-                        Button("删除歌单", role: .destructive) {
-                            Task { _ = await model.deletePlaylist(id: playlist.id) }
-                        }
+                        Button("删除歌单", role: .destructive) { isConfirmingDelete = true }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .frame(width: 32, height: 32)
+                            .frame(width: 28, height: 28)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -81,30 +101,6 @@ struct MacPlaylistView: View {
             Spacer()
         }
         .padding(.top, 20)
-    }
-
-    @ViewBuilder
-    private var artwork: some View {
-        let reps = Array(tracks.prefix(4))
-        if reps.isEmpty {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(.quaternary)
-                Image(systemName: "music.note.list")
-                    .font(.system(size: 64))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 220, height: 220)
-        } else if reps.count == 4 {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
-                ForEach(reps) { track in
-                    ArtworkView(title: track.albumTitle, artworkKey: track.artworkKey, colors: theme.colorTokens, size: 106, cornerRadius: 8)
-                }
-            }
-            .frame(width: 216, height: 216)
-        } else {
-            ArtworkView(title: playlist.name, artworkKey: reps.first?.artworkKey, colors: theme.colorTokens, size: 220, cornerRadius: 14)
-        }
     }
 }
 #endif

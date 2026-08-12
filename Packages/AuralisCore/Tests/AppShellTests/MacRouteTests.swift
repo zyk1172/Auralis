@@ -5,46 +5,40 @@ import Foundation
 import LocalCatalog
 import Testing
 
-/// Clean-Slate Mac UI：新路由身份（MacRoute id 稳定、跨服务器不碰撞）与
-/// 资料库查询助手（专辑曲目 disc/track 排序）的纯逻辑测试。
+/// Mac 路由身份 / 查询助手 / 格式化的纯逻辑测试（Round-2 导航模型）。
 @Suite("Mac clean-slate routing & query helpers")
 struct MacRouteTests {
-    // MARK: - MacRoute identity
-
-    @Test("album route id 包含 serverID，跨服务器同 remote id 不碰撞")
-    func albumRouteIDsAreServerScoped() {
-        let a = Album(id: "album-1", serverID: "serverA", artistID: "artist", title: "Same", artistName: "X")
-        let b = Album(id: "album-1", serverID: "serverB", artistID: "artist", title: "Same", artistName: "X")
-        #expect(MacRoute.album(a).id != MacRoute.album(b).id)
-        #expect(MacRoute.album(a).id.contains("serverA"))
-        #expect(MacRoute.album(b).id.contains("serverB"))
+    @Test("album entity route id 含 serverID，跨服务器同 remote id 不碰撞")
+    func albumEntityIDsAreServerScoped() {
+        let a = MacEntityRouteID(serverID: "serverA", remoteID: "album-1")
+        let b = MacEntityRouteID(serverID: "serverB", remoteID: "album-1")
+        #expect(a != b)
+        #expect(MacDetailRoute.album(a) != MacDetailRoute.album(b))
     }
 
-    @Test("playlist route id 包含 serverID + playlistID")
-    func playlistRouteIDsAreStable() {
-        let p1 = Playlist(id: "pl-1", serverID: "serverA", name: "Mix", trackIDs: [])
-        let p2 = Playlist(id: "pl-1", serverID: "serverB", name: "Mix", trackIDs: [])
-        #expect(MacRoute.playlist(p1).id != MacRoute.playlist(p2).id)
-        #expect(MacRoute.playlist(p1).id == MacRoute.playlist(p1).id)
+    @Test("playlist entity route id 含 serverID + playlistID")
+    func playlistEntityIDsAreStable() {
+        let p1 = MacEntityRouteID(serverID: "serverA", remoteID: "pl-1")
+        let p2 = MacEntityRouteID(serverID: "serverB", remoteID: "pl-1")
+        #expect(MacDetailRoute.playlist(p1) != MacDetailRoute.playlist(p2))
+        #expect(MacDetailRoute.playlist(p1) == MacDetailRoute.playlist(p1))
     }
 
-    @Test("genre route id 使用归一化 name，稳定")
-    func genreRouteIDIsStable() {
-        let g1 = Genre(name: "Rock", songCount: 5)
-        let g2 = Genre(name: "Rock", songCount: 99)
-        #expect(MacRoute.genre(g1).id == MacRoute.genre(g2).id)
-        #expect(MacRoute.genre(g1).title == "Rock")
+    @Test("genre route 使用归一化 name")
+    func genreRouteUsesName() {
+        let r1 = MacDetailRoute.genre("Rock")
+        let r2 = MacDetailRoute.genre("Rock")
+        #expect(r1 == r2)
+        #expect(MacDetailRoute.genre("Rock") != MacDetailRoute.genre("Pop"))
     }
 
-    @Test("顶层目的地 id 唯一且稳定")
-    func topLevelDestinationsAreUnique() {
-        let ids = [MacRoute.home, .songs, .albums, .artists, .genres, .favorites, .disliked, .downloads, .playlists, .categories, .assistant, .server, .nowPlaying].map(\.id)
-        #expect(Set(ids).count == ids.count)
-        #expect(MacRoute.home.id == "home")
-        #expect(MacRoute.nowPlaying.id == "nowPlaying")
+    @Test("Sidebar destination 顶层唯一且稳定")
+    func sidebarDestinationsUnique() {
+        let all = MacSidebarDestination.allCases
+        #expect(Set(all.map(\.id)).count == all.count)
+        #expect(MacSidebarDestination.home.id == "home")
+        #expect(MacSidebarDestination.songs.title == "歌曲")
     }
-
-    // MARK: - MacLibraryQuery
 
     @MainActor
     private func makeModel(tracks: [Track]) -> AuralisAppModel {
