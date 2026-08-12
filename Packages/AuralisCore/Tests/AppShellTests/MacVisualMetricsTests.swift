@@ -58,10 +58,10 @@ struct MacVisualMetricsTests {
         #expect(m >= 110 && m <= 155)
     }
 
-    @Test("full player top ≈ 16.5% 窗口高（150...200）")
+    @Test("full player top 收敛（56...90，1536×1050 → ≈73.5）")
     func fullPlayerTop() {
         let t = MacFullPlayerMetrics.topY(window: CGSize(width: 1536, height: 1050))
-        #expect(t >= 150 && t <= 200)
+        #expect(t >= 56 && t <= 90)
     }
 
     @Test("full player right column 440...560")

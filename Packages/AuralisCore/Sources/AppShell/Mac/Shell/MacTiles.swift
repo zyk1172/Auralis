@@ -26,17 +26,17 @@ struct MacPlaylistArtwork: View {
                     .font(.system(size: size * 0.28))
                     .foregroundStyle(.secondary)
             case 1:
-                artworkCell(keys[0], cornerRadius: cornerRadius)
+                artworkCell(keys[0], cornerRadius: cornerRadius, cellSize: size)
             case 2:
                 HStack(spacing: 2) {
-                    artworkCell(keys[0], cornerRadius: 0)
-                    artworkCell(keys[1], cornerRadius: 0)
+                    artworkCell(keys[0], cornerRadius: 0, cellSize: cellHalf)
+                    artworkCell(keys[1], cornerRadius: 0, cellSize: cellHalf)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             default:
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)], spacing: 2) {
                     ForEach(Array(keys.prefix(4)), id: \.self) { key in
-                        artworkCell(key, cornerRadius: 0)
+                        artworkCell(key, cornerRadius: 0, cellSize: cellHalf)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -45,6 +45,9 @@ struct MacPlaylistArtwork: View {
         .frame(width: size, height: size)
         .accessibilityLabel("\(playlist.name) 封面")
     }
+
+    /// 2×2 马赛克每格尺寸（扣除 2pt 间距后的半格）。
+    private var cellHalf: CGFloat { max(1, (size - 2) / 2) }
 
     private var distinctArtworkKeys: [String] {
         Self.artworkKeys(playlist: playlist, model: model)
@@ -66,7 +69,7 @@ struct MacPlaylistArtwork: View {
         return keys
     }
 
-    private func artworkCell(_ key: String, cornerRadius: CGFloat) -> some View {
+    private func artworkCell(_ key: String, cornerRadius: CGFloat, cellSize: CGFloat) -> some View {
         if key.isEmpty {
             return AnyView(
                 ZStack {
@@ -80,7 +83,7 @@ struct MacPlaylistArtwork: View {
                 title: playlist.name,
                 artworkKey: key,
                 colors: theme.colorTokens,
-                size: size,
+                size: cellSize,
                 cornerRadius: cornerRadius
             )
         )

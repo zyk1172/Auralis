@@ -41,7 +41,7 @@ struct AssistantView: View {
     /// 输入框焦点：仅供本页用 @FocusState 管理，以便点击空白 / 拖动 / 发送时收起键盘。
     @FocusState private var assistantInputFocused: Bool
 
-    @EnvironmentObject private var bottomDockScroll: BottomDockScrollCoordinator
+    @Environment(\.bottomDockScrollCoordinator) private var bottomDockScroll: BottomDockScrollCoordinator?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -77,7 +77,14 @@ struct AssistantView: View {
                 conversation
             }
         }
-        .background(theme.colorTokens.background.color)
+        .background {
+            #if os(macOS)
+            // macOS 主窗口使用系统背景，避免与其余系统外观页面形成色块割裂。
+            Color(nsColor: .underPageBackgroundColor)
+            #else
+            theme.colorTokens.background.color
+            #endif
+        }
         .task { await agent.bootstrap() }
         .alert("重命名会话", isPresented: Binding(
             get: { renamingSession != nil },
@@ -384,7 +391,7 @@ struct AssistantView: View {
             DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: $assistantInputFocused)
                 // 收拢态时输入栏进入底部导航栏的中间槽位；一旦获得输入焦点、键盘弹出，
                 // 必须立即恢复完整输入宽度，而不能继续沿用窄胶囊。
-                .padding(.horizontal, assistantInputFocused ? 0 : 64 * bottomDockScroll.collapseProgress)
+                .padding(.horizontal, assistantInputFocused ? 0 : 64 * (bottomDockScroll?.collapseProgress ?? 0))
                 // 键盘关闭时：主菜单栏是独立的底部 overlay（忽略键盘），会覆盖在屏幕最底，
                 // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
                 // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
@@ -393,19 +400,21 @@ struct AssistantView: View {
                     .bottom,
                     assistantInputFocused
                         ? AuralisSpacing.small
-                        : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - bottomDockScroll.collapseProgress)
+                        : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - (bottomDockScroll?.collapseProgress ?? 0))
                 )
                 // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
                 // 不再按拖动位移逐帧改变宽度，快滑和慢滑的视觉节奏完全一致。
                 .animation(
                     BottomDockMotion.animation(reduceMotion: reduceMotion),
-                    value: bottomDockScroll.collapseProgress
+                    value: bottomDockScroll?.collapseProgress ?? 0
                 )
         }
         #else
-        // macOS 没有底部 Dock，输入框作为本页底部安全区浮层。
+        // macOS 没有底部 Dock，输入框作为本页底部安全区浮层；
+        // 主窗口底部还有常驻悬浮播放条（≈70pt + 22pt 底距），输入框需抬升避免被遮挡。
         .safeAreaInset(edge: .bottom, spacing: 0) {
             inputBar
+                .padding(.bottom, 100)
         }
         #endif
     }

@@ -25,7 +25,6 @@ public struct MacMusicShell: View {
 
     @State private var playerPresentation: MacPlayerPresentation = .library
     @State private var expandedContext: MacExpandedPlayerContext = .none
-    @Namespace private var playerTransitionNamespace
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -53,12 +52,11 @@ public struct MacMusicShell: View {
                     model: model,
                     theme: theme,
                     context: $expandedContext,
-                    namespace: playerTransitionNamespace,
                     onCollapse: collapseExpandedPlayer,
                     onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) }
                 )
                 .zIndex(100)
-                .transition(.opacity)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .toolbarVisibility(playerPresentation == .expanded ? .hidden : .automatic, for: .windowToolbar)
@@ -87,14 +85,13 @@ public struct MacMusicShell: View {
                 MacFloatingPlayerBar(
                     model: model,
                     theme: theme,
-                    namespace: playerTransitionNamespace,
                     onOpenFullPlayer: { expandCurrentWindowPlayer() },
                     onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) },
                     onToggleLyrics: { toggleRightPanel(.lyrics) },
                     onToggleQueue: { toggleRightPanel(.queue) }
                 )
                 .padding(.horizontal, 64)
-                .padding(.bottom, 22)
+                .padding(.bottom, 14)
             }
             .inspector(isPresented: $showRightPanel) {
                 MacRightPanel(model: model, theme: theme, mode: rightPanelMode)

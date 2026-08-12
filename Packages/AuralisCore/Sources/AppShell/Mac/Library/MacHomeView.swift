@@ -4,8 +4,8 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
-/// 首页：只展示真实有数据的货架。最近播放/最近添加按 Album 投影去重，
-/// 收藏用紧凑歌曲列表，避免同一封面重复几十次。
+/// 首页：只展示真实有数据的货架（全部为网格卡片）。
+/// 最近播放/最近添加按 Album 投影去重；收藏歌曲/播放列表等资料库入口由侧边栏负责。
 struct MacHomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -18,13 +18,11 @@ struct MacHomeView: View {
                 VStack(alignment: .leading, spacing: 26) {
                     albumShelf("最近播放专辑", albums: recentAlbums, seeAll: .recentlyPlayed, metrics: homeMetrics)
                     albumShelf("最近添加专辑", albums: recentAddedAlbums, seeAll: .recentlyAdded, metrics: homeMetrics)
-                    favoriteList
                     albumShelf("常听专辑", albums: model.homeTopAlbums, seeAll: .albums, metrics: homeMetrics)
                     artistShelf("常听艺术家", artists: model.homeTopArtists, seeAll: .artists, metrics: homeMetrics)
                     trackShelf("很久没听", tracks: deduped(model.homeLongUnplayedTracks), metrics: homeMetrics)
                     trackShelf("从未播放", tracks: deduped(model.homeNeverPlayedTracks), metrics: homeMetrics)
                     trackShelf("收藏里随便听", tracks: deduped(model.homeFavoriteRandomTracks), metrics: homeMetrics)
-                    playlistShelf("播放列表", seeAll: .playlists, metrics: homeMetrics)
                 }
                 .padding(.horizontal, homeMetrics.horizontalPadding)
                 .padding(.top, 32)
@@ -33,6 +31,23 @@ struct MacHomeView: View {
             .frame(minHeight: 700)
         }
     }
+
+    /// 首页货架标题（有序）。资料库入口（歌曲/专辑/艺术家/流派/下载/不喜欢/播放列表/收藏）
+    /// 由侧边栏负责，首页只保留“适合首页”的音乐内容卡片货架。供测试校验栏目切割。
+    static let shelfTitles: [String] = [
+        "最近播放专辑",
+        "最近添加专辑",
+        "常听专辑",
+        "常听艺术家",
+        "很久没听",
+        "从未播放",
+        "收藏里随便听",
+    ]
+
+    /// 首页不得包含这些（已由侧边栏资料库/播放列表区承担）。
+    static let sidebarOnlyTitles: Set<String> = [
+        "歌曲", "专辑", "艺术家", "流派", "下载", "不喜欢", "播放列表", "收藏",
+    ]
 
     // MARK: - Album 投影（去重封面）
 
@@ -158,75 +173,6 @@ struct MacHomeView: View {
                     }
                     .padding(.horizontal, 2)
                 }
-            }
-        )
-    }
-
-    private func playlistShelf(_ title: String, seeAll: MacSidebarDestination?, metrics: MacArtworkGridMetrics) -> some View {
-        let playlists = model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        guard !playlists.isEmpty else { return AnyView(EmptyView()) }
-        let size = min(210, metrics.itemWidth)
-        return AnyView(
-            VStack(alignment: .leading, spacing: 12) {
-                MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : "查看全部") {
-                    if let seeAll { onNavigate(.sidebar(seeAll)) }
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 24) {
-                        ForEach(playlists.prefix(14)) { playlist in
-                            MacPlaylistTile(
-                                playlist: playlist,
-                                model: model,
-                                theme: theme,
-                                size: size,
-                                onOpen: { onNavigate(.playlist(playlist)) },
-                                onPlay: {
-                                    let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
-                                    if !tracks.isEmpty { model.playQueue(tracks) }
-                                }
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 2)
-                }
-            }
-        )
-    }
-
-    /// 收藏：紧凑歌曲列表，不强制等大封面卡。
-    private var favoriteList: some View {
-        let favorites = Array(model.homeFavoriteTracks.prefix(8))
-        guard !favorites.isEmpty else { return AnyView(EmptyView()) }
-        return AnyView(
-            VStack(alignment: .leading, spacing: 10) {
-                MacSectionHeader(title: "收藏", actionTitle: "查看全部") {
-                    onNavigate(.sidebar(.favorites))
-                }
-                VStack(spacing: 0) {
-                    ForEach(Array(favorites.enumerated()), id: \.element.id) { index, track in
-                        HStack(spacing: 10) {
-                            ArtworkView(title: track.albumTitle, artworkKey: track.artworkKey, colors: theme.colorTokens, size: 32, cornerRadius: 4)
-                                .accessibilityHidden(true)
-                            Button {
-                                model.selectAndPlay(track)
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(track.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                                        Text(track.artistName).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Text(MacFormat.time(track.duration)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .macTrackContextMenu(track: track, model: model, onNavigate: onNavigate)
-                        }
-                        if index < favorites.count - 1 { Divider().padding(.leading, 42) }
-                    }
-                }
-                .padding(.trailing, 12)
             }
         )
     }

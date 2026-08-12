@@ -7,7 +7,6 @@ import ThemeEngine
 struct MacFloatingPlayerBar: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    let namespace: Namespace.ID
     var onOpenFullPlayer: () -> Void = {}
     var onOpenMiniPlayer: () -> Void = {}
     var onToggleLyrics: () -> Void = {}
@@ -21,7 +20,6 @@ struct MacFloatingPlayerBar: View {
     init(
         model: AuralisAppModel,
         theme: BuiltInTheme,
-        namespace: Namespace.ID,
         onOpenFullPlayer: @escaping () -> Void = {},
         onOpenMiniPlayer: @escaping () -> Void = {},
         onToggleLyrics: @escaping () -> Void = {},
@@ -29,7 +27,6 @@ struct MacFloatingPlayerBar: View {
     ) {
         self.model = model
         self.theme = theme
-        self.namespace = namespace
         self.onOpenFullPlayer = onOpenFullPlayer
         self.onOpenMiniPlayer = onOpenMiniPlayer
         self.onToggleLyrics = onToggleLyrics
@@ -65,9 +62,12 @@ struct MacFloatingPlayerBar: View {
                 }
                 .padding(.horizontal, 14)
             }
-            .frame(height: 70)
+            .frame(height: 68)
         }
         .frame(maxWidth: 960)
+        // 整条空白区域点击也展开播放器；内部 Button/Menu/Slider 各自消费点击。
+        .contentShape(Rectangle())
+        .onTapGesture { onOpenFullPlayer() }
     }
 
     // MARK: - Transport（LEFT）
@@ -147,7 +147,6 @@ struct MacFloatingPlayerBar: View {
                     size: 44,
                     cornerRadius: 6
                 )
-                .matchedGeometryEffect(id: "nowPlaying.artwork", in: namespace)
                 .accessibilityHidden(true)
             }
             .buttonStyle(.plain)

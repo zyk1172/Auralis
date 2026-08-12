@@ -12,7 +12,6 @@ struct MacExpandedPlayerView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var context: MacExpandedPlayerContext
-    let namespace: Namespace.ID
     let onCollapse: () -> Void
     let onOpenMiniPlayer: () -> Void
 
@@ -27,14 +26,12 @@ struct MacExpandedPlayerView: View {
         model: AuralisAppModel,
         theme: BuiltInTheme,
         context: Binding<MacExpandedPlayerContext>,
-        namespace: Namespace.ID,
         onCollapse: @escaping () -> Void,
         onOpenMiniPlayer: @escaping () -> Void
     ) {
         self.model = model
         self.theme = theme
         self._context = context
-        self.namespace = namespace
         self.onCollapse = onCollapse
         self.onOpenMiniPlayer = onOpenMiniPlayer
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
@@ -117,7 +114,6 @@ struct MacExpandedPlayerView: View {
                 size: artworkSize,
                 cornerRadius: 14
             )
-            .matchedGeometryEffect(id: "nowPlaying.artwork", in: namespace)
             .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
             .accessibilityLabel("\(track.albumTitle) 封面")
 
@@ -462,7 +458,7 @@ struct MacExpandedPlayerView: View {
                     .frame(height: 44)
                 }
                 .padding(.leading, 20)
-                .padding(.top, 14)
+                .padding(.top, 10)
             }
     }
 
@@ -486,7 +482,7 @@ struct MacExpandedPlayerView: View {
                     .frame(height: 46)
                 }
                 .padding(.trailing, 20)
-                .padding(.top, 14)
+                .padding(.top, 10)
             }
     }
 

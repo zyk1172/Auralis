@@ -306,7 +306,10 @@ enum MacFullPlayerMetrics {
         min(500, max(300, min(window.width * 0.31, window.height * 0.46)))
     }
     static func leftMargin(window: CGSize) -> CGFloat { window.width * 0.085 }
-    static func topY(window: CGSize) -> CGFloat { window.height * 0.165 }
+    static func topY(window: CGSize) -> CGFloat {
+        // 顶部留白收敛：玻璃胶囊（关闭/音量）贴近顶栏，封面从 ~56-84pt 开始。
+        max(56, min(84, window.height * 0.07))
+    }
     static func rightColumnWidth(window: CGSize) -> CGFloat {
         min(560, max(440, window.width * 0.34))
     }
