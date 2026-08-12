@@ -163,6 +163,91 @@ struct RecommendationIndexV2SemanticTagsTests {
         #expect(imported.contains { $0.dimension == "mood" && $0.value == "平静" })
     }
 
+    @Test("P0-1 旧固定索引（无开放标签）进入 semanticTagsOnly 批次")
+    func oldFixedIndexEntersSemanticOnlyBatch() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let id = try #require(batch.tracks.first?.id)
+        // 只写固定分类（旧索引场景：没有开放标签）。
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.9)
+        ], serverID: serverID)
+        // 固定已完成但缺开放标签 → next_batch 必须是 semanticTagsOnly，且能取到这首歌。
+        let next = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        #expect(next.mode == "semanticTagsOnly")
+        #expect(next.tracks.contains { $0.id == id })
+        #expect(next.pendingTracks == 1)
+        let status = try await store.recommendationIndexV2Status(serverID: serverID)
+        #expect(status.pendingTracks == 0)
+        #expect(status.pendingSemanticTagTracks == 1)
+    }
+
+    @Test("P0-1 先 full 后 semanticTagsOnly，最后 truly done")
+    func fullThenSemanticThenDone() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
+        // 未分类：full 批次。
+        let first = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        #expect(first.mode == "full")
+        let id = try #require(first.tracks.first?.id)
+        // full 写回（含开放标签）。
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(
+                id: id, moods: ["平静"], energy: 3,
+                semanticTags: [.init(value: "夜行感", confidence: 0.8)]
+            )
+        ], serverID: serverID)
+        // 全部完成：下一批 mode=done 且无曲目。
+        let done = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        #expect(done.mode == "done")
+        #expect(done.tracks.isEmpty)
+        #expect(done.pendingTracks == 0)
+    }
+
+    @Test("P1 跨歌曲 canonical：Lo-fi / LO-FI 归一到同一词条")
+    func crossSongCanonicalization() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [
+            semTrack(serverID: serverID, remoteID: "t1", title: "Song A"),
+            semTrack(serverID: serverID, remoteID: "t2", title: "Song B"),
+        ])
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let ids = batch.tracks.map(\.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: ids[0], moods: ["平静"], energy: 3,
+                semanticTags: [.init(value: "Lo-fi", confidence: 0.8)]),
+            RecommendationIndexV2Classification(id: ids[1], moods: ["平静"], energy: 3,
+                semanticTags: [.init(value: "LO-FI", confidence: 0.7)]),
+        ], serverID: serverID)
+        let catalog = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let lofi = catalog.filter { $0.dimension == "tag" && RecommendationIndexV2.semanticTagKey($0.value) == "lo-fi" }
+        #expect(lofi.count == 1)
+        #expect(lofi.first?.trackCount == 2)
+    }
+
+    @Test("P1 semantic_tag_rules_version 按曲目持久化")
+    func semanticVersionPersistedPerTrack() async throws {
+        let store = try semStore()
+        let serverID: ServerID = "s1"
+        try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let id = try #require(batch.tracks.first?.id)
+        _ = try await store.writeRecommendationIndexV2([
+            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3,
+                semanticTags: [.init(value: "夜行感", confidence: 0.8)])
+        ], serverID: serverID)
+        let rows = try await store.db.query(
+            "SELECT semantic_tag_rules_version FROM recommendation_index_v2_state WHERE global_id = ?",
+            [.text(id)]
+        )
+        let version = rows.first?["semantic_tag_rules_version"]?.int ?? 0
+        #expect(version == RecommendationIndexV2.semanticTagRulesVersion)
+    }
+
     @Test("TEST8 旧固定索引升级后不丢失（tag_catalog 可读取）")
     func fixedIndexUpgradeAndTagCatalog() async throws {
         let store = try semStore()

@@ -49,14 +49,14 @@ extension LocalCatalogStore {
         let indexed = snapshot.lines.filter { line in
             snapshot.states[line.id]?.hash == recommendationIndexV2ContentHash(line)
         }.count
-        let semanticTagged = try recommendationIndexV2SemanticTaggedIDs(serverID: serverID).count
+        let pendingSemantic = try recommendationIndexV2SemanticPendingIDs(snapshot: snapshot, serverID: serverID)
         return RecommendationIndexV2Status(
             totalTracks: snapshot.lines.count,
             indexedTracks: indexed,
             pendingTracks: snapshot.lines.count - indexed,
             rulesVersion: RecommendationIndexV2.rulesVersion,
-            semanticTaggedTracks: semanticTagged,
-            pendingSemanticTagTracks: max(snapshot.lines.count - semanticTagged, 0)
+            semanticTaggedTracks: snapshot.lines.count - pendingSemantic.count,
+            pendingSemanticTagTracks: pendingSemantic.count
         )
     }
 
@@ -78,30 +78,91 @@ extension LocalCatalogStore {
         return Set(rows.compactMap { $0["global_id"]?.string })
     }
 
-    /// 取得下一批待分类元数据。批次稳定排序，失败重试不会跳过歌曲。
-    public func nextRecommendationIndexV2Batch(serverID: ServerID?, limit: Int = 80) throws -> RecommendationIndexV2Batch {
-        let snapshot = try recommendationIndexV2Snapshot(serverID: serverID)
-        let pending = snapshot.lines.filter { snapshot.states[$0.id]?.hash != recommendationIndexV2ContentHash($0) }
-        let semanticTagged = try recommendationIndexV2SemanticTaggedIDs(serverID: serverID)
-        let batch = Array(pending.prefix(min(max(limit, 1), 100)))
-        // 本批工作模式：全缺 → full；已有固定但缺开放标签 → semanticTagsOnly；混合 → mixed。
-        var needsFull = false
-        var needsSemanticOnly = false
-        for line in batch {
-            let hasFixed = snapshot.states[line.id]?.hash != nil
-            if hasFixed && !semanticTagged.contains(line.id) {
-                needsSemanticOnly = true
-            } else if !hasFixed {
-                needsFull = true
+    /// 跨歌曲 canonical 映射：normalizedKey → 使用最多的展示值（Lo-fi / lo-fi / LO-FI 归一到同一 display）。
+    /// 读取现有 dimension='tag' 全部值，按 normalizeSemanticTag 的 key 归组，取出现次数最多的写法。
+    func recommendationIndexV2SemanticCanonicalMap(serverID: ServerID?) throws -> [String: String] {
+        let rows: [[String: SQLiteValue]]
+        if let serverID {
+            rows = try db.query(
+                """
+                SELECT t.value, COUNT(*) AS n FROM recommendation_index_v2_tags t
+                JOIN recommendation_index_v2_state s ON s.global_id = t.global_id
+                WHERE t.dimension = 'tag' AND s.server_id = ?
+                GROUP BY t.value
+                """,
+                [.text(serverID.rawValue)]
+            )
+        } else {
+            rows = try db.query(
+                "SELECT value, COUNT(*) AS n FROM recommendation_index_v2_tags WHERE dimension = 'tag' GROUP BY value"
+            )
+        }
+        var counts: [String: (display: String, count: Int)] = [:]
+        for row in rows {
+            guard let raw = row["value"]?.string,
+                  let canonical = RecommendationIndexV2.normalizeSemanticTag(raw)
+            else { continue }
+            let key = RecommendationIndexV2.semanticTagKey(canonical)
+            let count = Int(row["n"]?.int ?? 0)
+            var current = counts[key] ?? (canonical, 0)
+            if count > current.count || (count == current.count && canonical < current.display) {
+                current = (canonical, count)
+            }
+            counts[key] = current
+        }
+        return counts.mapValues { $0.display }
+    }
+
+    /// 语义标签待补的曲目：固定分类已完成（hash 匹配）但尚未按当前 semanticTagRulesVersion
+    /// 生成开放标签（没有 tag 行，或语义标签规则版本过期）。
+    func recommendationIndexV2SemanticPendingIDs(
+        snapshot: (lines: [CatalogTrackLine], states: [String: RecommendationIndexV2StoredState]),
+        serverID: ServerID?
+    ) throws -> Set<String> {
+        let tagged = try recommendationIndexV2SemanticTaggedIDs(serverID: serverID)
+        var pending = Set<String>()
+        for line in snapshot.lines {
+            guard snapshot.states[line.id]?.hash == recommendationIndexV2ContentHash(line) else { continue }
+            let hasTags = tagged.contains(line.id)
+            let versionOK = (snapshot.states[line.id]?.semanticTagRulesVersion ?? 0) >= RecommendationIndexV2.semanticTagRulesVersion
+            if !hasTags || !versionOK {
+                pending.insert(line.id)
             }
         }
+        return pending
+    }
+
+    /// 取得下一批待分类元数据。两个独立 pending：
+    /// - pendingFixed：固定分类尚未完成 / 内容 hash 过期；
+    /// - pendingSemantic：固定分类已完成但缺少（或规则版本过期的）开放语义标签。
+    /// 先跑 full（补固定+开放标签），再跑 semanticTagsOnly（只补开放标签），
+    /// 同一批模式唯一，不产生需要模型自行判断的 mixed 批次。
+    public func nextRecommendationIndexV2Batch(serverID: ServerID?, limit: Int = 80) throws -> RecommendationIndexV2Batch {
+        let snapshot = try recommendationIndexV2Snapshot(serverID: serverID)
+        let pendingFixed = snapshot.lines.filter { snapshot.states[$0.id]?.hash != recommendationIndexV2ContentHash($0) }
+        let pendingSemantic = try recommendationIndexV2SemanticPendingIDs(snapshot: snapshot, serverID: serverID)
+        let totalPending = pendingFixed.count + pendingSemantic.count
+
         let mode: String
-        if needsFull && needsSemanticOnly { mode = "mixed" }
-        else if needsSemanticOnly { mode = "semanticTagsOnly" }
-        else { mode = "full" }
+        let source: [CatalogTrackLine]
+        if !pendingFixed.isEmpty {
+            mode = "full"
+            source = pendingFixed
+        } else if !pendingSemantic.isEmpty {
+            mode = "semanticTagsOnly"
+            source = snapshot.lines.filter { pendingSemantic.contains($0.id) }
+        } else {
+            return RecommendationIndexV2Batch(
+                tracks: [],
+                pendingTracks: 0,
+                rulesVersion: RecommendationIndexV2.rulesVersion,
+                mode: "done"
+            )
+        }
+        let batch = Array(source.prefix(min(max(limit, 1), 100)))
         return RecommendationIndexV2Batch(
             tracks: batch,
-            pendingTracks: pending.count,
+            pendingTracks: totalPending,
             rulesVersion: RecommendationIndexV2.rulesVersion,
             mode: mode
         )
@@ -140,6 +201,8 @@ extension LocalCatalogStore {
         }
         guard !valid.isEmpty else { return 0 }
 
+        // 跨歌曲 canonical 映射：让同义/同写法变体（Lo-fi/lo-fi/LO-FI）复用同一展示值。
+        var canonicalMap = try recommendationIndexV2SemanticCanonicalMap(serverID: serverID)
         try db.transaction {
             for (item, line) in valid {
                 let confidence = min(max(item.confidence, 0), 1)
@@ -151,15 +214,17 @@ extension LocalCatalogStore {
                 }
                 try db.run(
                     """
-                    INSERT INTO recommendation_index_v2_state (global_id, server_id, source_hash, rules_version, classifier, classified_at, source_hash_version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO recommendation_index_v2_state (global_id, server_id, source_hash, rules_version, classifier, classified_at, source_hash_version, semantic_tag_rules_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(global_id) DO UPDATE SET source_hash = excluded.source_hash, rules_version = excluded.rules_version,
                     classifier = excluded.classifier, classified_at = excluded.classified_at,
-                    source_hash_version = excluded.source_hash_version
+                    source_hash_version = excluded.source_hash_version,
+                    semantic_tag_rules_version = excluded.semantic_tag_rules_version
                     """,
                     [.text(item.id), .text(GlobalID(item.id)?.serverID.rawValue ?? ""), .text(recommendationIndexV2ContentHash(line)),
                      .text(RecommendationIndexV2.rulesVersion), .text(classifier), .real(Date.now.timeIntervalSince1970),
-                     .integer(Int64(RecommendationIndexV2.contentHashVersion))]
+                     .integer(Int64(RecommendationIndexV2.contentHashVersion)),
+                     .integer(Int64(RecommendationIndexV2.semanticTagRulesVersion))]
                 )
                 if mode == "full" {
                     try recommendationIndexV2InsertTags(item.moods, dimension: "mood", allowed: RecommendationIndexV2.moods, id: item.id, confidence: confidence)
@@ -169,7 +234,7 @@ extension LocalCatalogStore {
                     try recommendationIndexV2InsertTags(item.styles, dimension: "style", allowed: RecommendationIndexV2.styles, id: item.id, confidence: confidence)
                     try recommendationIndexV2InsertNumericTags(item, id: item.id, confidence: confidence)
                 }
-                try recommendationIndexV2InsertSemanticTags(item.semanticTags, id: item.id, line: line, confidence: confidence)
+                try recommendationIndexV2InsertSemanticTags(item.semanticTags, id: item.id, line: line, confidence: confidence, canonicalMap: &canonicalMap)
             }
         }
         return valid.count
@@ -300,16 +365,27 @@ extension LocalCatalogStore {
             sql += " AND t.value LIKE ?"
             values.append(.text("%\(trimmed)%"))
         }
-        sql += " GROUP BY t.value ORDER BY track_count DESC, t.value ASC LIMIT ?"
-        values.append(.integer(Int64(min(max(limit, 1), 500))))
+        sql += " GROUP BY t.value ORDER BY track_count DESC, t.value ASC"
         let rows = try db.query(sql, values)
-        return rows.compactMap { row in
-            guard let value = row["value"]?.string, !value.isEmpty else { return nil }
-            return RecommendationIndexV2Category(
-                dimension: "tag",
-                value: value,
-                trackCount: Int(row["track_count"]?.int ?? 0)
-            )
+        // 客户端按 normalizeSemanticTag key 合并变体（Lo-fi / lo-fi / LO-FI 归一到同一展示值），
+        // canonical display = 使用次数最多的写法；这是读取聚合，不是标签数量限制。
+        var merged: [String: (display: String, count: Int)] = [:]
+        for row in rows {
+            guard let raw = row["value"]?.string,
+                  let canonical = RecommendationIndexV2.normalizeSemanticTag(raw)
+            else { continue }
+            let key = RecommendationIndexV2.semanticTagKey(canonical)
+            let count = Int(row["track_count"]?.int ?? 0)
+            var current = merged[key] ?? (canonical, 0)
+            if count > current.count || (count == current.count && canonical < current.display) {
+                current = (canonical, count)
+            }
+            merged[key] = current
+        }
+        let top = merged.values.sorted { $0.count == $1.count ? $0.display < $1.display : $0.count > $1.count }
+            .prefix(min(max(limit, 1), 500))
+        return top.map {
+            RecommendationIndexV2Category(dimension: "tag", value: $0.display, trackCount: $0.count)
         }
     }
 
@@ -355,16 +431,17 @@ extension LocalCatalogStore {
         }.sorted { lhs, rhs in lhs.id < rhs.id }
         let rows: [[String: SQLiteValue]]
         if let serverID {
-            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version FROM recommendation_index_v2_state WHERE server_id = ?", [.text(serverID.rawValue)])
+            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version, semantic_tag_rules_version FROM recommendation_index_v2_state WHERE server_id = ?", [.text(serverID.rawValue)])
         } else {
-            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version FROM recommendation_index_v2_state")
+            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version, semantic_tag_rules_version FROM recommendation_index_v2_state")
         }
         var states: [String: RecommendationIndexV2StoredState] = [:]
         for row in rows where row["rules_version"]?.string == RecommendationIndexV2.rulesVersion {
             if let id = row["global_id"]?.string, let hash = row["source_hash"]?.string {
                 states[id] = RecommendationIndexV2StoredState(
                     hash: hash,
-                    hashVersion: Int(row["source_hash_version"]?.int ?? 0)
+                    hashVersion: Int(row["source_hash_version"]?.int ?? 0),
+                    semanticTagRulesVersion: Int(row["semantic_tag_rules_version"]?.int ?? 0)
                 )
             }
         }
@@ -429,7 +506,8 @@ extension LocalCatalogStore {
         _ tags: [RecommendationIndexV2SemanticTag],
         id: String,
         line: CatalogTrackLine,
-        confidence: Double
+        confidence: Double,
+        canonicalMap: inout [String: String]
     ) throws {
         var seen = Set<String>()
         for tag in tags {
@@ -442,11 +520,14 @@ extension LocalCatalogStore {
             ]
             if forbidden.contains(where: { !$0.isEmpty && $0 == lower }) { continue }
             if ["收藏", "不喜欢", "已播放", "播放很多", "评分", "跳过", "下载"].contains(where: { canonical.contains($0) }) { continue }
-            let key = lower
+            let key = RecommendationIndexV2.semanticTagKey(canonical)
             guard seen.insert(key).inserted else { continue }
+            // 跨歌曲 canonical 复用：已有相同 key 的展示值则沿用，否则用本次规范化值并登记。
+            let display = canonicalMap[key] ?? canonical
+            canonicalMap[key] = display
             try db.run(
                 "INSERT OR REPLACE INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
-                [.text(id), .text(canonical), .real(min(max(tag.confidence, 0), 1))]
+                [.text(id), .text(display), .real(min(max(tag.confidence, 0), 1))]
             )
         }
     }
@@ -482,8 +563,10 @@ extension LocalCatalogStore {
     }
 }
 
-/// 一条已入库的 V2 索引状态：内容 hash + hash 算法版本。
+/// 一条已入库的 V2 索引状态：内容 hash + hash 算法版本 + 语义标签规则版本。
 struct RecommendationIndexV2StoredState {
     var hash: String
     var hashVersion: Int
+    /// 该曲目的开放语义标签是按哪个 semanticTagRulesVersion 生成的（0 = 尚未生成）。
+    var semanticTagRulesVersion: Int
 }

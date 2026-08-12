@@ -182,7 +182,7 @@ public struct AgentRunner {
     /// 终止条件：
     /// - 正常结束：模型返回最终文本（无原生 tool_calls、无文本 ACTION 行）；
     /// - 用户取消 / 不可恢复错误（配置错误、API Key 无效、数据库损坏等）；
-    /// - 任一模型轮次或工具调用超时 → 取消该步骤并明确停止任务；此前成功操作保留。
+    /// - 单工具失败或超时 → 以结构化失败回灌模型，模型换工具/换参数继续，不终止整项任务。
     ///
     /// Tool Call / Tool Result 关联：
     /// - 原生模式（provider.supportsToolCalling）：每个 tool call 有稳定 `tool_call_id`，
@@ -232,7 +232,8 @@ public struct AgentRunner {
             systemPrompt: Self.systemPrompt(
                 context: context,
                 tools: selectedTools,
-                nativeToolCalling: provider.supportsToolCalling
+                nativeToolCalling: provider.supportsToolCalling,
+                goal: taskState.goal
             ),
             task: taskState,
             facts: [],
@@ -249,6 +250,8 @@ public struct AgentRunner {
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
+        // 已提示过模型调用 result_present_tracks（只 repair 一次，避免无限循环）。
+        var didRequestFinalSelection = false
         // 任务工作集：任务级结果缓存、重复调用保护、候选/队列统计、诊断轨迹。
         var ws = AgentTaskWorkingSet(
             targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
@@ -390,6 +393,25 @@ public struct AgentRunner {
                     repairAttempts: completionRepairAttempts
                 ) {
                 case .accept:
+                    // 纯推荐任务（musicDiscovery）：已有候选但既没有显式 final（result_present_tracks）
+                    // 也没有真实 queue/playlist 副作用时，先要求模型调用 result_present_tracks 选择
+                    // 真正最终推荐的歌曲，而不是让用户看到“零卡片”或把候选当结果。只 repair 一次。
+                    if intent == .musicDiscovery,
+                       !didRequestFinalSelection,
+                       !presentation.candidateOrder.isEmpty,
+                       presentation.resolvedFinalCards.isEmpty,
+                       presentation.disambiguationTracks.isEmpty {
+                        didRequestFinalSelection = true
+                        completionRepairAttempts += 1
+                        let instruction = "你已经取得候选歌曲，但还没有确定最终展示结果。请调用 result_present_tracks(trackIDs=[真正最终推荐给主人的歌曲]) 一次；只把最终选定的歌曲传入，不要把整个候选池传入。"
+                        taskState.pendingActions = [instruction]
+                        taskState.status = .waitingForTool
+                        taskState.updatedAt = .now
+                        await state(taskState)
+                        conversation.append(AIMessage(role: .assistant, content: reply))
+                        conversation.append(AIMessage(role: .user, content: "系统完成条件校验：\(instruction)"))
+                        continue
+                    }
                     await state(taskState)
                     // 查看类任务的收尾合并（搜索 / 资料库浏览如“我的收藏”）：没有明确 final
                     // 时把候选合成一组；推荐/播放/建歌单/改队列等任务必须走显式 final。
@@ -1118,7 +1140,7 @@ public struct AgentRunner {
         return results
     }
 
-    public static func systemPrompt(context: Context, tools: [ToolDescriptor], nativeToolCalling: Bool) -> String {
+    public static func systemPrompt(context: Context, tools: [ToolDescriptor], nativeToolCalling: Bool, goal: String = "") -> String {
         let tools = Self.promptToolList(tools)
         let serverLine: String
         if let id = context.serverID {
@@ -1147,13 +1169,30 @@ public struct AgentRunner {
         } else {
             recentLine = context.recentlyPlayedTitles.prefix(5).joined(separator: "、")
         }
-        // 记忆注入是 Context 优化：存储不设数量上限，但每轮只注入最近更新的核心记忆，
-        // 剩余空间受单次 input token budget 控制（需要更多时模型用 memory_list 精确查询）。
+        // 记忆注入是 Context 优化：存储不设数量上限，但每轮只注入「高相关 + 核心 + 最近」
+        // 的记忆，总量受单次 input token budget 的固定上限控制（需要更多时用 memory_list 精确查询）。
         let memoryLines: String
         if context.memories.isEmpty {
             memoryLines = "（还没有记住关于主人的事情。主人告诉你名字或喜好时，主动用 memory_save 记下来喵）"
         } else {
-            let injected = Array(context.memories.prefix(40))
+            let goal = goal.lowercased()
+            let goalTokens = goal.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+            func relevance(_ entry: AgentMemoryEntry) -> Int {
+                let key = entry.key.lowercased()
+                let value = entry.value.lowercased()
+                var score = 0
+                // 核心长期信息优先。
+                if ["名字", "姓名", "喜欢的歌手", "喜欢的艺术家", "喜欢的音乐类型", "不喜欢", "服务器", "设备", "偏好"].contains(where: { key.contains($0) }) { score += 3 }
+                // 与当前请求关键词相关优先。
+                if goalTokens.contains(where: { $0.count >= 2 && (key.contains($0) || value.contains($0)) }) { score += 2 }
+                return score
+            }
+            let ranked = context.memories.sorted { lhs, rhs in
+                let ls = relevance(lhs), rs = relevance(rhs)
+                if ls != rs { return ls > rs }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            let injected = Array(ranked.prefix(40))
             let joined = injected.map { "• \($0.key)：\($0.value)" }.joined(separator: "\n")
             memoryLines = injected.count < context.memories.count
                 ? joined + "\n（另有 \(context.memories.count - injected.count) 条记忆，可用 memory_list 查看全部）"

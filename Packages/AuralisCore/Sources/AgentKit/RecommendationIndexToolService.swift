@@ -60,6 +60,7 @@ enum RecommendationIndexToolService {
                     .text("pending=0"),
                     facts: [
                         "recommendation.index.pending": "0",
+                        "recommendation.index.pendingSemantic": "0",
                         "recommendation.index.nextBatchAvailable": "false",
                     ]
                 )
@@ -68,11 +69,11 @@ enum RecommendationIndexToolService {
             let modeHint: String
             switch batch.mode {
             case "semanticTagsOnly": modeHint = "本批只需要补开放语义标签（mode=\"semanticTagsOnly\"）：不要改动固定维度，只写 semanticTags。"
-            case "mixed": modeHint = "本批混合：有固定分类的歌曲只补 semanticTags（mode=\"semanticTagsOnly\"），没有固定分类的歌曲做完整分类（mode=\"full\"）。"
             default: modeHint = "本批需要完整分类（mode=\"full\"）：固定维度 + 开放语义标签。"
             }
             let tagRules = "开放语义标签规则：固定维度（moods/scenes/vocals/textures/styles 与 energy/tempo/acousticness/danceability 数值）保持规范；此外可以根据音乐属性创建开放 semantic tags（value 为规范化中文或常见英文词，如 夜行感/公路感/城市霓虹/复古合成器/电影感），标签数量没有硬上限；优先复用已有 canonical 标签（可用 library_index_v2_tag_catalog 查看）；不要用歌曲名/艺术家名/专辑名/ID 或收藏评分播放历史当标签；同一概念不要拆成多个写法。"
             let text = "待分类总数 \(batch.pendingTracks)，本批 \(batch.tracks.count) 首；本批模式：\(batch.mode)。仅根据以下元数据分类；不要解释、不要补充歌曲。完成后立刻调用 library_index_v2_write_batch，把结构化 items 数组直接传入，数组必须恰好覆盖本批每个 id 一次。\(modeHint) \(tagRules)：\n\(payload)"
+            let batchStatus = try await catalog.recommendationIndexV2Status(serverID: serverID)
             return .ok(
                 call,
                 descriptor,
@@ -80,6 +81,7 @@ enum RecommendationIndexToolService {
                 .text(text),
                 facts: [
                     "recommendation.index.pending": "\(batch.pendingTracks)",
+                    "recommendation.index.pendingSemantic": "\(batchStatus.pendingSemanticTagTracks)",
                     "recommendation.index.nextBatchAvailable": "true",
                 ]
             )
@@ -113,7 +115,7 @@ enum RecommendationIndexToolService {
                 let payload = String(decoding: try JSONEncoder().encode(nextBatch.tracks), as: UTF8.self)
                 let modeHint = nextBatch.mode == "semanticTagsOnly"
                     ? "本批只补开放语义标签（mode=\"semanticTagsOnly\"），不要改动固定维度。"
-                    : (nextBatch.mode == "mixed" ? "本批混合：无固定分类的歌曲做完整分类，其余只补 semanticTags。" : "本批完整分类（mode=\"full\"）。")
+                    : "本批完整分类（mode=\"full\"）。"
                 text = "已写入 \(written) 首。尚待分类 \(status.pendingTracks) 首。下一批 \(nextBatch.tracks.count) 首已直接提供（本批模式：\(nextBatch.mode)）；不要调用 library_index_v2_next_batch，也不要输出自然语言。\(modeHint) 请立刻只根据下列元数据生成结构化 items 数组，并调用 library_index_v2_write_batch(items=该数组)：\n\(payload)"
             } else {
                 text = "已写入 \(written) 首。尚待分类 0 首。索引 V2 已完成。"
@@ -175,6 +177,7 @@ enum RecommendationIndexToolService {
             "recommendation.index.total": "\(status.totalTracks)",
             "recommendation.index.indexed": "\(status.indexedTracks)",
             "recommendation.index.pending": "\(status.pendingTracks)",
+            "recommendation.index.pendingSemantic": "\(status.pendingSemanticTagTracks)",
             "recommendation.index.nextBatchAvailable": nextBatchAvailable ? "true" : "false",
         ]
     }

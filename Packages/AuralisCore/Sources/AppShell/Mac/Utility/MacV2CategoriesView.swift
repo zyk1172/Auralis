@@ -99,20 +99,54 @@ private struct MacV2DimensionPane: View {
     @State private var selectedCategory: RecommendationIndexV2Category?
     @State private var selection: Set<GlobalID> = []
     @State private var tracks: [Track] = []
+    /// AI 标签独立浏览：搜索 + 分页（读取优化，不代表标签数量限制）。
+    @State private var tagQuery = ""
+    @State private var tagLimit = 30
+    @State private var tagExhausted = false
+
+    /// 展示给列表的分类：tag 维度按需搜索/分页加载，其余维度用传入的全部 categories。
+    @State private var displayedCategories: [RecommendationIndexV2Category] = []
+
+    private var isTagDimension: Bool { dimension == "tag" }
 
     var body: some View {
         HSplitView {
-            List(categories, selection: $selectedCategory) { category in
-                HStack {
-                    Text(category.value)
-                    Spacer()
-                    Text("\(category.trackCount)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                if isTagDimension {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("搜索标签", text: $tagQuery)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { Task { await loadTagPage(reset: true) } }
+                        Button {
+                            Task { await loadTagPage(reset: true) }
+                        } label: {
+                            Label("搜索", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+                        }
+                    }
+                    .padding(8)
                 }
-                .tag(category)
+                List(displayedCategories, selection: $selectedCategory) { category in
+                    HStack {
+                        Text(category.value)
+                        Spacer()
+                        Text("\(category.trackCount)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(category)
+                }
+                .listStyle(.sidebar)
+                if isTagDimension, !tagExhausted {
+                    Button {
+                        Task { await loadTagPage(reset: false) }
+                    } label: {
+                        Text("加载更多标签")
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(6)
+                }
             }
-            .listStyle(.sidebar)
             .frame(minWidth: 150)
             if let category = selectedCategory {
                 MacSongTable(tracks: tracks, selection: $selection, model: model, theme: theme, onNavigate: onNavigate)
@@ -123,6 +157,18 @@ private struct MacV2DimensionPane: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .task(id: dimension) { await initialLoad() }
+    }
+
+    private func loadTagPage(reset: Bool) async {
+        guard isTagDimension, let serverID = model.catalog.activeServerID else { return }
+        if reset { tagLimit = 30 }
+        let query = tagQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fetched = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
+            serverID: serverID, query: query.isEmpty ? nil : query, limit: tagLimit
+        )) ?? []
+        displayedCategories = fetched
+        tagExhausted = fetched.count < tagLimit
     }
 
     private func loadTracks(_ category: RecommendationIndexV2Category) async {
@@ -133,6 +179,18 @@ private struct MacV2DimensionPane: View {
         tracks = (try? await model.catalogCoordinator.store.recommendationIndexV2Tracks(
             serverID: serverID, dimension: category.dimension, value: category.value
         )) ?? []
+    }
+}
+
+private extension MacV2DimensionPane {
+    /// 初次出现：tag 维度走 tag_catalog 加载，其余维度直接用传入 categories。
+    func initialLoad() async {
+        if isTagDimension {
+            displayedCategories = []
+            await loadTagPage(reset: true)
+        } else {
+            displayedCategories = categories
+        }
     }
 }
 #endif

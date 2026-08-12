@@ -205,7 +205,7 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         id: String,
         moods: [String] = [],
         scenes: [String] = [],
-        energy: Int,
+        energy: Int = 3,
         tempo: Int = 3,
         acousticness: Int = 3,
         danceability: Int = 3,
@@ -238,7 +238,7 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         id = try container.decode(String.self, forKey: .id)
         moods = try container.decodeIfPresent([String].self, forKey: .moods) ?? []
         scenes = try container.decodeIfPresent([String].self, forKey: .scenes) ?? []
-        energy = try container.decode(Int.self, forKey: .energy)
+        energy = try container.decodeIfPresent(Int.self, forKey: .energy) ?? 3
         tempo = try container.decodeIfPresent(Int.self, forKey: .tempo) ?? 3
         acousticness = try container.decodeIfPresent(Int.self, forKey: .acousticness) ?? 3
         danceability = try container.decodeIfPresent(Int.self, forKey: .danceability) ?? 3

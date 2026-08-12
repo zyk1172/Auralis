@@ -469,9 +469,9 @@ public final class AgentCoordinator: ObservableObject {
             self.currentRunID = runID
             // 用户在任务真正开始前点了停止：直接结束，不回任何消息。
             if Task.isCancelled {
-                await MainActor.run { [weak self] in self?.isRunning = false }
-                self.currentRunID = nil
+                if self.currentRunID == runID { self.currentRunID = nil }
                 self.runTask = nil
+                await MainActor.run { [weak self] in self?.isRunning = false }
                 return
             }
             // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
@@ -517,9 +517,9 @@ public final class AgentCoordinator: ObservableObject {
                         runID: runID
                     )
                     taskStore.update(taskID, status: .cancelled, error: "用户未授权首次外发请求。")
-                    await MainActor.run { [weak self] in self?.isRunning = false }
-                    self.currentRunID = nil
+                    if self.currentRunID == runID { self.currentRunID = nil }
                     self.runTask = nil
+                    await MainActor.run { [weak self] in self?.isRunning = false }
                     return
                 case .allowOnce, .allowAndRemember:
                     break
@@ -553,15 +553,18 @@ public final class AgentCoordinator: ObservableObject {
                     await self?.updateTaskState(taskState, taskID: taskID, sessionID: sessionID)
                 }
             )
-            await MainActor.run { [weak self] in self?.isRunning = false }
+            // 收尾顺序：先结算任务 → 再清理运行身份 → 最后才释放 isRunning。
+            // currentRunID 只在仍属于本次运行时才清空，避免旧 Run 清掉新 Run 的身份。
+            let wasCancelled = Task.isCancelled
             let sessionMessages = await self.sessionStore.session(sessionID)?.messages ?? []
             let failure = Self.failureSummary(in: sessionMessages.dropFirst(history.count))
-            await self.finishTask(taskID, failure: failure)
+            await self.finishTask(taskID, sessionID: sessionID, wasCancelled: wasCancelled, failure: failure)
             if self.activeSessionID == sessionID {
                 await self.summarizeActiveSession()
             }
-            self.currentRunID = nil
+            if self.currentRunID == runID { self.currentRunID = nil }
             self.runTask = nil
+            await MainActor.run { [weak self] in self?.isRunning = false }
         }
     }
 
@@ -614,9 +617,9 @@ public final class AgentCoordinator: ObservableObject {
 
     /// 任务结束后按真实结果落盘。此前 Runner 已发出 `.error` 时仍被一律标为
     /// completed，导致用户看到失败、任务记录却显示完成，无法诊断或恢复。
-    private func finishTask(_ taskID: UUID, failure: String?) async {
+    private func finishTask(_ taskID: UUID, sessionID: UUID, wasCancelled: Bool, failure: String?) async {
         let status: AgentTaskStatus
-        if runTask?.isCancelled == true {
+        if wasCancelled {
             status = .cancelled
         } else if failure != nil {
             status = .failed
@@ -624,7 +627,10 @@ public final class AgentCoordinator: ObservableObject {
             status = .completed
         }
         taskStore.update(taskID, status: status, error: failure)
-        activeTask = taskStore.record(taskID)
+        // 只有属于当前活动会话的任务才更新 UI 任务状态，避免 A 的收尾污染 B 界面。
+        if activeSessionID == sessionID {
+            activeTask = taskStore.record(taskID)
+        }
     }
 
     private static func failureSummary(in messages: ArraySlice<AgentChatMessage>) -> String? {

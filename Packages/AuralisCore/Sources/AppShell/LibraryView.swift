@@ -11,6 +11,12 @@ struct LibraryView: View {
     @State private var playlistTarget: Track?
     @State private var recommendationCategories: [RecommendationIndexV2Category] = []
     @State private var isLoadingRecommendationCategories = false
+    /// AI 标签独立区：搜索 + 分页（读取优化，不代表标签数量限制）。
+    @State private var aiTags: [RecommendationIndexV2Category] = []
+    @State private var aiTagSearch = ""
+    @State private var aiTagLimit = 30
+    @State private var aiTagsExhausted = false
+    @State private var isLoadingMoreTags = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -300,7 +306,90 @@ struct LibraryView: View {
                             .buttonStyle(HapticPlainButtonStyle())
                         }
                     }
-                    .padding(AuralisSpacing.medium)
+                    .padding(.horizontal, AuralisSpacing.medium)
+                    .padding(.top, AuralisSpacing.medium)
+
+                    // AI 标签独立区：搜索 + 分页（读取优化，不代表标签数量限制）。
+                    if !aiTags.isEmpty || !aiTagSearch.isEmpty {
+                        HStack {
+                            Text("AI 标签")
+                                .font(.headline)
+                                .foregroundStyle(theme.colorTokens.primaryText.color)
+                            Spacer()
+                            HStack(spacing: 4) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.caption)
+                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                TextField("搜索标签", text: $aiTagSearch)
+                                    .textFieldStyle(.plain)
+                                    .font(.caption)
+                                    .onSubmit { Task { await loadAITags(reset: true) } }
+                            }
+                            .padding(.horizontal, AuralisSpacing.small)
+                            .padding(.vertical, 4)
+                            .background(theme.colorTokens.surface.color)
+                            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+                            .frame(maxWidth: 180)
+                        }
+                        .padding(.horizontal, AuralisSpacing.medium)
+                        .padding(.top, AuralisSpacing.large)
+
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 150), spacing: AuralisSpacing.medium)],
+                            spacing: AuralisSpacing.medium
+                        ) {
+                            ForEach(aiTags) { category in
+                                Button {
+                                    openRecommendationCategory(category)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+                                        HStack {
+                                            Image(systemName: "tag")
+                                                .font(.title3)
+                                                .foregroundStyle(theme.colorTokens.accent.color)
+                                            Spacer()
+                                            Text("\(category.trackCount)")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                        }
+                                        Text(category.value)
+                                            .font(.headline)
+                                            .lineLimit(1)
+                                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                                        Text("\(category.trackCount) 首")
+                                            .font(.caption)
+                                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                    }
+                                    .padding(AuralisSpacing.medium)
+                                    .frame(maxWidth: .infinity, minHeight: 86, alignment: .topLeading)
+                                    .background(theme.colorTokens.surface.color)
+                                    .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
+                                }
+                                .buttonStyle(HapticPlainButtonStyle())
+                            }
+                        }
+                        .padding(.horizontal, AuralisSpacing.medium)
+                        .padding(.top, AuralisSpacing.small)
+
+                        if !aiTagsExhausted {
+                            Button {
+                                Task { await loadMoreAITags() }
+                            } label: {
+                                HStack {
+                                    if isLoadingMoreTags { ProgressView().controlSize(.small) }
+                                    Text("加载更多标签")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .padding(.horizontal, AuralisSpacing.medium)
+                            .padding(.bottom, AuralisSpacing.medium)
+                        } else {
+                            Spacer().frame(height: AuralisSpacing.medium)
+                        }
+                    } else {
+                        Spacer().frame(height: AuralisSpacing.medium)
+                    }
                 }
                 .reportsBottomDockScroll()
             }
@@ -311,11 +400,34 @@ struct LibraryView: View {
     private func loadRecommendationCategories() async {
         guard let serverID = model.catalog.activeAccount?.id else {
             recommendationCategories = []
+            aiTags = []
             return
         }
         isLoadingRecommendationCategories = true
-        recommendationCategories = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(serverID: serverID)) ?? []
+        let all = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(serverID: serverID)) ?? []
+        recommendationCategories = all.filter { $0.dimension != "tag" }
+        aiTags = all.filter { $0.dimension == "tag" }
+        aiTagsExhausted = aiTags.count < 500
         isLoadingRecommendationCategories = false
+    }
+
+    private func loadAITags(reset: Bool) async {
+        guard let serverID = model.catalog.activeAccount?.id else { return }
+        let query = aiTagSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fetched = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
+            serverID: serverID, query: query.isEmpty ? nil : query, limit: aiTagLimit
+        )) ?? []
+        aiTags = fetched
+        aiTagsExhausted = fetched.count < aiTagLimit
+        isLoadingMoreTags = false
+        _ = reset
+    }
+
+    private func loadMoreAITags() async {
+        guard !isLoadingMoreTags, !aiTagsExhausted else { return }
+        isLoadingMoreTags = true
+        aiTagLimit += 30
+        await loadAITags(reset: false)
     }
 
     private func openRecommendationCategory(_ category: RecommendationIndexV2Category) {

@@ -274,6 +274,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
         """)
         // Additive migration for databases created before revision-aware sync probes.
         try? db.run("ALTER TABLE recommendation_index_v2_state ADD COLUMN source_hash_version INTEGER NOT NULL DEFAULT 0")
+        try? db.run("ALTER TABLE recommendation_index_v2_state ADD COLUMN semantic_tag_rules_version INTEGER NOT NULL DEFAULT 0")
         try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_fingerprint TEXT")
         try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_probe_kind TEXT")
         try? db.run("ALTER TABLE sync_meta ADD COLUMN last_probe_at REAL")

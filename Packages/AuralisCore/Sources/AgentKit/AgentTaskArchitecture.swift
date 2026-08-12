@@ -578,13 +578,20 @@ public enum AgentCompletionEvaluator {
             satisfied = state.facts["sideEffect.playback"] == "success" || state.facts["sideEffect.queue"] == "success"
             continuation = "播放操作尚未得到成功工具结果。请执行获准的播放工具；不要仅用文字声称已经完成。"
         case .indexPendingCountIsZero:
-            satisfied = state.facts["recommendation.index.pending"] == "0"
-            if state.facts["recommendation.index.pending"] == nil {
-                continuation = "推荐索引完成事实尚未取得。请先调用 library_index_v2_status；只有真实工具结果显示 pending=0 才能结束。"
+            // 完整完成 = 固定分类待处理 == 0 且 开放语义标签待处理 == 0。
+            let pendingFixed = state.facts["recommendation.index.pending"]
+            let pendingSemantic = state.facts["recommendation.index.pendingSemantic"] ?? "0"
+            satisfied = pendingFixed == "0" && pendingSemantic == "0"
+            if pendingFixed == nil {
+                continuation = "推荐索引完成事实尚未取得。请先调用 library_index_v2_status；只有真实工具结果显示固定分类与开放语义标签都无待处理项才能结束。"
+            } else if pendingFixed != "0" {
+                continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pendingFixed ?? "?") 首）。请调用 library_index_v2_next_batch(limit=80) 并持续分类写回；直到固定分类与开放标签都完成。"
+            } else if pendingSemantic != "0" {
+                continuation = "推荐索引固定分类已完成，但仍需为 \(pendingSemantic) 首歌曲补充开放语义标签。请继续调用 library_index_v2_next_batch（本批模式 semanticTagsOnly）并写回。"
             } else if state.facts["recommendation.index.nextBatchAvailable"] == "true" {
-                continuation = "推荐索引仍有待分类歌曲，上一条工具结果已提供下一批元数据。请直接用结构化 items 调用 library_index_v2_write_batch 写回该批；pending=0 前不得结束。"
+                continuation = "推荐索引仍有待分类歌曲，上一条工具结果已提供下一批元数据。请直接用结构化 items 调用 library_index_v2_write_batch 写回该批。"
             } else {
-                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch(limit=80) 并持续分类写回；pending=0 前不得结束。"
+                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch(limit=80) 并持续分类写回。"
             }
         case .appreciationWithEvidence:
             let metadataReady = state.facts["appreciation.metadata"] == "available"

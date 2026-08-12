@@ -196,7 +196,7 @@ public enum AgentToolRegistry {
           "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         },
-        "required": ["id", "energy"]
+        "required": ["id"]
       }
     }
     """#

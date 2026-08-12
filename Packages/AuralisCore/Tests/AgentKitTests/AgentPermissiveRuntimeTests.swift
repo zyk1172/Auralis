@@ -903,6 +903,40 @@ struct AgentPermissiveRuntimeTests {
         #expect(!names.contains("removeServer"))
     }
 
+    // MARK: - TEST 31：musicDiscovery 无显式 final 时要求 result_present_tracks
+
+    @Test("TEST31 纯推荐忘调 result_present_tracks → Runtime 提示一次后再放行")
+    func discoveryForcesFinalSelection() async throws {
+        let store = try makePermStore()
+        try await seedPerm(store, [makePermTrack(serverID: "test-server", remoteID: "t1", title: "歌")])
+        let bridge = PermissiveBridge()
+        let system = PermissiveSystemService()
+        system.recommendationTracks = [permCard(GlobalID(serverID: "test-server", remoteID: "t1"), title: "歌")]
+        let collector = PermissiveCollector()
+        // 模型只推荐（产生候选），忘记调用 result_present_tracks，直接给最终回答。
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
+            "已经为你选好 1 首适合开车提神的歌。",
+        ])
+        await AgentRunner.run(
+            userText: "推荐一首开车提神的歌给我看看",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            systemService: system,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        // 第二轮应出现要求调用 result_present_tracks 的完成校验指令。
+        #expect(provider.requests.count >= 3)
+        let repairSeen = provider.requests.dropFirst().contains { req in
+            req.messages.contains { $0.role == .user && $0.content.contains("result_present_tracks") }
+        }
+        #expect(repairSeen)
+    }
+
     // MARK: - TEST 23 / 24：隐私与凭据
 
     @Test("TEST23 allowsLyrics=false 时歌词正文不进入 Provider 请求")

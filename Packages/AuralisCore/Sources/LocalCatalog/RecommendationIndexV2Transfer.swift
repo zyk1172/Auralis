@@ -305,14 +305,15 @@ extension LocalCatalogStore {
                 }
                 try db.run(
                     """
-                    INSERT INTO recommendation_index_v2_state (global_id, server_id, source_hash, rules_version, classifier, classified_at, source_hash_version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO recommendation_index_v2_state (global_id, server_id, source_hash, rules_version, classifier, classified_at, source_hash_version, semantic_tag_rules_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(global_id) DO UPDATE SET
                         source_hash = excluded.source_hash,
                         rules_version = excluded.rules_version,
                         classifier = excluded.classifier,
                         classified_at = excluded.classified_at,
-                        source_hash_version = excluded.source_hash_version
+                        source_hash_version = excluded.source_hash_version,
+                        semantic_tag_rules_version = excluded.semantic_tag_rules_version
                     """,
                     [
                         .text(line.id), .text(serverID.rawValue), .text(entry.contentHash),
@@ -320,6 +321,7 @@ extension LocalCatalogStore {
                         .text(entry.classifier.isEmpty ? "imported" : entry.classifier),
                         .real(entry.classifiedAt.timeIntervalSince1970),
                         .integer(Int64(RecommendationIndexV2.contentHashVersion)),
+                        .integer(Int64(RecommendationIndexV2.semanticTagRulesVersion)),
                     ]
                 )
             }
