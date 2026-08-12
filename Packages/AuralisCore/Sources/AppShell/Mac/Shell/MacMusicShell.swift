@@ -288,15 +288,6 @@ public struct MacMusicShell: View {
         }
     }
 
-    /// 定位当前歌曲：进入「歌曲」一级页并选中当前曲目。
-    private func revealCurrentSong() {
-        navigation.selectSidebar(.songs)
-        if model.hasCurrentTrack {
-            let gid = GlobalID(serverID: model.currentTrack.serverID, remoteID: model.currentTrack.id.rawValue)
-            selectedTracks = [gid]
-        }
-    }
-
     // MARK: - 修饰器拆分
 
     private func attachModals(_ view: some View) -> some View {

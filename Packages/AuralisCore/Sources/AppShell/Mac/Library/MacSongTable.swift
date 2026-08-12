@@ -9,6 +9,8 @@ import Domain
 struct MacSongRow: Identifiable {
     let id: GlobalID
     let track: Track
+    var playCount: Int = 0
+    var addedDate: Date? = nil
 
     var title: String { track.title }
     var artistName: String { track.artistName }
@@ -32,6 +34,7 @@ struct MacSongTable: View {
     var showYearColumn = true
     var showGenreColumn = true
     var showFormatColumn = true
+    var showPlayCountColumn = false
     var showArtwork = true
     var rowHeight: CGFloat = 40
 
@@ -40,8 +43,16 @@ struct MacSongTable: View {
     ]
 
     private var rows: [MacSongRow] {
-        tracks.map { MacSongRow(id: GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue), track: $0) }
-            .sorted(using: sortOrder)
+        let counts = model.playCounts
+        return tracks.map { track in
+            MacSongRow(
+                id: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue),
+                track: track,
+                playCount: counts[track.id] ?? 0,
+                addedDate: model.addedDate(for: track)
+            )
+        }
+        .sorted(using: sortOrder)
     }
 
     var body: some View {
@@ -101,6 +112,14 @@ struct MacSongTable: View {
                     }
                 }
                 .width(min: 56, ideal: 64, max: 84)
+            }
+            if showPlayCountColumn {
+                TableColumn("播放次数", value: \.playCount) { row in
+                    Text(row.playCount > 0 ? "\(row.playCount)" : "—")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .width(min: 56, ideal: 64, max: 80)
             }
             TableColumn("收藏") { row in
                 Image(systemName: row.track.isFavorite ? "heart.fill" : "heart")

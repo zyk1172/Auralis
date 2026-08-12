@@ -415,6 +415,11 @@ public final class AuralisAppModel: ObservableObject {
     /// 搜索历史（最近在前，最多 10 条），供搜索页快捷回填。
     @Published public private(set) var recentSearches: [String] = []
     private static let recentSearchesDefaultsKey = "auralis.recentSearches"
+
+    /// 本地首次见到该曲目的时间（有真实数据时返回；否则 nil，不伪造）。
+    public func addedDate(for track: Track) -> Date? {
+        libraryAddedTracker.date(for: track)
+    }
     /// Siri / URL Scheme 传入的待播放请求（歌曲名/歌手名；空字符串表示「播放音乐」）。
     /// 资料库尚未恢复（冷启动）时先暂存，待 apply() 恢复资料库后再消费，
     /// 避免找不到曲目。

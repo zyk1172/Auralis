@@ -16,6 +16,7 @@ struct MacSongsView: View {
     @AppStorage("auralis.mac.songs.showYear") private var showYear = false
     @AppStorage("auralis.mac.songs.showGenre") private var showGenre = false
     @AppStorage("auralis.mac.songs.showFormat") private var showFormat = false
+    @AppStorage("auralis.mac.songs.showPlayCount") private var showPlayCount = false
 
     private var filteredTracks: [Track] {
         let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -39,7 +40,8 @@ struct MacSongsView: View {
                 numberText: { _ in nil },
                 showYearColumn: showYear,
                 showGenreColumn: showGenre,
-                showFormatColumn: showFormat
+                showFormatColumn: showFormat,
+                showPlayCountColumn: showPlayCount
             )
         }
         .navigationTitle("歌曲")
@@ -50,6 +52,7 @@ struct MacSongsView: View {
                     Toggle("年份", isOn: $showYear)
                     Toggle("流派", isOn: $showGenre)
                     Toggle("格式", isOn: $showFormat)
+                    Toggle("播放次数", isOn: $showPlayCount)
                 } label: {
                     Image(systemName: "sidebar.right")
                 }

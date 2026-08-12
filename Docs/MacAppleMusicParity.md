@@ -80,3 +80,8 @@
 - **假功能移除**：AlbumSort 移除不真实的「最近添加」；Playlist 空态提供「新建播放列表」。
 - **未复制 Apple 业务**：无 广播/Apple Music scope/账户/订阅/AutoPlay/Crossfade/SharePlay/Apple Logo。
 - 视觉状态一律 MANUAL-VISUAL-VERIFY（见 Docs/MacVisualParity.md）。
+
+## Round-4 补充（Songs 数据列）
+
+- Songs Table 新增真实「播放次数」列（`model.playCounts`，View Options 开关，持久化）。
+- 新增 `AuralisAppModel.addedDate(for:)`（真实本地入库时间）；「添加日期」列因 SwiftUI `Table` 11 列 + Date 类型触发编译器类型检查限制而暂缓（数据访问器已就绪，后续可单独加回），不伪造数据。
