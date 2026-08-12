@@ -78,6 +78,8 @@ struct AuralisMacApp: App {
             MacMiniPlayerWindow(themeStore: themeStore)
         }
         .windowResizability(.contentSize)
+        // 像 Apple Music 一样默认出现在屏幕右下，而不是屏幕正中央。
+        .defaultPosition(.bottomTrailing)
         Settings {
             MacSettingsHost(themeStore: themeStore, settingsRouter: settingsRouter)
         }
