@@ -107,6 +107,7 @@ public struct MacMusicShell: View {
             if fullscreen { enterSystemFullscreenIfNeeded() }
             return
         }
+        MacUITrace.action("expandPlayer", "fullscreen=\(fullscreen) track=\(model.currentTrack.serverID):\(model.currentTrack.id.rawValue)")
         withAnimation(.spring(duration: 0.42, bounce: 0.0)) {
             playerPresentation = .expanded
         }
@@ -119,6 +120,7 @@ public struct MacMusicShell: View {
 
     private func collapseExpandedPlayer() {
         guard playerPresentation == .expanded else { return }
+        MacUITrace.action("collapsePlayer")
         if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
             window.toggleFullScreen(nil)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -263,14 +265,17 @@ public struct MacMusicShell: View {
 
     private func toggleRightPanel(_ mode: MacRightPanelMode) {
         if showRightPanel && rightPanelMode == mode {
+            MacUITrace.action("closeRightPanel")
             showRightPanel = false
         } else {
+            MacUITrace.action("openRightPanel", mode.rawValue)
             rightPanelMode = mode
             showRightPanel = true
         }
     }
 
     private func presentDiagnostics() {
+        MacUITrace.action("openServerSettings", "fromPlaybackError")
         settingsRouter.selection = .server
         openSettings()
     }

@@ -229,6 +229,7 @@ struct MacSearchView: View {
     private func resultSongRow(_ summary: CatalogTrackSummary) -> some View {
         if let resolved = model.track(for: summary.globalID) {
             Button {
+                MacUITrace.action("playTrack", summary.globalID.description)
                 model.playQueue([resolved])
             } label: {
                 HStack(spacing: 12) {

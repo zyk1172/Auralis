@@ -496,6 +496,7 @@ struct MacExpandedPlayerView: View {
                 MacGlassCapsule {
                     HStack(spacing: 22) {
                         Button {
+                            MacUITrace.action("toggleLyrics", "from=\(String(describing: context))")
                             context = context == .lyrics ? .none : .lyrics
                         } label: {
                             Image(systemName: "quote.bubble")
@@ -506,6 +507,7 @@ struct MacExpandedPlayerView: View {
                         .help("歌词")
                         .accessibilityLabel("歌词")
                         Button {
+                            MacUITrace.action("toggleQueue", "from=\(String(describing: context))")
                             context = context == .queue ? .none : .queue
                         } label: {
                             Image(systemName: "list.bullet")
