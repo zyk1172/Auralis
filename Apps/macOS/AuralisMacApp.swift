@@ -14,7 +14,10 @@ struct AuralisMacApp: App {
         }
         .defaultSize(width: 1280, height: 820)
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .newItem) {
+                Button("新建播放列表") { post(MacCommand.newPlaylist) }
+                    .keyboardShortcut("n", modifiers: .command)
+            }
             CommandMenu("播放") {
                 // Space 播放/暂停唯一入口在 MacMusicShell 的 .onKeyPress(.space)。
                 Button("播放 / 暂停") { post(MacCommand.togglePlay) }

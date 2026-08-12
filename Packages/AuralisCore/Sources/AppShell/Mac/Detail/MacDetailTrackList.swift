@@ -1,5 +1,6 @@
-import Domain
 #if os(macOS)
+import Domain
+
 import DesignSystem
 import LocalCatalog
 import SwiftUI

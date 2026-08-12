@@ -12,11 +12,14 @@ public struct MacMusicShell: View {
     @ObservedObject var themeStore: ThemeStore
 
     @StateObject private var navigation = MacNavigationModel()
+    @StateObject private var sidebarPrefs = MacSidebarPreferences()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var selectedTracks: Set<GlobalID> = []
     @State private var rightPanelMode: MacRightPanelMode = .queue
     @State private var showRightPanel = false
     @State private var getInfoTrack: Track?
+    @State private var isCreatingPlaylist = false
+    @State private var newPlaylistName = ""
 
     @Environment(\.openWindow) private var openWindow
 
@@ -35,7 +38,7 @@ public struct MacMusicShell: View {
 
     private var content: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            MacSidebar(model: model, selection: $navigation.selection) { playlist in
+            MacSidebar(model: model, prefs: sidebarPrefs, selection: $navigation.selection) { playlist in
                 navigation.push(.playlist(MacEntityRouteID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)))
             }
         } detail: {
@@ -132,7 +135,7 @@ public struct MacMusicShell: View {
         case .albums:
             MacAlbumsView(model: model, theme: theme, onNavigate: navigate)
         case .artists:
-            MacArtistsView(model: model, theme: theme, onNavigate: navigate)
+            MacArtistsView(model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate)
         case .genres:
             MacGenresView(model: model, theme: theme, onNavigate: navigate)
         case .favorites:
@@ -275,6 +278,20 @@ public struct MacMusicShell: View {
             } message: {
                 Text(model.playbackError.map { "\($0)" } ?? "未知错误")
             }
+            .alert("新建播放列表", isPresented: $isCreatingPlaylist) {
+                TextField("播放列表名称", text: $newPlaylistName)
+                Button("创建") {
+                    let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    newPlaylistName = ""
+                    guard !name.isEmpty else { return }
+                    Task { _ = await model.createPlaylist(named: name) }
+                }
+                Button("取消", role: .cancel) {
+                    newPlaylistName = ""
+                }
+            } message: {
+                Text("创建一个新的播放列表。")
+            }
     }
 
     private func attachLifecycle(_ view: some View) -> some View {
@@ -342,6 +359,10 @@ public struct MacMusicShell: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.showMiniPlayer)) { _ in
                 openWindow(id: MacWindowID.miniPlayer)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: MacCommand.newPlaylist)) { _ in
+                newPlaylistName = ""
+                isCreatingPlaylist = true
             }
             .onChange(of: navigation.isSearchPresented) { _, presented in
                 if presented {

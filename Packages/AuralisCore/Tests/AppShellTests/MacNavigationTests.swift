@@ -262,3 +262,44 @@ struct MacNavigationTests {
         }
     }
 }
+
+@Suite("Mac sidebar library preferences")
+struct MacSidebarPreferencesTests {
+    @MainActor
+    @Test("默认资料库项全部启用且顺序稳定")
+    func defaultsAllEnabled() {
+        let prefs = MacSidebarPreferences(defaults: UserDefaults(suiteName: "sb-\(UUID().uuidString)")!)
+        let enabled = prefs.enabledDestinations
+        #expect(enabled.contains(.songs))
+        #expect(enabled.contains(.albums))
+        #expect(enabled.first == .recentlyAdded)
+    }
+
+    @MainActor
+    @Test("toggle 显示/隐藏并持久化往返")
+    func togglePersists() {
+        let defaults = UserDefaults(suiteName: "sb-persist-\(UUID().uuidString)")!
+        let prefs = MacSidebarPreferences(defaults: defaults)
+        prefs.toggle(MacSidebarDestination.albums.rawValue)
+        #expect(!prefs.enabledDestinations.contains(.albums))
+
+        // 新实例从同一 UserDefaults 恢复
+        let restored = MacSidebarPreferences(defaults: defaults)
+        #expect(!restored.enabledDestinations.contains(.albums))
+        #expect(restored.enabledDestinations.contains(.songs))
+    }
+
+    @MainActor
+    @Test("move 重新排序并持久化")
+    func movePersists() {
+        let defaults = UserDefaults(suiteName: "sb-move-\(UUID().uuidString)")!
+        let prefs = MacSidebarPreferences(defaults: defaults)
+        // 把「歌曲」移到最前
+        let from = prefs.items.firstIndex { $0.id == MacSidebarDestination.songs.rawValue }!
+        prefs.move(fromOffsets: IndexSet([from]), toOffset: 0)
+        #expect(prefs.items.first?.id == MacSidebarDestination.songs.rawValue)
+
+        let restored = MacSidebarPreferences(defaults: defaults)
+        #expect(restored.items.first?.id == MacSidebarDestination.songs.rawValue)
+    }
+}

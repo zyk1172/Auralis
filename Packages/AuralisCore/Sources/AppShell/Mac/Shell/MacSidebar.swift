@@ -2,12 +2,16 @@
 import Domain
 import SwiftUI
 
-/// 侧边栏：一级目的地 + 播放列表（含「收藏歌曲」智能集合）内联。
-/// 使用系统 `.sidebar` 与系统 accent；不手工涂色。
+/// 侧边栏：首页 + 资料库（可编辑显示/隐藏+排序）+ 播放列表（收藏歌曲 + 用户歌单内联）+ Auralis。
+/// 系统 `.sidebar`；资料库项来自 MacSidebarPreferences。
 struct MacSidebar: View {
     @ObservedObject var model: AuralisAppModel
+    @ObservedObject var prefs: MacSidebarPreferences
     @Binding var selection: MacSidebarDestination?
     var onOpenPlaylist: (Playlist) -> Void = { _ in }
+
+    @State private var isEditingLibrary = false
+    @State private var isHoveringLibrary = false
 
     private var playlists: [Playlist] {
         model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -18,14 +22,15 @@ struct MacSidebar: View {
             Section {
                 sidebarRow(.home)
             }
-            Section("资料库") {
-                sidebarRow(.recentlyAdded)
-                sidebarRow(.recentlyPlayed)
-                sidebarRow(.artists)
-                sidebarRow(.albums)
-                sidebarRow(.songs)
-                sidebarRow(.genres)
-                sidebarRow(.downloads)
+            Section {
+                ForEach(prefs.enabledDestinations) { destination in
+                    sidebarRow(destination)
+                }
+            } header: {
+                libraryHeader
+            }
+            .popover(isPresented: $isEditingLibrary, arrowEdge: .trailing) {
+                MacSidebarLibraryEditor(prefs: prefs)
             }
             Section("播放列表") {
                 sidebarRow(.favorites)
@@ -42,6 +47,20 @@ struct MacSidebar: View {
         }
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
+    }
+
+    private var libraryHeader: some View {
+        HStack {
+            Text("资料库")
+            Spacer()
+            if isHoveringLibrary || isEditingLibrary {
+                Button("编辑") { isEditingLibrary = true }
+                    .buttonStyle(.link)
+                    .help("显示或隐藏资料库项目、拖动排序")
+                    .accessibilityLabel("编辑资料库")
+            }
+        }
+        .onHover { isHoveringLibrary = $0 }
     }
 
     private func sidebarRow(_ item: MacSidebarDestination) -> some View {

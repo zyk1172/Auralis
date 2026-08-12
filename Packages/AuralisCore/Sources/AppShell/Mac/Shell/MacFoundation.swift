@@ -25,6 +25,7 @@ public enum MacCommand {
     public static let showTrackInformation = Notification.Name("auralis.mac.command.showTrackInformation")
     public static let showFullScreenPlayer = Notification.Name("auralis.mac.command.showFullScreenPlayer")
     public static let showMiniPlayer = Notification.Name("auralis.mac.command.showMiniPlayer")
+    public static let newPlaylist = Notification.Name("auralis.mac.command.newPlaylist")
 }
 
 // MARK: - 主内容导航

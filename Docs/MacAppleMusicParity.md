@@ -11,7 +11,7 @@
 | Search（系统 .searchable） | MATCH（已修正） |
 | Full Screen Player（独立窗口 + 全屏） | MATCH（已修正） |
 | Detail 滚动模型（单 ScrollView + TrackRow） | MATCH（已修正） |
-| Sidebar 信息架构 | PARTIAL（已重构，Library Edit 待办） |
+| Sidebar 信息架构 | MATCH（已重构 + Library Edit） |
 | System Appearance（跟随系统，不强制 Theme） | MATCH（已修正） |
 | Media Tiles（Album/Artist/Playlist/Track 分离） | MATCH（已修正） |
 | Playlist mosaic（真实 2×2 去重） | MATCH（已修正） |
@@ -21,8 +21,8 @@
 | Queue 语义（History/Current/Upcoming） | MATCH（已修正） |
 | Get Info（TabView 面板） | MATCH（已修正） |
 | MiniPlayer 独立窗口 | MATCH（已实现） |
-| 菜单 / 快捷键 | PARTIAL（已对齐主要项） |
-| Library Edit（资料库显示/隐藏/排序） | NOT IMPLEMENTED（P2） |
+| 菜单 / 快捷键 | MATCH（含 ⌘N 新建播放列表） |
+| Library Edit（资料库显示/隐藏/排序） | MATCH（已实现，持久化） |
 | Drag to Playlist | NOT IMPLEMENTED（P2） |
 
 ## Round-2 已修正（文件 → 行为）
@@ -45,6 +45,9 @@
 - `MacTrackInfoSheet.swift`：Get Info 改为 TabView（详细信息/插图/歌词/文件/Auralis）。
 - `MacMiniPlayerView.swift`（新）：独立 MiniPlayer 窗口，支持隐藏封面紧凑模式。
 - `AuralisMacApp.swift`：新增 迷你播放器/全屏播放 窗口 Scene；菜单按 播放/歌曲/显示/窗口 分组，快捷键对齐（⌘L、⌥⌘U 队列、⌘I 信息、⌘↑/⌘↓ 音量、⇧⌘F 全屏播放、⌥⌘M 迷你播放器；删除 ⇧⌘Q）。
+- `MacSidebarPreferences.swift`（新）：资料库显示/隐藏 + 拖动排序，UserDefaults 持久化；Sidebar「资料库」hover 出现「编辑」。
+- `MacArtistsView.swift`：艺术家改为资料库内二级 split（左侧紧凑列表 + 右侧详情）。
+- 菜单「文件 → 新建播放列表（⌘N）」：弹窗命名后 `createPlaylist(named:)`。
 
 ## 人工验收
 

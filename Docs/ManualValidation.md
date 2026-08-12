@@ -400,6 +400,10 @@
 
 【步骤】⌥⌘L 打开歌词：普通行 18pt、当前行 23pt 高亮；行距充足；点击 timed 行 seek；自动滚动只在当前行变化时。⌥⌘U 打开队列：正在播放 / 播放下一首 / 历史记录 三段；清空只清待播保留当前；拖动/Delete 只作用待播。⌘I Get Info：TabView 五页（详细信息/插图/歌词/文件/Auralis），Auralis 页含公开音乐三来源与歌曲鉴赏；不显示服务器凭据/私有 URL。
 
+### `MANUAL-VERIFY` Sidebar 编辑 / 新建歌单 / 艺术家 split
+
+【步骤】Sidebar「资料库」hover 出现「编辑」：显示/隐藏 最近添加/艺术家/专辑/歌曲/流派/下载，拖动排序，重启后保持。文件 → 新建播放列表（⌘N）：输入名称创建，Sidebar 播放列表立即出现。艺术家页为左侧列表 + 右侧详情：选择艺术家即显示详情；窄窗口 split 可拖动分隔。
+
 ### `MANUAL-VERIFY` 外观与 Tiles
 
 【步骤】Light/Dark 切换跟随系统（不强制 Theme）；Sidebar/Toolbar/Search/Inspector 用系统材质（Liquid Glass 由系统提供）；Home 最近播放/最近添加显示专辑（去重封面）；收藏为紧凑歌曲列表；Playlist 封面为真实 2×2 mosaic（4 首不同封面）；Album/Artist/Playlist 卡片视觉区分（Artist 圆形/mosaic，非方形专辑卡）。
