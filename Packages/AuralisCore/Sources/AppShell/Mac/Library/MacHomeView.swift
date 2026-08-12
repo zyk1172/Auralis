@@ -13,24 +13,24 @@ struct MacHomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                Text("首页")
-                    .font(.system(size: MacLayout.pageTitleSize, weight: .bold, design: .default))
-                    .accessibilityAddTraits(.isHeader)
-                    .padding(.top, 4)
-
-                albumShelf("最近播放专辑", albums: recentAlbums, seeAll: .recentlyPlayed)
-                albumShelf("最近添加专辑", albums: recentAddedAlbums, seeAll: .recentlyAdded)
-                favoriteList
-                albumShelf("常听专辑", albums: model.homeTopAlbums, seeAll: .albums)
-                artistShelf("常听艺术家", artists: model.homeTopArtists, seeAll: .artists)
-                trackShelf("很久没听", tracks: deduped(model.homeLongUnplayedTracks))
-                trackShelf("从未播放", tracks: deduped(model.homeNeverPlayedTracks))
-                trackShelf("收藏里随便听", tracks: deduped(model.homeFavoriteRandomTracks))
-                playlistShelf("播放列表", seeAll: .playlists)
+            GeometryReader { geo in
+                let homeMetrics = MacArtworkGridMetrics.home(availableWidth: geo.size.width)
+                VStack(alignment: .leading, spacing: 26) {
+                    albumShelf("最近播放专辑", albums: recentAlbums, seeAll: .recentlyPlayed, metrics: homeMetrics)
+                    albumShelf("最近添加专辑", albums: recentAddedAlbums, seeAll: .recentlyAdded, metrics: homeMetrics)
+                    favoriteList
+                    albumShelf("常听专辑", albums: model.homeTopAlbums, seeAll: .albums, metrics: homeMetrics)
+                    artistShelf("常听艺术家", artists: model.homeTopArtists, seeAll: .artists, metrics: homeMetrics)
+                    trackShelf("很久没听", tracks: deduped(model.homeLongUnplayedTracks), metrics: homeMetrics)
+                    trackShelf("从未播放", tracks: deduped(model.homeNeverPlayedTracks), metrics: homeMetrics)
+                    trackShelf("收藏里随便听", tracks: deduped(model.homeFavoriteRandomTracks), metrics: homeMetrics)
+                    playlistShelf("播放列表", seeAll: .playlists, metrics: homeMetrics)
+                }
+                .padding(.horizontal, homeMetrics.horizontalPadding)
+                .padding(.top, 32)
+                .padding(.bottom, 120)
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 28)
+            .frame(minHeight: 700)
         }
     }
 
@@ -75,9 +75,10 @@ struct MacHomeView: View {
 
     // MARK: - Shelves
 
-    private func trackShelf(_ title: String, tracks: [Track]) -> some View {
+    private func trackShelf(_ title: String, tracks: [Track], metrics: MacArtworkGridMetrics) -> some View {
         let items = Array(tracks.prefix(14))
         guard !items.isEmpty else { return AnyView(EmptyView()) }
+        let size = min(150, metrics.itemWidth)
         return AnyView(
             VStack(alignment: .leading, spacing: 12) {
                 MacSectionHeader(title: title)
@@ -88,6 +89,7 @@ struct MacHomeView: View {
                                 track: track,
                                 model: model,
                                 theme: theme,
+                                size: size,
                                 onOpen: { model.selectAndPlay(track) },
                                 onPlay: { model.selectAndPlay(track) },
                                 moreActions: trackMenuActions(track)
@@ -100,21 +102,23 @@ struct MacHomeView: View {
         )
     }
 
-    private func albumShelf(_ title: String, albums: [Album], seeAll: MacSidebarDestination?) -> some View {
+    private func albumShelf(_ title: String, albums: [Album], seeAll: MacSidebarDestination?, metrics: MacArtworkGridMetrics) -> some View {
         let items = Array(albums.prefix(14))
         guard !items.isEmpty else { return AnyView(EmptyView()) }
+        let size = min(210, metrics.itemWidth)
         return AnyView(
             VStack(alignment: .leading, spacing: 12) {
                 MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : "查看全部") {
                     if let seeAll { onNavigate(.sidebar(seeAll)) }
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 20) {
+                    LazyHStack(alignment: .top, spacing: 24) {
                         ForEach(items) { album in
                             MacAlbumTile(
                                 album: album,
                                 model: model,
                                 theme: theme,
+                                size: size,
                                 onOpen: { onNavigate(.album(album)) },
                                 onPlay: { model.playQueue(MacLibraryQuery.albumTracks(album, model: model)) },
                                 moreActions: albumMoreActions(album)
@@ -127,9 +131,10 @@ struct MacHomeView: View {
         )
     }
 
-    private func artistShelf(_ title: String, artists: [Artist], seeAll: MacSidebarDestination?) -> some View {
+    private func artistShelf(_ title: String, artists: [Artist], seeAll: MacSidebarDestination?, metrics: MacArtworkGridMetrics) -> some View {
         let items = Array(artists.prefix(14))
         guard !items.isEmpty else { return AnyView(EmptyView()) }
+        let size = min(170, metrics.itemWidth)
         return AnyView(
             VStack(alignment: .leading, spacing: 12) {
                 MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : "查看全部") {
@@ -142,6 +147,7 @@ struct MacHomeView: View {
                                 artist: artist,
                                 model: model,
                                 theme: theme,
+                                size: size,
                                 onOpen: { onNavigate(.artist(artist)) },
                                 onPlay: {
                                     let tracks = MacLibraryQuery.artistTracks(artist, model: model)
@@ -156,21 +162,23 @@ struct MacHomeView: View {
         )
     }
 
-    private func playlistShelf(_ title: String, seeAll: MacSidebarDestination?) -> some View {
+    private func playlistShelf(_ title: String, seeAll: MacSidebarDestination?, metrics: MacArtworkGridMetrics) -> some View {
         let playlists = model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         guard !playlists.isEmpty else { return AnyView(EmptyView()) }
+        let size = min(210, metrics.itemWidth)
         return AnyView(
             VStack(alignment: .leading, spacing: 12) {
                 MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : "查看全部") {
                     if let seeAll { onNavigate(.sidebar(seeAll)) }
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 20) {
+                    LazyHStack(alignment: .top, spacing: 24) {
                         ForEach(playlists.prefix(14)) { playlist in
                             MacPlaylistTile(
                                 playlist: playlist,
                                 model: model,
                                 theme: theme,
+                                size: size,
                                 onOpen: { onNavigate(.playlist(playlist)) },
                                 onPlay: {
                                     let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)

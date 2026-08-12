@@ -2,24 +2,20 @@
 import Domain
 import SwiftUI
 
-/// 侧边栏：首页 + 资料库（可编辑显示/隐藏+排序）+ 播放列表（收藏歌曲 + 用户歌单内联）+ Auralis。
-/// 系统 `.sidebar`；资料库项来自 MacSidebarPreferences。
+/// 侧边栏（REFERENCE_A）：顶部 搜索/主页；资料库（可编辑显示/隐藏+排序）；
+/// 播放列表 = 收藏歌曲 + 所有播放列表（不再把每个用户歌单铺进 Sidebar）；Auralis 扩展区。
 struct MacSidebar: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var prefs: MacSidebarPreferences
     @Binding var selection: MacSidebarDestination?
-    var onOpenPlaylist: (Playlist) -> Void = { _ in }
 
     @State private var isEditingLibrary = false
     @State private var isHoveringLibrary = false
 
-    private var playlists: [Playlist] {
-        model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
     var body: some View {
         List(selection: $selection) {
             Section {
+                sidebarRow(.search)
                 sidebarRow(.home)
             }
             Section {
@@ -34,9 +30,7 @@ struct MacSidebar: View {
             }
             Section("播放列表") {
                 sidebarRow(.favorites)
-                ForEach(playlists) { playlist in
-                    sidebarRow(playlist)
-                }
+                sidebarRow(.playlists)
             }
             Section("Auralis") {
                 sidebarRow(.categories)
@@ -46,7 +40,7 @@ struct MacSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
+        .navigationSplitViewColumnWidth(min: 210, ideal: 260, max: 300)
     }
 
     private var libraryHeader: some View {
@@ -66,30 +60,6 @@ struct MacSidebar: View {
     private func sidebarRow(_ item: MacSidebarDestination) -> some View {
         Label(item.title, systemImage: item.symbol)
             .tag(item)
-    }
-
-    private func sidebarRow(_ playlist: Playlist) -> some View {
-        Button {
-            onOpenPlaylist(playlist)
-        } label: {
-            Label(playlist.name, systemImage: "music.note.list")
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("播放") {
-                let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
-                if !tracks.isEmpty { model.playQueue(tracks) }
-            }
-            Button("随机播放") {
-                let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
-                if !tracks.isEmpty { model.playShuffledQueue(tracks) }
-            }
-            Divider()
-            Button("删除歌单", role: .destructive) {
-                Task { _ = await model.deletePlaylist(id: playlist.id) }
-            }
-        }
     }
 }
 #endif

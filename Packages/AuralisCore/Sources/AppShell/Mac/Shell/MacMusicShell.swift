@@ -5,8 +5,9 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
-/// macOS 主窗口 Shell：系统 Sidebar + 主内容 NavigationStack + 右侧 Lyrics/Queue 面板
-/// + 底部播放条。搜索使用系统 `.searchable`；外观跟随系统（不强制 Theme color scheme）。
+/// macOS 主窗口 Shell（REFERENCE_A）：
+/// Sidebar（含 搜索 一级页） + 主内容 NavigationStack + 悬浮 Liquid Glass 播放器（detail overlay）+ 右侧 Lyrics/Queue 面板。
+/// 全局 Toolbar 不再放 Player 控制；每页提供自己的上下文 Toolbar 与本地搜索。
 public struct MacMusicShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
@@ -38,58 +39,31 @@ public struct MacMusicShell: View {
 
     private var content: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            MacSidebar(model: model, prefs: sidebarPrefs, selection: $navigation.selection) { playlist in
-                navigation.push(.playlist(MacEntityRouteID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)))
-            }
+            MacSidebar(model: model, prefs: sidebarPrefs, selection: $navigation.selection)
         } detail: {
-            NavigationStack(path: $navigation.path) {
-                detailContent
-                    .navigationDestination(for: MacDetailRoute.self) { route in
-                        detailRouteView(route)
-                    }
-            }
-            .navigationTitle(currentTitle)
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        toggleRightPanel(.lyrics)
-                    } label: {
-                        Image(systemName: "quote.bubble")
-                    }
-                    .help("歌词")
-                    .accessibilityLabel("歌词")
-                    Button {
-                        toggleRightPanel(.queue)
-                    } label: {
-                        Image(systemName: "list.bullet")
-                    }
-                    .help("队列")
-                    .accessibilityLabel("队列")
+            ZStack(alignment: .bottom) {
+                NavigationStack(path: $navigation.path) {
+                    detailContent
+                        .navigationDestination(for: MacDetailRoute.self) { route in
+                            detailRouteView(route)
+                        }
                 }
+                .navigationTitle(currentTitle)
+                .contentMargins(.bottom, 120, for: .scrollContent)
+
+                MacFloatingPlayerBar(
+                    model: model,
+                    theme: theme,
+                    onOpenFullPlayer: { post(MacCommand.showFullScreenPlayer) },
+                    onOpenMiniPlayer: { post(MacCommand.showMiniPlayer) },
+                    onToggleLyrics: { toggleRightPanel(.lyrics) },
+                    onToggleQueue: { toggleRightPanel(.queue) }
+                )
+                .padding(.horizontal, 64)
+                .padding(.bottom, 22)
             }
             .inspector(isPresented: $showRightPanel) {
                 MacRightPanel(model: model, theme: theme, mode: rightPanelMode)
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            MacPlayerBar(
-                model: model,
-                theme: theme,
-                onOpenNowPlaying: { post(MacCommand.revealNowPlaying) },
-                onToggleLyrics: { toggleRightPanel(.lyrics) },
-                onToggleQueue: { toggleRightPanel(.queue) }
-            )
-        }
-        .searchable(
-            text: $navigation.searchQuery,
-            isPresented: $navigation.isSearchPresented,
-            placement: .toolbar,
-            prompt: "搜索歌曲、专辑、艺术家和歌单"
-        )
-        .onSubmit(of: .search) {
-            let trimmed = navigation.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                model.recordSearch(trimmed)
             }
         }
         .environment(model.artworkStore)
@@ -100,24 +74,9 @@ public struct MacMusicShell: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if navigation.isSearching {
-            MacSearchView(
-                model: model,
-                theme: theme,
-                query: navigation.searchQuery,
-                onNavigate: navigate,
-                onSelectRecent: { term in
-                    navigation.selectRecentSearch(term)
-                }
-            )
-        } else {
-            sidebarContent(navigation.selection)
-        }
-    }
-
-    @ViewBuilder
-    private func sidebarContent(_ selection: MacSidebarDestination?) -> some View {
-        switch selection {
+        switch navigation.selection {
+        case .search:
+            MacSearchView(model: model, theme: theme, onNavigate: navigate)
         case .home:
             MacHomeView(model: model, theme: theme, onNavigate: navigate)
         case .recentlyPlayed:
@@ -188,15 +147,12 @@ public struct MacMusicShell: View {
             } else {
                 ContentUnavailableView("流派不可用", systemImage: "music.quarternote.3", description: Text("这个流派不在当前资料库中。"))
             }
-        case .nowPlaying:
-            MacNowPlayingView(model: model, theme: theme)
         }
     }
 
     private var currentTitle: String {
         if let route = navigation.path.last {
             switch route {
-            case .nowPlaying: return "正在播放"
             case let .album(id): return resolveAlbum(id)?.title ?? "专辑"
             case let .artist(id): return resolveArtist(id)?.name ?? "艺术家"
             case let .playlist(id): return resolvePlaylist(id)?.name ?? "播放列表"
@@ -258,7 +214,16 @@ public struct MacMusicShell: View {
         }
     }
 
-    // MARK: - 修饰器拆分（降低类型检查复杂度）
+    /// 定位当前歌曲：进入「歌曲」一级页并选中当前曲目（不再打开空白的普通 Now Playing 页）。
+    private func revealCurrentSong() {
+        navigation.selectSidebar(.songs)
+        if model.hasCurrentTrack {
+            let gid = GlobalID(serverID: model.currentTrack.serverID, remoteID: model.currentTrack.id.rawValue)
+            selectedTracks = [gid]
+        }
+    }
+
+    // MARK: - 修饰器拆分
 
     private func attachModals(_ view: some View) -> some View {
         view
@@ -302,20 +267,15 @@ public struct MacMusicShell: View {
             .onChange(of: navigation.selection) { _, _ in
                 selectedTracks = []
                 navigation.path.removeAll()
-                // 用户点击 Sidebar 一级项：退出搜索，恢复普通内容。
-                if navigation.isSearching {
-                    navigation.isSearchPresented = false
-                    navigation.searchQuery = ""
-                }
             }
             .onChange(of: selectedTracks) { _, newValue in
                 if !newValue.isEmpty { showRightPanel = false }
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.search)) { _ in
-                navigation.isSearchPresented = true
+                navigation.selectSidebar(.search)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.revealNowPlaying)) { _ in
-                navigation.push(.nowPlaying)
+                revealCurrentSong()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.toggleSidebar)) { _ in
                 withAnimation {
@@ -363,11 +323,6 @@ public struct MacMusicShell: View {
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.newPlaylist)) { _ in
                 newPlaylistName = ""
                 isCreatingPlaylist = true
-            }
-            .onChange(of: navigation.isSearchPresented) { _, presented in
-                if presented {
-                    navigation.searchReturnDestination = navigation.selection
-                }
             }
             // Space / Return / ← / →：输入框内放行；其余状态播放控制。
             .onKeyPress(.space) {

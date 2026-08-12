@@ -33,12 +33,12 @@ final class MacSidebarPreferences: ObservableObject {
 
     private static let defaultItems: [Item] = [
         Item(id: MacSidebarDestination.recentlyAdded.rawValue, title: "最近添加", symbol: "tray.and.arrow.down", enabled: true),
-        Item(id: MacSidebarDestination.recentlyPlayed.rawValue, title: "最近播放", symbol: "clock", enabled: true),
         Item(id: MacSidebarDestination.artists.rawValue, title: "艺术家", symbol: "person.2", enabled: true),
         Item(id: MacSidebarDestination.albums.rawValue, title: "专辑", symbol: "square.stack", enabled: true),
         Item(id: MacSidebarDestination.songs.rawValue, title: "歌曲", symbol: "music.note", enabled: true),
         Item(id: MacSidebarDestination.genres.rawValue, title: "流派", symbol: "music.quarternote.3", enabled: true),
-        Item(id: MacSidebarDestination.downloads.rawValue, title: "下载", symbol: "arrow.down.circle", enabled: true)
+        Item(id: MacSidebarDestination.downloads.rawValue, title: "下载", symbol: "arrow.down.circle", enabled: true),
+        Item(id: MacSidebarDestination.recentlyPlayed.rawValue, title: "最近播放", symbol: "clock", enabled: true)
     ]
 
     /// 当前启用的资料库目的地（按用户排序）。

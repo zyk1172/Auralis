@@ -33,6 +33,7 @@ public enum MacCommand {
 /// Sidebar 一级目的地。与可推入的 Detail Route 分离：
 /// 一级页面切换 selection、清空 path；实体详情才 push。
 enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
+    case search
     case home
     case recentlyPlayed
     case recentlyAdded
@@ -52,6 +53,7 @@ enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .search: "搜索"
         case .home: "首页"
         case .recentlyPlayed: "最近播放"
         case .recentlyAdded: "最近添加"
@@ -71,6 +73,7 @@ enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .search: "magnifyingglass"
         case .home: "house"
         case .recentlyPlayed: "clock"
         case .recentlyAdded: "tray.and.arrow.down"
@@ -102,7 +105,6 @@ enum MacDetailRoute: Hashable {
     case artist(MacEntityRouteID)
     case playlist(MacEntityRouteID)
     case genre(String)
-    case nowPlaying
 }
 
 /// 页面发起的统一导航目标。
@@ -142,12 +144,6 @@ final class MacNavigationModel: ObservableObject {
 
     /// 实体详情：push 到主内容栈，不改一级 selection。
     func push(_ route: MacDetailRoute) {
-        if case .nowPlaying = route {
-            if !path.contains(.nowPlaying) {
-                path.append(route)
-            }
-            return
-        }
         path.append(route)
     }
 

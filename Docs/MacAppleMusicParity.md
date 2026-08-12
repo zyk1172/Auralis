@@ -54,3 +54,14 @@
 ## 人工验收
 
 逐页 Structure / Density / System Controls / Cards / Typography / Resize / Keyboard / Hover / Light-Dark 清单见 `Docs/ManualValidation.md` → “Mac Apple Music Parity”。
+
+## Round-3 Visual Parity（REFERENCE_A/B）
+
+- Sidebar：+搜索一级页；播放列表不再内联；ideal 260。
+- 搜索架构：全局搜索为 Sidebar 页（自带 .searchable）；专辑/歌曲/艺术家/播放列表各自本地搜索（「在专辑中查找」等）。
+- Albums：响应式大封面 Grid（detail≈1268 → 4 列 ≈276pt）；Toolbar inline 标题 + 排序 + 本地搜索；无内容大标题。
+- Placeholder：Mac 默认灰色 music note（macMusic），无 Navidrome 图。
+- Floating Player：悬浮 Liquid Glass 胶囊，只位于 Main Content 上方；Toolbar 全局 Lyrics/Queue 移除。
+- Full Player：按 REFERENCE_B 重排（Artwork≈31% 宽、左列 TrackInfo/Progress/Transport、右区 Lyrics/Queue 常驻、三组 Glass Capsule、全窗 ambience、透明 titlebar、enterFullScreenIfNeeded）。
+- MacNowPlayingView 退役；⌘L 定位当前歌曲。
+- 视觉状态一律 MANUAL-VISUAL-VERIFY（见 Docs/MacVisualParity.md）。
