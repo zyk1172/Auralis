@@ -62,6 +62,10 @@ public struct MacMusicShell: View {
             }
         }
         .toolbarVisibility(playerPresentation == .expanded ? .hidden : .automatic, for: .windowToolbar)
+        // 环境注入放到 ZStack 层：libraryUI 与同窗口 Expanded Player 都能继承
+        // ArtworkStore / ThemeStore（否则 Expanded 内的 ArtworkView 强解包崩溃）。
+        .environment(model.artworkStore)
+        .environmentObject(themeStore)
     }
 
     // MARK: - 普通资料库 UI
@@ -96,8 +100,6 @@ public struct MacMusicShell: View {
                 MacRightPanel(model: model, theme: theme, mode: rightPanelMode)
             }
         }
-        .environment(model.artworkStore)
-        .environmentObject(themeStore)
     }
 
     // MARK: - 播放器展开 / 收起（同窗口）
