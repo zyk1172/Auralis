@@ -419,6 +419,20 @@ public struct AgentRunner {
                         presentation.applySearchFallback()
                     }
                     presentation.applyAlbumFallbackIfNeeded()
+                    // 纯推荐任务：repair 一次后模型仍没调用 result_present_tracks 时，
+                    // Runtime 做确定性兜底——按用户要求数量（默认 5）从候选里取，绝不泄漏整个候选池。
+                    if intent == .musicDiscovery,
+                       presentation.resolvedFinalCards.isEmpty,
+                       !presentation.candidateOrder.isEmpty,
+                       presentation.disambiguationTracks.isEmpty {
+                        let target = max(ws.targetQueueCount ?? 5, 1)
+                        let chosen = Array(presentation.candidateOrder.prefix(target))
+                        let cards = chosen.compactMap { presentation.candidateTracks[$0] }
+                        if !cards.isEmpty {
+                            presentation.setFinalTracks(cards)
+                            taskState.selectedIDs = Set(cards.map { $0.globalID.description })
+                        }
+                    }
                     if let finalMessage = presentation.finalMessage() {
                         await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
                     }

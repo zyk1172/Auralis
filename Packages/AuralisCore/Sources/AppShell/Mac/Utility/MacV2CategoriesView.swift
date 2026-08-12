@@ -85,7 +85,11 @@ struct MacV2CategoriesView: View {
             categories = []
             return
         }
-        categories = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(serverID: serverID)) ?? []
+        // 父页面只加载有界固定维度；AI 标签由 tag 维度面板按需分页。
+        categories = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(
+            serverID: serverID,
+            dimensions: RecommendationIndexV2.fixedDimensions
+        )) ?? []
     }
 }
 

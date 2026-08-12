@@ -404,15 +404,19 @@ struct LibraryView: View {
             return
         }
         isLoadingRecommendationCategories = true
-        let all = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(serverID: serverID)) ?? []
-        recommendationCategories = all.filter { $0.dimension != "tag" }
-        aiTags = all.filter { $0.dimension == "tag" }
-        aiTagsExhausted = aiTags.count < 500
+        // 固定维度一次读取（数量有界）；开放语义标签单独分页（tag_catalog），
+        // 避免 5000 个 AI 标签一次读进内存。
+        recommendationCategories = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(
+            serverID: serverID,
+            dimensions: RecommendationIndexV2.fixedDimensions
+        )) ?? []
         isLoadingRecommendationCategories = false
+        await loadAITags(reset: true)
     }
 
     private func loadAITags(reset: Bool) async {
         guard let serverID = model.catalog.activeAccount?.id else { return }
+        if reset { aiTagLimit = 30 }
         let query = aiTagSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let fetched = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
             serverID: serverID, query: query.isEmpty ? nil : query, limit: aiTagLimit
@@ -420,7 +424,6 @@ struct LibraryView: View {
         aiTags = fetched
         aiTagsExhausted = fetched.count < aiTagLimit
         isLoadingMoreTags = false
-        _ = reset
     }
 
     private func loadMoreAITags() async {

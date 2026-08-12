@@ -257,9 +257,11 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
     public let pendingTracks: Int
     public let rulesVersion: String
     public let semanticTagRulesVersion: Int
-    /// 已有开放语义标签（dimension='tag'）的歌曲数。
+    /// 已有开放语义标签行（dimension='tag'）的歌曲数。
     public let semanticTaggedTracks: Int
-    /// 尚缺开放语义标签的歌曲数。
+    /// 已按当前 semanticTagRulesVersion 处理过语义标签的歌曲数（处理结果可为 0 个标签）。
+    public let semanticProcessedTracks: Int
+    /// 尚需处理开放语义标签的歌曲数（semanticTagRulesVersion 低于当前版本）。
     public let pendingSemanticTagTracks: Int
 
     public init(
@@ -269,6 +271,7 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
         rulesVersion: String,
         semanticTagRulesVersion: Int = RecommendationIndexV2.semanticTagRulesVersion,
         semanticTaggedTracks: Int = 0,
+        semanticProcessedTracks: Int = 0,
         pendingSemanticTagTracks: Int = 0
     ) {
         self.totalTracks = totalTracks
@@ -277,6 +280,7 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
         self.rulesVersion = rulesVersion
         self.semanticTagRulesVersion = semanticTagRulesVersion
         self.semanticTaggedTracks = semanticTaggedTracks
+        self.semanticProcessedTracks = semanticProcessedTracks
         self.pendingSemanticTagTracks = pendingSemanticTagTracks
     }
 }

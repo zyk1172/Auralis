@@ -935,6 +935,9 @@ struct AgentPermissiveRuntimeTests {
             req.messages.contains { $0.role == .user && $0.content.contains("result_present_tracks") }
         }
         #expect(repairSeen)
+        // 模型仍不调用 result_present_tracks → Runtime 确定性兜底：按用户要求数量（1 首）建立 final。
+        let groups = await collector.trackCardGroupCounts()
+        #expect(groups == [1])
     }
 
     // MARK: - TEST 23 / 24：隐私与凭据

@@ -18,6 +18,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
         try createSchema()
         try cleanupOrphanedSyncState()
         // 开放语义标签已恢复（dimension='tag'）：不再清理任何非固定维度，保留全部标签。
+        // 幂等归并历史标签变体为 canonical（Lo-fi/LO-FI → Lo-fi），保证数量与点击结果一致。
+        try recommendationIndexV2MigrateSemanticCanonical()
     }
 
     /// Canonical on-device catalog location shared by the app and extensions.

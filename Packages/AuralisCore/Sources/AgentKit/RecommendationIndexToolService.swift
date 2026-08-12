@@ -24,7 +24,7 @@ enum RecommendationIndexToolService {
         switch call.name {
         case "library_index_v2_status":
             let status = try await catalog.recommendationIndexV2Status(serverID: serverID)
-            let text = "推荐索引 V2：共 \(status.totalTracks) 首；已完成固定分类 \(status.indexedTracks) 首；待分类 \(status.pendingTracks) 首；已有开放语义标签 \(status.semanticTaggedTracks) 首；待补开放标签 \(status.pendingSemanticTagTracks) 首；规则版本 \(status.rulesVersion)；语义标签规则版本 \(status.semanticTagRulesVersion)。"
+            let text = "推荐索引 V2：共 \(status.totalTracks) 首；已完成固定分类 \(status.indexedTracks) 首；固定分类待处理 \(status.pendingTracks) 首；已处理语义标签 \(status.semanticProcessedTracks) 首（其中生成标签 \(status.semanticTaggedTracks) 首）；语义标签待处理 \(status.pendingSemanticTagTracks) 首；规则版本 \(status.rulesVersion)；语义标签规则版本 \(status.semanticTagRulesVersion)。"
             return .ok(call, descriptor, text, .text(text), facts: statusFacts(status, nextBatchAvailable: false))
 
         case "library_index_v2_read":
@@ -109,16 +109,17 @@ enum RecommendationIndexToolService {
 
             let text: String
             var nextBatchAvailable = false
-            if status.pendingTracks > 0 {
+            // 固定分类或开放语义标签任一仍有待处理项 → 自动续批；两者都为 0 才是真正完成。
+            if status.pendingTracks > 0 || status.pendingSemanticTagTracks > 0 {
                 let nextBatch = try await catalog.nextRecommendationIndexV2Batch(serverID: serverID, limit: 80)
                 nextBatchAvailable = !nextBatch.tracks.isEmpty
                 let payload = String(decoding: try JSONEncoder().encode(nextBatch.tracks), as: UTF8.self)
                 let modeHint = nextBatch.mode == "semanticTagsOnly"
                     ? "本批只补开放语义标签（mode=\"semanticTagsOnly\"），不要改动固定维度。"
                     : "本批完整分类（mode=\"full\"）。"
-                text = "已写入 \(written) 首。尚待分类 \(status.pendingTracks) 首。下一批 \(nextBatch.tracks.count) 首已直接提供（本批模式：\(nextBatch.mode)）；不要调用 library_index_v2_next_batch，也不要输出自然语言。\(modeHint) 请立刻只根据下列元数据生成结构化 items 数组，并调用 library_index_v2_write_batch(items=该数组)：\n\(payload)"
+                text = "已写入 \(written) 首。固定分类待处理 \(status.pendingTracks) 首；开放语义标签待处理 \(status.pendingSemanticTagTracks) 首。下一批 \(nextBatch.tracks.count) 首已直接提供（本批模式：\(nextBatch.mode)）；不要调用 library_index_v2_next_batch，也不要输出自然语言。\(modeHint) 请立刻只根据下列元数据生成结构化 items 数组，并调用 library_index_v2_write_batch(items=该数组)：\n\(payload)"
             } else {
-                text = "已写入 \(written) 首。尚待分类 0 首。索引 V2 已完成。"
+                text = "已写入 \(written) 首。固定分类待处理 0 首；开放语义标签待处理 0 首。索引 V2 已完成。"
             }
             return .ok(
                 call,

@@ -50,12 +50,14 @@ extension LocalCatalogStore {
             snapshot.states[line.id]?.hash == recommendationIndexV2ContentHash(line)
         }.count
         let pendingSemantic = try recommendationIndexV2SemanticPendingIDs(snapshot: snapshot, serverID: serverID)
+        let tagged = try recommendationIndexV2SemanticTaggedIDs(serverID: serverID)
         return RecommendationIndexV2Status(
             totalTracks: snapshot.lines.count,
             indexedTracks: indexed,
             pendingTracks: snapshot.lines.count - indexed,
             rulesVersion: RecommendationIndexV2.rulesVersion,
-            semanticTaggedTracks: snapshot.lines.count - pendingSemantic.count,
+            semanticTaggedTracks: tagged.count,
+            semanticProcessedTracks: snapshot.lines.count - pendingSemantic.count,
             pendingSemanticTagTracks: pendingSemantic.count
         )
     }
@@ -113,19 +115,71 @@ extension LocalCatalogStore {
         return counts.mapValues { $0.display }
     }
 
-    /// 语义标签待补的曲目：固定分类已完成（hash 匹配）但尚未按当前 semanticTagRulesVersion
-    /// 生成开放标签（没有 tag 行，或语义标签规则版本过期）。
+    /// 幂等迁移：把历史 dimension='tag' 变体（Lo-fi / LO-FI / lo-fi）按 normalized key 归并成
+    /// 单一 canonical display，重写数据库 value（重复行经 PRIMARY KEY 合并）。
+    /// 迁移后数据库内部即 canonical：tag_catalog 显示数量与 recommendationIndexV2Tracks
+    /// 点击结果完全一致，不只在 UI 读取层打补丁。nonisolated 以便在 Store 初始化时同步执行。
+    nonisolated func recommendationIndexV2MigrateSemanticCanonical() throws {
+        let rows = try db.query(
+            "SELECT global_id, value, confidence FROM recommendation_index_v2_tags WHERE dimension = 'tag'"
+        )
+        guard !rows.isEmpty else { return }
+        // 全局 canonical：normalizedKey → 使用最多的展示值。
+        var counts: [String: (display: String, count: Int)] = [:]
+        for row in rows {
+            guard let raw = row["value"]?.string,
+                  let canonical = RecommendationIndexV2.normalizeSemanticTag(raw)
+            else { continue }
+            let key = RecommendationIndexV2.semanticTagKey(canonical)
+            let current = counts[key] ?? (canonical, 0)
+            let count = current.count + 1
+            if count > current.count || (count == current.count && canonical < current.display) {
+                counts[key] = (canonical, count)
+            } else {
+                counts[key] = (current.display, count)
+            }
+        }
+        // 每首歌每个 normalizedKey 只保留一条：canonical display + 该 key 内最大 confidence。
+        var byTrack: [String: [String: (display: String, confidence: Double)]] = [:]
+        for row in rows {
+            guard let id = row["global_id"]?.string,
+                  let raw = row["value"]?.string,
+                  let canonical = RecommendationIndexV2.normalizeSemanticTag(raw)
+            else { continue }
+            let key = RecommendationIndexV2.semanticTagKey(canonical)
+            let display = counts[key]?.display ?? canonical
+            let confidence = max(
+                row["confidence"]?.double ?? 0,
+                byTrack[id]?[key]?.confidence ?? 0
+            )
+            byTrack[id, default: [:]][key] = (display, confidence)
+        }
+        try db.transaction {
+            for (id, merged) in byTrack {
+                try db.run(
+                    "DELETE FROM recommendation_index_v2_tags WHERE global_id = ? AND dimension = 'tag'",
+                    [.text(id)]
+                )
+                for (_, item) in merged {
+                    try db.run(
+                        "INSERT OR REPLACE INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
+                        [.text(id), .text(item.display), .real(item.confidence)]
+                    )
+                }
+            }
+        }
+    }
+
+    /// 语义标签待补的曲目：尚未按当前 semanticTagRulesVersion 处理过（版本低于当前）。
+    /// 「处理过」= 该曲目已按本版本语义标签规则跑过一次，即使结果是没有标签（信息不足时不强造标签）。
     func recommendationIndexV2SemanticPendingIDs(
         snapshot: (lines: [CatalogTrackLine], states: [String: RecommendationIndexV2StoredState]),
         serverID: ServerID?
     ) throws -> Set<String> {
-        let tagged = try recommendationIndexV2SemanticTaggedIDs(serverID: serverID)
         var pending = Set<String>()
         for line in snapshot.lines {
-            guard snapshot.states[line.id]?.hash == recommendationIndexV2ContentHash(line) else { continue }
-            let hasTags = tagged.contains(line.id)
-            let versionOK = (snapshot.states[line.id]?.semanticTagRulesVersion ?? 0) >= RecommendationIndexV2.semanticTagRulesVersion
-            if !hasTags || !versionOK {
+            let version = snapshot.states[line.id]?.semanticTagRulesVersion ?? 0
+            if version < RecommendationIndexV2.semanticTagRulesVersion {
                 pending.insert(line.id)
             }
         }
@@ -314,22 +368,32 @@ extension LocalCatalogStore {
         .map { $0 }
     }
 
-    /// 返回资料库「分类」页所需的全部 V2 标签及各自歌曲数。
+    /// 返回资料库「分类」页所需的 V2 标签及各自歌曲数。
+    /// `dimensions` 非空时只返回指定维度（例如固定维度），用于避免把全部开放语义标签
+    /// 一次读进内存；开放标签用 `recommendationIndexV2TagCatalog` 按需分页。
     /// 与推荐查询保持同一可见范围：当前规则版本、当前服务器，且不暴露歌词/路径/播放地址。
-    public func recommendationIndexV2Categories(serverID: ServerID?) throws -> [RecommendationIndexV2Category] {
-        let rows = try db.query(
-            """
+    public func recommendationIndexV2Categories(
+        serverID: ServerID?,
+        dimensions: Set<String>? = nil
+    ) throws -> [RecommendationIndexV2Category] {
+        var sql = """
             SELECT t.dimension, t.value, COUNT(DISTINCT t.global_id) AS track_count
             FROM recommendation_index_v2_tags t
             JOIN recommendation_index_v2_state s ON s.global_id = t.global_id
             WHERE s.rules_version = ?
-            \(serverID == nil ? "" : "AND s.server_id = ?")
-            GROUP BY t.dimension, t.value
-            ORDER BY track_count DESC, t.dimension ASC, t.value ASC
-            """,
-            serverID.map { [.text(RecommendationIndexV2.rulesVersion), .text($0.rawValue)] }
-                ?? [.text(RecommendationIndexV2.rulesVersion)]
-        )
+        """
+        var values: [SQLiteValue] = [.text(RecommendationIndexV2.rulesVersion)]
+        if let serverID {
+            sql += " AND s.server_id = ?"
+            values.append(.text(serverID.rawValue))
+        }
+        if let dimensions, !dimensions.isEmpty {
+            let placeholders = dimensions.sorted().map { _ in "?" }.joined(separator: ",")
+            sql += " AND t.dimension IN (\(placeholders))"
+            values.append(contentsOf: dimensions.sorted().map { SQLiteValue.text($0) })
+        }
+        sql += " GROUP BY t.dimension, t.value ORDER BY track_count DESC, t.dimension ASC, t.value ASC"
+        let rows = try db.query(sql, values)
         return rows.compactMap { row in
             guard let dimension = row["dimension"]?.string,
                   let value = row["value"]?.string,
