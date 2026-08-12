@@ -12,6 +12,7 @@ struct MacSearchView: View {
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     @State private var query = ""
+    @State private var isSearchPresented = false
     @State private var state: MacSearchState = .idle
     @State private var tracks: [CatalogTrackSummary] = []
     @State private var albums: [CatalogAlbumSummary] = []
@@ -50,7 +51,11 @@ struct MacSearchView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .searchable(text: $query, placement: .toolbar, prompt: "搜索")
+        .searchable(text: $query, isPresented: $isSearchPresented, placement: .toolbar, prompt: "搜索")
+        .onAppear {
+            // 进入 Search 页（含 ⌘F）时呈现并聚焦系统搜索框。
+            isSearchPresented = true
+        }
         .onSubmit(of: .search) {
             let trimmed = trimmedQuery
             if !trimmed.isEmpty { model.recordSearch(trimmed) }
