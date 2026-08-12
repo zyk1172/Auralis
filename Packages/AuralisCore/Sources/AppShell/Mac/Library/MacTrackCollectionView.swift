@@ -44,7 +44,6 @@ struct MacTrackCollectionView: View {
                     showAlbumColumn: true,
                     showYearColumn: true,
                     showGenreColumn: false,
-                    showFormatColumn: false,
                     showArtwork: true
                 )
             }
@@ -84,7 +83,6 @@ struct MacDislikedView: View {
                     onNavigate: onNavigate,
                     numberText: { _ in nil },
                     showGenreColumn: false,
-                    showFormatColumn: false
                 )
             }
         }

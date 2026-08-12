@@ -35,8 +35,7 @@ struct MacMusicDownloadsView: View {
                     model: model,
                     theme: theme,
                     onNavigate: onNavigate,
-                    showGenreColumn: false,
-                    showFormatColumn: true
+                    showGenreColumn: false
                 )
             }
         }

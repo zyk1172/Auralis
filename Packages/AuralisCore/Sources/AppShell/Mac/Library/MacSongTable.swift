@@ -20,6 +20,12 @@ struct MacSongRow: Identifiable {
     var genre: String { (track.genres.first ?? "") }
     var format: String { track.effectiveCodec ?? "" }
     var favorite: Bool { track.isFavorite }
+    /// 添加日期排序键（TimeInterval，与 duration 列同型，避免 Date 触发 Table 类型检查限制）。
+    var addedDateSort: TimeInterval { addedDate?.timeIntervalSince1970 ?? 0 }
+    /// 添加日期文本（避免在 cell 内做 Date 格式化推断）。
+    var addedDateText: String {
+        addedDate.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—"
+    }
 }
 
 /// 统一 Mac 歌曲 Table：sortable / resizable / 多选 / 双击播放 / 右键菜单。
@@ -33,8 +39,8 @@ struct MacSongTable: View {
     var showAlbumColumn = true
     var showYearColumn = true
     var showGenreColumn = true
-    var showFormatColumn = true
     var showPlayCountColumn = false
+    var showAddedDateColumn = false
     var showArtwork = true
     var rowHeight: CGFloat = 40
 
@@ -105,14 +111,6 @@ struct MacSongTable: View {
                 }
                 .width(min: 100, ideal: 140)
             }
-            if showFormatColumn {
-                TableColumn("格式", value: \.format) { row in
-                    if let codec = MacFormat.codec(row.track) {
-                        Text(codec).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .width(min: 56, ideal: 64, max: 84)
-            }
             if showPlayCountColumn {
                 TableColumn("播放次数", value: \.playCount) { row in
                     Text(row.playCount > 0 ? "\(row.playCount)" : "—")
@@ -120,6 +118,13 @@ struct MacSongTable: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .width(min: 56, ideal: 64, max: 80)
+            }
+            if showAddedDateColumn {
+                TableColumn("添加日期", value: \.addedDateSort) { row in
+                    Text(row.addedDateText)
+                        .foregroundStyle(.secondary)
+                }
+                .width(min: 90, ideal: 110, max: 130)
             }
             TableColumn("收藏") { row in
                 Image(systemName: row.track.isFavorite ? "heart.fill" : "heart")
