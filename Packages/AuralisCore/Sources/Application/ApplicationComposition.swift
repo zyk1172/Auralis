@@ -49,7 +49,15 @@ public enum ApplicationComposition {
         if let store = try? LocalCatalogStore(url: LocalCatalogStore.defaultStoreURL()) {
             return store
         }
-        return try! LocalCatalogStore(url: URL(fileURLWithPath: ":memory:"))
+        // 兜底 1：临时目录文件库（避免相对路径 ":memory:" 在不可写 cwd 下 `try!` 崩溃）。
+        let fallback = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-catalog-\(UUID().uuidString).sqlite")
+        if let store = try? LocalCatalogStore(url: fallback) {
+            return store
+        }
+        // 兜底 2：真内存库（URL(path == ":memory:")）。
+        let memory = URL(string: "file::memory:")!
+        return try! LocalCatalogStore(url: memory)
     }
 
     private static func libraryStoreURL() -> URL {
