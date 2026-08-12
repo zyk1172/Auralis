@@ -331,3 +331,43 @@
 【预期结果】搜索跳转按 serverID + remoteID 匹配；本地网络说明只出现在错误路径。
 
 【失败时需要提供】搜索结果截图、跨服务器误匹配复现步骤、服务器页截图。
+
+---
+
+# macOS Clean-Slate UI Rebuild 人工验证
+
+以下项目依赖真实 Mac GUI，标记为 `MANUAL-VERIFY`。所有页面分别在 1280×820 / 窄窗口 / 宽窗口 / 全屏 / Dark Mode / Light Mode 检查。判据：去掉 Auralis 文字后是否明显像 Apple 原生 macOS 音乐播放器。
+
+## P0
+
+### `MANUAL-VERIFY` 首页与窗口骨架
+
+【步骤】打开 App：确认系统 Toolbar / Sidebar / Liquid Glass 由系统提供；Sidebar 分区（浏览/资料库/播放列表/Auralis）行高系统化、无自定义大按钮；首页只显示真实有数据的货架，无服务器卡片、无“继续播放”大卡片；窗口 900→1600 拖动自由缩放无横向溢出；侧边栏可折叠/展开。
+
+【预期】第一眼接近 Apple Music for Mac；无 Card dashboard 风；无每页渐变背景。
+
+### `MANUAL-VERIFY` Songs Table 与多选
+
+【步骤】歌曲页：表头排序（标题/艺术家/专辑/时长/年份/流派/格式/收藏）、拖拽调整列宽、单击选中、⌘/Shift 多选、双击播放、右键菜单分组（播放/导航/私人状态/文件/资料）；当前播放行显示 accent + speaker 波形而非整行染色；收藏列 heart.fill 仅在收藏时突出。
+
+### `MANUAL-VERIFY` 底部播放条与右侧面板
+
+【步骤】确认 transport 组（Shuffle/Previous/Play/Pause/Next/Repeat）与曲目身份组（Artwork/Title/Artist/进度）与上下文组（Favorite/Lyrics/Queue/Volume）三组分离；播放条高度 72–82pt、系统 bar 背景；点击封面进入正在播放页；⌘⇧L 展开歌词（当前行高亮、点击行跳转、自动跟随）、⌘⇧Q 展开队列（双击播放、拖动排序、Delete 移除、清空）；窄窗口下时间文字与音量滑杆降级为按钮，transport 三键不被压缩。
+
+### `MANUAL-VERIFY` Album / Artist / Playlist Detail
+
+【步骤】专辑：Hero 封面 + 元数据 + Play/Shuffle/Favorite/More，按碟曲目表，底部年份/曲数/时长/格式；艺术家：名称 + 收藏 + 播放/随机 + 热门歌曲 + 专辑网格（无艺人照片时 2×2 mosaic）；歌单：前 4 首真实封面 2×2 mosaic + 曲目表；「加入队列」与「播放」语义不混淆（加入=追加，播放=替换）。
+
+### `MANUAL-VERIFY` 搜索
+
+【步骤】⌘F 聚焦 Toolbar 搜索框；空查询显示 Landing（最近搜索/浏览资料库/最近播放艺术家/常用歌单）；输入后结果分 歌曲/专辑/艺术家/歌单；点歌曲播放、专辑→专辑详情（真实封面）、艺术家→艺术家页、歌单→歌单详情；跨服务器同名歌曲不误匹配（serverID+remoteID）。
+
+### `MANUAL-VERIFY` 键盘 / 无障碍
+
+【步骤】Space 在搜索框/文本输入框内输入空格、不触发播放；非输入态 Space 播放/暂停；⌘←/⌘→ 上一首/下一首；⌃⌘F 全屏播放；⌘, 打开设置；VoiceOver 遍历 Sidebar/Table/播放条标签完整；Full Keyboard Access 键盘选择表格行；Reduce Motion / Reduce Transparency 下动画与材质正常。
+
+### `MANUAL-VERIFY` 截图验收（目标 39）
+
+【步骤】对 Home / Songs / Albums / Album Detail / Artist Detail / Playlist / Search / Lyrics Panel / Queue Panel / AI Assistant / Server / Settings 各生成 1280×820、窄窗口、宽窗口、Dark、Light 截图。逐张问“去掉 Auralis 文字后是否明显像 Apple 原生 macOS 音乐播放器”；答案是否则记录并返回修改。
+
+【失败时需要提供】截图、窗口尺寸、系统外观模式。

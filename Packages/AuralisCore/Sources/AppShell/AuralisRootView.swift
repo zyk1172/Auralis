@@ -103,7 +103,7 @@ public struct AuralisRootView: View {
     public var body: some View {
         Group {
 #if os(macOS)
-            MacAuralisRootView(model: model, themeStore: themeStore)
+            MacMusicShell(model: model, themeStore: themeStore)
 #elseif os(iOS)
             if horizontalSizeClass == .compact {
                 CompactShell(model: model, themeStore: themeStore, bottomDockScroll: bottomDockScroll)
