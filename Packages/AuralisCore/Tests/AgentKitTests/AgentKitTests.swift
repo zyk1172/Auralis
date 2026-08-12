@@ -1180,10 +1180,10 @@ func toolSelectorCoversEightRequests() {
     }
 }
 
-// MARK: - Delete confirmation
+// MARK: - 删除操作直接执行（permissive direct execution）
 
-@Test("Delete confirm: rejection does not execute and logs nothing")
-func deleteConfirmRejected() async throws {
+@Test("Delete server executes directly without runtime confirmation")
+func deleteServerExecutesDirectly() async throws {
     let store = try makeStore()
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
@@ -1201,33 +1201,9 @@ func deleteConfirmRejected() async throws {
         emit: { await collector.record($0) },
         log: { await log.add($0) }
     )
-    #expect(await bridge.removedServers.isEmpty)
-    #expect(await collector.containsText("已取消"))
-    #expect(await log.records.isEmpty)
-    #expect(await probe.calls == 1)
-}
-
-@Test("Delete confirm: approval executes and logs a destructive action")
-func deleteConfirmApproved() async throws {
-    let store = try makeStore()
-    let bridge = MockAgentBridge()
-    let collector = EmittedCollector()
-    let log = ActionRecorder()
-    let provider = ScriptedAIProvider(actionBatches: ["ACTION: {\"tool\":\"removeServer\",\"args\":{\"serverID\":\"srv-x\"}}"])
-    let probe = ConfirmationProbe(policy: true)
-    await AgentRunner.run(
-        userText: "删除服务器",
-        provider: provider,
-        model: "scripted-model",
-        bridge: bridge,
-        catalog: store,
-        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
-        confirm: { await probe.decide($0) },
-        emit: { await collector.record($0) },
-        log: { await log.add($0) }
-    )
+    // 用户明确要求 + 目标唯一 → 直接执行，不再向用户索取二次确认。
     #expect(await bridge.removedServers.contains("srv-x"))
-    #expect(await probe.calls == 1)
+    #expect(await probe.calls == 0)
     let records = await log.records
     #expect(records.contains { $0.toolName == "removeServer" && $0.permission == .destructive })
 }
@@ -1329,28 +1305,26 @@ func workingSetCachesIdenticalQuery() {
     #expect(ws.executedCalls == 1)
 }
 
-@Test("WorkingSet: no-new-results streak stops searching after limit")
-func workingSetStopsSearchingAfterRepeatedNoNewResults() {
+@Test("WorkingSet: no-new-results streak is diagnostic-only, never blocks search")
+func workingSetNoNewResultsIsDiagnosticOnly() {
     var ws = AgentTaskWorkingSet(targetQueueCount: 20)
     let gid = GlobalID(serverID: "test-server", remoteID: "x")
     // 第一次有候选：streak 归零。
     ws.observeCandidates([gid])
     #expect(ws.noNewResultsStreak == 0)
-    // 连续空结果 / 相同结果：streak 递增，达到上限后停止搜索。
-    for _ in 0..<(AgentTaskWorkingSet.noNewResultsLimit - 1) {
+    // 连续空结果：streak 递增（仅统计），不产生任何停止标志。
+    for _ in 0..<(AgentTaskWorkingSet.noNewResultsLimit + 5) {
         ws.observeCandidates([])
-        #expect(ws.stopSearching == false)
     }
-    ws.observeCandidates([])
-    #expect(ws.stopSearching == true)
+    #expect(ws.noNewResultsStreak >= AgentTaskWorkingSet.noNewResultsLimit + 5)
 }
 
-@Test("WorkingSet: queued songs reaching threshold stops searching")
-func workingSetStopsSearchingWhenQueueSatisfied() {
+@Test("WorkingSet: queued songs tracking is diagnostic-only")
+func workingSetQueuedTrackingIsDiagnostic() {
     var ws = AgentTaskWorkingSet(targetQueueCount: 20)
     let ids = (1...20).map { GlobalID(serverID: "test-server", remoteID: "q-\($0)") }
     ws.noteQueued(ids)
-    #expect(ws.stopSearching == true)
+    #expect(ws.queuedSongIDs.count == 20)
 }
 
 @Test("WorkingSet: diagnostic summary is non-empty and counts tools")
@@ -1562,13 +1536,13 @@ func loopBlocksRepeatedSearches() async throws {
     // 不应触发保护上限暂停，任务正常完成。
     #expect(await collector.containsText("任务执行步骤异常过多") == false)
     #expect(await collector.containsText("完成") == true)
-    // 重复搜索被拦截：最后一轮模型请求里应出现停止搜索的提示。
+    // 重复搜索走缓存并给出信息性提示（不再硬性停止搜索）。
     let lastRequest = provider.requests.last
-    #expect(lastRequest?.messages.contains { $0.content.contains("请停止重复搜索") } == true)
+    #expect(lastRequest?.messages.contains { $0.content.contains("（提示）同一搜索已执行") } == true)
 }
 
-@Test("Loop allows only one queue replacement per task")
-func loopBlocksSecondQueueReplacement() async throws {
+@Test("Loop allows multiple queue replacements with different args")
+func loopAllowsMultipleQueueReplacements() async throws {
     let store = try makeStore()
     let first = makeTrack(serverID: "test-server", remoteID: "queue-1", title: "第一首")
     let second = makeTrack(serverID: "test-server", remoteID: "queue-2", title: "第二首")
@@ -1590,9 +1564,9 @@ func loopBlocksSecondQueueReplacement() async throws {
         confirm: { _ in true },
         emit: { await collector.record($0) }
     )
-    #expect(bridge.replacedQueues.count == 1)
-    #expect(bridge.replacedQueues.first?.first?.remoteID == "queue-1")
-    #expect(await collector.containsText("已跳过第二次替换队列"))
+    // 不同参数的 queue_replace 不再受“每任务一次”互斥保护。
+    #expect(bridge.replacedQueues.count == 2)
+    #expect(await collector.containsText("已完成"))
 }
 
 /// 链式修改 Track 的测试辅助。

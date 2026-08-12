@@ -1,5 +1,39 @@
 # Auralis Agent 架构
 
+
+# Execution Philosophy
+
+Auralis uses a permissive direct-execution agent runtime.
+
+A user's explicit natural-language request authorizes the requested operation.
+
+Intent is a routing hint, not a capability boundary.
+
+Normal registered music tools are allowed by default.
+
+The runtime does not impose cumulative tool-call limits on normal tasks.
+
+No-progress counters and repeated-tool counters do not terminate normal tasks.
+
+Ambiguous targets require entity disambiguation, not risk confirmation.
+
+Privacy preferences and credential isolation remain technical data-flow boundaries.
+
+User cancellation and per-request timeouts remain supported.
+
+## 实现对照
+
+- `AgentTaskPolicy.authorizes(_:)` 恒返回 `true`（deprecated / diagnostics-only）：已注册工具
+  默认全部允许，不再按 Intent / ToolGroup / Permission / Risk / Scope 拒绝。
+- `AgentTaskBudget` 只剩极端看门狗：`wallClockSeconds`（默认 60 分钟）与
+  `maxModelRounds`（默认 1000，紧急防失控）。`maxNoProgressRounds` /
+  `maxRepeatedToolPattern` 保留为诊断统计，不作为终止条件。
+- `AgentRunner` 不再：按 Intent 拦截工具、向用户索取破坏性操作确认、因
+  `stopSearching` / 连续无新结果 / 重复工具模式终止任务。
+- 单工具超时/异常回灌结构化失败结果，模型可换工具、换参数、换策略继续。
+- `queue_replace` 可用不同参数多次调用；相同工具 + 相同参数幂等复用。
+- 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认。
+
 ## 目标
 
 Auralis 使用单 Agent 体系：一个模型、一个 `AgentRuntime` actor、一份结构化
@@ -31,13 +65,15 @@ AssistantView / Siri / App Intent / 歌曲鉴赏入口
 覆盖对话、目录搜索、播放、发现、队列、歌单、资料库维护、服务器、诊断、歌曲鉴赏、
 下载与记忆。
 
-Intent 产生 `AgentTaskPolicy`。Policy 同时约束：
+Intent 产生 `AgentTaskPolicy`。Policy 只承担路由/诊断职责，不再约束执行能力：
 
-- 允许的 `ToolGroup`；
-- read-only / reversible / destructive 权限；
-- 最大风险；
-- Granted Scope；
-- Completion Predicate；
+- Completion Predicate（完成判定）；
+- Budget（仅极端看门狗）；
+- 推荐的 Tool Group / 意图建议工具（ToolSelector 用，纯加法）；
+- 日志与 UI 状态。
+
+`ToolGroup` / `ToolPermission` / `AgentRisk` / `GrantedScope` 保留为兼容与诊断元数据，
+Runtime 正常执行路径不再依赖它们做门禁。
 - wall-clock、模型轮次、输入/输出 token、无进展和重复模式预算。
 
 模型上下文上限统一为 256,000 token，单次输出上限为 16,000 token。输入上限是每次

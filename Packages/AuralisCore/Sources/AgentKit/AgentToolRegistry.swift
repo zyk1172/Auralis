@@ -225,14 +225,14 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "playNext", group: .playback, permission: .reversible, summary: "下一首播放",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
-        .init(name: "replaceQueue", group: .playback, permission: .destructive, requiresConfirmation: false, summary: "替换整个队列",
+        .init(name: "replaceQueue", group: .playback, permission: .reversible, summary: "替换整个队列",
               parameters: [.init(name: "trackIDs", required: true, description: "逗号分隔的 GlobalTrackID")]),
         .init(name: "removeFromQueue", group: .playback, permission: .reversible, summary: "从队列移除",
               parameters: [.init(name: "index", required: true, description: "队列索引（从 0）")]),
         .init(name: "reorderQueue", group: .playback, permission: .reversible, summary: "调整队列顺序",
               parameters: [.init(name: "from", required: true, description: "原索引"),
                            .init(name: "to", required: true, description: "目标索引")]),
-        .init(name: "clearQueue", group: .playback, permission: .destructive, requiresConfirmation: true, summary: "清空队列"),
+        .init(name: "clearQueue", group: .playback, permission: .reversible, summary: "清空队列"),
 
         // MARK: 音乐下载（MoviePilot / MoviePilot）
         .init(name: "music_download", group: .download, permission: .reversible, summary: "从 MoviePilot（MoviePilot）搜索并下载音乐资源",
@@ -285,7 +285,7 @@ public enum AgentToolRegistry {
         .init(name: "mergePlaylists", group: .playlist, permission: .reversible, summary: "合并歌单",
               parameters: [.init(name: "sourceIDs", required: true, description: "逗号分隔的 GlobalPlaylistID"),
                            .init(name: "name", required: true, description: "新歌单名称")]),
-        .init(name: "deletePlaylist", group: .playlist, permission: .destructive, requiresConfirmation: true, summary: "删除歌单",
+        .init(name: "deletePlaylist", group: .playlist, permission: .destructive, summary: "删除歌单",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
 
         // MARK: Annotation
@@ -312,16 +312,16 @@ public enum AgentToolRegistry {
         .init(name: "getActiveServer", group: .server, permission: .readOnly, summary: "获取当前服务器"),
         .init(name: "testServerConnection", group: .server, permission: .readOnly, summary: "测试服务器连接",
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
-        .init(name: "addServer", group: .server, permission: .reversible, requiresConfirmation: true, summary: "添加服务器（打开原生表单录入凭据）",
+        .init(name: "addServer", group: .server, permission: .reversible, summary: "添加服务器（打开原生表单录入凭据）",
               parameters: [.init(name: "displayName", required: true, description: "显示名称"),
                            .init(name: "baseURL", required: true, description: "服务器地址")]),
-        .init(name: "updateServer", group: .server, permission: .reversible, requiresConfirmation: true, summary: "更新服务器",
+        .init(name: "updateServer", group: .server, permission: .reversible, summary: "更新服务器",
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
         .init(name: "switchServer", group: .server, permission: .reversible, summary: "切换服务器",
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
         .init(name: "refreshLibrary", group: .server, permission: .reversible, summary: "刷新本地目录"),
         .init(name: "getSyncStatus", group: .server, permission: .readOnly, summary: "获取同步状态"),
-        .init(name: "removeServer", group: .server, permission: .destructive, requiresConfirmation: true, summary: "删除服务器（仅本地清理）",
+        .init(name: "removeServer", group: .server, permission: .destructive, summary: "删除服务器（仅本地清理）",
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
 
         // MARK: 第一阶段统一命名工具（v2 工具集）
@@ -473,9 +473,9 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "queue_play_next", group: .playback, permission: .reversible, summary: "把歌曲插入到当前歌曲之后播放",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
-        .init(name: "queue_replace", group: .playback, permission: .destructive, requiresConfirmation: false, summary: "替换整个播放队列",
+        .init(name: "queue_replace", group: .playback, permission: .reversible, summary: "替换整个播放队列",
               parameters: [.init(name: "trackIDs", required: true, description: "逗号分隔的 GlobalTrackID 列表")]),
-        .init(name: "queue_clear", group: .playback, permission: .destructive, requiresConfirmation: true, summary: "清空播放队列"),
+        .init(name: "queue_clear", group: .playback, permission: .reversible, summary: "清空播放队列"),
         .init(name: "queue_shuffle_remaining", group: .playback, permission: .reversible, summary: "只随机尚未播放的剩余队列"),
         .init(name: "queue_move", group: .playback, permission: .reversible, summary: "调整队列中歌曲顺序",
               parameters: [
@@ -574,7 +574,7 @@ public enum AgentToolRegistry {
         .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
         .init(name: "memory_delete", group: .memory, permission: .reversible, summary: "删除一条记忆",
               parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")]),
-        .init(name: "memory_clear", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "清空全部记忆（需确认）"),
+        .init(name: "memory_clear", group: .memory, permission: .reversible, summary: "清空全部记忆"),
         .init(name: "skill_create", group: .memory, permission: .reversible, summary: "创建一段可复用指令（skill 文件），之后可读取使用",
               parameters: [
                 .init(name: "name", required: true, description: "技能名，简短英文或中文"),

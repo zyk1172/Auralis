@@ -3,7 +3,8 @@ import Domain
 import Foundation
 import LocalCatalog
 
-/// 用户请求的粗粒度意图。意图只决定能力边界，不承载领域实现细节。
+/// 用户请求的粗粒度意图。意图只用于任务理解、工具排序、提示、完成语义与 UI/诊断，
+/// 不再是普通音乐工具的执行权限边界（permissive direct-execution runtime）。
 public enum AgentTaskIntent: String, Codable, CaseIterable, Sendable {
     case conversation
     case librarySearch
@@ -19,7 +20,8 @@ public enum AgentTaskIntent: String, Codable, CaseIterable, Sendable {
     case memoryManagement
 }
 
-/// 工具副作用风险。运行时以此为最终门禁，不能只相信模型看见的 schema。
+/// 工具副作用风险（deprecated / diagnostics-only）。Runtime 不再据此拒绝任何普通工具；
+/// 保留枚举仅为旧任务记录、日志与 UI 分类兼容。
 public enum AgentRisk: Int, Codable, Comparable, Sendable {
     case none = 0
     case low = 1
@@ -31,7 +33,9 @@ public enum AgentRisk: Int, Codable, Comparable, Sendable {
     }
 }
 
-/// 任务获准使用的能力域。与 UI 或具体工具名解耦。
+/// 能力域描述（deprecated / diagnostics-only）。
+/// 曾用于按意图隔离工具；现在保留类型仅为 migration / Codable / 日志兼容，
+/// Runtime 不再因缺少 scope 而拒绝已注册的普通工具。
 public enum GrantedScope: String, Codable, CaseIterable, Sendable, Hashable {
     case catalogRead
     case playbackWrite
@@ -48,25 +52,26 @@ public enum GrantedScope: String, Codable, CaseIterable, Sendable, Hashable {
 }
 
 public struct AgentTaskBudget: Codable, Equatable, Sendable {
+    /// 极端看门狗：任务总墙钟时间上限。正常用户任务很难触发（默认 60 分钟）。
     public var wallClockSeconds: TimeInterval
     /// 单次模型请求允许使用的输入上下文上限，不是多轮任务的累计用量。
     public var maxInputTokens: Int
     /// 单次模型回复上限，不是多轮任务的累计用量。
     public var maxOutputTokens: Int
+    /// 极端看门狗：模型轮次上限（默认 1000）。正常任务不触发，仅在程序失控死循环时兜底。
     public var maxModelRounds: Int
+    /// 诊断统计阈值（deprecated）：不再作为正常任务终止条件。
     public var maxNoProgressRounds: Int
+    /// 诊断统计阈值（deprecated）：不再作为正常任务终止条件。
     public var maxRepeatedToolPattern: Int
 
     public init(
-        wallClockSeconds: TimeInterval = 6 * 60,
+        wallClockSeconds: TimeInterval = 60 * 60,
         maxInputTokens: Int = 256_000,
         maxOutputTokens: Int = 16_000,
-        maxModelRounds: Int = 24,
+        // 紧急防失控：1000 轮模型请求，正常任务不可能撞到；触发即记录异常诊断。
+        maxModelRounds: Int = 1_000,
         maxNoProgressRounds: Int = 3,
-        // The working-set guard asks the model to stop after three duplicate
-        // search results. Allow one final attempted call to be blocked and
-        // returned as evidence so the model can produce its closing answer;
-        // the generic runtime guard remains the final backstop after that.
         maxRepeatedToolPattern: Int = 4
     ) {
         self.wallClockSeconds = wallClockSeconds
@@ -88,7 +93,9 @@ public enum AgentCompletionPredicate: Codable, Equatable, Sendable {
     case appreciationWithEvidence
 }
 
-/// 每个任务的能力与安全策略。Runner/模型返回任何工具名后都必须再次经过这里。
+/// 每个任务的路由/诊断策略（intent、completion、budget 等）。
+/// 已注册的普通音乐工具默认全部允许执行；`authorizes` 不再构成能力门禁，
+/// 保留方法仅为兼容旧调用方，恒返回 true。
 public struct AgentTaskPolicy: Codable, Equatable, Sendable {
     public let intent: AgentTaskIntent
     public let scopes: Set<GrantedScope>
@@ -119,12 +126,10 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         self.budget = budget
     }
 
+    /// deprecated / diagnostics-only：permissive direct-execution runtime 不再用
+    /// 意图/权限/风险/scope 拒绝已注册的普通音乐工具。恒返回 true。
     public func authorizes(_ descriptor: ToolDescriptor) -> Bool {
-        guard allowedToolGroups.contains(descriptor.group),
-              allowedPermissions.contains(descriptor.permission),
-              scopes.isSuperset(of: descriptor.requiredScopes)
-        else { return false }
-        return Self.risk(for: descriptor.permission) <= maxRisk
+        true
     }
 
     public static func risk(for permission: ToolPermission) -> AgentRisk {
@@ -298,30 +303,30 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
         updatedAt = .now
     }
 
+    /// 仅剩两个极端看门狗：总墙钟时间、模型轮次（默认 1000）。
+    /// noProgress / repeatedToolPattern 只作诊断统计，不再终止任何正常任务。
     public func budgetViolation(policy: AgentTaskPolicy, now: Date = .now) -> AgentRuntimeError? {
         if now.timeIntervalSince(startedAt) > policy.budget.wallClockSeconds { return .wallClockBudgetExceeded }
-        // input/output token 是多轮累计统计；模型的 256K/16K 限制是单次请求限制，
-        // 由 ContextManager 裁剪和 AICompletionRequest 强制执行。不能拿累计值与单次
-        // 上限比较，否则合法的长工具任务会误报“达到输入 token 预算”。
         if progress.modelRounds >= policy.budget.maxModelRounds { return .modelRoundBudgetExceeded }
-        if progress.noProgressRounds >= policy.budget.maxNoProgressRounds { return .noProgress }
-        if repeatedToolPatternCount > policy.budget.maxRepeatedToolPattern { return .repeatedToolPattern }
         return nil
     }
 }
 
 public enum AgentRuntimeError: Error, LocalizedError, Equatable, Sendable {
+    /// 未知工具（注册表里不存在），而不是“权限不足”。
     case toolOutsidePolicy(String)
     case wallClockBudgetExceeded
     case modelRoundBudgetExceeded
+    /// deprecated：不再作为任务终止条件；保留仅为兼容旧代码。
     case noProgress
+    /// deprecated：不再作为任务终止条件；保留仅为兼容旧代码。
     case repeatedToolPattern
 
     public var errorDescription: String? {
         switch self {
-        case let .toolOutsidePolicy(name): "工具 \(name) 不在当前任务获准范围内。"
-        case .wallClockBudgetExceeded: "任务已达到总运行时间预算。"
-        case .modelRoundBudgetExceeded: "任务已达到模型轮次预算。"
+        case let .toolOutsidePolicy(name): "无法执行：工具 \(name) 不存在。"
+        case .wallClockBudgetExceeded: "任务运行时间过长，已停止以保护设备。"
+        case .modelRoundBudgetExceeded: "任务运行轮次异常过多，已停止以保护设备。"
         case .noProgress: "任务连续多轮没有取得新进展。"
         case .repeatedToolPattern: "任务重复调用同一工具且没有形成新进展。"
         }
@@ -388,7 +393,7 @@ public enum AgentIntentClassifier {
         if has(["服务器", "同步", "连接", "navidrome", "nas"]) { return .serverManagement }
         if has(["歌单", "playlist"]) { return .playlistManagement }
         if has(["队列", "接下来播放", "替换队列", "清空队列"]) { return .queueManagement }
-        if has(["推荐", "相似", "发现", "随便听", "心情", "场景"]) { return .musicDiscovery }
+        if has(["推荐", "相似", "发现", "随便听", "心情", "场景", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) { return .musicDiscovery }
         if has(["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放"]) { return .playbackControl }
         if has(["收藏", "评分", "资料库", "索引 v2", "索引v2"]) { return .libraryManagement }
         if has(["记住", "记忆", "忘记", "技能", "memory", "skill"]) { return .memoryManagement }
@@ -458,9 +463,10 @@ public enum AgentTaskReducer {
         to state: inout AgentTaskState
     ) -> Bool {
         guard result.success else {
-            state.recordNoProgress()
+            // 失败本身也是新信息（新错误事实）：换策略的判断依据。记录为进展，不当作停滞。
             state.errors.append(result.summary)
             state.errorState = result.summary
+            state.recordProgress(action: "\(descriptor.name) 失败：\(result.summary)")
             return false
         }
 
@@ -611,8 +617,10 @@ public actor AgentRuntime {
 
     public func isRunning(_ id: UUID) -> Bool { runningTaskIDs.contains(id) }
 
+    /// 解析并校验工具存在性。已注册工具一律放行（permissive direct execution）；
+    /// 只有注册表里不存在的工具才抛错。
     public func authorize(tool name: String, policy: AgentTaskPolicy) throws -> ToolDescriptor {
-        guard let descriptor = AgentToolRegistry.descriptor(for: name), policy.authorizes(descriptor) else {
+        guard let descriptor = AgentToolRegistry.descriptor(for: name) else {
             throw AgentRuntimeError.toolOutsidePolicy(name)
         }
         return descriptor

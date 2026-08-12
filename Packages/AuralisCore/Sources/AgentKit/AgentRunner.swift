@@ -3,12 +3,14 @@ import Domain
 import Foundation
 import LocalCatalog
 
-/// 受控工具调用 Agent 的执行引擎。
+/// 受控工具调用 Agent 的执行引擎（permissive direct execution）。
 ///
-/// 流程：用户文本 →（可选 LLM 规划）→ 权限检查 → 本地工具执行 → 结果回传 → UI 渲染。
+/// 流程：用户文本 →（可选 LLM 规划）→ 本地工具执行 → 结果回传 → UI 渲染。
+/// 设计准则：已注册的普通音乐工具默认全部允许；Intent 只是路由提示，不是能力边界；
+/// 用户明确要求且目标唯一时直接执行（删除歌单/清空队列/删除下载等不再二次确认）。
 /// 硬性约束：每一轮模型请求和每一次工具执行都有独立超时；支持取消与防循环。
-/// 不以累计工具次数截断任务，避免长任务在进展正常时被人为暂停；一旦某一步超时，
-/// 立即停止当前任务并保留此前已成功落库的结果。破坏性操作仍需确认。
+/// 单工具超时/失败回灌结构化结果让模型换策略继续，不终止整项任务；
+/// 不设正常任务累计工具调用上限；noProgress / repeatedToolPattern 只做诊断统计。
 public struct AgentRunner {
     /// 单个工具调用的最长执行时间。超过后取消该调用并结束整项 Agent 任务，
     /// 防止某个网络/系统服务工具卡住而让任务无限悬挂。
@@ -113,7 +115,8 @@ public struct AgentRunner {
     /// 执行一次用户请求。
     /// - Parameters:
     ///   - provider: 可用时为 LLM 规划；为 nil 时走本地规则降级。
-    ///   - confirm: 破坏性/需确认操作的裁决回调（返回 true 表示用户批准）。
+    ///   - toolTimeout: 单个工具执行的最长等待时间；超时以结构化失败回灌模型，不终止任务。
+    ///   - confirm: 兼容回调（permissive runtime 不再产生确认请求；保留签名兼容旧调用方）。
     ///   - emit: 逐步向 UI 发送结构化消息。
     ///   - log: 所有修改型（reversible / destructive）工具调用的落盘回调。
     public static func run(
@@ -129,6 +132,7 @@ public struct AgentRunner {
         intent: AgentTaskIntent? = nil,
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
+        toolTimeout: TimeInterval = AgentRunner.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
@@ -152,6 +156,7 @@ public struct AgentRunner {
                 intent: intent ?? AgentIntentClassifier.classify(userText),
                 policy: policy ?? AgentTaskPolicy.policy(for: intent ?? AgentIntentClassifier.classify(userText)),
                 initialTaskState: initialTaskState,
+                toolTimeout: toolTimeout,
                 confirm: confirm,
                 emit: emit,
                 log: log,
@@ -200,6 +205,7 @@ public struct AgentRunner {
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
+        toolTimeout: TimeInterval,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
@@ -207,9 +213,13 @@ public struct AgentRunner {
         state: @escaping @Sendable (AgentTaskState) async -> Void
     ) async {
         // 动态工具加载：只向模型暴露与本次意图相关的工具，降低 schema 对上下文的占用。
-        let selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
+        // Intent 只是路由提示（纯加法）：KeywordSuggested ∪ IntentSuggested ∪ TaskRequired。
+        // 每轮用「用户原文 + 模型已输出文本 + 已执行工具」重新展开，任务中途需要新工具
+        // （例如第一轮音乐发现、第二轮需要歌单/服务器工具）会自动补入，不会永久缺失。
+        var accumulatedToolText = userText
+        var selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
         let requestTimeout = roundTimeout
-        let toolDefinitions = provider.supportsToolCalling
+        var toolDefinitions = provider.supportsToolCalling
             ? ToolSelector.toolDefinitions(from: selectedTools)
             : []
 
@@ -264,6 +274,31 @@ public struct AgentRunner {
 
             // 显式指定单次输出上限：当前模型使用 256K 上下文、16K 输出。
             // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
+            // 动态工具扩展：每轮重新展开工具集（只增不减），保证任务中途的新工具需求可达。
+            let expanded = ToolSelector.select(for: accumulatedToolText, intent: intent, policy: policy, all: AgentToolRegistry.all)
+            var merged = selectedTools
+            var haveNames = Set(merged.map(\.name))
+            for tool in expanded where !haveNames.contains(tool.name) {
+                merged.append(tool)
+                haveNames.insert(tool.name)
+            }
+            // TaskRequiredTools：本轮已实际执行过的工具永远保留在 schema 中。
+            if !ws.perToolCounts.isEmpty {
+                let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                for name in ws.perToolCounts.keys where !haveNames.contains(name) {
+                    if let tool = byName[name] {
+                        merged.append(tool)
+                        haveNames.insert(tool.name)
+                    }
+                }
+            }
+            if merged.count != selectedTools.count {
+                selectedTools = merged
+                if provider.supportsToolCalling {
+                    toolDefinitions = ToolSelector.toolDefinitions(from: selectedTools)
+                }
+            }
+
             let request = AICompletionRequest(
                 model: model,
                 messages: conversation,
@@ -339,6 +374,7 @@ public struct AgentRunner {
 
             // 解析本轮工具调用：原生 tool_calls 优先（流式事件收集），文本 ACTION 兜底。
             let streamedText = outcome.text
+            if !streamedText.isEmpty { accumulatedToolText += " " + streamedText }
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             let textActions = nativeCalls.isEmpty ? parseActions(from: streamedText) : []
 
@@ -425,44 +461,9 @@ public struct AgentRunner {
                     continue
                 }
 
-                // 模型只能调用当前意图策略真正授权的工具。ToolSelector 只是减少 schema，
-                // 这里才是不可绕过的运行时安全边界。
-                guard policy.authorizes(descriptor) else {
-                    let reason = AgentRuntimeError.toolOutsidePolicy(call.name).localizedDescription
-                    taskState.errors.append(reason)
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: reason, reused: false))
-                    toolMessages.append(Self.toolResultMessage(
-                        callID: call.id,
-                        content: "执行失败：\(reason)",
-                        native: nativeMode
-                    ))
-                    continue
-                }
-
-                if descriptor.requiresConfirmation || (descriptor.permission == .destructive && policy.requiresConfirmationForDestructive) {
-                    let pending = PendingConfirmation(
-                        toolName: call.name,
-                        permission: descriptor.permission,
-                        title: "确认\(descriptor.summary)",
-                        detail: diagnosticArgs.map { "\($0.key)=\($0.value)" }.joined(separator: "，"),
-                        call: ToolCall(name: call.name, arguments: diagnosticArgs)
-                    )
-                    let approved = await confirm(pending)
-                    if !approved {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消操作：\(descriptor.summary)")]))
-                        // 原生模式必须为每个 tool_call_id 回灌结果，否则下一轮上下文被 API 拒绝。
-                        toolMessages.append(Self.toolResultMessage(
-                            callID: call.id,
-                            content: "用户取消了该操作：\(descriptor.summary)",
-                            native: nativeMode
-                        ))
-                        continue
-                    }
-                }
-
-                // 修改型工具不是查询缓存的一部分。单靠只读缓存无法阻止模型在下一轮
-                // 以不同参数再次发 queue_replace，从而覆盖刚刚建立的队列。
-                // 成功的写操作在工作集里登记：相同操作幂等，替换队列在单个任务内互斥。
+                // 修改型工具不是查询缓存的一部分。相同工具 + 相同规范化参数再次出现时
+                // 幂等复用（不重复副作用）；不同参数（例如第二次 queue_replace 使用不同
+                // 歌曲列表）照常执行，任务不被“互斥保护”卡死。
                 if descriptor.permission != .readOnly,
                    let reason = ws.sideEffectBlockReason(tool: call.name, args: call.args) {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复副作用", reused: true))
@@ -477,14 +478,6 @@ public struct AgentRunner {
                     continue
                 }
 
-                // ① 重复调用保护：已要求停止搜索，模型又调用搜索工具 → 不再执行，明确要求基于现有候选完成。
-                if ws.stopSearching, AgentTaskWorkingSet.isSearchTool(call.name) {
-                    let blocked = "（工具执行结果）\(call.name): 失败 - 已停止搜索：已有 \(ws.uniqueSongIDs.count) 首唯一候选\(ws.queuedSongIDs.isEmpty ? "" : "，队列已含 \(ws.queuedSongIDs.count) 首")，请直接基于现有结果完成任务，不要再搜索。"
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复搜索", reused: false))
-                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: blocked, native: nativeMode))
-                    continue
-                }
-
                 // ② 任务级缓存：同一工具 + 规范化参数已执行过 → 直接复用结果。
                 // 搜索类工具的重复调用同样记为「无新结果」，连续多次后触发停止搜索。
                 if descriptor.cachePolicy == .task,
@@ -493,7 +486,7 @@ public struct AgentRunner {
                     if AgentTaskWorkingSet.isSearchTool(call.name) {
                         _ = ws.observeCandidates([])
                         if ws.noNewResultsStreak >= AgentTaskWorkingSet.noNewResultsLimit {
-                            text += "\n（系统提示）同一搜索已重复 \(ws.noNewResultsStreak) 次且没有新结果，已有 \(ws.uniqueSongIDs.count) 首唯一候选，请停止重复搜索，直接基于现有候选完成任务。"
+                            text += "\n（提示）同一搜索已执行 \(ws.noNewResultsStreak) 次且没有新结果，当前已获得 \(ws.uniqueSongIDs.count) 首唯一候选。可以基于现有候选回答，或换一个搜索词/换一种策略继续。"
                         }
                     }
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "缓存命中", reused: true))
@@ -511,7 +504,7 @@ public struct AgentRunner {
                 await state(taskState)
                 let result: ToolResult
                 do {
-                    result = try await Self.withTimeout(toolExecutionTimeout) {
+                    result = try await Self.withTimeout(toolTimeout) {
                         await AgentToolRegistry.execute(
                             ToolCall(name: call.name, arguments: call.args),
                             bridge: bridge,
@@ -526,18 +519,18 @@ public struct AgentRunner {
                     await Self.emitBufferedCards(bufferedCards, emit: emit)
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                     return
-                } catch AgentRunnerError.timeout {
-                    await Self.emitBufferedCards(bufferedCards, emit: emit)
-                    await emit(AgentChatMessage(role: .assistant, messages: [.error(
-                        "工具 \(call.name) 超过 \(Int(toolExecutionTimeout)) 秒仍未完成，已停止本次任务；此前已成功执行的操作会保留。"
-                    )]))
-                    return
                 } catch {
-                    await Self.emitBufferedCards(bufferedCards, emit: emit)
-                    await emit(AgentChatMessage(role: .assistant, messages: [.error(
-                        "工具 \(call.name) 执行中断（\(Self.errorText(error))），已停止本次任务；此前已成功执行的操作会保留。"
-                    )]))
-                    return
+                    // 单工具超时/异常只回灌结构化失败结果，不终止整项任务；模型可换工具/换参数继续。
+                    let failureText: String
+                    if error is AgentRunnerError {
+                        failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，结果未知。可以重试该工具，或换一种方式继续。"
+                    } else {
+                        failureText = "（工具执行结果）\(call.name): 执行中断 - \(Self.errorText(error))"
+                    }
+                    taskState.errors.append(failureText)
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "工具超时/中断", reused: false))
+                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
+                    continue
                 }
                 if result.success, result.permission != .readOnly {
                     ws.recordSuccessfulSideEffect(tool: call.name, args: call.args, summary: result.summary)
@@ -577,9 +570,9 @@ public struct AgentRunner {
                 if let payload = result.payload, case let .trackCards(cards) = payload {
                     let ids = cards.map(\.globalID)
                     let noNew = ws.observeCandidates(ids)
-                    // 连续多次无新结果 → 明确要求模型停止搜索。
+                    // 连续多次无新结果 → 信息性提示（不终止任务，模型可换策略）。
                     if noNew, ws.noNewResultsStreak >= AgentTaskWorkingSet.noNewResultsLimit {
-                        resultText += "\n（系统提示）搜索已连续 \(ws.noNewResultsStreak) 次没有新结果，已有 \(ws.uniqueSongIDs.count) 首唯一候选，请停止重复搜索，直接基于现有候选完成任务。"
+                        resultText += "\n（提示）搜索已连续 \(ws.noNewResultsStreak) 次没有新结果，当前已获得 \(ws.uniqueSongIDs.count) 首唯一候选。可以基于现有候选回答，或换一个搜索词/换一种策略继续。"
                     }
                 }
                 if AgentTaskWorkingSet.isSearchTool(call.name) == false, AgentTaskWorkingSet.queueWritingTools.contains(call.name) {
@@ -1154,13 +1147,13 @@ public struct AgentRunner {
         1. 数据源是服务器：查询先走本地缓存（快）；本地没有或结果可疑时，先用 server_search 在服务器上在线搜索（server_search 已带播放地址，可直接流播）。不要把「本地没有」直接说成「服务器不存在」；「本地目录没有」≠「不能播放」。
         2. 播放/收藏/歌单/评分的任何操作，最终都要作用于服务器；参数必须使用当前服务器真实存在的 GlobalID（格式「服务器ID:歌曲ID」）。歌单/艺术家 ID 形如「服务器ID:歌单ID」「服务器ID:艺术家ID」；listPlaylists / library_search / searchArtists / searchArtists 返回结果里，名字后括号内的就是该 ID，直接原样传给 playback_play_playlist / playback_play_artist 等，不要自己拼接或臆造。
         3. 播放流程：先 library_search（或 server_search）找到歌曲 → 用返回的 trackID 调 playback_play_song（或 playback_play_album / playback_play_playlist / playback_play_artist）。搜索命中多首时，说明候选并让用户选择，不要随意播放错误的那首。**server_search 找到但本地目录还没有的歌，直接 playback_play_song 播放即可——App 会自动走服务器在线流播，不需要先同步（server_sync_start）也不需要下载。** 同步只影响离线使用，与「现在能不能播放」无关。
-        4. 歌单：library_get_playlist 查看歌单内容；playlist_create 创建；playlist_add_songs 添加歌曲；favorite_set 收藏。删除歌单、替换歌单内容等破坏性操作由 Runner 向用户确认。
+        4. 歌单：library_get_playlist 查看歌单内容；playlist_create 创建；playlist_add_songs 添加歌曲；favorite_set 收藏。删除歌单、清空队列、删除下载等操作在用户明确要求、且目标解析唯一时直接执行，不再向用户二次确认。
         5. 同步：用户问「服务器在线吗」用 server_test_connection；问「同步到哪了」用 server_sync_status；要求「同步音乐库」用 server_sync_start。
-        5b. 推荐：用户要「推荐」时，必须先调用 recommend_by_mood（按心情）或 recommend_by_constraints（按约束）获取真实歌曲清单，再基于清单给出推荐和理由；绝不编造不存在的歌曲。工具结果会附带歌曲清单。
+        5b. 推荐：用户给心情/场景/用途（如开车、提神、通勤、睡前、运动）时，优先直接调用 recommend_by_mood 或 recommend_by_constraints 获取真实歌曲清单；复杂过滤条件用 library_select_tracks；需要了解曲库结构时再用 library_get_catalog_index。拿到清单后基于真实歌曲给出推荐和理由；绝不编造不存在的歌曲。
         5c. 流派：用户问「有哪些流派/按流派找歌」时，用 library_get_genres 列出流派及歌曲数（返回中文显示名），用 library_get_tracks_by_genre 取某流派下的歌。流派来自音乐文件内嵌标签（Navidrome 的 getGenres / 曲目 genre 字段）；如果流派列表为空，说明服务器可能没写入流派标签，提示用户让 Navidrome 重新扫描，不要编造流派。
         5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首候选（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里挑选。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
         5e. 热门 = 本地热度代理（播放次数/收藏/评分/最近播放），不是互联网排行榜。library_select_tracks 的 popularityProxy 已按此排序；语言标签缺失时会按热度返回候选，请按歌曲名/艺术家判断语言后再挑选。
-        5f. 推荐前先了解曲库：先用 library_get_catalog_index 查看流派/语言/年代/歌手构成；需要具体候选时用 library_get_catalog_tracks(category, value, limit) 取该分类的歌曲清单（只含元数据，无歌词/海报）。按用户需求只取相关分类，不要把全部分类一次性拉进对话；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
+        5f. 推荐时不需要每次都先 catalog_index：只有确实需要了解曲库结构（流派/语言/年代构成）时才调用 library_get_catalog_index；能直接用 recommend_by_mood / recommend_by_constraints / library_select_tracks 得到候选时就先用它们。按用户需求只取相关分类；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
         5e-0. 不喜欢（dislike）：用户说「我不喜欢这首」「这首以后不要给我推荐」「别再推荐这首歌」「把当前歌曲标记为不喜欢」时，调用 preference_set_disliked(trackID, value=true)；「取消不喜欢」调用 value=false。查询用 library_get_disliked。**不喜欢只影响自动推荐/随机/相似/智能队列/发现**；用户明确要「播放」「搜索」「打开专辑/歌单」某首不喜欢歌曲时，必须正常执行，不得以「你不喜欢」为由拒绝。所有自动推荐工具的返回候选已经由 Swift/SQLite 层排除了不喜欢歌曲，你不需要也不应该把不喜欢的歌塞回推荐。
         5f-0. 歌曲鉴赏：主人要求鉴赏/赏析/乐评/大众评价时，必须调用 music_appreciate。没有指定歌曲则省略 trackID，鉴赏当前播放曲目；指定歌曲时先 library_search 取得真实 trackID，再调用 music_appreciate。最终回答固定使用 `## 《歌名》鉴赏`，并按顺序分为 `### 【已核验事实】`、`### 【模型分析】`、`### 【我的私人数据】`、`### 【大众评价】`；可在模型分析中使用音乐结构、情绪、编曲、人声、风格和聆听细节的小标题，但不得混入事实段。只有工具返回真实 Community Evidence 才能描述大众评价；否则大众评价段必须逐字写“暂无可核验的大众评价数据。” 本机播放次数、收藏和个人评分只能放在“我的私人数据”，不能冒充大众反馈。不得编造调性、BPM、歌词、创作背景、平台评分、榜单、奖项、评论来源或引语。
         5g. 音乐下载（Music Download / MoviePilot）：这是「下载到服务器音乐目录」的离线补充能力，**不是播放的前置条件**。播放永远走服务器在线流播（见规则 3）。只有以下两种情况才用 music_download：① 用户明确要求「下载」某首歌/专辑；② 已用 server_search 确认服务器音乐库中确实不存在该资源（先说明该资源不在服务器上，再询问是否要下载）。
@@ -1183,8 +1176,8 @@ public struct AgentRunner {
            直到给出最终回答为止。每个模型轮次和每个工具仍受独立超时保护；某一步超时就停止当前任务并保留此前成功结果。
         8. 工具执行结果会以「（工具执行结果）工具名: 成功/失败 - 摘要；详情：歌曲清单」的形式回传给你，里面包含真实歌曲名与 GlobalID。拿到结果后：成功就据此给出自然语言总结；只有确实需要后续操作时才继续调用工具，不要重复调用已经成功的工具。
         8b. 禁止重复搜索：已经拿到某首歌的稳定 ID 后，后续操作必须直接使用该 ID（queue_replace / queue_append / playback_play_song），**禁止**再次按名称搜索同一首歌。同一查询（相同工具 + 相同参数）会被缓存，重复调用只返回缓存、不会得到新结果。
-        8c. 已有候选足够时立即停止搜索：只要已获得用户明确要求的目标数量、或对应队列操作已经由工具确认成功，就不要再调用搜索工具；直接完成任务。用户没有指定数量时不得擅自套用固定首数。若工具结果提示「已停止搜索」或「连续多次没有新结果」，必须停止搜索并基于现有候选完成任务。
-        9. 需要用户确认的破坏性操作（删除歌单/清空队列/删除服务器等）照常发出 ACTION，Runner 会向用户索取确认。
+        8c. 候选足够时即可收尾：已获得用户要求的目标数量、或对应队列操作已由工具确认成功时，直接完成任务，不要继续无意义搜索。同一搜索重复多次没有新结果时，可以基于现有候选回答，或换一个搜索词/换一种策略继续；不要死磕同一条搜索。
+        9. 执行哲学：用户明确要求且目标唯一时，删除歌单、清空队列、删除下载、删除服务器、清空记忆等操作直接执行，不再索要二次确认；不要擅自扩大用户指令范围。多个同名/相似对象无法确定时，先列出候选让用户选择目标，再执行。
         10. 凭据（密码、Token、完整服务器地址）绝不出现在任何参数或回复中。
         10b. 添加 / 修改服务器（地址、账号、凭据）必须由用户在本机「设置 → 服务器」页完成：
             模型不负责填写或保存任何服务器凭据。addServer / updateServer 只是唤起设置页，

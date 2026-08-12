@@ -89,7 +89,7 @@ public enum ToolSelector {
         if containsAny(lower, ["歌单", "playlist", "播放列表"]) { names += playlistNames }
         if containsAny(lower, ["收藏", "喜欢", "评分", "不喜欢", "不感兴趣", "favorite", "star", "heart", "dislike"]) { names += annotationNames }
         if containsAny(lower, ["服务器", "同步", "连接", "在线", "server", "sync", "connect"]) { names += serverNames }
-        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2", "大众评价", "乐评", "评分", "资料"]) { names += recommendationNames }
+        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2", "大众评价", "乐评", "评分", "资料", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "学习", "工作", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) { names += recommendationNames }
         if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error"]) { names += diagnosticsNames }
         if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
         if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
@@ -101,8 +101,8 @@ public enum ToolSelector {
         return unique.compactMap { byName[$0] }
     }
 
-    /// 意图感知选择：先生成小型候选集，再用运行时策略收紧。
-    /// 若关键词选择遗漏了该意图的必要工具，会从获准分组补入；不会把未授权工具暴露给模型。
+    /// 意图感知选择：KeywordSuggested ∪ IntentSuggested ∪ TaskRequired，纯加法。
+    /// 意图只是路由提示，不再裁剪能力；不会把任何已注册工具按 policy 过滤掉。
     public static func select(
         for userText: String,
         intent: AgentTaskIntent,
@@ -139,7 +139,7 @@ public enum ToolSelector {
         }
         let existing = Set(selected.map(\.name))
         selected.append(contentsOf: all.filter { intentNames.contains($0.name) && !existing.contains($0.name) })
-        return selected.filter(policy.authorizes)
+        return selected
     }
 
     /// 把选中的工具描述转为原生 function calling 定义。

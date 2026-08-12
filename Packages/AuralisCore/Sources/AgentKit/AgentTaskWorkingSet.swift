@@ -26,8 +26,10 @@ public struct AgentToolTrace: Codable, Sendable {
 /// 职责：
 /// 1. **任务级 Tool Result Cache**：同一工具 + 规范化参数再次出现时直接复用结果，
 ///    避免重复查询 / 重复写操作（缓存键含 toolName + 排序后的参数）；
-/// 2. **重复调用保护**：搜索类工具连续多次没有新歌曲时，返回明确提示并禁止继续搜索；
-/// 3. **Task Working Set**：累计唯一候选歌曲、已入队歌曲，达到目标后阻止继续搜索；
+/// 2. **幂等副作用**：相同写操作（同工具 + 同参数）只真正执行一次；不同参数照常执行，
+///    不存在“每任务一次”的互斥保护（例如 queue_replace 可用不同参数多次调用）；
+/// 3. **Task Working Set**：累计唯一候选歌曲、已入队歌曲，仅供诊断/提示统计，
+///    不阻止模型换搜索词或换策略继续；
 /// 4. **诊断统计**：每工具调用次数、缓存命中、唯一歌曲数、最后 N 次调用轨迹。
 public struct AgentTaskWorkingSet: Sendable {
     /// 唯一候选歌曲（来自所有 trackCards 结果）。
@@ -46,18 +48,14 @@ public struct AgentTaskWorkingSet: Sendable {
     public private(set) var noNewResultsStreak = 0
     /// 最近若干次调用轨迹（诊断用）。
     public private(set) var lastTraces: [AgentToolTrace] = []
-    /// 是否已要求模型停止搜索。
-    public private(set) var stopSearching = false
     /// 本次任务明确要求的队列数量。未明确数量时为 nil，不以任意固定常量判定完成。
     public let targetQueueCount: Int?
-    /// 已成功执行的修改型操作：同一语义与参数在一个任务内只能执行一次。
+    /// 已成功执行的修改型操作：同工具 + 同参数幂等复用；不同参数照常执行。
     private var successfulSideEffects: [String: String] = [:]
-    /// 本任务中已经完成的互斥操作。当前只有“替换队列”是互斥的；追加歌曲仍可多次调用。
-    private var completedExclusiveEffects: [String: String] = [:]
 
     /// 缓存条数上限（LRU 语义：超出时丢弃最旧）。
     public static let maxCacheSize = 60
-    /// 连续多少次“无新结果”后提示模型停止搜索。
+    /// 连续多少次“无新结果”后给模型一条信息性提示（不终止任务，模型可换策略）。
     public static let noNewResultsLimit = 3
     /// 允许缓存的只读查询工具（缓存仅限查询，绝不含播放/收藏/评分等可变操作）。
     public static let cacheableTools: Set<String> = [
@@ -129,15 +127,13 @@ public struct AgentTaskWorkingSet: Sendable {
         }
     }
 
-    /// 返回不可执行原因：相同修改操作幂等复用；整轮任务只允许一次替换队列。
+    /// 返回不可执行原因：相同工具 + 相同参数已成功执行过（幂等复用）。
+    /// 不同参数（例如第二次 queue_replace 使用不同的歌曲列表）不受任何互斥保护，照常执行。
     public func sideEffectBlockReason(tool: String, args: [String: String]) -> String? {
         let canonical = Self.canonicalSideEffectTool(tool)
         let signature = Self.signature(tool: canonical, args: args)
         if let summary = successfulSideEffects[signature] {
             return "已跳过重复操作：相同的 \(canonical) 已成功执行（\(summary)），不会再次修改播放器状态。"
-        }
-        if canonical == "queue_replace", let summary = completedExclusiveEffects[canonical] {
-            return "已跳过第二次替换队列：本次任务已成功替换过队列（\(summary)）。如需补充歌曲，请使用 queue_append；不会用新的 replace 覆盖已有队列。"
         }
         return nil
     }
@@ -147,9 +143,6 @@ public struct AgentTaskWorkingSet: Sendable {
         let canonical = Self.canonicalSideEffectTool(tool)
         let signature = Self.signature(tool: canonical, args: args)
         successfulSideEffects[signature] = summary
-        if canonical == "queue_replace" {
-            completedExclusiveEffects[canonical] = summary
-        }
     }
 
     /// 尝试命中缓存：命中返回 true 并更新统计。
@@ -191,19 +184,13 @@ public struct AgentTaskWorkingSet: Sendable {
         } else {
             noNewResultsStreak = 0
         }
-        // 队列已满足目标 或 连续无新结果达到上限 → 停止搜索。
-        if targetQueueCount.map({ queuedSongIDs.count >= $0 }) == true || noNewResultsStreak >= Self.noNewResultsLimit {
-            stopSearching = true
-        }
+        // 仅统计“连续无新结果”的轮次，供信息性提示；不终止搜索、不设置任何停止标志。
         return new.isEmpty
     }
 
-    /// 记录一次入队 / 播放的歌曲 ID。
+    /// 记录一次入队 / 播放的歌曲 ID（仅诊断统计）。
     public mutating func noteQueued(_ ids: [GlobalID]) {
         queuedSongIDs.formUnion(ids)
-        if targetQueueCount.map({ queuedSongIDs.count >= $0 }) == true {
-            stopSearching = true
-        }
     }
 
     /// 从工具参数里解析歌曲 ID 列表（trackIDs / trackID / songIDs / songID）。

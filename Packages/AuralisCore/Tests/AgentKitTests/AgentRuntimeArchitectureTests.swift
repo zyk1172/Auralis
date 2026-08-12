@@ -23,16 +23,18 @@ struct AgentRuntimeArchitectureTests {
         #expect(AgentIntentClassifier.classify(input) == expected)
     }
 
-    @Test func conversationDefaultsToReadOnly() {
+    @Test func conversationPolicyAuthorizesEveryRegisteredTool() {
+        // Intent 不再是能力边界：conversation 也能调用全部已注册工具。
         let policy = AgentTaskPolicy.policy(for: .conversation)
-        #expect(policy.allowedPermissions == [.readOnly])
-        #expect(policy.maxRisk == .none)
+        for tool in AgentToolRegistry.all {
+            #expect(policy.authorizes(tool), "conversation 应允许 \(tool.name)")
+        }
     }
 
-    @Test func playbackCannotCallServerMutation() {
+    @Test func playbackCanCallServerMutationUnderPermissivePolicy() {
         let policy = AgentTaskPolicy.policy(for: .playbackControl)
         let remove = AgentToolRegistry.descriptor(for: "removeServer")!
-        #expect(!policy.authorizes(remove))
+        #expect(policy.authorizes(remove))
     }
 
     @Test func serverManagementCanReadAndMutateServer() {
@@ -41,35 +43,36 @@ struct AgentRuntimeArchitectureTests {
         #expect(policy.authorizes(AgentToolRegistry.descriptor(for: "removeServer")!))
     }
 
-    @Test func appreciationCannotWriteQueue() {
+    @Test func appreciationCanAlsoWriteQueue() {
         let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
         #expect(policy.authorizes(AgentToolRegistry.descriptor(for: "music_appreciate")!))
-        #expect(!policy.authorizes(AgentToolRegistry.descriptor(for: "queue_replace")!))
+        #expect(policy.authorizes(AgentToolRegistry.descriptor(for: "queue_replace")!))
         #expect(policy.budget.maxOutputTokens == 16_000)
     }
 
-    @Test func runtimeRejectsToolBeyondScope() async {
+    @Test func runtimeAllowsRegisteredToolForAnyPolicy() async throws {
         let runtime = AgentRuntime()
-        await #expect(throws: AgentRuntimeError.toolOutsidePolicy("removeServer")) {
-            _ = try await runtime.authorize(tool: "removeServer", policy: .policy(for: .playbackControl))
-        }
+        // 已注册工具不再因 policy 被拒。
+        let descriptor = try await runtime.authorize(tool: "removeServer", policy: .policy(for: .playbackControl))
+        #expect(descriptor.name == "removeServer")
     }
 
-    @Test func grantedScopeIsAnEnforcedAuthorizationBoundary() {
+    @Test func grantedScopeIsDiagnosticsOnlyNotAnAuthorizationBoundary() {
         let conversation = AgentTaskPolicy.policy(for: .conversation)
         let appreciation = AgentTaskPolicy.policy(for: .musicAppreciation)
         let tool = AgentToolRegistry.descriptor(for: "music_appreciate")!
         #expect(tool.requiredScopes == [.catalogRead, .externalRead])
-        #expect(!conversation.authorizes(tool))
+        // scope 只做日志/诊断：conversation 与 appreciation 都能调用该工具。
+        #expect(conversation.authorizes(tool))
         #expect(appreciation.authorizes(tool))
     }
 
-    @Test func queueScopeDoesNotGrantGeneralPlaybackMutation() {
+    @Test func discoveryIntentGrantsQueueAndPlaybackTools() {
         let discovery = AgentTaskPolicy.policy(for: .musicDiscovery)
         let queueAppend = AgentToolRegistry.descriptor(for: "queue_append")!
         let playSong = AgentToolRegistry.descriptor(for: "playback_play_song")!
         #expect(discovery.authorizes(queueAppend))
-        #expect(!discovery.authorizes(playSong))
+        #expect(discovery.authorizes(playSong))
     }
 
     @Test func unknownToolIsRejected() async {
@@ -79,11 +82,12 @@ struct AgentRuntimeArchitectureTests {
         }
     }
 
-    @Test func toolSelectionIsActuallyPolicyFiltered() {
+    @Test func toolSelectionIsNotPolicyFiltered() {
         let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
         let tools = ToolSelector.select(for: "鉴赏并删除服务器", intent: .musicAppreciation, policy: policy, all: AgentToolRegistry.all)
         #expect(tools.contains { $0.name == "music_appreciate" })
-        #expect(!tools.contains { $0.name == "removeServer" })
+        // 关键词命中服务器工具时，不再被 policy 过滤掉。
+        #expect(tools.contains { $0.name == "removeServer" })
         #expect(tools.allSatisfy(policy.authorizes))
     }
 
@@ -94,12 +98,11 @@ struct AgentRuntimeArchitectureTests {
         #expect(state.budgetViolation(policy: policy) == .modelRoundBudgetExceeded)
     }
 
-    @Test func noProgressBudgetStopsAtLimit() {
+    @Test func noProgressNeverTerminates() {
         var state = AgentTaskState(intent: .conversation, goal: "test")
         let policy = AgentTaskPolicy(intent: .conversation, scopes: [], allowedToolGroups: [], budget: .init(maxNoProgressRounds: 2))
-        state.recordNoProgress()
-        state.recordNoProgress()
-        #expect(state.budgetViolation(policy: policy) == .noProgress)
+        for _ in 0..<10 { state.recordNoProgress() }
+        #expect(state.budgetViolation(policy: policy) == nil)
     }
 
     @Test func progressResetsNoProgressCount() {
@@ -241,7 +244,7 @@ struct AgentRuntimeArchitectureTests {
         #expect(summary.contains("evidence=1"))
     }
 
-    @Test func repeatedToolPatternTriggersBudget() {
+    @Test func repeatedToolPatternNeverTerminates() {
         var state = AgentTaskState(intent: .librarySearch, goal: "find")
         let policy = AgentTaskPolicy(
             intent: .librarySearch,
@@ -249,8 +252,9 @@ struct AgentRuntimeArchitectureTests {
             allowedToolGroups: [],
             budget: .init(maxRepeatedToolPattern: 2)
         )
-        for _ in 0..<3 { state.recordToolCall(name: "library_search", arguments: ["query": "same"]) }
-        #expect(state.budgetViolation(policy: policy) == .repeatedToolPattern)
+        for _ in 0..<6 { state.recordToolCall(name: "library_search", arguments: ["query": "same"]) }
+        #expect(state.repeatedToolPatternCount > 2)
+        #expect(state.budgetViolation(policy: policy) == nil)
     }
 
     @Test func changingArgumentsBreaksRepeatedPattern() {
@@ -293,7 +297,7 @@ struct AgentRuntimeArchitectureTests {
             explicitIntent: .musicAppreciation
         )
         #expect(policy.intent == .musicAppreciation)
-        #expect(!policy.authorizes(AgentToolRegistry.descriptor(for: "removeServer")!))
+        #expect(policy.authorizes(AgentToolRegistry.descriptor(for: "removeServer")!))
     }
 
     @Test func fullIndexRequestUsesDeterministicCompletion() {
@@ -338,14 +342,16 @@ struct AgentRuntimeArchitectureTests {
         #expect(state.evidence[0].source == .localCatalog)
     }
 
-    @Test func failedToolDoesNotCreateEvidence() {
+    @Test func failedToolRecordsErrorFactAsProgress() {
         var state = AgentTaskState(intent: .librarySearch, goal: "find")
         let descriptor = AgentToolRegistry.descriptor(for: "library_search")!
         let result = ToolResult(call: .init(name: descriptor.name), permission: .readOnly, success: false, summary: "offline")
         let changed = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &state)
+        // 失败本身是新信息（错误事实）：换策略的依据，不当作停滞。
         #expect(!changed)
         #expect(state.evidence.isEmpty)
-        #expect(state.progress.noProgressRounds == 1)
+        #expect(state.errors.contains("offline"))
+        #expect(state.progress.noProgressRounds == 0)
     }
 
     @Test func queueCompletionRequiresRealMutationFact() {
@@ -434,20 +440,20 @@ struct AgentRuntimeArchitectureTests {
         #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: "推荐几首适合通勤的歌") == nil)
     }
 
-    @Test func workingSetStopsAtRequestedCountOnly() {
+    @Test func workingSetTracksQueuedCountDiagnostically() {
         var state = AgentTaskWorkingSet(targetQueueCount: 2)
         state.noteQueued([
             .init(serverID: .init(rawValue: "s"), remoteID: "1"),
             .init(serverID: .init(rawValue: "s"), remoteID: "2"),
         ])
-        #expect(state.stopSearching)
+        #expect(state.queuedSongIDs.count == 2)
     }
 
-    @Test func workingSetWithoutTargetDoesNotUseLegacyTwentyLimit() {
+    @Test func workingSetWithoutTargetDoesNotInventCounts() {
         var state = AgentTaskWorkingSet()
         let ids = (0..<30).map { GlobalID(serverID: .init(rawValue: "s"), remoteID: "\($0)") }
         state.noteQueued(ids)
-        #expect(!state.stopSearching)
+        #expect(state.queuedSongIDs.count == 30)
     }
 
     @Test func redactorHandlesAuthorizationAndCookieVariants() {
