@@ -28,6 +28,15 @@ struct MacRightPanel: View {
             }
         }
         .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
+        .task(id: lyricLoadID) {
+            if mode == .lyrics {
+                model.ensureLyricsLoadedForCurrentTrack()
+            }
+        }
+    }
+
+    private var lyricLoadID: String {
+        "\(mode.rawValue):\(model.currentTrack.serverID):\(model.currentTrack.id.rawValue)"
     }
 
     private var header: some View {

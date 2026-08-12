@@ -83,6 +83,7 @@ public struct MacFullScreenPlayerView: View {
         }
         .task(id: track.id.rawValue) {
             ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
+            model.ensureLyricsLoadedForCurrentTrack()
         }
     }
 
@@ -526,5 +527,21 @@ private struct MacFullPlayerWindowConfigurator: NSViewRepresentable {
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+// MARK: - 窗口场景包装（注入共享环境，避免独立窗口缺 ArtworkStore/ThemeStore 崩溃）
+
+/// 全屏播放器窗口内容：注入 artworkStore / themeStore 环境。
+public struct MacFullScreenPlayerWindow: View {
+    @ObservedObject public var themeStore: ThemeStore
+    public init(themeStore: ThemeStore) {
+        self.themeStore = themeStore
+    }
+    public var body: some View {
+        MacFullScreenPlayerView(model: .shared, theme: themeStore.current)
+            .environment(AuralisAppModel.shared.artworkStore)
+            .environmentObject(themeStore)
+            .tint(themeStore.current.colorTokens.accent.color)
+            .preferredColorScheme(themeStore.current.colorScheme)
+    }
 }
 #endif

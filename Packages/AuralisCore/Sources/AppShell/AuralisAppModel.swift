@@ -1098,6 +1098,11 @@ public final class AuralisAppModel: ObservableObject {
 
     public var currentLyrics: LyricsDocument? { catalog.lyrics[currentTrack.id] }
 
+    /// 确保当前曲目歌词已按需加载（播放器/歌词面板打开时调用）。
+    public func ensureLyricsLoadedForCurrentTrack() {
+        loadLyricsIfNeeded(for: currentTrack)
+    }
+
     /// Agent 歌词状态查询：区分“有歌词 / 已确认无歌词 / 尚未确认”，
     /// 不把“还没查”误报成“没有歌词”。
     func lyricsAvailability(for trackID: TrackID) -> AgentLyricsState {

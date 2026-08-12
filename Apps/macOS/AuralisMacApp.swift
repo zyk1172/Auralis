@@ -73,11 +73,11 @@ struct AuralisMacApp: App {
             }
         }
         Window("迷你播放器", id: MacWindowID.miniPlayer) {
-            MacMiniPlayerView(model: .shared, themeStore: themeStore)
+            MacMiniPlayerWindow(themeStore: themeStore)
         }
         .windowResizability(.contentSize)
         Window("全屏播放", id: MacWindowID.fullScreenPlayer) {
-            MacFullScreenPlayerView(model: .shared, theme: themeStore.current)
+            MacFullScreenPlayerWindow(themeStore: themeStore)
         }
         Settings {
             MacSettingsHost(themeStore: themeStore)

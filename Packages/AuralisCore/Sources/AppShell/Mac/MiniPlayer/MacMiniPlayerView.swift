@@ -134,4 +134,20 @@ public struct MacMiniPlayerView: View {
         .background(.regularMaterial)
     }
 }
+// MARK: - 窗口场景包装（注入共享环境）
+
+/// 迷你播放器窗口内容：注入 artworkStore / themeStore 环境。
+public struct MacMiniPlayerWindow: View {
+    @ObservedObject public var themeStore: ThemeStore
+    public init(themeStore: ThemeStore) {
+        self.themeStore = themeStore
+    }
+    public var body: some View {
+        MacMiniPlayerView(model: .shared, themeStore: themeStore)
+            .environment(AuralisAppModel.shared.artworkStore)
+            .environmentObject(themeStore)
+            .tint(themeStore.current.colorTokens.accent.color)
+            .preferredColorScheme(themeStore.current.colorScheme)
+    }
+}
 #endif
