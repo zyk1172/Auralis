@@ -15,7 +15,7 @@
 | System Appearance（跟随系统，不强制 Theme） | MATCH（已修正） |
 | Media Tiles（Album/Artist/Playlist/Track 分离） | MATCH（已修正） |
 | Playlist mosaic（真实 2×2 去重） | MATCH（已修正） |
-| Songs Table 默认列 | MATCH（已收敛） |
+| Songs Table 默认列 + 显示选项 | MATCH（已收敛 + View Options 切换年份/流派/格式） |
 | Player Bar 三区稳定布局 | MATCH（已修正） |
 | Lyrics 排版 | MATCH（已修正） |
 | Queue 语义（History/Current/Upcoming） | MATCH（已修正） |
@@ -47,6 +47,8 @@
 - `AuralisMacApp.swift`：新增 迷你播放器/全屏播放 窗口 Scene；菜单按 播放/歌曲/显示/窗口 分组，快捷键对齐（⌘L、⌥⌘U 队列、⌘I 信息、⌘↑/⌘↓ 音量、⇧⌘F 全屏播放、⌥⌘M 迷你播放器；删除 ⇧⌘Q）。
 - `MacSidebarPreferences.swift`（新）：资料库显示/隐藏 + 拖动排序，UserDefaults 持久化；Sidebar「资料库」hover 出现「编辑」。
 - `MacArtistsView.swift`：艺术家改为资料库内二级 split（左侧紧凑列表 + 右侧详情）。
+- `MacSongsView.swift`：新增「显示选项」菜单（年份/流派/格式列开关，@AppStorage 持久化）。
+- `MacPlayerBar.swift`：右侧新增「更多」菜单（不喜欢/取消不喜欢 + 歌曲信息），Favorite 常显、Dislike 低权重。
 - 菜单「文件 → 新建播放列表（⌘N）」：弹窗命名后 `createPlaylist(named:)`。
 
 ## 人工验收

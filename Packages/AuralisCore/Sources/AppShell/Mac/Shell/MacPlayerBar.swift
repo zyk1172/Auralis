@@ -258,12 +258,37 @@ struct MacPlayerBar: View {
     // MARK: - Context controls
 
     private var contextGroup: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             favoriteButton
             lyricsButton
             queueButton
             volumeButton
+            moreButton
         }
+    }
+
+    /// 更多：Dislike（低于 Favorite 的视觉权重）+ 歌曲信息。
+    private var moreButton: some View {
+        Menu {
+            if hasTrack {
+                let disliked = model.isDisliked(model.currentTrack)
+                Button(disliked ? "取消不喜欢" : "不喜欢") {
+                    model.setDisliked(model.currentTrack, value: !disliked, source: "player-more")
+                }
+                Button("歌曲信息") {
+                    NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .foregroundStyle(Color.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("更多")
+        .accessibilityLabel("更多")
+        .disabled(!hasTrack)
     }
 
     private var favoriteButton: some View {
