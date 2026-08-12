@@ -73,6 +73,7 @@ struct MacV2CategoriesView: View {
         case "tempo": "节奏"
         case "acousticness": "原声度"
         case "danceability": "舞动感"
+        case "tag": "AI 标签"
         default: dimension
         }
     }

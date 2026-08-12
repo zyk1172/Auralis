@@ -341,6 +341,7 @@ struct LibraryView: View {
         case "tempo": dimension = "速度"
         case "acousticness": dimension = "原声感"
         case "danceability": dimension = "舞动性"
+        case "tag": dimension = "AI 标签"
         default: dimension = category.dimension
         }
         let suffix: String
@@ -363,6 +364,7 @@ struct LibraryView: View {
         case "tempo": "metronome"
         case "acousticness": "guitars"
         case "danceability": "figure.dance"
+        case "tag": "tag"
         default: "tag"
         }
     }
