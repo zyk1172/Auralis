@@ -20,29 +20,41 @@ struct MacPlaylistListView: View {
     }
 
     var body: some View {
-        ScrollView {
-            GeometryReader { geo in
+        GeometryReader { geo in
+            if playlists.isEmpty {
+                ContentUnavailableView {
+                    Label("暂无播放列表", systemImage: "music.note.list")
+                } description: {
+                    Text("你可以创建播放列表，也可以使用音乐服务器中已经存在的播放列表。")
+                } actions: {
+                    Button("新建播放列表") {
+                        NotificationCenter.default.post(name: MacCommand.newPlaylist, object: nil)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            } else {
                 let metrics = MacArtworkGridMetrics.albums(availableWidth: geo.size.width)
                 let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
-                LazyVGrid(columns: columns, spacing: 28) {
-                    ForEach(playlists) { playlist in
-                        MacPlaylistTile(
-                            playlist: playlist,
-                            model: model,
-                            theme: theme,
-                            size: metrics.itemWidth,
-                            onOpen: { onNavigate(.playlist(playlist)) },
-                            onPlay: {
-                                let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
-                                if !tracks.isEmpty { model.playQueue(tracks) }
-                            }
-                        )
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 28) {
+                        ForEach(playlists) { playlist in
+                            MacPlaylistTile(
+                                playlist: playlist,
+                                model: model,
+                                theme: theme,
+                                size: metrics.itemWidth,
+                                onOpen: { onNavigate(.playlist(playlist)) },
+                                onPlay: {
+                                    let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
+                                    if !tracks.isEmpty { model.playQueue(tracks) }
+                                }
+                            )
+                        }
                     }
+                    .padding(.horizontal, metrics.horizontalPadding)
+                    .padding(.vertical, 20)
                 }
-                .padding(.horizontal, metrics.horizontalPadding)
-                .padding(.vertical, 20)
             }
-            .frame(minHeight: 600)
         }
         .navigationTitle("播放列表")
         .searchable(text: $localSearch, placement: .toolbar, prompt: "在播放列表中查找")

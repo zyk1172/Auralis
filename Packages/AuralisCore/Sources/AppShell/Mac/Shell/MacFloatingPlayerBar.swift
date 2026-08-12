@@ -7,6 +7,7 @@ import ThemeEngine
 struct MacFloatingPlayerBar: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    let namespace: Namespace.ID
     var onOpenFullPlayer: () -> Void = {}
     var onOpenMiniPlayer: () -> Void = {}
     var onToggleLyrics: () -> Void = {}
@@ -20,6 +21,7 @@ struct MacFloatingPlayerBar: View {
     init(
         model: AuralisAppModel,
         theme: BuiltInTheme,
+        namespace: Namespace.ID,
         onOpenFullPlayer: @escaping () -> Void = {},
         onOpenMiniPlayer: @escaping () -> Void = {},
         onToggleLyrics: @escaping () -> Void = {},
@@ -27,6 +29,7 @@ struct MacFloatingPlayerBar: View {
     ) {
         self.model = model
         self.theme = theme
+        self.namespace = namespace
         self.onOpenFullPlayer = onOpenFullPlayer
         self.onOpenMiniPlayer = onOpenMiniPlayer
         self.onToggleLyrics = onToggleLyrics
@@ -39,7 +42,7 @@ struct MacFloatingPlayerBar: View {
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
 
     var body: some View {
-        GlassControlGroup {
+        MacGlassCapsule {
             GeometryReader { geo in
                 let sideWidth = min(230, max(180, geo.size.width * 0.23))
                 HStack(spacing: 10) {
@@ -144,14 +147,15 @@ struct MacFloatingPlayerBar: View {
                     size: 44,
                     cornerRadius: 6
                 )
+                .matchedGeometryEffect(id: "nowPlaying.artwork", in: namespace)
                 .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
             .disabled(!hasTrack)
-            .help("全屏播放器")
-            .accessibilityLabel("全屏播放器")
+            .help("展开播放器")
+            .accessibilityLabel("展开播放器")
             .contextMenu {
-                Button("全屏播放器") { onOpenFullPlayer() }
+                Button("展开播放器") { onOpenFullPlayer() }
                 Button("迷你播放器") { onOpenMiniPlayer() }
             }
 

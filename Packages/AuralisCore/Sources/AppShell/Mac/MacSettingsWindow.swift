@@ -8,49 +8,25 @@ import ThemeEngine
 
 /// macOS 独立设置窗口（Settings Scene）。顶部分类工具栏，内容按分类拆分，不使用 iOS 长列表。
 public struct MacSettingsWindow: View {
-    public init(model: AuralisAppModel, themeStore: ThemeStore) {
+    public init(model: AuralisAppModel, themeStore: ThemeStore, settingsRouter: MacSettingsRouter) {
         self.model = model
         self.themeStore = themeStore
+        self.settingsRouter = settingsRouter
     }
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
-    @State private var category: Category = .general
-
-    private enum Category: String, CaseIterable, Identifiable {
-        case general, server, libraryPlayback, ai, system, about
-        var id: String { rawValue }
-        var title: String {
-            switch self {
-            case .general: "通用"
-            case .server: "服务器"
-            case .libraryPlayback: "资料库与播放"
-            case .ai: "AI 与公开数据"
-            case .system: "系统"
-            case .about: "关于"
-            }
-        }
-        var symbol: String {
-            switch self {
-            case .general: "gearshape"
-            case .server: "server.rack"
-            case .libraryPlayback: "music.note.list"
-            case .ai: "sparkles"
-            case .system: "command"
-            case .about: "info.circle"
-            }
-        }
-    }
+    @ObservedObject var settingsRouter: MacSettingsRouter
 
     private var theme: BuiltInTheme { themeStore.current }
 
     public var body: some View {
-        TabView(selection: $category) {
-            general.tabItem { Label(Category.general.title, systemImage: Category.general.symbol) }.tag(Category.general)
-            server.tabItem { Label(Category.server.title, systemImage: Category.server.symbol) }.tag(Category.server)
-            libraryPlayback.tabItem { Label(Category.libraryPlayback.title, systemImage: Category.libraryPlayback.symbol) }.tag(Category.libraryPlayback)
-            ai.tabItem { Label(Category.ai.title, systemImage: Category.ai.symbol) }.tag(Category.ai)
-            system.tabItem { Label(Category.system.title, systemImage: Category.system.symbol) }.tag(Category.system)
-            about.tabItem { Label(Category.about.title, systemImage: Category.about.symbol) }.tag(Category.about)
+        TabView(selection: $settingsRouter.selection) {
+            general.tabItem { Label(MacSettingsCategory.general.title, systemImage: MacSettingsCategory.general.symbol) }.tag(MacSettingsCategory.general)
+            server.tabItem { Label(MacSettingsCategory.server.title, systemImage: MacSettingsCategory.server.symbol) }.tag(MacSettingsCategory.server)
+            libraryPlayback.tabItem { Label(MacSettingsCategory.libraryPlayback.title, systemImage: MacSettingsCategory.libraryPlayback.symbol) }.tag(MacSettingsCategory.libraryPlayback)
+            ai.tabItem { Label(MacSettingsCategory.ai.title, systemImage: MacSettingsCategory.ai.symbol) }.tag(MacSettingsCategory.ai)
+            system.tabItem { Label(MacSettingsCategory.system.title, systemImage: MacSettingsCategory.system.symbol) }.tag(MacSettingsCategory.system)
+            about.tabItem { Label(MacSettingsCategory.about.title, systemImage: MacSettingsCategory.about.symbol) }.tag(MacSettingsCategory.about)
         }
         .frame(width: 760, height: 560)
         .padding(0)

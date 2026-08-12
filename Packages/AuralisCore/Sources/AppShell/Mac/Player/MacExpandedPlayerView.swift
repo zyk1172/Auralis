@@ -1,97 +1,94 @@
 #if os(macOS)
-import AppKit
 import Domain
 import DesignSystem
 import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
-/// 全屏播放器几何度量（REFERENCE_B：1536×1050 → Artwork ≈475，左距 ≈130，顶 ≈173）。
-enum MacFullPlayerMetrics {
-    static func artworkSize(window: CGSize) -> CGFloat {
-        min(500, max(300, min(window.width * 0.31, window.height * 0.46)))
-    }
-    static func leftMargin(window: CGSize) -> CGFloat { window.width * 0.085 }
-    static func topY(window: CGSize) -> CGFloat { window.height * 0.165 }
-    static func rightColumnWidth(window: CGSize) -> CGFloat {
-        min(560, max(440, window.width * 0.34))
-    }
-    static func horizontalGap(window: CGSize) -> CGFloat { max(52, window.width * 0.035) }
-    static func transportWidth(window: CGSize) -> CGFloat { artworkSize(window: window) }
-}
-
-/// Full Player 右侧上下文：歌词 / 队列。
-enum MacFullPlayerContext: Hashable {
-    case lyrics
-    case queue
-}
-
-/// Apple Music macOS 27 Full Screen Player（REFERENCE_B）：
-/// 全窗 Artwork ambience + 左列（Artwork→TrackInfo→Progress→Transport）+ 常驻右区（Lyrics/Queue）
-/// + 三组 Floating Glass Capsule（左上窗口控制 / 右上音量 / 右下歌词-队列）。
-public struct MacFullScreenPlayerView: View {
+/// 同窗口 Expanded Player（Round-4）：
+/// 覆盖同一主窗口，不新建窗口；三状态 context = none/lyrics/queue。
+/// context=none 时播放器列水平居中；打开歌词/队列时平滑左移 + 右侧 context 淡入。
+struct MacExpandedPlayerView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    @Binding var context: MacExpandedPlayerContext
+    let namespace: Namespace.ID
+    let onCollapse: () -> Void
+    let onOpenMiniPlayer: () -> Void
 
     @State private var ambienceImage: PlatformImage?
-    @State private var window: NSWindow?
-    @State private var didRequestFullscreen = false
-    @State private var context: MacFullPlayerContext = .lyrics
+    @State private var lyricsState: MacLyricsPresentationState = .loading
     @State private var isScrubbing = false
     @State private var scrubValue: TimeInterval = 0
 
     @ObservedObject private var playbackStore: PlaybackStore
 
-    public init(model: AuralisAppModel, theme: BuiltInTheme) {
+    init(
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        context: Binding<MacExpandedPlayerContext>,
+        namespace: Namespace.ID,
+        onCollapse: @escaping () -> Void,
+        onOpenMiniPlayer: @escaping () -> Void
+    ) {
         self.model = model
         self.theme = theme
+        self._context = context
+        self.namespace = namespace
+        self.onCollapse = onCollapse
+        self.onOpenMiniPlayer = onOpenMiniPlayer
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
     }
 
     private var track: Track { model.currentTrack }
     private var duration: TimeInterval { max(model.currentTrack.duration, 1) }
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
+    private var trackGlobalID: String { "\(track.serverID):\(track.id.rawValue)" }
 
-    public var body: some View {
+    var body: some View {
         GeometryReader { geo in
             let size = geo.size
             let artwork = MacFullPlayerMetrics.artworkSize(window: size)
-            let leftX = MacFullPlayerMetrics.leftMargin(window: size)
-            let topY = MacFullPlayerMetrics.topY(window: size)
+            let hasContext = context != .none
+            let leading = hasContext ? MacFullPlayerMetrics.leftMargin(window: size) : max(0, (size.width - artwork) / 2)
 
             ZStack {
                 background
+
                 HStack(alignment: .top, spacing: MacFullPlayerMetrics.horizontalGap(window: size)) {
-                    leftColumn(artworkSize: artwork)
+                    playerColumn(artworkSize: artwork)
                         .frame(width: artwork)
-                    rightContext(artworkSize: artwork)
-                        .frame(width: MacFullPlayerMetrics.rightColumnWidth(window: size))
+                    if hasContext {
+                        rightContext(artworkSize: artwork)
+                            .frame(width: MacFullPlayerMetrics.rightColumnWidth(window: size))
+                            .transition(.opacity)
+                    }
                     Spacer(minLength: 0)
                 }
-                .padding(.leading, leftX)
-                .padding(.top, topY)
+                .padding(.leading, leading)
+                .padding(.top, MacFullPlayerMetrics.topY(window: size))
 
+                // Glass Capsules（只对内容命中）
                 topLeftGlass
                 topRightVolumeGlass
                 bottomRightContextGlass
             }
+            .animation(.easeInOut(duration: 0.25), value: context)
         }
-        .background(WindowAccessor { window = $0 })
-        .background(MacFullPlayerWindowConfigurator())
-        .onAppear {
-            enterFullScreenIfNeeded()
-        }
-        .task(id: track.id.rawValue) {
+        .task(id: trackGlobalID) {
             ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
-            model.ensureLyricsLoadedForCurrentTrack()
+            await loadLyrics()
+        }
+        .onChange(of: trackGlobalID) { _, _ in
+            Task { await loadLyrics() }
         }
     }
 
-    // MARK: - 背景（全窗 Artwork ambience）
+    // MARK: - 背景
 
     private var background: some View {
         ZStack {
-            if let ambienceImage {
+            if let ambienceImage, model.currentTrack.artworkKey != nil {
                 Image(platformImage: ambienceImage)
                     .resizable()
                     .scaledToFill()
@@ -101,7 +98,7 @@ public struct MacFullScreenPlayerView: View {
                     .scaleEffect(1.15)
                     .clipped()
             } else {
-                LinearGradient(colors: [.black, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.black.opacity(0.9), .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
             }
             Color.black.opacity(0.30)
         }
@@ -109,9 +106,9 @@ public struct MacFullScreenPlayerView: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: - 左列
+    // MARK: - 播放器列
 
-    private func leftColumn(artworkSize: CGFloat) -> some View {
+    private func playerColumn(artworkSize: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ArtworkView(
                 title: track.albumTitle,
@@ -120,6 +117,7 @@ public struct MacFullScreenPlayerView: View {
                 size: artworkSize,
                 cornerRadius: 14
             )
+            .matchedGeometryEffect(id: "nowPlaying.artwork", in: namespace)
             .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
             .accessibilityLabel("\(track.albumTitle) 封面")
 
@@ -155,7 +153,7 @@ public struct MacFullScreenPlayerView: View {
             Button {
                 model.toggleFavorite(track)
             } label: {
-                Image(systemName: track.isFavorite ? "star.fill" : "star")
+                Image(systemName: track.isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 20))
                     .foregroundStyle(track.isFavorite ? MacMediaAccent.color : .white.opacity(0.8))
             }
@@ -166,10 +164,18 @@ public struct MacFullScreenPlayerView: View {
                 if model.hasCurrentTrack {
                     let disliked = model.isDisliked(model.currentTrack)
                     Button(disliked ? "取消不喜欢" : "不喜欢") {
-                        model.setDisliked(model.currentTrack, value: !disliked, source: "full-player")
+                        model.setDisliked(model.currentTrack, value: !disliked, source: "expanded-player")
                     }
                     Button("歌曲信息") {
                         NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
+                    }
+                    Button("歌曲鉴赏") {
+                        NotificationCenter.default.post(name: MacCommand.songAppreciation, object: model.currentTrack)
+                    }
+                    if model.isDownloaded(model.currentTrack) {
+                        Button("删除下载", role: .destructive) { model.removeDownload(model.currentTrack) }
+                    } else {
+                        Button("下载") { model.download(model.currentTrack) }
                     }
                 }
             } label: {
@@ -272,24 +278,39 @@ public struct MacFullScreenPlayerView: View {
         .frame(width: artworkSize)
     }
 
-    // MARK: - 右区（Lyrics / Queue 常驻）
+    // MARK: - 右侧 Context
 
     private func rightContext(artworkSize: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             switch context {
-            case .lyrics: lyricsPane
-            case .queue: queuePane
+            case .none:
+                EmptyView()
+            case .lyrics:
+                lyricsPane
+            case .queue:
+                queuePane
             }
         }
+        .frame(maxHeight: .infinity)
     }
 
     private var lyricsPane: some View {
         Group {
-            if let lines = model.currentLyrics?.lines, !lines.isEmpty {
+            switch lyricsState {
+            case .loading:
+                VStack(spacing: 10) {
+                    Spacer()
+                    ProgressView().controlSize(.small).tint(.white)
+                    Text("正在加载歌词…")
+                        .font(.body)
+                        .foregroundStyle(.white.opacity(0.6))
+                    Spacer()
+                }
+            case let .available(lyrics) where !lyrics.lines.isEmpty:
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 20) {
-                            ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
+                            ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                                 let isCurrent = currentLyricIndex == index
                                 Text(line.text)
                                     .font(.system(size: isCurrent ? 29 : 23, weight: isCurrent ? .semibold : .regular))
@@ -312,13 +333,17 @@ public struct MacFullScreenPlayerView: View {
                         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(index, anchor: .center) }
                     }
                 }
-            } else {
-                VStack(spacing: 10) {
+            case .available:
+                unavailableView
+            case .unavailable:
+                unavailableView
+            case let .error(message):
+                VStack(spacing: 8) {
                     Spacer()
-                    Text("无可用歌词")
+                    Text("歌词加载失败")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.85))
-                    Text("此歌曲没有任何可用的歌词。")
+                    Text(message)
                         .font(.body)
                         .foregroundStyle(.white.opacity(0.5))
                     Spacer()
@@ -326,14 +351,27 @@ public struct MacFullScreenPlayerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(maxHeight: .infinity)
+    }
+
+    private var unavailableView: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Text("无可用歌词")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.85))
+            Text("此歌曲没有任何可用的歌词。")
+                .font(.body)
+                .foregroundStyle(.white.opacity(0.5))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var currentLyricIndex: Int? {
-        guard let lines = model.currentLyrics?.lines else { return nil }
+        guard case let .available(lyrics) = lyricsState else { return nil }
         let position = playbackStore.position
         var index: Int?
-        for (i, line) in lines.enumerated() {
+        for (i, line) in lyrics.lines.enumerated() {
             if let start = line.startTime, start <= position + 0.15 { index = i }
         }
         return index
@@ -341,19 +379,27 @@ public struct MacFullScreenPlayerView: View {
 
     private var queuePane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("待播队列")
-                .font(.headline)
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(.bottom, 10)
+            HStack {
+                Text("待播队列")
+                    .font(.headline)
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer()
+                if !model.upcomingTracks.isEmpty {
+                    Button("清除") { model.clearUpcoming() }
+                        .buttonStyle(.link)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            .padding(.bottom, 10)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     if model.hasCurrentTrack {
                         queueRow(model.currentTrack, isCurrent: true)
                     }
-                    ForEach(Array(model.upcomingTracks.enumerated()), id: \.element.id) { offset, track in
-                        queueRow(track, isCurrent: false)
+                    ForEach(Array(model.upcomingTracks.enumerated()), id: \.element.id) { offset, queueTrack in
+                        queueRow(queueTrack, isCurrent: false)
                             .contextMenu {
-                                Button("立即播放") { model.selectAndPlay(track) }
+                                Button("立即播放") { model.selectAndPlay(queueTrack) }
                                 Button("从队列移除") {
                                     let real = (model.currentQueueIndex ?? -1) + 1 + offset
                                     model.removeFromQueue(atOffsets: IndexSet([real]))
@@ -383,165 +429,112 @@ public struct MacFullScreenPlayerView: View {
             Spacer()
         }
         .padding(.vertical, 4)
+        .onTapGesture(count: 2) {
+            model.selectAndPlay(queueTrack)
+        }
     }
 
-    // MARK: - Glass Capsules
+    // MARK: - Glass Capsules（.overlay(alignment:) 定位，避免整屏透明容器吞点击）
 
     private var topLeftGlass: some View {
-        VStack {
-            HStack(spacing: 14) {
-                Button(action: close) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+        Color.clear
+            .overlay(alignment: .topLeading) {
+                MacGlassCapsule {
+                    HStack(spacing: 14) {
+                        Button(action: onCollapse) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        .buttonStyle(.plain)
+                        .help("收起播放器")
+                        .accessibilityLabel("收起播放器")
+                        Button(action: onOpenMiniPlayer) {
+                            Image(systemName: "pip")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        .buttonStyle(.plain)
+                        .help("切换迷你播放器")
+                        .accessibilityLabel("切换迷你播放器")
+                    }
+                    .padding(.horizontal, 18)
+                    .frame(height: 44)
                 }
-                .buttonStyle(.plain)
-                .help("关闭全屏播放器")
-                .accessibilityLabel("关闭全屏播放器")
-                Button(action: openMiniPlayer) {
-                    Image(systemName: "pip")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                .buttonStyle(.plain)
-                .help("切换迷你播放器")
-                .accessibilityLabel("切换迷你播放器")
+                .padding(.leading, 20)
+                .padding(.top, 14)
             }
-            .padding(.horizontal, 20)
-            .frame(height: 46)
-            .background(GlassControlGroup { EmptyView() })
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.leading, 20)
-        .padding(.top, 14)
     }
 
     private var topRightVolumeGlass: some View {
-        VStack {
-            HStack(spacing: 12) {
-                Image(systemName: "speaker.wave.3.fill")
-                    .font(.system(size: 15))
-                    .foregroundStyle(.white.opacity(0.85))
-                Slider(value: Binding(
-                    get: { model.volume },
-                    set: { model.setVolume($0) }
-                ), in: 0...1)
-                .controlSize(.small)
-                .frame(width: 150)
-                .accessibilityLabel("音量")
+        Color.clear
+            .overlay(alignment: .topTrailing) {
+                MacGlassCapsule {
+                    HStack(spacing: 12) {
+                        Image(systemName: "speaker.wave.3.fill")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white.opacity(0.85))
+                        Slider(value: Binding(
+                            get: { model.volume },
+                            set: { model.setVolume($0) }
+                        ), in: 0...1)
+                        .controlSize(.small)
+                        .frame(width: 150)
+                        .accessibilityLabel("音量")
+                    }
+                    .padding(.horizontal, 18)
+                    .frame(height: 46)
+                }
+                .padding(.trailing, 20)
+                .padding(.top, 14)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 48)
-            .background(GlassControlGroup { EmptyView() })
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .padding(.trailing, 20)
-        .padding(.top, 14)
     }
 
     private var bottomRightContextGlass: some View {
-        VStack {
-            Spacer()
-            HStack(spacing: 22) {
-                Button {
-                    context = .lyrics
-                } label: {
-                    Image(systemName: "quote.bubble")
-                        .font(.system(size: 16))
-                        .foregroundStyle(context == .lyrics ? MacMediaAccent.color : .white.opacity(0.85))
+        Color.clear
+            .overlay(alignment: .bottomTrailing) {
+                MacGlassCapsule {
+                    HStack(spacing: 22) {
+                        Button {
+                            context = context == .lyrics ? .none : .lyrics
+                        } label: {
+                            Image(systemName: "quote.bubble")
+                                .font(.system(size: 16))
+                                .foregroundStyle(context == .lyrics ? MacMediaAccent.color : .white.opacity(0.85))
+                        }
+                        .buttonStyle(.plain)
+                        .help("歌词")
+                        .accessibilityLabel("歌词")
+                        Button {
+                            context = context == .queue ? .none : .queue
+                        } label: {
+                            Image(systemName: "list.bullet")
+                                .font(.system(size: 16))
+                                .foregroundStyle(context == .queue ? MacMediaAccent.color : .white.opacity(0.85))
+                        }
+                        .buttonStyle(.plain)
+                        .help("队列")
+                        .accessibilityLabel("队列")
+                    }
+                    .padding(.horizontal, 20)
+                    .frame(height: 46)
                 }
-                .buttonStyle(.plain)
-                .help("歌词")
-                .accessibilityLabel("歌词")
-                Button {
-                    context = .queue
-                } label: {
-                    Image(systemName: "list.bullet")
-                        .font(.system(size: 16))
-                        .foregroundStyle(context == .queue ? MacMediaAccent.color : .white.opacity(0.85))
-                }
-                .buttonStyle(.plain)
-                .help("队列")
-                .accessibilityLabel("队列")
+                .padding(.trailing, 20)
+                .padding(.bottom, 20)
             }
-            .padding(.horizontal, 22)
-            .frame(height: 48)
-            .background(GlassControlGroup { EmptyView() })
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-        .padding(.trailing, 20)
-        .padding(.bottom, 20)
     }
 
-    // MARK: - Window 控制
+    // MARK: - 加载
 
-    private func enterFullScreenIfNeeded() {
-        guard !didRequestFullscreen else { return }
-        didRequestFullscreen = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            guard let window else { return }
-            if !window.styleMask.contains(.fullScreen) {
-                window.toggleFullScreen(nil)
-            }
-        }
-    }
-
-    private func close() {
-        guard let window else { return }
-        if window.styleMask.contains(.fullScreen) {
-            window.toggleFullScreen(nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { window.close() }
+    private func loadLyrics() async {
+        lyricsState = .loading
+        model.ensureLyricsLoadedForCurrentTrack()
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        if let lyrics = model.currentLyrics {
+            lyricsState = .available(lyrics)
         } else {
-            window.close()
+            lyricsState = .unavailable
         }
-    }
-
-    private func openMiniPlayer() {
-        NotificationCenter.default.post(name: MacCommand.showMiniPlayer, object: nil)
-    }
-}
-
-/// 捕获承载视图的 NSWindow。
-private struct WindowAccessor: NSViewRepresentable {
-    let onWindow: (NSWindow?) -> Void
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { onWindow(view.window) }
-        return view
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-/// 只作用于 Full Screen Player 窗口：透明 titlebar + 隐藏标题 + fullSizeContentView。
-private struct MacFullPlayerWindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-            window.styleMask.insert(.fullSizeContentView)
-        }
-        return view
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-// MARK: - 窗口场景包装（注入共享环境，避免独立窗口缺 ArtworkStore/ThemeStore 崩溃）
-
-/// 全屏播放器窗口内容：注入 artworkStore / themeStore 环境。
-public struct MacFullScreenPlayerWindow: View {
-    @ObservedObject public var themeStore: ThemeStore
-    public init(themeStore: ThemeStore) {
-        self.themeStore = themeStore
-    }
-    public var body: some View {
-        MacFullScreenPlayerView(model: .shared, theme: themeStore.current)
-            .environment(AuralisAppModel.shared.artworkStore)
-            .environmentObject(themeStore)
-            .tint(themeStore.current.colorTokens.accent.color)
-            .preferredColorScheme(themeStore.current.colorScheme)
     }
 }
 #endif

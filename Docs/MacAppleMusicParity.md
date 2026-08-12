@@ -65,3 +65,18 @@
 - Full Player：按 REFERENCE_B 重排（Artwork≈31% 宽、左列 TrackInfo/Progress/Transport、右区 Lyrics/Queue 常驻、三组 Glass Capsule、全窗 ambience、透明 titlebar、enterFullScreenIfNeeded）。
 - MacNowPlayingView 退役；⌘L 定位当前歌曲。
 - 视觉状态一律 MANUAL-VISUAL-VERIFY（见 Docs/MacVisualParity.md）。
+
+## Round-4（Interaction Parity）
+
+- **同窗口 Expanded Player**：删除独立 `Window("全屏播放")` / `MacFullScreenPlayerWindow` / `openWindow(fullScreenPlayer)`；`MacPlayerPresentation(.library/.expanded)` 由 Shell 管理，Expanded Player 覆盖同一主窗口（`MacExpandedPlayerView`，ZStack + zIndex），保留 traffic lights，不新建 NSWindow。
+- **点击底部封面**：在当前窗口向上展开（`matchedGeometryEffect("nowPlaying.artwork")` + spring 0.42）；右键菜单可「展开播放器 / 迷你播放器」。
+- **窗口 → 全屏播放器**：先在当前窗口展开，再 `toggleFullScreen` 同一窗口；× / Esc 先退全屏再收起；收起后恢复原 Sidebar/页面/Scroll/Search 状态。
+- **Expanded 三状态**：`MacExpandedPlayerContext(none/lyrics/queue)`；none 时播放器列水平居中，歌词/队列时左移 + 右侧 context 淡入；左上 Glass（× + 迷你）、右上常驻音量 Glass、右下歌词/队列 Glass（`.overlay(alignment:)` 定位，内容进 Glass，无 EmptyView 假背景、无整屏透明吞点击）。
+- **Tile 点击**：Album/Artist/Playlist/Track Tile 删除父级 `onTapGesture`；Artwork/Title 为独立 `Button(onOpen)`，Play/More 分离；Menu destructive role 生效。
+- **Search**：未解析实体显示「已不在本地资料库」且不可点（删除 placeholderTrack 参与真实动作）；最近艺术家按 (serverID, artistID) 双键；搜索状态 idle/searching/results/empty + 200ms debounce。
+- **Grid**：Album/Playlist Grid 改为 GeometryReader 测宽 + 内部 ScrollView（不再 `ScrollView>GeometryReader+minHeight(600)`）。
+- **Server → Settings**：删除 `MacSidebarDestination.server` 与 Sidebar/Shell 的 Server 页；新增 `MacSettingsRouter`（深链 Server 分类）；连接错误/首页空态改为「打开服务器设置」（`openSettings`）。
+- **Liquid Glass**：`MacGlassCapsule` —— macOS 26+ 用真实 `glassEffect(.regular.interactive(), in: Capsule())`（已核对 Xcode 27 SDK），macOS 15 fallback ultraThinMaterial 胶囊。
+- **假功能移除**：AlbumSort 移除不真实的「最近添加」；Playlist 空态提供「新建播放列表」。
+- **未复制 Apple 业务**：无 广播/Apple Music scope/账户/订阅/AutoPlay/Crossfade/SharePlay/Apple Logo。
+- 视觉状态一律 MANUAL-VISUAL-VERIFY（见 Docs/MacVisualParity.md）。

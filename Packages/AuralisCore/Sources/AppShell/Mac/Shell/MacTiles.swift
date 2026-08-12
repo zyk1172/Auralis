@@ -103,77 +103,91 @@ struct MacAlbumTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
-                ArtworkView(
-                    title: album.title,
-                    artworkKey: album.artworkKey,
-                    colors: theme.colorTokens,
-                    size: size,
-                    cornerRadius: MacLayout.artworkCornerRadius
-                )
-                .shadow(color: .black.opacity(0.14), radius: 3, y: 1)
-                .accessibilityHidden(true)
+                Button {
+                    onOpen?()
+                } label: {
+                    ArtworkView(
+                        title: album.title,
+                        artworkKey: album.artworkKey,
+                        colors: theme.colorTokens,
+                        size: size,
+                        cornerRadius: MacLayout.artworkCornerRadius
+                    )
+                    .shadow(color: .black.opacity(0.14), radius: 3, y: 1)
+                    .contentShape(RoundedRectangle(cornerRadius: MacLayout.artworkCornerRadius, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("打开专辑")
+                .accessibilityLabel("打开专辑")
+
                 if isHovering {
-                    hoverControls
-                        .padding(8)
-                        .transition(.opacity)
+                    HStack(spacing: 6) {
+                        if let onPlay {
+                            Button {
+                                onPlay()
+                            } label: {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .frame(width: 30, height: 30)
+                                    .background(.thinMaterial, in: Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("播放")
+                            .accessibilityLabel("播放")
+                        }
+                        if !moreActions.isEmpty {
+                            Menu {
+                                ForEach(moreActions) { action in
+                                    Button(role: action.destructive ? .destructive : nil) {
+                                        action.action()
+                                    } label: {
+                                        Label(action.title, systemImage: action.systemImage ?? "circle")
+                                    }
+                                    .disabled(action.disabled)
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .frame(width: 30, height: 30)
+                                    .background(.thinMaterial, in: Circle())
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .help("更多操作")
+                            .accessibilityLabel("更多操作")
+                        }
+                    }
+                    .padding(8)
+                    .transition(.opacity)
                 }
             }
             .frame(width: size, height: size)
-            Text(album.title)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-            Text(album.artistName)
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
+            Button {
+                onOpen?()
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(album.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                    Text(album.artistName)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(width: size, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("打开专辑")
+            .accessibilityLabel("打开专辑")
         }
         .frame(width: size, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { onOpen?() }
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.16), value: isHovering)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(album.title)，\(album.artistName)")
-    }
-
-    private var hoverControls: some View {
-        HStack(spacing: 6) {
-            if let onPlay {
-                Button {
-                    onPlay()
-                } label: {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 30, height: 30)
-                        .background(.thinMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("播放")
-                .accessibilityLabel("播放")
-            }
-            if !moreActions.isEmpty {
-                Menu {
-                    ForEach(moreActions) { action in
-                        Button {
-                            action.action()
-                        } label: {
-                            Label(action.title, systemImage: action.systemImage ?? "circle")
-                        }
-                        .disabled(action.disabled)
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 30, height: 30)
-                        .background(.thinMaterial, in: Circle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("更多操作")
-                .accessibilityLabel("更多操作")
-            }
-        }
     }
 }
 
@@ -194,9 +208,17 @@ struct MacArtistTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
-                artistArtwork
-                    .frame(width: size, height: size)
-                    .accessibilityHidden(true)
+                Button {
+                    onOpen?()
+                } label: {
+                    artistArtwork
+                        .frame(width: size, height: size)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("打开艺术家")
+                .accessibilityLabel("打开艺术家")
+
                 if isHovering {
                     Button {
                         onPlay?()
@@ -213,21 +235,31 @@ struct MacArtistTile: View {
                     .transition(.opacity)
                 }
             }
-            Text(artist.name)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-            Text("\(artist.albumCount) 张专辑")
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
+            Button {
+                onOpen?()
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(artist.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                    Text("\(artist.albumCount) 张专辑")
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(width: size, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("打开艺术家")
+            .accessibilityLabel("打开艺术家")
         }
         .frame(width: size, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { onOpen?() }
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.16), value: isHovering)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(artist.name)，\(artist.albumCount) 张专辑")
     }
 
     @ViewBuilder
@@ -269,8 +301,16 @@ struct MacPlaylistTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
-                MacPlaylistArtwork(playlist: playlist, model: model, theme: theme, size: size)
-                    .accessibilityHidden(true)
+                Button {
+                    onOpen?()
+                } label: {
+                    MacPlaylistArtwork(playlist: playlist, model: model, theme: theme, size: size)
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("打开播放列表")
+                .accessibilityLabel("打开播放列表")
+
                 if isHovering {
                     HStack(spacing: 6) {
                         if let onPlay {
@@ -289,7 +329,7 @@ struct MacPlaylistTile: View {
                         if !moreActions.isEmpty {
                             Menu {
                                 ForEach(moreActions) { action in
-                                    Button {
+                                    Button(role: action.destructive ? .destructive : nil) {
                                         action.action()
                                     } label: {
                                         Label(action.title, systemImage: action.systemImage ?? "circle")
@@ -312,21 +352,31 @@ struct MacPlaylistTile: View {
                     .transition(.opacity)
                 }
             }
-            Text(playlist.name)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-            Text("\(MacLibraryQuery.playlistTracks(playlist, model: model).count) 首")
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
+            Button {
+                onOpen?()
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(playlist.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                    Text("\(MacLibraryQuery.playlistTracks(playlist, model: model).count) 首")
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(width: size, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("打开播放列表")
+            .accessibilityLabel("打开播放列表")
         }
         .frame(width: size, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { onOpen?() }
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.16), value: isHovering)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(playlist.name)
     }
 }
 
@@ -346,14 +396,22 @@ struct MacTrackTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
-                ArtworkView(
-                    title: track.albumTitle,
-                    artworkKey: track.artworkKey,
-                    colors: theme.colorTokens,
-                    size: size,
-                    cornerRadius: MacLayout.artworkCornerRadius
-                )
-                .accessibilityHidden(true)
+                Button {
+                    onOpen?()
+                } label: {
+                    ArtworkView(
+                        title: track.albumTitle,
+                        artworkKey: track.artworkKey,
+                        colors: theme.colorTokens,
+                        size: size,
+                        cornerRadius: MacLayout.artworkCornerRadius
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: MacLayout.artworkCornerRadius, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("播放")
+                .accessibilityLabel("播放")
+
                 if isHovering, let onPlay {
                     Button {
                         onPlay()
@@ -371,21 +429,31 @@ struct MacTrackTile: View {
                 }
             }
             .frame(width: size, height: size)
-            Text(track.title)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-            Text(track.artistName)
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
+            Button {
+                onOpen?()
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                    Text(track.artistName)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(width: size, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("播放")
+            .accessibilityLabel("播放")
         }
         .frame(width: size, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { onOpen?() }
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.16), value: isHovering)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(track.title)，\(track.artistName)")
     }
 }
 

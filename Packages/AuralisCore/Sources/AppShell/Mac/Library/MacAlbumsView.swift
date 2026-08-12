@@ -15,14 +15,13 @@ struct MacAlbumsView: View {
     @State private var sortOrder: AlbumSort = .title
 
     enum AlbumSort: String, CaseIterable, Identifiable {
-        case title, artist, year, recentlyAdded
+        case title, artist, year
         var id: String { rawValue }
         var title: String {
             switch self {
             case .title: "标题"
             case .artist: "艺术家"
             case .year: "年份"
-            case .recentlyAdded: "最近添加"
             }
         }
     }
@@ -46,18 +45,15 @@ struct MacAlbumsView: View {
                 let ry = $1.year ?? Int.min
                 return ly != ry ? ly > ry : $0.title.localizedStandardCompare($1.title) == .orderedAscending
             }
-        case .recentlyAdded:
-            // 以本地曲目库中的专辑出现顺序近似；保持 Catalog 顺序稳定即可。
-            result.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         }
         return result
     }
 
     var body: some View {
-        ScrollView {
-            GeometryReader { geo in
-                let metrics = MacArtworkGridMetrics.albums(availableWidth: geo.size.width)
-                let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
+        GeometryReader { geo in
+            let metrics = MacArtworkGridMetrics.albums(availableWidth: geo.size.width)
+            let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
+            ScrollView {
                 LazyVGrid(columns: columns, spacing: 28) {
                     ForEach(filteredAlbums) { album in
                         MacAlbumTile(
@@ -74,7 +70,6 @@ struct MacAlbumsView: View {
                 .padding(.horizontal, metrics.horizontalPadding)
                 .padding(.vertical, 20)
             }
-            .frame(minHeight: 600)
         }
         .navigationTitle("专辑")
         .searchable(text: $localSearch, placement: .toolbar, prompt: "在专辑中查找")

@@ -6,10 +6,12 @@ import ThemeEngine
 struct AuralisMacApp: App {
     /// 唯一长期 ThemeStore：主窗口与 Settings Scene 共享。
     @StateObject private var themeStore = ThemeStore()
+    /// 设置路由：主窗口错误恢复可深链到 Settings 的「服务器」分类。
+    @StateObject private var settingsRouter = MacSettingsRouter()
 
     var body: some Scene {
         WindowGroup("澜音") {
-            MacMusicShell(model: .shared, themeStore: themeStore)
+            MacMusicShell(model: .shared, themeStore: themeStore, settingsRouter: settingsRouter)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1280, height: 820)
@@ -76,11 +78,8 @@ struct AuralisMacApp: App {
             MacMiniPlayerWindow(themeStore: themeStore)
         }
         .windowResizability(.contentSize)
-        Window("全屏播放", id: MacWindowID.fullScreenPlayer) {
-            MacFullScreenPlayerWindow(themeStore: themeStore)
-        }
         Settings {
-            MacSettingsHost(themeStore: themeStore)
+            MacSettingsHost(themeStore: themeStore, settingsRouter: settingsRouter)
         }
     }
 
@@ -98,14 +97,16 @@ struct AuralisMacApp: App {
 struct MacSettingsHost: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
+    @ObservedObject var settingsRouter: MacSettingsRouter
 
-    init(themeStore: ThemeStore, model: AuralisAppModel = .shared) {
+    init(themeStore: ThemeStore, model: AuralisAppModel = .shared, settingsRouter: MacSettingsRouter) {
         self.themeStore = themeStore
         self.model = model
+        self.settingsRouter = settingsRouter
     }
 
     var body: some View {
-        MacSettingsWindow(model: model, themeStore: themeStore)
+        MacSettingsWindow(model: model, themeStore: themeStore, settingsRouter: settingsRouter)
             .environmentObject(model)
             .environmentObject(themeStore)
     }

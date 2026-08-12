@@ -47,7 +47,6 @@ enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
     case playlists
     case categories
     case assistant
-    case server
 
     var id: String { rawValue }
 
@@ -67,7 +66,6 @@ enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
         case .playlists: "播放列表"
         case .categories: "分类"
         case .assistant: "AI 助手"
-        case .server: "服务器"
         }
     }
 
@@ -87,7 +85,6 @@ enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
         case .playlists: "music.note.list"
         case .categories: "square.grid.2x2"
         case .assistant: "sparkles"
-        case .server: "server.rack"
         }
     }
 }
@@ -269,6 +266,52 @@ extension MacNavigationTarget {
     static func genre(_ genre: Genre) -> MacNavigationTarget {
         .detail(.genre(genre.name))
     }
+}
+
+// MARK: - 播放器展示状态（Round-4 同窗口展开）
+
+/// 播放器在窗口内的展示模式：
+/// - `.library`：普通资料库 + 底部悬浮播放器；
+/// - `.expanded`：同一主窗口内展开为沉浸播放器（不新建窗口）。
+enum MacPlayerPresentation: Equatable {
+    case library
+    case expanded
+}
+
+/// Expanded Player 右侧上下文：无 / 歌词 / 队列。
+enum MacExpandedPlayerContext: Hashable {
+    case none
+    case lyrics
+    case queue
+
+    /// 点当前激活按钮 → 关闭；点另一个 → 切换。
+    func toggled(_ tapped: MacExpandedPlayerContext) -> MacExpandedPlayerContext {
+        self == tapped ? .none : tapped
+    }
+}
+
+/// 歌词加载状态：区分 加载中 / 可用 / 确实无 / 错误，避免把加载中误判为无歌词。
+enum MacLyricsPresentationState: Equatable {
+    case loading
+    case available(LyricsDocument)
+    case unavailable
+    case error(String)
+}
+
+
+// MARK: - Expanded Player 几何度量（REFERENCE_B）
+
+enum MacFullPlayerMetrics {
+    static func artworkSize(window: CGSize) -> CGFloat {
+        min(500, max(300, min(window.width * 0.31, window.height * 0.46)))
+    }
+    static func leftMargin(window: CGSize) -> CGFloat { window.width * 0.085 }
+    static func topY(window: CGSize) -> CGFloat { window.height * 0.165 }
+    static func rightColumnWidth(window: CGSize) -> CGFloat {
+        min(560, max(440, window.width * 0.34))
+    }
+    static func horizontalGap(window: CGSize) -> CGFloat { max(52, window.width * 0.035) }
+    static func transportWidth(window: CGSize) -> CGFloat { artworkSize(window: window) }
 }
 
 #endif

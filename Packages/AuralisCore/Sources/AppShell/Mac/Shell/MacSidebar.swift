@@ -36,7 +36,6 @@ struct MacSidebar: View {
                 sidebarRow(.categories)
                 sidebarRow(.disliked)
                 sidebarRow(.assistant)
-                sidebarRow(.server)
             }
         }
         .listStyle(.sidebar)

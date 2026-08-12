@@ -49,3 +49,12 @@
 - iOS：`ArtworkPlaceholderStyle` 默认 `.auralis`，无视觉变化。
 - Liquid Glass 仅用于 CONTROL LAYER（Floating Player / Full Player Capsules）；内容层无 glass。
 - `MacMediaAccent`（pink/red）统一 active Shuffle/Repeat/Favorite。
+
+## Round-4（Interaction）补充
+
+- Expanded Player：同窗口覆盖（非新窗口）；none 时播放器列水平居中，lyrics/queue 时左移+右栏。
+- 点击底部封面 → 当前窗口向上展开（matchedGeometryEffect）；窗口→全屏播放器 = 展开 + 同窗 toggleFullScreen。
+- 三组 Glass Capsule（左上/右上音量/右下歌词-队列）用 `.overlay(alignment:)` + 内容进 `MacGlassCapsule`（macOS26 glassEffect，15 fallback），无整屏透明容器。
+- Sidebar 无 Server；服务器仅 Settings（`MacSettingsRouter` 深链）。首页空态「打开服务器设置」。
+- 验证：AuralisMac + Auralis generic build PASS；AppShellTests 128/128、LocalCatalogTests 38/38。
+- 视觉与点击验收：MANUAL-VISUAL-VERIFY（需真机；本 Agent 无 GUI 截图能力）。

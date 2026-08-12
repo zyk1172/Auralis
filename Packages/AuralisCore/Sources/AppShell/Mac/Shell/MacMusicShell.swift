@@ -5,12 +5,13 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
-/// macOS 主窗口 Shell（REFERENCE_A）：
-/// Sidebar（含 搜索 一级页） + 主内容 NavigationStack + 悬浮 Liquid Glass 播放器（detail overlay）+ 右侧 Lyrics/Queue 面板。
-/// 全局 Toolbar 不再放 Player 控制；每页提供自己的上下文 Toolbar 与本地搜索。
+/// macOS 主窗口 Shell（Round-4）：
+/// 普通资料库 UI + 同一窗口内的 Expanded Player 覆盖（不新建 Full Player 窗口）。
+/// 展开/收起只改 presentation state，不改 navigation selection / path / scroll / search。
 public struct MacMusicShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
+    @ObservedObject var settingsRouter: MacSettingsRouter
 
     @StateObject private var navigation = MacNavigationModel()
     @StateObject private var sidebarPrefs = MacSidebarPreferences()
@@ -22,22 +23,50 @@ public struct MacMusicShell: View {
     @State private var isCreatingPlaylist = false
     @State private var newPlaylistName = ""
 
+    @State private var playerPresentation: MacPlayerPresentation = .library
+    @State private var expandedContext: MacExpandedPlayerContext = .none
+    @Namespace private var playerTransitionNamespace
+
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     private var theme: BuiltInTheme { themeStore.current }
 
-    public init(model: AuralisAppModel, themeStore: ThemeStore) {
+    public init(model: AuralisAppModel, themeStore: ThemeStore, settingsRouter: MacSettingsRouter = MacSettingsRouter()) {
         self.model = model
         self.themeStore = themeStore
+        self.settingsRouter = settingsRouter
     }
 
     public var body: some View {
-        attachLifecycle(attachModals(content))
+        attachLifecycle(attachModals(contents))
     }
 
-    // MARK: - 主内容
+    private var contents: some View {
+        ZStack {
+            libraryUI
+                .opacity(playerPresentation == .expanded ? 0 : 1)
+                .allowsHitTesting(playerPresentation == .library)
 
-    private var content: some View {
+            if playerPresentation == .expanded {
+                MacExpandedPlayerView(
+                    model: model,
+                    theme: theme,
+                    context: $expandedContext,
+                    namespace: playerTransitionNamespace,
+                    onCollapse: collapseExpandedPlayer,
+                    onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) }
+                )
+                .zIndex(100)
+                .transition(.opacity)
+            }
+        }
+        .toolbarVisibility(playerPresentation == .expanded ? .hidden : .automatic, for: .windowToolbar)
+    }
+
+    // MARK: - 普通资料库 UI
+
+    private var libraryUI: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             MacSidebar(model: model, prefs: sidebarPrefs, selection: $navigation.selection)
         } detail: {
@@ -54,8 +83,9 @@ public struct MacMusicShell: View {
                 MacFloatingPlayerBar(
                     model: model,
                     theme: theme,
-                    onOpenFullPlayer: { post(MacCommand.showFullScreenPlayer) },
-                    onOpenMiniPlayer: { post(MacCommand.showMiniPlayer) },
+                    namespace: playerTransitionNamespace,
+                    onOpenFullPlayer: { expandCurrentWindowPlayer() },
+                    onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) },
                     onToggleLyrics: { toggleRightPanel(.lyrics) },
                     onToggleQueue: { toggleRightPanel(.queue) }
                 )
@@ -70,7 +100,45 @@ public struct MacMusicShell: View {
         .environmentObject(themeStore)
     }
 
-    // MARK: - 内容路由
+    // MARK: - 播放器展开 / 收起（同窗口）
+
+    private func expandCurrentWindowPlayer(fullscreen: Bool = false) {
+        guard playerPresentation == .library else {
+            if fullscreen { enterSystemFullscreenIfNeeded() }
+            return
+        }
+        withAnimation(.spring(duration: 0.42, bounce: 0.0)) {
+            playerPresentation = .expanded
+        }
+        if fullscreen {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                enterSystemFullscreenIfNeeded()
+            }
+        }
+    }
+
+    private func collapseExpandedPlayer() {
+        guard playerPresentation == .expanded else { return }
+        if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
+            window.toggleFullScreen(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                withAnimation(.spring(duration: 0.35, bounce: 0.0)) {
+                    playerPresentation = .library
+                }
+            }
+        } else {
+            withAnimation(.spring(duration: 0.35, bounce: 0.0)) {
+                playerPresentation = .library
+            }
+        }
+    }
+
+    private func enterSystemFullscreenIfNeeded() {
+        guard let window = NSApp.keyWindow, !window.styleMask.contains(.fullScreen) else { return }
+        window.toggleFullScreen(nil)
+    }
+
+    // MARK: - 主内容（普通模式）
 
     @ViewBuilder
     private var detailContent: some View {
@@ -78,7 +146,14 @@ public struct MacMusicShell: View {
         case .search:
             MacSearchView(model: model, theme: theme, onNavigate: navigate)
         case .home:
-            MacHomeView(model: model, theme: theme, onNavigate: navigate)
+            if model.catalog.activeServerID == nil {
+                MacServerEmptyState {
+                    settingsRouter.selection = .server
+                    openSettings()
+                }
+            } else {
+                MacHomeView(model: model, theme: theme, onNavigate: navigate)
+            }
         case .recentlyPlayed:
             MacTrackCollectionView(
                 title: "最近播放", tracks: model.recentlyPlayedTracks,
@@ -112,8 +187,6 @@ public struct MacMusicShell: View {
             MacV2CategoriesView(model: model, theme: theme, onNavigate: navigate)
         case .assistant:
             AssistantView(model: model, theme: theme)
-        case .server:
-            MacServerPage(model: model, theme: theme)
         case nil:
             ContentUnavailableView("选择一个项目", systemImage: "music.note.list",
                                    description: Text("从左侧选择资料库或工具开始"))
@@ -198,7 +271,8 @@ public struct MacMusicShell: View {
     }
 
     private func presentDiagnostics() {
-        navigation.selectSidebar(.server)
+        settingsRouter.selection = .server
+        openSettings()
     }
 
     private func beginSongAppreciation(_ track: Track) {
@@ -214,7 +288,7 @@ public struct MacMusicShell: View {
         }
     }
 
-    /// 定位当前歌曲：进入「歌曲」一级页并选中当前曲目（不再打开空白的普通 Now Playing 页）。
+    /// 定位当前歌曲：进入「歌曲」一级页并选中当前曲目。
     private func revealCurrentSong() {
         navigation.selectSidebar(.songs)
         if model.hasCurrentTrack {
@@ -275,7 +349,7 @@ public struct MacMusicShell: View {
                 navigation.selectSidebar(.search)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.revealNowPlaying)) { _ in
-                revealCurrentSong()
+                expandCurrentWindowPlayer()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.toggleSidebar)) { _ in
                 withAnimation {
@@ -315,7 +389,7 @@ public struct MacMusicShell: View {
                 getInfoTrack = track
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.showFullScreenPlayer)) { _ in
-                openWindow(id: MacWindowID.fullScreenPlayer)
+                expandCurrentWindowPlayer(fullscreen: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.showMiniPlayer)) { _ in
                 openWindow(id: MacWindowID.miniPlayer)
@@ -324,7 +398,7 @@ public struct MacMusicShell: View {
                 newPlaylistName = ""
                 isCreatingPlaylist = true
             }
-            // Space / Return / ← / →：输入框内放行；其余状态播放控制。
+            // Space / Return / ← / → / Esc：输入框内放行。
             .onKeyPress(.space) {
                 if isTypingText { return .ignored }
                 model.togglePlayback()
@@ -354,12 +428,35 @@ public struct MacMusicShell: View {
                 }
                 return .ignored
             }
+            .onKeyPress(.escape) {
+                if isTypingText { return .ignored }
+                if playerPresentation == .expanded {
+                    collapseExpandedPlayer()
+                    return .handled
+                }
+                return .ignored
+            }
     }
 }
 
-/// 独立窗口 ID（MiniPlayer / Full Screen Player）。
+/// 独立窗口 ID（仅 MiniPlayer）。
 public enum MacWindowID {
     public static let miniPlayer = "auralis.miniplayer"
-    public static let fullScreenPlayer = "auralis.fullscreenplayer"
+}
+
+/// 首页空态（未连接服务器）：原生提示 + 打开服务器设置。
+struct MacServerEmptyState: View {
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("尚未连接音乐服务器", systemImage: "server.rack")
+        } description: {
+            Text("连接 Navidrome 或其他 OpenSubsonic 服务器后，你的音乐资料库会显示在这里。")
+        } actions: {
+            Button("打开服务器设置", action: onOpenSettings)
+                .buttonStyle(.borderedProminent)
+        }
+    }
 }
 #endif
