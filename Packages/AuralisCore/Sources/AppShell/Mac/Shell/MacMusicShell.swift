@@ -359,13 +359,13 @@ public struct MacMusicShell: View {
                 set: { if !$0 { model.dismissPlaybackError() } }
             )) {
                 Button("好") { model.dismissPlaybackError() }
-                if let error = model.playbackError {
+                if model.playbackError != nil {
                     Button("重试") { model.retryPlayback() }
                     Button("停止") { model.stopPlayback() }
                     Button("查看诊断", role: .none) { presentDiagnostics() }
                 }
             } message: {
-                Text(model.playbackError.map { "\($0)" } ?? "未知错误")
+                Text(model.playbackError?.localizedDescription ?? "未知错误")
             }
             .alert("新建播放列表", isPresented: $isCreatingPlaylist) {
                 TextField("播放列表名称", text: $newPlaylistName)

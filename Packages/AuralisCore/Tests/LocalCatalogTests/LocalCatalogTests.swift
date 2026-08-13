@@ -235,6 +235,41 @@ func recommendationIndexV2RoundTrip() async throws {
     #expect(try await store.readRecommendationIndexV2(serverID: serverID, dimension: "texture", value: "钢琴").map(\.track.id) == [firstID])
 }
 
+@Test("Recommendation Index V2 category detail has no 20,000-track ceiling")
+func recommendationIndexV2CategoryDetailExceedsTwentyThousandTracks() async throws {
+    let store = try makeStore()
+    let serverID: ServerID = "v2-large-library"
+    let tracks = (0..<25_100).map {
+        makeTrack(serverID: serverID, remoteID: String(format: "t-%05d", $0), title: "Library track \($0)")
+    }
+    try await seed(store, tracks)
+
+    // 仅最后 100 首进入同一个分类；若快照或详情查询仍带 20,000 上限，它们会被静默遗漏。
+    let classifications = tracks.suffix(100).map { track in
+        RecommendationIndexV2Classification(
+            id: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description,
+            moods: ["平静"],
+            energy: 3,
+            tempo: 3,
+            acousticness: 3,
+            danceability: 3,
+            confidence: 0.9
+        )
+    }
+    #expect(try await store.writeRecommendationIndexV2(classifications, serverID: serverID) == 100)
+
+    let result = try await store.recommendationIndexV2Tracks(
+        serverID: serverID,
+        dimension: "mood",
+        value: "平静"
+    )
+    #expect(result.count == 100)
+    #expect(
+        Set(result.map { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) })
+            == Set(tracks.suffix(100).map { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) })
+    )
+}
+
 @Test("Multi-server: ratings are scoped per server and readable back")
 func multiServerRatingIsolation() async throws {
     let store = try makeStore()

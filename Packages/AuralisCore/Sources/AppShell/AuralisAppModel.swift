@@ -389,6 +389,7 @@ public final class AuralisAppModel: ObservableObject {
     private var progressTimer: Timer?
     private var lyricsInFlight: Set<TrackID> = []
     private var lyricsUnavailable: Set<TrackID> = []
+    private var lyricsLoadTasks: [GlobalID: Task<LyricsDocument?, Never>] = [:]
     /// 当前播放任务，用于取消之前的播放操作（快速切歌时避免竞态条件）。
     private var playbackTask: Task<Void, Never>?
     /// Handoff 活动：把当前播放（歌曲/队列/进度）接力到其他 Apple 设备。
@@ -1114,11 +1115,57 @@ public final class AuralisAppModel: ObservableObject {
         persistPlaybackSession()
     }
 
-    public var currentLyrics: LyricsDocument? { catalog.lyrics[currentTrack.id] }
+    public var currentLyrics: LyricsDocument? { lyrics(for: currentTrack) }
+
+    public func lyrics(for track: Track) -> LyricsDocument? {
+        catalog.lyrics[track.id]
+    }
 
     /// 确保当前曲目歌词已按需加载（播放器/歌词面板打开时调用）。
     public func ensureLyricsLoadedForCurrentTrack() {
         loadLyricsIfNeeded(for: currentTrack)
+    }
+
+    /// 读取指定歌曲的歌词，供信息面板等非当前播放曲目使用；结果只属于传入的 GlobalID。
+    public func loadLyrics(for track: Track) async -> LyricsDocument? {
+        let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        if let lyrics = lyrics(for: track) { return lyrics }
+        if lyricsUnavailable.contains(track.id) { return nil }
+        if let task = lyricsLoadTasks[globalID] { return await task.value }
+
+        lyricsInFlight.insert(track.id)
+        let task = Task<LyricsDocument?, Never> { [connector, lyricsCache] in
+            if let cached = await lyricsCache.document(forServer: track.serverID, trackID: track.id) {
+                return cached
+            }
+            if await lyricsCache.isKnownMissing(serverID: track.serverID, trackID: track.id) {
+                return nil
+            }
+            let document = await connector.lyrics(for: track)
+            if let document {
+                await lyricsCache.store(document, forServer: track.serverID, trackID: track.id)
+            } else {
+                await lyricsCache.markMissing(serverID: track.serverID, trackID: track.id)
+            }
+            return document
+        }
+        lyricsLoadTasks[globalID] = task
+        let document = await task.value
+        lyricsLoadTasks[globalID] = nil
+        lyricsInFlight.remove(track.id)
+
+        if let document {
+            // catalog 当前仅展示活动服务器；切服后的旧任务不能回写到新服务器的 TrackID 键。
+            if catalog.activeServerID == track.serverID {
+                catalog.lyrics[track.id] = document
+            }
+        } else {
+            lyricsUnavailable.insert(track.id)
+            Task.detached(priority: .utility) { [musicEnrichment] in
+                _ = await musicEnrichment.prefetchForMissingLyrics(track: track)
+            }
+        }
+        return document
     }
 
     /// Agent 歌词状态查询：区分“有歌词 / 已确认无歌词 / 尚未确认”，
@@ -1204,9 +1251,7 @@ public final class AuralisAppModel: ObservableObject {
     /// GlobalID → 内存 catalog 中 Track 的统一解析：必须同时匹配 serverID 与 remoteID。
     /// 禁止 API 声明 GlobalID、内部却只按 remoteID（TrackID）查找导致跨服务器误匹配。
     public func track(for globalID: GlobalID) -> Track? {
-        catalog.tracks.first {
-            $0.serverID == globalID.serverID && $0.id.rawValue == globalID.remoteID
-        }
+        libraryStore.track(for: globalID)
     }
 
     /// 把歌曲加入队列末尾（macOS 表格右键 / 双击等）。
@@ -1785,8 +1830,10 @@ public final class AuralisAppModel: ObservableObject {
     /// 若直接喂给 SwiftUI 的 ForEach / List，会因 duplicate ID 在运行期 fatal error 崩溃。
     /// 全链路（队列、随机货架、最近添加、流派筛选）统一在此收敛，避免重复 ID 进入界面。
     func uniquedTracks(_ tracks: [Track]) -> [Track] {
-        var seen = Set<TrackID>()
-        return tracks.filter { seen.insert($0.id).inserted }
+        var seen = Set<GlobalID>()
+        return tracks.filter {
+            seen.insert(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue)).inserted
+        }
     }
 
     // MARK: - Downloads
@@ -2240,35 +2287,8 @@ public final class AuralisAppModel: ObservableObject {
               !lyricsUnavailable.contains(track.id),
               !lyricsInFlight.contains(track.id)
         else { return }
-        lyricsInFlight.insert(track.id)
-        Task { [lyricsCache] in
-            // 第一优先：本地歌词缓存（冷启动后无需任何网络请求）。
-            // 键按「serverID:trackID」隔离（P0-2），避免读到别家服务器的歌词。
-            if let cached = await lyricsCache.document(forServer: track.serverID, trackID: track.id) {
-                lyricsInFlight.remove(track.id)
-                catalog.lyrics[track.id] = cached
-                return
-            }
-            // 该服务器此前已确认没有这首歌的歌词，不再重复请求（负缓存按服务器隔离）。
-            if await lyricsCache.isKnownMissing(serverID: track.serverID, trackID: track.id) {
-                lyricsInFlight.remove(track.id)
-                lyricsUnavailable.insert(track.id)
-                return
-            }
-            let document = await connector.lyrics(for: track)
-            lyricsInFlight.remove(track.id)
-            if let document {
-                catalog.lyrics[track.id] = document
-                await lyricsCache.store(document, forServer: track.serverID, trackID: track.id)
-            } else {
-                lyricsUnavailable.insert(track.id)
-                await lyricsCache.markMissing(serverID: track.serverID, trackID: track.id)
-                // 无歌词：低优先级补全公开音乐资料（歌曲信息/鉴赏用）。
-                // 不阻塞播放、歌词界面或主线程；评价平台不是歌词 Provider。
-                Task.detached(priority: .utility) { [musicEnrichment] in
-                    _ = await musicEnrichment.prefetchForMissingLyrics(track: track)
-                }
-            }
+        Task { [weak self] in
+            _ = await self?.loadLyrics(for: track)
         }
     }
 

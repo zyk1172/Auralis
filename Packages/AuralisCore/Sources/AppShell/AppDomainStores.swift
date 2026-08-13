@@ -153,7 +153,11 @@ final class HomeStore: ObservableObject {
 /// 本地目录与浏览页的可观察状态。同步器仍负责事实写入，Store 只承接 UI 投影。
 @MainActor
 final class LibraryStore: ObservableObject {
-    @Published var catalog: LibraryCatalog
+    @Published var catalog: LibraryCatalog {
+        didSet { trackByGlobalID = Self.makeTrackIndex(catalog.tracks) }
+    }
+    /// 浏览页、歌单和上下文菜单均以 GlobalID 解析歌曲，避免 M×N 扫描与跨服务器同 ID 串库。
+    private(set) var trackByGlobalID: [GlobalID: Track]
     @Published var playlistTracks: [PlaylistID: [Track]] = [:]
     @Published var loadingPlaylistIDs: Set<PlaylistID> = []
     @Published var playlistDeletionError: String?
@@ -162,6 +166,17 @@ final class LibraryStore: ObservableObject {
 
     init(catalog: LibraryCatalog) {
         self.catalog = catalog
+        self.trackByGlobalID = Self.makeTrackIndex(catalog.tracks)
+    }
+
+    func track(for globalID: GlobalID) -> Track? { trackByGlobalID[globalID] }
+
+    private static func makeTrackIndex(_ tracks: [Track]) -> [GlobalID: Track] {
+        var index: [GlobalID: Track] = [:]
+        for track in tracks {
+            index[GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)] = track
+        }
+        return index
     }
 }
 

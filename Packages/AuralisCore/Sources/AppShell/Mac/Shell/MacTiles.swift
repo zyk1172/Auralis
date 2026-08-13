@@ -222,9 +222,9 @@ struct MacArtistTile: View {
                 .help("打开艺术家")
                 .accessibilityLabel("打开艺术家")
 
-                if isHovering {
+                if isHovering, let onPlay {
                     Button {
-                        onPlay?()
+                        onPlay()
                     } label: {
                         Image(systemName: "play.fill")
                             .font(.system(size: 13, weight: .semibold))

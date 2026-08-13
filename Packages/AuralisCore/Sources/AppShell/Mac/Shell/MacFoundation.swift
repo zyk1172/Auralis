@@ -3,6 +3,13 @@ import Domain
 import LocalCatalog
 import SwiftUI
 
+extension Track {
+    /// SwiftUI 列表和队列的稳定身份必须包含服务器，不能只用会跨库冲突的 TrackID。
+    var macGlobalID: GlobalID {
+        GlobalID(serverID: serverID, remoteID: id.rawValue)
+    }
+}
+
 // MARK: - 键盘命令广播（App 菜单 → 主窗口）
 
 /// macOS 键盘命令广播名称。所有 Toolbar / PlayerBar 动作都必须能通过 Menu Bar 触发，
@@ -220,7 +227,7 @@ enum MacLibraryQuery {
     /// 歌单曲目（按歌单内顺序，本地缺歌则跳过）。
     static func playlistTracks(_ playlist: Playlist, model: AuralisAppModel) -> [Track] {
         playlist.trackIDs.compactMap { id in
-            model.catalog.tracks.first { $0.id == id && $0.serverID == playlist.serverID }
+            model.track(for: GlobalID(serverID: playlist.serverID, remoteID: id.rawValue))
         }
     }
 

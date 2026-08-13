@@ -517,9 +517,10 @@ extension LocalCatalogStore {
     ) throws -> [Track] {
         let rows = try db.query(
             """
-            SELECT t.global_id
+            SELECT tr.payload
             FROM recommendation_index_v2_tags t
             JOIN recommendation_index_v2_state s ON s.global_id = t.global_id
+            JOIN tracks tr ON tr.global_id = t.global_id
             WHERE s.rules_version = ? AND t.dimension = ? AND t.value = ?
             \(serverID == nil ? "" : "AND s.server_id = ?")
             ORDER BY t.confidence DESC, t.global_id ASC
@@ -527,16 +528,17 @@ extension LocalCatalogStore {
             serverID.map { [.text(RecommendationIndexV2.rulesVersion), .text(dimension), .text(value), .text($0.rawValue)] }
                 ?? [.text(RecommendationIndexV2.rulesVersion), .text(dimension), .text(value)]
         )
-        let order = rows.compactMap { $0["global_id"]?.string }
-        guard !order.isEmpty else { return [] }
-        let byID = Dictionary(uniqueKeysWithValues: try allTracks(serverID: serverID, limit: 20_000).map {
-            (GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue).description, $0)
-        })
-        return order.compactMap { byID[$0] }
+        // 分类详情必须只解码命中的 Track payload。此前先全量 allTracks(limit: 20_000)
+        // 再在内存映射，不仅每次点击都会扫描整个曲库，超过 20,000 首还会静默漏歌。
+        return rows.compactMap { row in
+            guard let payload = row["payload"]?.string else { return nil }
+            return try? decode(Track.self, payload)
+        }
     }
 
     func recommendationIndexV2Snapshot(serverID: ServerID?) throws -> (lines: [CatalogTrackLine], states: [String: RecommendationIndexV2StoredState]) {
-        let tracks = try allTracks(serverID: serverID, limit: 20_000)
+        // 分类写入也必须看到完整资料库；否则第 20,000 首之后的歌曲永远不会进入 V2 索引。
+        let tracks = try allTracks(serverID: serverID)
         let popularity = try popularityScores(serverID: serverID)
         let favorites = Set(try getFavorites(serverID: serverID).map(\.globalID))
         let ratings = serverID.flatMap { try? ratings(serverID: $0) } ?? [:]

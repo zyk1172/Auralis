@@ -6,19 +6,16 @@ import Testing
 /// 首页只保留适合首页的卡片货架，资料库入口由侧边栏承担）。
 @Suite("Mac home sections")
 struct MacHomeSectionsTests {
-    @Test("首页货架顺序固定")
+    @MainActor
+    @Test("首页货架由内容模块默认顺序驱动")
     func homeShelfOrder() {
         #expect(MacHomeView.shelfTitles == [
-            "最近播放专辑",
-            "最近添加专辑",
-            "常听专辑",
-            "常听艺术家",
-            "很久没听",
-            "从未播放",
-            "收藏里随便听",
+            "随机音乐", "最近播放", "很久没听", "最近添加", "收藏里随便听",
+            "从未播放", "常听艺术家", "常听专辑",
         ])
     }
 
+    @MainActor
     @Test("首页不包含侧边栏资料库入口")
     func homeExcludesSidebarOnlySections() {
         for title in MacHomeView.sidebarOnlyTitles {

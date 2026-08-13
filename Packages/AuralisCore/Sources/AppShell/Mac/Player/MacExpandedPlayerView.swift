@@ -78,10 +78,10 @@ struct MacExpandedPlayerView: View {
                 }
 
                 // Glass Capsules（只对内容命中）
-                topLeftGlass
-                topRightVolumeGlass
-                bottomRightContextGlass
             }
+            .overlay(alignment: .topLeading) { topLeftGlass }
+            .overlay(alignment: .topTrailing) { topRightVolumeGlass }
+            .overlay(alignment: .bottomTrailing) { bottomRightContextGlass }
             .animation(.easeInOut(duration: 0.25), value: context)
             // 整个 Expanded Player 作为一层淡入并向上就位；ArtworkView 的异步图片
             // 也会受同一个 opacity/offset 约束，不会比背景与控制器先出现。
@@ -96,9 +96,6 @@ struct MacExpandedPlayerView: View {
         .task(id: trackGlobalID) {
             ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
             await loadLyrics()
-        }
-        .onChange(of: trackGlobalID) { _, _ in
-            Task { await loadLyrics() }
         }
     }
 
@@ -331,11 +328,12 @@ struct MacExpandedPlayerView: View {
                     Spacer()
                 }
             case let .available(lyrics) where !lyrics.lines.isEmpty:
+                let activeIndex = currentLyricIndex
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                                let isCurrent = currentLyricIndex == index
+                                let isCurrent = activeIndex == index
                                 Text(line.text)
                                     .font(.system(size: isCurrent ? MacUIVisualTokens.Typography.lyricActive : MacUIVisualTokens.Typography.lyricInactive, weight: isCurrent ? .semibold : .regular))
                                     .foregroundStyle(isCurrent ? Color.white : Color.white.opacity(0.55))
@@ -403,12 +401,6 @@ struct MacExpandedPlayerView: View {
 
     private var queuePane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 14) {
-                queueModePill(title: "自动连播", systemImage: "infinity")
-                queueModePill(title: "交叉渐入渐出", systemImage: "shuffle")
-            }
-            .padding(.bottom, 28)
-
             HStack {
                 Text("继续播放")
                     .font(.system(size: 18, weight: .semibold))
@@ -434,7 +426,7 @@ struct MacExpandedPlayerView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.queueRowSpacing) {
-                        ForEach(Array(model.upcomingTracks.enumerated()), id: \.element.id) { offset, queueTrack in
+                        ForEach(Array(model.upcomingTracks.enumerated()), id: \.element.macGlobalID) { offset, queueTrack in
                             queueRow(queueTrack, isCurrent: false)
                                 .contextMenu {
                                     Button("立即播放") { model.selectAndPlay(queueTrack) }
@@ -449,16 +441,6 @@ struct MacExpandedPlayerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func queueModePill(title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(.white.opacity(0.60))
-            .frame(maxWidth: .infinity)
-            .frame(height: 42)
-            .background(.white.opacity(0.08), in: Capsule())
-            .accessibilityLabel(title)
     }
 
     private func queueRow(_ queueTrack: Track, isCurrent: Bool) -> some View {
@@ -486,104 +468,96 @@ struct MacExpandedPlayerView: View {
     // MARK: - Glass Capsules（.overlay(alignment:) 定位，避免整屏透明容器吞点击）
 
     private var topLeftGlass: some View {
-        Color.clear
-            .overlay(alignment: .topLeading) {
-                MacGlassCapsule {
-                    HStack(spacing: MacUIVisualTokens.ExpandedPlayer.topRightControlSpacing) {
-                        Button(action: onCollapse) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                        .buttonStyle(.plain)
-                        .help("收起播放器")
-                        .accessibilityLabel("收起播放器")
-                        Button(action: onOpenMiniPlayer) {
-                            Image(systemName: "rectangle.on.rectangle")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                        .buttonStyle(.plain)
-                        .help("切换迷你播放器")
-                        .accessibilityLabel("切换迷你播放器")
-                    }
-                    .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingH)
-                    .frame(height: MacUIVisualTokens.ExpandedPlayer.topLeftGlassHeight)
+        MacGlassCapsule {
+            HStack(spacing: MacUIVisualTokens.ExpandedPlayer.topRightControlSpacing) {
+                Button(action: onCollapse) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
                 }
-                .padding(.leading, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingL)
-                .padding(.top, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingT)
+                .buttonStyle(.plain)
+                .help("收起播放器")
+                .accessibilityLabel("收起播放器")
+                Button(action: onOpenMiniPlayer) {
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .help("切换迷你播放器")
+                .accessibilityLabel("切换迷你播放器")
             }
+            .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingH)
+            .frame(height: MacUIVisualTokens.ExpandedPlayer.topLeftGlassHeight)
+        }
+        .padding(.leading, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingL)
+        .padding(.top, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingT)
     }
 
     private var topRightVolumeGlass: some View {
-        Color.clear
-            .overlay(alignment: .topTrailing) {
-                MacGlassCapsule {
-                    HStack(spacing: 12) {
-                        Slider(value: Binding(
-                            get: { model.volume },
-                            set: { model.setVolume($0) }
-                        ), in: 0...1)
-                        .controlSize(.small)
-                        .frame(width: MacUIVisualTokens.ExpandedPlayer.topRightGlassWidth)
-                        .accessibilityLabel("音量")
-                        Image(systemName: "speaker.wave.3.fill")
-                            .font(.system(size: 17))
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-                    .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
-                    .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)
-                }
-                .padding(.trailing, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingR)
-                .padding(.top, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingT)
+        MacGlassCapsule {
+            HStack(spacing: 12) {
+                Slider(value: Binding(
+                    get: { model.volume },
+                    set: { model.setVolume($0) }
+                ), in: 0...1)
+                .controlSize(.small)
+                .frame(width: MacUIVisualTokens.ExpandedPlayer.topRightGlassWidth)
+                .accessibilityLabel("音量")
+                Image(systemName: "speaker.wave.3.fill")
+                    .font(.system(size: 17))
+                    .foregroundStyle(.white.opacity(0.85))
             }
+            .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
+            .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)
+        }
+        .padding(.trailing, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingR)
+        .padding(.top, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingT)
     }
 
     private var bottomRightContextGlass: some View {
-        Color.clear
-            .overlay(alignment: .bottomTrailing) {
-                MacGlassCapsule {
-                    HStack(spacing: 22) {
-                        Button {
-                            MacUITrace.action("toggleLyrics", "from=\(String(describing: context))")
-                            context = context == .lyrics ? .none : .lyrics
-                        } label: {
-                            Image(systemName: "quote.bubble")
-                                .font(.system(size: 16))
-                                .foregroundStyle(context == .lyrics ? MacMediaAccent.color : .white.opacity(0.85))
-                        }
-                        .buttonStyle(.plain)
-                        .help("歌词")
-                        .accessibilityLabel("歌词")
-                        Button {
-                            MacUITrace.action("toggleQueue", "from=\(String(describing: context))")
-                            context = context == .queue ? .none : .queue
-                        } label: {
-                            Image(systemName: "list.bullet")
-                                .font(.system(size: 16))
-                                .foregroundStyle(context == .queue ? MacMediaAccent.color : .white.opacity(0.85))
-                        }
-                        .buttonStyle(.plain)
-                        .help("队列")
-                        .accessibilityLabel("队列")
-                    }
-                    .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
-                    .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)
+        MacGlassCapsule {
+            HStack(spacing: 22) {
+                Button {
+                    MacUITrace.action("toggleLyrics", "from=\(String(describing: context))")
+                    context = context == .lyrics ? .none : .lyrics
+                } label: {
+                    Image(systemName: "quote.bubble")
+                        .font(.system(size: 16))
+                        .foregroundStyle(context == .lyrics ? MacMediaAccent.color : .white.opacity(0.85))
                 }
-                .padding(.trailing, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingR)
-                .padding(.bottom, 20)
+                .buttonStyle(.plain)
+                .help("歌词")
+                .accessibilityLabel("歌词")
+                Button {
+                    MacUITrace.action("toggleQueue", "from=\(String(describing: context))")
+                    context = context == .queue ? .none : .queue
+                } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 16))
+                        .foregroundStyle(context == .queue ? MacMediaAccent.color : .white.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .help("队列")
+                .accessibilityLabel("队列")
             }
+            .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
+            .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)
+        }
+        .padding(.trailing, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingR)
+        .padding(.bottom, 20)
     }
 
     // MARK: - 加载
 
     private func loadLyrics() async {
         lyricsState = .loading
-        model.ensureLyricsLoadedForCurrentTrack()
-        try? await Task.sleep(nanoseconds: 600_000_000)
-        if let lyrics = model.currentLyrics {
+        let expectedID = trackGlobalID
+        if let lyrics = await model.loadLyrics(for: track) {
+            guard expectedID == trackGlobalID, !Task.isCancelled else { return }
             lyricsState = .available(lyrics)
         } else {
+            guard expectedID == trackGlobalID, !Task.isCancelled else { return }
             lyricsState = .unavailable
         }
     }

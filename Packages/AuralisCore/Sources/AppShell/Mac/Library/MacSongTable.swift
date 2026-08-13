@@ -49,22 +49,21 @@ struct MacSongTable: View {
     @State private var sortOrder: [KeyPathComparator<MacSongRow>] = [
         KeyPathComparator(\.title, order: .forward)
     ]
+    @State private var baseRows: [MacSongRow] = []
+    @State private var orderedRows: [MacSongRow] = []
 
-    private var rows: [MacSongRow] {
-        let counts = model.playCounts
-        return tracks.map { track in
-            MacSongRow(
-                id: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue),
-                track: track,
-                playCount: counts[track.id] ?? 0,
-                addedDate: model.addedDate(for: track)
-            )
-        }
-        .sorted(using: sortOrder)
+    /// 进度 tick 会重绘播放器相关视图，但歌曲表不应因此重新 map/sort 全部数据。
+    private var rowDataIdentity: String {
+        tracks.map { track in
+            let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description
+            let count = model.playCounts[track.id] ?? 0
+            let added = model.addedDate(for: track)?.timeIntervalSince1970 ?? 0
+            return "\(gid):\(count):\(added)"
+        }.joined(separator: "|")
     }
 
     var body: some View {
-        Table(rows, selection: $selection, sortOrder: $sortOrder) {
+        Table(orderedRows, selection: $selection, sortOrder: $sortOrder) {
             if showIndexColumn {
                 TableColumn("#") { row in
                     if let text = numberText(row.track) {
@@ -131,15 +130,22 @@ struct MacSongTable: View {
                 .width(min: 90, ideal: 110, max: 130)
             }
             TableColumn("收藏") { row in
-                Image(systemName: row.track.isFavorite ? "heart.fill" : "heart")
-                    .foregroundStyle(row.track.isFavorite ? theme.colorTokens.accent.color : Color.secondary.opacity(0.4))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                Button {
+                    model.toggleFavorite(row.track)
+                } label: {
+                    Image(systemName: row.track.isFavorite ? "heart.fill" : "heart")
+                        .foregroundStyle(row.track.isFavorite ? theme.colorTokens.accent.color : Color.secondary.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+                .help(row.track.isFavorite ? "取消收藏" : "收藏")
+                .accessibilityLabel(row.track.isFavorite ? "取消收藏" : "收藏")
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 40, ideal: 44, max: 48)
         }
         .environment(\.defaultMinListRowHeight, rowHeight)
         .contextMenu(forSelectionType: GlobalID.self) { ids in
-            if let gid = ids.first, let track = model.track(for: gid) {
+            if ids.count == 1, let gid = ids.first, let track = model.track(for: gid) {
                 macTrackMenuContent(track: track, model: model, onNavigate: onNavigate)
             } else if !ids.isEmpty {
                 Button("播放所选 \(ids.count) 首") {
@@ -164,6 +170,10 @@ struct MacSongTable: View {
         }
         .onDeleteCommand {
             // 队列等场景由宿主处理；此处保持空实现避免系统默认删除行为。
+        }
+        .task(id: rowDataIdentity) { rebuildRows() }
+        .onChange(of: sortOrder) { _, _ in
+            orderedRows = baseRows.sorted(using: sortOrder)
         }
     }
 
@@ -203,6 +213,19 @@ struct MacSongTable: View {
 
     private func isCurrent(_ track: Track) -> Bool {
         model.currentTrack.serverID == track.serverID && model.currentTrack.id == track.id
+    }
+
+    private func rebuildRows() {
+        let counts = model.playCounts
+        baseRows = tracks.map { track in
+            MacSongRow(
+                id: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue),
+                track: track,
+                playCount: counts[track.id] ?? 0,
+                addedDate: model.addedDate(for: track)
+            )
+        }
+        orderedRows = baseRows.sorted(using: sortOrder)
     }
 }
 #endif

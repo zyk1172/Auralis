@@ -15,6 +15,8 @@ struct MacTrackInfoSheet: View {
 
     @State private var externalResult: AgentExternalMusicResult?
     @State private var isLoadingExternal = false
+    @State private var lyrics: LyricsDocument?
+    @State private var isLoadingLyrics = false
 
     private var gid: GlobalID {
         GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
@@ -39,9 +41,10 @@ struct MacTrackInfoSheet: View {
             .padding(12)
         }
         .frame(width: 560, height: 480)
-        .task(id: track.id.rawValue) {
+        .task(id: gid) {
             await loadEvidence()
         }
+        .task(id: gid) { await loadTrackLyrics() }
     }
 
     // MARK: - 详细信息
@@ -84,7 +87,10 @@ struct MacTrackInfoSheet: View {
 
     private var lyricsPane: some View {
         Group {
-            if let lyrics = model.currentLyrics, !lyrics.lines.isEmpty {
+            if isLoadingLyrics {
+                ProgressView("正在加载歌词…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let lyrics, !lyrics.lines.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(lyrics.lines) { line in
@@ -214,10 +220,17 @@ struct MacTrackInfoSheet: View {
     }
 
     private func loadEvidence() async {
-        guard model.hasCurrentTrack || model.track(for: gid) != nil else { return }
         isLoadingExternal = true
         defer { isLoadingExternal = false }
         externalResult = await model.musicEnrichment.enrich(track: track, globalID: gid)
+    }
+
+    private func loadTrackLyrics() async {
+        isLoadingLyrics = true
+        let loaded = await model.loadLyrics(for: track)
+        guard !Task.isCancelled else { return }
+        lyrics = loaded
+        isLoadingLyrics = false
     }
 }
 #endif

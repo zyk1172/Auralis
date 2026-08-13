@@ -54,11 +54,12 @@ struct MacRightPanel: View {
     private var lyricsContent: some View {
         Group {
             if let lyrics = model.currentLyrics, !lyrics.lines.isEmpty {
+                let activeIndex = currentLyricIndex
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 16) {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                                let isCurrent = isCurrentLyric(line)
+                                let isCurrent = index == activeIndex
                                 Text(line.text)
                                     .font(.system(size: isCurrent ? 23 : 18, weight: isCurrent ? .semibold : .regular))
                                     .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.primary.opacity(0.72))
@@ -105,11 +106,6 @@ struct MacRightPanel: View {
         return index
     }
 
-    private func isCurrentLyric(_ line: TimedLyricLine) -> Bool {
-        guard let idx = currentLyricIndex, let lyrics = model.currentLyrics else { return false }
-        return idx < lyrics.lines.count && lyrics.lines[idx].id == line.id
-    }
-
     // MARK: - 队列
 
     private var currentIndex: Int? { model.currentQueueIndex }
@@ -128,7 +124,7 @@ struct MacRightPanel: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(Array(upcoming.enumerated()), id: \.element.id) { offset, track in
+                    ForEach(Array(upcoming.enumerated()), id: \.element.macGlobalID) { offset, track in
                         queueRow(track, isCurrent: false)
                             .contextMenu {
                                 Button("立即播放") { model.selectAndPlay(track) }
