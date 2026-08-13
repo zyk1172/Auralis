@@ -2,11 +2,17 @@
 import SwiftUI
 import ThemeEngine
 
+enum MacFloatingPlayerPresentation {
+    case regular
+    case assistantArtworkOrb
+}
+
 /// Apple Music macOS 27 式悬浮播放器（REFERENCE_A）：
 /// 只位于 Main Content 上方、水平居中、Liquid Glass 胶囊；不覆盖 Sidebar、不是全宽底部条。
 struct MacFloatingPlayerBar: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    let presentation: MacFloatingPlayerPresentation
     var onOpenFullPlayer: () -> Void = {}
     var onOpenMiniPlayer: () -> Void = {}
     var onToggleLyrics: () -> Void = {}
@@ -20,6 +26,7 @@ struct MacFloatingPlayerBar: View {
     init(
         model: AuralisAppModel,
         theme: BuiltInTheme,
+        presentation: MacFloatingPlayerPresentation = .regular,
         onOpenFullPlayer: @escaping () -> Void = {},
         onOpenMiniPlayer: @escaping () -> Void = {},
         onToggleLyrics: @escaping () -> Void = {},
@@ -27,6 +34,7 @@ struct MacFloatingPlayerBar: View {
     ) {
         self.model = model
         self.theme = theme
+        self.presentation = presentation
         self.onOpenFullPlayer = onOpenFullPlayer
         self.onOpenMiniPlayer = onOpenMiniPlayer
         self.onToggleLyrics = onToggleLyrics
@@ -39,23 +47,33 @@ struct MacFloatingPlayerBar: View {
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
 
     var body: some View {
+        switch presentation {
+        case .regular:
+            regularPlayerBar
+        case .assistantArtworkOrb:
+            assistantArtworkOrb
+        }
+    }
+
+    private var regularPlayerBar: some View {
         MacGlassCapsule {
             GeometryReader { geo in
                 let sideWidth = min(MacUIVisualTokens.FloatingPlayer.sideMaxWidth, max(MacUIVisualTokens.FloatingPlayer.sideMinWidth, geo.size.width * 0.23))
                 HStack(spacing: MacUIVisualTokens.FloatingPlayer.sectionSpacing) {
                     HStack {
                         transportGroup
-                        Spacer(minLength: 0)
+                        playerBarBlankTapArea
                     }
                     .frame(width: sideWidth)
 
                     HStack(spacing: MacUIVisualTokens.FloatingPlayer.identitySpacing) {
                         trackIdentity
+                        playerBarBlankTapArea
                     }
                     .frame(maxWidth: .infinity)
 
                     HStack {
-                        Spacer(minLength: 0)
+                        playerBarBlankTapArea
                         contextGroup
                     }
                     .frame(width: sideWidth)
@@ -71,6 +89,43 @@ struct MacFloatingPlayerBar: View {
         // 注意：不要在这里给整条胶囊挂 .onTapGesture —— macOS 上祖先 TapGesture
         // 会与内部 Button/Menu/Slider 的命中测试冲突，导致循环/随机/切歌按钮偶发点不动。
         // “点击身份区展开播放器”已收敛到 trackIdentity 内的按钮（见下方）。
+    }
+
+    /// 只覆盖传输/资料/右侧按钮之间真正的留白；控件本身继续由各自 Button/Menu 命中。
+    private var playerBarBlankTapArea: some View {
+        Button(action: onOpenFullPlayer) {
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("展开播放器")
+        .accessibilityLabel("展开播放器")
+    }
+
+    /// AI 助手页只保留播放条最左端的圆弧，并将它收拢成可展开的封面球。
+    private var assistantArtworkOrb: some View {
+        MacGlassCapsule {
+            Button(action: onOpenFullPlayer) {
+                ArtworkView(
+                    title: model.currentTrack.albumTitle,
+                    artworkKey: model.currentTrack.artworkKey,
+                    colors: theme.colorTokens,
+                    size: MacUIVisualTokens.FloatingPlayer.assistantOrbSize,
+                    cornerRadius: MacUIVisualTokens.FloatingPlayer.assistantOrbSize / 2
+                )
+                .clipShape(Circle())
+                .accessibilityHidden(true)
+            }
+            .buttonStyle(.plain)
+            .disabled(!hasTrack)
+            .help("展开播放器")
+            .accessibilityLabel("展开播放器")
+        }
+        .frame(
+            width: MacUIVisualTokens.FloatingPlayer.assistantOrbSize,
+            height: MacUIVisualTokens.FloatingPlayer.assistantOrbSize
+        )
     }
 
     // MARK: - Transport（LEFT）

@@ -85,18 +85,18 @@ private final class IndexScriptedProvider: AIProvider, @unchecked Sendable {
 /// 覆盖真机使用的 OpenAI 原生 function calling：参数中的 items 是数组而不是
 /// 预先转义的 JSON 字符串。
 private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
-    private var call: AIToolCall?
+    private var calls: [AIToolCall]
     var supportsToolCalling: Bool { true }
 
-    init(call: AIToolCall) { self.call = call }
+    init(calls: [AIToolCall]) { self.calls = calls }
 
     func testConnection() async -> AIConnectionResult {
         AIConnectionResult(latency: 0, model: "native-index", message: "ready")
     }
 
     func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
-        if let call {
-            self.call = nil
+        if !calls.isEmpty {
+            let call = calls.removeFirst()
             return AICompletionResponse(model: request.model, content: "", finishReason: "tool_calls", toolCalls: [call])
         }
         return AICompletionResponse(model: request.model, content: "索引已完成。", finishReason: "stop")
@@ -105,8 +105,8 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
     func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.started(model: request.model))
-            if let call {
-                self.call = nil
+            if !calls.isEmpty {
+                let call = calls.removeFirst()
                 continuation.yield(.toolCall(call))
             } else {
                 continuation.yield(.delta("索引已完成。"))
@@ -214,11 +214,14 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
         ]],
     ]
     let argumentData = try JSONSerialization.data(withJSONObject: arguments)
-    let provider = NativeIndexProvider(call: AIToolCall(
-        id: "native-write-1",
-        name: "library_index_v2_write_batch",
-        arguments: String(decoding: argumentData, as: UTF8.self)
-    ))
+    let provider = NativeIndexProvider(calls: [
+        AIToolCall(id: "native-next-1", name: "library_index_v2_next_batch", arguments: "{}"),
+        AIToolCall(
+            id: "native-write-1",
+            name: "library_index_v2_write_batch",
+            arguments: String(decoding: argumentData, as: UTF8.self)
+        ),
+    ])
 
     await AgentRunner.run(
         userText: "继续构建推荐索引 V2",
@@ -244,6 +247,73 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
     let properties = try #require(schema["properties"] as? [String: Any])
     let items = try #require(properties["items"] as? [String: Any])
     #expect(items["type"] as? String == "array")
+    let required = try #require(schema["required"] as? [String])
+    #expect(required.contains("items"))
+    let itemSchema = try #require(items["items"] as? [String: Any])
+    let itemRequired = try #require(itemSchema["required"] as? [String])
+    #expect(itemRequired.contains("id"))
+}
+
+@Test("截断的原生 V2 items 不会伪装成缺少参数，并会缩批重新取 pending")
+func recommendationIndexV2MalformedArgumentsRecover() async throws {
+    let store = try makeV2Store()
+    let serverID: ServerID = "malformed-index-server"
+    try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "malformed-1", title: "Recover Me")])
+    let gid = GlobalID(serverID: serverID, remoteID: "malformed-1")
+    let arguments = try JSONSerialization.data(withJSONObject: ["items": [
+        ["id": gid.description, "moods": ["平静"], "scenes": ["深夜"], "energy": 2,
+         "tempo": 2, "acousticness": 5, "danceability": 1, "vocals": ["器乐"],
+         "textures": ["钢琴"], "styles": ["轻音乐"], "confidence": 0.9],
+    ]])
+    let collector = IndexResultCollector()
+    let provider = NativeIndexProvider(calls: [
+        .init(id: "next-1", name: "library_index_v2_next_batch", arguments: "{}"),
+        .init(id: "bad-write", name: "library_index_v2_write_batch", arguments: #"{"items":[{"id":"malformed-index-server:malformed-1"}"#),
+        .init(id: "next-2", name: "library_index_v2_next_batch", arguments: "{}"),
+        .init(id: "good-write", name: "library_index_v2_write_batch", arguments: String(decoding: arguments, as: UTF8.self)),
+    ])
+    await AgentRunner.run(
+        userText: "构建推荐索引 V2", provider: provider, model: "native-index-model",
+        bridge: MockAgentBridge(activeServerID: serverID), catalog: store,
+        context: .init(serverID: serverID, currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true }, emit: { await collector.record($0) }
+    )
+    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    #expect(status.pendingUniqueTracks == 0)
+    #expect(await collector.contains("参数 JSON 不完整或被截断"))
+    #expect(await collector.contains("缺少参数：items") == false)
+}
+
+@Test("1000 首 V2 分片在一次模拟截断后仍可从 pending 完成")
+func recommendationIndexV2ThousandTrackRecovery() async throws {
+    let store = try makeV2Store()
+    let serverID: ServerID = "thousand-index-server"
+    try await seedV2(store, (0..<1_000).map { makeV2Track(serverID: serverID, remoteID: "track-\($0)", title: "Track \($0)") })
+    var limit = 24
+    var batchNumber = 0
+    while true {
+        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: limit)
+        if batch.tracks.isEmpty { break }
+        batchNumber += 1
+        // 第七批模拟 function arguments 被截断：不写库、缩批，再从 pending 重取。
+        if batchNumber == 7 {
+            limit = 12
+            continue
+        }
+        let items = batch.tracks.map {
+            RecommendationIndexV2Classification(
+                id: $0.id, moods: ["平静"], scenes: ["深夜"], energy: 3,
+                tempo: 2, acousticness: 4, danceability: 2, vocals: ["器乐"],
+                textures: ["钢琴"], styles: ["轻音乐"],
+                semanticTags: [.init(value: "夜行感", confidence: 0.8)], confidence: 0.9
+            )
+        }
+        #expect(try await store.writeRecommendationIndexV2(items, serverID: serverID) == items.count)
+    }
+    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    #expect(status.pendingTracks == 0)
+    #expect(status.pendingSemanticTagTracks == 0)
+    #expect(status.pendingUniqueTracks == 0)
 }
 
 @Test("v2 playback_play_song executes through bridge")

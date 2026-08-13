@@ -32,6 +32,13 @@ public struct AgentToolTrace: Codable, Sendable {
 ///    不阻止模型换搜索词或换策略继续；
 /// 4. **诊断统计**：每工具调用次数、缓存命中、唯一歌曲数、最后 N 次调用轨迹。
 public struct AgentTaskWorkingSet: Sendable {
+    /// V2 是可恢复的长任务：当前批身份与缩批状态只存活于当前任务，数据库仍是 pending 的事实来源。
+    private struct RecommendationIndexV2RuntimeState: Sendable {
+        var preferredBatchSize: Int = RecommendationIndexV2BatchPolicy.recommendedLimit(maxOutputTokens: 16_000)
+        var lastBatchMode: String?
+        var lastBatchIDs: [String] = []
+        var malformedWriteAttempts = 0
+    }
     /// 唯一候选歌曲（来自所有 trackCards 结果）。
     public private(set) var uniqueSongIDs: Set<GlobalID> = []
     /// 已入队 / 已播放的歌曲。
@@ -52,6 +59,7 @@ public struct AgentTaskWorkingSet: Sendable {
     public let targetQueueCount: Int?
     /// 已成功执行的修改型操作：同工具 + 同参数幂等复用；不同参数照常执行。
     private var successfulSideEffects: [String: String] = [:]
+    private var recommendationIndexV2 = RecommendationIndexV2RuntimeState()
 
     /// 缓存条数上限（LRU 语义：超出时丢弃最旧）。
     public static let maxCacheSize = 60
@@ -87,6 +95,67 @@ public struct AgentTaskWorkingSet: Sendable {
         } else {
             self.targetQueueCount = nil
         }
+    }
+
+    // MARK: - Recommendation Index V2 transport state
+
+    public mutating func configureRecommendationIndexV2(maxOutputTokens: Int) {
+        recommendationIndexV2.preferredBatchSize = RecommendationIndexV2BatchPolicy.recommendedLimit(
+            maxOutputTokens: maxOutputTokens
+        )
+    }
+
+    public var recommendationIndexV2PreferredBatchSize: Int {
+        recommendationIndexV2.preferredBatchSize
+    }
+
+    /// 原生 arguments 被截断、合法对象却漏 items、或批身份不符时，丢弃瞬态批状态并缩批。
+    /// 已完成条目不受影响；下一次 next_batch 会从数据库 pending 事实重新取得未写入的前缀。
+    public mutating func recoverRecommendationIndexV2Batch() -> Int {
+        recommendationIndexV2.preferredBatchSize = RecommendationIndexV2BatchPolicy.reducedLimit(
+            from: recommendationIndexV2.preferredBatchSize
+        )
+        recommendationIndexV2.lastBatchMode = nil
+        recommendationIndexV2.lastBatchIDs = []
+        recommendationIndexV2.malformedWriteAttempts += 1
+        return recommendationIndexV2.preferredBatchSize
+    }
+
+    public mutating func recordRecommendationIndexV2Batch(facts: [String: String]) {
+        guard let rawIDs = facts["recommendation.index.currentBatchIDs"], !rawIDs.isEmpty else { return }
+        recommendationIndexV2.lastBatchIDs = rawIDs.split(separator: ",").map(String.init)
+        recommendationIndexV2.lastBatchMode = facts["recommendation.index.currentBatchMode"]
+    }
+
+    public mutating func completeRecommendationIndexV2Batch() {
+        recommendationIndexV2.lastBatchMode = nil
+        recommendationIndexV2.lastBatchIDs = []
+        recommendationIndexV2.malformedWriteAttempts = 0
+    }
+
+    /// 返回不安全调用的原因；nil 表示当前 items 与刚取得的批次完全一致。
+    public func recommendationIndexV2WriteIssue(arguments: [String: String]) -> String? {
+        guard let raw = arguments["items"] ?? arguments["itemsJSON"],
+              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return "缺少必填 items" }
+        guard let data = raw.data(using: .utf8),
+              let items = try? JSONDecoder().decode([RecommendationIndexV2Classification].self, from: data)
+        else { return "items 不是完整的结构化 JSON 数组" }
+        guard !recommendationIndexV2.lastBatchIDs.isEmpty else {
+            return "没有刚刚由 library_index_v2_next_batch 返回的当前批次"
+        }
+        let ids = items.map(\.id)
+        guard ids.count == Set(ids).count,
+              Set(ids) == Set(recommendationIndexV2.lastBatchIDs),
+              ids.count == recommendationIndexV2.lastBatchIDs.count
+        else { return "items 必须恰好覆盖当前批次的每个真实 ID 一次" }
+        if recommendationIndexV2.lastBatchMode == "semanticTagsOnly",
+           items.contains(where: { $0.mode != "semanticTagsOnly" }) {
+            return "当前批次为 semanticTagsOnly，每项必须使用 mode=semanticTagsOnly" }
+        if recommendationIndexV2.lastBatchMode == "full",
+           items.contains(where: { $0.mode == "semanticTagsOnly" }) {
+            return "当前批次为 full，不能伪装成 semanticTagsOnly" }
+        return nil
     }
 
     /// 只从用户明确写出的“首/首歌/歌曲”数量建立目标；没有明确数量就保持开放，

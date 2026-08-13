@@ -279,6 +279,9 @@ final class MacPlayerPresentationState: ObservableObject {
 
     func expand() {
         guard presentation == .library else { return }
+        // 与 Music.app 一致：展开播放页时直接展示“继续播放”队列，而不是
+        // 先给一张只有封面的空白页。
+        context = .queue
         presentation = .expanded
     }
 

@@ -17,13 +17,43 @@ struct MacGlassCapsule<Content: View>: View {
             if #available(macOS 26.0, *) {
                 content
                     .glassEffect(.regular.interactive(), in: Capsule())
+                    .overlay {
+                        Capsule().stroke(
+                            LinearGradient(
+                                colors: [.white.opacity(0.72), .white.opacity(0.18), .white.opacity(0.46)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1
+                        )
+                    }
             } else {
                 content
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay {
-                        Capsule().stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+                    .background {
+                        Capsule()
+                            .fill(.ultraThinMaterial)
+                            .overlay {
+                                Capsule().fill(
+                                    LinearGradient(
+                                        colors: [.white.opacity(0.34), .white.opacity(0.12), .black.opacity(0.14)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                            }
                     }
-                    .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+                    .overlay {
+                        Capsule().stroke(
+                            LinearGradient(
+                                colors: [.white.opacity(0.78), .white.opacity(0.26), .white.opacity(0.52)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1
+                        )
+                    }
+                    .shadow(color: .white.opacity(0.22), radius: 1, y: -1)
+                    .shadow(color: .black.opacity(0.30), radius: 16, y: 8)
             }
         }
     }

@@ -367,6 +367,9 @@ public enum AgentFailureClassifier {
             switch provider {
             case .missingCredential, .invalidEndpoint:
                 return .invalidConfiguration
+            case .outputTruncated:
+                // 由 V2 Runtime 缩批恢复；不能触发同一超大请求的通用网络重试。
+                return .permanent
             case let .httpStatus(status):
                 if status == 401 || status == 403 { return .authentication }
                 if status == 429 { return .rateLimited }
@@ -585,13 +588,13 @@ public enum AgentCompletionEvaluator {
             if pendingFixed == nil {
                 continuation = "推荐索引完成事实尚未取得。请先调用 library_index_v2_status；只有真实工具结果显示固定分类与开放语义标签都无待处理项才能结束。"
             } else if pendingFixed != "0" {
-                continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pendingFixed ?? "?") 首）。请调用 library_index_v2_next_batch(limit=80) 并持续分类写回；直到固定分类与开放标签都完成。"
+                continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pendingFixed ?? "?") 首）。请调用 library_index_v2_next_batch 获取当前安全批次，写回后再次调用 next_batch；直到固定分类与开放标签都完成。"
             } else if pendingSemantic != "0" {
                 continuation = "推荐索引固定分类已完成，但仍需为 \(pendingSemantic) 首歌曲补充开放语义标签。请继续调用 library_index_v2_next_batch（本批模式 semanticTagsOnly）并写回。"
             } else if state.facts["recommendation.index.nextBatchAvailable"] == "true" {
-                continuation = "推荐索引仍有待分类歌曲，上一条工具结果已提供下一批元数据。请直接用结构化 items 调用 library_index_v2_write_batch 写回该批。"
+                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch 获取完整当前批次，分类后再调用 library_index_v2_write_batch。"
             } else {
-                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch(limit=80) 并持续分类写回。"
+                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch 获取当前安全批次并持续分类写回。"
             }
         case .appreciationWithEvidence:
             let metadataReady = state.facts["appreciation.metadata"] == "available"

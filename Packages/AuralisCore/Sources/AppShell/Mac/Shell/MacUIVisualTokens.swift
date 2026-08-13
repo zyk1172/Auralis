@@ -81,8 +81,11 @@ enum MacUIVisualTokens {
         static let controlSpacing: CGFloat = 14
         static let contextSpacing: CGFloat = 12
         static let identitySpacing: CGFloat = 12
-        static let titleMaxWidth: CGFloat = 260
+        /// Apple Music 式中部信息区：标题、歌手和进度条使用同一条较宽轨道。
+        static let titleMaxWidth: CGFloat = 460
         static let innerHorizontalPadding: CGFloat = 14
+        /// AI 助手页将播放条收拢为左端的同高度圆形封面球。
+        static let assistantOrbSize: CGFloat = 68
         static let volumePopoverWidth: CGFloat = 160
         static let volumePopoverPadding: CGFloat = 12
         static let volumePopoverContentSpacing: CGFloat = 8
@@ -117,18 +120,18 @@ enum MacUIVisualTokens {
         static let transportSpacing: CGFloat = 10
         static let lyricsLineGap: CGFloat = 20
         static let queueRowSpacing: CGFloat = 8
-        static let topLeftGlassHeight: CGFloat = 44
-        static let topLeftGlassPaddingH: CGFloat = 18
+        static let topLeftGlassHeight: CGFloat = 50
+        static let topLeftGlassPaddingH: CGFloat = 20
         /// 紧邻 traffic lights 后的系统安全位置，和 Music.app 的 close / mini group 对齐。
         static let topLeftGlassPaddingL: CGFloat = 140
-        static let topLeftGlassPaddingT: CGFloat = 12
-        static let topRightGlassHeight: CGFloat = 46
-        static let topRightGlassPaddingH: CGFloat = 18
+        static let topLeftGlassPaddingT: CGFloat = 10
+        static let topRightGlassHeight: CGFloat = 50
+        static let topRightGlassPaddingH: CGFloat = 20
         static let topRightGlassPaddingR: CGFloat = 20
         /// 与左侧收起 / 迷你播放器控制保持同一水平线。
-        static let topRightGlassPaddingT: CGFloat = 12
-        static let topRightGlassWidth: CGFloat = 150
-        static let topRightControlSpacing: CGFloat = 22
+        static let topRightGlassPaddingT: CGFloat = 10
+        static let topRightGlassWidth: CGFloat = 180
+        static let topRightControlSpacing: CGFloat = 24
     }
 
     // MARK: - Mini Player

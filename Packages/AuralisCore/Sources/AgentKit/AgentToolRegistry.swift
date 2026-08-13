@@ -438,13 +438,13 @@ public enum AgentToolRegistry {
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
               ], maxResultCharacters: 24_000),
         .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；仅在用户明确要求构建或继续索引时使用；每个真实 ID 必须恰好分类一次，不能加入歌词、路径或播放地址",
-              parameters: [.init(name: "limit", required: false, description: "每批 1-100，建议 80")],
+              parameters: [.init(name: "limit", required: false, description: "每批 1-100；Runtime 会按模型输出预算选择安全分片")],
               maxResultCharacters: 24_000),
-        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入推荐索引分类；items 必须严格覆盖上一批全部真实 ID 各一次。固定维度（情绪/场景/人声/质感/风格/能量/节奏/原声度/舞动感）保持规范，此外可根据音乐属性创建开放 semanticTags（不设数量上限，优先复用已有标签）；结果若直接附带下一批就继续写回，直到 pending=0",
+        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入刚刚由 library_index_v2_next_batch 返回的推荐索引分类；items 必须严格覆盖该批全部真实 ID 各一次。mode=full 写固定维度与可选开放 semanticTags；mode=semanticTagsOnly 只写 id、mode 和 semanticTags，不能伪造固定维度。开放 semanticTags 没有全局数量硬上限；写入成功后必须重新调用 next_batch 获取下一批，直到 pending=0",
               parameters: [.init(
                 name: "items",
                 required: true,
-                description: "分类数组；仅使用固定维度：moods/scenes/vocals/textures/styles 与 energy/tempo/acousticness/danceability 数值",
+                description: "分类数组。full：id、固定维度、semanticTags 与 confidence；semanticTagsOnly：id、mode=semanticTagsOnly、semanticTags。semanticTags 仅限有音乐意义且有区分度的开放标签，优先复用 canonical 标签，词库不设全局硬上限。",
                 schemaJSON: Self.recommendationClassificationArraySchema
               )],
               maxResultCharacters: 24_000),

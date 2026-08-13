@@ -112,6 +112,11 @@ public struct AgentRunner {
         var outputTokens: Int?
     }
 
+    private enum ToolArgumentParseResult {
+        case success([String: String])
+        case malformed(rawLength: Int)
+    }
+
     /// 执行一次用户请求。
     /// - Parameters:
     ///   - provider: 可用时为 LLM 规划；为 nil 时走本地规则降级。
@@ -256,6 +261,7 @@ public struct AgentRunner {
         var ws = AgentTaskWorkingSet(
             targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
         )
+        ws.configureRecommendationIndexV2(maxOutputTokens: provider.capabilities.maxOutputTokens)
 
         while true {
             if Task.isCancelled {
@@ -318,6 +324,18 @@ public struct AgentRunner {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                 return
             } catch {
+                if Self.isOutputTruncated(error), policy.completion == .indexPendingCountIsZero {
+                    let limit = ws.recoverRecommendationIndexV2Batch()
+                    let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只对刚返回的完整批次生成 items。"
+                    taskState.errors.append(recovery)
+                    taskState.pendingActions = [recovery]
+                    taskState.status = .waitingForTool
+                    taskState.updatedAt = .now
+                    await state(taskState)
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
+                    conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
+                    continue
+                }
                 // 原生 tools 字段被 400/422 拒绝（部分自托管端点不认识 tools）：
                 // 降级到文本 ACTION 协议重试一次，而不是直接判死。
                 if nativeMode, Self.isSchemaRejection(error) {
@@ -466,14 +484,19 @@ public struct AgentRunner {
             }
 
             // 统一调用视图：原生调用带稳定 id，文本 ACTION 合成 text-N。
-            let calls: [(id: String?, name: String, args: [String: String])]
+            let calls: [(id: String?, name: String, args: [String: String], malformedArguments: Bool)]
             if nativeMode, !nativeCalls.isEmpty {
-                calls = nativeCalls.map {
-                    (id: $0.id, name: $0.name, args: Self.parseArguments($0.arguments))
+                calls = nativeCalls.map { native in
+                    switch Self.parseArguments(native.arguments) {
+                    case let .success(args):
+                        (id: native.id, name: native.name, args: args, malformedArguments: false)
+                    case .malformed:
+                        (id: native.id, name: native.name, args: [:], malformedArguments: true)
+                    }
                 }
             } else {
                 calls = textActions.enumerated().map {
-                    (id: "text-\($0.offset)", name: $0.element.tool, args: $0.element.args)
+                    (id: "text-\($0.offset)", name: $0.element.tool, args: $0.element.args, malformedArguments: false)
                 }
             }
 
@@ -482,7 +505,11 @@ public struct AgentRunner {
             var roundSearchCalls = 0
             var roundToolNames: Set<String> = []
 
-            for call in calls {
+            for rawCall in calls {
+                var call = rawCall
+                if call.name == "library_index_v2_next_batch" {
+                    call.args["limit"] = "\(ws.recommendationIndexV2PreferredBatchSize)"
+                }
                 toolStepCount += 1
                 taskState.progress.toolCalls += 1
                 taskState.recordToolCall(name: call.name, arguments: call.args)
@@ -501,6 +528,32 @@ public struct AgentRunner {
                         content: "执行失败：未知工具 \(call.name)",
                         native: nativeMode
                     ))
+                    continue
+                }
+
+                if call.malformedArguments {
+                    let failureText: String
+                    if call.name == "library_index_v2_write_batch" {
+                        let limit = ws.recoverRecommendationIndexV2Batch()
+                        failureText = "（工具执行结果）library_index_v2_write_batch: 参数 JSON 不完整或被截断，本次没有执行写入。请重新调用 library_index_v2_next_batch(limit=\(limit))，只使用刚返回的完整批次。"
+                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
+                    } else {
+                        failureText = "（工具执行结果）\(call.name): 参数 JSON 不完整或被截断，本次没有执行工具。"
+                    }
+                    taskState.errors.append(failureText)
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: [:], summary: "原生参数 JSON 不完整", reused: false))
+                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
+                    continue
+                }
+
+                if call.name == "library_index_v2_write_batch",
+                   let issue = ws.recommendationIndexV2WriteIssue(arguments: call.args) {
+                    let limit = ws.recoverRecommendationIndexV2Batch()
+                    let failureText = "（工具执行结果）library_index_v2_write_batch: \(issue)，本次没有执行写入。请重新调用 library_index_v2_next_batch(limit=\(limit))，只提交刚返回的完整批次。"
+                    taskState.errors.append(failureText)
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "V2 批身份或 items 无效", reused: false))
+                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批参数不完整，正在缩小批次重试…")]))
                     continue
                 }
 
@@ -546,10 +599,11 @@ public struct AgentRunner {
                 taskState.updatedAt = .now
                 await state(taskState)
                 let result: ToolResult
+                let executableCall = ToolCall(name: call.name, arguments: call.args)
                 do {
                     result = try await Self.withTimeout(toolTimeout) {
                         await AgentToolRegistry.execute(
-                            ToolCall(name: call.name, arguments: call.args),
+                            executableCall,
                             bridge: bridge,
                             catalog: catalog,
                             serverID: context.serverID,
@@ -578,6 +632,11 @@ public struct AgentRunner {
                     ws.recordSuccessfulSideEffect(tool: call.name, args: call.args, summary: result.summary)
                 }
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
+                if result.success, call.name == "library_index_v2_next_batch" {
+                    ws.recordRecommendationIndexV2Batch(facts: result.facts)
+                } else if result.success, call.name == "library_index_v2_write_batch" {
+                    ws.completeRecommendationIndexV2Batch()
+                }
                 if madeProgress { completionRepairAttempts = 0 }
                 await state(taskState)
                 // 展示状态：候选进内部池（绝不上屏）；最终/歧义由工具声明；真实副作用写 final。
@@ -721,13 +780,13 @@ public struct AgentRunner {
     }
 
     /// 解析原生 tool call 的 arguments JSON 字符串为参数字典。
-    private static func parseArguments(_ json: String) -> [String: String] {
+    private static func parseArguments(_ json: String) -> ToolArgumentParseResult {
         guard let data = json.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
+        else { return .malformed(rawLength: json.utf8.count) }
         var args: [String: String] = [:]
         for (key, value) in object { args[key] = argumentString(value) }
-        return args
+        return .success(args)
     }
 
     /// 原生工具参数可能包含数组或对象。`String(describing:)` 会生成 Swift 的
@@ -755,6 +814,12 @@ public struct AgentRunner {
 
     private static func errorText(_ error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    }
+
+    private static func isOutputTruncated(_ error: Error) -> Bool {
+        guard let providerError = error as? AIProviderError else { return false }
+        if case .outputTruncated = providerError { return true }
+        return false
     }
 
     /// 提示词负责“少用表情”，这里再做一次确定性兜底：每个句子最多保留一个 emoji。
@@ -1249,6 +1314,7 @@ public struct AgentRunner {
         5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首**候选**（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里筛选出用户要求的 N 首。注意：40～60 是内部候选池，不是给主人显示 40～60 首；最终展示只通过 result_present_tracks / 真实建队/建歌单副作用确定。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
         5e. 热门 = 本地热度代理（播放次数/收藏/评分/最近播放），不是互联网排行榜。library_select_tracks 的 popularityProxy 已按此排序；语言标签缺失时会按热度返回候选，请按歌曲名/艺术家判断语言后再挑选。
         5f. 推荐时不需要每次都先 catalog_index：只有确实需要了解曲库结构（流派/语言/年代构成）时才调用 library_get_catalog_index；能直接用 recommend_by_mood / recommend_by_constraints / library_select_tracks 得到候选时就先用它们。按用户需求只取相关分类；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
+        5f-1. 构建 Recommendation Index V2 时严格使用 status → library_index_v2_next_batch → library_index_v2_write_batch → next_batch → write_batch。每次成功写入后必须重新获取完整下一批；绝不能在没有刚取得的完整 metadata 时凭记忆连续调用 write_batch。若工具结果提示参数不完整或缩小批次，立即按给出的 limit 重新调用 next_batch，不要猜测或补造 items。
         5e-0. 不喜欢（dislike）：用户说「我不喜欢这首」「这首以后不要给我推荐」「别再推荐这首歌」「把当前歌曲标记为不喜欢」时，调用 preference_set_disliked(trackID, value=true)；「取消不喜欢」调用 value=false。查询用 library_get_disliked。**不喜欢只影响自动推荐/随机/相似/智能队列/发现**；用户明确要「播放」「搜索」「打开专辑/歌单」某首不喜欢歌曲时，必须正常执行，不得以「你不喜欢」为由拒绝。所有自动推荐工具的返回候选已经由 Swift/SQLite 层排除了不喜欢歌曲，你不需要也不应该把不喜欢的歌塞回推荐。
         5f-0. 歌曲鉴赏：主人要求鉴赏/赏析/乐评/大众评价时，必须调用 music_appreciate。没有指定歌曲则省略 trackID，鉴赏当前播放曲目；指定歌曲时先 library_search 取得真实 trackID，再调用 music_appreciate。最终回答固定使用 `## 《歌名》鉴赏`，并按顺序分为 `### 【已核验事实】`、`### 【模型分析】`、`### 【我的私人数据】`、`### 【大众评价】`；可在模型分析中使用音乐结构、情绪、编曲、人声、风格和聆听细节的小标题，但不得混入事实段。只有工具返回真实 Community Evidence 才能描述大众评价；否则大众评价段必须逐字写“暂无可核验的大众评价数据。” 本机播放次数、收藏和个人评分只能放在“我的私人数据”，不能冒充大众反馈。不得编造调性、BPM、歌词、创作背景、平台评分、榜单、奖项、评论来源或引语。
         5g. 音乐下载（Music Download / MoviePilot）：这是「下载到服务器音乐目录」的离线补充能力，**不是播放的前置条件**。播放永远走服务器在线流播（见规则 3）。只有以下两种情况才用 music_download：① 用户明确要求「下载」某首歌/专辑；② 已用 server_search 确认服务器音乐库中确实不存在该资源（先说明该资源不在服务器上，再询问是否要下载）。

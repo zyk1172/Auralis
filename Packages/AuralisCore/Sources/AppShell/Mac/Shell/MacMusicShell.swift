@@ -61,9 +61,11 @@ public struct MacMusicShell: View {
                 .transition(.opacity)
             }
         }
-        // Expanded Player 仍属于同一个 macOS 窗口：保留系统 titlebar/traffic lights，
-        // 不能为了隐藏导航工具栏而把窗口控制一并藏掉。
-        .toolbarVisibility(.automatic, for: .windowToolbar)
+        // 展开播放器不是资料库目的地：隐藏原页面的标题与 toolbar actions，避免
+        // “最近添加”等导航标题和随机播放按钮遗留在播放器顶部。window toolbar
+        // 隐藏后仍由系统保留 titlebar / traffic lights；Expanded Player 内的左、右
+        // 控件会与它们处于同一顶栏水平线。
+        .toolbarVisibility(playerState.isExpanded ? .hidden : .automatic, for: .windowToolbar)
         // 用户选择主题后，主窗口、AI 助手与每个资料库目的地共享同一套色彩和控件强调色。
         .tint(theme.colorTokens.accent.color)
         .preferredColorScheme(theme.colorScheme)
@@ -79,31 +81,67 @@ public struct MacMusicShell: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             MacSidebar(model: model, prefs: sidebarPrefs, selection: $navigation.selection)
         } detail: {
-            NavigationStack(path: $navigation.path) {
-                detailContent
-                    .navigationDestination(for: MacDetailRoute.self) { route in
-                        detailRouteView(route)
+            // 不能把播放条挂在页面内容的 safeAreaInset 上：空态 VStack 会给它一个
+            // 非窗口高度，导致下载/不喜欢等页面的播放条上跳。这里由 detail 的
+            // GeometryReader 提供稳定窗口坐标，内容仅预留播放器所占底部空间。
+            GeometryReader { _ in
+                ZStack(alignment: .bottom) {
+                    NavigationStack(path: $navigation.path) {
+                        detailContent
+                            .navigationDestination(for: MacDetailRoute.self) { route in
+                                detailRouteView(route)
+                            }
                     }
+                    .navigationTitle(currentTitle)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        Color.clear
+                            .frame(height: playerDockReservedHeight)
+                            .accessibilityHidden(true)
+                    }
+                    .inspector(isPresented: $showRightPanel) {
+                        MacRightPanel(model: model, theme: theme, mode: rightPanelMode)
+                    }
+
+                    playerBar
+                        .padding(.horizontal, MacUIVisualTokens.FloatingPlayer.horizontalInset)
+                        .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
+                        .padding(.top, MacUIVisualTokens.FloatingPlayer.topInset)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
-            .navigationTitle(currentTitle)
-            // 播放器属于详情区域的底部安全区，而不是覆盖在 ScrollView/Table 上。
-            // 这样歌单、歌曲表、下载页和所有后续同级页面都会自动为它避让。
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+        }
+    }
+
+    private var playerDockReservedHeight: CGFloat {
+        MacUIVisualTokens.FloatingPlayer.height
+            + MacUIVisualTokens.FloatingPlayer.topInset
+            + MacUIVisualTokens.FloatingPlayer.bottomInset
+    }
+
+    @ViewBuilder
+    private var playerBar: some View {
+        if navigation.selection == .assistant {
+            // 先占用与常规胶囊完全相同的宽度，再将封面球贴到该轨道左端；
+            // 不会因页面切换而跑到 detail 的最左侧或内容中部。
+            HStack(spacing: 0) {
                 MacFloatingPlayerBar(
                     model: model,
                     theme: theme,
-                    onOpenFullPlayer: { expandCurrentWindowPlayer() },
-                    onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) },
-                    onToggleLyrics: { toggleRightPanel(.lyrics) },
-                    onToggleQueue: { toggleRightPanel(.queue) }
+                    presentation: .assistantArtworkOrb,
+                    onOpenFullPlayer: { expandCurrentWindowPlayer() }
                 )
-                .padding(.horizontal, MacUIVisualTokens.FloatingPlayer.horizontalInset)
-                .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
-                .padding(.top, MacUIVisualTokens.FloatingPlayer.topInset)
+                Spacer(minLength: 0)
             }
-            .inspector(isPresented: $showRightPanel) {
-                MacRightPanel(model: model, theme: theme, mode: rightPanelMode)
-            }
+            .frame(maxWidth: MacUIVisualTokens.FloatingPlayer.maxWidth, alignment: .leading)
+        } else {
+            MacFloatingPlayerBar(
+                model: model,
+                theme: theme,
+                onOpenFullPlayer: { expandCurrentWindowPlayer() },
+                onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) },
+                onToggleLyrics: { toggleRightPanel(.lyrics) },
+                onToggleQueue: { toggleRightPanel(.queue) }
+            )
         }
     }
 
@@ -118,6 +156,8 @@ public struct MacMusicShell: View {
         withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.42, bounce: 0.0)) {
             playerState.expand()
         }
+        // 展开页面不能吞掉标准红/黄/绿窗口按钮；toolbar 处于隐藏状态时也显式保留它们。
+        DispatchQueue.main.async { restoreTrafficLights() }
         if fullscreen {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 enterSystemFullscreenIfNeeded()
@@ -145,6 +185,13 @@ public struct MacMusicShell: View {
     private func enterSystemFullscreenIfNeeded() {
         guard let window = NSApp.keyWindow, !window.styleMask.contains(.fullScreen) else { return }
         window.toggleFullScreen(nil)
+    }
+
+    private func restoreTrafficLights() {
+        guard let window = NSApp.keyWindow else { return }
+        [.closeButton, .miniaturizeButton, .zoomButton].forEach { button in
+            window.standardWindowButton(button)?.isHidden = false
+        }
     }
 
     // MARK: - 主内容（普通模式）

@@ -44,6 +44,7 @@ struct MacExpandedPlayerView: View {
     private var duration: TimeInterval { max(model.currentTrack.duration, 1) }
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
     private var trackGlobalID: String { "\(track.serverID):\(track.id.rawValue)" }
+    private var isPlaying: Bool { playbackStore.state == .playing }
 
     var body: some View {
         GeometryReader { geo in
@@ -135,6 +136,10 @@ struct MacExpandedPlayerView: View {
                 cornerRadius: MacUIVisualTokens.ExpandedPlayer.artworkCornerRadius
             )
             .frame(maxWidth: .infinity)
+            // Apple Music 的呼吸式反馈：播放时封面铺满轨道，暂停时收拢。
+            // 参考 Music.app：暂停封面约为播放态的 73%，而不是轻微缩小。
+            .scaleEffect(isPlaying ? 1 : 0.73)
+            .animation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.16), value: isPlaying)
             .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
             .accessibilityLabel("\(track.albumTitle) 封面")
 
@@ -398,37 +403,62 @@ struct MacExpandedPlayerView: View {
 
     private var queuePane: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 14) {
+                queueModePill(title: "自动连播", systemImage: "infinity")
+                queueModePill(title: "交叉渐入渐出", systemImage: "shuffle")
+            }
+            .padding(.bottom, 28)
+
             HStack {
-                Text("待播队列")
-                    .font(.headline)
-                    .foregroundStyle(.white.opacity(0.85))
+                Text("继续播放")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
                 Spacer()
                 if !model.upcomingTracks.isEmpty {
                     Button("清除") { model.clearUpcoming() }
-                        .buttonStyle(.link)
-                        .foregroundStyle(.white.opacity(0.7))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.pink.opacity(0.9))
                 }
             }
-            .padding(.bottom, 10)
-            ScrollView {
-                VStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.queueRowSpacing) {
-                    if model.hasCurrentTrack {
-                        queueRow(model.currentTrack, isCurrent: true)
-                    }
-                    ForEach(Array(model.upcomingTracks.enumerated()), id: \.element.id) { offset, queueTrack in
-                        queueRow(queueTrack, isCurrent: false)
-                            .contextMenu {
-                                Button("立即播放") { model.selectAndPlay(queueTrack) }
-                                Button("从队列移除") {
-                                    let real = (model.currentQueueIndex ?? -1) + 1 + offset
-                                    model.removeFromQueue(atOffsets: IndexSet([real]))
+            .padding(.bottom, 14)
+            Divider().overlay(.white.opacity(0.22))
+            if model.upcomingTracks.isEmpty {
+                VStack {
+                    Spacer()
+                    Text("队列中无音乐。")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(0.58))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.queueRowSpacing) {
+                        ForEach(Array(model.upcomingTracks.enumerated()), id: \.element.id) { offset, queueTrack in
+                            queueRow(queueTrack, isCurrent: false)
+                                .contextMenu {
+                                    Button("立即播放") { model.selectAndPlay(queueTrack) }
+                                    Button("从队列移除") {
+                                        let real = (model.currentQueueIndex ?? -1) + 1 + offset
+                                        model.removeFromQueue(atOffsets: IndexSet([real]))
+                                    }
                                 }
-                            }
+                    }
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func queueModePill(title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.white.opacity(0.60))
+            .frame(maxWidth: .infinity)
+            .frame(height: 42)
+            .background(.white.opacity(0.08), in: Capsule())
+            .accessibilityLabel(title)
     }
 
     private func queueRow(_ queueTrack: Track, isCurrent: Bool) -> some View {
@@ -462,15 +492,15 @@ struct MacExpandedPlayerView: View {
                     HStack(spacing: MacUIVisualTokens.ExpandedPlayer.topRightControlSpacing) {
                         Button(action: onCollapse) {
                             Image(systemName: "xmark")
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.85))
                         }
                         .buttonStyle(.plain)
                         .help("收起播放器")
                         .accessibilityLabel("收起播放器")
                         Button(action: onOpenMiniPlayer) {
-                            Image(systemName: "pip")
-                                .font(.system(size: 13, weight: .semibold))
+                            Image(systemName: "rectangle.on.rectangle")
+                                .font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.85))
                         }
                         .buttonStyle(.plain)
@@ -490,9 +520,6 @@ struct MacExpandedPlayerView: View {
             .overlay(alignment: .topTrailing) {
                 MacGlassCapsule {
                     HStack(spacing: 12) {
-                        Image(systemName: "speaker.wave.3.fill")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.white.opacity(0.85))
                         Slider(value: Binding(
                             get: { model.volume },
                             set: { model.setVolume($0) }
@@ -500,6 +527,9 @@ struct MacExpandedPlayerView: View {
                         .controlSize(.small)
                         .frame(width: MacUIVisualTokens.ExpandedPlayer.topRightGlassWidth)
                         .accessibilityLabel("音量")
+                        Image(systemName: "speaker.wave.3.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(.white.opacity(0.85))
                     }
                     .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
                     .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)

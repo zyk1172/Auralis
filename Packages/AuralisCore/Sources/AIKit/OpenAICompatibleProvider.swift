@@ -7,6 +7,9 @@ public enum AIProviderError: Error, Equatable, Sendable {
     case invalidEndpoint
     case transport(String)
     case httpStatus(Int)
+    /// 模型因输出上限停止，function-call arguments 不能被当成完整工具调用。
+    /// 这不是网络瞬态故障；调用方必须缩小任务分片后重新请求。
+    case outputTruncated
     /// 响应无法解析。
     /// - detail: 响应体前若干字节（或说明），便于定位是空响应、HTML 错误页还是格式不兼容。
     /// - retryable: 空响应 / 截断 JSON / 非 JSON 错误页属于网关瞬时抖动，可重试；
@@ -25,7 +28,7 @@ public extension AIProviderError {
             return true
         case let .malformedResponse(_, retryable):
             return retryable
-        case .missingCredential, .invalidEndpoint:
+        case .missingCredential, .invalidEndpoint, .outputTruncated:
             return false
         }
     }
@@ -38,6 +41,8 @@ extension AIProviderError: LocalizedError {
             "尚未配置 API Key，请先在设置中填写。"
         case .invalidEndpoint:
             "接口地址无效，请检查 Base URL 与 API 路径。"
+        case .outputTruncated:
+            "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。"
         case let .transport(message):
             "网络请求失败：\(message)"
         case let .httpStatus(status):
@@ -121,10 +126,15 @@ public struct OpenAICompatibleProvider: AIProvider {
             body: requestBody(request, stream: false),
             run: { try await session.data(for: $0) },
             transform: { data, _ in
-                if usesResponsesAPI {
-                    return try Self.parseResponsesCompletion(data: data, fallbackModel: request.model)
+                let response = if usesResponsesAPI {
+                    try Self.parseResponsesCompletion(data: data, fallbackModel: request.model)
+                } else {
+                    try Self.parseCompletion(data: data, fallbackModel: request.model)
                 }
-                return try Self.parseCompletion(data: data, fallbackModel: request.model)
+                if response.finishReason == "length", response.toolCalls?.isEmpty == false {
+                    throw AIProviderError.outputTruncated
+                }
+                return response
             }
         )
     }
@@ -183,7 +193,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                             // 一些 OpenAI 兼容网关会发送标准的 finish_reason，但不会
                             // 再补 [DONE] 或主动关闭 SSE 连接。若忽略它，最终文本虽然
                             // 已显示，AgentRunner 仍会一直等待，界面就会卡在“正在执行”。
-                            if Self.streamHasFinished(message.data) {
+                            if let finishReason = Self.streamFinishReason(message.data) {
+                                if finishReason == "length" { throw AIProviderError.outputTruncated }
                                 Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
                                 continuation.yield(.completed)
                                 continuation.finish()
@@ -217,7 +228,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 toolCallFragments[fragment.index] = fragment
                             }
                         }
-                        if Self.streamHasFinished(message.data) {
+                        if let finishReason = Self.streamFinishReason(message.data) {
+                            if finishReason == "length" { throw AIProviderError.outputTruncated }
                             Self.yieldAssembledToolCalls(fragments: toolCallFragments, continuation: continuation)
                             continuation.yield(.completed)
                             continuation.finish()
@@ -248,14 +260,24 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// Chat Completions 的最后一个 chunk 通常带 `finish_reason`。把它当作
     /// 与 `[DONE]` 等价的结束信号，兼容没有关闭长连接的转发服务。
-    private static func streamHasFinished(_ data: String) -> Bool {
+    private static func streamFinishReason(_ data: String) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any],
               let choices = object["choices"] as? [[String: Any]]
+        else { return nil }
+        return choices.compactMap { choice in
+            guard let reason = choice["finish_reason"] as? String else { return nil }
+            return reason
+        }.first
+    }
+
+    /// Responses API 以 response.status=incomplete + max_output_tokens 表达等价的截断。
+    private static func responsesStreamIsTruncated(_ data: String) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any],
+              let response = object["response"] as? [String: Any],
+              response["status"] as? String == "incomplete",
+              let details = response["incomplete_details"] as? [String: Any]
         else { return false }
-        return choices.contains { choice in
-            guard let reason = choice["finish_reason"] else { return false }
-            return !(reason is NSNull)
-        }
+        return details["reason"] as? String == "max_output_tokens"
     }
 
     /// Responses API 流式：SSE 事件按 `data: {"type":...}` 解析，
@@ -282,6 +304,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 continuation.finish()
                                 return
                             }
+                            if Self.responsesStreamIsTruncated(message.data) { throw AIProviderError.outputTruncated }
                             let parsed = Self.parseResponsesStreamEvent(message.data)
                             switch parsed {
                             case let .text(text):
@@ -314,6 +337,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.finish()
                             return
                         }
+                        if Self.responsesStreamIsTruncated(message.data) { throw AIProviderError.outputTruncated }
                         let parsed = Self.parseResponsesStreamEvent(message.data)
                         switch parsed {
                         case let .text(text):
