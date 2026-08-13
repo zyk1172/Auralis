@@ -112,20 +112,20 @@ struct MacExpandedPlayerView: View {
                 artworkKey: track.artworkKey,
                 colors: theme.colorTokens,
                 size: artworkSize,
-                cornerRadius: 14
+                cornerRadius: MacUIVisualTokens.ExpandedPlayer.artworkCornerRadius
             )
             .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
             .accessibilityLabel("\(track.albumTitle) 封面")
 
-            Spacer().frame(height: 26)
+            Spacer().frame(height: 26)  // trackInfo 上间距（保留）
 
             trackInfoRow
 
-            Spacer().frame(height: 24)
+            Spacer().frame(height: MacUIVisualTokens.ExpandedPlayer.columnBlockSpacing)
 
             progressView(width: artworkSize)
 
-            Spacer().frame(height: 28)
+            Spacer().frame(height: 28)  // progress→transport 间距（保留）
 
             transport(artworkSize: artworkSize)
 
@@ -307,11 +307,11 @@ struct MacExpandedPlayerView: View {
             case let .available(lyrics) where !lyrics.lines.isEmpty:
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 20) {
+                        LazyVStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                                 let isCurrent = currentLyricIndex == index
                                 Text(line.text)
-                                    .font(.system(size: isCurrent ? 29 : 23, weight: isCurrent ? .semibold : .regular))
+                                    .font(.system(size: isCurrent ? MacUIVisualTokens.Typography.lyricActive : MacUIVisualTokens.Typography.lyricInactive, weight: isCurrent ? .semibold : .regular))
                                     .foregroundStyle(isCurrent ? Color.white : Color.white.opacity(0.55))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
@@ -390,7 +390,7 @@ struct MacExpandedPlayerView: View {
             }
             .padding(.bottom, 10)
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.queueRowSpacing) {
                     if model.hasCurrentTrack {
                         queueRow(model.currentTrack, isCurrent: true)
                     }
@@ -416,11 +416,11 @@ struct MacExpandedPlayerView: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(queueTrack.title)
-                    .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
+                    .font(.system(size: MacUIVisualTokens.Typography.queueTrackTitle, weight: isCurrent ? .semibold : .regular))
                     .foregroundStyle(isCurrent ? Color.white : Color.white.opacity(0.8))
                     .lineLimit(1)
                 Text(queueTrack.artistName)
-                    .font(.system(size: 12))
+                    .font(.system(size: MacUIVisualTokens.Typography.queueTrackSubtitle))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
             }
@@ -438,7 +438,7 @@ struct MacExpandedPlayerView: View {
         Color.clear
             .overlay(alignment: .topLeading) {
                 MacGlassCapsule {
-                    HStack(spacing: 14) {
+                    HStack(spacing: MacUIVisualTokens.ExpandedPlayer.topRightControlSpacing) {
                         Button(action: onCollapse) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 13, weight: .semibold))
@@ -456,11 +456,11 @@ struct MacExpandedPlayerView: View {
                         .help("切换迷你播放器")
                         .accessibilityLabel("切换迷你播放器")
                     }
-                    .padding(.horizontal, 18)
-                    .frame(height: 44)
+                    .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingH)
+                    .frame(height: MacUIVisualTokens.ExpandedPlayer.topLeftGlassHeight)
                 }
-                .padding(.leading, 20)
-                .padding(.top, 10)
+                .padding(.leading, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingL)
+                .padding(.top, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingT)
             }
     }
 
@@ -477,14 +477,14 @@ struct MacExpandedPlayerView: View {
                             set: { model.setVolume($0) }
                         ), in: 0...1)
                         .controlSize(.small)
-                        .frame(width: 150)
+                        .frame(width: MacUIVisualTokens.ExpandedPlayer.topRightGlassWidth)
                         .accessibilityLabel("音量")
                     }
-                    .padding(.horizontal, 18)
-                    .frame(height: 46)
+                    .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
+                    .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)
                 }
-                .padding(.trailing, 20)
-                .padding(.top, 10)
+                .padding(.trailing, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingR)
+                .padding(.top, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingT)
             }
     }
 
@@ -516,10 +516,10 @@ struct MacExpandedPlayerView: View {
                         .help("队列")
                         .accessibilityLabel("队列")
                     }
-                    .padding(.horizontal, 20)
-                    .frame(height: 46)
+                    .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
+                    .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)
                 }
-                .padding(.trailing, 20)
+                .padding(.trailing, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingR)
                 .padding(.bottom, 20)
             }
     }

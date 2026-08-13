@@ -23,11 +23,11 @@ public struct MacMusicShell: View {
     @State private var isCreatingPlaylist = false
     @State private var newPlaylistName = ""
 
-    @State private var playerPresentation: MacPlayerPresentation = .library
-    @State private var expandedContext: MacExpandedPlayerContext = .none
+    @StateObject private var playerState = MacPlayerPresentationState()
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var theme: BuiltInTheme { themeStore.current }
 
@@ -44,22 +44,22 @@ public struct MacMusicShell: View {
     private var contents: some View {
         ZStack {
             libraryUI
-                .opacity(playerPresentation == .expanded ? 0 : 1)
-                .allowsHitTesting(playerPresentation == .library)
+                .opacity(playerState.isExpanded ? 0 : 1)
+                .allowsHitTesting(!playerState.isExpanded)
 
-            if playerPresentation == .expanded {
+            if playerState.isExpanded {
                 MacExpandedPlayerView(
                     model: model,
                     theme: theme,
-                    context: $expandedContext,
+                    context: $playerState.context,
                     onCollapse: collapseExpandedPlayer,
                     onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) }
                 )
                 .zIndex(100)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .toolbarVisibility(playerPresentation == .expanded ? .hidden : .automatic, for: .windowToolbar)
+        .toolbarVisibility(playerState.isExpanded ? .hidden : .automatic, for: .windowToolbar)
         // 环境注入放到 ZStack 层：libraryUI 与同窗口 Expanded Player 都能继承
         // ArtworkStore / ThemeStore（否则 Expanded 内的 ArtworkView 强解包崩溃）。
         .environment(model.artworkStore)
@@ -80,7 +80,7 @@ public struct MacMusicShell: View {
                         }
                 }
                 .navigationTitle(currentTitle)
-                .contentMargins(.bottom, 120, for: .scrollContent)
+                .contentMargins(.bottom, MacUIVisualTokens.Content.scrollBottomInset, for: .scrollContent)
 
                 MacFloatingPlayerBar(
                     model: model,
@@ -90,8 +90,8 @@ public struct MacMusicShell: View {
                     onToggleLyrics: { toggleRightPanel(.lyrics) },
                     onToggleQueue: { toggleRightPanel(.queue) }
                 )
-                .padding(.horizontal, 64)
-                .padding(.bottom, 14)
+                .padding(.horizontal, MacUIVisualTokens.FloatingPlayer.horizontalInset)
+                .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
             }
             .inspector(isPresented: $showRightPanel) {
                 MacRightPanel(model: model, theme: theme, mode: rightPanelMode)
@@ -102,13 +102,13 @@ public struct MacMusicShell: View {
     // MARK: - 播放器展开 / 收起（同窗口）
 
     private func expandCurrentWindowPlayer(fullscreen: Bool = false) {
-        guard playerPresentation == .library else {
+        guard !playerState.isExpanded else {
             if fullscreen { enterSystemFullscreenIfNeeded() }
             return
         }
         MacUITrace.action("expandPlayer", "fullscreen=\(fullscreen) track=\(model.currentTrack.serverID):\(model.currentTrack.id.rawValue)")
-        withAnimation(.spring(duration: 0.42, bounce: 0.0)) {
-            playerPresentation = .expanded
+        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.42, bounce: 0.0)) {
+            playerState.expand()
         }
         if fullscreen {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -118,18 +118,18 @@ public struct MacMusicShell: View {
     }
 
     private func collapseExpandedPlayer() {
-        guard playerPresentation == .expanded else { return }
+        guard playerState.isExpanded else { return }
         MacUITrace.action("collapsePlayer")
         if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
             window.toggleFullScreen(nil)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                withAnimation(.spring(duration: 0.35, bounce: 0.0)) {
-                    playerPresentation = .library
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
+                    playerState.collapse()
                 }
             }
         } else {
-            withAnimation(.spring(duration: 0.35, bounce: 0.0)) {
-                playerPresentation = .library
+            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
+                playerState.collapse()
             }
         }
     }
@@ -425,7 +425,7 @@ public struct MacMusicShell: View {
             }
             .onKeyPress(.escape) {
                 if isTypingText { return .ignored }
-                if playerPresentation == .expanded {
+                if playerState.isExpanded {
                     collapseExpandedPlayer()
                     return .handled
                 }

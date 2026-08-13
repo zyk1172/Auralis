@@ -21,7 +21,7 @@ struct MacPageHeader<Trailing: View>: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: MacLayout.pageTitleSize, weight: .bold, design: .default))
+                    .font(.system(size: MacUIVisualTokens.Typography.pageTitle, weight: .bold, design: .default))
                     .accessibilityAddTraits(.isHeader)
                 if let subtitle {
                     Text(subtitle)

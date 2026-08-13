@@ -27,7 +27,7 @@ struct MacRightPanel: View {
             case .queue: queueContent
             }
         }
-        .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
+        .inspectorColumnWidth(min: MacUIVisualTokens.RightPanel.minWidth, ideal: MacUIVisualTokens.RightPanel.idealWidth, max: MacUIVisualTokens.RightPanel.maxWidth)
         .task(id: lyricLoadID) {
             if mode == .lyrics {
                 model.ensureLyricsLoadedForCurrentTrack()

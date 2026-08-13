@@ -12,7 +12,7 @@ struct MacArtworkGridMetrics: Equatable {
     /// 「专辑」页网格（REFERENCE_A 基准：detail ≈1268 → 4 列，item ≈267-275）。
     static func albums(availableWidth: CGFloat) -> MacArtworkGridMetrics {
         let padding = horizontalPadding(for: availableWidth)
-        let spacing: CGFloat = 24
+        let spacing = MacUIVisualTokens.Content.gridColumnSpacing
         let content = max(0, availableWidth - padding * 2)
         let columns = columnCount(for: availableWidth)
         let item = (content - spacing * CGFloat(columns - 1)) / CGFloat(columns)
@@ -27,7 +27,7 @@ struct MacArtworkGridMetrics: Equatable {
     /// 首页 shelf 使用较小 Artwork（180-210），保持 5-6 可见。
     static func home(availableWidth: CGFloat) -> MacArtworkGridMetrics {
         let padding = horizontalPadding(for: availableWidth)
-        let spacing: CGFloat = 20
+        let spacing = MacUIVisualTokens.Content.homeShelfSpacing
         let content = max(0, availableWidth - padding * 2)
         let columns = max(4, columnCount(for: availableWidth))
         let item = (content - spacing * CGFloat(columns - 1)) / CGFloat(columns)
@@ -40,10 +40,10 @@ struct MacArtworkGridMetrics: Equatable {
     }
 
     private static func horizontalPadding(for width: CGFloat) -> CGFloat {
-        if width >= 1400 { return 46 }
-        if width >= 1100 { return 40 }
-        if width >= 900 { return 32 }
-        return 24
+        if width >= 1400 { return MacUIVisualTokens.Content.horizontalPaddingUltraWide }
+        if width >= 1100 { return MacUIVisualTokens.Content.horizontalPaddingWide }
+        if width >= 900 { return MacUIVisualTokens.Content.horizontalPaddingMedium }
+        return MacUIVisualTokens.Content.horizontalPaddingCompact
     }
 
     private static func columnCount(for width: CGFloat) -> Int {

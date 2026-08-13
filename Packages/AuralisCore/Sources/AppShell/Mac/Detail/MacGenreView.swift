@@ -16,7 +16,7 @@ struct MacGenreView: View {
     private var tracks: [Track] { model.tracks(for: genre) }
     private var albums: [Album] { MacLibraryQuery.genreAlbums(genre, model: model) }
 
-    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: MacLayout.artworkGridGap)]
+    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: MacUIVisualTokens.Artwork.gridGap)]
 
     var body: some View {
         ScrollView {
@@ -25,7 +25,7 @@ struct MacGenreView: View {
                 if !tracks.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("歌曲")
-                            .font(.system(size: MacLayout.sectionTitleSize, weight: .bold))
+                            .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         MacDetailTrackList(
                             tracks: tracks,
                             model: model,
@@ -39,7 +39,7 @@ struct MacGenreView: View {
                 if !albums.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("专辑")
-                            .font(.system(size: MacLayout.sectionTitleSize, weight: .bold))
+                            .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         LazyVGrid(columns: columns, spacing: 24) {
                             ForEach(albums) { album in
                                 MacAlbumTile(

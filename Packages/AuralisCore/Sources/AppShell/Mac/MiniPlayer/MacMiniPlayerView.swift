@@ -24,16 +24,16 @@ public struct MacMiniPlayerView: View {
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
 
     public var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: MacUIVisualTokens.MiniPlayer.contentSpacing) {
             if !hideArtwork {
                 ArtworkView(
                     title: model.currentTrack.albumTitle,
                     artworkKey: model.currentTrack.artworkKey,
                     colors: theme.colorTokens,
-                    size: 220,
-                    cornerRadius: 12
+                    size: MacUIVisualTokens.MiniPlayer.artworkSize,
+                    cornerRadius: MacUIVisualTokens.MiniPlayer.artworkCornerRadius
                 )
-                .frame(width: 220, height: 220)
+                .frame(width: MacUIVisualTokens.MiniPlayer.artworkSize, height: MacUIVisualTokens.MiniPlayer.artworkSize)
                 .accessibilityLabel("封面")
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -63,7 +63,7 @@ public struct MacMiniPlayerView: View {
             .controlSize(.mini)
             .disabled(!hasTrack)
 
-            HStack(spacing: 18) {
+            HStack(spacing: MacUIVisualTokens.MiniPlayer.controlSpacing) {
                 Button {
                     model.previous()
                 } label: {
@@ -130,7 +130,7 @@ public struct MacMiniPlayerView: View {
             }
         }
         .padding(16)
-        .frame(width: hideArtwork ? 300 : 252, height: hideArtwork ? 120 : 380)
+        .frame(width: hideArtwork ? MacUIVisualTokens.MiniPlayer.compactWindowWidth : MacUIVisualTokens.MiniPlayer.windowWidth, height: hideArtwork ? MacUIVisualTokens.MiniPlayer.compactWindowHeight : MacUIVisualTokens.MiniPlayer.windowHeight)
         .background(.regularMaterial)
     }
 }

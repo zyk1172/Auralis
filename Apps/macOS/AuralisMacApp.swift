@@ -23,10 +23,10 @@ struct AuralisMacApp: App {
             CommandMenu("播放") {
                 // Space 播放/暂停唯一入口在 MacMusicShell 的 .onKeyPress(.space)。
                 Button("播放 / 暂停") { post(MacCommand.togglePlay) }
+                // 对齐 Apple Music：上一首/下一首使用 plain ← / →（由 Shell onKeyPress 处理），
+                // 菜单里不再注册 Command-←/→，避免与系统/Apple Music 语义冲突。
                 Button("上一首") { post(MacCommand.previous) }
-                    .keyboardShortcut(.leftArrow, modifiers: .command)
                 Button("下一首") { post(MacCommand.next) }
-                    .keyboardShortcut(.rightArrow, modifiers: .command)
                 Divider()
                 Button("随机播放") { post(MacCommand.toggleShuffle) }
                 Button("循环模式") { post(MacCommand.cycleRepeat) }
@@ -67,7 +67,7 @@ struct AuralisMacApp: App {
                 Button("搜索") { post(MacCommand.search) }
                     .keyboardShortcut("f", modifiers: .command)
             }
-            CommandMenu("窗口") {
+            CommandMenu("播放器") {
                 Button("迷你播放器") { post(MacCommand.showMiniPlayer) }
                     .keyboardShortcut("m", modifiers: [.command, .option])
                 Button("全屏播放") { post(MacCommand.showFullScreenPlayer) }

@@ -22,7 +22,7 @@ struct MacArtistView: View {
         return tracks.sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
     }
 
-    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: MacLayout.artworkGridGap)]
+    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: MacUIVisualTokens.Artwork.gridGap)]
 
     var body: some View {
         ScrollView {
@@ -31,7 +31,7 @@ struct MacArtistView: View {
                 if !topTracks.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("常听歌曲")
-                            .font(.system(size: MacLayout.sectionTitleSize, weight: .bold))
+                            .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         MacDetailTrackList(
                             tracks: topTracks,
                             model: model,
@@ -44,7 +44,7 @@ struct MacArtistView: View {
                 if !albums.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("专辑")
-                            .font(.system(size: MacLayout.sectionTitleSize, weight: .bold))
+                            .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         LazyVGrid(columns: columns, spacing: 24) {
                             ForEach(albums) { album in
                                 MacAlbumTile(

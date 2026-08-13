@@ -39,7 +39,7 @@ struct MacSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 210, ideal: 260, max: 300)
+        .navigationSplitViewColumnWidth(min: MacUIVisualTokens.Sidebar.minWidth, ideal: MacUIVisualTokens.Sidebar.idealWidth, max: MacUIVisualTokens.Sidebar.maxWidth)
     }
 
     private var libraryHeader: some View {

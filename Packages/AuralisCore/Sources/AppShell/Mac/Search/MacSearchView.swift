@@ -277,12 +277,12 @@ struct MacSearchView: View {
             )
         } else {
             VStack(alignment: .leading, spacing: 7) {
-                ArtworkView(title: summary.title, artworkKey: nil, colors: theme.colorTokens, size: MacLayout.albumArtworkSize, cornerRadius: 10)
+                ArtworkView(title: summary.title, artworkKey: nil, colors: theme.colorTokens, size: MacUIVisualTokens.Artwork.searchResultSize, cornerRadius: MacUIVisualTokens.Artwork.searchResultCornerRadius)
                     .accessibilityHidden(true)
                 Text(summary.title).font(.system(size: 13, weight: .medium)).lineLimit(1).foregroundStyle(.primary)
                 Text("该项目已不在本地资料库中").font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1)
             }
-            .frame(width: MacLayout.albumArtworkSize, alignment: .leading)
+            .frame(width: MacUIVisualTokens.Artwork.searchResultSize, alignment: .leading)
         }
     }
 

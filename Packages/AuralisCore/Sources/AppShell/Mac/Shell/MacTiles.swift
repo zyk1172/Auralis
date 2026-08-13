@@ -96,7 +96,7 @@ struct MacAlbumTile: View {
     let album: Album
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    var size: CGFloat = MacLayout.albumArtworkSize
+    var size: CGFloat = MacUIVisualTokens.Artwork.tileFallbackSize
     var onOpen: (() -> Void)? = nil
     var onPlay: (() -> Void)? = nil
     var moreActions: [MacMenuAction] = []
@@ -114,10 +114,10 @@ struct MacAlbumTile: View {
                         artworkKey: album.artworkKey,
                         colors: theme.colorTokens,
                         size: size,
-                        cornerRadius: MacLayout.artworkCornerRadius
+                        cornerRadius: MacUIVisualTokens.Artwork.cornerRadius
                     )
                     .shadow(color: .black.opacity(0.14), radius: 3, y: 1)
-                    .contentShape(RoundedRectangle(cornerRadius: MacLayout.artworkCornerRadius, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: MacUIVisualTokens.Artwork.cornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("打开专辑")
@@ -294,7 +294,7 @@ struct MacPlaylistTile: View {
     let playlist: Playlist
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
-    var size: CGFloat = MacLayout.albumArtworkSize
+    var size: CGFloat = MacUIVisualTokens.Artwork.tileFallbackSize
     var onOpen: (() -> Void)? = nil
     var onPlay: (() -> Void)? = nil
     var moreActions: [MacMenuAction] = []
@@ -407,9 +407,9 @@ struct MacTrackTile: View {
                         artworkKey: track.artworkKey,
                         colors: theme.colorTokens,
                         size: size,
-                        cornerRadius: MacLayout.artworkCornerRadius
+                        cornerRadius: MacUIVisualTokens.Artwork.cornerRadius
                     )
-                    .contentShape(RoundedRectangle(cornerRadius: MacLayout.artworkCornerRadius, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: MacUIVisualTokens.Artwork.cornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("播放")
@@ -481,7 +481,7 @@ struct MacSectionHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.system(size: MacLayout.sectionTitleSize, weight: .bold, design: .default))
+                .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold, design: .default))
             Spacer()
             if let onAction, let actionTitle {
                 Button(actionTitle, action: onAction)

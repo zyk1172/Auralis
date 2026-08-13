@@ -41,15 +41,15 @@ struct MacFloatingPlayerBar: View {
     var body: some View {
         MacGlassCapsule {
             GeometryReader { geo in
-                let sideWidth = min(230, max(180, geo.size.width * 0.23))
-                HStack(spacing: 10) {
+                let sideWidth = min(MacUIVisualTokens.FloatingPlayer.sideMaxWidth, max(MacUIVisualTokens.FloatingPlayer.sideMinWidth, geo.size.width * 0.23))
+                HStack(spacing: MacUIVisualTokens.FloatingPlayer.sectionSpacing) {
                     HStack {
                         transportGroup
                         Spacer(minLength: 0)
                     }
                     .frame(width: sideWidth)
 
-                    HStack(spacing: 12) {
+                    HStack(spacing: MacUIVisualTokens.FloatingPlayer.identitySpacing) {
                         trackIdentity
                     }
                     .frame(maxWidth: .infinity)
@@ -60,11 +60,11 @@ struct MacFloatingPlayerBar: View {
                     }
                     .frame(width: sideWidth)
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, MacUIVisualTokens.FloatingPlayer.innerHorizontalPadding)
             }
-            .frame(height: 68)
+            .frame(height: MacUIVisualTokens.FloatingPlayer.height)
         }
-        .frame(maxWidth: 960)
+        .frame(maxWidth: MacUIVisualTokens.FloatingPlayer.maxWidth)
         // 注意：不要在这里给整条胶囊挂 .onTapGesture —— macOS 上祖先 TapGesture
         // 会与内部 Button/Menu/Slider 的命中测试冲突，导致循环/随机/切歌按钮偶发点不动。
         // “点击身份区展开播放器”已收敛到 trackIdentity 内的按钮（见下方）。
@@ -73,7 +73,7 @@ struct MacFloatingPlayerBar: View {
     // MARK: - Transport（LEFT）
 
     private var transportGroup: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: MacUIVisualTokens.FloatingPlayer.controlSpacing) {
             Button {
                 model.setShuffle(!model.isShuffled)
                 MacUITrace.action("toggleShuffle", "enabled=\(model.isShuffled)")
@@ -147,8 +147,8 @@ struct MacFloatingPlayerBar: View {
                     title: model.currentTrack.albumTitle,
                     artworkKey: model.currentTrack.artworkKey,
                     colors: theme.colorTokens,
-                    size: 44,
-                    cornerRadius: 6
+                    size: MacUIVisualTokens.FloatingPlayer.artworkSize,
+                    cornerRadius: MacUIVisualTokens.FloatingPlayer.artworkCornerRadius
                 )
                 .accessibilityHidden(true)
             }
@@ -198,14 +198,14 @@ struct MacFloatingPlayerBar: View {
                 .disabled(!hasTrack)
                 .accessibilityLabel("播放进度")
             }
-            .frame(maxWidth: 260, alignment: .leading)
+            .frame(maxWidth: MacUIVisualTokens.FloatingPlayer.titleMaxWidth, alignment: .leading)
         }
     }
 
     // MARK: - Context（RIGHT）
 
     private var contextGroup: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: MacUIVisualTokens.FloatingPlayer.contextSpacing) {
             Button {
                 if hasTrack { model.toggleFavorite(model.currentTrack) }
             } label: {
@@ -240,17 +240,17 @@ struct MacFloatingPlayerBar: View {
             .help("音量")
             .accessibilityLabel("音量")
             .popover(isPresented: $isVolumePopoverPresented, arrowEdge: .bottom) {
-                VStack(spacing: 8) {
+                VStack(spacing: MacUIVisualTokens.FloatingPlayer.volumePopoverContentSpacing) {
                     Slider(value: Binding(
                         get: { model.volume },
                         set: { model.setVolume($0) }
                     ), in: 0...1)
-                    .frame(width: 160)
+                    .frame(width: MacUIVisualTokens.FloatingPlayer.volumePopoverWidth)
                     Text("\(Int(model.volume * 100))%")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                .padding(12)
+                .padding(MacUIVisualTokens.FloatingPlayer.volumePopoverPadding)
             }
 
             Menu {

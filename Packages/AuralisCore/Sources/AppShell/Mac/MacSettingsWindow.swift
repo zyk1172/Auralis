@@ -28,7 +28,8 @@ public struct MacSettingsWindow: View {
             system.tabItem { Label(MacSettingsCategory.system.title, systemImage: MacSettingsCategory.system.symbol) }.tag(MacSettingsCategory.system)
             about.tabItem { Label(MacSettingsCategory.about.title, systemImage: MacSettingsCategory.about.symbol) }.tag(MacSettingsCategory.about)
         }
-        .frame(width: 760, height: 560)
+        // 允许放大：大字体 / 长内容（AI、服务器）时可拉高窗口，避免固定尺寸裁剪。
+        .frame(minWidth: 760, minHeight: 560)
         .padding(0)
     }
 

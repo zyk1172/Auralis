@@ -161,19 +161,9 @@ final class MacNavigationModel: ObservableObject {
 
 // MARK: - 布局 / 排版常量
 
-/// Apple Music 式密度：内容层保持平、无 Card dashboard。
-enum MacLayout {
-    public static let sidebarIdeal: CGFloat = 240
-    public static let sidebarMin: CGFloat = 200
-    public static let sidebarMax: CGFloat = 300
-    public static let pageTitleSize: CGFloat = 30
-    public static let sectionTitleSize: CGFloat = 21
-    public static let artworkGridGap: CGFloat = 20
-    public static let artworkCornerRadius: CGFloat = 10
-    public static let albumArtworkSize: CGFloat = 168
-    public static let contentMaxWidth: CGFloat = 1200
-    public static let playerBarHeight: CGFloat = 78
-}
+/// 布局 / 排版常量：统一收敛到 MacUIVisualTokens（见 MacUIVisualTokens.swift）。
+/// 历史误导常量（playerBarHeight=78 / contentMaxWidth / sidebarIdeal/Min/Max）已删除，
+/// 避免与真实页面（Floating Player 68pt、响应式网格）不一致。
 
 enum MacFormat {
     static func time(_ seconds: TimeInterval) -> String {
@@ -278,6 +268,30 @@ enum MacPlayerPresentation: Equatable {
     case expanded
 }
 
+/// Expanded Player 展示状态（可测试）：展开/收起是纯 Presentation 状态，
+/// 绝不改变 navigation selection / path / search / AppModel。
+@MainActor
+final class MacPlayerPresentationState: ObservableObject {
+    @Published var presentation: MacPlayerPresentation = .library
+    @Published var context: MacExpandedPlayerContext = .none
+
+    var isExpanded: Bool { presentation == .expanded }
+
+    func expand() {
+        guard presentation == .library else { return }
+        presentation = .expanded
+    }
+
+    func collapse() {
+        guard presentation == .expanded else { return }
+        presentation = .library
+    }
+
+    func toggleContext(_ tapped: MacExpandedPlayerContext) {
+        context = context.toggled(tapped)
+    }
+}
+
 /// Expanded Player 右侧上下文：无 / 歌词 / 队列。
 enum MacExpandedPlayerContext: Hashable {
     case none
@@ -303,17 +317,23 @@ enum MacLyricsPresentationState: Equatable {
 
 enum MacFullPlayerMetrics {
     static func artworkSize(window: CGSize) -> CGFloat {
-        min(500, max(300, min(window.width * 0.31, window.height * 0.46)))
+        let t = MacUIVisualTokens.ExpandedPlayer.self
+        return min(t.artworkMax, max(t.artworkMin, min(window.width * t.artworkWidthRatio, window.height * t.artworkHeightRatio)))
     }
-    static func leftMargin(window: CGSize) -> CGFloat { window.width * 0.085 }
+    static func leftMargin(window: CGSize) -> CGFloat { window.width * MacUIVisualTokens.ExpandedPlayer.leftMarginRatio }
     static func topY(window: CGSize) -> CGFloat {
         // 顶部留白收敛：玻璃胶囊（关闭/音量）贴近顶栏，封面从 ~56-84pt 开始。
-        max(56, min(84, window.height * 0.07))
+        let t = MacUIVisualTokens.ExpandedPlayer.self
+        return max(t.topInsetMin, min(t.topInsetMax, window.height * t.topInsetRatio))
     }
     static func rightColumnWidth(window: CGSize) -> CGFloat {
-        min(560, max(440, window.width * 0.34))
+        let t = MacUIVisualTokens.ExpandedPlayer.self
+        return min(t.rightColumnMax, max(t.rightColumnMin, window.width * t.rightColumnRatio))
     }
-    static func horizontalGap(window: CGSize) -> CGFloat { max(52, window.width * 0.035) }
+    static func horizontalGap(window: CGSize) -> CGFloat {
+        let t = MacUIVisualTokens.ExpandedPlayer.self
+        return max(t.horizontalGapMin, window.width * t.horizontalGapRatio)
+    }
     static func transportWidth(window: CGSize) -> CGFloat { artworkSize(window: window) }
 }
 
