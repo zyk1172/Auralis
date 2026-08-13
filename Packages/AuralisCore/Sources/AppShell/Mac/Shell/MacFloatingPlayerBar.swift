@@ -65,9 +65,9 @@ struct MacFloatingPlayerBar: View {
             .frame(height: 68)
         }
         .frame(maxWidth: 960)
-        // 整条空白区域点击也展开播放器；内部 Button/Menu/Slider 各自消费点击。
-        .contentShape(Rectangle())
-        .onTapGesture { onOpenFullPlayer() }
+        // 注意：不要在这里给整条胶囊挂 .onTapGesture —— macOS 上祖先 TapGesture
+        // 会与内部 Button/Menu/Slider 的命中测试冲突，导致循环/随机/切歌按钮偶发点不动。
+        // “点击身份区展开播放器”已收敛到 trackIdentity 内的按钮（见下方）。
     }
 
     // MARK: - Transport（LEFT）
@@ -76,6 +76,7 @@ struct MacFloatingPlayerBar: View {
         HStack(spacing: 14) {
             Button {
                 model.setShuffle(!model.isShuffled)
+                MacUITrace.action("toggleShuffle", "enabled=\(model.isShuffled)")
             } label: {
                 Image(systemName: "shuffle")
                     .foregroundStyle(model.isShuffled ? MacMediaAccent.color : Color.secondary)
@@ -117,13 +118,15 @@ struct MacFloatingPlayerBar: View {
 
             Button {
                 model.cycleRepeatMode()
+                MacUITrace.action("cycleRepeat", "mode=\(model.repeatMode.rawValue)")
             } label: {
                 Image(systemName: model.repeatMode == .one ? "repeat.1" : "repeat")
                     .foregroundStyle(model.repeatMode != .off ? MacMediaAccent.color : Color.secondary)
             }
             .buttonStyle(.plain)
             .help(repeatHelp)
-            .accessibilityLabel(repeatHelp)
+            .accessibilityLabel("循环模式")
+            .accessibilityValue(repeatHelp)
         }
     }
 
@@ -158,14 +161,26 @@ struct MacFloatingPlayerBar: View {
                 Button("迷你播放器") { onOpenMiniPlayer() }
             }
 
+            // 标题 / 艺术家：点击展开播放器（Apple Music 同款交互）。
+            // 文本单独成 Button，避免整条 capsule 的 TapGesture 干扰旁边的传输控制按钮。
             VStack(alignment: .leading, spacing: 2) {
-                Text(hasTrack ? model.currentTrack.title : "未在播放")
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                Text(hasTrack ? model.currentTrack.artistName : "选择歌曲开始播放")
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
+                Button(action: onOpenFullPlayer) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(hasTrack ? model.currentTrack.title : "未在播放")
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                        Text(hasTrack ? model.currentTrack.artistName : "选择歌曲开始播放")
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasTrack)
+                .help("展开播放器")
+                .accessibilityLabel("展开播放器")
+
                 Slider(
                     value: Binding(
                         get: { progress },

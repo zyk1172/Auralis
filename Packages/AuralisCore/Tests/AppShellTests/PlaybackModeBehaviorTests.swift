@@ -258,6 +258,21 @@ struct PlaybackModeBehaviorTests {
 
     // MARK: - 单曲循环防竞态（旧预载项不得带跑）
 
+    @Test("repeatOne：切换到单曲循环后旧预载被清理（prepareNext nil）")
+    @MainActor
+    func repeatOneInvalidatesPreparedNext() async {
+        let engine = RepeatProbeEngine()
+        let tracks = [track("t1"), track("t2")]
+        let model = makeModel(tracks: tracks, engine: engine)
+        model.playQueue(tracks)
+        // 线性队列先预载下一首 t2。
+        await waitUntil { await engine.lastPreparedTrackID?.rawValue == "t2" }
+        // 切到单曲循环：seamlessNextCandidate 返回 nil → prepareNext(nil) 清理旧预载。
+        model.setRepeatMode(.one)
+        await waitUntil { await engine.lastPreparedTrackID == nil }
+        #expect(await engine.lastPreparedTrackID == nil)
+    }
+
     @Test("repeatOne：即使引擎带入了旧预载项，也重播当前曲目而非被带跑")
     @MainActor
     func repeatOneRejectsStalePreparedAdvance() async {
@@ -265,11 +280,30 @@ struct PlaybackModeBehaviorTests {
         let tracks = [track("t1"), track("t2")]
         let model = makeModel(tracks: tracks, engine: engine)
         model.playQueue(tracks)
+        await waitUntil { await engine.lastPlayTrackID?.rawValue == "t1" } // 初始播放已到达引擎
         model.setRepeatMode(.one)
         model.currentTrack = track("t1")
+        let playsBefore = await engine.playInvocationCount
+
         // 模拟引擎因旧预载项自动推进到 t2（模式切换竞态）。
         await engine.simulatePreparedStart(tracks[1])
-        #expect(model.currentTrack.id.rawValue == "t1") // 仍回到当前曲目
+
+        // 模型回到当前曲目，且引擎真实收到了重播 t1 的命令。
+        await waitUntil {
+            let idOK = await engine.lastPlayTrackID?.rawValue == "t1"
+            let countOK = await engine.playInvocationCount == playsBefore + 1
+            return idOK && countOK
+        }
+        #expect(model.currentTrack.id.rawValue == "t1")
+        #expect(await engine.lastPlayTrackID?.rawValue == "t1")
+        #expect(await engine.playInvocationCount == playsBefore + 1)
+        // repeat 状态保持不变（仍是单曲循环）。
+        #expect(model.repeatMode == .one)
+        // 播放状态不是永久错误暂停：重播命令使引擎回到 playing。
+        #expect(await engine.state() == .playing)
+        // 后续自然播完仍重播当前曲目（不跳到 t2）。
+        model.handleTrackEnded()
+        #expect(model.currentTrack.id.rawValue == "t1")
     }
 
     // MARK: - capability 统一
@@ -365,16 +399,30 @@ private actor PlaybackModeProbeEngine: PlaybackControlling {
     func stop() { playbackState = .idle }
 }
 
-/// 可模拟“预载下一首已自动推进”的最小引擎。
+/// 可模拟“预载下一首已自动推进”的最小引擎；记录真实 play / prepareNext 调用，
+/// 用于验证 stale-preload 竞态下引擎确实收到了“重播当前曲目”的命令。
 private actor RepeatProbeEngine: PlaybackControlling {
     private var playbackState = PlaybackState.idle
     private var preparedStarted: (@Sendable (Track) -> Void)?
     private(set) var hasPreparedStartedHandler = false
+    /// 引擎最后一次收到的 play(track:) 曲目（验证真实重播命令）。
+    private(set) var lastPlayTrackID: TrackID?
+    /// 引擎累计收到 play(track:) 的次数。
+    private(set) var playInvocationCount = 0
+    /// 引擎最后一次收到的 prepareNext(track:) 曲目（nil 表示清理预载）。
+    private(set) var lastPreparedTrackID: TrackID?
     func state() -> PlaybackState { playbackState }
-    func play(track: Track) { playbackState = .playing }
+    func play(track: Track) {
+        lastPlayTrackID = track.id
+        playInvocationCount += 1
+        playbackState = .playing
+    }
     func pause() { playbackState = .paused }
     func resume() { playbackState = .playing }
     func stop() { playbackState = .idle }
+    func prepareNext(track: Track?) {
+        lastPreparedTrackID = track?.id
+    }
     func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) {
         preparedStarted = handler
         hasPreparedStartedHandler = handler != nil

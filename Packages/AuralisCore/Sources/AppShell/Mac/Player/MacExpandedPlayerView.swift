@@ -263,12 +263,14 @@ struct MacExpandedPlayerView: View {
             Spacer()
             Button {
                 model.cycleRepeatMode()
+                MacUITrace.action("cycleRepeat", "mode=\(model.repeatMode.rawValue)")
             } label: {
                 Image(systemName: model.repeatMode == .one ? "repeat.1" : "repeat")
                     .font(.system(size: 20))
                     .foregroundStyle(model.repeatMode != .off ? MacMediaAccent.color : .white.opacity(0.8))
             }
             .buttonStyle(.plain)
+            .help("循环模式")
             .accessibilityLabel("循环模式")
         }
         .frame(width: artworkSize)
