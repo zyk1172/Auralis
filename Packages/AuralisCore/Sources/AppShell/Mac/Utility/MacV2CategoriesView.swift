@@ -20,14 +20,6 @@ struct MacV2CategoriesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageHeader(title: "分类", subtitle: "\(categories.count) 个分类") {
-                Button {
-                    Task { await load() }
-                } label: {
-                    Label("刷新", systemImage: "arrow.clockwise")
-                }
-            }
-            Divider()
             if isLoading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if categories.isEmpty {
@@ -57,6 +49,16 @@ struct MacV2CategoriesView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationTitle("分类")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    Task { await load() }
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
             }
         }
         .task(id: model.catalog.activeServerID) { await load() }

@@ -50,31 +50,8 @@ struct MacAlbumsView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let metrics = MacArtworkGridMetrics.albums(availableWidth: geo.size.width)
-            let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 28) {
-                    ForEach(filteredAlbums) { album in
-                        MacAlbumTile(
-                            album: album,
-                            model: model,
-                            theme: theme,
-                            size: metrics.itemWidth,
-                            onOpen: { onNavigate(.album(album)) },
-                            onPlay: { model.playQueue(MacLibraryQuery.albumTracks(album, model: model)) },
-                            moreActions: albumMoreActions(album)
-                        )
-                    }
-                }
-                .padding(.horizontal, metrics.horizontalPadding)
-                .padding(.vertical, 20)
-            }
-        }
-        .navigationTitle("专辑")
-        .searchable(text: $localSearch, placement: .toolbar, prompt: "在专辑中查找")
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
+        VStack(spacing: 0) {
+            MacPageSearchHeader(text: $localSearch, prompt: "在专辑中查找", accessory: {
                 Menu {
                     Picker("排序方式", selection: $sortOrder) {
                         ForEach(AlbumSort.allCases) { option in
@@ -84,10 +61,31 @@ struct MacAlbumsView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
-                .help("排序")
-                .accessibilityLabel("排序")
+            })
+            Divider()
+            GeometryReader { geo in
+                let metrics = MacArtworkGridMetrics.albums(availableWidth: geo.size.width)
+                let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 28) {
+                        ForEach(filteredAlbums) { album in
+                            MacAlbumTile(
+                                album: album,
+                                model: model,
+                                theme: theme,
+                                size: metrics.itemWidth,
+                                onOpen: { onNavigate(.album(album)) },
+                                onPlay: { model.playQueue(MacLibraryQuery.albumTracks(album, model: model)) },
+                                moreActions: albumMoreActions(album)
+                            )
+                        }
+                    }
+                    .padding(.horizontal, metrics.horizontalPadding)
+                    .padding(.vertical, 20)
+                }
             }
         }
+        .navigationTitle("专辑")
     }
 
     private func albumMoreActions(_ album: Album) -> [MacMenuAction] {

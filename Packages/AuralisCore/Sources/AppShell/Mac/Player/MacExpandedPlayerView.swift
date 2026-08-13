@@ -19,8 +19,11 @@ struct MacExpandedPlayerView: View {
     @State private var lyricsState: MacLyricsPresentationState = .loading
     @State private var isScrubbing = false
     @State private var scrubValue: TimeInterval = 0
+    /// 让背景、封面和控制器作为一个 presentation layer 同步进入，避免封面先闪现。
+    @State private var isPresentationVisible = false
 
     @ObservedObject private var playbackStore: PlaybackStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         model: AuralisAppModel,
@@ -46,24 +49,32 @@ struct MacExpandedPlayerView: View {
         GeometryReader { geo in
             let size = geo.size
             let artwork = MacFullPlayerMetrics.artworkSize(window: size)
+            let playerWidth = MacFullPlayerMetrics.playerColumnWidth(window: size)
             let hasContext = context != .none
-            let leading = hasContext ? MacFullPlayerMetrics.leftMargin(window: size) : max(0, (size.width - artwork) / 2)
+            let playerLeading = hasContext
+                ? MacFullPlayerMetrics.leftMargin(window: size)
+                : max(0, (size.width - playerWidth) / 2)
+            let contextLeading = playerLeading + playerWidth + MacFullPlayerMetrics.horizontalGap(window: size)
 
             ZStack {
                 background
 
-                HStack(alignment: .top, spacing: MacFullPlayerMetrics.horizontalGap(window: size)) {
-                    playerColumn(artworkSize: artwork)
-                        .frame(width: artwork)
-                    if hasContext {
-                        rightContext(artworkSize: artwork)
-                            .frame(width: MacFullPlayerMetrics.rightColumnWidth(window: size))
-                            .transition(.opacity)
-                    }
-                    Spacer(minLength: 0)
+                // Music.app 的左侧是固定宽度的「播放轨道」：封面居中，标题、进度和运输控制
+                // 左右对齐。队列/歌词是另一条更靠上的右轨，不能与封面同一顶部基线。
+                playerColumn(artworkSize: artwork, columnWidth: playerWidth)
+                    .frame(width: playerWidth, alignment: .leading)
+                    .padding(.leading, playerLeading)
+                    .padding(.top, MacFullPlayerMetrics.topY(window: size))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+                if hasContext {
+                    rightContext(artworkSize: artwork)
+                        .padding(.leading, contextLeading)
+                        .padding(.trailing, max(36, size.width * 0.04))
+                        .padding(.top, MacFullPlayerMetrics.contextTopY(window: size))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .transition(.opacity)
                 }
-                .padding(.leading, leading)
-                .padding(.top, MacFullPlayerMetrics.topY(window: size))
 
                 // Glass Capsules（只对内容命中）
                 topLeftGlass
@@ -71,6 +82,15 @@ struct MacExpandedPlayerView: View {
                 bottomRightContextGlass
             }
             .animation(.easeInOut(duration: 0.25), value: context)
+            // 整个 Expanded Player 作为一层淡入并向上就位；ArtworkView 的异步图片
+            // 也会受同一个 opacity/offset 约束，不会比背景与控制器先出现。
+            .opacity(isPresentationVisible ? 1 : 0)
+            .offset(y: isPresentationVisible ? 0 : 46)
+            .onAppear {
+                withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .easeOut(duration: 0.30)) {
+                    isPresentationVisible = true
+                }
+            }
         }
         .task(id: trackGlobalID) {
             ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
@@ -105,7 +125,7 @@ struct MacExpandedPlayerView: View {
 
     // MARK: - 播放器列
 
-    private func playerColumn(artworkSize: CGFloat) -> some View {
+    private func playerColumn(artworkSize: CGFloat, columnWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ArtworkView(
                 title: track.albumTitle,
@@ -114,6 +134,7 @@ struct MacExpandedPlayerView: View {
                 size: artworkSize,
                 cornerRadius: MacUIVisualTokens.ExpandedPlayer.artworkCornerRadius
             )
+            .frame(maxWidth: .infinity)
             .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
             .accessibilityLabel("\(track.albumTitle) 封面")
 
@@ -123,11 +144,11 @@ struct MacExpandedPlayerView: View {
 
             Spacer().frame(height: MacUIVisualTokens.ExpandedPlayer.columnBlockSpacing)
 
-            progressView(width: artworkSize)
+            progressView(width: columnWidth)
 
             Spacer().frame(height: 28)  // progress→transport 间距（保留）
 
-            transport(artworkSize: artworkSize)
+            transport(width: columnWidth)
 
             Spacer(minLength: 0)
         }
@@ -216,7 +237,7 @@ struct MacExpandedPlayerView: View {
         .frame(width: width)
     }
 
-    private func transport(artworkSize: CGFloat) -> some View {
+    private func transport(width: CGFloat) -> some View {
         HStack {
             Button {
                 model.setShuffle(!model.isShuffled)
@@ -273,7 +294,7 @@ struct MacExpandedPlayerView: View {
             .help("循环模式")
             .accessibilityLabel("循环模式")
         }
-        .frame(width: artworkSize)
+        .frame(width: width)
     }
 
     // MARK: - 右侧 Context
@@ -289,7 +310,7 @@ struct MacExpandedPlayerView: View {
                 queuePane
             }
         }
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var lyricsPane: some View {

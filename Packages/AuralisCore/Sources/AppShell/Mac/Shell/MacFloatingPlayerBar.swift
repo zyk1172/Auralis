@@ -61,6 +61,9 @@ struct MacFloatingPlayerBar: View {
                     .frame(width: sideWidth)
                 }
                 .padding(.horizontal, MacUIVisualTokens.FloatingPlayer.innerHorizontalPadding)
+                // GeometryReader 的子视图默认从左上角布局。显式占满胶囊并居中，
+                // 才能保证左右控制、中间封面/文本/进度在任何内容高度下都处于同一垂直基线。
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
             .frame(height: MacUIVisualTokens.FloatingPlayer.height)
         }

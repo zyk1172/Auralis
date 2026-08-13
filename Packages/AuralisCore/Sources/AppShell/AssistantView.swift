@@ -79,8 +79,9 @@ struct AssistantView: View {
         }
         .background {
             #if os(macOS)
-            // macOS 主窗口使用系统背景，避免与其余系统外观页面形成色块割裂。
-            Color(nsColor: .underPageBackgroundColor)
+            // macOS 的 AI 助手也是 Auralis 内容页；不能落回系统 under-page 背景，
+            // 否则切换主题时会与资料库、服务器设置出现两套色板。
+            theme.colorTokens.background.color
             #else
             theme.colorTokens.background.color
             #endif
@@ -207,6 +208,10 @@ struct AssistantView: View {
                 }
             }
             .listStyle(.plain)
+            #if os(macOS)
+            .scrollContentBackground(.hidden)
+            .background(theme.colorTokens.elevated.color)
+            #endif
 
             if isBatchManaging {
                 HStack(spacing: AuralisSpacing.small) {

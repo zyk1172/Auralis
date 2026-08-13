@@ -30,8 +30,6 @@ enum MacUIVisualTokens {
         /// 专辑页 / 首页网格列距（MacArtworkGridMetrics 使用）。
         static let gridColumnSpacing: CGFloat = 24
         static let homeShelfSpacing: CGFloat = 20
-        /// 主内容区底部为悬浮播放器预留的高度。
-        static let scrollBottomInset: CGFloat = 120
     }
 
     // MARK: - Artwork
@@ -68,14 +66,17 @@ enum MacUIVisualTokens {
     // MARK: - Floating Player
 
     enum FloatingPlayer {
-        static let maxWidth: CGFloat = 960
+        /// 对齐 Music.app 的内容区播放条：不覆盖 Sidebar，宽度覆盖主要内容列而非做成窄胶囊。
+        static let maxWidth: CGFloat = 1_200
+        /// 胶囊本体高度；外部安全区留白不计入此值。
         static let height: CGFloat = 68
+        static let topInset: CGFloat = 10
         static let bottomInset: CGFloat = 14
         static let horizontalInset: CGFloat = 64
         static let artworkSize: CGFloat = 44
         static let artworkCornerRadius: CGFloat = 6
-        static let sideMinWidth: CGFloat = 180
-        static let sideMaxWidth: CGFloat = 230
+        static let sideMinWidth: CGFloat = 230
+        static let sideMaxWidth: CGFloat = 260
         static let sectionSpacing: CGFloat = 10
         static let controlSpacing: CGFloat = 14
         static let contextSpacing: CGFloat = 12
@@ -90,19 +91,24 @@ enum MacUIVisualTokens {
     // MARK: - Expanded Player
 
     enum ExpandedPlayer {
-        static let artworkMin: CGFloat = 300
-        static let artworkMax: CGFloat = 500
-        static let artworkWidthRatio: CGFloat = 0.31
-        static let artworkHeightRatio: CGFloat = 0.46
-        static let leftMarginRatio: CGFloat = 0.085
-        static let topInsetMin: CGFloat = 56
-        static let topInsetMax: CGFloat = 84
-        static let topInsetRatio: CGFloat = 0.07
-        static let rightColumnMin: CGFloat = 440
-        static let rightColumnMax: CGFloat = 560
-        static let rightColumnRatio: CGFloat = 0.34
-        static let horizontalGapMin: CGFloat = 52
-        static let horizontalGapRatio: CGFloat = 0.035
+        /// 左轨道不是「封面宽度」：封面居中于一条固定控制轨道，歌曲资料/进度/控制同轨对齐。
+        static let playerColumnMin: CGFloat = 440
+        static let playerColumnMax: CGFloat = 520
+        static let playerColumnWidthRatio: CGFloat = 0.316
+        static let artworkMin: CGFloat = 280
+        static let artworkMax: CGFloat = 420
+        static let artworkWidthRatio: CGFloat = 0.23
+        static let artworkHeightRatio: CGFloat = 0.36
+        static let leftMarginRatio: CGFloat = 0.092
+        /// Music.app 的封面在窗口内容中部开始；右侧队列则更靠上。
+        static let topInsetMin: CGFloat = 190
+        static let topInsetMax: CGFloat = 260
+        static let topInsetRatio: CGFloat = 0.23
+        static let contextTopInsetMin: CGFloat = 118
+        static let contextTopInsetMax: CGFloat = 142
+        static let contextTopInsetRatio: CGFloat = 0.12
+        static let horizontalGapMin: CGFloat = 108
+        static let horizontalGapRatio: CGFloat = 0.09
         static let artworkCornerRadius: CGFloat = 14
         /// 播放器列内各区块间距。
         static let columnBlockSpacing: CGFloat = 24
@@ -113,12 +119,14 @@ enum MacUIVisualTokens {
         static let queueRowSpacing: CGFloat = 8
         static let topLeftGlassHeight: CGFloat = 44
         static let topLeftGlassPaddingH: CGFloat = 18
-        static let topLeftGlassPaddingL: CGFloat = 20
-        static let topLeftGlassPaddingT: CGFloat = 10
+        /// 紧邻 traffic lights 后的系统安全位置，和 Music.app 的 close / mini group 对齐。
+        static let topLeftGlassPaddingL: CGFloat = 140
+        static let topLeftGlassPaddingT: CGFloat = 12
         static let topRightGlassHeight: CGFloat = 46
         static let topRightGlassPaddingH: CGFloat = 18
         static let topRightGlassPaddingR: CGFloat = 20
-        static let topRightGlassPaddingT: CGFloat = 10
+        /// 与左侧收起 / 迷你播放器控制保持同一水平线。
+        static let topRightGlassPaddingT: CGFloat = 12
         static let topRightGlassWidth: CGFloat = 150
         static let topRightControlSpacing: CGFloat = 22
     }

@@ -42,6 +42,8 @@ struct MacSongTable: View {
     var showPlayCountColumn = false
     var showAddedDateColumn = false
     var showArtwork = true
+    /// 集合页没有真实曲序时不保留空白的 # 列。
+    var showIndexColumn = false
     var rowHeight: CGFloat = 40
 
     @State private var sortOrder: [KeyPathComparator<MacSongRow>] = [
@@ -63,14 +65,16 @@ struct MacSongTable: View {
 
     var body: some View {
         Table(rows, selection: $selection, sortOrder: $sortOrder) {
-            TableColumn("#") { row in
-                if let text = numberText(row.track) {
-                    Text(text)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+            if showIndexColumn {
+                TableColumn("#") { row in
+                    if let text = numberText(row.track) {
+                        Text(text)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
+                .width(min: 32, ideal: 40, max: 48)
             }
-            .width(min: 32, ideal: 40, max: 48)
             TableColumn("标题", value: \.title) { row in
                 titleCell(row)
             }

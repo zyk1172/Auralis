@@ -30,6 +30,7 @@ struct MacSongsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            MacPageSearchHeader(text: $localSearch, prompt: "在歌曲中查找")
             Divider()
             MacSongTable(
                 tracks: filteredTracks,
@@ -45,7 +46,6 @@ struct MacSongsView: View {
             )
         }
         .navigationTitle("歌曲")
-        .searchable(text: $localSearch, placement: .toolbar, prompt: "在歌曲中查找")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Menu {

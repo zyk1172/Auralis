@@ -12,9 +12,11 @@ struct MacHomeView: View {
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     var body: some View {
-        ScrollView {
-            GeometryReader { geo in
-                let homeMetrics = MacArtworkGridMetrics.home(availableWidth: geo.size.width)
+        // GeometryReader 必须在 ScrollView 外层：放在可滚动内容中会收到不确定的高度提议，
+        // 从而把每个横向 shelf 压成一条窄带，封面不能按正方形展开。
+        GeometryReader { geo in
+            let homeMetrics = MacArtworkGridMetrics.home(availableWidth: geo.size.width)
+            ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     albumShelf("最近播放专辑", albums: recentAlbums, seeAll: .recentlyPlayed, metrics: homeMetrics)
                     albumShelf("最近添加专辑", albums: recentAddedAlbums, seeAll: .recentlyAdded, metrics: homeMetrics)
@@ -26,9 +28,8 @@ struct MacHomeView: View {
                 }
                 .padding(.horizontal, homeMetrics.horizontalPadding)
                 .padding(.top, 32)
-                .padding(.bottom, 120)
+                .padding(.bottom, 24)
             }
-            .frame(minHeight: 700)
         }
     }
 

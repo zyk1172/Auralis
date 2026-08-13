@@ -31,6 +31,10 @@ public struct MacSettingsWindow: View {
         // 允许放大：大字体 / 长内容（AI、服务器）时可拉高窗口，避免固定尺寸裁剪。
         .frame(minWidth: 760, minHeight: 560)
         .padding(0)
+        // Settings 是独立 Scene，必须显式继承 ThemeStore 的当前色板，不能落回系统默认蓝色。
+        .tint(theme.colorTokens.accent.color)
+        .preferredColorScheme(theme.colorScheme)
+        .background(theme.colorTokens.background.color)
     }
 
     // MARK: - 通用

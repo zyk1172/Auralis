@@ -34,40 +34,44 @@ struct MacVisualMetricsTests {
         #expect(m.itemWidth >= 150 && m.itemWidth <= 210)
     }
 
-    // MARK: - Floating Player（REFERENCE_A：宽 900-970，高 64-76）
+    // MARK: - Floating Player（Music.app 内容区宽胶囊，左右各保留稳定控制区）
 
-    @Test("player 内部几何：detail 1268 → 左右固定 180-230")
+    @Test("player 内部几何：detail 1268 → 左右固定 230-260")
     func playerSideWidths() {
-        // 复刻 MacFloatingPlayerBar 的 sideWidth 规则（min(230, max(180, width*0.23))）
+        // 复刻 MacFloatingPlayerBar 的 sideWidth 规则（min(260, max(230, width*0.23))）
         let width: CGFloat = 1268
-        let side = min(230, max(180, width * 0.23))
-        #expect(side >= 180 && side <= 230)
+        let side = min(260, max(230, width * 0.23))
+        #expect(side >= 230 && side <= 260)
     }
 
-    // MARK: - Full Player（REFERENCE_B：1536×1050 → Artwork 450-500，左距 110-155）
+    // MARK: - Full Player（Music.app 左播放轨道 + 右歌词/队列轨道）
 
-    @Test("full player artwork 1536×1050 → 450...500")
+    @Test("full player artwork 1536×1050 → 340...370")
     func fullPlayerArtworkSize() {
         let s = MacFullPlayerMetrics.artworkSize(window: CGSize(width: 1536, height: 1050))
-        #expect(s >= 450 && s <= 500)
+        #expect(s >= 340 && s <= 370)
     }
 
-    @Test("full player left margin ≈ 8.5% 窗口宽（110...155）")
+    @Test("full player left margin ≈ 9.2% 窗口宽（130...150）")
     func fullPlayerLeftMargin() {
         let m = MacFullPlayerMetrics.leftMargin(window: CGSize(width: 1536, height: 1050))
-        #expect(m >= 110 && m <= 155)
+        #expect(m >= 130 && m <= 150)
     }
 
-    @Test("full player top 收敛（56...90，1536×1050 → ≈73.5）")
+    @Test("full player artwork 位于窗口中部（220...250）")
     func fullPlayerTop() {
         let t = MacFullPlayerMetrics.topY(window: CGSize(width: 1536, height: 1050))
-        #expect(t >= 56 && t <= 90)
+        #expect(t >= 220 && t <= 250)
     }
 
-    @Test("full player right column 440...560")
-    func fullPlayerRightColumn() {
-        let r = MacFullPlayerMetrics.rightColumnWidth(window: CGSize(width: 1536, height: 1050))
-        #expect(r >= 440 && r <= 560)
+    @Test("full player 左轨 440...520，右轨更靠上")
+    func fullPlayerTracks() {
+        let size = CGSize(width: 1536, height: 1050)
+        let column = MacFullPlayerMetrics.playerColumnWidth(window: size)
+        let playerTop = MacFullPlayerMetrics.topY(window: size)
+        let contextTop = MacFullPlayerMetrics.contextTopY(window: size)
+        #expect(column >= 440 && column <= 520)
+        #expect(contextTop < playerTop)
     }
 
     @Test("窗口缩放时 artwork 不固定 420")
@@ -75,6 +79,6 @@ struct MacVisualMetricsTests {
         let small = MacFullPlayerMetrics.artworkSize(window: CGSize(width: 1280, height: 800))
         let big = MacFullPlayerMetrics.artworkSize(window: CGSize(width: 1728, height: 1117))
         #expect(small < big)
-        #expect(small >= 300 && small <= 500)
+        #expect(small >= 280 && small <= 420)
     }
 }

@@ -22,41 +22,44 @@ struct MacArtistsView: View {
     }
 
     var body: some View {
-        HSplitView {
-            List(selection: $selectedArtist) {
-                ForEach(artists) { artist in
-                    HStack(spacing: 10) {
-                        ArtworkView(
-                            title: artist.name,
-                            artworkKey: artist.artworkKey,
-                            colors: theme.colorTokens,
-                            size: 28,
-                            cornerRadius: 14
-                        )
-                        .accessibilityHidden(true)
-                        Text(artist.name)
-                            .lineLimit(1)
-                        Spacer()
-                        Text("\(artist.albumCount)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            MacPageSearchHeader(text: $localSearch, prompt: "在艺术家中查找")
+            Divider()
+            HSplitView {
+                List(selection: $selectedArtist) {
+                    ForEach(artists) { artist in
+                        HStack(spacing: 10) {
+                            ArtworkView(
+                                title: artist.name,
+                                artworkKey: artist.artworkKey,
+                                colors: theme.colorTokens,
+                                size: 28,
+                                cornerRadius: 14
+                            )
+                            .accessibilityHidden(true)
+                            Text(artist.name)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(artist.albumCount)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(artist)
                     }
-                    .tag(artist)
                 }
-            }
-            .listStyle(.inset)
-            .frame(minWidth: 220, idealWidth: 260)
+                .listStyle(.inset)
+                .frame(minWidth: 220, idealWidth: 260)
 
-            if let artist = selectedArtist {
-                MacArtistView(artist: artist, model: model, theme: theme, selection: $selection, onNavigate: onNavigate)
-            } else {
-                ContentUnavailableView("选择一个艺术家", systemImage: "person.2",
-                                       description: Text("从左侧选择艺术家查看详情。"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let artist = selectedArtist {
+                    MacArtistView(artist: artist, model: model, theme: theme, selection: $selection, onNavigate: onNavigate)
+                } else {
+                    ContentUnavailableView("选择一个艺术家", systemImage: "person.2",
+                                           description: Text("从左侧选择艺术家查看详情。"))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .navigationTitle("艺术家")
-        .searchable(text: $localSearch, placement: .toolbar, prompt: "在艺术家中查找")
     }
 }
 #endif

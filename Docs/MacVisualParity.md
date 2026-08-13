@@ -19,19 +19,19 @@
 | Sidebar 结构 | 搜索/主页 / 资料库 / 播放列表 / Auralis | 已实现；播放列表不再内联全部歌单 | MANUAL |
 | 搜索架构 | 全局搜索为 Sidebar 一级页；专辑页本地「在专辑中查找」 | `MacSearchView` 自带 `.searchable`；Albums/Songs/Artists/Playlists 各自本地 searchable | MANUAL |
 | Toolbar 全局按钮 | 只留页面上下文动作，Player 控制只属于播放器 | Shell Toolbar 已移除 Lyrics/Queue | MANUAL |
-| 底部播放器 | 悬浮 Glass 胶囊，仅 Main Content 上方，不盖 Sidebar | `MacFloatingPlayerBar` + detail overlay；宽 900-970 / 高 70 / bottom 22 | 逻辑测试 180-230 侧宽 PASS；视觉 MANUAL |
+| 底部播放器 | 宽 Glass 胶囊，仅 Main Content 上方，不盖 Sidebar | `MacFloatingPlayerBar` + detail safe-area inset；最大宽 1200 / 本体高 68 / 底距 14 | 逻辑测试 230-260 侧宽 PASS；视觉 MANUAL |
 
 ## REFERENCE_B — Full Player（1536×1050）
 
 | 项目 | TARGET | IMPLEMENTED | VERIFIED |
 | :-- | :-- | :-- | :-- |
-| Artwork 尺寸 | ≈窗口宽 31%（1536→≈475） | `MacFullPlayerMetrics.artworkSize = min(500, max(300, min(w*0.31, h*0.46)))` | 逻辑测试 450-500 PASS；视觉 MANUAL |
-| Artwork 左距 | ≈8.5% 宽（≈130） | `leftMargin = w*0.085` | 逻辑测试 110-155 PASS；视觉 MANUAL |
-| Artwork 顶距 | ≈16.5% 高（≈173） | `topY = h*0.165` | 逻辑测试 150-200 PASS；视觉 MANUAL |
-| 左列结构 | Artwork → TrackInfo → Progress → Transport | 已实现 | MANUAL |
+| Artwork 尺寸 | ≈窗口宽 23%（1536→≈353） | `MacFullPlayerMetrics.artworkSize = min(420, max(280, min(w*0.23, h*0.36)))` | 逻辑测试 340-370 PASS；视觉 MANUAL |
+| Artwork 左距 | ≈9.2% 宽（≈141） | `leftMargin = w*0.092` | 逻辑测试 130-150 PASS；视觉 MANUAL |
+| Artwork 顶距 | 左播放轨道在窗口中部（1536×1050→≈241） | `topY = clamp(h*0.23, 190...260)` | 逻辑测试 220-250 PASS；视觉 MANUAL |
+| 左列结构 | 固定播放轨道：Artwork 居中 → TrackInfo → Progress → Transport（信息/进度/控制等宽） | 已实现 | MANUAL |
 | Progress | 等宽 Artwork，elapsed/remaining | Slider + 时间 caption monospacedDigit | MANUAL |
 | Transport | 5 按钮 Spacer 均布，active 用 Media Accent | 已实现（shuffle/prev/play/next/repeat） | MANUAL |
-| 右区 Lyrics/Queue | 常驻右半区；无歌词显示 Empty State | `MacFullPlayerContext`；空歌词显示「无可用歌词」 | MANUAL |
+| 右区 Lyrics/Queue | 与左轨分离、更靠近顶部；无歌词显示 Empty State | `MacFullPlayerContext`；空歌词显示「无可用歌词」 | MANUAL |
 | 左上 Glass | 关闭 X + 迷你播放器（≈90-100×46） | GlassControlGroup capsule（xmark + pip） | MANUAL |
 | 右上 Volume Glass | ≈220-240×46-50，常驻 slider | GlassControlGroup（speaker.wave.3 + slider 150） | MANUAL |
 | 右下 Lyrics/Queue Glass | ≈100-110×46-50 | GlassControlGroup（quote.bubble + list.bullet） | MANUAL |

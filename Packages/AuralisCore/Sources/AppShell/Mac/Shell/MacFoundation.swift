@@ -316,25 +316,29 @@ enum MacLyricsPresentationState: Equatable {
 // MARK: - Expanded Player 几何度量（REFERENCE_B）
 
 enum MacFullPlayerMetrics {
+    static func playerColumnWidth(window: CGSize) -> CGFloat {
+        let t = MacUIVisualTokens.ExpandedPlayer.self
+        return min(t.playerColumnMax, max(t.playerColumnMin, window.width * t.playerColumnWidthRatio))
+    }
     static func artworkSize(window: CGSize) -> CGFloat {
         let t = MacUIVisualTokens.ExpandedPlayer.self
         return min(t.artworkMax, max(t.artworkMin, min(window.width * t.artworkWidthRatio, window.height * t.artworkHeightRatio)))
     }
     static func leftMargin(window: CGSize) -> CGFloat { window.width * MacUIVisualTokens.ExpandedPlayer.leftMarginRatio }
     static func topY(window: CGSize) -> CGFloat {
-        // 顶部留白收敛：玻璃胶囊（关闭/音量）贴近顶栏，封面从 ~56-84pt 开始。
+        // 封面与左侧播放轨道从窗口中部开始；不与顶部的队列上下齐平。
         let t = MacUIVisualTokens.ExpandedPlayer.self
         return max(t.topInsetMin, min(t.topInsetMax, window.height * t.topInsetRatio))
     }
-    static func rightColumnWidth(window: CGSize) -> CGFloat {
+    static func contextTopY(window: CGSize) -> CGFloat {
         let t = MacUIVisualTokens.ExpandedPlayer.self
-        return min(t.rightColumnMax, max(t.rightColumnMin, window.width * t.rightColumnRatio))
+        return max(t.contextTopInsetMin, min(t.contextTopInsetMax, window.height * t.contextTopInsetRatio))
     }
     static func horizontalGap(window: CGSize) -> CGFloat {
         let t = MacUIVisualTokens.ExpandedPlayer.self
         return max(t.horizontalGapMin, window.width * t.horizontalGapRatio)
     }
-    static func transportWidth(window: CGSize) -> CGFloat { artworkSize(window: window) }
+    static func transportWidth(window: CGSize) -> CGFloat { playerColumnWidth(window: window) }
 }
 
 #endif

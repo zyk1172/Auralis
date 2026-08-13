@@ -56,10 +56,17 @@ public struct MacMusicShell: View {
                     onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) }
                 )
                 .zIndex(100)
-                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                // 展开页内部负责统一的封面/背景/控制层进入动画；外层只做淡出，
+                // 避免 ArtworkView 与页面容器各自执行不同的 move transition。
+                .transition(.opacity)
             }
         }
-        .toolbarVisibility(playerState.isExpanded ? .hidden : .automatic, for: .windowToolbar)
+        // Expanded Player 仍属于同一个 macOS 窗口：保留系统 titlebar/traffic lights，
+        // 不能为了隐藏导航工具栏而把窗口控制一并藏掉。
+        .toolbarVisibility(.automatic, for: .windowToolbar)
+        // 用户选择主题后，主窗口、AI 助手与每个资料库目的地共享同一套色彩和控件强调色。
+        .tint(theme.colorTokens.accent.color)
+        .preferredColorScheme(theme.colorScheme)
         // 环境注入放到 ZStack 层：libraryUI 与同窗口 Expanded Player 都能继承
         // ArtworkStore / ThemeStore（否则 Expanded 内的 ArtworkView 强解包崩溃）。
         .environment(model.artworkStore)
@@ -72,16 +79,16 @@ public struct MacMusicShell: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             MacSidebar(model: model, prefs: sidebarPrefs, selection: $navigation.selection)
         } detail: {
-            ZStack(alignment: .bottom) {
-                NavigationStack(path: $navigation.path) {
-                    detailContent
-                        .navigationDestination(for: MacDetailRoute.self) { route in
-                            detailRouteView(route)
-                        }
-                }
-                .navigationTitle(currentTitle)
-                .contentMargins(.bottom, MacUIVisualTokens.Content.scrollBottomInset, for: .scrollContent)
-
+            NavigationStack(path: $navigation.path) {
+                detailContent
+                    .navigationDestination(for: MacDetailRoute.self) { route in
+                        detailRouteView(route)
+                    }
+            }
+            .navigationTitle(currentTitle)
+            // 播放器属于详情区域的底部安全区，而不是覆盖在 ScrollView/Table 上。
+            // 这样歌单、歌曲表、下载页和所有后续同级页面都会自动为它避让。
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 MacFloatingPlayerBar(
                     model: model,
                     theme: theme,
@@ -92,6 +99,7 @@ public struct MacMusicShell: View {
                 )
                 .padding(.horizontal, MacUIVisualTokens.FloatingPlayer.horizontalInset)
                 .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
+                .padding(.top, MacUIVisualTokens.FloatingPlayer.topInset)
             }
             .inspector(isPresented: $showRightPanel) {
                 MacRightPanel(model: model, theme: theme, mode: rightPanelMode)

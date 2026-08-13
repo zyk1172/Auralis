@@ -4,7 +4,8 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
-/// 全局搜索（Sidebar 一级页）：自身持有系统 .searchable。
+/// 全局搜索（Sidebar 一级页）：自身持有自定义搜索框（不用系统 .searchable，
+/// 规避 macOS 27 Beta 中 NavigationSplitView + .searchable 的框架崩溃）。
 /// 只允许 canonical 实体参与真实动作；未解析实体显示不可用行，不构造假 Track。
 struct MacSearchView: View {
     @ObservedObject var model: AuralisAppModel
@@ -12,7 +13,7 @@ struct MacSearchView: View {
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     @State private var query = ""
-    @State private var isSearchPresented = false
+    @FocusState private var searchFocused: Bool
     @State private var state: MacSearchState = .idle
     @State private var tracks: [CatalogTrackSummary] = []
     @State private var albums: [CatalogAlbumSummary] = []
@@ -29,38 +30,49 @@ struct MacSearchView: View {
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
-        Group {
-            switch state {
-            case .idle:
-                idleContent
-            case .searching:
-                VStack(spacing: 12) {
-                    Spacer()
-                    ProgressView().controlSize(.small)
-                    Text("正在搜索你的资料库")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .results:
-                resultsContent
-            case .empty:
-                ContentUnavailableView("未找到结果", systemImage: "magnifyingglass",
-                                       description: Text("没有找到与「\(trimmedQuery)」匹配的内容。"))
+        VStack(spacing: 0) {
+            MacPageSearchHeader(
+                text: $query,
+                prompt: "搜索",
+                onSubmit: {
+                    let trimmed = trimmedQuery
+                    if !trimmed.isEmpty { model.recordSearch(trimmed) }
+                },
+                focus: $searchFocused
+            )
+            Divider()
+            Group {
+                switch state {
+                case .idle:
+                    idleContent
+                case .searching:
+                    VStack(spacing: 12) {
+                        Spacer()
+                        ProgressView().controlSize(.small)
+                        Text("正在搜索你的资料库")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .results:
+                    resultsContent
+                case .empty:
+                    ContentUnavailableView("未找到结果", systemImage: "magnifyingglass",
+                                           description: Text("没有找到与「\(trimmedQuery)」匹配的内容。"))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
-        .searchable(text: $query, isPresented: $isSearchPresented, placement: .toolbar, prompt: "搜索")
         .onAppear {
-            // 进入 Search 页（含 ⌘F）时呈现并聚焦系统搜索框。
-            isSearchPresented = true
-        }
-        .onSubmit(of: .search) {
-            let trimmed = trimmedQuery
-            if !trimmed.isEmpty { model.recordSearch(trimmed) }
+            // 进入 Search 页（含 ⌘F）时聚焦搜索框。
+            searchFocused = true
         }
         .task(id: trimmedQuery) { await runSearch() }
+        .onReceive(NotificationCenter.default.publisher(for: MacCommand.search)) { _ in
+            // 已在搜索页时再次按 ⌘F：重新聚焦搜索框。
+            searchFocused = true
+        }
     }
 
     // MARK: - Landing

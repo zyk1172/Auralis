@@ -17,20 +17,6 @@ struct MacTrackCollectionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageHeader(title: title, subtitle: "\(tracks.count) 首") {
-                Button {
-                    model.playShuffledQueue(tracks)
-                } label: {
-                    Label("随机播放", systemImage: "shuffle")
-                }
-                Button {
-                    model.playQueue(tracks)
-                } label: {
-                    Label("播放", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            Divider()
             if tracks.isEmpty {
                 ContentUnavailableView("暂无内容", systemImage: "music.note", description: Text("这里还没有歌曲。"))
             } else {
@@ -46,6 +32,23 @@ struct MacTrackCollectionView: View {
                     showGenreColumn: false,
                     showArtwork: true
                 )
+            }
+        }
+        .navigationTitle(title)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    model.playShuffledQueue(tracks)
+                } label: {
+                    Label("随机播放", systemImage: "shuffle")
+                }
+                .disabled(tracks.isEmpty)
+                Button {
+                    model.playQueue(tracks)
+                } label: {
+                    Label("播放", systemImage: "play.fill")
+                }
+                .disabled(tracks.isEmpty)
             }
         }
     }
@@ -64,14 +67,6 @@ struct MacDislikedView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageHeader(title: "不喜欢", subtitle: "\(tracks.count) 首") {
-                Button {
-                    model.playShuffledQueue(tracks)
-                } label: {
-                    Label("随机播放", systemImage: "shuffle")
-                }
-            }
-            Divider()
             if tracks.isEmpty {
                 ContentUnavailableView("没有不喜欢的歌曲", systemImage: "heart.slash", description: Text("右键歌曲可选择「不喜欢」。"))
             } else {
@@ -84,6 +79,17 @@ struct MacDislikedView: View {
                     numberText: { _ in nil },
                     showGenreColumn: false,
                 )
+            }
+        }
+        .navigationTitle("不喜欢")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.playShuffledQueue(tracks)
+                } label: {
+                    Label("随机播放", systemImage: "shuffle")
+                }
+                .disabled(tracks.isEmpty)
             }
         }
     }
