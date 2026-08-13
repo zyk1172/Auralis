@@ -150,7 +150,7 @@ struct MacRightPanel: View {
             }
             if !historyTracks.isEmpty {
                 Section("历史记录") {
-                    ForEach(historyTracks) { track in
+                    ForEach(historyTracks, id: \.macGlobalID) { track in
                         queueRow(track, isCurrent: false)
                     }
                 }

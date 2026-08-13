@@ -97,7 +97,7 @@ struct MacAlbumTile: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var size: CGFloat = MacUIVisualTokens.Artwork.tileFallbackSize
-    var onOpen: (() -> Void)? = nil
+    let onOpen: () -> Void
     var onPlay: (() -> Void)? = nil
     var moreActions: [MacMenuAction] = []
 
@@ -107,7 +107,7 @@ struct MacAlbumTile: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 Button {
-                    onOpen?()
+                    onOpen()
                 } label: {
                     ArtworkView(
                         title: album.title,
@@ -167,7 +167,7 @@ struct MacAlbumTile: View {
             }
             .frame(width: size, height: size)
             Button {
-                onOpen?()
+                onOpen()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(album.title)
@@ -201,7 +201,7 @@ struct MacArtistTile: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var size: CGFloat = 150
-    var onOpen: (() -> Void)? = nil
+    let onOpen: () -> Void
     var onPlay: (() -> Void)? = nil
 
     @State private var isHovering = false
@@ -212,7 +212,7 @@ struct MacArtistTile: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 Button {
-                    onOpen?()
+                    onOpen()
                 } label: {
                     artistArtwork
                         .frame(width: size, height: size)
@@ -239,7 +239,7 @@ struct MacArtistTile: View {
                 }
             }
             Button {
-                onOpen?()
+                onOpen()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(artist.name)
@@ -295,7 +295,7 @@ struct MacPlaylistTile: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var size: CGFloat = MacUIVisualTokens.Artwork.tileFallbackSize
-    var onOpen: (() -> Void)? = nil
+    let onOpen: () -> Void
     var onPlay: (() -> Void)? = nil
     var moreActions: [MacMenuAction] = []
 
@@ -305,7 +305,7 @@ struct MacPlaylistTile: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 Button {
-                    onOpen?()
+                    onOpen()
                 } label: {
                     MacPlaylistArtwork(playlist: playlist, model: model, theme: theme, size: size)
                         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -356,7 +356,7 @@ struct MacPlaylistTile: View {
                 }
             }
             Button {
-                onOpen?()
+                onOpen()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(playlist.name)
@@ -390,7 +390,7 @@ struct MacTrackTile: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var size: CGFloat = 132
-    var onOpen: (() -> Void)? = nil
+    let onOpen: () -> Void
     var onPlay: (() -> Void)? = nil
     var moreActions: [MacMenuAction] = []
 
@@ -400,7 +400,7 @@ struct MacTrackTile: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 Button {
-                    onOpen?()
+                    onOpen()
                 } label: {
                     ArtworkView(
                         title: track.albumTitle,
@@ -433,7 +433,7 @@ struct MacTrackTile: View {
             }
             .frame(width: size, height: size)
             Button {
-                onOpen?()
+                onOpen()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title)

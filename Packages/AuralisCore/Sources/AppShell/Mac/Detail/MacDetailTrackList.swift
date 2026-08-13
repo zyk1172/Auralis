@@ -170,7 +170,7 @@ struct MacDetailTrackList: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+            ForEach(Array(tracks.enumerated()), id: \.element.macGlobalID) { index, track in
                 MacDetailTrackRow(
                     track: track,
                     model: model,

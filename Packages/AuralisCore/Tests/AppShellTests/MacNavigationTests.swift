@@ -256,6 +256,17 @@ struct MacNavigationTests {
         #expect(row.id.remoteID == "t1")
     }
 
+    @MainActor
+    @Test("队列保留不同服务器的同 remote TrackID")
+    func queueDedupesByGlobalID() {
+        let first = track("same", serverID: "server-a")
+        let second = track("same", serverID: "server-b")
+        let model = makeModel(tracks: [first, second])
+        model.playQueue([first, second])
+        #expect(model.queue.count == 2)
+        #expect(Set(model.queue.map { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) }).count == 2)
+    }
+
     private final class NoopConnector: ServerConnecting, @unchecked Sendable {
         func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
             throw CancellationError()

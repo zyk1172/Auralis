@@ -56,10 +56,26 @@ struct MacHomeView: View {
 
     /// 按用户持久化的顺序和显示开关驱动 Mac 首页；无数据的模块不占空白。
     private var visibleContentModules: [HomeModule] {
-        model.homeLayout.contentModules
-            .filter { $0.isVisible }
-            .compactMap { HomeModuleRegistry.module(forID: $0.moduleID) }
-            .filter { moduleHasData($0.id) }
+        let available = Set(HomeModuleID.allCases.filter { moduleHasData($0) })
+        return Self.renderedContentModuleIDs(
+            preferences: model.homeLayout.contentModules,
+            available: available
+        )
+        .compactMap(HomeModuleRegistry.module(forID:))
+    }
+
+    /// 将持久化偏好与本次可用数据分离，方便验证「隐藏」与「暂时无数据」不会混淆。
+    nonisolated static func renderedContentModuleIDs(
+        preferences: [HomeModulePreference],
+        available: Set<HomeModuleID>
+    ) -> [String] {
+        preferences.compactMap { preference in
+            guard preference.isVisible,
+                  let id = HomeModuleID(rawValue: preference.moduleID),
+                  available.contains(id)
+            else { return nil }
+            return preference.moduleID
+        }
     }
 
     private func moduleHasData(_ id: HomeModuleID) -> Bool {
@@ -121,9 +137,7 @@ struct MacHomeView: View {
     private func homeModule(_ module: HomeModule, metrics: MacArtworkGridMetrics) -> some View {
         switch module.id {
         case .random:
-            trackShelf(module.title, tracks: deduped(model.randomTracks), metrics: metrics, actionTitle: "换一批") {
-                model.regenerateRandomMusic()
-            }
+            randomShelf(metrics: metrics)
         case .recentlyPlayed:
             albumShelf(module.title, albums: recentAlbums, seeAll: .recentlyPlayed, metrics: metrics)
         case .recentlyAdded:
@@ -142,6 +156,47 @@ struct MacHomeView: View {
             albumShelf(module.title, albums: model.homeTopAlbums, seeAll: .albums, metrics: metrics)
         default:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func randomShelf(metrics: MacArtworkGridMetrics) -> some View {
+        let items = Array(deduped(model.randomTracks).prefix(14)).map(MacHomeTrackItem.init)
+        if !items.isEmpty {
+            let size = min(150, metrics.itemWidth)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("随机音乐")
+                        .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
+                    Spacer()
+                    Button("随机播放") {
+                        model.playShuffledQueue(model.uniquedTracks(items.map(\.track)))
+                    }
+                    .buttonStyle(.link)
+                    Button("换一批") {
+                        model.regenerateRandomMusic()
+                    }
+                    .buttonStyle(.link)
+                }
+                .padding(.horizontal, 2)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 20) {
+                        ForEach(items) { item in
+                            let track = item.track
+                            MacTrackTile(
+                                track: track,
+                                model: model,
+                                theme: theme,
+                                size: size,
+                                onOpen: { model.selectAndPlay(track) },
+                                onPlay: { model.selectAndPlay(track) },
+                                moreActions: trackMenuActions(track)
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
         }
     }
 

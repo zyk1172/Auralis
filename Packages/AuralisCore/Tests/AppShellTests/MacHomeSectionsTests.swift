@@ -22,4 +22,19 @@ struct MacHomeSectionsTests {
             #expect(!MacHomeView.shelfTitles.contains(title), "首页不应出现「\(title)」（侧边栏已承担）")
         }
     }
+
+    @Test("Mac 首页按持久化顺序渲染，隐藏模块不因无数据改变偏好")
+    func homeRendererUsesLayoutOrderAndVisibility() {
+        let preferences = [
+            HomeModulePreference(moduleID: "topAlbums", isVisible: true, order: 0),
+            HomeModulePreference(moduleID: "random", isVisible: false, order: 1),
+            HomeModulePreference(moduleID: "recentlyPlayed", isVisible: true, order: 2),
+        ]
+        let rendered = MacHomeView.renderedContentModuleIDs(
+            preferences: preferences,
+            available: [.topAlbums, .random, .recentlyPlayed]
+        )
+        #expect(rendered == ["topAlbums", "recentlyPlayed"])
+        #expect(preferences[1].isVisible == false)
+    }
 }

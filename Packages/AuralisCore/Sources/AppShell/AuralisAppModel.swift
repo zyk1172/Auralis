@@ -208,7 +208,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 本次随机播放轮次中已随机播放过的曲目（TrackID）。
     /// 随机 + 不循环：一轮随机播完即停；随机 + 列表循环：一轮播完重置继续。
     /// 队列变更 / 重新开启随机时清空，避免旧轮次污染新队列。
-    private var shufflePlayedIDs: Set<TrackID> = []
+    private var shufflePlayedIDs: Set<GlobalID> = []
     /// macOS 侧边栏搜索框的查询词（搜索页实时使用）。
     @Published public var macSearchQuery: String = ""
     /// 播放历史与单次播放达标状态由独立组件管理，避免“点选即计数”。
@@ -220,6 +220,11 @@ public final class AuralisAppModel: ObservableObject {
     public var playCounts: [TrackID: Int] {
         guard let serverID = catalog.activeServerID else { return [:] }
         return playbackHistoryStore.counts(for: serverID)
+    }
+
+    /// Row cache 的读取必须由 Track 的服务器身份决定，不能把不同服务器的相同 TrackID 混用。
+    public func playCount(for track: Track) -> Int {
+        playbackHistoryStore.count(for: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
     }
     /// 已下载到本地的歌曲。
     public var downloadedTrackIDs: Set<GlobalID> { downloadStore.downloadedTrackIDs }
@@ -244,7 +249,7 @@ public final class AuralisAppModel: ObservableObject {
                 // 重新开启随机：新一轮；当前曲目计入本轮已播放。
                 shufflePlayedIDs.removeAll()
                 if currentTrack.id.rawValue != "placeholder" {
-                    shufflePlayedIDs.insert(currentTrack.id)
+                    shufflePlayedIDs.insert(queueIdentity(currentTrack))
                 }
             }
             schedulePreparedNext()
@@ -647,7 +652,7 @@ public final class AuralisAppModel: ObservableObject {
             stopForSleepTimer(reason: .userStopped)
             return true
         case .afterCurrentAlbum:
-            if let index = queue.firstIndex(where: { $0.id == currentTrack.id }),
+            if let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }),
                queue.indices.contains(index + 1),
                queue[index + 1].albumID == currentTrack.albumID {
                 return false
@@ -1053,7 +1058,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 切歌后同步 Now Playing 全量信息（含队列位置 / 总数，控制中心可显示）。
     private func syncNowPlayingTrack() {
-        let queueIndex = queue.firstIndex(where: { $0.id == currentTrack.id })
+        let queueIndex = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) })
         mediaIntegration.trackChanged(
             currentTrack,
             position: playbackPosition,
@@ -1091,10 +1096,10 @@ public final class AuralisAppModel: ObservableObject {
         else { return }
         let trackByID = Dictionary(uniqueKeysWithValues: catalog.tracks.map { ($0.id.rawValue, $0) })
         var restoredQueue: [Track] = []
-        var seen = Set<TrackID>()
+        var seen = Set<GlobalID>()
         if let ids = info["queueTrackIDs"] as? [String] {
             for id in ids {
-                if let track = trackByID[id], seen.insert(track.id).inserted {
+                if let track = trackByID[id], seen.insert(queueIdentity(track)).inserted {
                     restoredQueue.append(track)
                 }
             }
@@ -1102,7 +1107,7 @@ public final class AuralisAppModel: ObservableObject {
         guard !restoredQueue.isEmpty else { return }
         queue = restoredQueue
         if let currentRaw = info["currentTrackID"] as? String, let current = trackByID[currentRaw] {
-            if !queue.contains(where: { $0.id == current.id }) { queue.insert(current, at: 0) }
+            if !queue.contains(where: { queueIdentity($0) == queueIdentity(current) }) { queue.insert(current, at: 0) }
             currentTrack = current
         } else {
             currentTrack = restoredQueue[0]
@@ -1187,7 +1192,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 物理队列中是否存在相邻的下一首（不包含 shuffle / repeat 语义）。
     public var hasNext: Bool {
-        guard let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return false }
+        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return false }
         return queue.indices.contains(index + 1)
     }
 
@@ -1211,12 +1216,14 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 随机模式下尚未在本轮播放过的候选池（排除当前曲目与已随机播放过的曲目）。
     private var shuffleRemainingPool: [Track] {
-        queue.filter { $0.id != currentTrack.id && !shufflePlayedIDs.contains($0.id) }
+        queue.filter {
+            queueIdentity($0) != queueIdentity(currentTrack) && !shufflePlayedIDs.contains(queueIdentity($0))
+        }
     }
 
     /// 物理队列中是否存在相邻的上一首（不包含 repeat 语义）。
     public var hasPrevious: Bool {
-        guard let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return false }
+        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return false }
         return queue.indices.contains(index - 1)
     }
 
@@ -1254,18 +1261,22 @@ public final class AuralisAppModel: ObservableObject {
         libraryStore.track(for: globalID)
     }
 
+    private func queueIdentity(_ track: Track) -> GlobalID {
+        GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+    }
+
     /// 把歌曲加入队列末尾（macOS 表格右键 / 双击等）。
     public func addToQueue(globalID: GlobalID) {
         guard let track = track(for: globalID),
-              !queue.contains(where: { $0.id == track.id }) else { return }
+              !queue.contains(where: { queueIdentity($0) == queueIdentity(track) }) else { return }
         queue.append(track)
     }
 
     /// 下一首播放：插入到当前歌曲之后。
     public func playNext(globalID: GlobalID) {
         guard let track = track(for: globalID) else { return }
-        queue.removeAll { $0.id == track.id }
-        if let index = queue.firstIndex(where: { $0.id == currentTrack.id }) {
+        queue.removeAll { queueIdentity($0) == queueIdentity(track) }
+        if let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) {
             queue.insert(track, at: index + 1)
         } else {
             queue.insert(track, at: 0)
@@ -1278,9 +1289,9 @@ public final class AuralisAppModel: ObservableObject {
         playbackHistoryStore.resetSelection()
         currentTrack = track
         // 随机模式下记录“本轮已播放”：保证随机 + 不循环时每首只播一次，播完即停。
-        if isShuffled { shufflePlayedIDs.insert(track.id) }
+        if isShuffled { shufflePlayedIDs.insert(queueIdentity(track)) }
         playbackPosition = 0
-        if !queue.contains(where: { $0.id == track.id }) { queue.insert(track, at: 0) }
+        if !queue.contains(where: { queueIdentity($0) == queueIdentity(track) }) { queue.insert(track, at: 0) }
         // 播放时自动缓存：当前歌曲的歌词 + 专辑封面（loadArtwork 在 UI 请求时落盘），
         // 并预缓存队列接下来几首的封面缩略图与歌词（写磁盘，不占内存）。
         loadLyricsIfNeeded(for: track)
@@ -1695,9 +1706,9 @@ public final class AuralisAppModel: ObservableObject {
         else { return false }
         let trackByID = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id.rawValue, $0) })
         var restoredQueue: [Track] = []
-        var seen = Set<TrackID>()
+        var seen = Set<GlobalID>()
         for id in snapshot.queueTrackIDs {
-            guard let track = trackByID[id], seen.insert(track.id).inserted else { continue }
+            guard let track = trackByID[id], seen.insert(queueIdentity(track)).inserted else { continue }
             restoredQueue.append(track)
         }
         guard !restoredQueue.isEmpty else { return false }
@@ -1708,7 +1719,7 @@ public final class AuralisAppModel: ObservableObject {
             current = restoredQueue[0]
         }
         queue = restoredQueue
-        if !queue.contains(where: { $0.id == current.id }) { queue.insert(current, at: 0) }
+        if !queue.contains(where: { queueIdentity($0) == queueIdentity(current) }) { queue.insert(current, at: 0) }
         currentTrack = current
         let duration = current.duration > 0 ? current.duration : snapshot.position
         playbackPosition = min(max(snapshot.position, 0), duration)
@@ -2408,7 +2419,7 @@ public final class AuralisAppModel: ObservableObject {
             playRandomFromQueue()
             return
         }
-        guard let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return }
+        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return }
         if queue.indices.contains(index + 1) {
             selectAndPlay(queue[index + 1])
         } else if repeatMode == .all, queue.count > 1, let first = queue.first {
@@ -2419,7 +2430,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 只随机尚未播放的剩余队列（当前曲目之后），保持已播放部分顺序不变。
     public func shuffleRemainingInQueue() {
-        guard let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return }
+        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return }
         let tail = Array(queue.dropFirst(index + 1))
         guard tail.count > 1 else { return }
         queue = Array(queue.prefix(index + 1)) + tail.shuffled()
@@ -2439,19 +2450,21 @@ public final class AuralisAppModel: ObservableObject {
     @discardableResult
     private func playRandomFromQueue() -> Bool {
         guard queue.count > 1 else { return false }
-        var pool = queue.filter { $0.id != currentTrack.id && !shufflePlayedIDs.contains($0.id) }
+        var pool = queue.filter {
+            queueIdentity($0) != queueIdentity(currentTrack) && !shufflePlayedIDs.contains(queueIdentity($0))
+        }
         if pool.isEmpty {
             if repeatMode == .all {
                 // 列表循环 + 随机：一轮播完，重置后继续随机。
                 shufflePlayedIDs.removeAll()
-                pool = queue.filter { $0.id != currentTrack.id }
+                pool = queue.filter { queueIdentity($0) != queueIdentity(currentTrack) }
             } else {
                 // 随机 + 不循环：一轮播完即停（不把“随机”当成隐式循环）。
                 return false
             }
         }
         guard let next = pool.randomElement() else { return false }
-        shufflePlayedIDs.insert(next.id)
+        shufflePlayedIDs.insert(queueIdentity(next))
         selectAndPlay(next)
         return true
     }
@@ -2548,7 +2561,7 @@ public final class AuralisAppModel: ObservableObject {
             seekToAbsolute(0)
             return
         }
-        guard let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else {
+        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else {
             seekToAbsolute(0)
             return
         }
@@ -2581,7 +2594,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 当前曲目在播放队列中的下标（按 serverID + trackID 匹配）。
     public var currentQueueIndex: Int? {
-        queue.firstIndex { $0.id == currentTrack.id && $0.serverID == currentTrack.serverID }
+        queue.firstIndex { queueIdentity($0) == queueIdentity(currentTrack) }
     }
 
     /// 待播队列：当前曲目之后的部分。
@@ -2618,8 +2631,8 @@ public final class AuralisAppModel: ObservableObject {
     /// 从队列移除曲目。删除正在播放的曲目时自动切到下一首；
     /// 队列清空后回到空闲状态。曲目仍保留在音乐库中。
     public func removeFromQueue(_ track: Track) {
-        guard let index = queue.firstIndex(where: { $0.id == track.id }) else { return }
-        let wasCurrent = track.id == currentTrack.id
+        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(track) }) else { return }
+        let wasCurrent = queueIdentity(track) == queueIdentity(currentTrack)
         queue.remove(at: index)
         guard wasCurrent else { return }
 
@@ -2811,7 +2824,7 @@ public final class AuralisAppModel: ObservableObject {
 
     private func seamlessNextCandidate() -> Track? {
         guard !isShuffled, repeatMode != .one,
-              let index = queue.firstIndex(where: { $0.id == currentTrack.id }) else { return nil }
+              let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return nil }
         if sleepTimerMode == .afterCurrentTrack { return nil }
 
         let candidate: Track?
@@ -3133,7 +3146,7 @@ public final class AuralisAppModel: ObservableObject {
                     currentTrack = restored
                     loadLyricsIfNeeded(for: restored)
                     // 恢复曲目可能位于队列前 30 首之外，确保它进入队列，避免上一首/下一首静默失效。
-                    if !queue.contains(where: { $0.id == restored.id }) {
+                    if !queue.contains(where: { queueIdentity($0) == queueIdentity(restored) }) {
                         queue.insert(restored, at: 0)
                     }
                 } else if let first = queue.first {

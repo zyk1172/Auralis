@@ -56,7 +56,7 @@ struct MacSongTable: View {
     private var rowDataIdentity: String {
         tracks.map { track in
             let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description
-            let count = model.playCounts[track.id] ?? 0
+            let count = model.playCount(for: track)
             let added = model.addedDate(for: track)?.timeIntervalSince1970 ?? 0
             return "\(gid):\(count):\(added)"
         }.joined(separator: "|")
@@ -216,12 +216,11 @@ struct MacSongTable: View {
     }
 
     private func rebuildRows() {
-        let counts = model.playCounts
         baseRows = tracks.map { track in
             MacSongRow(
                 id: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue),
                 track: track,
-                playCount: counts[track.id] ?? 0,
+                playCount: model.playCount(for: track),
                 addedDate: model.addedDate(for: track)
             )
         }

@@ -2,6 +2,7 @@ import AppShell
 import Application
 import Domain
 import Foundation
+import LocalCatalog
 import Testing
 
 // 自包含桩：还原持久化资料库（connect 返回预置结果），与其它 AppShell 测试一致。
@@ -265,6 +266,14 @@ func homeSnapshotDataRules() async throws {
     #expect(!model.homeFavoriteRandomTracks.isEmpty)
     #expect(model.homeFavoriteRandomTracks.allSatisfy { $0.isFavorite })
     #expect(Set(model.homeFavoriteRandomTracks.map(\.id)).isSubset(of: [t1.id, t6.id]))
+
+    // 随机音乐是稳定快照，且“随机播放”只消费该货架，不会回退到整个资料库。
+    let randomSnapshot = model.randomTracks
+    #expect(!randomSnapshot.isEmpty)
+    #expect(model.randomTracks == randomSnapshot)
+    model.playShuffledQueue(randomSnapshot)
+    #expect(Set(model.queue.map { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) })
+        .isSubset(of: Set(randomSnapshot.map { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) })))
 }
 
 /// 收藏里随便听「换一批」：本地重采样，不发网络请求（不依赖服务器，直接验证样本变化或仍为收藏）。

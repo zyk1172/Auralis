@@ -48,4 +48,18 @@ struct MacV2BrowserStateTests {
         let stale = GlobalID(serverID: "server", remoteID: "stale")
         #expect(MacV2BrowserState.cleanedSelection([keep, stale], validTrackIDs: [keep]) == [keep])
     }
+
+    @Test("快速切换分类时，旧状态不会重新成为有效选择")
+    func rapidCategorySwitchesStayConsistent() {
+        var selectedID: String? = "mood:平静"
+        for index in 0..<100 {
+            let replacementID = index.isMultiple(of: 2) ? "mood:激昂" : "scene:通勤"
+            selectedID = MacV2BrowserState.selectionAfterReplacing(
+                selectedID: selectedID,
+                availableIDs: [replacementID]
+            )
+            #expect(selectedID == nil)
+            selectedID = replacementID
+        }
+    }
 }

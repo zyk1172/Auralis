@@ -104,6 +104,10 @@ struct PlaybackHistoryStore: Sendable {
         })
     }
 
+    func count(for globalID: GlobalID) -> Int {
+        counts[globalID.description] ?? 0
+    }
+
     func recentIDs(for serverID: ServerID) -> [TrackID] {
         recentKeys.compactMap { key in
             guard let globalID = GlobalID(key), globalID.serverID == serverID else { return nil }
