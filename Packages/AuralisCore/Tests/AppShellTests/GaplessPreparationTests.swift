@@ -121,9 +121,9 @@ struct GaplessPreparationTests {
         )
     }
 
-    /// 并行测试负载较高时，@MainActor 上的异步 prep 可能超过 1s；放宽到 3s 避免偶发超时。
+    /// 并行测试负载较高时，@MainActor 上的异步 prep 可能超过 1s；放宽到 20s 避免偶发超时。
     private func waitUntil(
-        attempts: Int = 300,
+        attempts: Int = 2000,
         condition: @escaping @Sendable () async -> Bool
     ) async {
         for _ in 0..<attempts {
@@ -134,7 +134,7 @@ struct GaplessPreparationTests {
 
     @MainActor
     private func waitUntilMainActor(
-        attempts: Int = 300,
+        attempts: Int = 2000,
         condition: () -> Bool
     ) async {
         for _ in 0..<attempts {

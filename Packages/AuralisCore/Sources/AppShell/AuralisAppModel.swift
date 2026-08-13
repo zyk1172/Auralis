@@ -77,6 +77,8 @@ public final class AuralisAppModel: ObservableObject {
             guard playbackStore.queue != unique else { return }
             objectWillChange.send()
             playbackStore.queue = unique
+            // 队列变更：开启新一轮随机（避免旧轮次的“已播放”标记污染新队列）。
+            shufflePlayedIDs.removeAll()
             // 队列是播放会话的一部分：变更即持久化（按服务器隔离），
             // 进程重启后可恢复上次的队列与当前曲目。
             persistPlaybackSession()
@@ -203,6 +205,10 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var volume: Float
     @Published public private(set) var replayGainSettings: ReplayGainSettings
     private var prepareNextTask: Task<Void, Never>?
+    /// 本次随机播放轮次中已随机播放过的曲目（TrackID）。
+    /// 随机 + 不循环：一轮随机播完即停；随机 + 列表循环：一轮播完重置继续。
+    /// 队列变更 / 重新开启随机时清空，避免旧轮次污染新队列。
+    private var shufflePlayedIDs: Set<TrackID> = []
     /// macOS 侧边栏搜索框的查询词（搜索页实时使用）。
     @Published public var macSearchQuery: String = ""
     /// 播放历史与单次播放达标状态由独立组件管理，避免“点选即计数”。
@@ -234,6 +240,13 @@ public final class AuralisAppModel: ObservableObject {
         didSet {
             defaults.set(isShuffled, forKey: Self.shuffleDefaultsKey)
             mediaIntegration.modeChanged(isShuffled: isShuffled, repeatMode: repeatMode)
+            if isShuffled {
+                // 重新开启随机：新一轮；当前曲目计入本轮已播放。
+                shufflePlayedIDs.removeAll()
+                if currentTrack.id.rawValue != "placeholder" {
+                    shufflePlayedIDs.insert(currentTrack.id)
+                }
+            }
             schedulePreparedNext()
         }
     }
@@ -1136,10 +1149,22 @@ public final class AuralisAppModel: ObservableObject {
     /// 列表循环到队尾也能绕回第一首——这些都必须反映在 capability 里。
     public var canGoNext: Bool {
         guard hasCurrentTrack else { return false }
+        if isShuffled {
+            // 随机模式下以“本轮随机候选池”为准（物理相邻项不代表随机可继续）：
+            // 随机 + 不循环：本轮随机已播完则不能再“下一首”；
+            // 随机 + 列表循环：可以继续随机。
+            guard queue.count > 1 else { return false }
+            if repeatMode == .off, shuffleRemainingPool.isEmpty { return false }
+            return true
+        }
         if hasNext { return true }
-        if isShuffled && queue.count > 1 { return true }
         if repeatMode == .all && queue.count > 1 { return true }
         return false
+    }
+
+    /// 随机模式下尚未在本轮播放过的候选池（排除当前曲目与已随机播放过的曲目）。
+    private var shuffleRemainingPool: [Track] {
+        queue.filter { $0.id != currentTrack.id && !shufflePlayedIDs.contains($0.id) }
     }
 
     /// 物理队列中是否存在相邻的上一首（不包含 repeat 语义）。
@@ -1207,6 +1232,8 @@ public final class AuralisAppModel: ObservableObject {
         streamRetryAttempts.removeValue(forKey: track.id)
         playbackHistoryStore.resetSelection()
         currentTrack = track
+        // 随机模式下记录“本轮已播放”：保证随机 + 不循环时每首只播一次，播完即停。
+        if isShuffled { shufflePlayedIDs.insert(track.id) }
         playbackPosition = 0
         if !queue.contains(where: { $0.id == track.id }) { queue.insert(track, at: 0) }
         // 播放时自动缓存：当前歌曲的歌词 + 专辑封面（loadArtwork 在 UI 请求时落盘），
@@ -2387,12 +2414,26 @@ public final class AuralisAppModel: ObservableObject {
         return true
     }
 
-    /// 随机模式：从队列里随机挑一首非当前曲目。
-    private func playRandomFromQueue() {
-        guard queue.count > 1,
-              let next = queue.filter({ $0.id != currentTrack.id }).randomElement()
-        else { return }
+    /// 随机模式：从队列里随机挑一首尚未在本轮随机中播放过的非当前曲目。
+    /// 返回 false 表示本轮随机已播完（且不循环）或队列不足，由调用方决定暂停/重播。
+    @discardableResult
+    private func playRandomFromQueue() -> Bool {
+        guard queue.count > 1 else { return false }
+        var pool = queue.filter { $0.id != currentTrack.id && !shufflePlayedIDs.contains($0.id) }
+        if pool.isEmpty {
+            if repeatMode == .all {
+                // 列表循环 + 随机：一轮播完，重置后继续随机。
+                shufflePlayedIDs.removeAll()
+                pool = queue.filter { $0.id != currentTrack.id }
+            } else {
+                // 随机 + 不循环：一轮播完即停（不把“随机”当成隐式循环）。
+                return false
+            }
+        }
+        guard let next = pool.randomElement() else { return false }
+        shufflePlayedIDs.insert(next.id)
         selectAndPlay(next)
+        return true
     }
 
     /// 切换曲目的收藏状态，并同步到服务器（star/unstar）。
@@ -2638,7 +2679,10 @@ public final class AuralisAppModel: ObservableObject {
             selectAndPlay(currentTrack)
         case .all:
             if isShuffled {
-                playRandomFromQueue()
+                if !playRandomFromQueue(), queue.count == 1 {
+                    // 单曲队列 + 随机：与 .one 一致，循环播放当前曲目。
+                    selectAndPlay(currentTrack)
+                }
             } else if hasNext {
                 next()
             } else if queue.count == 1 {
@@ -2650,8 +2694,11 @@ public final class AuralisAppModel: ObservableObject {
                 pauseAtQueueEnd()
             }
         case .off:
-            if isShuffled, queue.count > 1 {
-                playRandomFromQueue()
+            if isShuffled {
+                if !playRandomFromQueue() {
+                    // 随机 + 不循环：本轮随机已播完，停止而不是继续隐式循环。
+                    pauseAtQueueEnd()
+                }
             } else if hasNext {
                 next()
             } else {
@@ -2667,6 +2714,13 @@ public final class AuralisAppModel: ObservableObject {
         let finished = currentTrack
         finalizeCompletedTrack(finished)
         if applySleepTimerAtTrackEnd() { return }
+
+        // 单曲循环下不应存在预载下一首；若模式切换竞态导致旧预载项被引擎自动推进，
+        // 回到单曲循环语义：重播当前曲目，而不是被旧预载项带跑（避免“单曲循环不起作用”）。
+        if repeatMode == .one {
+            selectAndPlay(currentTrack)
+            return
+        }
 
         guard seamlessNextCandidate()?.id == prepared.id,
               let canonical = queue.first(where: { $0.id == prepared.id }) else {
