@@ -49,6 +49,19 @@ struct MacV2BrowserStateTests {
         #expect(MacV2BrowserState.cleanedSelection([keep, stale], validTrackIDs: [keep]) == [keep])
     }
 
+    @Test("分类按歌曲数量降序，数量相同保持稳定顺序")
+    func categoriesAreSortedByTrackCount() {
+        let categories = [
+            RecommendationIndexV2Category(dimension: "scene", value: "通勤", trackCount: 3),
+            RecommendationIndexV2Category(dimension: "mood", value: "明亮", trackCount: 9),
+            RecommendationIndexV2Category(dimension: "mood", value: "平静", trackCount: 3),
+        ]
+
+        #expect(MacV2BrowserState.categoriesSortedByTrackCount(categories).map(\.id) == [
+            "mood:明亮", "mood:平静", "scene:通勤",
+        ])
+    }
+
     @Test("快速切换分类时，旧状态不会重新成为有效选择")
     func rapidCategorySwitchesStayConsistent() {
         var selectedID: String? = "mood:平静"

@@ -276,6 +276,8 @@ public struct MacMusicShell: View {
             } else {
                 ContentUnavailableView("流派不可用", systemImage: "music.quarternote.3", description: Text("这个流派不在当前资料库中。"))
             }
+        case let .recommendationCategory(category):
+            MacV2CategoryTracksView(category: category, model: model, theme: theme, onNavigate: navigate)
         }
     }
 
@@ -286,6 +288,7 @@ public struct MacMusicShell: View {
             case let .artist(id): return resolveArtist(id)?.name ?? "艺术家"
             case let .playlist(id): return resolvePlaylist(id)?.name ?? "播放列表"
             case let .genre(name): return name
+            case let .recommendationCategory(category): return category.macCategoryTitle
             }
         }
         return navigation.selection?.title ?? "澜音"

@@ -109,6 +109,7 @@ enum MacDetailRoute: Hashable {
     case artist(MacEntityRouteID)
     case playlist(MacEntityRouteID)
     case genre(String)
+    case recommendationCategory(RecommendationIndexV2Category)
 }
 
 /// 页面发起的统一导航目标。
