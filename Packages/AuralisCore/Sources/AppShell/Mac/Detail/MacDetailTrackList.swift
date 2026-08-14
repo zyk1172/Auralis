@@ -158,7 +158,8 @@ struct MacDetailTrackRow: View {
     }
 }
 
-/// 详情页曲目列表：VStack + 可选 Disc 分组头。
+/// 详情页曲目列表：真正的 LazyVStack。流派或大型歌单即使有数千首歌，
+/// 也只创建当前视口附近的 Row，不在打开详情时一次实例化全部 SwiftUI 子树。
 struct MacDetailTrackList: View {
     let tracks: [Track]
     @ObservedObject var model: AuralisAppModel
@@ -169,8 +170,8 @@ struct MacDetailTrackList: View {
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(tracks.enumerated()), id: \.element.macGlobalID) { index, track in
+        LazyVStack(spacing: 0) {
+            ForEach(tracks, id: \.macGlobalID) { track in
                 MacDetailTrackRow(
                     track: track,
                     model: model,
@@ -180,7 +181,8 @@ struct MacDetailTrackList: View {
                     showAlbum: showAlbum,
                     onNavigate: onNavigate
                 )
-                if index < tracks.count - 1 {
+                // 最后一个 row 不画分隔线，避免列表底部多出一条；无需 enumerate。
+                if track.macGlobalID != tracks.last?.macGlobalID {
                     Divider().padding(.leading, 46)
                 }
             }

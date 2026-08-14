@@ -11,10 +11,15 @@ struct MacPlaylistListView: View {
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     @State private var localSearch = ""
+    @State private var visiblePlaylists: [Playlist] = []
 
-    private var playlists: [Playlist] {
+    private var derivationKey: String {
+        "\(model.catalogRevision)|\(localSearch)"
+    }
+
+    private func rebuildVisiblePlaylists() {
         let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.catalog.playlists
+        visiblePlaylists = model.catalog.playlists
             .filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -24,7 +29,7 @@ struct MacPlaylistListView: View {
             MacPageSearchHeader(text: $localSearch, prompt: "在播放列表中查找")
             Divider()
             GeometryReader { geo in
-                if playlists.isEmpty {
+                if visiblePlaylists.isEmpty {
                     ContentUnavailableView {
                         Label("暂无播放列表", systemImage: "music.note.list")
                     } description: {
@@ -40,7 +45,7 @@ struct MacPlaylistListView: View {
                     let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 28) {
-                            ForEach(playlists) { playlist in
+                            ForEach(visiblePlaylists) { playlist in
                                 MacPlaylistTile(
                                     playlist: playlist,
                                     model: model,
@@ -61,6 +66,9 @@ struct MacPlaylistListView: View {
             }
         }
         .navigationTitle("播放列表")
+        .task(id: derivationKey) {
+            rebuildVisiblePlaylists()
+        }
     }
 }
 #endif

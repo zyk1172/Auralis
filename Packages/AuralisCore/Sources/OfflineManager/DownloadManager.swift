@@ -28,6 +28,11 @@ struct DownloadTaskMetadata: Codable, Equatable, Sendable {
     }
 }
 
+private struct PersistedDownloadFailure: Codable, Equatable, Sendable {
+    let metadata: DownloadTaskMetadata
+    let info: DownloadTaskInfo
+}
+
 /// 很小的任务身份仓库。只保存 track/server/codec，不保存下载 URL 或认证参数。
 /// 使用整份 JSON 原子覆盖，任务数通常很少，且避免多个独立 key 留下半写状态。
 final class DownloadTaskMetadataStore: @unchecked Sendable {
@@ -36,11 +41,13 @@ final class DownloadTaskMetadataStore: @unchecked Sendable {
 
     private let defaults: UserDefaults
     private let key: String
+    private let failuresKey: String
     private let lock = NSLock()
 
     init(defaults: UserDefaults, key: String = storageKey) {
         self.defaults = defaults
         self.key = key
+        self.failuresKey = key + ".failures"
     }
 
     func all() -> [Int: DownloadTaskMetadata] {
@@ -71,6 +78,39 @@ final class DownloadTaskMetadataStore: @unchecked Sendable {
         lock.unlock()
     }
 
+    func failures() -> [(DownloadTaskID, DownloadTaskInfo)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadFailuresLocked().map {
+            (
+                DownloadTaskID(serverID: $0.metadata.serverID, trackID: $0.metadata.trackID),
+                $0.info
+            )
+        }
+    }
+
+    func saveFailure(id: DownloadTaskID, info: DownloadTaskInfo, codec: String?) {
+        lock.lock()
+        var failures = loadFailuresLocked()
+        let metadata = DownloadTaskMetadata(trackID: id.trackID, serverID: id.serverID, codec: codec)
+        failures.removeAll {
+            $0.metadata.serverID == id.serverID && $0.metadata.trackID == id.trackID
+        }
+        failures.append(PersistedDownloadFailure(metadata: metadata, info: info))
+        saveFailuresLocked(failures)
+        lock.unlock()
+    }
+
+    func removeFailure(id: DownloadTaskID) {
+        lock.lock()
+        var failures = loadFailuresLocked()
+        failures.removeAll {
+            $0.metadata.serverID == id.serverID && $0.metadata.trackID == id.trackID
+        }
+        saveFailuresLocked(failures)
+        lock.unlock()
+    }
+
     private func loadLocked() -> [Int: DownloadTaskMetadata] {
         guard
             let data = defaults.data(forKey: key),
@@ -92,20 +132,69 @@ final class DownloadTaskMetadataStore: @unchecked Sendable {
             defaults.set(data, forKey: key)
         }
     }
+
+    private func loadFailuresLocked() -> [PersistedDownloadFailure] {
+        guard let data = defaults.data(forKey: failuresKey) else { return [] }
+        return (try? JSONDecoder().decode([PersistedDownloadFailure].self, from: data)) ?? []
+    }
+
+    private func saveFailuresLocked(_ failures: [PersistedDownloadFailure]) {
+        guard !failures.isEmpty else {
+            defaults.removeObject(forKey: failuresKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(failures) {
+            defaults.set(data, forKey: failuresKey)
+        }
+    }
 }
 
 /// 单曲下载任务状态。
-public struct DownloadTaskInfo: Sendable, Equatable {
+public struct DownloadTaskInfo: Codable, Sendable, Equatable {
     public var trackID: TrackID
     public var status: DownloadStatus
     public var progress: Double
     public var byteCount: Int64
+    public var expectedByteCount: Int64?
+    public var failure: DownloadFailureInfo?
 
-    public init(trackID: TrackID, status: DownloadStatus = .queued, progress: Double = 0, byteCount: Int64 = 0) {
+    public init(
+        trackID: TrackID,
+        status: DownloadStatus = .queued,
+        progress: Double = 0,
+        byteCount: Int64 = 0,
+        expectedByteCount: Int64? = nil,
+        failure: DownloadFailureInfo? = nil
+    ) {
         self.trackID = trackID
         self.status = status
         self.progress = progress
         self.byteCount = byteCount
+        self.expectedByteCount = expectedByteCount
+        self.failure = failure
+    }
+}
+
+/// 可稳定展示、测试和重试决策的失败分类。不要把带认证参数的 URL 或系统错误原文
+/// 直接暴露给 UI；这里只保存面向用户的脱敏说明。
+public enum DownloadFailureKind: String, Codable, Hashable, Sendable {
+    case networkUnavailable
+    case timedOut
+    case authentication
+    case unavailable
+    case invalidResponse
+    case storage
+    case interrupted
+    case unknown
+}
+
+public struct DownloadFailureInfo: Codable, Hashable, Sendable {
+    public let kind: DownloadFailureKind
+    public let message: String
+
+    public init(kind: DownloadFailureKind, message: String) {
+        self.kind = kind
+        self.message = message
     }
 }
 
@@ -137,7 +226,7 @@ public struct ActiveDownloadSnapshot: Sendable, Equatable {
 /// 使用 URLSessionDownloadTask + delegate 汇报进度；完成后把临时文件移入 TrackCacheStore。
 /// 线程安全：delegate 回调可能来自任意队列，内部用锁保护状态。
 public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    public typealias StateChange = @Sendable (DownloadTaskID, DownloadStatus, Double) -> Void
+    public typealias StateChange = @Sendable (DownloadTaskID, DownloadTaskInfo) -> Void
 
     /// delegate 必须指向 self，因此用 lazy 在 super.init 之后创建。
     /// 使用后台会话：App 被系统挂起后，下载任务按系统规则继续并在完成后回调
@@ -145,15 +234,18 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
     /// 后台会话标识：App 生命周期转发 handleEventsForBackgroundURLSession 时按此匹配。
     public static let sessionIdentifier = "com.auralis.player.downloads"
     private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.background(
-            withIdentifier: Self.sessionIdentifier
-        )
+        let configuration = sessionConfiguration
         configuration.timeoutIntervalForRequest = 120
-        configuration.sessionSendsLaunchEvents = true
+        if configuration.identifier != nil {
+            configuration.sessionSendsLaunchEvents = true
+        }
         return URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
     }()
+    private let sessionConfiguration: URLSessionConfiguration
     private let store: TrackCacheStore
     private let metadataStore: DownloadTaskMetadataStore
+    private let maxConcurrentDownloads: Int
+    private let stagingDirectory: URL
     /// 可替换的状态回调（App 在 init 完成后注入，避免 init 期捕获 self）。
     public var onStateChange: StateChange
     private let lock = NSLock()
@@ -165,6 +257,9 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
     /// `getAllTasks` 的异步快照可能晚于用户取消返回。用 taskIdentifier 墓碑阻止恢复回调
     /// 把已经取消的系统任务重新绑定成 downloading；消费后立即移除，集合保持有界。
     private var cancelledTaskIdentifiers: Set<Int> = []
+    /// didFinishDownloadingTo 提供的系统临时文件只在 delegate 回调期间有效。
+    /// 先同步移到 staging，再跨 actor 写入正式缓存；这里记录崩溃恢复中的文件。
+    private var recoveringTaskIdentifiers: Set<Int> = []
     /// URLSession 的事件结束不代表异步缓存搬运已经结束，必须等两者都结束再交还系统 completion。
     private var pendingCacheMoves = 0
     private var backgroundSessionEventsFinished = false
@@ -173,10 +268,12 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
 
     public convenience init(
         store: TrackCacheStore,
-        onStateChange: @escaping StateChange = { _, _, _ in }
+        maxConcurrentDownloads: Int = 3,
+        onStateChange: @escaping StateChange = { _, _ in }
     ) {
         self.init(
             store: store,
+            maxConcurrentDownloads: maxConcurrentDownloads,
             onStateChange: onStateChange,
             metadataStore: .shared,
             automaticallyReconnect: true
@@ -185,15 +282,25 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
 
     init(
         store: TrackCacheStore,
-        onStateChange: @escaping StateChange = { _, _, _ in },
+        maxConcurrentDownloads: Int = 3,
+        onStateChange: @escaping StateChange = { _, _ in },
         metadataStore: DownloadTaskMetadataStore,
-        automaticallyReconnect: Bool
+        automaticallyReconnect: Bool,
+        stagingDirectory: URL? = nil,
+        sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.store = store
+        self.maxConcurrentDownloads = max(1, maxConcurrentDownloads)
         self.onStateChange = onStateChange
         self.metadataStore = metadataStore
+        self.sessionConfiguration = sessionConfiguration ?? URLSessionConfiguration.background(
+            withIdentifier: Self.sessionIdentifier
+        )
+        self.stagingDirectory = stagingDirectory ?? Self.makeStagingDirectory()
+        try? FileManager.default.createDirectory(at: self.stagingDirectory, withIntermediateDirectories: true)
         super.init()
         hydratePersistedTaskState()
+        recoverStagedDownloads()
         if automaticallyReconnect {
             reconnectBackgroundTasks()
         }
@@ -244,15 +351,23 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         }
     }
 
+    /// 包含活动任务与持久化失败记录，供 App 冷启动后恢复“可重试”状态。
+    public func stateSnapshots() -> [ActiveDownloadSnapshot] {
+        lock.lock()
+        defer { lock.unlock() }
+        return infos.map { id, info in ActiveDownloadSnapshot(serverID: id.serverID, info: info) }
+    }
+
     /// 开始下载：trackID → url（带认证的 download 地址）；serverID 用于落盘时按服务器隔离。
     public func start(trackID: TrackID, url: URL, codec: String?, serverID: ServerID) {
         let id = DownloadTaskID(serverID: serverID, trackID: trackID)
+        metadataStore.removeFailure(id: id)
         lock.lock()
         guard taskIdentifiers[id] == nil else {
             lock.unlock()
             return
         }
-        infos[id] = DownloadTaskInfo(trackID: trackID, status: .downloading)
+        infos[id] = DownloadTaskInfo(trackID: trackID, status: .queued)
         codecs[id] = codec
         lock.unlock()
 
@@ -265,8 +380,8 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         lock.unlock()
         // 必须在 resume 前写入兜底映射，避免任务刚启动进程就被系统终止的竞态。
         metadataStore.save(metadata, for: task.taskIdentifier)
-        onStateChange(id, .downloading, 0)
-        task.resume()
+        notify(id)
+        resumeNextTasks()
     }
 
     public func cancel(_ id: DownloadTaskID) {
@@ -287,14 +402,23 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         if let taskIdentifier {
             metadataStore.remove(taskIdentifier: taskIdentifier)
         }
+        metadataStore.removeFailure(id: id)
         task?.cancel()
-        onStateChange(id, .notDownloaded, 0)
+        notify(id)
+        resumeNextTasks()
     }
 
     /// 旧调用方兼容取消：取消所有匹配的服务器任务。业务代码应使用 scoped 版本。
     public func cancel(_ trackID: TrackID) {
         lock.lock()
         let ids = taskIdentifiers.keys.filter { $0.trackID == trackID }
+        lock.unlock()
+        for id in ids { cancel(id) }
+    }
+
+    public func cancelAll() {
+        lock.lock()
+        let ids = Array(taskIdentifiers.keys)
         lock.unlock()
         for id in ids { cancel(id) }
     }
@@ -315,8 +439,10 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         lock.lock()
         infos[id]?.progress = min(max(progress, 0), 1)
         infos[id]?.byteCount = totalBytesWritten
+        infos[id]?.expectedByteCount = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
+        infos[id]?.failure = nil
         lock.unlock()
-        onStateChange(id, .downloading, min(max(progress, 0), 1))
+        notify(id)
     }
 
     public func urlSession(
@@ -325,47 +451,116 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         didFinishDownloadingTo location: URL
     ) {
         guard let id = taskID(for: downloadTask) else { return }
+        lock.lock()
+        let isAlreadyRecovering = recoveringTaskIdentifiers.contains(downloadTask.taskIdentifier)
+        lock.unlock()
+        guard !isAlreadyRecovering else { return }
+        if let failure = Self.responseFailure(for: downloadTask) {
+            finishFailure(id: id, taskIdentifier: downloadTask.taskIdentifier, failure: failure)
+            resumeNextTasks()
+            return
+        }
+        let downloadedBytes = Self.fileSize(at: location)
+        guard downloadedBytes > 0 else {
+            finishFailure(
+                id: id,
+                taskIdentifier: downloadTask.taskIdentifier,
+                failure: DownloadFailureInfo(kind: .invalidResponse, message: "服务器返回了空文件，请重试")
+            )
+            resumeNextTasks()
+            return
+        }
+        let stagedLocation: URL
+        do {
+            stagedLocation = try stageTemporaryDownload(at: location, taskIdentifier: downloadTask.taskIdentifier)
+        } catch {
+            finishFailure(
+                id: id,
+                taskIdentifier: downloadTask.taskIdentifier,
+                failure: DownloadFailureInfo(kind: .storage, message: "无法暂存下载文件，请检查磁盘空间后重试")
+            )
+            resumeNextTasks()
+            return
+        }
+
         let codec: String?
         let taskIdentifier: Int
         lock.lock()
         codec = codecs[id]
         tasks[id] = nil
         taskIdentifier = taskIdentifiers[id] ?? downloadTask.taskIdentifier
+        infos[id]?.byteCount = downloadedBytes
+        infos[id]?.progress = 1
         pendingCacheMoves += 1
         lock.unlock()
+        resumeNextTasks()
         // store 是 actor，moveDownloadedFile 需要 await；delegate 回调是同步的，用 Task 包裹。
         // 组合键带 serverID：不同服务器同 trackID 的文件互不覆盖（P0-1）。
         let cacheID = TrackCacheStore.TrackCacheID(serverID: id.serverID, trackID: id.trackID)
-        Task { [store, cacheID, codec, location, self] in
+        Task { [store, cacheID, codec, stagedLocation, self] in
             do {
-                _ = try await store.moveDownloadedFile(at: location, for: cacheID, codec: codec)
-                self.finishSuccess(id: id, taskIdentifier: taskIdentifier)
+                _ = try await store.moveDownloadedFile(at: stagedLocation, for: cacheID, codec: codec)
+                let accepted = self.finishSuccess(id: id, taskIdentifier: taskIdentifier)
+                if !accepted {
+                    try? await store.remove(for: cacheID)
+                }
             } catch {
-                self.finishFailure(id: id, taskIdentifier: taskIdentifier)
+                self.finishFailure(
+                    id: id,
+                    taskIdentifier: taskIdentifier,
+                    failure: DownloadFailureInfo(kind: .storage, message: "无法保存到本地，请检查磁盘空间后重试")
+                )
             }
             self.finishPendingCacheMove()
         }
     }
 
     /// 同步辅助：完成状态更新（从异步上下文调用，锁在同步方法内执行）。
-    private func finishSuccess(id: DownloadTaskID, taskIdentifier: Int) {
+    @discardableResult
+    private func finishSuccess(id: DownloadTaskID, taskIdentifier: Int) -> Bool {
         lock.lock()
-        infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .downloaded, progress: 1)
+        let wasCancelled = cancelledTaskIdentifiers.remove(taskIdentifier) != nil
+        var info = infos[id] ?? DownloadTaskInfo(trackID: id.trackID)
+        info.status = wasCancelled ? .notDownloaded : .downloaded
+        info.progress = wasCancelled ? 0 : 1
+        info.failure = nil
+        infos[id] = info
         codecs[id] = nil
         taskIdentifiers[id] = nil
+        tasks[id] = nil
+        recoveringTaskIdentifiers.remove(taskIdentifier)
         lock.unlock()
         metadataStore.remove(taskIdentifier: taskIdentifier)
-        onStateChange(id, .downloaded, 1)
+        metadataStore.removeFailure(id: id)
+        if !wasCancelled { notify(id) }
+        return !wasCancelled
     }
 
-    private func finishFailure(id: DownloadTaskID, taskIdentifier: Int) {
+    private func finishFailure(
+        id: DownloadTaskID,
+        taskIdentifier: Int,
+        failure: DownloadFailureInfo
+    ) {
+        let codec: String?
         lock.lock()
-        infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .failed)
+        let wasCancelled = cancelledTaskIdentifiers.remove(taskIdentifier) != nil
+        var info = infos[id] ?? DownloadTaskInfo(trackID: id.trackID)
+        info.status = wasCancelled ? .notDownloaded : .failed
+        info.failure = wasCancelled ? nil : failure
+        infos[id] = info
+        codec = codecs[id]
         codecs[id] = nil
         taskIdentifiers[id] = nil
+        tasks[id] = nil
+        recoveringTaskIdentifiers.remove(taskIdentifier)
         lock.unlock()
         metadataStore.remove(taskIdentifier: taskIdentifier)
-        onStateChange(id, .failed, 0)
+        if wasCancelled {
+            metadataStore.removeFailure(id: id)
+        } else {
+            metadataStore.saveFailure(id: id, info: info, codec: codec)
+            notify(id)
+        }
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -376,12 +571,12 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         let taskIdentifier = taskIdentifiers.removeValue(forKey: id) ?? task.taskIdentifier
         lock.unlock()
         guard wasActive else { return }
-        lock.lock()
-        infos[id] = DownloadTaskInfo(trackID: id.trackID, status: .failed)
-        codecs[id] = nil
-        lock.unlock()
-        metadataStore.remove(taskIdentifier: taskIdentifier)
-        onStateChange(id, .failed, 0)
+        finishFailure(
+            id: id,
+            taskIdentifier: taskIdentifier,
+            failure: Self.failureInfo(for: error)
+        )
+        resumeNextTasks()
     }
 
     /// 由 App 生命周期转发：后台会话标识匹配时保存完成回调。
@@ -428,15 +623,81 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
     }
 
     private func hydratePersistedTaskState() {
+        let failures = metadataStore.failures()
         let persisted = metadataStore.all()
         lock.lock()
+        for (id, info) in failures {
+            infos[id] = info
+        }
         for (taskIdentifier, metadata) in persisted {
             let id = DownloadTaskID(serverID: metadata.serverID, trackID: metadata.trackID)
-            infos[id] = DownloadTaskInfo(trackID: metadata.trackID, status: .downloading)
+            // 系统任务真实 state 要等 getAllTasks 返回；恢复期间先显示“排队中”，
+            // 避免把尚未重连的任务误报为正在传输。
+            infos[id] = DownloadTaskInfo(trackID: metadata.trackID, status: .queued)
             codecs[id] = metadata.codec
             taskIdentifiers[id] = taskIdentifier
         }
         lock.unlock()
+    }
+
+    /// App 可能在系统临时文件已交付、但尚未写进 TrackCacheStore 的极短窗口被终止。
+    /// staging 文件名使用 URLSession taskIdentifier；业务身份仍从脱敏 metadata 恢复。
+    private func recoverStagedDownloads() {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: stagingDirectory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        for file in files where file.pathExtension == "download" {
+            guard
+                let taskIdentifier = Int(file.deletingPathExtension().lastPathComponent),
+                let metadata = metadataStore.metadata(for: taskIdentifier)
+            else {
+                try? FileManager.default.removeItem(at: file)
+                continue
+            }
+            let id = DownloadTaskID(serverID: metadata.serverID, trackID: metadata.trackID)
+            let byteCount = Self.fileSize(at: file)
+            guard byteCount > 0 else {
+                try? FileManager.default.removeItem(at: file)
+                metadataStore.remove(taskIdentifier: taskIdentifier)
+                continue
+            }
+
+            lock.lock()
+            guard recoveringTaskIdentifiers.insert(taskIdentifier).inserted else {
+                lock.unlock()
+                continue
+            }
+            var info = infos[id] ?? DownloadTaskInfo(trackID: metadata.trackID)
+            info.status = .downloading
+            info.progress = 1
+            info.byteCount = byteCount
+            info.failure = nil
+            infos[id] = info
+            codecs[id] = metadata.codec
+            taskIdentifiers[id] = taskIdentifier
+            pendingCacheMoves += 1
+            lock.unlock()
+            notify(id)
+
+            let cacheID = TrackCacheStore.TrackCacheID(serverID: id.serverID, trackID: id.trackID)
+            Task { [store, cacheID, file, self] in
+                do {
+                    _ = try await store.moveDownloadedFile(at: file, for: cacheID, codec: metadata.codec)
+                    let accepted = self.finishSuccess(id: id, taskIdentifier: taskIdentifier)
+                    if !accepted { try? await store.remove(for: cacheID) }
+                } catch {
+                    self.finishFailure(
+                        id: id,
+                        taskIdentifier: taskIdentifier,
+                        failure: DownloadFailureInfo(kind: .storage, message: "无法恢复已下载文件，请检查磁盘空间后重试")
+                    )
+                }
+                self.finishPendingCacheMove()
+            }
+        }
     }
 
     /// 重新连接系统后台会话，并用 taskDescription / 持久映射重建内存状态。
@@ -471,13 +732,15 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             }
             metadataStore.save(metadata, for: downloadTask.taskIdentifier)
             bind(task: downloadTask, metadata: metadata)
-            if downloadTask.state == .suspended {
-                downloadTask.resume()
-            }
         }
 
         // 只清理 getAllTasks 调用前已经存在的记录，避免与同时发生的新 start() 竞争。
-        let staleTaskIdentifiers = pruneCandidates.subtracting(activeTaskIdentifiers)
+        lock.lock()
+        let recovering = recoveringTaskIdentifiers
+        lock.unlock()
+        let staleTaskIdentifiers = pruneCandidates
+            .subtracting(activeTaskIdentifiers)
+            .subtracting(recovering)
         var failedIDs: [DownloadTaskID] = []
         for taskIdentifier in staleTaskIdentifiers {
             guard let metadata = metadataStore.metadata(for: taskIdentifier) else { continue }
@@ -487,19 +750,36 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             if taskIdentifiers[id] == taskIdentifier {
                 taskIdentifiers[id] = nil
                 codecs[id] = nil
-                infos[id] = DownloadTaskInfo(trackID: metadata.trackID, status: .failed)
+                infos[id] = DownloadTaskInfo(
+                    trackID: metadata.trackID,
+                    status: .failed,
+                    failure: DownloadFailureInfo(kind: .interrupted, message: "上次下载未完成，请重试")
+                )
+                if let info = infos[id] {
+                    metadataStore.saveFailure(id: id, info: info, codec: metadata.codec)
+                }
                 failedIDs.append(id)
             }
             lock.unlock()
         }
         for id in failedIDs {
-            onStateChange(id, .failed, 0)
+            notify(id)
         }
+        resumeNextTasks()
     }
 
     private func bind(task: URLSessionDownloadTask, metadata: DownloadTaskMetadata) {
         let id = DownloadTaskID(serverID: metadata.serverID, trackID: metadata.trackID)
         lock.lock()
+        // getAllTasks 可能先通过取消检查、随后用户才点取消。绑定时必须再次检查墓碑，
+        // 否则迟到的恢复回调会把已取消任务重新放回 downloading。
+        if cancelledTaskIdentifiers.remove(task.taskIdentifier) != nil {
+            lock.unlock()
+            task.taskDescription = nil
+            metadataStore.remove(taskIdentifier: task.taskIdentifier)
+            task.cancel()
+            return
+        }
         // 同一服务器的同一首歌只允许一个系统任务；不同服务器的相同 TrackID 可并存。
         if let existingIdentifier = taskIdentifiers[id],
            existingIdentifier != task.taskIdentifier,
@@ -513,9 +793,126 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
         }
         tasks[id] = task
         taskIdentifiers[id] = task.taskIdentifier
-        infos[id] = DownloadTaskInfo(trackID: metadata.trackID, status: .downloading)
+        var info = infos[id] ?? DownloadTaskInfo(trackID: metadata.trackID)
+        info.status = task.state == .running ? .downloading : .queued
+        info.failure = nil
+        infos[id] = info
         codecs[id] = metadata.codec
         lock.unlock()
+        notify(id)
+    }
+
+    /// 只让固定数量的网络任务并发；其余任务保留为 URLSession suspended task，
+    /// 因而仍可被后台会话恢复、取消和展示。批量离线不会再瞬间压满服务器与连接池。
+    private func resumeNextTasks() {
+        let candidates: [(DownloadTaskID, URLSessionDownloadTask)]
+        lock.lock()
+        let runningCount = tasks.values.filter { $0.state == .running }.count
+        let availableSlots = max(maxConcurrentDownloads - runningCount, 0)
+        candidates = tasks
+            .filter { id, task in
+                task.state == .suspended && infos[id]?.status == .queued
+            }
+            .sorted { $0.key.trackID.rawValue < $1.key.trackID.rawValue }
+            .prefix(availableSlots)
+            .map { ($0.key, $0.value) }
+        for (id, _) in candidates {
+            infos[id]?.status = .downloading
+            infos[id]?.failure = nil
+        }
+        lock.unlock()
+
+        for (id, task) in candidates {
+            task.resume()
+            notify(id)
+        }
+    }
+
+    private func notify(_ id: DownloadTaskID) {
+        lock.lock()
+        let info = infos[id]
+        lock.unlock()
+        if let info { onStateChange(id, info) }
+    }
+
+    private static func fileSize(at url: URL) -> Int64 {
+        (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+    }
+
+    private static func makeStagingDirectory() -> URL {
+        let manager = FileManager.default
+        let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? manager.temporaryDirectory
+        let directory = support.appendingPathComponent("Auralis/DownloadStaging", isDirectory: true)
+        try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableDirectory = directory
+        try? mutableDirectory.setResourceValues(values)
+        return directory
+    }
+
+    private func stageTemporaryDownload(at location: URL, taskIdentifier: Int) throws -> URL {
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        let destination = stagingDirectory.appendingPathComponent("\(taskIdentifier).download")
+        if FileManager.default.fileExists(atPath: destination.path) {
+            // 已由本进程恢复中的 staging 文件优先；系统重投递的临时副本交还系统清理。
+            return destination
+        }
+        try FileManager.default.moveItem(at: location, to: destination)
+        return destination
+    }
+
+    private static func responseFailure(for task: URLSessionDownloadTask) -> DownloadFailureInfo? {
+        responseFailure(
+            statusCode: (task.response as? HTTPURLResponse)?.statusCode,
+            mimeType: task.response?.mimeType
+        )
+    }
+
+    static func responseFailure(statusCode: Int?, mimeType: String?) -> DownloadFailureInfo? {
+        if let statusCode {
+            switch statusCode {
+            case 200 ..< 300:
+                break
+            case 401, 403:
+                return DownloadFailureInfo(kind: .authentication, message: "登录已失效，请重新连接服务器")
+            case 404, 410:
+                return DownloadFailureInfo(kind: .unavailable, message: "服务器上已找不到这首歌曲")
+            case 500 ..< 600:
+                return DownloadFailureInfo(kind: .unavailable, message: "音乐服务器暂时不可用，请稍后重试")
+            default:
+                return DownloadFailureInfo(kind: .invalidResponse, message: "下载请求失败（HTTP \(statusCode)）")
+            }
+        }
+
+        let contentType = mimeType?.lowercased() ?? ""
+        if contentType.contains("json") || contentType.contains("html") || contentType.contains("xml") {
+            return DownloadFailureInfo(kind: .invalidResponse, message: "服务器返回的不是音频文件")
+        }
+        return nil
+    }
+
+    private static func failureInfo(for error: Error?) -> DownloadFailureInfo {
+        guard let error else {
+            return DownloadFailureInfo(kind: .unknown, message: "下载失败，请重试")
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            let code = URLError.Code(rawValue: nsError.code)
+            switch code {
+            case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost,
+                 .dnsLookupFailed, .internationalRoamingOff, .dataNotAllowed:
+                return DownloadFailureInfo(kind: .networkUnavailable, message: "网络不可用，联网后可重试")
+            case .timedOut:
+                return DownloadFailureInfo(kind: .timedOut, message: "下载超时，请重试")
+            case .userAuthenticationRequired, .userCancelledAuthentication:
+                return DownloadFailureInfo(kind: .authentication, message: "登录已失效，请重新连接服务器")
+            default:
+                break
+            }
+        }
+        return DownloadFailureInfo(kind: .unknown, message: "下载中断，请重试")
     }
 
     private func finishPendingCacheMove() {

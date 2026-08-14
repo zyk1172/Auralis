@@ -34,7 +34,7 @@ struct InspectorView: View {
     private var queue: some View {
         List {
             ForEach(model.queue) { track in
-                TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                     .contentShape(Rectangle())
                     .onTapGesture { model.selectAndPlay(track) }
                     .contextMenu {

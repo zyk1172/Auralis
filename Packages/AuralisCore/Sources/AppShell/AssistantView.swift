@@ -271,6 +271,8 @@ struct AssistantView: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
+            // 会话行整行至少 44pt 可点，行高与视觉不变。
+            .frame(minHeight: 44)
         }
         .buttonStyle(HapticPlainButtonStyle())
         .listRowBackground(
@@ -327,6 +329,8 @@ struct AssistantView: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
+            // 批量模式行同样保持整行 44pt 可点。
+            .frame(minHeight: 44)
         }
         .buttonStyle(HapticPlainButtonStyle())
         .listRowBackground(
@@ -395,11 +399,14 @@ struct AssistantView: View {
                 // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
                 // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
                 // 避免「键盘与输入框之间一大段空白」。
+                // iPad（regular width）没有底部 Dock，不预留 Dock 高度，输入框贴近底部安全区。
                 .padding(
                     .bottom,
                     assistantInputFocused
                         ? AuralisSpacing.small
-                        : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - (bottomDockScroll?.collapseProgress ?? 0))
+                        : (horizontalSizeClass == .regular
+                            ? AuralisSpacing.medium
+                            : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - (bottomDockScroll?.collapseProgress ?? 0)))
                 )
                 // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
                 // 不再按拖动位移逐帧改变宽度，快滑和慢滑的视觉节奏完全一致。

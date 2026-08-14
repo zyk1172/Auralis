@@ -13,6 +13,7 @@ struct MacAlbumsView: View {
 
     @State private var localSearch = ""
     @State private var sortOrder: AlbumSort = .title
+    @State private var visibleAlbums: [Album] = []
 
     enum AlbumSort: String, CaseIterable, Identifiable {
         case title, artist, year
@@ -26,7 +27,13 @@ struct MacAlbumsView: View {
         }
     }
 
-    private var filteredAlbums: [Album] {
+    /// 只在目录、查询或排序真正改变时派生网格数据；播放进度的高频发布不会再
+    /// 让数千张专辑在每次 body 求值时重新 filter + sort。
+    private var derivationKey: String {
+        "\(model.catalogRevision)|\(sortOrder.rawValue)|\(localSearch)"
+    }
+
+    private func rebuildVisibleAlbums() {
         var result = model.catalog.albums
         let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         if !q.isEmpty {
@@ -46,7 +53,7 @@ struct MacAlbumsView: View {
                 return ly != ry ? ly > ry : $0.title.localizedStandardCompare($1.title) == .orderedAscending
             }
         }
-        return result
+        visibleAlbums = result
     }
 
     var body: some View {
@@ -68,7 +75,7 @@ struct MacAlbumsView: View {
                 let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 28) {
-                        ForEach(filteredAlbums) { album in
+                        ForEach(visibleAlbums) { album in
                             MacAlbumTile(
                                 album: album,
                                 model: model,
@@ -86,6 +93,9 @@ struct MacAlbumsView: View {
             }
         }
         .navigationTitle("专辑")
+        .task(id: derivationKey) {
+            rebuildVisibleAlbums()
+        }
     }
 
     private func albumMoreActions(_ album: Album) -> [MacMenuAction] {

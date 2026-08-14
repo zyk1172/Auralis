@@ -31,7 +31,7 @@ let package = Package(
         .target(name: "RecommendationEngine", dependencies: ["Domain"]),
         .target(name: "Persistence", dependencies: ["Domain"]),
         .target(name: "SystemMediaIntegration", dependencies: ["Domain", "Observability"]),
-        .target(name: "LocalCatalog", dependencies: ["Domain", "MusicLibrary"]),
+        .target(name: "LocalCatalog", dependencies: ["Domain", "MusicLibrary", "Observability"]),
         .target(name: "AgentKit", dependencies: ["Domain", "AIKit", "LocalCatalog"]),
         .target(name: "TestSupport", dependencies: ["Domain"]),
         .target(

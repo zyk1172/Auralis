@@ -1,4 +1,5 @@
 import Foundation
+import Observability
 import SQLite3
 
 /// SQLite 绑值类型。
@@ -37,21 +38,24 @@ final class SQLiteDatabase: @unchecked Sendable {
                 withIntermediateDirectories: true
             )
         }
-        var handle: OpaquePointer?
-        guard sqlite3_open(url.path, &handle) == SQLITE_OK, let handle else {
-            throw LocalCatalogError.openFailed(url.path)
+        var openedHandle: OpaquePointer?
+        try StartupPerformanceTrace.measure(.sqliteOpen) {
+            guard sqlite3_open(url.path, &openedHandle) == SQLITE_OK, openedHandle != nil else {
+                throw LocalCatalogError.openFailed(url.path)
+            }
         }
-        self.handle = handle
+        guard let openedHandle else { throw LocalCatalogError.openFailed(url.path) }
+        self.handle = openedHandle
         try exec("PRAGMA journal_mode = WAL;")
         try exec("PRAGMA foreign_keys = ON;")
         // App 与 Siri/小组件扩展共享同一 App Group 数据库：设置 busy_timeout，
         // 避免并发写直接返回 SQLITE_BUSY 而失败。
         try exec("PRAGMA busy_timeout = 5000;")
-        // 打开即做一次快速完整性自检：损坏时抛错，由上层回退/提示，而不是静默读到残缺数据。
-        try checkIntegrity()
     }
 
-    private func checkIntegrity() throws {
+    /// 显式完整性检查。调用方负责在本地目录已可用后按时间策略后台执行，避免每次
+    /// 打开数据库都同步扫描并阻塞冷启动。
+    func quickCheck() throws {
         let statement = try prepare("PRAGMA quick_check;")
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW,

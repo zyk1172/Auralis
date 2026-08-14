@@ -201,58 +201,96 @@ final class DownloadStore: ObservableObject {
     @Published private(set) var downloadedTrackIDs: Set<GlobalID> = []
     @Published private(set) var downloadingTrackIDs: Set<GlobalID> = []
     @Published private(set) var progress: [GlobalID: Double] = [:]
+    @Published private(set) var records: [GlobalID: DownloadTaskInfo] = [:]
+    @Published private(set) var cachedEntries: [GlobalID: TrackCacheStore.CachedTrackEntry] = [:]
+    @Published private(set) var lastOperationError: String?
 
     private let connector: any ServerConnecting
     private let cacheStore: TrackCacheStore
     private let manager: DownloadManager
+    /// 获取下载地址本身也是可取消的“排队”阶段。令牌防止用户点取消后，迟到的 URL
+    /// 又创建一个后台任务。
+    private var requestTokens: [GlobalID: UUID] = [:]
 
-    init(connector: any ServerConnecting, cacheStore: TrackCacheStore) {
+    init(
+        connector: any ServerConnecting,
+        cacheStore: TrackCacheStore,
+        manager: DownloadManager? = nil
+    ) {
         self.connector = connector
         self.cacheStore = cacheStore
-        self.manager = DownloadManager(store: cacheStore)
-        manager.onStateChange = { [weak self] taskID, status, progress in
+        self.manager = manager ?? DownloadManager(store: cacheStore)
+        self.manager.onStateChange = { [weak self] taskID, info in
             Task { @MainActor [weak self] in
-                self?.handle(taskID: taskID, status: status, progress: progress)
+                self?.handle(taskID: taskID, info: info)
             }
         }
         restoreActiveDownloads()
     }
 
     private func restoreActiveDownloads() {
-        for snapshot in manager.activeSnapshots() {
+        for snapshot in manager.stateSnapshots() {
             let globalID = GlobalID(
                 serverID: snapshot.serverID,
                 remoteID: snapshot.info.trackID.rawValue
             )
-            downloadingTrackIDs.insert(globalID)
-            progress[globalID] = snapshot.info.progress
+            records[globalID] = snapshot.info
+            if snapshot.info.status == .queued || snapshot.info.status == .downloading {
+                downloadingTrackIDs.insert(globalID)
+                progress[globalID] = snapshot.info.progress
+            }
         }
     }
 
     func restoreCachedIDs() async {
-        downloadedTrackIDs = Set(await cacheStore.cachedTrackIDs().map {
-            GlobalID(serverID: $0.serverID, remoteID: $0.trackID.rawValue)
+        let entries = await cacheStore.cachedEntries()
+        cachedEntries = Dictionary(uniqueKeysWithValues: entries.map { entry in
+            let id = GlobalID(
+                serverID: entry.cacheID.serverID,
+                remoteID: entry.cacheID.trackID.rawValue
+            )
+            return (id, entry)
         })
+        downloadedTrackIDs = Set(cachedEntries.keys)
     }
 
     func isDownloaded(_ track: Track) -> Bool { downloadedTrackIDs.contains(globalID(for: track)) }
     func isDownloading(_ track: Track) -> Bool { downloadingTrackIDs.contains(globalID(for: track)) }
 
     func allCachedTrackIDs() async -> Set<GlobalID> {
-        Set(await cacheStore.cachedTrackIDs().map {
-            GlobalID(serverID: $0.serverID, remoteID: $0.trackID.rawValue)
-        })
+        await restoreCachedIDs()
+        return downloadedTrackIDs
     }
 
     func download(_ track: Track) {
         let globalID = globalID(for: track)
         guard !downloadedTrackIDs.contains(globalID), !downloadingTrackIDs.contains(globalID) else { return }
+        let token = UUID()
+        requestTokens[globalID] = token
+        lastOperationError = nil
+        let queued = DownloadTaskInfo(trackID: track.id, status: .queued)
+        records[globalID] = queued
+        downloadingTrackIDs.insert(globalID)
+        progress[globalID] = 0
+
         Task { @MainActor [weak self] in
-            guard let self, let url = await connector.downloadURL(trackID: track.id) else { return }
+            guard let self else { return }
+            let url = await connector.downloadURL(trackID: track.id)
+            guard requestTokens[globalID] == token else { return }
+            requestTokens[globalID] = nil
+            guard let url else {
+                let failure = DownloadFailureInfo(
+                    kind: .networkUnavailable,
+                    message: "无法获取下载地址，请确认音乐服务器已连接后重试"
+                )
+                records[globalID] = DownloadTaskInfo(trackID: track.id, status: .failed, failure: failure)
+                downloadingTrackIDs.remove(globalID)
+                progress[globalID] = nil
+                lastOperationError = failure.message
+                return
+            }
             let taskID = DownloadTaskID(serverID: track.serverID, trackID: track.id)
             guard !manager.isDownloading(taskID) else { return }
-            downloadingTrackIDs.insert(globalID)
-            progress[globalID] = 0
             manager.start(
                 trackID: track.id,
                 url: url,
@@ -264,51 +302,99 @@ final class DownloadStore: ObservableObject {
 
     func cancel(_ track: Track) {
         let globalID = globalID(for: track)
+        requestTokens[globalID] = nil
         manager.cancel(DownloadTaskID(serverID: track.serverID, trackID: track.id))
         downloadingTrackIDs.remove(globalID)
         progress[globalID] = nil
+        records[globalID] = nil
     }
 
     func remove(_ track: Track) async {
-        try? await cacheStore.remove(for: cacheID(for: track))
-        downloadedTrackIDs.remove(globalID(for: track))
+        let globalID = globalID(for: track)
+        if downloadingTrackIDs.contains(globalID) { cancel(track) }
+        do {
+            try await cacheStore.remove(for: cacheID(for: track))
+            downloadedTrackIDs.remove(globalID)
+            cachedEntries[globalID] = nil
+            records[globalID] = nil
+            lastOperationError = nil
+        } catch {
+            lastOperationError = "无法删除本地文件，请稍后重试"
+        }
     }
 
     func removeAll() async {
-        for globalID in downloadedTrackIDs {
-            try? await cacheStore.remove(for: TrackCacheStore.TrackCacheID(
-                serverID: globalID.serverID,
-                trackID: TrackID(rawValue: globalID.remoteID)
-            ))
+        cancelAll()
+        do {
+            try await cacheStore.removeAll()
+            downloadedTrackIDs = []
+            cachedEntries = [:]
+            records = records.filter { $0.value.status == .failed }
+            lastOperationError = nil
+        } catch {
+            await restoreCachedIDs()
+            lastOperationError = "部分下载文件无法删除，请关闭正在使用这些文件的播放器后重试"
         }
-        downloadedTrackIDs = []
+    }
+
+    func cancelAll() {
+        requestTokens.removeAll()
+        manager.cancelAll()
+        downloadingTrackIDs = []
+        progress = [:]
+        records = records.filter { $0.value.status == .failed }
+    }
+
+    func retry(_ track: Track) {
+        records[globalID(for: track)] = nil
+        download(track)
+    }
+
+    func info(for track: Track) -> DownloadTaskInfo? {
+        records[globalID(for: track)]
+    }
+
+    func cachedEntry(for track: Track) -> TrackCacheStore.CachedTrackEntry? {
+        cachedEntries[globalID(for: track)]
+    }
+
+    func clearOperationError() {
+        lastOperationError = nil
     }
 
     func clearVisibleState() {
         downloadedTrackIDs = []
         downloadingTrackIDs = []
         progress = [:]
+        records = [:]
+        cachedEntries = [:]
+        requestTokens.removeAll()
     }
 
     func handleBackgroundEvents(identifier: String, completion: @escaping () -> Void) {
         manager.handleEventsForBackgroundURLSession(identifier: identifier, completion: completion)
     }
 
-    private func handle(taskID: DownloadTaskID, status: DownloadStatus, progress value: Double) {
+    private func handle(taskID: DownloadTaskID, info: DownloadTaskInfo) {
         let globalID = GlobalID(serverID: taskID.serverID, remoteID: taskID.trackID.rawValue)
-        switch status {
-        case .downloading:
+        records[globalID] = info
+        switch info.status {
+        case .queued, .downloading:
             downloadingTrackIDs.insert(globalID)
-            progress[globalID] = value
+            progress[globalID] = info.progress
         case .downloaded:
             downloadingTrackIDs.remove(globalID)
             progress[globalID] = nil
             downloadedTrackIDs.insert(globalID)
-        case .failed, .notDownloaded:
+            Task { @MainActor [weak self] in await self?.restoreCachedIDs() }
+        case .failed:
             downloadingTrackIDs.remove(globalID)
             progress[globalID] = nil
-        case .queued:
-            break
+            lastOperationError = info.failure?.message
+        case .notDownloaded:
+            downloadingTrackIDs.remove(globalID)
+            progress[globalID] = nil
+            records[globalID] = nil
         }
     }
 

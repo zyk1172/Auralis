@@ -36,10 +36,11 @@ struct RestoreConnectionTests {
         vault: any CredentialVault = InMemoryCredentialVault(),
         catalogStore: LocalCatalogStore? = nil
     ) -> ProductionServerConnector {
-        ProductionServerConnector(
+        let store = catalogStore ?? (try! LocalCatalogStore(url: URL(string: "file::memory:")!))
+        return ProductionServerConnector(
             credentialVault: vault,
             persistence: persistence,
-            catalogStore: catalogStore,
+            catalogStore: store,
             sourceFactory: { _ in EmptySyncSource() }
         )
     }
@@ -145,5 +146,38 @@ struct RestoreConnectionTests {
         let result = try await makeConnector(persistence: persistence, vault: vault)
             .restoreConnection(serverID: ServerID(rawValue: "ghost"))
         #expect(result == nil)
+    }
+
+    @Test("冷恢复保持目录 streamURL 为空，不再装饰全曲库")
+    func coldRestoreDoesNotGenerateLibraryStreamURLs() async throws {
+        let persistence = InMemoryPersistence()
+        let vault = InMemoryCredentialVault()
+        let serverID: ServerID = "cold"
+        let credentialID = CredentialID(rawValue: "opensubsonic.cold")
+        let account = ServerAccount(
+            id: serverID,
+            displayName: "Cold Restore",
+            baseURL: URL(string: "https://music.example.test")!,
+            username: "listener",
+            credentialReference: credentialID.rawValue
+        )
+        try await persistence.saveAccount(account)
+        try await persistence.saveSnapshot(
+            ServerLibrarySnapshot(
+                serverID: serverID,
+                account: account,
+                tracks: [
+                    makeTrack(serverID: serverID, title: "One"),
+                    makeTrack(serverID: serverID, title: "Two"),
+                ]
+            )
+        )
+        try await vault.store("password", for: credentialID)
+
+        let result = try await makeConnector(persistence: persistence, vault: vault)
+            .restoreConnection(serverID: serverID)
+
+        #expect(result?.tracks.count == 2)
+        #expect(result?.tracks.allSatisfy { $0.streamURL == nil } == true)
     }
 }

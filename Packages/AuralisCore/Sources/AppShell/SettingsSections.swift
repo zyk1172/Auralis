@@ -1,6 +1,7 @@
 import AgentKit
 import DesignSystem
 import Domain
+import Foundation
 import LocalCatalog
 import SwiftUI
 import ThemeEngine
@@ -207,44 +208,87 @@ struct CacheManagementSection: View {
 
 // MARK: - 小猫的记忆（AI 助手记忆管理）
 
-/// 设置页「小猫的记忆」区块：查看跨会话记忆与技能、清空记忆。
-/// 记忆与技能由 AI 助手工具（memory_* / skill_*）读写，只存在本机 App Support。
+/// 设置页折叠摘要使用的纯数据快照，避免内容数量一多就把整个 Form 拉长。
+struct AgentMemorySettingsSnapshot: Equatable {
+    let memoryCount: Int
+    let skillCount: Int
+    let memoryCharacterCount: Int
+    let skillCharacterCount: Int
+
+    init(memories: [AgentMemoryEntry], skills: [AgentSkillEntry]) {
+        memoryCount = memories.count
+        skillCount = skills.count
+        memoryCharacterCount = memories.reduce(0) { $0 + $1.value.count }
+        skillCharacterCount = skills.reduce(0) { $0 + $1.instructions.count }
+    }
+
+    var memorySummary: String {
+        memoryCount == 0 ? "空" : "\(memoryCount) 条 · \(memoryCharacterCount) 字符"
+    }
+
+    var skillSummary: String {
+        skillCount == 0 ? "空" : "\(skillCount) 个文件 · \(skillCharacterCount) 字符"
+    }
+
+    static func preview(_ value: String, limit: Int = 52) -> String {
+        let flattened = value
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        guard flattened.count > limit else { return flattened }
+        return String(flattened.prefix(limit)) + "…"
+    }
+}
+
+/// 设置页「小猫的记忆」区块：以“长期记忆文件 / 技能文件”分区，默认收起。
+/// 用户展开分区后仍可逐条查看完整内容、删除单项或清空全部记忆。
 struct AgentMemoryManagementSection: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
 
     @State private var memories: [AgentMemoryEntry] = []
     @State private var skills: [AgentSkillEntry] = []
+    @State private var isMemoryFileExpanded = false
+    @State private var isSkillsDirectoryExpanded = false
+    @State private var expandedMemoryIDs: Set<String> = []
+    @State private var expandedSkillIDs: Set<String> = []
     @State private var confirmClear = false
+    @State private var removalTarget: RemovalTarget?
 
     private var store: AgentMemoryStore { model.agentCoordinator.memoryStore }
+    private var snapshot: AgentMemorySettingsSnapshot {
+        AgentMemorySettingsSnapshot(memories: memories, skills: skills)
+    }
+
+    private enum RemovalTarget: Identifiable {
+        case memory(String)
+        case skill(String)
+
+        var id: String {
+            switch self {
+            case let .memory(key): "memory:\(key)"
+            case let .skill(name): "skill:\(name)"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case let .memory(key): "删除记忆“\(key)”？"
+            case let .skill(name): "删除技能“\(name)”？"
+            }
+        }
+    }
 
     var body: some View {
         Section {
-            if memories.isEmpty {
-                Label("还没有记住关于主人的事情。跟小猫说「我叫XX」「我喜欢XX」，小猫就会记住喵", systemImage: "brain")
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-            } else {
-                ForEach(memories) { memory in
-                    LabeledContent(memory.key, value: memory.value)
-                }
-            }
-            if !skills.isEmpty {
-                ForEach(skills) { skill in
-                    LabeledContent("技能 · \(skill.name)", value: skill.summary)
-                }
-            }
-            if !memories.isEmpty || !skills.isEmpty {
-                Button("清空全部记忆", role: .destructive) { confirmClear = true }
-            }
+            memoryFileDisclosure
+            skillsDirectoryDisclosure
         } header: {
             Text("小猫的记忆（AI 助手）")
         } footer: {
-            Text("记忆与技能只存在本机 App Support，不会上传；每次 AI 对话开始时自动注入给小猫，让它跨会话记得你。技能是一段可复用指令，可让小猫用「创建一个技能」存下来。")
+            Text("默认只显示数量摘要，具体信息需手动展开。记忆与技能只存在本机 App Support，不会上传；每次 AI 对话开始时会按需注入相关记忆。")
         }
         .task { reload() }
-        .confirmationDialog("清空小猫的全部记忆？", isPresented: $confirmClear, titleVisibility: .visible) {
+        .alert("清空小猫的全部记忆？", isPresented: $confirmClear) {
             Button("清空", role: .destructive) {
                 _ = store.clearMemory()
                 reload()
@@ -253,10 +297,166 @@ struct AgentMemoryManagementSection: View {
         } message: {
             Text("清空后小猫将不再记得这些信息。技能文件不会被删除。")
         }
+        .confirmationDialog(
+            removalTarget?.title ?? "删除这项内容？",
+            isPresented: removalConfirmationBinding,
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) { performPendingRemoval() }
+            Button("取消", role: .cancel) { removalTarget = nil }
+        } message: {
+            Text("此操作只删除本机对应内容，无法撤销。")
+        }
+    }
+
+    private var memoryFileDisclosure: some View {
+        DisclosureGroup(isExpanded: $isMemoryFileExpanded) {
+            if memories.isEmpty {
+                Label("还没有长期记忆。跟小猫说“我叫…”或“我喜欢…”，它就会记住。", systemImage: "brain")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            } else {
+                ForEach(memories) { memory in
+                    DisclosureGroup(isExpanded: memoryExpansionBinding(for: memory.id)) {
+                        Text(memory.value)
+                            .font(.body)
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack {
+                            Text("更新于 \(memory.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            Spacer()
+                            Button("删除", role: .destructive) {
+                                removalTarget = .memory(memory.key)
+                            }
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(memory.key)
+                                .font(.body.weight(.medium))
+                            Text(AgentMemorySettingsSnapshot.preview(memory.value))
+                                .font(.caption)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
+                Button("清空全部长期记忆", role: .destructive) { confirmClear = true }
+            }
+        } label: {
+            collectionLabel(
+                title: "长期记忆文件",
+                systemImage: "brain.head.profile",
+                summary: snapshot.memorySummary
+            )
+        }
+    }
+
+    private var skillsDirectoryDisclosure: some View {
+        DisclosureGroup(isExpanded: $isSkillsDirectoryExpanded) {
+            if skills.isEmpty {
+                Label("还没有技能文件。可让小猫用“创建一个技能”保存可复用指令。", systemImage: "doc.badge.plus")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            } else {
+                ForEach(skills) { skill in
+                    DisclosureGroup(isExpanded: skillExpansionBinding(for: skill.id)) {
+                        Text(skill.instructions)
+                            .font(.body)
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack {
+                            Text("修改于 \(skill.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            Spacer()
+                            Button("删除技能", role: .destructive) {
+                                removalTarget = .skill(skill.name)
+                            }
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(skill.name)
+                                .font(.body.weight(.medium))
+                            Text(AgentMemorySettingsSnapshot.preview(skill.summary))
+                                .font(.caption)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        } label: {
+            collectionLabel(
+                title: "技能文件",
+                systemImage: "folder",
+                summary: snapshot.skillSummary
+            )
+        }
+    }
+
+    private func collectionLabel(title: String, systemImage: String, summary: String) -> some View {
+        Label {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(summary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(theme.colorTokens.accent.color)
+        }
+    }
+
+    private func memoryExpansionBinding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedMemoryIDs.contains(id) },
+            set: { isExpanded in
+                if isExpanded { expandedMemoryIDs.insert(id) }
+                else { expandedMemoryIDs.remove(id) }
+            }
+        )
+    }
+
+    private func skillExpansionBinding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedSkillIDs.contains(id) },
+            set: { isExpanded in
+                if isExpanded { expandedSkillIDs.insert(id) }
+                else { expandedSkillIDs.remove(id) }
+            }
+        )
+    }
+
+    private var removalConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { removalTarget != nil },
+            set: { if !$0 { removalTarget = nil } }
+        )
+    }
+
+    private func performPendingRemoval() {
+        guard let removalTarget else { return }
+        switch removalTarget {
+        case let .memory(key):
+            _ = store.deleteMemory(key: key)
+        case let .skill(name):
+            _ = store.deleteSkill(name: name)
+        }
+        self.removalTarget = nil
+        reload()
     }
 
     private func reload() {
         memories = store.memories
         skills = store.skills
+        expandedMemoryIDs.formIntersection(memories.map(\.id))
+        expandedSkillIDs.formIntersection(skills.map(\.id))
     }
 }

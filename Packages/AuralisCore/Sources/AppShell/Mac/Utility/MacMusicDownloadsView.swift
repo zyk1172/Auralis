@@ -4,21 +4,100 @@ import ThemeEngine
 import Domain
 import LocalCatalog
 
-/// 下载页：已离线歌曲 Table + 缓存用量（维护性质页面，标准 Table/Form 视觉）。
+/// 下载中心：排队 / 传输 / 失败 / 已完成四态完整呈现，并提供重试、取消和清理闭环。
 struct MacMusicDownloadsView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
+    @State private var confirmsRemoveAll = false
+    @State private var confirmsRemoveSelected = false
 
     private var tracks: [Track] {
-        model.catalog.tracks.filter { model.isDownloaded($0) }
+        model.downloadedTracks.sorted {
+            $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+    }
+
+    private var activeTracks: [Track] { model.activeDownloadTracks }
+    private var failedTracks: [Track] { model.failedDownloadTracks }
+    private var selectedDownloadedTracks: [Track] {
+        selection.compactMap { model.track(for: $0) }.filter { model.isDownloaded($0) }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if tracks.isEmpty {
-                ContentUnavailableView("暂无下载", systemImage: "arrow.down.circle", description: Text("右键歌曲选择「下载」后可离线播放。"))
+            MacPageHeader(
+                title: "下载",
+                subtitle: "\(tracks.count) 首离线音乐 · \(DownloadManagementView.byteText(model.downloadedAudioBytes))"
+            ) {
+                if !tracks.isEmpty {
+                    MacPrimaryButton(title: "随机播放", systemImage: "shuffle") {
+                        model.playShuffledQueue(tracks)
+                    }
+                }
+                Menu {
+                    if !activeTracks.isEmpty {
+                        Button(role: .destructive) {
+                            model.cancelAllDownloads()
+                        } label: {
+                            Label("取消全部下载", systemImage: "xmark.circle")
+                        }
+                    }
+                    Button(role: .destructive) {
+                        confirmsRemoveSelected = true
+                    } label: {
+                        Label("删除所选下载", systemImage: "trash")
+                    }
+                    .disabled(selectedDownloadedTracks.isEmpty)
+                    Button(role: .destructive) {
+                        confirmsRemoveAll = true
+                    } label: {
+                        Label("删除全部本地音乐", systemImage: "trash.slash")
+                    }
+                    .disabled(tracks.isEmpty && activeTracks.isEmpty)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityLabel("下载管理")
+            }
+
+            if let error = model.lastDownloadOperationError {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(.subheadline)
+                    Spacer()
+                    Button {
+                        model.clearDownloadOperationError()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("关闭下载错误")
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
+                .background(.orange.opacity(0.10))
+            }
+
+            if !activeTracks.isEmpty || !failedTracks.isEmpty {
+                downloadActivityPanel
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 12)
+            }
+
+            if tracks.isEmpty, activeTracks.isEmpty, failedTracks.isEmpty {
+                ContentUnavailableView(
+                    "暂无下载",
+                    systemImage: "arrow.down.circle",
+                    description: Text("在歌曲、专辑或播放列表菜单中选择“下载”，即可离线播放。")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if tracks.isEmpty {
+                Spacer(minLength: 0)
             } else {
                 MacSongTable(
                     tracks: tracks,
@@ -31,15 +110,87 @@ struct MacMusicDownloadsView: View {
             }
         }
         .navigationTitle("下载")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.playShuffledQueue(tracks)
-                } label: {
-                    Label("随机播放", systemImage: "shuffle")
-                }
-                .disabled(tracks.isEmpty)
+        .confirmationDialog(
+            "删除全部本地音乐？",
+            isPresented: $confirmsRemoveAll,
+            titleVisibility: .visible
+        ) {
+            Button("删除全部下载", role: .destructive) {
+                Task { await model.removeAllDownloads() }
             }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只删除这台 Mac 上的离线文件，不会删除音乐服务器上的歌曲。")
+        }
+        .confirmationDialog(
+            "删除所选的 \(selectedDownloadedTracks.count) 首本地音乐？",
+            isPresented: $confirmsRemoveSelected,
+            titleVisibility: .visible
+        ) {
+            Button("删除所选下载", role: .destructive) {
+                for track in selectedDownloadedTracks { model.removeDownload(track) }
+                selection.removeAll()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这些歌曲仍保留在音乐服务器上。")
+        }
+    }
+
+    private var downloadActivityPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !activeTracks.isEmpty {
+                HStack {
+                    Text("正在下载")
+                        .font(.headline)
+                    Text("\(activeTracks.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("全部取消", role: .destructive) { model.cancelAllDownloads() }
+                        .buttonStyle(.plain)
+                }
+                ForEach(activeTracks) { track in
+                    DownloadActivityRow(
+                        track: track,
+                        info: model.downloadInfo(for: track),
+                        theme: theme
+                    ) {
+                        model.cancelDownload(track)
+                    }
+                }
+            }
+
+            if !failedTracks.isEmpty {
+                Divider()
+                HStack {
+                    Text("需要处理")
+                        .font(.headline)
+                    Text("\(failedTracks.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("全部重试") {
+                        for track in failedTracks { model.retryDownload(track) }
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(failedTracks) { track in
+                    DownloadActivityRow(
+                        track: track,
+                        info: model.downloadInfo(for: track),
+                        theme: theme
+                    ) {
+                        model.retryDownload(track)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         }
     }
 }

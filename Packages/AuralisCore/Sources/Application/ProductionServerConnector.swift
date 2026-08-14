@@ -3,6 +3,7 @@ import Domain
 import Foundation
 import LocalCatalog
 import MusicLibrary
+import Observability
 import OpenSubsonicKit
 import Persistence
 import SecurityKit
@@ -33,7 +34,7 @@ public actor ProductionServerConnector: ServerConnecting {
     public init(
         credentialVault: any CredentialVault,
         persistence: any AuralisPersisting,
-        catalogStore: LocalCatalogStore? = nil,
+        catalogStore: LocalCatalogStore,
         session: URLSession = .shared,
         auxiliaryCache: LibraryAuxiliaryCache = LibraryAuxiliaryCache(),
         sourceFactory: @escaping SourceFactory,
@@ -42,11 +43,15 @@ public actor ProductionServerConnector: ServerConnecting {
         self.credentialVault = credentialVault
         self.persistence = persistence
         self.catalogStore = catalogStore
-            ?? (try! LocalCatalogStore(url: URL(fileURLWithPath: ":memory:")))
         self.session = session
         self.auxiliaryCache = auxiliaryCache
         self.sourceFactory = sourceFactory
         self.streamQuality = streamQuality
+    }
+
+    /// 仅供 composition identity 回归测试；不暴露数据库路径或内容。
+    nonisolated var catalogStoreIdentity: ObjectIdentifier {
+        ObjectIdentifier(catalogStore)
     }
 
     public func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
@@ -141,10 +146,7 @@ public actor ProductionServerConnector: ServerConnecting {
                     serverID: serverID
                 )
 
-                // 为每首 track 构造带认证的 stream URL，供 AVPlayer 直接播放
-                for index in tracks.indices {
-                    tracks[index].streamURL = await Self.makeStreamURL(client: client, trackID: tracks[index].id.rawValue, quality: streamQuality)
-                }
+                // Catalog 保持纯元数据；真正播放/预载/重试时由 AppModel 按需解析单曲 URL。
                 activeClient = client
 
                 return ServerConnectionResult(
@@ -180,12 +182,26 @@ public actor ProductionServerConnector: ServerConnecting {
     public func restoreConnection(serverID: ServerID) async throws -> ServerConnectionResult? {
         do {
             try Task.checkCancellation()
+            let serverHash = StartupPerformanceTrace.redactedServerID(serverID.rawValue)
             // 只要求账号存在：备份恢复的服务器可能还没有本地快照（未同步过），
             // 此时返回空库结果让 UI 显示「已配置但未同步」，而不是让用户重新添加服务器。
-            guard let account = try await persistence.account(id: serverID) else {
+            let restoreAccountStartedAt = ContinuousClock.now
+            let account = try await persistence.account(id: serverID)
+            StartupPerformanceTrace.record(
+                .restoreAccount,
+                since: restoreAccountStartedAt,
+                metadata: .init(serverIDHash: serverHash)
+            )
+            guard let account else {
                 return nil
             }
+            let legacyMigrationStartedAt = ContinuousClock.now
             try await migrateLegacySnapshotIfNeeded(serverID: serverID, account: account)
+            StartupPerformanceTrace.record(
+                .legacySnapshotMigration,
+                since: legacyMigrationStartedAt,
+                metadata: .init(serverIDHash: serverHash)
+            )
             try await catalogStore.upsertServer(account)
             // 冷启动必须先展示本地快照，不能被内外网探测（内网最长 30 秒）阻塞。
             // 先用内网客户端拼出本地目录；端点选择转到后台，完成后会替换 activeClient，
@@ -202,9 +218,14 @@ public actor ProductionServerConnector: ServerConnecting {
             var tracks = snapshot.tracks
             let artists = snapshot.artists
             let albums = snapshot.albums
-            if let client = activeClient {
-                tracks = await Self.applyingStreamURLs(to: tracks, client: client, quality: streamQuality)
-            }
+            // 冷恢复不再给全曲库生成 stream URL。这里记录真实的零工作量，方便启动
+            // timeline 明确证明 URL decoration 已离开 critical path。
+            let streamURLStartedAt = ContinuousClock.now
+            StartupPerformanceTrace.record(
+                .restoreStreamURLs,
+                since: streamURLStartedAt,
+                metadata: .init(entityCount: 0, serverIDHash: serverHash)
+            )
             // 除双地址的端点选择外，仍只读本地辅助缓存；歌单/流派随后后台增量刷新。
             let cached = await auxiliaryCache.snapshot(serverID: account.id)
             // 服务器收藏回流：冷启动时用本地缓存的收藏 ID 集合校正曲目收藏状态，
@@ -275,9 +296,7 @@ public actor ProductionServerConnector: ServerConnecting {
                 favoriteTrackIDs: favoriteTrackIDs,
                 serverID: serverID
             )
-            for index in tracks.indices {
-                tracks[index].streamURL = await Self.makeStreamURL(client: client, trackID: tracks[index].id.rawValue, quality: streamQuality)
-            }
+            // 完整同步结果同样保持纯目录元数据；播放入口统一按需解析 URL。
 
             return ServerConnectionResult(
                 account: account,
@@ -838,12 +857,13 @@ public actor ProductionServerConnector: ServerConnecting {
         serverID: ServerID,
         account: ServerAccount
     ) async throws -> ServerLibrarySnapshot {
+        let catalog = try await catalogStore.catalogSnapshot(serverID: serverID)
         let snapshot = ServerLibrarySnapshot(
             serverID: serverID,
             account: account,
-            artists: try await catalogStore.allArtists(serverID: serverID),
-            albums: try await catalogStore.allAlbums(serverID: serverID),
-            tracks: try await catalogStore.allTracks(serverID: serverID)
+            artists: catalog.artists,
+            albums: catalog.albums,
+            tracks: catalog.tracks
         )
         return Self.repaired(snapshot: snapshot, account: account)
     }
@@ -1036,25 +1056,6 @@ public actor ProductionServerConnector: ServerConnecting {
             maxBitRate: quality.maxBitRate,
             format: quality.format
         )
-    }
-
-    /// 大曲库恢复时一次认证、批量生成 URL，避免 N 首歌触发 N 次 Keychain 查询。
-    nonisolated private static func applyingStreamURLs(
-        to tracks: [Track],
-        client: OpenSubsonicClient,
-        quality: StreamQualityPolicy
-    ) async -> [Track] {
-        guard !tracks.isEmpty else { return tracks }
-        guard let urls = try? await client.makeStreamURLs(
-            trackIDs: tracks.map { $0.id.rawValue },
-            maxBitRate: quality.maxBitRate,
-            format: quality.format
-        ) else { return tracks }
-        return tracks.map { track in
-            var track = track
-            track.streamURL = urls[track.id.rawValue]
-            return track
-        }
     }
 
     public nonisolated static func stableServerID(baseURL: URL, username: String) -> ServerID {

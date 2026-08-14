@@ -19,14 +19,31 @@ struct ThemeContrastTests {
         }
     }
 
-    @Test("每个内置主题的次前景对主背景至少 3:1")
+    @Test("每个内置主题的次前景对所有基色至少 3:1")
     func secondaryTextRemainsDiscoverable() {
         for theme in BuiltInThemes.all {
             let colors = theme.colorTokens
-            #expect(
-                colors.secondaryText.contrastRatio(against: colors.background) >= 3.0,
-                "\(theme.name) 的次前景在主背景上对比度不足"
-            )
+            for background in [colors.background, colors.elevated, colors.surface] {
+                #expect(
+                    colors.secondaryText.contrastRatio(against: background) >= 3.0,
+                    "\(theme.name) 的次前景在渐变基色上对比度不足"
+                )
+            }
+        }
+    }
+
+    /// 强调色会直接用于按钮、选中态图标、进度条与焦点边框；按非文本控件标准，
+    /// 它在可能承载控件的三层背景上都不能低于 3:1。
+    @Test("每个内置主题的交互强调色对所有基色至少 3:1")
+    func accentControlsRemainDiscoverableAcrossSurfaces() {
+        for theme in BuiltInThemes.all {
+            let colors = theme.colorTokens
+            for background in [colors.background, colors.elevated, colors.surface] {
+                #expect(
+                    colors.accent.contrastRatio(against: background) >= 3.0,
+                    "\(theme.name) 的交互强调色在控件背景上对比度不足"
+                )
+            }
         }
     }
 }

@@ -28,6 +28,19 @@ struct MacSongRow: Identifiable {
     }
 }
 
+/// Table 重建只依赖真正会改变行内容的 O(1) revision。播放进度每秒发布时这几个
+/// 值保持不变，因此不会重新 map/sort 数万首歌曲。
+struct MacSongRowsRevision: Hashable {
+    let catalog: UInt64
+    let metadata: UInt64
+    let visibleCount: Int
+    let firstID: GlobalID?
+    let lastID: GlobalID?
+    /// 有序内容摘要：两个集合即使首尾与数量相同也能区分，避免中间曲目变化时
+    /// 行数据陈旧。只对 GlobalID 哈希，不拼大字符串、不做字典查询。
+    let contentDigest: UInt64
+}
+
 /// 统一 Mac 歌曲 Table：sortable / resizable / 多选 / 双击播放 / 右键菜单。
 struct MacSongTable: View {
     let tracks: [Track]
@@ -52,14 +65,20 @@ struct MacSongTable: View {
     @State private var baseRows: [MacSongRow] = []
     @State private var orderedRows: [MacSongRow] = []
 
-    /// 进度 tick 会重绘播放器相关视图，但歌曲表不应因此重新 map/sort 全部数据。
-    private var rowDataIdentity: String {
-        tracks.map { track in
-            let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description
-            let count = model.playCount(for: track)
-            let added = model.addedDate(for: track)?.timeIntervalSince1970 ?? 0
-            return "\(gid):\(count):\(added)"
-        }.joined(separator: "|")
+    private var rowsRevision: MacSongRowsRevision {
+        var hasher = Hasher()
+        for track in tracks {
+            hasher.combine(track.serverID)
+            hasher.combine(track.id)
+        }
+        return MacSongRowsRevision(
+            catalog: model.catalogRevision,
+            metadata: model.libraryRowMetadataRevision,
+            visibleCount: tracks.count,
+            firstID: tracks.first?.macGlobalID,
+            lastID: tracks.last?.macGlobalID,
+            contentDigest: UInt64(truncatingIfNeeded: hasher.finalize())
+        )
     }
 
     var body: some View {
@@ -171,7 +190,7 @@ struct MacSongTable: View {
         .onDeleteCommand {
             // 队列等场景由宿主处理；此处保持空实现避免系统默认删除行为。
         }
-        .task(id: rowDataIdentity) { rebuildRows() }
+        .task(id: rowsRevision) { rebuildRows() }
         .onChange(of: sortOrder) { _, _ in
             orderedRows = baseRows.sorted(using: sortOrder)
         }

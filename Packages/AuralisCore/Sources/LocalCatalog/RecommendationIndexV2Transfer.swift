@@ -234,7 +234,7 @@ extension LocalCatalogStore {
         }
 
         // 当前服务器曲目映射：remoteTrackID → CatalogTrackLine。
-        let tracks = try allTracks(serverID: serverID, limit: 20_000)
+        let tracks = try allTracks(serverID: serverID)
         let lineByRemoteID = Dictionary(uniqueKeysWithValues: tracks.compactMap { track -> (String, CatalogTrackLine)? in
             let line = CatalogTrackLine(
                 id: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description,

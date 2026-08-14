@@ -120,7 +120,15 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
 private actor IndexResultCollector {
     private var texts: [String] = []
     func record(_ message: AgentChatMessage) {
-        texts += message.messages.compactMap { if case let .text(value) = $0 { value } else { nil } }
+        texts += message.messages.compactMap {
+            switch $0 {
+            case let .text(value): value
+            case let .error(value): value
+            case let .toolProgress(step): step
+            case let .streaming(value): value
+            default: nil
+            }
+        }
     }
     func contains(_ text: String) -> Bool { texts.contains { $0.contains(text) } }
 }
@@ -280,7 +288,7 @@ func recommendationIndexV2MalformedArgumentsRecover() async throws {
     )
     let status = try await store.recommendationIndexV2Status(serverID: serverID)
     #expect(status.pendingUniqueTracks == 0)
-    #expect(await collector.contains("参数 JSON 不完整或被截断"))
+    #expect(await collector.contains("本批结构化输出不完整"))
     #expect(await collector.contains("缺少参数：items") == false)
 }
 

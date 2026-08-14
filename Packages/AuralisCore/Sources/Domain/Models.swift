@@ -591,3 +591,13 @@ public struct ServerCapabilities: Codable, Hashable, Sendable {
         self.supportsAPIKeyAuthentication = supportsAPIKeyAuthentication
     }
 }
+
+// MARK: - Track identity
+
+extension Track {
+    /// 跨服务器安全地判断两首曲目是否为同一首歌。UI 高亮「正在播放」时必须同时
+    /// 比较 serverID 与 id：不同服务器可能复用相同的 TrackID。
+    public func isSame(as other: Track) -> Bool {
+        serverID == other.serverID && id == other.id
+    }
+}

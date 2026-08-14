@@ -108,7 +108,7 @@ public struct AuralisRootView: View {
             if horizontalSizeClass == .compact {
                 CompactShell(model: model, themeStore: themeStore, bottomDockScroll: bottomDockScroll)
             } else {
-                DesktopShell(model: model, themeStore: themeStore)
+                PadMusicShell(model: model, themeStore: themeStore)
             }
 #endif
         }
@@ -896,41 +896,138 @@ extension View {
 }
 #endif
 
-private struct DesktopShell: View {
+#if os(iOS)
+private enum PadSidebarDestination: String, CaseIterable, Hashable, Identifiable {
+    case search
+    case home
+    case recentlyAdded
+    case artists
+    case albums
+    case songs
+    case genres
+    case downloads
+    case recentlyPlayed
+    case favorites
+    case playlists
+    case categories
+    case assistant
+    case settings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .search: "搜索"
+        case .home: "首页"
+        case .recentlyAdded: "最近添加"
+        case .artists: "艺术家"
+        case .albums: "专辑"
+        case .songs: "歌曲"
+        case .genres: "流派"
+        case .downloads: "下载"
+        case .recentlyPlayed: "最近播放"
+        case .favorites: "收藏歌曲"
+        case .playlists: "播放列表"
+        case .categories: "分类"
+        case .assistant: "AI 助手"
+        case .settings: "设置"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .search: "magnifyingglass"
+        case .home: "house"
+        case .recentlyAdded: "tray.and.arrow.down"
+        case .artists: "person.2"
+        case .albums: "square.stack"
+        case .songs: "music.note"
+        case .genres: "music.quarternote.3"
+        case .downloads: "arrow.down.circle"
+        case .recentlyPlayed: "clock.arrow.circlepath"
+        case .favorites: "heart"
+        case .playlists: "music.note.list"
+        case .categories: "square.grid.2x2"
+        case .assistant: "sparkles"
+        case .settings: "gearshape"
+        }
+    }
+
+    var appSection: AppSection {
+        switch self {
+        case .search: .search
+        case .home: .home
+        case .assistant: .assistant
+        case .settings: .settings
+        default: .library
+        }
+    }
+
+    static func defaultDestination(for section: AppSection) -> Self {
+        switch section {
+        case .home: .home
+        case .library: .albums
+        case .assistant: .assistant
+        case .search: .search
+        case .settings: .settings
+        }
+    }
+}
+
+/// iPadOS 使用与 Mac 相同的信息架构，但保持 iPad 原生的三栏折叠、触控目标和
+/// 系统导航行为。横屏显示三栏，窄窗口由 NavigationSplitView 自动折叠。
+private struct PadMusicShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
+    @State private var selection: PadSidebarDestination = .home
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             List {
-                // 参照 Apple Music：侧边栏按「资料库 / 工具」分组，选中项用强调色胶囊高亮。
+                sidebarRow(.search)
+                sidebarRow(.home)
                 Section("资料库") {
-                    desktopRow(.home)
-                    desktopRow(.library)
+                    sidebarRow(.recentlyAdded)
+                    sidebarRow(.artists)
+                    sidebarRow(.albums)
+                    sidebarRow(.songs)
+                    sidebarRow(.genres)
+                    sidebarRow(.downloads)
+                    sidebarRow(.recentlyPlayed)
                 }
-                Section("工具") {
-                    desktopRow(.assistant)
-                    desktopRow(.settings)
+                Section("播放列表") {
+                    sidebarRow(.favorites)
+                    sidebarRow(.playlists)
+                }
+                Section("Auralis") {
+                    sidebarRow(.categories)
+                    sidebarRow(.assistant)
+                    sidebarRow(.settings)
                 }
             }
             .listStyle(.sidebar)
             .navigationTitle("澜音")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 290)
             .safeAreaInset(edge: .bottom) {
                 ServerStatus(model: model, theme: themeStore.current)
             }
         } content: {
-            SectionContent(section: model.selectedSection, model: model, themeStore: themeStore)
-                .navigationTitle(model.selectedSection.title)
-                // 宽屏（Mac / iPad 横屏）内容居中，避免页面被拉成一条横贯的宽条。
-                .frame(maxWidth: 980)
+            padContent
+                .id(selection)
+                .navigationTitle(selection.title)
+                .frame(maxWidth: 1080)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } detail: {
             InspectorView(model: model, theme: themeStore.current)
+                .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
         }
         .navigationSplitViewStyle(.balanced)
         .safeAreaInset(edge: .bottom) {
             if model.hasCurrentTrack && model.selectedSection != .assistant && model.selectedSection != .settings {
                 MiniPlayer(model: model, theme: themeStore.current)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
             }
         }
         .sheet(isPresented: nowPlayingBinding) {
@@ -970,24 +1067,71 @@ private struct DesktopShell: View {
                 }
             }
         }
+        .onAppear {
+            selection = .defaultDestination(for: model.selectedSection)
+        }
+        .onChange(of: selection) { _, destination in
+            model.selectedSection = destination.appSection
+            model.browseDestination = nil
+        }
+        .onChange(of: model.selectedSection) { _, section in
+            guard selection.appSection != section else { return }
+            selection = .defaultDestination(for: section)
+        }
     }
 
-    /// 侧边栏行：图标 + 文字，选中时强调色胶囊高亮。
-    private func desktopRow(_ section: AppSection) -> some View {
+    private func sidebarRow(_ destination: PadSidebarDestination) -> some View {
         Button {
-            model.selectedSection = section
+            selection = destination
         } label: {
-            Label(section.title, systemImage: section.symbol)
+            Label(destination.title, systemImage: destination.symbol)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .padding(.vertical, 3)
+                .padding(.vertical, 4)
+                // iPad 触控目标：整行至少 44pt 可点，行高与视觉不变。
+                .frame(minHeight: 44)
         }
         .buttonStyle(HapticPlainButtonStyle())
         .listRowBackground(
-            section == model.selectedSection
+            destination == selection
             ? themeStore.current.colorTokens.accent.color.opacity(0.16)
             : Color.clear
         )
+        .accessibilityAddTraits(destination == selection ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private var padContent: some View {
+        switch selection {
+        case .search:
+            SearchView(model: model, theme: themeStore.current)
+        case .home:
+            HomeView(model: model, theme: themeStore.current)
+        case .recentlyAdded:
+            BrowseDetailSheet(destination: .recentlyAdded, model: model, theme: themeStore.current, showsCloseButton: false)
+        case .artists:
+            LibraryView(model: model, theme: themeStore.current, initialScope: .artists)
+        case .albums:
+            LibraryView(model: model, theme: themeStore.current, initialScope: .albums)
+        case .songs:
+            LibraryView(model: model, theme: themeStore.current, initialScope: .tracks)
+        case .genres:
+            LibraryView(model: model, theme: themeStore.current, initialScope: .genres)
+        case .downloads:
+            DownloadManagementView(model: model, theme: themeStore.current)
+        case .recentlyPlayed:
+            BrowseDetailSheet(destination: .recentlyPlayed, model: model, theme: themeStore.current, showsCloseButton: false)
+        case .favorites:
+            LibraryView(model: model, theme: themeStore.current, initialScope: .favorites)
+        case .playlists:
+            LibraryView(model: model, theme: themeStore.current, initialScope: .playlists)
+        case .categories:
+            LibraryView(model: model, theme: themeStore.current, initialScope: .categories)
+        case .assistant:
+            AssistantView(model: model, theme: themeStore.current)
+        case .settings:
+            SettingsView(model: model, themeStore: themeStore)
+        }
     }
 
     /// 互斥呈现：服务器配置弹窗优先；正在播放 / 浏览详情不会与它同时弹出，
@@ -1013,6 +1157,7 @@ private struct DesktopShell: View {
     }
 
 }
+#endif
 private struct SectionContent: View {
     let section: AppSection
     @ObservedObject var model: AuralisAppModel
@@ -1099,6 +1244,10 @@ struct BrowseDetailSheet: View {
     @State private var selectedPlaylistIDs: Set<PlaylistID> = []
     @State private var playlistSortOrder: PlaylistSortOrder = .nameAscending
     @State private var confirmsBatchPlaylistDeletion = false
+    /// 分类详情改为按需解析：路由只携带身份，这里保存解析结果与错误，避免
+    /// 一次性快照进入导航值（索引刷新后可重新解析，读库失败能展示错误与重试）。
+    @State private var categoryTracks: [Track]?
+    @State private var categoryLoadError: String?
     @State private var isDeletingPlaylists = false
     @Environment(\.dismiss) private var dismiss
 
@@ -1135,8 +1284,8 @@ struct BrowseDetailSheet: View {
             case let .genre(genre):
                 let local = model.tracks(for: genre)
                 return local.isEmpty ? (model.genreTracks ?? []) : local
-            case let .recommendationCategory(_, tracks):
-                return tracks
+            case .recommendationCategory:
+                return categoryTracks ?? []
             case .random:
                 return model.randomTracks
             case .recentlyPlayed:
@@ -1165,7 +1314,7 @@ struct BrowseDetailSheet: View {
         case .favorites: "收藏"
         case .mostPlayed: "最常听"
         case let .genre(genre): GenreLocalization.displayName(for: genre.name)
-        case let .recommendationCategory(category, _): categoryDisplayName(category)
+        case let .recommendationCategory(category): categoryDisplayName(category)
         case .random: "随机音乐"
         case .recentlyPlayed: "最近播放"
         case .recentlyAdded: "最近添加"
@@ -1187,7 +1336,7 @@ struct BrowseDetailSheet: View {
         case .favorites: "\(tracks.count) 首喜爱的歌曲"
         case .mostPlayed: "按你的播放次数排序"
         case let .genre(genre): "\(tracks.count) 首 · 按流派「\(GenreLocalization.displayName(for: genre.name))」筛选"
-        case let .recommendationCategory(category, _): "\(tracks.count) 首 · 按分类「\(categoryDisplayName(category))」筛选"
+        case let .recommendationCategory(category): "\(tracks.count) 首 · 按分类「\(categoryDisplayName(category))」筛选"
         case .random: "点右上角「换一批」可重新随机"
         case .recentlyPlayed: "\(tracks.count) 首 · 最近播放过的歌曲"
         case .recentlyAdded: "\(tracks.count) 首 · 最近同步进来的歌曲"
@@ -1248,6 +1397,8 @@ struct BrowseDetailSheet: View {
                 // 本地按流派筛选为空时，从服务器按流派拉取真实歌曲
                 // （Navidrome 等服务器 getGenres 常为空，但按流派列专辑可用）。
                 model.loadGenreTracks(genre)
+            } else if case let .recommendationCategory(category) = destination {
+                loadRecommendationCategoryTracks(category)
             }
         }
         .confirmationDialog(
@@ -1374,6 +1525,23 @@ struct BrowseDetailSheet: View {
         }
     }
 
+    private func loadRecommendationCategoryTracks(_ category: RecommendationIndexV2Category) {
+        guard categoryTracks == nil, categoryLoadError == nil else { return }
+        categoryTracks = []
+        Task {
+            do {
+                let tracks = try await model.catalogCoordinator.store.recommendationIndexV2Tracks(
+                    serverID: model.catalog.activeAccount?.id,
+                    dimension: category.dimension,
+                    value: category.value
+                )
+                categoryTracks = tracks
+            } catch {
+                categoryLoadError = "读取分类歌曲失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         if case .playlists = destination {
@@ -1382,6 +1550,27 @@ struct BrowseDetailSheet: View {
             artistList
         } else if case .topAlbums = destination {
             albumList
+        } else if case .recommendationCategory = destination {
+            if let categoryLoadError {
+                AuralisEmptyState(
+                    icon: "exclamationmark.triangle",
+                    title: "读取分类失败",
+                    message: categoryLoadError,
+                    colors: theme.colorTokens
+                )
+            } else if categoryTracks == nil {
+                ProgressView("正在读取分类歌曲…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if tracks.isEmpty {
+                AuralisEmptyState(
+                    icon: "music.note",
+                    title: "暂无歌曲",
+                    message: "这个分类里暂时没有歌曲。",
+                    colors: theme.colorTokens
+                )
+            } else {
+                trackList
+            }
         } else if isGenreLoading {
             ProgressView("正在从服务器加载「\(currentGenreName)」歌曲…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1469,7 +1658,7 @@ struct BrowseDetailSheet: View {
                         model.selectAndPlay(track)
                         dismiss()
                     } label: {
-                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                        TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                             .contentShape(Rectangle())
                     }
                         .buttonStyle(HapticPlainButtonStyle())
@@ -1706,7 +1895,7 @@ private struct PlaylistTracksView: View {
                             model.queue = model.uniquedTracks(tracks)
                             model.selectAndPlay(track)
                         } label: {
-                            TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                            TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(HapticPlainButtonStyle())

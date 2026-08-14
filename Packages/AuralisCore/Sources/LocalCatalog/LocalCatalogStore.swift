@@ -1,6 +1,7 @@
 import Domain
 import Foundation
 import MusicLibrary
+import Observability
 
 /// SQLite 支撑的本地音乐目录。
 ///
@@ -9,17 +10,25 @@ import MusicLibrary
 /// - 提供 `CatalogReader` 查询 API 供 Agent 工具与 UI 使用。
 /// - 使用 FTS5 全文索引支持本地检索。
 public actor LocalCatalogStore: LibrarySyncStore {
+    /// 正常运行最多每七天在本地目录可用后做一次后台 quick_check。
+    public nonisolated static let integrityCheckMinimumInterval: TimeInterval = 7 * 24 * 60 * 60
+
     let db: SQLiteDatabase
     let encoder = JSONEncoder()
     let decoder = JSONDecoder()
 
     public init(url: URL) throws {
         self.db = try SQLiteDatabase(url: url)
-        try createSchema()
+        try StartupPerformanceTrace.measure(.sqliteSchema) {
+            try createSchema()
+        }
         try cleanupOrphanedSyncState()
         // 开放语义标签已恢复（dimension='tag'）：不再清理任何非固定维度，保留全部标签。
         // 一次性、可版本化的 canonical migration（catalog_migrations 记录，后续启动 O(1) 跳过）。
-        try runCatalogMigrations()
+        try StartupPerformanceTrace.measure(.sqliteMigrations) {
+            try runAdditiveSchemaMigrations()
+            try runCatalogMigrations()
+        }
     }
 
     /// Canonical on-device catalog location shared by the app and extensions.
@@ -216,6 +225,11 @@ public actor LocalCatalogStore: LibrarySyncStore {
             version INTEGER NOT NULL,
             applied_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS catalog_runtime_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS recommendation_index_v2_tag_vocabulary (
             normalized_key TEXT PRIMARY KEY,
             display_value TEXT NOT NULL,
@@ -285,13 +299,90 @@ public actor LocalCatalogStore: LibrarySyncStore {
         CREATE INDEX IF NOT EXISTS idx_disliked_tracks_server ON disliked_tracks(server_id);
         CREATE INDEX IF NOT EXISTS idx_community_reviews_track ON community_music_reviews(global_track_id, fetched_at DESC);
         """)
-        // Additive migration for databases created before revision-aware sync probes.
-        try? db.run("ALTER TABLE recommendation_index_v2_state ADD COLUMN source_hash_version INTEGER NOT NULL DEFAULT 0")
-        try? db.run("ALTER TABLE recommendation_index_v2_state ADD COLUMN semantic_tag_rules_version INTEGER NOT NULL DEFAULT 0")
-        try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_fingerprint TEXT")
-        try? db.run("ALTER TABLE sync_meta ADD COLUMN remote_probe_kind TEXT")
-        try? db.run("ALTER TABLE sync_meta ADD COLUMN last_probe_at REAL")
-        try? db.run("ALTER TABLE sync_meta ADD COLUMN last_validated_at REAL")
+    }
+
+    /// 旧库的 additive columns 只迁移一次。正常启动只查一行 migration version，
+    /// 不再用一组必然失败的 ALTER TABLE 作为列存在性探测。
+    nonisolated private func runAdditiveSchemaMigrations() throws {
+        let key = "catalog_additive_columns"
+        let targetVersion: Int64 = 1
+        let applied = try db.query(
+            "SELECT version FROM catalog_migrations WHERE key = ?",
+            [.text(key)]
+        ).first?["version"]?.int ?? 0
+        guard applied < targetVersion else { return }
+
+        try db.transaction {
+            try addColumnIfMissing(
+                table: "recommendation_index_v2_state",
+                column: "source_hash_version",
+                definition: "INTEGER NOT NULL DEFAULT 0"
+            )
+            try addColumnIfMissing(
+                table: "recommendation_index_v2_state",
+                column: "semantic_tag_rules_version",
+                definition: "INTEGER NOT NULL DEFAULT 0"
+            )
+            try addColumnIfMissing(table: "sync_meta", column: "remote_fingerprint", definition: "TEXT")
+            try addColumnIfMissing(table: "sync_meta", column: "remote_probe_kind", definition: "TEXT")
+            try addColumnIfMissing(table: "sync_meta", column: "last_probe_at", definition: "REAL")
+            try addColumnIfMissing(table: "sync_meta", column: "last_validated_at", definition: "REAL")
+            try db.run(
+                """
+                INSERT INTO catalog_migrations (key, version, applied_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET version = excluded.version, applied_at = excluded.applied_at
+                """,
+                [.text(key), .integer(targetVersion), .real(Date.now.timeIntervalSince1970)]
+            )
+        }
+    }
+
+    nonisolated private func addColumnIfMissing(
+        table: String,
+        column: String,
+        definition: String
+    ) throws {
+        // 所有名字均为上方硬编码常量，不接受外部输入。
+        let columns = try db.query("PRAGMA table_info(\(table))")
+        guard !columns.contains(where: { $0["name"]?.string == column }) else { return }
+        try db.run("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
+    }
+
+    /// 在 UI 已恢复本地目录后执行的持久化时间策略完整性检查。
+    /// - Returns: 本次是否真正执行了 `PRAGMA quick_check`。
+    @discardableResult
+    public func verifyIntegrityIfDue(
+        now: Date = .now,
+        minimumInterval: TimeInterval = LocalCatalogStore.integrityCheckMinimumInterval,
+        force: Bool = false
+    ) throws -> Bool {
+        let metadataKey = "sqlite_quick_check_last_success"
+        if !force,
+           let raw = try? db.query(
+               "SELECT value FROM catalog_runtime_metadata WHERE key = ?",
+               [.text(metadataKey)]
+           ).first?["value"]?.string,
+           let timestamp = TimeInterval(raw),
+           now.timeIntervalSince1970 - timestamp >= 0,
+           now.timeIntervalSince1970 - timestamp < max(minimumInterval, 0) {
+            return false
+        }
+
+        try StartupPerformanceTrace.measure(.sqliteQuickCheck) {
+            try db.quickCheck()
+        }
+        try db.run(
+            """
+            INSERT INTO catalog_runtime_metadata (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            [
+                .text(metadataKey),
+                .text(String(now.timeIntervalSince1970)),
+                .real(now.timeIntervalSince1970),
+            ]
+        )
+        return true
     }
 
     /// Older builds persisted checkpoints without durable staged pages. Those rows cannot be

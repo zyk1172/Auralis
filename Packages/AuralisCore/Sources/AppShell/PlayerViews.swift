@@ -209,6 +209,7 @@ struct NowPlayingView: View {
     let theme: BuiltInTheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var page = NowPlayingPage.player
     @State private var isPlaylistSheetPresented = false
     @State private var showsMoreActions = false
@@ -246,6 +247,9 @@ struct NowPlayingView: View {
                 }
             }
             .padding(AuralisSpacing.large)
+            // iPad 等宽屏：内容按 Mac 的“居中 + 最大宽度”约束，避免整页被拉成
+            // 一条横贯全屏的宽条；iPhone 紧凑布局保持原样（不限宽）。
+            .frame(maxWidth: horizontalSizeClass == .regular ? 680 : .infinity)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
         .sheet(isPresented: $isPlaylistSheetPresented) {
@@ -311,6 +315,8 @@ struct NowPlayingView: View {
             showsMoreActions = true
         } label: {
             Image(systemName: "ellipsis")
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(HapticBorderedButtonStyle())
         .accessibilityLabel("更多操作")
@@ -494,12 +500,17 @@ struct NowPlayingView: View {
                         .font(.title3)
                         .foregroundStyle(model.playMode == .list ? theme.colorTokens.secondaryText.color : theme.colorTokens.accent.color)
                         .contentTransition(.identity)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("播放模式：\(model.playMode.title)")
             }
             transportItem {
                 Button(action: model.previous) {
-                    Image(systemName: "backward.fill").font(.title2)
+                    Image(systemName: "backward.fill")
+                        .font(.title2)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .disabled(!model.canGoPrevious)
                 .accessibilityLabel("上一首")
@@ -517,7 +528,10 @@ struct NowPlayingView: View {
             }
             transportItem {
                 Button(action: model.next) {
-                    Image(systemName: "forward.fill").font(.title2)
+                    Image(systemName: "forward.fill")
+                        .font(.title2)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .disabled(!model.canGoNext)
                 .accessibilityLabel("下一首")
@@ -712,7 +726,7 @@ struct NowPlayingView: View {
                 Button {
                     model.selectAndPlay(track)
                 } label: {
-                    TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                    TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                         .contentShape(Rectangle())
                 }
                     .buttonStyle(HapticPlainButtonStyle())

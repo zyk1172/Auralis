@@ -82,6 +82,7 @@ struct MacPlaylistView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
                     Menu {
+                        Button("下载歌单") { model.downloadAll(tracks) }
                         Button("添加到队列") {
                             for track in tracks {
                                 model.addToQueue(globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))

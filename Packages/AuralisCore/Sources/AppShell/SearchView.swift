@@ -191,7 +191,7 @@ struct SearchView: View {
                                 model.recordSearch(query)
                                 model.selectAndPlay(track)
                         } label: {
-                            TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                            TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(HapticPlainButtonStyle())
@@ -206,7 +206,7 @@ struct SearchView: View {
                                 model.recordSearch(query)
                                 model.selectAndPlay(track)
                         } label: {
-                            TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                            TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(HapticPlainButtonStyle())

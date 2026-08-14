@@ -25,6 +25,19 @@ public actor TrackCacheStore {
         public var description: String { "\(serverID.rawValue):\(trackID.rawValue)" }
     }
 
+    public struct CachedTrackEntry: Hashable, Sendable, Identifiable {
+        public var id: TrackCacheID { cacheID }
+        public let cacheID: TrackCacheID
+        public let byteCount: Int64
+        public let modifiedAt: Date
+
+        public init(cacheID: TrackCacheID, byteCount: Int64, modifiedAt: Date) {
+            self.cacheID = cacheID
+            self.byteCount = byteCount
+            self.modifiedAt = modifiedAt
+        }
+    }
+
     private let directory: URL
     private let indexURL: URL
     /// 组合键描述（"serverID:trackID"）→ 缓存文件名
@@ -78,7 +91,13 @@ public actor TrackCacheStore {
     public func cachedFileURL(for id: TrackCacheID) -> URL? {
         guard let name = index[id.description] else { return nil }
         let url = directory.appendingPathComponent(name)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            // 文件被外部清理后立即修复索引；否则 UI 会永久保留一个幽灵下载记录。
+            index[id.description] = nil
+            try? persistIndex()
+            return nil
+        }
+        return url
     }
 
     public func isCached(_ id: TrackCacheID) -> Bool {
@@ -86,41 +105,91 @@ public actor TrackCacheStore {
     }
 
     public func cachedTrackIDs() -> Set<TrackCacheID> {
-        Set(index.keys.compactMap { key in
-            guard let separator = key.firstIndex(of: ":") else { return nil }
-            return TrackCacheID(
-                serverID: ServerID(rawValue: String(key[key.startIndex..<separator])),
-                trackID: TrackID(rawValue: String(key[key.index(after: separator)...]))
-            )
-        }.filter { cachedFileURL(for: $0) != nil })
+        Set(cachedEntries().map(\.cacheID))
+    }
+
+    /// 下载页所需的真实磁盘信息。读取时顺手剔除失效索引，大小与日期均来自文件系统，
+    /// 不依赖可能过期的内存估算。
+    public func cachedEntries() -> [CachedTrackEntry] {
+        var result: [CachedTrackEntry] = []
+        var staleKeys: [String] = []
+        for (key, name) in index {
+            guard let cacheID = Self.cacheID(from: key) else { continue }
+            let url = directory.appendingPathComponent(name)
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+                  let fileSize = values.fileSize
+            else {
+                staleKeys.append(key)
+                continue
+            }
+            result.append(CachedTrackEntry(
+                cacheID: cacheID,
+                byteCount: Int64(fileSize),
+                modifiedAt: values.contentModificationDate ?? .distantPast
+            ))
+        }
+        if !staleKeys.isEmpty {
+            for key in staleKeys { index[key] = nil }
+            try? persistIndex()
+        }
+        return result.sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
     /// 写入音频数据并更新索引。codec 用于推导文件扩展名，保证 AVPlayer 能识别格式。
     public func store(data: Data, for id: TrackCacheID, codec: String?) throws -> URL {
-        let name = "\(Self.safeFileName(id)).\(Self.fileExtension(codec: codec))"
+        guard !data.isEmpty else { throw TrackCacheError.emptyFile }
+        try ensureDirectory()
+        let name = Self.uniqueFileName(id: id, codec: codec)
         let url = directory.appendingPathComponent(name)
-        try data.write(to: url, options: .atomic)
+        let previousName = index[id.description]
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
         index[id.description] = name
-        try persistIndex()
+        do {
+            try persistIndex()
+        } catch {
+            index[id.description] = previousName
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+        removeReplacedFile(previousName, keeping: name)
         return url
     }
 
     /// 把已下载到临时位置的音频文件移入缓存目录并登记索引（原子移动）。
     public func moveDownloadedFile(at sourceURL: URL, for id: TrackCacheID, codec: String?) throws -> URL {
-        let name = "\(Self.safeFileName(id)).\(Self.fileExtension(codec: codec))"
+        let sourceSize = (try? sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard sourceSize > 0 else { throw TrackCacheError.emptyFile }
+        try ensureDirectory()
+        let name = Self.uniqueFileName(id: id, codec: codec)
         let destination = directory.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: destination)
+        let previousName = index[id.description]
         try FileManager.default.moveItem(at: sourceURL, to: destination)
         index[id.description] = name
-        try persistIndex()
+        do {
+            try persistIndex()
+        } catch {
+            index[id.description] = previousName
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+        removeReplacedFile(previousName, keeping: name)
         return destination
     }
 
     public func remove(for id: TrackCacheID) throws {
         guard let name = index[id.description] else { return }
-        try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+        let url = directory.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        let previousName = index[id.description]
         index[id.description] = nil
-        try persistIndex()
+        do {
+            try persistIndex()
+        } catch {
+            index[id.description] = previousName
+            throw error
+        }
     }
 
     /// 按服务器删除该服务器的全部音频缓存（删除服务器 / 清理本地数据用）。
@@ -138,18 +207,27 @@ public actor TrackCacheStore {
         try? persistIndex()
     }
 
+    /// 清空所有用户主动下载的音频。调用方需先取消活动任务，防止清空后后台任务又写回。
+    public func removeAll() throws {
+        let previousIndex = index
+        for name in Set(index.values) {
+            let url = directory.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+        }
+        index = [:]
+        do {
+            try persistIndex()
+        } catch {
+            index = previousIndex
+            throw error
+        }
+    }
+
     /// 缓存总大小（字节），供设置页展示。
     public func totalBytes() -> Int64 {
-        index.keys.reduce(into: Int64(0)) { total, key in
-            guard let separator = key.firstIndex(of: ":"),
-                  let url = cachedFileURL(for: TrackCacheID(
-                      serverID: ServerID(rawValue: String(key[key.startIndex..<separator])),
-                      trackID: TrackID(rawValue: String(key[key.index(after: separator)...]))
-                  )),
-                  let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64
-            else { return }
-            total += size
-        }
+        cachedEntries().reduce(into: Int64(0)) { $0 += $1.byteCount }
     }
 
     private func persistIndex() throws {
@@ -157,12 +235,36 @@ public actor TrackCacheStore {
         try data.write(to: indexURL, options: .atomic)
     }
 
-    /// 组合键描述含 ":" 等路径不友好字符，统一做安全化处理：非字母数字替换为 "_"，
-    /// 例如 "srv1:track/1" → "srv1_track_1"。
-    private static func safeFileName(_ id: TrackCacheID) -> String {
-        id.description.unicodeScalars.map { scalar -> String in
-            CharacterSet.alphanumerics.contains(scalar) ? String(scalar) : "_"
-        }.joined()
+    private func ensureDirectory() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    private func removeReplacedFile(_ previousName: String?, keeping currentName: String) {
+        guard let previousName, previousName != currentName else { return }
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(previousName))
+    }
+
+    private static func cacheID(from description: String) -> TrackCacheID? {
+        guard let separator = description.firstIndex(of: ":") else { return nil }
+        return TrackCacheID(
+            serverID: ServerID(rawValue: String(description[..<separator])),
+            trackID: TrackID(rawValue: String(description[description.index(after: separator)...]))
+        )
+    }
+
+    /// 旧实现把所有非字母数字都变成 `_`，`track/a` 与 `track?a` 会落到同一个文件并互相覆盖。
+    /// 文件名现在使用可读前缀 + FNV-1a + UUID；真正身份仍由 index 的完整 GlobalID 决定。
+    private static func uniqueFileName(id: TrackCacheID, codec: String?) -> String {
+        let readable = id.trackID.rawValue.unicodeScalars
+            .map { CharacterSet.alphanumerics.contains($0) ? String($0) : "_" }
+            .joined()
+            .prefix(32)
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in id.description.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return "\(readable)-\(String(hash, radix: 16))-\(UUID().uuidString).\(fileExtension(codec: codec))"
     }
 
     private static func fileExtension(codec: String?) -> String {
@@ -176,4 +278,8 @@ public actor TrackCacheStore {
         default: return "mp3"
         }
     }
+}
+
+public enum TrackCacheError: Error, Equatable, Sendable {
+    case emptyFile
 }
