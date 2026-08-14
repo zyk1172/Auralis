@@ -35,6 +35,23 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var failureReported = false
     /// 缓冲停滞超时任务：进入 stalled 后 15 秒未恢复则按播放失败上报（P2-5）。
     private var stallTimeoutTask: Task<Void, Never>?
+    /// 当前边界事件对应的 item：DidPlayToEnd 闭包必须校验事件 item 仍是当前观察
+    /// 的 item，避免被移除观察者的迟到通知重复处理（exactly-once）。
+    private var endObservedItem: AVPlayerItem?
+    /// AVQueuePlayer.currentItem KVO：prepared item 成为 current 的权威事件。
+    private var currentItemObservation: NSKeyValueObservation?
+    /// prepared item 在推进前失败的观察（FailedToPlayToEndTime / status==.failed）。
+    private var preparedItemFailureObserver: NSObjectProtocol?
+    private var preparedItemStatusObservation: NSKeyValueObservation?
+    /// 播放边界状态机：解决「DidPlayToEnd 与 currentItem 变化顺序不确定」导致的
+    /// 双重推进 / 漏推进。同一个歌曲边界只允许完成一次。
+    /// 播放边界确定性状态机（可独立测试；见 PlayerItemBoundaryCoordinator）。
+    /// 解决「DidPlayToEnd 与 currentItem 变化顺序不确定」导致的双重推进/漏推进，
+    /// 保证同一个歌曲边界 exactly-once。
+    private var boundaryCoordinator = PlayerItemBoundaryCoordinator()
+    /// 边界兜底：预载项在限定时间内未成为 current 时，只执行一次 trackEndedHandler。
+    private var boundaryFallbackTask: Task<Void, Never>?
+    private static let boundaryFallbackTimeout: Duration = .seconds(3)
 
     public init() {}
 
@@ -109,6 +126,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observeTrackEnd(for: item)
         observeItemFailure(for: item)
         observeTimeControl(for: player)
+        observeCurrentItem(for: player)
 
         CrashLog.shared.log("调用 player.play()")
         player.play()
@@ -130,6 +148,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// This is true preloading, but remote HTTP/codec behaviour remains
     /// best-effort seamless rather than a sample-perfect guarantee.
     public func prepareNext(track: Track?) {
+        // 边界未决（上一首已结束、正在等待 preloaded item 推进）时不允许替换
+        // prepared item，避免 currentItem KVO 的匹配目标漂移导致漏过渡。
+        if boundaryCoordinator.state == .waitingForPreparedAdvance { return }
+        clearPreparedItemFailureObserver()
         if let preparedItem, avPlayer?.items().contains(where: { $0 === preparedItem }) == true {
             avPlayer?.remove(preparedItem)
         }
@@ -143,6 +165,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedItem = item
         preparedTrack = track
         player.insert(item, after: nil)
+        observePreparedItemFailure(for: item)
     }
 
     // MARK: - Controls
@@ -191,6 +214,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         CrashLog.shared.log("AVFoundationPlaybackEngine.stopAll")
         failureReported = false
         cancelStallTimeout()
+        cancelBoundaryFallback()
+        boundaryCoordinator.reset()
+        clearPreparedItemFailureObserver()
+        currentItemObservation?.invalidate()
+        currentItemObservation = nil
+        endObservedItem = nil
         if let endObserver {
             NotificationCenter.default.removeObserver(endObserver)
             self.endObserver = nil
@@ -213,33 +242,155 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedTrack = nil
     }
 
-    /// 曲目自然播完 → 通知 AppModel 按循环模式切歌。
+    /// 曲目自然播完：进入边界状态机。prepared item 存在时不立即回调 trackEnded，
+    /// 而是等 `AVQueuePlayer.currentItem` KVO 确认推进；若推进已发生（E2 先于 E1）
+    /// 则直接完成过渡。无预载项时直接回调 trackEndedHandler。
     private func observeTrackEnd(for item: AVPlayerItem) {
         let observedGeneration = playGeneration
+        endObservedItem = item
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            // 同步校验事件 item（避免把非 Sendable 的 Notification 传入 Task）。
+            let isExpectedItem = (notification.object as? AVPlayerItem) === item
             Task { @MainActor [weak self] in
-                // 检查 observer 是否已被移除（快速切歌场景）
+                // 检查 observer 是否已被移除（快速切歌场景），并校验事件 item 仍是
+                // 当前观察的 item（防止被移除观察者的迟到通知重复处理）。
                 guard let self, self.endObserver != nil,
-                      self.playGeneration == observedGeneration else { return }
-                // AVQueuePlayer advances at item end. Yield one executor turn
-                // so currentItem reflects the prepared item before deciding.
-                await Task.yield()
-                if let preparedItem = self.preparedItem,
-                   self.avPlayer?.currentItem === preparedItem,
-                   let track = self.preparedTrack {
-                    self.finishPreparedTransition(item: preparedItem, track: track)
-                } else {
-                    self.trackEndedHandler?()
-                }
+                      self.playGeneration == observedGeneration,
+                      self.endObservedItem === item,
+                      isExpectedItem else { return }
+                self.handleItemDidPlayToEnd(item)
             }
         }
     }
 
+    /// DidPlayToEnd 的确定性处理：不依赖 Task.yield 猜测 AVQueuePlayer 是否推进，
+    /// 全部交给边界协调器决定（exactly-once）。
+    private func handleItemDidPlayToEnd(_ item: AVPlayerItem) {
+        let hasPrepared = preparedItem != nil
+            && avPlayer?.items().contains(where: { $0 === preparedItem }) == true
+        let currentIsPrepared = avPlayer?.currentItem === preparedItem
+        let actions = boundaryCoordinator.itemEnded(
+            hasPrepared: hasPrepared,
+            currentItemIsPrepared: currentIsPrepared
+        )
+        applyBoundaryActions(actions)
+        if boundaryCoordinator.state == .waitingForPreparedAdvance {
+            // 已进入等待推进：启动有界兜底（仅在真正等待时）。
+            startBoundaryFallback()
+        }
+    }
+
+    private func observeCurrentItem(for player: AVPlayer) {
+        let observedGeneration = playGeneration
+        currentItemObservation = player.observe(\.currentItem, options: [.new]) { [weak self] player, change in
+            Task { @MainActor [weak self] in
+                guard let self, self.currentItemObservation != nil,
+                      self.playGeneration == observedGeneration,
+                      self.avPlayer === player else { return }
+                let newItem = change.newValue ?? player.currentItem
+                guard let newItem else { return }
+                let newItemIsPrepared = newItem === self.preparedItem && self.preparedItem != nil
+                let actions = self.boundaryCoordinator.currentItemChanged(newItemIsPrepared: newItemIsPrepared)
+                self.applyBoundaryActions(actions)
+                // 非待决边界下的 currentItem 变化（首次 item / 队列编辑）不触发过渡。
+            }
+        }
+    }
+
+    /// 有界兜底：等待推进超时后仍未进入 prepared item，则移除该 item 并只回调一次
+    /// trackEndedHandler，由 AppModel 按当前 repeat/shuffle 策略决定下一步。
+    /// 仅在协调器仍处于 waiting 时生效（可取消、可去重）。
+    private func startBoundaryFallback() {
+        boundaryFallbackTask?.cancel()
+        boundaryFallbackTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.boundaryFallbackTimeout)
+            guard let self, !Task.isCancelled else { return }
+            let actions = self.boundaryCoordinator.fallbackTick()
+            self.applyBoundaryActions(actions)
+        }
+    }
+
+    private func cancelBoundaryFallback() {
+        boundaryFallbackTask?.cancel()
+        boundaryFallbackTask = nil
+    }
+
+    /// 执行边界协调器输出的动作。每个动作都有幂等语义：
+    /// - completeTransition：prepared 已成为 current，完成无缝过渡；
+    /// - handleTrackEnded：交给 AppModel 决定 repeat/shuffle 下一步；
+    /// - removePrepared：移除失效的 prepared item 并清空状态。
+    private func applyBoundaryActions(_ actions: [PlayerItemBoundaryCoordinator.Action]) {
+        for action in actions {
+            switch action {
+            case .completeTransition:
+                if let preparedItem, let preparedTrack {
+                    finishPreparedTransition(item: preparedItem, track: preparedTrack)
+                }
+            case .handleTrackEnded:
+                trackEndedHandler?()
+            case .removePrepared:
+                if let preparedItem,
+                   avPlayer?.items().contains(where: { $0 === preparedItem }) == true {
+                    avPlayer?.remove(preparedItem)
+                }
+                clearPreparedItemFailureObserver()
+                preparedItem = nil
+                preparedTrack = nil
+            }
+        }
+    }
+
+    /// prepared item 在成为 current 之前失败：移除它并清空 prepared 状态。
+    /// 若当前正等待该 item 推进（上一首已结束），则按「未推进」兜底只触发一次
+    /// trackEndedHandler；否则什么都不做（当前曲目结束时自然走无预载路径）。
+    private func observePreparedItemFailure(for item: AVPlayerItem) {
+        let observedGeneration = playGeneration
+        preparedItemFailureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.preparedItemFailureObserver != nil,
+                      self.playGeneration == observedGeneration else { return }
+                self.handlePreparedItemFailure(item)
+            }
+        }
+        preparedItemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.preparedItemStatusObservation != nil,
+                      self.playGeneration == observedGeneration else { return }
+                self.handlePreparedItemFailure(item)
+            }
+        }
+    }
+
+    private func clearPreparedItemFailureObserver() {
+        if let preparedItemFailureObserver {
+            NotificationCenter.default.removeObserver(preparedItemFailureObserver)
+        }
+        preparedItemFailureObserver = nil
+        preparedItemStatusObservation?.invalidate()
+        preparedItemStatusObservation = nil
+    }
+
+    private func handlePreparedItemFailure(_ item: AVPlayerItem) {
+        guard preparedItem === item else { return }
+        let actions = boundaryCoordinator.preparedFailed()
+        applyBoundaryActions(actions)
+    }
+
+    /// AVQueuePlayer 已推进到 prepared item：只更新引擎/模型状态与观察者，
+    /// 不重建播放器，避免破坏无缝衔接。
     private func finishPreparedTransition(item: AVPlayerItem, track: Track) {
+        cancelBoundaryFallback()
+        boundaryCoordinator.reset()
+        clearPreparedItemFailureObserver()
         clearItemObservers()
         preparedItem = nil
         preparedTrack = nil

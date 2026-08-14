@@ -20,6 +20,10 @@ public actor LyricsDiskCache {
     /// "serverID:trackID" → 已确认无歌词（负缓存）。
     private var misses: Set<String> = []
     private var didLoad = false
+    /// 歌词缓存总字节预算：超过后按文件大小从大到小淘汰（P2-1，RC 边界策略）。
+    private static let maxTotalBytes: Int64 = 64 * 1024 * 1024
+    /// 负缓存条目上限：超过后裁剪，避免无限增长（再超出的曲目会重新向服务器确认一次）。
+    private static let maxMissesCount = 20_000
 
     public init(directory: URL? = nil) {
         let manager = FileManager.default
@@ -58,12 +62,14 @@ public actor LyricsDiskCache {
         try? data.write(to: directory.appendingPathComponent(Self.fileName(serverID: serverID, trackID: trackID)), options: .atomic)
         loadMissesIfNeeded()
         if misses.remove(Self.key(serverID, trackID)) != nil { persistMisses() }
+        evictIfNeeded()
     }
 
     /// 记录「服务器没有这首歌的歌词」。
     public func markMissing(serverID: ServerID, trackID: TrackID) {
         loadMissesIfNeeded()
         guard misses.insert(Self.key(serverID, trackID)).inserted else { return }
+        pruneMissesIfNeeded()
         persistMisses()
     }
 
@@ -95,6 +101,40 @@ public actor LyricsDiskCache {
                 try? manager.removeItem(at: source)
             }
         }
+    }
+
+    // MARK: - 边界策略（P2-1）
+
+    /// 超过总字节预算时，按文件大小从大到小淘汰，直到低于预算。
+    private func evictIfNeeded() {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        ) else { return }
+        var candidates: [(url: URL, size: Int64)] = []
+        for url in entries where url.pathExtension == "json" && url.lastPathComponent != "misses.json" {
+            let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            candidates.append((url, size))
+        }
+        var total = candidates.reduce(into: Int64(0)) { $0 += $1.size }
+        guard total > Self.maxTotalBytes else { return }
+        candidates.sort { $0.size > $1.size }
+        var index = 0
+        while total > Self.maxTotalBytes, index < candidates.count {
+            let size = candidates[index].size
+            try? manager.removeItem(at: candidates[index].url)
+            total -= size
+            index += 1
+        }
+    }
+
+    /// 负缓存条目超限时裁剪一半（简单有界策略；丢失的负缓存只意味着重新确认一次）。
+    private func pruneMissesIfNeeded() {
+        guard misses.count > Self.maxMissesCount else { return }
+        let overflow = misses.count - Self.maxMissesCount / 2
+        misses = Set(misses.prefix(Self.maxMissesCount / 2))
+        _ = overflow
     }
 
     // MARK: - 统计与清理

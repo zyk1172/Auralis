@@ -31,6 +31,7 @@ public final class AuralisAppModel: ObservableObject {
     let libraryStore: LibraryStore
     let serverStore: ServerStore
     let downloadStore: DownloadStore
+    private let liveActivityManager = LiveActivityManager.shared
     private var childStoreSubscriptions: Set<AnyCancellable> = []
     public var currentTrack: Track {
         get { playbackStore.currentTrack }
@@ -425,8 +426,8 @@ public final class AuralisAppModel: ObservableObject {
     /// 还是「切换到另一台服务器」。只有后者才需要清空封面 / 歌词缓存。
     private var appliedServerID: ServerID?
     private var progressTimer: Timer?
-    private var lyricsInFlight: Set<TrackID> = []
-    private var lyricsUnavailable: Set<TrackID> = []
+    private var lyricsInFlight: Set<GlobalID> = []
+    private var lyricsUnavailable: Set<GlobalID> = []
     private var lyricsLoadTasks: [GlobalID: Task<LyricsDocument?, Never>] = [:]
     /// 当前播放任务，用于取消之前的播放操作（快速切歌时避免竞态条件）。
     private var playbackTask: Task<Void, Never>?
@@ -435,7 +436,7 @@ public final class AuralisAppModel: ObservableObject {
     private static let handoffActivityType = "com.auralis.player.playback"
     private var handoffActivity: NSUserActivity?
     /// 当前曲目流地址失败重试次数（selectAndPlay 时清零），避免无限重试。
-    private var streamRetryAttempts: [TrackID: Int] = [:]
+    private var streamRetryAttempts: [GlobalID: Int] = [:]
     private static let maxStreamRetryAttempts = 2
     /// 睡眠定时模式。
     public enum SleepTimerMode: String, Codable, Sendable, CaseIterable {
@@ -611,6 +612,9 @@ public final class AuralisAppModel: ObservableObject {
         downloadStore.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &childStoreSubscriptions)
+
+        // 下载地址用活动连接器获取；等待期间服务器切换时按此判断放弃（P1-2）。
+        self.downloadStore.serverIDProvider = { [weak self] in self?.catalog.activeServerID }
         Task { [self] in
             await engine.setVolume(volume)
             await engine.setRate(playbackRate)
@@ -1118,7 +1122,37 @@ public final class AuralisAppModel: ObservableObject {
             queueCount: queue.count,
             rate: playbackState == .playing ? playbackRate : 0
         )
+        // 灵动岛 / 锁屏实时活动与「正在播放」小组件（P1-4）。
+        let content = liveActivityContent()
+        Task { await liveActivityManager.updatePlayback(content) }
         updateHandoffActivity()
+    }
+
+    /// 构建 Live Activity 展示内容（不含凭据/地址/路径）。
+    private func liveActivityContent() -> PlaybackActivityAttributes.ContentState {
+        PlaybackActivityAttributes.ContentState(
+            title: currentTrack.id.rawValue == "placeholder" ? "" : currentTrack.title,
+            artist: currentTrack.artistName,
+            album: currentTrack.albumTitle,
+            artworkKey: currentTrack.artworkKey,
+            serverID: catalog.activeServerID?.rawValue,
+            trackID: currentTrack.id.rawValue,
+            duration: currentTrack.duration,
+            position: playbackPosition,
+            isPlaying: playbackState == .playing
+        )
+    }
+
+    /// 更新实时活动为当前状态（暂停/继续/停止时显式刷新）。
+    private func syncLiveActivity() {
+        if playbackState == .idle {
+            Task { await liveActivityManager.endPlayback() }
+        } else if case .failed = playbackState {
+            Task { await liveActivityManager.endPlayback() }
+        } else {
+            let content = liveActivityContent()
+            Task { await liveActivityManager.updatePlayback(content) }
+        }
     }
 
     /// 更新 Handoff 活动：把当前播放接力到其他设备（不自动出声，由接收端用户点击播放）。
@@ -1185,18 +1219,23 @@ public final class AuralisAppModel: ObservableObject {
     public func loadLyrics(for track: Track) async -> LyricsDocument? {
         let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
         if let lyrics = lyrics(for: track) { return lyrics }
-        if lyricsUnavailable.contains(track.id) { return nil }
+        if lyricsUnavailable.contains(globalID) { return nil }
         if let task = lyricsLoadTasks[globalID] { return await task.value }
 
-        lyricsInFlight.insert(track.id)
-        let task = Task<LyricsDocument?, Never> { [connector, lyricsCache] in
+        lyricsInFlight.insert(globalID)
+        let task = Task<LyricsDocument?, Never> { [weak self, connector, lyricsCache] in
+            guard let self else { return nil }
             if let cached = await lyricsCache.document(forServer: track.serverID, trackID: track.id) {
                 return cached
             }
             if await lyricsCache.isKnownMissing(serverID: track.serverID, trackID: track.id) {
                 return nil
             }
+            // 切服保护（P1-6）：歌词由活动连接器获取；等待期间服务器切换时，
+            // 旧任务不得把新服务器的歌词写入旧服务器的磁盘缓存键。
+            guard self.catalog.activeServerID == track.serverID else { return nil }
             let document = await connector.lyrics(for: track)
+            guard self.catalog.activeServerID == track.serverID else { return nil }
             if let document {
                 await lyricsCache.store(document, forServer: track.serverID, trackID: track.id)
             } else {
@@ -1207,7 +1246,7 @@ public final class AuralisAppModel: ObservableObject {
         lyricsLoadTasks[globalID] = task
         let document = await task.value
         lyricsLoadTasks[globalID] = nil
-        lyricsInFlight.remove(track.id)
+        lyricsInFlight.remove(globalID)
 
         if let document {
             // catalog 当前仅展示活动服务器；切服后的旧任务不能回写到新服务器的 TrackID 键。
@@ -1215,7 +1254,7 @@ public final class AuralisAppModel: ObservableObject {
                 catalog.lyrics[track.id] = document
             }
         } else {
-            lyricsUnavailable.insert(track.id)
+            lyricsUnavailable.insert(globalID)
             Task.detached(priority: .utility) { [musicEnrichment] in
                 _ = await musicEnrichment.prefetchForMissingLyrics(track: track)
             }
@@ -1225,9 +1264,9 @@ public final class AuralisAppModel: ObservableObject {
 
     /// Agent 歌词状态查询：区分“有歌词 / 已确认无歌词 / 尚未确认”，
     /// 不把“还没查”误报成“没有歌词”。
-    func lyricsAvailability(for trackID: TrackID) -> AgentLyricsState {
-        if catalog.lyrics[trackID] != nil { return .available }
-        if lyricsUnavailable.contains(trackID) { return .unavailable }
+    func lyricsAvailability(for globalID: GlobalID) -> AgentLyricsState {
+        if catalog.lyrics[TrackID(rawValue: globalID.remoteID)] != nil { return .available }
+        if lyricsUnavailable.contains(globalID) { return .unavailable }
         return .unknown
     }
 
@@ -1335,7 +1374,7 @@ public final class AuralisAppModel: ObservableObject {
 
     public func selectAndPlay(_ track: Track) {
         CrashLog.shared.log("selectAndPlay 开始: \(track.title) (id=\(track.id.rawValue))")
-        streamRetryAttempts.removeValue(forKey: track.id)
+        streamRetryAttempts.removeValue(forKey: queueIdentity(track))
         playbackHistoryStore.resetSelection()
         currentTrack = track
         // 随机模式下记录“本轮已播放”：保证随机 + 不循环时每首只播一次，播完即停。
@@ -1921,6 +1960,11 @@ public final class AuralisAppModel: ObservableObject {
         if !forceRefresh, track.streamURL != nil {
             return track
         }
+        // 跨服务器安全（P0-1/P1-1）：非活动服务器的曲目不得用活动连接器刷新流地址，
+        // 否则旧服务器的同 TrackID 会被解析成新服务器的音频。本地缓存与既有 URL 仍可用。
+        guard track.serverID == catalog.activeServerID else {
+            return track.streamURL == nil ? nil : track
+        }
         if catalog.activeServerID != nil,
            let refreshedURL = await connector.refreshStreamURL(trackID: track.id) {
             var playable = track
@@ -2377,6 +2421,7 @@ public final class AuralisAppModel: ObservableObject {
     public func removeServerLocally(serverID: ServerID) async {
         await connector.forgetServer(serverID: serverID)
         guard catalog.activeServerID == serverID else { return }
+        Task { await liveActivityManager.endPlayback() }
         mediaIntegration.stop()
         catalog = .empty
         queue = []
@@ -2407,9 +2452,10 @@ public final class AuralisAppModel: ObservableObject {
     /// 按需从服务器拉取歌词并写入 catalog，播放页与检查器会自动刷新。
     /// 拉取过（无论成败）的曲目不会重复请求。
     private func loadLyricsIfNeeded(for track: Track) {
+        let globalID = queueIdentity(track)
         guard catalog.lyrics[track.id] == nil,
-              !lyricsUnavailable.contains(track.id),
-              !lyricsInFlight.contains(track.id)
+              !lyricsUnavailable.contains(globalID),
+              !lyricsInFlight.contains(globalID)
         else { return }
         Task { [weak self] in
             _ = await self?.loadLyrics(for: track)
@@ -2474,6 +2520,7 @@ public final class AuralisAppModel: ObservableObject {
                     position: self.playbackPosition,
                     rate: self.playbackState == .playing ? self.playbackRate : 0
                 )
+                self.syncLiveActivity()
             }
         }
     }
@@ -2521,10 +2568,11 @@ public final class AuralisAppModel: ObservableObject {
     private func seekToAbsolute(_ position: TimeInterval) {
         playbackPosition = position
         persistPlaybackSession()
-        let trackID = currentTrack.id
+        let identity = queueIdentity(currentTrack)
         Task {
             // seek 竞态防护（P2-18）：执行前若已切歌则放弃旧 seek，避免落到新曲目。
-            guard self.currentTrack.id == trackID else { return }
+            // 用 GlobalID 比较，切换服务器后同 TrackID 不会误通过。
+            guard queueIdentity(self.currentTrack) == identity else { return }
             await engine.seek(to: position)
             mediaIntegration.seekCompleted(position: position, isPlaying: playbackState == .playing, rate: playbackState == .playing ? playbackRate : 0)
         }
@@ -2608,7 +2656,7 @@ public final class AuralisAppModel: ObservableObject {
         if let index = catalog.tracks.firstIndex(where: { $0.id == track.id }) {
             catalog.tracks[index].isFavorite = updated.isFavorite
         }
-        if currentTrack.id == track.id { currentTrack = updated }
+        if currentTrack.isSame(as: track) { currentTrack = updated }
         refreshHomeSnapshots()
         await connector.setFavorite(trackID: updated.id, isFavorite: updated.isFavorite)
     }
@@ -2665,7 +2713,7 @@ public final class AuralisAppModel: ObservableObject {
         if let index = catalog.tracks.firstIndex(where: { $0.id == track.id }) {
             catalog.tracks[index].isFavorite = false
         }
-        if currentTrack.id == track.id { currentTrack = updated }
+        if currentTrack.isSame(as: track) { currentTrack = updated }
         refreshHomeSnapshots()
         await connector.setFavorite(trackID: updated.id, isFavorite: false)
     }
@@ -2696,11 +2744,11 @@ public final class AuralisAppModel: ObservableObject {
     public func seek(toProgress progress: Double) {
         playbackPosition = min(max(progress, 0), 1) * currentTrack.duration
         let position = playbackPosition
-        let trackID = currentTrack.id
+        let identity = queueIdentity(currentTrack)
         persistPlaybackSession()
         Task {
             // seek 竞态防护（P2-18）：执行前若已切歌则放弃旧 seek，避免落到新曲目。
-            guard self.currentTrack.id == trackID else { return }
+            guard queueIdentity(self.currentTrack) == identity else { return }
             await engine.seek(to: position)
             mediaIntegration.seekCompleted(position: position, isPlaying: playbackState == .playing, rate: playbackState == .playing ? playbackRate : 0)
         }
@@ -2797,9 +2845,14 @@ public final class AuralisAppModel: ObservableObject {
     /// 估算模式下播完由这里兜底检测（真实模式下由引擎的播完通知驱动）。
     /// 同时以低频节流把播放位置写入本地，进程终止后能恢复进度。
     private var lastPlaybackPersistAt: Date = .distantPast
+    /// 进度 tick 合并：`advanceProgress` 每 0.5 秒触发一次；若上一次的引擎位置查询
+    /// 还没返回，跳过本次，避免 Task 叠加（P2-4）。
+    private var isAdvancingProgress = false
     private func advanceProgress() {
-        guard playbackState == .playing else { return }
+        guard playbackState == .playing, !isAdvancingProgress else { return }
+        isAdvancingProgress = true
         Task { @MainActor in
+            defer { self.isAdvancingProgress = false }
             if let real = await self.engine.currentPosition() {
                 self.playbackPosition = min(real, self.currentTrack.duration)
             } else {
@@ -2871,8 +2924,8 @@ public final class AuralisAppModel: ObservableObject {
             return
         }
 
-        guard seamlessNextCandidate()?.id == prepared.id,
-              let canonical = queue.first(where: { $0.id == prepared.id }) else {
+        guard seamlessNextCandidate().map(queueIdentity) == queueIdentity(prepared),
+              let canonical = queue.first(where: { queueIdentity($0) == queueIdentity(prepared) }) else {
             // Queue changed at the boundary after preparation. Stop the stale
             // transition and let the current queue policy choose deterministically.
             if let expected = seamlessNextCandidate() {
@@ -2920,13 +2973,14 @@ public final class AuralisAppModel: ObservableObject {
             prepareNextTask = Task { [engine] in await engine.prepareNext(track: nil) }
             return
         }
-        let currentID = currentTrack.id
+        let currentIdentity = queueIdentity(currentTrack)
+        let candidateIdentity = queueIdentity(candidate)
         prepareNextTask = Task { @MainActor [weak self] in
             guard let self else { return }
             guard let playable = await resolvePlayableTrack(candidate) else { return }
             guard !Task.isCancelled,
-                  currentTrack.id == currentID,
-                  seamlessNextCandidate()?.id == candidate.id,
+                  queueIdentity(currentTrack) == currentIdentity,
+                  seamlessNextCandidate().map(queueIdentity) == candidateIdentity,
                   playable.streamURL != nil else { return }
             await engine.prepareNext(track: playable)
         }
@@ -2954,6 +3008,7 @@ public final class AuralisAppModel: ObservableObject {
     private func pauseAtQueueEnd() {
         lastStopReason = .queueEnded
         playbackPosition = 0
+        Task { await liveActivityManager.endPlayback() }
         Task {
             await engine.pause()
             playbackState = await engine.state()
@@ -2968,27 +3023,31 @@ public final class AuralisAppModel: ObservableObject {
     private func handleStreamFailure() {
         let track = currentTrack
         guard track.id.rawValue != "placeholder" else { return }
-        let attempts = streamRetryAttempts[track.id, default: 0]
+        // 重试预算按 GlobalID 隔离：切换服务器后即使远端 TrackID 相同也不会串扰。
+        let gid = queueIdentity(track)
+        let attempts = streamRetryAttempts[gid, default: 0]
         guard attempts < Self.maxStreamRetryAttempts else {
-            streamRetryAttempts[track.id] = 0
+            streamRetryAttempts[gid] = 0
             lastStopReason = .streamExpired
             playbackError = .engineFailure("流地址失效，已重试仍无法播放")
             playbackState = .failed(.engineFailure("流地址失效，已重试仍无法播放"))
             syncProgressTimer()
-            if hasNext {
+            // 统一用 canGoNext（含列表循环绕回、shuffle 剩余候选），而不是物理队列 hasNext：
+            // repeat all 队尾可绕回；repeat off 队尾停止；不产生 fail→repeat→fail 自旋。
+            if canGoNext {
                 next()
             }
             return
         }
-        streamRetryAttempts[track.id] = attempts + 1
+        streamRetryAttempts[gid] = attempts + 1
         playbackState = .buffering
         CrashLog.shared.log("流地址失效，刷新后重试（第 \(attempts + 1) 次）")
         Task { @MainActor in
             let refreshed = await resolvePlayableTrack(track, forceRefresh: true)
-            guard self.currentTrack.id == track.id else { return }
+            guard self.currentTrack.isSame(as: track) else { return }
             guard let refreshed else {
                 // 无法获取新流地址（服务器离线等）：按重试耗尽处理，自动下一首或提示。
-                self.streamRetryAttempts[track.id] = Self.maxStreamRetryAttempts
+                self.streamRetryAttempts[gid] = Self.maxStreamRetryAttempts
                 self.handleStreamFailure()
                 return
             }
@@ -3254,10 +3313,24 @@ public final class AuralisAppModel: ObservableObject {
             // 避免「切库后点下一首仍播旧库歌曲」以及用新服务器键写旧 trackID 快照。
             playbackTask?.cancel()
             playbackTask = nil
+            prepareNextTask?.cancel()
+            prepareNextTask = nil
             playbackError = nil
             lastStopReason = .serverDisconnected
             playbackPosition = 0
             queue = Array(tracks.prefix(30))
+            // 关键：把 currentTrack 重置为新服务器的曲目（或占位），避免旧服务器曲目
+            // 在切换后仍显示在播放条上、且点播放时被新服务器连接器按相同 TrackID 解析（P0-1）。
+            if let first = tracks.first {
+                currentTrack = first
+                loadLyricsIfNeeded(for: first)
+            } else {
+                currentTrack = Track(
+                    id: "placeholder", serverID: result.account.id,
+                    albumID: "placeholder", artistID: "placeholder",
+                    title: "请先连接服务器", artistName: "", albumTitle: "", duration: 0
+                )
+            }
             handoffActivity?.invalidate()
             Task { @MainActor in
                 await self.engine.stop()
@@ -3353,7 +3426,8 @@ public final class AuralisAppModel: ObservableObject {
                 artists: spotlightArtists,
                 albums: spotlightAlbums,
                 tracks: spotlightTracks,
-                playlists: spotlightPlaylists
+                playlists: spotlightPlaylists,
+                dislikedTrackIDs: dislikedTrackIDs
             )
         }
 

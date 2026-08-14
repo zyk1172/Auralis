@@ -211,6 +211,9 @@ final class DownloadStore: ObservableObject {
     /// 获取下载地址本身也是可取消的“排队”阶段。令牌防止用户点取消后，迟到的 URL
     /// 又创建一个后台任务。
     private var requestTokens: [GlobalID: UUID] = [:]
+    /// 当前活动服务器 ID。下载地址用活动连接器获取；若等待期间服务器切换，
+    /// 不得把新服务器的音频写入旧服务器的缓存槽（P1-2）。
+    var serverIDProvider: @MainActor () -> ServerID? = { nil }
 
     init(
         connector: any ServerConnecting,
@@ -286,6 +289,19 @@ final class DownloadStore: ObservableObject {
                 records[globalID] = DownloadTaskInfo(trackID: track.id, status: .failed, failure: failure)
                 downloadingTrackIDs.remove(globalID)
                 progress[globalID] = nil
+                lastOperationError = failure.message
+                return
+            }
+            // 等待下载地址期间服务器可能已切换：不允许用新服务器的地址写入旧服务器缓存槽。
+            if let activeServerID = serverIDProvider(), activeServerID != track.serverID {
+                let failure = DownloadFailureInfo(
+                    kind: .interrupted,
+                    message: "服务器已切换，本次下载已取消"
+                )
+                records[globalID] = DownloadTaskInfo(trackID: track.id, status: .failed, failure: failure)
+                downloadingTrackIDs.remove(globalID)
+                progress[globalID] = nil
+                requestTokens[globalID] = nil
                 lastOperationError = failure.message
                 return
             }

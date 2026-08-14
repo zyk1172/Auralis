@@ -498,3 +498,54 @@
 - 检查项：
   - 播放条上「随机」「上一首」「播放/暂停」「下一首」「循环」「收藏」「歌词」「队列」「音量」逐个点击均有响应，且点击后不展开播放器（除非点在封面/标题上）。
   - 循环按钮点击三次应依次显示：不循环 → 列表循环 → 单曲循环（帮助文本/图标变化）。
+
+---
+
+# Release Candidate 深度审计（2026-08-14）真机验收
+
+以下为 RC 审计新增/强调的 MANUAL-VERIFY。命令行与模拟器不能代替真机播放引擎、窗口与后台行为。
+
+## RC-1 播放边界（AVQueuePlayer）真机验收
+- 背景：循环/无缝切歌已改为 `PlayerItemBoundaryCoordinator` 确定性边界状态机
+  （`AVQueuePlayer.currentItem` KVO 是推进权威事件；不再用 `Task.yield` 猜测）。
+  确定性逻辑已由 `PlayerItemBoundaryCoordinatorTests`（9 项）与
+  `AURALIS_RUN_AV_TESTS=1 swift test --filter AVFoundationPlaybackEngineBoundaryTests`
+  覆盖；以下为真机最终确认。
+- 前置：iPhone（iOS 27）/ iPad / Mac 各一台；≥3 首真实可播放队列。
+- iPhone 前台/锁屏/后台、控制中心；iPad 前台/分屏；Mac 普通窗口/Expanded/Mini/全屏。
+- 每平台至少：
+  - Repeat One：同一首连续重播 ≥ 3 次，每次 position 归 0、进入 playing；
+  - Repeat All：3 首连续播放 ≥ 2 圈，队尾 C → A 无缝（无第二段 AVPlayer 重建间隙）；
+  - Repeat Off：一轮播完停止（不绕回、不重复）；
+  - Shuffle + Repeat Off：一轮随机播完停止；Shuffle + Repeat All：第二轮继续；
+  - 后台自然播完（App 在后台/锁屏 30 分钟）：循环仍按 Repeat 模式继续，不依赖 SwiftUI 生命周期。
+- 关键检查：A → B 无缝推进时**不会**先 `trackEndedHandler` 再 `preparedStartedHandler`
+  （无双重推进）；控制中心/锁屏标题与声音一致（声音已到 B，显示必须也是 B）。
+- 失败时提供：Console 中 `AuralisStartup`/播放日志、复现步骤、系统版本、音频格式。
+
+## RC-2 Mac Expanded Player 标题栏
+- 连续「普通资料库 → Expanded → Collapse」≥ 30 次。
+- Expanded 时：左上角绝无「澜音」、无原生窗口标题、标题栏透明、自定义 traffic lights 正常；
+- Collapse 后：普通窗口 traffic lights 恢复、toolbar/sidebar/navigation title 正常、窗口可拖动/缩放/最小化/关闭；
+- 全屏进出后同样正确；Mini Player 不受影响；播放进度 tick 不重排 titlebar。
+- 逻辑已由 `MacExpandedChromeTests`（8 项）覆盖；此处为真窗口视觉确认。
+
+## RC-3 iPad Sheet 仲裁
+- 打开 Browse 详情时点 MiniPlayer：只出现 Now Playing，Browse 关闭；
+- 从 Now Playing 打开 Browse 链接：Now Playing 关闭，只出现 Browse；
+- 上述任一生效时触发服务器设置（助手/快捷指令/连接错误路径）：只出现一个 sheet，关闭后恢复原 sheet；
+- Siri/快捷指令在 Browse 打开时触发 Now Playing：不得双 sheet。
+- 逻辑已由 `PadPresentationArbitrationTests`（14 项）覆盖；此处为真机确认。
+
+## RC-4 Live Activity / 灵动岛 / 小组件
+- 首次播放后：灵动岛出现当前歌曲（标题/艺术家/进度/播放状态）；
+- 切歌/暂停/继续/拖动：灵动岛与锁屏信息跟随，节流更新（约 5s）不报错；
+- 停止/队列结束/移除服务器：活动结束，小组件回到「暂无播放」；
+- 桌面小组件（Home Screen）显示与 App 一致的「正在播放」快照。
+- 前置：iOS 27 真机；小组件/灵动岛需要在真机验证（模拟器不可替代）。
+
+## RC-5 流失败与跨服务器身份
+- 播放中把服务器流地址失效（NAS 断网/换 URL）：自动刷新重试 ≤ 2 次后按队列策略前进/绕回/停止，不无限自旋；
+- 播放中切换服务器：播放条立即切到新服务器曲目（不再显示旧服务器标题）；点播放不会去新服务器拉旧 TrackID 的音频；
+- 下载进行中切换服务器：旧下载取消并标记失败（不把新服务器音频写入旧服务器缓存）。
+- 逻辑已由 `PlaybackPolicyRegressionTests`（4 项）覆盖；此处为真机/真实 NAS 确认。

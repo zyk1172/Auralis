@@ -35,7 +35,7 @@ public final class AuralisAgentBridge: AgentBridge {
     public func currentQueue() async -> [Track] { model.queue }
 
     public func lyricsState(for globalID: GlobalID) async -> AgentLyricsState {
-        model.lyricsAvailability(for: TrackID(rawValue: globalID.remoteID))
+        model.lyricsAvailability(for: globalID)
     }
 
     // MARK: - Playback

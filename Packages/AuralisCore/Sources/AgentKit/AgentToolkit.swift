@@ -496,7 +496,7 @@ public struct AgentToolkit {
             _ = (try? boolParam(call, "playableOnly")) ?? false
             let sort = (try? require(call, "sort"))?.lowercased() ?? "popularityProxy"
 
-            var tracks = try await catalog.allTracks(serverID: serverID, limit: 20000)
+            var tracks = try await catalog.allTracks(serverID: serverID)
             if favoritesOnly { tracks = tracks.filter(\.isFavorite) }
             if !genres.isEmpty {
                 tracks = tracks.filter { track in
@@ -709,7 +709,7 @@ public struct AgentToolkit {
             // 流派来自服务器返回的曲目标签（Navidrome 的 getGenres/曲目 genre 字段），
             // 本地按曲目聚合统计；显示名用中文翻译（GenreLocalization）。
             let limit = min(max((try? intParam(call, "limit")) ?? 30, 1), 100)
-            let tracks = try await catalog.allTracks(serverID: serverID, limit: 20000)
+            let tracks = try await catalog.allTracks(serverID: serverID)
             var counts: [String: Int] = [:]
             for track in tracks {
                 for genre in track.genres {
@@ -729,7 +729,7 @@ public struct AgentToolkit {
         case "library_get_tracks_by_genre":
             let genre = try require(call, "genre").trimmingCharacters(in: .whitespacesAndNewlines)
             let limit = min(max((try? intParam(call, "limit")) ?? 20, 1), 50)
-            let tracks = try await catalog.allTracks(serverID: serverID, limit: 20000)
+            let tracks = try await catalog.allTracks(serverID: serverID)
             let hits = tracks.filter { track in
                 track.genres.contains { $0.localizedCaseInsensitiveCompare(genre) == .orderedSame }
             }
@@ -846,7 +846,7 @@ public struct AgentToolkit {
         case "smart_queue_generate":
             // 只返回队列预览，不替换当前队列；由 queue_replace 直接应用（permissive runtime 无需二次确认）。
             let limit = min(max((try? intParam(call, "limit")) ?? 20, 1), 100)
-            let all = try await catalog.allTracks(serverID: serverID, limit: 20_000)
+            let all = try await catalog.allTracks(serverID: serverID)
             let recent = Set(try await catalog.getRecentHistory(serverID: serverID, limit: 50).map(\.globalID))
             let base = await excludingDisliked(all, catalog: catalog, serverID: serverID)
             let candidates = TrackQuality.deduplicatedPreferringQuality(base.filter {

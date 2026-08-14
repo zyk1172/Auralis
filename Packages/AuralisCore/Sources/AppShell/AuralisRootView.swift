@@ -896,6 +896,80 @@ extension View {
 }
 #endif
 
+// MARK: - iPad 弹窗仲裁（共享纯逻辑，供 PadMusicShell 与单元测试使用）
+
+/// iPad 弹窗仲裁中的唯一可呈现弹窗。
+/// 优先级：服务器配置 > 正在播放 > 浏览详情；同一时刻至多呈现一个。
+enum PadPresentedSheet: Equatable, Identifiable {
+    case serverSetup
+    case nowPlaying
+    case browse(BrowseDestination)
+
+    var id: String {
+        switch self {
+        case .serverSetup: "serverSetup"
+        case .nowPlaying: "nowPlaying"
+        case let .browse(destination): "browse.\(destination.id)"
+        }
+    }
+}
+
+/// 纯逻辑弹窗仲裁策略（不依赖 SwiftUI，可单元测试）：
+/// - `presentedSheet` 由三个底层状态推导唯一应呈现的弹窗；
+/// - `dismissals` 描述“打开某个动作”时应清除的其它底层状态，保持互斥。
+enum PadPresentationArbitration {
+    /// 将要打开的动作。
+    enum Open: Equatable {
+        case nowPlaying
+        case browse(BrowseDestination)
+        case serverSetup
+    }
+
+    /// 打开动作时需要清除的其它底层状态。
+    struct Dismissals: Equatable {
+        var nowPlaying = false
+        var browse = false
+
+        static let none = Dismissals()
+    }
+
+    /// 根据三个底层状态推导当前应呈现的唯一弹窗。服务器配置始终优先；
+    /// 正在播放优先于浏览详情（底层状态可能同时为真，但呈现只允许一个）。
+    static func presentedSheet(
+        serverSetupPresented: Bool,
+        nowPlayingPresented: Bool,
+        browseDestination: BrowseDestination?
+    ) -> PadPresentedSheet? {
+        if serverSetupPresented { return .serverSetup }
+        if nowPlayingPresented { return .nowPlaying }
+        if let browseDestination { return .browse(browseDestination) }
+        return nil
+    }
+
+    /// 打开动作后应清除的其它状态。
+    /// 服务器配置优先级最高：只遮盖不销毁（关闭后可恢复之前的弹窗）；
+    /// 正在播放与浏览详情彼此互斥：打开一方即关闭另一方。
+    static func dismissals(
+        opening: Open,
+        serverSetupPresented: Bool,
+        nowPlayingPresented: Bool,
+        browseDestination: BrowseDestination?
+    ) -> Dismissals {
+        switch opening {
+        case .serverSetup:
+            return .none
+        case .nowPlaying:
+            // 服务器配置打开时不允许打开正在播放。
+            guard !serverSetupPresented else { return .none }
+            return Dismissals(nowPlaying: false, browse: browseDestination != nil)
+        case .browse:
+            // 服务器配置打开时不允许打开浏览详情。
+            guard !serverSetupPresented else { return .none }
+            return Dismissals(nowPlaying: nowPlayingPresented, browse: false)
+        }
+    }
+}
+
 #if os(iOS)
 private enum PadSidebarDestination: String, CaseIterable, Hashable, Identifiable {
     case search
@@ -1030,19 +1104,22 @@ private struct PadMusicShell: View {
                     .padding(.bottom, 4)
             }
         }
-        .sheet(isPresented: nowPlayingBinding) {
-            NowPlayingView(model: model, theme: themeStore.current)
-                #if os(iOS)
-                .presentationDragIndicator(.visible)
-                .presentationDetents([.large])
-                #endif
-                .frame(minWidth: 620, minHeight: 680)
-        }
-        .sheet(isPresented: $model.shouldPresentServerSetup) {
-            ServerConnectionSheet(model: model, theme: themeStore.current)
-        }
-        .sheet(item: browseDestinationBinding) { destination in
-            BrowseDetailSheet(destination: destination, model: model, theme: themeStore.current)
+        // 单一弹窗仲裁：服务器配置 > 正在播放 > 浏览详情，同一时刻至多呈现一个弹窗，
+        // 从根上避免 UIKit "Attempt to present … which is already presenting …" 冲突导致卡顿。
+        .sheet(item: presentedSheetBinding) { sheet in
+            switch sheet {
+            case .serverSetup:
+                ServerConnectionSheet(model: model, theme: themeStore.current)
+            case .nowPlaying:
+                NowPlayingView(model: model, theme: themeStore.current)
+                    #if os(iOS)
+                    .presentationDragIndicator(.visible)
+                    .presentationDetents([.large])
+                    #endif
+                    .frame(minWidth: 620, minHeight: 680)
+            case let .browse(destination):
+                BrowseDetailSheet(destination: destination, model: model, theme: themeStore.current)
+            }
         }
         .alert("播放失败", isPresented: .init(
             get: { model.playbackError != nil },
@@ -1077,6 +1154,28 @@ private struct PadMusicShell: View {
         .onChange(of: model.selectedSection) { _, section in
             guard selection.appSection != section else { return }
             selection = .defaultDestination(for: section)
+        }
+        // 直接写入模型状态（快捷指令 / AI 助手 / 页面按钮）时也执行互斥仲裁：
+        // 打开正在播放即关闭浏览详情；打开浏览详情即关闭正在播放。
+        .onChange(of: model.isNowPlayingPresented) { _, presented in
+            guard presented else { return }
+            let dismissals = PadPresentationArbitration.dismissals(
+                opening: .nowPlaying,
+                serverSetupPresented: model.shouldPresentServerSetup,
+                nowPlayingPresented: presented,
+                browseDestination: model.browseDestination
+            )
+            if dismissals.browse { model.browseDestination = nil }
+        }
+        .onChange(of: model.browseDestination) { _, destination in
+            guard let destination else { return }
+            let dismissals = PadPresentationArbitration.dismissals(
+                opening: .browse(destination),
+                serverSetupPresented: model.shouldPresentServerSetup,
+                nowPlayingPresented: model.isNowPlayingPresented,
+                browseDestination: destination
+            )
+            if dismissals.nowPlaying { model.isNowPlayingPresented = false }
         }
     }
 
@@ -1134,25 +1233,36 @@ private struct PadMusicShell: View {
         }
     }
 
-    /// 互斥呈现：服务器配置弹窗优先；正在播放 / 浏览详情不会与它同时弹出，
-    /// 避免 UIKit "Attempt to present … which is already presenting …" 冲突导致卡顿。
-    private var nowPlayingBinding: Binding<Bool> {
+    /// 单一弹窗仲裁绑定：呈现由 `PadPresentationArbitration.presentedSheet` 推导
+    /// （服务器配置 > 正在播放 > 浏览详情）；关闭弹窗（SwiftUI 写入 nil）时只清除
+    /// 当前实际呈现的那一个底层状态，避免误删被服务器配置遮盖的旧状态。
+    private var presentedSheetBinding: Binding<PadPresentedSheet?> {
         Binding(
-            get: { model.isNowPlayingPresented && !model.shouldPresentServerSetup },
-            set: { newValue in
-                if !newValue {
+            get: {
+                PadPresentationArbitration.presentedSheet(
+                    serverSetupPresented: model.shouldPresentServerSetup,
+                    nowPlayingPresented: model.isNowPlayingPresented,
+                    browseDestination: model.browseDestination
+                )
+            },
+            set: { sheet in
+                // 呈现由 get 推导；set 只处理 SwiftUI 关闭弹窗（写入 nil）的情况。
+                guard sheet == nil else { return }
+                switch PadPresentationArbitration.presentedSheet(
+                    serverSetupPresented: model.shouldPresentServerSetup,
+                    nowPlayingPresented: model.isNowPlayingPresented,
+                    browseDestination: model.browseDestination
+                ) {
+                case .serverSetup:
+                    model.shouldPresentServerSetup = false
+                case .nowPlaying:
                     model.isNowPlayingPresented = false
-                } else if !model.shouldPresentServerSetup {
-                    model.isNowPlayingPresented = true
+                case .browse:
+                    model.browseDestination = nil
+                case nil:
+                    break
                 }
             }
-        )
-    }
-
-    private var browseDestinationBinding: Binding<BrowseDestination?> {
-        Binding(
-            get: { model.shouldPresentServerSetup ? nil : model.browseDestination },
-            set: { model.browseDestination = $0 }
         )
     }
 

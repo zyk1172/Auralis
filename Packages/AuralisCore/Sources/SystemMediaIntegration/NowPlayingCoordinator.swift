@@ -49,6 +49,9 @@ public struct NowPlayingSnapshot: Sendable, Equatable {
 @MainActor
 public final class NowPlayingCoordinator {
     public private(set) var current: NowPlayingSnapshot?
+    /// 最近一次提交给系统的完整信息字典（含封面）。进度 tick 只改其中两个键，
+    /// 不重新读 MPNowPlayingInfoCenter——避免旧曲目信息被回写覆盖新曲目（P1-3）。
+    private var lastInfo: [String: Any]?
 
     public init() {}
 
@@ -92,10 +95,30 @@ public final class NowPlayingCoordinator {
     public func update(_ snapshot: NowPlayingSnapshot) {
         current = snapshot
         let info = Self.infoDictionary(for: snapshot)
+        lastInfo = info
         CrashLog.shared.log("NowPlayingCoordinator.update: \(snapshot.title)")
-        // MPNowPlayingInfoCenter 在 iOS 上必须从主线程访问；
-        // 非主线程调用会触发 FIG/MediaRemote 内部 _dispatch_assert_queue_fail。
-        // 用 DispatchQueue.main.async 确保即使调用方在 eventdispatch 等非主线程队列上也能安全执行。
+        dispatchNowPlaying(info)
+    }
+
+    /// 仅刷新进度与速率（拖动、播放/暂停切换的高频路径）。
+    /// 基于本协调器缓存的 `lastInfo` 修改两个键，不读取 MPNowPlayingInfoCenter：
+    /// 切歌后旧曲目的进度更新不会把旧标题/封面回写覆盖新曲目（P1-3）。
+    public func updateProgress(elapsed: TimeInterval, rate: Float) {
+        guard var snapshot = current else { return }
+        snapshot.elapsed = elapsed
+        snapshot.rate = rate
+        current = snapshot
+        guard var base = lastInfo else { return }
+        base[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
+        base[MPNowPlayingInfoPropertyPlaybackRate] = rate
+        lastInfo = base
+        dispatchNowPlaying(base)
+    }
+
+    /// MPNowPlayingInfoCenter 在 iOS 上必须从主线程访问；非主线程调用会触发
+    /// FIG/MediaRemote 内部 _dispatch_assert_queue_fail。用 DispatchQueue.main.async
+    /// 确保即使调用方在 eventdispatch 等非主线程队列上也能安全执行。
+    private func dispatchNowPlaying(_ info: [String: Any]) {
         #if os(iOS)
         DispatchQueue.main.async {
             CrashLog.shared.log("设置 MPNowPlayingInfoCenter.nowPlayingInfo (主线程)")
@@ -103,30 +126,6 @@ public final class NowPlayingCoordinator {
         }
         #else
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        #endif
-    }
-
-    /// 仅刷新进度与速率（拖动、播放/暂停切换的高频路径）。
-    public func updateProgress(elapsed: TimeInterval, rate: Float) {
-        guard var snapshot = current else { return }
-        snapshot.elapsed = elapsed
-        snapshot.rate = rate
-        current = snapshot
-        #if os(iOS)
-        // MPNowPlayingInfoCenter 在 iOS 上必须从主线程访问；
-        // 先读取当前信息，再在主线程上更新，避免 _dispatch_assert_queue_fail。
-        let currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-        DispatchQueue.main.async {
-            var base = currentInfo
-            base[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
-            base[MPNowPlayingInfoPropertyPlaybackRate] = rate
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = base
-        }
-        #else
-        var base = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-        base[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
-        base[MPNowPlayingInfoPropertyPlaybackRate] = rate
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = base
         #endif
     }
 
