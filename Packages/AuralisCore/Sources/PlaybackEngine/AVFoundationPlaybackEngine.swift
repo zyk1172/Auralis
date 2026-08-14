@@ -210,6 +210,22 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         return seconds
     }
 
+    /// 当前 item 的真实时长（秒）：优先 seekableTimeRanges（渐进式 HTTP 流可给出已确定时长），
+    /// 其次异步读取 asset.duration（本地文件/已知时长流）。目录元数据 duration 可能比真实
+    /// 音频短/长，播放页进度条与控制中心应以此为准（RC 真机反馈）。
+    public func currentDuration() async -> TimeInterval? {
+        guard let item = avPlayer?.currentItem else { return nil }
+        if let last = item.seekableTimeRanges.last {
+            let end = last.timeRangeValue.end.seconds
+            if end.isFinite, end > 0 { return end }
+        }
+        if let duration = try? await item.asset.load(.duration),
+           duration.seconds.isFinite, duration.seconds > 0 {
+            return duration.seconds
+        }
+        return nil
+    }
+
     private func stopAll() {
         CrashLog.shared.log("AVFoundationPlaybackEngine.stopAll")
         failureReported = false

@@ -116,6 +116,9 @@ public final class AuralisAppModel: ObservableObject {
     }
     /// O(1) 的目录内容修订号。只在 catalog 替换/实体内容改变时递增；播放进度 tick 不变。
     @Published public private(set) var catalogRevision: UInt64 = 0
+    /// 当前 item 的真实时长（秒），由引擎按需回报；目录元数据时长可能不准，
+    /// 播放页进度条、控制中心与 Live Activity 以此为准（真机反馈：进度条到头仍在播）。
+    @Published public private(set) var actualDuration: TimeInterval?
     /// O(1) 的歌曲行元数据修订号。播放次数或首次入库日期改变时递增；播放进度 tick 不变。
     @Published public private(set) var libraryRowMetadataRevision: UInt64 = 0
     /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
@@ -751,8 +754,8 @@ public final class AuralisAppModel: ObservableObject {
                 onPrevious: { [weak self] in self?.previous() },
                 onNext: { [weak self] in self?.next() },
                 onSeek: { [weak self] position in
-                    guard let self, self.currentTrack.duration > 0 else { return }
-                    self.seek(toProgress: position / self.currentTrack.duration)
+                    guard let self, (self.actualDuration ?? self.currentTrack.duration) > 0 else { return }
+                    self.seek(toProgress: position / (self.actualDuration ?? self.currentTrack.duration))
                 },
                 onShuffle: { [weak self] enabled in self?.setShuffle(enabled) },
                 onRepeatMode: { [weak self] mode in self?.setRepeatMode(mode) }
@@ -1120,7 +1123,8 @@ public final class AuralisAppModel: ObservableObject {
             artworkData: currentArtworkData(),
             queueIndex: queueIndex,
             queueCount: queue.count,
-            rate: playbackState == .playing ? playbackRate : 0
+            rate: playbackState == .playing ? playbackRate : 0,
+            duration: actualDuration
         )
         // 灵动岛 / 锁屏实时活动与「正在播放」小组件（P1-4）。
         let content = liveActivityContent()
@@ -1137,7 +1141,7 @@ public final class AuralisAppModel: ObservableObject {
             artworkKey: currentTrack.artworkKey,
             serverID: catalog.activeServerID?.rawValue,
             trackID: currentTrack.id.rawValue,
-            duration: currentTrack.duration,
+            duration: actualDuration ?? currentTrack.duration,
             position: playbackPosition,
             isPlaying: playbackState == .playing
         )
@@ -1273,8 +1277,9 @@ public final class AuralisAppModel: ObservableObject {
     /// 0...1 playback progress of the current track.
     public var playbackProgress: Double {
         get {
-            guard currentTrack.duration > 0 else { return 0 }
-            return min(max(playbackPosition / currentTrack.duration, 0), 1)
+            let duration = actualDuration ?? currentTrack.duration
+            guard duration > 0 else { return 0 }
+            return min(max(playbackPosition / duration, 0), 1)
         }
         set { seek(toProgress: newValue) }
     }
@@ -1374,6 +1379,7 @@ public final class AuralisAppModel: ObservableObject {
 
     public func selectAndPlay(_ track: Track) {
         CrashLog.shared.log("selectAndPlay 开始: \(track.title) (id=\(track.id.rawValue))")
+        actualDuration = nil
         streamRetryAttempts.removeValue(forKey: queueIdentity(track))
         playbackHistoryStore.resetSelection()
         currentTrack = track
@@ -2560,7 +2566,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 向前跳转（默认 30 秒）。
     public func skipForward(seconds: TimeInterval = 30) {
-        let duration = currentTrack.duration
+        let duration = actualDuration ?? currentTrack.duration
         let target = duration > 0 ? min(playbackPosition + seconds, duration) : playbackPosition + seconds
         seekToAbsolute(target)
     }
@@ -2747,7 +2753,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 拖动进度：同时更新 UI 位置、驱动引擎真实 seek，并同步锁屏进度。
     public func seek(toProgress progress: Double) {
-        playbackPosition = min(max(progress, 0), 1) * currentTrack.duration
+        playbackPosition = min(max(progress, 0), 1) * (actualDuration ?? currentTrack.duration)
         let position = playbackPosition
         let identity = queueIdentity(currentTrack)
         persistPlaybackSession()
@@ -2858,8 +2864,11 @@ public final class AuralisAppModel: ObservableObject {
         isAdvancingProgress = true
         Task { @MainActor in
             defer { self.isAdvancingProgress = false }
+            if let realDuration = await self.engine.currentDuration() {
+                self.actualDuration = realDuration
+            }
             if let real = await self.engine.currentPosition() {
-                self.playbackPosition = min(real, self.currentTrack.duration)
+                self.playbackPosition = min(real, self.actualDuration ?? self.currentTrack.duration)
             } else {
                 self.playbackPosition += 0.5
                 if self.playbackPosition >= self.currentTrack.duration {
@@ -3323,6 +3332,7 @@ public final class AuralisAppModel: ObservableObject {
             playbackError = nil
             lastStopReason = .serverDisconnected
             playbackPosition = 0
+            actualDuration = nil
             queue = Array(tracks.prefix(30))
             // 关键：把 currentTrack 重置为新服务器的曲目（或占位），避免旧服务器曲目
             // 在切换后仍显示在播放条上、且点播放时被新服务器连接器按相同 TrackID 解析（P0-1）。

@@ -22,6 +22,8 @@ public protocol PlaybackControlling: Sendable {
     func seek(to position: TimeInterval) async
     /// 引擎当前真实播放位置；无法获取时返回 nil，调用方回退到估算。
     func currentPosition() async -> TimeInterval?
+    /// 当前 item 的真实时长（秒）；无法获取时返回 nil，调用方回退到目录元数据。
+    func currentDuration() async -> TimeInterval?
     /// 注册曲目自然播完的通知回调（用于自动切歌）。
     func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) async
     /// 注册播放中途失败回调（流地址失效 / 解码失败 / 网络错误），用于刷新 URL 后重试或自动下一首。
@@ -41,6 +43,7 @@ public extension PlaybackControlling {
     func setRate(_ rate: Float) async {}
     func seek(to position: TimeInterval) async {}
     func currentPosition() async -> TimeInterval? { nil }
+    func currentDuration() async -> TimeInterval? { nil }
     func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) async {}
     func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) async {}
     func prepareNext(track: Track?) async {}

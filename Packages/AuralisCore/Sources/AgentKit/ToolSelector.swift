@@ -195,7 +195,7 @@ public enum ToolSelector {
         policy: AgentTaskPolicy,
         all: [ToolDescriptor]
     ) -> [ToolDescriptor] {
-        var selected = select(for: userText, all: all)
+        let selected = select(for: userText, all: all)
         let intentNames: Set<String>
         switch intent {
         case .conversation:

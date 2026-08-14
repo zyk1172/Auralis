@@ -50,7 +50,8 @@ public final class SystemMediaIntegrationController {
         artworkData: Data?,
         queueIndex: Int? = nil,
         queueCount: Int? = nil,
-        rate: Float? = nil
+        rate: Float? = nil,
+        duration: TimeInterval? = nil
     ) {
         let coordinator = audioSession
         Task { await coordinator.activate() }
@@ -58,7 +59,7 @@ public final class SystemMediaIntegrationController {
             title: track.title,
             artist: track.artistName,
             album: track.albumTitle,
-            duration: track.duration,
+            duration: duration ?? track.duration,
             elapsed: position,
             rate: rate ?? (isPlaying ? 1 : 0),
             artworkData: artworkData,

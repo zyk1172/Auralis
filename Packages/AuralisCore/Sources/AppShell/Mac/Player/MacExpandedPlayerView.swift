@@ -385,13 +385,14 @@ struct MacExpandedPlayerView: View {
                 let activeIndex = currentLyricIndex
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
+                        LazyVStack(alignment: .center, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                                 let isCurrent = activeIndex == index
                                 Text(line.text)
                                     .font(.system(size: isCurrent ? MacUIVisualTokens.Typography.lyricActive : MacUIVisualTokens.Typography.lyricInactive, weight: isCurrent ? .semibold : .regular))
                                     .foregroundStyle(isCurrent ? palette.primary : palette.lyricInactive)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: .infinity, alignment: .center)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         if let start = line.startTime {
@@ -747,14 +748,28 @@ private struct MacExpandedWindowChrome: NSViewRepresentable {
     final class ChromeHostView: NSView {
         private var isLayoutScheduled = false
         private var didPerformDeferredReassert = false
+        /// 窗口标题 KVO：SwiftUI 可能在播放/状态变化时重新提交 WindowGroup 标题（“澜音”），
+        /// 此时 updateNSView 不一定被调用。标题一变就幂等复检，确保展开页左上角绝不出现标题。
+        private var titleObservation: NSKeyValueObservation?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            guard window != nil else { return }
+            guard let window else {
+                titleObservation?.invalidate()
+                titleObservation = nil
+                return
+            }
             // 1) 进入窗口时立即复检。
             ensureExpandedChrome()
-            // 2) onAppear 之后的一次性延迟复检：SwiftUI 可能随后重新提交
-            //    WindowGroup 标题（如“澜音”），延迟到运行循环稳定后再纠正一次。
+            // 2) 观测窗口标题：任意时刻被重提交为“澜音”都立刻清掉（事件驱动，无轮询开销）。
+            titleObservation?.invalidate()
+            titleObservation = window.observe(\.title, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { [weak self] in
+                    self?.ensureExpandedChrome()
+                }
+            }
+            // 3) onAppear 之后的一次性延迟复检：SwiftUI 可能随后重新提交
+            //    WindowGroup 标题，延迟到运行循环稳定后再纠正一次。
             guard !didPerformDeferredReassert else { return }
             didPerformDeferredReassert = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
