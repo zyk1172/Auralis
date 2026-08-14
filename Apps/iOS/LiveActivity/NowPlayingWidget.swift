@@ -68,7 +68,7 @@ struct NowPlayingWidgetView: View {
                     .foregroundStyle(.secondary)
                 Text("暂无播放")
                     .font(.headline)
-                Text("打开澜音开始播放后，这里会显示当前歌曲。")
+                Text("打开Auralis开始播放后，这里会显示当前歌曲。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

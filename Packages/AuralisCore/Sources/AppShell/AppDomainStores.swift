@@ -161,10 +161,17 @@ final class HomeStore: ObservableObject {
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published var catalog: LibraryCatalog {
-        didSet { trackByGlobalID = Self.makeTrackIndex(catalog.tracks) }
+        didSet { rebuildDerivedIndexes() }
     }
     /// 浏览页、歌单和上下文菜单均以 GlobalID 解析歌曲，避免 M×N 扫描与跨服务器同 ID 串库。
-    private(set) var trackByGlobalID: [GlobalID: Track]
+    private(set) var trackByGlobalID: [GlobalID: Track] = [:]
+    /// 艺术家 GlobalID → 曲目。索引只在 catalog 变更时重建一次；
+    /// 同 GlobalID 重复条目合并（保留首次出现），避免 ForEach 重复身份崩溃。
+    private(set) var tracksByArtist: [GlobalID: [Track]] = [:]
+    /// 艺术家 GlobalID → 专辑。索引只在 catalog 变更时重建一次；同 GlobalID 合并。
+    private(set) var albumsByArtist: [GlobalID: [Album]] = [:]
+    /// 专辑 GlobalID → 曲目。索引只在 catalog 变更时重建一次；同 GlobalID 合并。
+    private(set) var tracksByAlbum: [GlobalID: [Track]] = [:]
     @Published var playlistTracks: [PlaylistID: [Track]] = [:]
     @Published var loadingPlaylistIDs: Set<PlaylistID> = []
     @Published var playlistDeletionError: String?
@@ -173,15 +180,76 @@ final class LibraryStore: ObservableObject {
 
     init(catalog: LibraryCatalog) {
         self.catalog = catalog
-        self.trackByGlobalID = Self.makeTrackIndex(catalog.tracks)
+        rebuildDerivedIndexes()
     }
 
     func track(for globalID: GlobalID) -> Track? { trackByGlobalID[globalID] }
+
+    // MARK: - 派生索引查找（O(1)，不扫描目录）
+
+    func tracks(artistGlobalID: GlobalID) -> [Track] { tracksByArtist[artistGlobalID] ?? [] }
+    func albums(artistGlobalID: GlobalID) -> [Album] { albumsByArtist[artistGlobalID] ?? [] }
+    func tracks(albumGlobalID: GlobalID) -> [Track] { tracksByAlbum[albumGlobalID] ?? [] }
+
+    func tracks(artist: Artist) -> [Track] {
+        tracks(artistGlobalID: GlobalID(serverID: artist.serverID, remoteID: artist.id.rawValue))
+    }
+    func albums(artist: Artist) -> [Album] {
+        albums(artistGlobalID: GlobalID(serverID: artist.serverID, remoteID: artist.id.rawValue))
+    }
+    func tracks(album: Album) -> [Track] {
+        tracks(albumGlobalID: GlobalID(serverID: album.serverID, remoteID: album.id.rawValue))
+    }
+
+    // MARK: - 索引构建（仅 catalog didSet / init 时重建一次）
+
+    private func rebuildDerivedIndexes() {
+        trackByGlobalID = Self.makeTrackIndex(catalog.tracks)
+        tracksByArtist = Self.makeArtistTrackIndex(catalog.tracks)
+        albumsByArtist = Self.makeArtistAlbumIndex(catalog.albums)
+        tracksByAlbum = Self.makeAlbumTrackIndex(catalog.tracks)
+    }
 
     private static func makeTrackIndex(_ tracks: [Track]) -> [GlobalID: Track] {
         var index: [GlobalID: Track] = [:]
         for track in tracks {
             index[GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)] = track
+        }
+        return index
+    }
+
+    private static func makeArtistTrackIndex(_ tracks: [Track]) -> [GlobalID: [Track]] {
+        var index: [GlobalID: [Track]] = [:]
+        var seen = Set<GlobalID>()
+        for track in tracks {
+            let trackGID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+            guard seen.insert(trackGID).inserted else { continue }
+            let artistGID = GlobalID(serverID: track.serverID, remoteID: track.artistID.rawValue)
+            index[artistGID, default: []].append(track)
+        }
+        return index
+    }
+
+    private static func makeArtistAlbumIndex(_ albums: [Album]) -> [GlobalID: [Album]] {
+        var index: [GlobalID: [Album]] = [:]
+        var seen = Set<GlobalID>()
+        for album in albums {
+            let albumGID = GlobalID(serverID: album.serverID, remoteID: album.id.rawValue)
+            guard seen.insert(albumGID).inserted else { continue }
+            let artistGID = GlobalID(serverID: album.serverID, remoteID: album.artistID.rawValue)
+            index[artistGID, default: []].append(album)
+        }
+        return index
+    }
+
+    private static func makeAlbumTrackIndex(_ tracks: [Track]) -> [GlobalID: [Track]] {
+        var index: [GlobalID: [Track]] = [:]
+        var seen = Set<GlobalID>()
+        for track in tracks {
+            let trackGID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+            guard seen.insert(trackGID).inserted else { continue }
+            let albumGID = GlobalID(serverID: track.serverID, remoteID: track.albumID.rawValue)
+            index[albumGID, default: []].append(track)
         }
         return index
     }

@@ -38,6 +38,11 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// 当前边界事件对应的 item：DidPlayToEnd 闭包必须校验事件 item 仍是当前观察
     /// 的 item，避免被移除观察者的迟到通知重复处理（exactly-once）。
     private var endObservedItem: AVPlayerItem?
+    /// 当前 item 的真实总时长（秒），由 duration KVO 在 item 解析后写入一次。
+    /// 播放页/控制中心以它为权威；不要在进度 tick 反复 asset.load(.duration)，
+    /// 也不要把 seekableTimeRanges（可 seek 范围）当总时长。
+    private var resolvedDuration: TimeInterval?
+    private var durationObservation: NSKeyValueObservation?
     /// AVQueuePlayer.currentItem KVO：prepared item 成为 current 的权威事件。
     private var currentItemObservation: NSKeyValueObservation?
     /// prepared item 在推进前失败的观察（FailedToPlayToEndTime / status==.failed）。
@@ -127,6 +132,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observeItemFailure(for: item)
         observeTimeControl(for: player)
         observeCurrentItem(for: player)
+        observeDuration(for: item)
 
         CrashLog.shared.log("调用 player.play()")
         player.play()
@@ -212,21 +218,36 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
     /// 当前 item 的真实总时长（秒）。
     ///
-    /// 目录元数据 duration 可能比真实音频短，导致进度条提前到头仍在播（RC 真机反馈）。
-    /// 注意 seekableTimeRanges 在渐进式 HTTP 流未完全缓冲时只是「已缓冲范围」，可能
-    /// 小于总时长，因此必须优先取总时长：asset.load(.duration)（本地文件/已知时长流
-    /// 准确），seekableTimeRanges 只作为最后兜底估计。
+    /// 由 duration KVO 在 item 解析后写入一次并缓存；进度 tick 只读此缓存。
+    /// 目录元数据 duration 可能比真实音频短/长，播放页/控制中心以此为准。
+    /// 不使用 seekableTimeRanges（那是「可 seek 的范围」，不是媒体总时长）。
     public func currentDuration() async -> TimeInterval? {
-        guard let item = avPlayer?.currentItem else { return nil }
-        if let duration = try? await item.asset.load(.duration),
-           duration.seconds.isFinite, duration.seconds > 0 {
-            return duration.seconds
+        guard let resolvedDuration, resolvedDuration.isFinite, resolvedDuration > 0 else { return nil }
+        return resolvedDuration
+    }
+
+    /// 安装 AVPlayerItem.duration KVO：duration 从 indefinite 变为有效值时写入缓存。
+    /// 每个 item 只解析一次；prepared 过渡/stop 时由调用方重置。
+    private func observeDuration(for item: AVPlayerItem) {
+        durationObservation?.invalidate()
+        durationObservation = item.observe(\.duration, options: [.new]) { [weak self] item, _ in
+            let seconds = item.duration.seconds
+            guard seconds.isFinite, seconds > 0 else { return }
+            Task { @MainActor [weak self] in
+                self?.resolvedDuration = seconds
+            }
         }
-        if let last = item.seekableTimeRanges.last {
-            let end = last.timeRangeValue.end.seconds
-            if end.isFinite, end > 0 { return end }
+        // item 可能已 ready、duration 已有效：立即读一次（幂等，避免依赖 KVO 首帧）。
+        let seconds = item.duration.seconds
+        if seconds.isFinite, seconds > 0 {
+            resolvedDuration = seconds
         }
-        return nil
+    }
+
+    private func resetDurationObservation() {
+        durationObservation?.invalidate()
+        durationObservation = nil
+        resolvedDuration = nil
     }
 
     private func stopAll() {
@@ -236,6 +257,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         cancelBoundaryFallback()
         boundaryCoordinator.reset()
         clearPreparedItemFailureObserver()
+        resetDurationObservation()
         currentItemObservation?.invalidate()
         currentItemObservation = nil
         endObservedItem = nil
@@ -411,6 +433,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         boundaryCoordinator.reset()
         clearPreparedItemFailureObserver()
         clearItemObservers()
+        resetDurationObservation()
         preparedItem = nil
         preparedTrack = nil
         currentTrack = track
@@ -419,6 +442,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observeTrackEnd(for: item)
         observeItemFailure(for: item)
         if let player = avPlayer { observeTimeControl(for: player) }
+        observeDuration(for: item)
         playbackState = avPlayer?.timeControlStatus == .playing ? .playing : .buffering
         preparedTrackStartedHandler?(track)
     }

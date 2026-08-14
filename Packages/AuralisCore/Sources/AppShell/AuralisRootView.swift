@@ -255,9 +255,10 @@ private struct CompactShell: View {
             coordinator: bottomDockScroll,
             onExpand: { setDockPresentation(.expanded) },
             onAssistant: {
-                model.selectedSection = .assistant
+                selectTopLevelSection(.assistant)
                 setDockPresentation(.expanded)
-            }
+            },
+            onSelect: { selectTopLevelSection($0) }
         )
     }
 
@@ -269,6 +270,14 @@ private struct CompactShell: View {
         withAnimation(dockAnimation) {
             bottomDockScroll.setCollapseProgress(presentation == .compact ? 1 : 0)
         }
+    }
+
+    /// 一级分区切换的唯一入口：必须同时清掉浏览详情（NavigationStack 的
+    /// navigationDestination item），否则详情仍盖在新分区根页之上，表现为
+    /// “歌单/收藏详情里点音乐库/AI 助手跳不过去”；同时重置底部 Dock 的滚动进度。
+    private func selectTopLevelSection(_ section: AppSection) {
+        model.selectTopLevelSection(section)
+        bottomDockScroll.reset()
     }
     /// 互斥呈现：服务器配置弹窗优先；正在播放 / 浏览详情不会与它同时弹出，
     /// 避免 UIKit "Attempt to present … which is already presenting …" 冲突导致卡顿。
@@ -351,6 +360,7 @@ private struct MorphingBottomDockProgressHost: View {
     @ObservedObject var coordinator: BottomDockScrollCoordinator
     let onExpand: () -> Void
     let onAssistant: () -> Void
+    let onSelect: (AppSection) -> Void
 
     var body: some View {
         MorphingBottomDock(
@@ -359,7 +369,8 @@ private struct MorphingBottomDockProgressHost: View {
             accessory: accessory,
             progress: coordinator.collapseProgress,
             onExpand: onExpand,
-            onAssistant: onAssistant
+            onAssistant: onAssistant,
+            onSelect: onSelect
         )
     }
 }
@@ -379,6 +390,7 @@ private struct MorphingBottomDock: View {
     let progress: CGFloat
     let onExpand: () -> Void
     let onAssistant: () -> Void
+    let onSelect: (AppSection) -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     private var p: CGFloat { min(max(progress, 0), 1) }
@@ -389,7 +401,7 @@ private struct MorphingBottomDock: View {
 
     var body: some View {
         if accessory == nil {
-            ExpandedDock(model: model, theme: theme, showsPlayer: false)
+            ExpandedDock(model: model, theme: theme, showsPlayer: false, onSelect: onSelect)
         } else {
             GeometryReader { proxy in
                 let height = bottomBarHeight * 2 + dockSpacing + dockBottomPadding
@@ -491,12 +503,12 @@ private struct MorphingBottomDock: View {
                 if p >= 0.96 {
                     onExpand()
                 } else {
-                    model.selectedSection = .home
+                    onSelect(.home)
                 }
             case .assistant:
                 onAssistant()
             default:
-                model.selectedSection = section
+                onSelect(section)
             }
         } label: {
             VStack(spacing: 4) {
@@ -579,6 +591,7 @@ private struct ExpandedDock: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     let showsPlayer: Bool
+    let onSelect: (AppSection) -> Void
 
     var body: some View {
         VStack(spacing: dockSpacing) {
@@ -594,7 +607,7 @@ private struct ExpandedDock: View {
             }
 
             BottomGlassBarShell {
-                MainTabBarContent(model: model, theme: theme)
+                MainTabBarContent(model: model, theme: theme, onSelect: onSelect)
             }
             .frame(maxWidth: .infinity)
             .frame(height: bottomBarHeight)
@@ -783,6 +796,7 @@ struct BottomGlassBarShell<Content: View>: View {
 private struct MainTabBarContent: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
+    let onSelect: (AppSection) -> Void
     @State private var dragOffset: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
 
@@ -816,7 +830,7 @@ private struct MainTabBarContent: View {
                         Button {
                             withAnimation(.snappy(duration: 0.30, extraBounce: 0.08)) {
                                 dragOffset = 0
-                                model.selectedSection = section
+                                onSelect(section)
                             }
                         } label: {
                             VStack(spacing: 4) {
@@ -881,7 +895,7 @@ private struct MainTabBarContent: View {
                     target = selectedIndex
                 }
                 withAnimation(.snappy(duration: 0.32, extraBounce: 0.08)) {
-                    model.selectedSection = sections[target]
+                    onSelect(sections[target])
                     dragOffset = 0
                 }
             }
@@ -1081,7 +1095,7 @@ private struct PadMusicShell: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationTitle("澜音")
+            .navigationTitle("Auralis")
             .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 290)
             .safeAreaInset(edge: .bottom) {
                 ServerStatus(model: model, theme: themeStore.current)

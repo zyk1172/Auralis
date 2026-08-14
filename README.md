@@ -1,4 +1,4 @@
-# Auralis / 澜音
+# Auralis
 
 > 面向 iPhone、iPad 与 macOS 的原生私人音乐播放器。连接你自己的
 > Navidrome / OpenSubsonic 音乐服务器，把「可靠播放、离线资料库、隐私优先」放在第一位。

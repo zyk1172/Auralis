@@ -1,5 +1,7 @@
 # Manual validation
 
+> 历史文档说明：本文档记录品牌名称为「澜音」时期的验证内容；品牌已更名为 **Auralis**，文中品牌名引用已同步更新。
+
 以下项目统一标记为 `MANUAL-VERIFY`。它们依赖真机、真实 NAS、音频路由、iOS 后台策略或 Instruments，不能由命令行单元测试或模拟器诚实替代。优先级按故障影响排列。
 
 ## P0
@@ -525,7 +527,7 @@
 
 ## RC-2 Mac Expanded Player 标题栏
 - 连续「普通资料库 → Expanded → Collapse」≥ 30 次。
-- Expanded 时：左上角绝无「澜音」、无原生窗口标题、标题栏透明、自定义 traffic lights 正常；
+- Expanded 时：左上角绝无「Auralis」、无原生窗口标题、标题栏透明、自定义 traffic lights 正常；
 - Collapse 后：普通窗口 traffic lights 恢复、toolbar/sidebar/navigation title 正常、窗口可拖动/缩放/最小化/关闭；
 - 全屏进出后同样正确；Mini Player 不受影响；播放进度 tick 不重排 titlebar。
 - 键盘：在任意 TextField（搜索/歌单命名/AI 输入等）编辑时，Space / Return / ← / →

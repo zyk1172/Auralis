@@ -20,7 +20,7 @@ public struct MacMiniPlayerView: View {
     }
 
     private var hasTrack: Bool { model.hasCurrentTrack }
-    private var duration: TimeInterval { max(model.currentTrack.duration, 1) }
+    private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
 
     public var body: some View {

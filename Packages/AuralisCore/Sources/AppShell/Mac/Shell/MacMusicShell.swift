@@ -8,6 +8,20 @@ import ThemeEngine
 /// macOS 主窗口 Shell（Round-4）：
 /// 普通资料库 UI + 同一窗口内的 Expanded Player 覆盖（不新建 Full Player 窗口）。
 /// 展开/收起只改 presentation state，不改 navigation selection / path / scroll / search。
+/// 普通模式窗口 chrome 附着器：进入窗口即把窗口交给唯一所有者，确保
+/// titleVisibility 保持 hidden（不显示原生窗口标题），traffic lights 正常显示。
+private struct MacWindowAttacher: NSViewRepresentable {
+    func makeNSView(context: Context) -> AttacherView { AttacherView() }
+    func updateNSView(_ view: AttacherView, context: Context) {}
+    final class AttacherView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            MacWindowChromeController.shared.attach(window)
+            MacWindowChromeController.shared.setExpanded(false)
+        }
+    }
+}
+
 public struct MacMusicShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
@@ -39,6 +53,7 @@ public struct MacMusicShell: View {
 
     public var body: some View {
         attachLifecycle(attachModals(contents))
+            .background(MacWindowAttacher())
     }
 
     private var contents: some View {
@@ -189,13 +204,9 @@ public struct MacMusicShell: View {
     }
 
     private func restoreTrafficLights() {
-        guard let window = NSApp.keyWindow else { return }
-        // 离开展开页后恢复原生 traffic lights 与普通资料库 titlebar。
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
-        [.closeButton, .miniaturizeButton, .zoomButton].forEach { button in
-            window.standardWindowButton(button)?.isHidden = false
-        }
+        // 统一由窗口 chrome 唯一所有者处理：恢复原生 traffic lights 与不透明 titlebar，
+        // titleVisibility 始终保持 hidden（内容区用 navigationTitle 显示页面标题）。
+        MacWindowChromeController.shared.setExpanded(false)
     }
 
     // MARK: - 主内容（普通模式）
@@ -295,7 +306,7 @@ public struct MacMusicShell: View {
             case let .recommendationCategory(category): return category.macCategoryTitle
             }
         }
-        return navigation.selection?.title ?? "澜音"
+        return navigation.selection?.title ?? "Auralis"
     }
 
     private func resolveAlbum(_ id: MacEntityRouteID) -> Album? {

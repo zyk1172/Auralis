@@ -9,6 +9,9 @@ public actor OpenSubsonicSyncSource: LibrarySyncSource {
     private let client: OpenSubsonicClient
     private var albumCache: [Album]?
     private let tracksBatchSize = 15
+    /// 专辑详情抓取的有界并发上限：与 OpenSubsonicLibrarySyncSource 保持一致，
+    /// 避免逐张专辑串行拉取把几千张专辑变成几千次串行 HTTP 请求。
+    private let maximumConcurrentAlbumRequests = 6
 
     public init(client: OpenSubsonicClient) {
         self.client = client
@@ -37,11 +40,32 @@ public actor OpenSubsonicSyncSource: LibrarySyncSource {
             return LibraryPage(items: [], nextContinuation: nil)
         }
         var tracks: [Track] = []
-        for album in albums[offset..<upper] {
-            // 单张专辑抓取失败向上抛出，由 LibrarySynchronizer 按重试策略重试，
-            // 而不是静默跳过导致曲目缺失（原实现 try? 吞错）。
-            let detail = try await client.album(id: album.id.rawValue)
-            tracks.append(contentsOf: detail.tracks)
+        let batch = Array(albums[offset..<upper])
+        var start = 0
+        // 单张专辑抓取失败向上抛出，由 LibrarySynchronizer 按重试策略重试，
+        // 而不是静默跳过导致曲目缺失（原实现 try? 吞错）。
+        // 有界并发：每批最多 maximumConcurrentAlbumRequests 张专辑并行抓取，
+        // 批与批之间串行推进，避免打爆 NAS 也不退化成逐张串行。
+        while start < batch.count {
+            try Task.checkCancellation()
+            let end = min(batch.count, start + maximumConcurrentAlbumRequests)
+            let slice = Array(batch[start..<end])
+            let details = try await withThrowingTaskGroup(
+                of: OpenSubsonicAlbumDetail.self,
+                returning: [OpenSubsonicAlbumDetail].self
+            ) { group in
+                for album in slice {
+                    group.addTask { [client] in
+                        try Task.checkCancellation()
+                        return try await client.album(id: album.id.rawValue)
+                    }
+                }
+                var values: [OpenSubsonicAlbumDetail] = []
+                for try await value in group { values.append(value) }
+                return values
+            }
+            for detail in details { tracks.append(contentsOf: detail.tracks) }
+            start = end
         }
         let next = upper < albums.count ? String(upper) : nil
         return LibraryPage(items: tracks, nextContinuation: next)

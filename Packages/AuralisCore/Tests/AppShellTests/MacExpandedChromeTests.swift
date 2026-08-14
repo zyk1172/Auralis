@@ -1,102 +1,123 @@
-@testable import AppShell
+#if os(macOS)
+import AppKit
 import Foundation
 import Testing
+@testable import AppShell
 
-/// Expanded Player 窗口 chrome 幂等策略的纯逻辑测试。
+/// Expanded Player 窗口 chrome 的窗口级测试：直接创建真实 `NSWindow`，
+/// 应用 normal / expanded / normal 状态，验证属性（可自动验证，不需要真机）。
 ///
-/// 覆盖「澜音」泄漏修复的核心决策函数 `MacExpandedChromePolicy`：
-/// - 状态已正确 → 不需要任何修正（保证播放位置 tick 不会触发 titlebar 重排）
-/// - 标题 / titleVisibility / titlebarAppearsTransparent / traffic lights
-///   任一偏离 → 只返回对应的修正项
-///
-/// NSView 侧的接线（viewDidMoveToWindow 立即复检、onAppear 后的一次性延迟复检、
-/// updateNSView 幂等复检、scheduleChromeLayout 合并）依赖真实窗口生命周期，无法
-/// 在此无窗口环境下自动验证，标记为 MANUAL-VERIFY（不伪造）。
-@Suite("Mac expanded chrome policy")
+/// 设计契约（RC Stabilization）：
+/// - 标题文本由 WindowGroup 管理（品牌名 `Auralis`），但 `titleVisibility` 在
+///   normal 与 expanded 都保持 `.hidden`（内容区用 navigationTitle 显示页面标题）；
+/// - expanded：原生 traffic lights 隐藏、titlebar 透明；
+/// - normal：原生 traffic lights 显示、titlebar 不透明；
+/// - 不做轮询 / KVO / Timer / 修改 window.title。
+@Suite("Mac expanded window chrome")
 struct MacExpandedChromeTests {
-    private func state(
-        title: String = "",
-        isTitleHidden: Bool = true,
-        isTitlebarTransparent: Bool = true,
-        areTrafficLightsHidden: Bool = true
-    ) -> MacExpandedChromePolicy.WindowChromeState {
-        .init(
-            title: title,
-            isTitleHidden: isTitleHidden,
-            isTitlebarTransparent: isTitlebarTransparent,
-            areTrafficLightsHidden: areTrafficLightsHidden
+    private func makeWindow() -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
         )
+        return window
     }
 
-    @Test("状态全部正确 → 不需要任何修正（幂等）")
-    func correctStateRequiresNoChanges() {
-        let changes = MacExpandedChromePolicy.neededChanges(for: state())
-        #expect(changes.isEmpty)
+    @Test("进入窗口即隐藏 titleVisibility，不显示原生窗口标题")
+    @MainActor
+    func attachHidesTitleVisibility() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        #expect(window.titleVisibility == .hidden)
     }
 
-    @Test("标题泄漏回 titlebar（如“澜音”）→ 只需清空标题")
-    func leakedTitleNeedsClear() {
-        let changes = MacExpandedChromePolicy.neededChanges(for: state(title: "澜音"))
-        #expect(changes.clearTitle)
-        #expect(!changes.hideTitle)
-        #expect(!changes.makeTitlebarTransparent)
-        #expect(!changes.hideTrafficLights)
-        #expect(!changes.isEmpty)
+    @Test("normal：titleVisibility hidden、traffic lights 显示、titlebar 不透明")
+    @MainActor
+    func normalModeChrome() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        controller.setExpanded(false)
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.titlebarAppearsTransparent == false)
+        let trafficTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        for type in trafficTypes {
+            #expect(window.standardWindowButton(type)?.isHidden == false)
+        }
     }
 
-    @Test("titleVisibility 非 hidden → 需要隐藏标题可见性")
-    func visibleTitleNeedsHide() {
-        let changes = MacExpandedChromePolicy.neededChanges(for: state(isTitleHidden: false))
-        #expect(changes.hideTitle)
-        #expect(!changes.clearTitle)
-        #expect(!changes.isEmpty)
+    @Test("expanded：titleVisibility 仍 hidden、traffic lights 隐藏、titlebar 透明")
+    @MainActor
+    func expandedModeChrome() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        controller.setExpanded(true)
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.titlebarAppearsTransparent == true)
+        let trafficTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        for type in trafficTypes {
+            #expect(window.standardWindowButton(type)?.isHidden == true)
+        }
     }
 
-    @Test("titlebarAppearsTransparent 非 true → 需要透明 titlebar")
-    func opaqueTitlebarNeedsTransparency() {
-        let changes = MacExpandedChromePolicy.neededChanges(for: state(isTitlebarTransparent: false))
-        #expect(changes.makeTitlebarTransparent)
-        #expect(!changes.isEmpty)
+    @Test("normal → expanded → normal 连续切换，titleVisibility 全程 hidden")
+    @MainActor
+    func toggleCycleKeepsTitleHidden() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        for _ in 0..<30 {
+            controller.setExpanded(true)
+            #expect(window.titleVisibility == .hidden)
+            #expect(window.titlebarAppearsTransparent == true)
+            controller.setExpanded(false)
+            #expect(window.titleVisibility == .hidden)
+            #expect(window.titlebarAppearsTransparent == false)
+        }
+        // 即使 SwiftUI 把 title 写回“Auralis”，titleVisibility 为 hidden，不显示。
+        window.title = "Auralis"
+        controller.setExpanded(false)
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.title != "")
     }
 
-    @Test("原生 traffic lights 显示中 → 需要隐藏")
-    func visibleTrafficLightsNeedHide() {
-        let changes = MacExpandedChromePolicy.neededChanges(for: state(areTrafficLightsHidden: false))
-        #expect(changes.hideTrafficLights)
-        #expect(!changes.isEmpty)
+    @Test("状态已正确时幂等：不改变任何属性（零 titlebar 重排）")
+    @MainActor
+    func applyIsIdempotent() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        controller.setExpanded(true)
+        // 手动“破坏”后再次 setExpanded(true) 应恢复；正确状态下重复调用不改值。
+        window.titlebarAppearsTransparent = false
+        controller.setExpanded(true)
+        #expect(window.titlebarAppearsTransparent == true)
+        controller.setExpanded(true) // 幂等
+        #expect(window.titlebarAppearsTransparent == true)
+        #expect(window.titleVisibility == .hidden)
     }
 
-    @Test("多个偏离 → 返回全部对应修正")
-    func multipleDeviationsAggregate() {
-        let changes = MacExpandedChromePolicy.neededChanges(
-            for: state(
-                title: "澜音",
-                isTitleHidden: false,
-                isTitlebarTransparent: false,
-                areTrafficLightsHidden: false
-            )
-        )
-        #expect(changes.clearTitle)
-        #expect(changes.hideTitle)
-        #expect(changes.makeTitlebarTransparent)
-        #expect(changes.hideTrafficLights)
-        #expect(!changes.isEmpty)
-    }
-
-    @Test("修正后状态回到正确 → 不再需要修正（防抖/幂等）")
-    func fixedStateBecomesIdempotent() {
-        var changes = MacExpandedChromePolicy.neededChanges(for: state(title: "澜音"))
-        #expect(!changes.isEmpty)
-        changes = MacExpandedChromePolicy.neededChanges(for: state())
-        #expect(changes.isEmpty)
-    }
-
-    @Test("原始要求不变：标题为空 + 隐藏 + 透明 + traffic lights 隐藏")
-    func requiredChromeInvariant() {
-        // 与审计要求一致：展开页期间 window.title == ""、
-        // titleVisibility == .hidden、titlebarAppearsTransparent == true、
-        // 原生 traffic lights 隐藏。
-        let changes = MacExpandedChromePolicy.neededChanges(for: state())
-        #expect(changes == MacExpandedChromePolicy.NeededChanges())
+    @Test("attach(nil) 保留最近窗口引用，收起后仍能恢复 traffic lights")
+    @MainActor
+    func attachNilKeepsWindowReference() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        controller.setExpanded(true)
+        // 收起：Expanded 桥接视图被移除 → attach(nil)。
+        controller.attach(nil)
+        controller.setExpanded(false)
+        // 仍能恢复（弱引用窗口存活时）。
+        #expect(window.titlebarAppearsTransparent == false)
+        let trafficTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        for type in trafficTypes {
+            #expect(window.standardWindowButton(type)?.isHidden == false)
+        }
+        #expect(window.titleVisibility == .hidden)
     }
 }
+#endif

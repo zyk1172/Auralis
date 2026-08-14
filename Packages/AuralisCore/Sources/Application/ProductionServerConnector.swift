@@ -436,6 +436,10 @@ public actor ProductionServerConnector: ServerConnecting {
         await libraryRevisionProbe()?.songCount
     }
 
+    /// 探针分页上限（500/页 → 最多 20,000 张专辑）。达到上限仍未翻完时视为
+    /// 「无法可靠判定」，返回 nil 走保守全量，而不是无限翻页。
+    private static let maximumProbePages = 40
+
     public func libraryRevisionProbe() async -> LibraryRevisionProbe? {
         guard let client = activeClient else { return nil }
         var total = 0
@@ -443,11 +447,17 @@ public actor ProductionServerConnector: ServerConnecting {
         let pageSize = 500
         var anySongCount = false
         var fingerprintParts: [String] = []
-        let maxPages = 500
+        // 探针有界：超大型曲库（超过上限页仍未翻完）无法可靠判定是否变化，
+        // 保守返回 nil（= 不跳过同步，走全量校验），避免「轻量检查」退化成整库扫描。
+        let maxPages = Self.maximumProbePages
+        var reachedEnd = false
         for _ in 0..<maxPages {
             do {
                 let page = try await client.albums(type: .alphabeticalByName, size: pageSize, offset: offset)
-                if page.isEmpty { break }
+                if page.isEmpty {
+                    reachedEnd = true
+                    break
+                }
                 for album in page {
                     if let count = album.songCount {
                         anySongCount = true
@@ -463,14 +473,17 @@ public actor ProductionServerConnector: ServerConnecting {
                         album.songCount.map(String.init) ?? "",
                     ].joined(separator: "\u{1f}"))
                 }
-                if page.count < pageSize { break }
+                if page.count < pageSize {
+                    reachedEnd = true
+                    break
+                }
                 offset += pageSize
             } catch {
                 return nil
             }
         }
-        // 服务器未提供任何 songCount 时无法可靠比对，返回 nil 走原有同步逻辑。
-        guard anySongCount, total > 0 else { return nil }
+        // 没翻完（超大库）或服务器未提供任何 songCount 时无法可靠比对，返回 nil 走原有同步逻辑。
+        guard reachedEnd, anySongCount, total > 0 else { return nil }
         fingerprintParts.sort()
         var hash: UInt64 = 14_695_981_039_346_656_037
         for byte in fingerprintParts.joined(separator: "\u{1e}").utf8 {
@@ -575,9 +588,11 @@ public actor ProductionServerConnector: ServerConnecting {
     }
 
     /// 用当前已认证服务器构建资料库同步器（本地目录写入）。
+    /// 与 connect()/resync() 使用同一个 bounded-concurrency source（sourceFactory 注入），
+    /// 避免后台/增量同步退回旧版「逐专辑串行拉取」——几千张专辑会变成几千次串行 HTTP。
     public func makeSynchronizer(store: LocalCatalogStore) -> LibrarySynchronizer? {
         guard let client = activeClient else { return nil }
-        let source = OpenSubsonicSyncSource(client: client)
+        let source = sourceFactory(client)
         return LibrarySynchronizer(source: source, store: store)
     }
 

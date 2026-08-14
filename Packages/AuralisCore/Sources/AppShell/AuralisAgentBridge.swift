@@ -107,8 +107,8 @@ public final class AuralisAgentBridge: AgentBridge {
     }
 
     public func seek(seconds: TimeInterval) async {
-        guard model.currentTrack.duration > 0 else { return }
-        model.seek(toProgress: seconds / model.currentTrack.duration)
+        guard model.effectivePlaybackDuration > 0 else { return }
+        model.seek(toProgress: seconds / model.effectivePlaybackDuration)
     }
 
     public func next() async { model.next() }

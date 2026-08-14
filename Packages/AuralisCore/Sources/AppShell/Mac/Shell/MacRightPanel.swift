@@ -68,7 +68,7 @@ struct MacRightPanel: View {
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         if let start = line.startTime {
-                                            model.seek(toProgress: min(1, max(0, start / max(model.currentTrack.duration, 1))))
+                                            model.seek(toProgress: min(1, max(0, start / max(model.effectivePlaybackDuration, 1))))
                                         }
                                     }
                                     .id(index)

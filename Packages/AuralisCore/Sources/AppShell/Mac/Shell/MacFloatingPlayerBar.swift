@@ -43,7 +43,7 @@ struct MacFloatingPlayerBar: View {
     }
 
     private var hasTrack: Bool { model.hasCurrentTrack }
-    private var duration: TimeInterval { max(model.currentTrack.duration, 1) }
+    private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
 
     var body: some View {

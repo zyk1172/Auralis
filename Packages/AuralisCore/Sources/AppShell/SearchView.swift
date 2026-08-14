@@ -144,7 +144,7 @@ struct SearchView: View {
             AuralisEmptyState(
                 icon: "magnifyingglass",
                 title: "搜索你的音乐库",
-                message: "输入歌曲、专辑、艺术家或歌单名称，澜音会在本地持久化资料库中匹配（离线可用）。",
+                message: "输入歌曲、专辑、艺术家或歌单名称，Auralis会在本地持久化资料库中匹配（离线可用）。",
                 colors: theme.colorTokens
             )
         } else {
