@@ -2310,13 +2310,18 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 设置曲目评分，0 表示清除评分。
-    public func setRating(trackID: TrackID, rating: Int) async {
+    /// 使用 GlobalID：只对活动服务器的曲目生效，避免旧服务器的同 TrackID 在切服后
+    /// 被当前连接器误评分，或把 currentTrack 误更新成旧服务器曲目（RC §26）。
+    public func setRating(globalID: GlobalID, rating: Int) async {
         let clamped = min(max(rating, 0), 5)
-        if let index = catalog.tracks.firstIndex(where: { $0.id == trackID }) {
+        guard globalID.serverID == catalog.activeServerID else { return }
+        if let index = catalog.tracks.firstIndex(where: {
+            $0.serverID == globalID.serverID && $0.id.rawValue == globalID.remoteID
+        }) {
             catalog.tracks[index].rating = clamped == 0 ? nil : clamped
-            if currentTrack.id == trackID { currentTrack = catalog.tracks[index] }
+            if currentTrack.isSame(as: catalog.tracks[index]) { currentTrack = catalog.tracks[index] }
         }
-        await connector.setRating(trackID: trackID, rating: clamped)
+        await connector.setRating(trackID: TrackID(rawValue: globalID.remoteID), rating: clamped)
     }
 
     // MARK: - Server lifecycle

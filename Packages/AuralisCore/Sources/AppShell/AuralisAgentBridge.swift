@@ -248,12 +248,12 @@ public final class AuralisAgentBridge: AgentBridge {
 
     public func setRating(globalID: GlobalID, rating: Int) async {
         try? await catalog.setRating(globalID, rating: rating)
-        await model.setRating(trackID: TrackID(rawValue: globalID.remoteID), rating: rating)
+        await model.setRating(globalID: globalID, rating: rating)
     }
 
     public func clearRating(globalID: GlobalID) async {
         try? await catalog.clearRating(globalID)
-        await model.setRating(trackID: TrackID(rawValue: globalID.remoteID), rating: 0)
+        await model.setRating(globalID: globalID, rating: 0)
     }
 
     // MARK: - Server
