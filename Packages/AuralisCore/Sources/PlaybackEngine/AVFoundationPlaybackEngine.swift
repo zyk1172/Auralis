@@ -210,18 +210,21 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         return seconds
     }
 
-    /// 当前 item 的真实时长（秒）：优先 seekableTimeRanges（渐进式 HTTP 流可给出已确定时长），
-    /// 其次异步读取 asset.duration（本地文件/已知时长流）。目录元数据 duration 可能比真实
-    /// 音频短/长，播放页进度条与控制中心应以此为准（RC 真机反馈）。
+    /// 当前 item 的真实总时长（秒）。
+    ///
+    /// 目录元数据 duration 可能比真实音频短，导致进度条提前到头仍在播（RC 真机反馈）。
+    /// 注意 seekableTimeRanges 在渐进式 HTTP 流未完全缓冲时只是「已缓冲范围」，可能
+    /// 小于总时长，因此必须优先取总时长：asset.load(.duration)（本地文件/已知时长流
+    /// 准确），seekableTimeRanges 只作为最后兜底估计。
     public func currentDuration() async -> TimeInterval? {
         guard let item = avPlayer?.currentItem else { return nil }
-        if let last = item.seekableTimeRanges.last {
-            let end = last.timeRangeValue.end.seconds
-            if end.isFinite, end > 0 { return end }
-        }
         if let duration = try? await item.asset.load(.duration),
            duration.seconds.isFinite, duration.seconds > 0 {
             return duration.seconds
+        }
+        if let last = item.seekableTimeRanges.last {
+            let end = last.timeRangeValue.end.seconds
+            if end.isFinite, end > 0 { return end }
         }
         return nil
     }

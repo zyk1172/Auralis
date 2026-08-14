@@ -751,30 +751,52 @@ private struct MacExpandedWindowChrome: NSViewRepresentable {
         /// 窗口标题 KVO：SwiftUI 可能在播放/状态变化时重新提交 WindowGroup 标题（“澜音”），
         /// 此时 updateNSView 不一定被调用。标题一变就幂等复检，确保展开页左上角绝不出现标题。
         private var titleObservation: NSKeyValueObservation?
+        /// 展开期间的低频幂等复检：播放过程模型会反复发布状态，SwiftUI 会周期性重新
+        /// 提交“澜音”，仅靠 KVO 仍会一帧帧闪（忽隐忽现）。用 0.1s 定时器兜底：
+        /// ensureExpandedChrome 只读状态、仅在确实不对时才修改 titlebar，因此正确时
+        /// 没有开销，错误时最长 0.1s 内被纠正，视觉上不再闪烁。
+        private var reassertTimer: Timer?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard let window else {
                 titleObservation?.invalidate()
                 titleObservation = nil
+                stopReassertTimer()
                 return
             }
             // 1) 进入窗口时立即复检。
             ensureExpandedChrome()
-            // 2) 观测窗口标题：任意时刻被重提交为“澜音”都立刻清掉（事件驱动，无轮询开销）。
+            // 2) 观测窗口标题：任意时刻被重提交为“澜音”都立刻清掉。
             titleObservation?.invalidate()
             titleObservation = window.observe(\.title, options: [.new]) { [weak self] _, _ in
                 DispatchQueue.main.async { [weak self] in
                     self?.ensureExpandedChrome()
                 }
             }
-            // 3) onAppear 之后的一次性延迟复检：SwiftUI 可能随后重新提交
+            // 3) 展开期间低频幂等复检（消除忽隐忽现）。
+            startReassertTimer()
+            // 4) onAppear 之后的一次性延迟复检：SwiftUI 可能随后重新提交
             //    WindowGroup 标题，延迟到运行循环稳定后再纠正一次。
             guard !didPerformDeferredReassert else { return }
             didPerformDeferredReassert = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.ensureExpandedChrome()
             }
+        }
+
+        private func startReassertTimer() {
+            stopReassertTimer()
+            let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.ensureExpandedChrome()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            reassertTimer = timer
+        }
+
+        private func stopReassertTimer() {
+            reassertTimer?.invalidate()
+            reassertTimer = nil
         }
 
         /// 幂等：仅当实际 chrome 状态与展开页要求不一致时才调度修正；
