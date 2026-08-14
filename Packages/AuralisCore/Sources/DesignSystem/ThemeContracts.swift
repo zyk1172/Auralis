@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 public struct ColorToken: Codable, Hashable, Sendable {
@@ -6,6 +7,38 @@ public struct ColorToken: Codable, Hashable, Sendable {
 
     public var color: Color {
         Color(hex: hex)
+    }
+
+    /// WCAG sRGB 相对亮度。主题和会在渐变页面上使用此值做可读性回归测试，
+    /// 避免把浅色背景和浅色前景组合后才在运行时发现按钮、文字不可见。
+    public var relativeLuminance: Double {
+        let rgb = rgbComponents
+        return 0.2126 * linearized(rgb.red)
+            + 0.7152 * linearized(rgb.green)
+            + 0.0722 * linearized(rgb.blue)
+    }
+
+    /// 与另一主题色的 WCAG 对比度（1:1 至 21:1）。
+    public func contrastRatio(against other: ColorToken) -> Double {
+        let brighter = max(relativeLuminance, other.relativeLuminance)
+        let darker = min(relativeLuminance, other.relativeLuminance)
+        return (brighter + 0.05) / (darker + 0.05)
+    }
+
+    private var rgbComponents: (red: Double, green: Double, blue: Double) {
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var value: UInt64 = 0
+        Scanner(string: cleaned).scanHexInt64(&value)
+        let shift = cleaned.count == 8 ? 8 : 0
+        return (
+            Double((value >> (16 + shift)) & 0xFF) / 255,
+            Double((value >> (8 + shift)) & 0xFF) / 255,
+            Double((value >> shift) & 0xFF) / 255
+        )
+    }
+
+    private func linearized(_ channel: Double) -> Double {
+        channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
     }
 }
 

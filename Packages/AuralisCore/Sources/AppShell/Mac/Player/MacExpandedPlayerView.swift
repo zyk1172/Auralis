@@ -46,6 +46,11 @@ struct MacExpandedPlayerView: View {
     private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
     private var trackGlobalID: String { "\(track.serverID):\(track.id.rawValue)" }
     private var isPlaying: Bool { playbackStore.state == .playing }
+    /// 展开播放页只从 ThemeColors 取前景色。背景可以是浅色渐变、封面氛围图或深色
+    /// 主题，但文字和按钮不能再假设它一定是黑底。
+    private var palette: MacExpandedPlayerPalette {
+        .init(colors: theme.colorTokens, colorScheme: theme.colorScheme)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -107,20 +112,53 @@ struct MacExpandedPlayerView: View {
     // MARK: - 背景
 
     private var background: some View {
-        ZStack {
+        let colors = theme.colorTokens
+        let isLight = theme.colorScheme == .light
+        return ZStack {
+            // 播放页的底色始终来自当前主题，而不是固定灰黑。三段渐变建立 Apple
+            // Music 式由顶向下的景深；两层低饱和主题强调光让不同主题仍保有识别度。
+            LinearGradient(
+                colors: [
+                    colors.background.color,
+                    colors.elevated.color,
+                    colors.surface.color.opacity(isLight ? 0.82 : 0.90)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            RadialGradient(
+                colors: [colors.accent.color.opacity(0.30), colors.accent.color.opacity(0.08), .clear],
+                center: .topTrailing,
+                startRadius: 12,
+                endRadius: 880
+            )
+            RadialGradient(
+                colors: [colors.accentSecondary.color.opacity(0.24), colors.accentSecondary.color.opacity(0.05), .clear],
+                center: .bottomLeading,
+                startRadius: 20,
+                endRadius: 940
+            )
             if let ambienceImage, model.currentTrack.artworkKey != nil {
                 Image(platformImage: ambienceImage)
                     .resizable()
                     .scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .blur(radius: 100)
-                    .saturation(0.72)
+                    .blur(radius: 108)
+                    .saturation(0.84)
                     .scaleEffect(1.15)
                     .clipped()
-            } else {
-                LinearGradient(colors: [.black.opacity(0.9), .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
+                    .opacity(isLight ? 0.12 : 0.28)
+                    .blendMode(.softLight)
             }
-            Color.black.opacity(0.30)
+            // 这是可读性层，而不是固定灰蒙版：浅色主题保留足够亮度让深色
+            // ThemeColors 前景清晰；深色主题压住封面氛围图后仍使用浅色前景。
+            LinearGradient(
+                colors: isLight
+                    ? [.white.opacity(0.18), .white.opacity(0.38)]
+                    : [.black.opacity(0.12), .black.opacity(0.30)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
@@ -171,11 +209,11 @@ struct MacExpandedPlayerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(track.title)
                     .font(.system(size: 23, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.primary)
                     .lineLimit(1)
                 Text("\(track.artistName) — \(track.albumTitle)")
                     .font(.system(size: 15))
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(palette.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -184,7 +222,7 @@ struct MacExpandedPlayerView: View {
             } label: {
                 Image(systemName: track.isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 20))
-                    .foregroundStyle(track.isFavorite ? MacMediaAccent.color : .white.opacity(0.8))
+                    .foregroundStyle(track.isFavorite ? palette.accent : palette.control)
             }
             .buttonStyle(.plain)
             .help(track.isFavorite ? "取消收藏" : "收藏")
@@ -210,7 +248,7 @@ struct MacExpandedPlayerView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(palette.control)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -236,7 +274,7 @@ struct MacExpandedPlayerView: View {
                 }
             )
             .controlSize(.small)
-            .tint(.white.opacity(0.7))
+            .tint(palette.accent)
             .accessibilityLabel("播放进度")
             HStack {
                 Text(MacFormat.time(progress))
@@ -244,7 +282,7 @@ struct MacExpandedPlayerView: View {
                 Text("-" + MacFormat.time(max(0, duration - progress)))
             }
             .font(.caption.monospacedDigit())
-            .foregroundStyle(.white.opacity(0.65))
+            .foregroundStyle(palette.secondary)
         }
         .frame(width: width)
     }
@@ -256,7 +294,7 @@ struct MacExpandedPlayerView: View {
             } label: {
                 Image(systemName: "shuffle")
                     .font(.system(size: 20))
-                    .foregroundStyle(model.isShuffled ? MacMediaAccent.color : .white.opacity(0.8))
+                    .foregroundStyle(model.isShuffled ? palette.accent : palette.control)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("随机播放")
@@ -266,7 +304,7 @@ struct MacExpandedPlayerView: View {
             } label: {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 28))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(palette.primary)
             }
             .buttonStyle(.plain)
             .disabled(!model.canGoPrevious)
@@ -277,7 +315,7 @@ struct MacExpandedPlayerView: View {
             } label: {
                 Image(systemName: model.playbackStore.state == .playing ? "pause.fill" : "play.fill")
                     .font(.system(size: 32))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.primary)
             }
             .buttonStyle(.plain)
             .disabled(!model.hasCurrentTrack)
@@ -288,7 +326,7 @@ struct MacExpandedPlayerView: View {
             } label: {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 28))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(palette.primary)
             }
             .buttonStyle(.plain)
             .disabled(!model.canGoNext)
@@ -300,7 +338,7 @@ struct MacExpandedPlayerView: View {
             } label: {
                 Image(systemName: model.repeatMode == .one ? "repeat.1" : "repeat")
                     .font(.system(size: 20))
-                    .foregroundStyle(model.repeatMode != .off ? MacMediaAccent.color : .white.opacity(0.8))
+                    .foregroundStyle(model.repeatMode != .off ? palette.accent : palette.control)
             }
             .buttonStyle(.plain)
             .help("循环模式")
@@ -331,10 +369,10 @@ struct MacExpandedPlayerView: View {
             case .loading:
                 VStack(spacing: 10) {
                     Spacer()
-                    ProgressView().controlSize(.small).tint(.white)
+                    ProgressView().controlSize(.small).tint(palette.accent)
                     Text("正在加载歌词…")
                         .font(.body)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(palette.secondary)
                     Spacer()
                 }
             case let .available(lyrics) where !lyrics.lines.isEmpty:
@@ -346,7 +384,7 @@ struct MacExpandedPlayerView: View {
                                 let isCurrent = activeIndex == index
                                 Text(line.text)
                                     .font(.system(size: isCurrent ? MacUIVisualTokens.Typography.lyricActive : MacUIVisualTokens.Typography.lyricInactive, weight: isCurrent ? .semibold : .regular))
-                                    .foregroundStyle(isCurrent ? Color.white : Color.white.opacity(0.55))
+                                    .foregroundStyle(isCurrent ? palette.primary : palette.lyricInactive)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
@@ -374,10 +412,10 @@ struct MacExpandedPlayerView: View {
                     Spacer()
                     Text("歌词加载失败")
                         .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(palette.primary)
                     Text(message)
                         .font(.body)
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(palette.secondary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -390,10 +428,10 @@ struct MacExpandedPlayerView: View {
             Spacer()
             Text("无可用歌词")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(palette.primary)
             Text("此歌曲没有任何可用的歌词。")
                 .font(.body)
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(palette.secondary)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -414,22 +452,22 @@ struct MacExpandedPlayerView: View {
             HStack {
                 Text("继续播放")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(palette.primary)
                 Spacer()
                 if !model.upcomingTracks.isEmpty {
                     Button("清除") { model.clearUpcoming() }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.pink.opacity(0.9))
+                        .foregroundStyle(palette.destructive)
                 }
             }
             .padding(.bottom, 14)
-            Divider().overlay(.white.opacity(0.22))
+            Divider().overlay(palette.separator)
             if model.upcomingTracks.isEmpty {
                 VStack {
                     Spacer()
                     Text("队列中无音乐。")
                         .font(.system(size: 16))
-                        .foregroundStyle(.white.opacity(0.58))
+                        .foregroundStyle(palette.secondary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -460,11 +498,11 @@ struct MacExpandedPlayerView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(queueTrack.title)
                     .font(.system(size: MacUIVisualTokens.Typography.queueTrackTitle, weight: isCurrent ? .semibold : .regular))
-                    .foregroundStyle(isCurrent ? Color.white : Color.white.opacity(0.8))
+                    .foregroundStyle(isCurrent ? palette.primary : palette.control)
                     .lineLimit(1)
                 Text(queueTrack.artistName)
                     .font(.system(size: MacUIVisualTokens.Typography.queueTrackSubtitle))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(palette.secondary)
                     .lineLimit(1)
             }
             Spacer()
@@ -504,12 +542,12 @@ struct MacExpandedPlayerView: View {
     }
 
     private var topLeftGlass: some View {
-        MacGlassCapsule {
+        MacGlassCapsule(colorScheme: theme.colorScheme) {
             HStack(spacing: MacUIVisualTokens.ExpandedPlayer.topRightControlSpacing) {
                 Button(action: onCollapse) {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(palette.control)
                 }
                 .buttonStyle(.plain)
                 .help("收起播放器")
@@ -517,7 +555,7 @@ struct MacExpandedPlayerView: View {
                 Button(action: onOpenMiniPlayer) {
                     Image(systemName: "rectangle.on.rectangle")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(palette.control)
                 }
                 .buttonStyle(.plain)
                 .help("切换迷你播放器")
@@ -533,7 +571,7 @@ struct MacExpandedPlayerView: View {
     }
 
     private var topRightVolumeGlass: some View {
-        MacGlassCapsule {
+        MacGlassCapsule(colorScheme: theme.colorScheme) {
             HStack(spacing: 12) {
                 Slider(value: Binding(
                     get: { model.volume },
@@ -544,7 +582,7 @@ struct MacExpandedPlayerView: View {
                 .accessibilityLabel("音量")
                 Image(systemName: "speaker.wave.3.fill")
                     .font(.system(size: 17))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(palette.control)
             }
             .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
             .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)
@@ -556,7 +594,7 @@ struct MacExpandedPlayerView: View {
     }
 
     private var bottomRightContextGlass: some View {
-        MacGlassCapsule {
+        MacGlassCapsule(colorScheme: theme.colorScheme) {
             HStack(spacing: 22) {
                 Button {
                     MacUITrace.action("toggleLyrics", "from=\(String(describing: context))")
@@ -564,7 +602,7 @@ struct MacExpandedPlayerView: View {
                 } label: {
                     Image(systemName: "quote.bubble")
                         .font(.system(size: 16))
-                        .foregroundStyle(context == .lyrics ? MacMediaAccent.color : .white.opacity(0.85))
+                        .foregroundStyle(context == .lyrics ? palette.accent : palette.control)
                 }
                 .buttonStyle(.plain)
                 .help("歌词")
@@ -575,7 +613,7 @@ struct MacExpandedPlayerView: View {
                 } label: {
                     Image(systemName: "list.bullet")
                         .font(.system(size: 16))
-                        .foregroundStyle(context == .queue ? MacMediaAccent.color : .white.opacity(0.85))
+                        .foregroundStyle(context == .queue ? palette.accent : palette.control)
                 }
                 .buttonStyle(.plain)
                 .help("队列")
@@ -600,6 +638,32 @@ struct MacExpandedPlayerView: View {
             guard expectedID == trackGlobalID, !Task.isCancelled else { return }
             lyricsState = .unavailable
         }
+    }
+}
+
+/// 主题感知的播放页前景色。把这层集中在这里，播放页今后即使叠加更亮的主题
+/// 渐变或封面氛围图，也不会悄悄回退成「白色文字／按钮」的固定假设。
+private struct MacExpandedPlayerPalette {
+    let primary: Color
+    let secondary: Color
+    let control: Color
+    let lyricInactive: Color
+    let accent: Color
+    let destructive: Color
+    let separator: Color
+
+    init(colors: ThemeColors, colorScheme: ColorScheme) {
+        primary = colors.primaryText.color
+        secondary = colors.secondaryText.color
+        control = colorScheme == .light
+            ? colors.primaryText.color.opacity(0.82)
+            : colors.primaryText.color.opacity(0.86)
+        lyricInactive = colorScheme == .light
+            ? colors.secondaryText.color.opacity(0.86)
+            : colors.secondaryText.color.opacity(0.78)
+        accent = colors.accent.color
+        destructive = colors.error.color
+        separator = colors.separator.color.opacity(colorScheme == .light ? 0.72 : 0.84)
     }
 }
 

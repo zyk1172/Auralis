@@ -112,9 +112,11 @@ enum MacUIVisualTokens {
         static let topInsetMin: CGFloat = 190
         static let topInsetMax: CGFloat = 260
         static let topInsetRatio: CGFloat = 0.23
-        static let contextTopInsetMin: CGFloat = 118
-        static let contextTopInsetMax: CGFloat = 142
-        static let contextTopInsetRatio: CGFloat = 0.12
+        /// 歌词／队列从顶栏下方的内容基线开始，不与左侧封面顶部绑定，避免右轨
+        /// 在大窗口中产生大块无意义留白。
+        static let contextTopInsetMin: CGFloat = 38
+        static let contextTopInsetMax: CGFloat = 54
+        static let contextTopInsetRatio: CGFloat = 0.04
         static let horizontalGapMin: CGFloat = 108
         static let horizontalGapRatio: CGFloat = 0.09
         static let artworkCornerRadius: CGFloat = 14
