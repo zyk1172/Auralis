@@ -16,10 +16,14 @@ struct MacArtistView: View {
     private var tracks: [Track] { MacLibraryQuery.artistTracks(artist, model: model) }
     private var albums: [Album] { MacLibraryQuery.artistAlbums(artist, model: model) }
 
-    /// 用户自己的常听歌曲：按本机播放次数降序。
+    /// 用户自己的常听歌曲：只展示真正播放过的 Top 12。完整曲目仍可从歌曲页搜索，
+    /// Artist Hero 不再因一个拥有数千首歌的艺术家而创建整套行视图。
     private var topTracks: [Track] {
         let counts = model.playCounts
-        return tracks.sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
+        return Array(tracks
+            .filter { (counts[$0.id] ?? 0) > 0 }
+            .sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
+            .prefix(12))
     }
 
     private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: MacUIVisualTokens.Artwork.gridGap)]
@@ -100,6 +104,17 @@ struct MacArtistView: View {
                     .buttonStyle(.bordered)
                     .help(model.isArtistFavorite(artist) ? "取消收藏艺术家" : "收藏艺术家")
                     .accessibilityLabel(model.isArtistFavorite(artist) ? "取消收藏艺术家" : "收藏艺术家")
+                    Menu {
+                        Button("下载全部") { model.downloadAll(tracks) }
+                        Button("随机播放全部") { model.playShuffledQueue(tracks) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 28, height: 28)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("更多操作")
                 }
             }
             Spacer()

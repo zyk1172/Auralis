@@ -142,6 +142,7 @@ struct MacAlbumView: View {
             .accessibilityLabel(model.isAlbumFavorite(album) ? "取消收藏专辑" : "收藏专辑")
             Menu {
                 Button("随机播放专辑") { model.playShuffledQueue(tracks) }
+                Button("下载专辑") { model.downloadAll(tracks) }
                 Button(model.isAlbumFavorite(album) ? "取消收藏专辑" : "收藏专辑") {
                     model.toggleAlbumFavorite(album)
                 }

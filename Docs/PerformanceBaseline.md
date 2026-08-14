@@ -94,3 +94,55 @@ MANUAL-VERIFY: Xcode Beta Build/Test。使用 Xcode Beta 打开项目，选择�
 每个场景记录：设备/OS、曲库规模、配置、冷/热、持续时间、峰值 RSS、主线程最重调用、
 hitch 数、网络请求数、异常 retain 类型、trace 文件名。第一次实测结果作为 baseline；后续
 只有同条件重复三次后才比较趋势。
+
+## macOS 冷启动与 UI 性能基线（2026-08）
+
+### 本轮已实施的结构性修复（代码可确认，非测量数字）
+
+- 生产进程只有一个 `LocalCatalogStore`：`ApplicationComposition.makeRuntimeDependencies()` 在
+  composition root 创建一次，Connector / CatalogCoordinator / Agent / 搜索 / V2 / 补全共用同一个
+  actor；不再存在「Connector 一个 store、Coordinator 另一个 store」的 split-brain fallback。
+- `SQLiteDatabase.init` 不再每次打开都同步执行 `PRAGMA quick_check`；改为
+  `LocalCatalogStore.verifyIntegrityIfDue()` 的持久化时间策略（默认 7 天一次、后台执行、目录可用
+  之后），数据库报错/异常关闭后仍会触发检查，不会永久删除完整性校验。
+- `restorePersistedLibrary()` 先恢复账号与本地 Catalog；Agent（dislike 迁移等）移到后台，不再
+  阻塞本地音乐库首屏。
+- 冷恢复不再给全曲库生成 stream URL；`resolvePlayableTrack(_:)` 是唯一播放入口：
+  本地缓存 → 现有 URL → 按需 `refreshStreamURL`，恢复后第一首点击播放仍能拿到 URL。
+- `refreshCatalogFromStore` / `makeCatalogIndex` 移除 20,000 首静默上限；`catalogSnapshot(serverID:)`
+  提供无上限完整快照（25,100 首回归测试覆盖，同步后数量一致）。
+- Mac 歌曲表改用 O(1) `MacSongRowsRevision`（catalogRevision / metadata revision / 可见首尾 ID），
+  播放进度 tick 不再重建 rows；`MacDetailTrackList` 使用真实 `LazyVStack`；艺术家「常听歌曲」只取
+  播放过的 Top 12；艺术家选择改用 `GlobalID`；搜索用一次 `searchAll` FTS；Expanded Player 仅在
+  context == .lyrics 时加载歌词；`MacExpandedWindowChrome` 只在窗口变化时重设布局。
+- 启动阶段计时已落地 `StartupPerformanceTrace`（Observability）：Console 输出
+  `AuralisStartup phase=... duration_ms=...`，同时写 os_signpost，Instruments 可直接拉时间线。
+
+### macOS 冷启动阶段（与 StartupPerformanceTrace.Phase 对应）
+
+| Phase | 含义 |
+|---|---|
+| APP_MODEL_INIT | AuralisAppModel 初始化 |
+| PERSISTENCE_INIT | FileBackedPersistence / library.json 打开（记录字节数） |
+| CATALOG_STORE_OPEN_CONNECTOR / COORDINATOR | 生产路径应只有一次（runtime 组合注入） |
+| SQLITE_OPEN / SCHEMA / QUICK_CHECK / MIGRATIONS | SQLite 打开、建表、后台完整性、迁移 |
+| RESTORE_ACCOUNT / LEGACY_SNAPSHOT_MIGRATION | 恢复账号、旧快照迁移 |
+| RESTORE_ARTISTS / ALBUMS / TRACKS | 本地 SQLite → JSON decode，记录实体数 |
+| RESTORE_STREAM_URLS | 冷恢复不再生成（应恒为 0） |
+| APP_APPLY_DEDUPE / GENRES / LIBRARY_ADDED / HOME_SNAPSHOT | MainActor apply 各子阶段 |
+| LOCAL_CATALOG_READY | 本地目录可用里程碑 |
+| SERVER_CONNECTION_STATE_CONNECTED | 进入已连接状态 |
+| BACKGROUND_SYNC_STARTED / FINISHED | 后台同步（不计入首屏时间） |
+
+### macOS 本机 Instruments 流程
+
+环境记录：Mac 型号 / macOS 版本 / 曲库歌曲-专辑-艺术家数 / catalog.sqlite 字节 /
+library.json 字节 / LAN 或 WAN / 冷启动或热启动。
+
+1. Time Profiler：启动 → 首页首次可交互 → `serverConnectionState == .connected`；把每个
+   `StartupPerformanceTrace` phase 的 duration 与 Instruments 时间线对齐，明确“慢在哪一段”。
+2. SwiftUI Instrument：Songs 10k+ / Albums / Artists / V2 / 大流派 / Home 滚动。
+3. Core Animation：Expanded Player blur、窗口 resize、play/pause、歌词打开。
+4. Allocations：展开/收起播放器 20 次、页面切换 30 次、服务器重连。
+
+MANUAL-VERIFY：以上数值必须在真实测量后填写，禁止伪造；本轮只固化结构与测量流程。

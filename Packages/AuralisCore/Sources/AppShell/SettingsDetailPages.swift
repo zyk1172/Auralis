@@ -51,19 +51,16 @@ struct ThemeSettingsPage: View {
     @ObservedObject var themeStore: ThemeStore
 
     private var theme: BuiltInTheme { themeStore.current }
-    private var selection: Binding<String> {
-        Binding(get: { themeStore.selectedID }, set: { themeStore.select(id: $0) })
-    }
 
     var body: some View {
         SettingsDetailForm(title: "主题", theme: theme) {
             Section("主题外观") {
-                Picker("主题", selection: selection) {
-                    ForEach(themeStore.themes) { candidate in
-                        Text(candidate.name).tag(candidate.id)
-                    }
-                }
-                .pickerStyle(.menu)
+                ThemeChoiceGrid(themeStore: themeStore)
+                Text("已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            Section("当前主题色板") {
                 ThemeSwatchGrid(colors: theme.colorTokens, name: theme.name)
             }
         }
@@ -439,6 +436,16 @@ struct ServerSettingsPage: View {
     var body: some View {
         SettingsDetailForm(title: "服务器", theme: theme) {
             Section("当前服务器") {
+                if model.catalogFallbackUsed {
+                    Label {
+                        Text("本地目录库打不开，当前运行在临时降级目录上：同步与搜索只对本次会话有效，请检查磁盘空间或应用支持目录。")
+                            .font(.caption)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(theme.colorTokens.error.color)
+                    }
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
                 serverSummary
                 if case .connected = model.serverConnectionState {
                     Button("测试连接") { Task { pingResult = await model.testActiveServerConnection() } }

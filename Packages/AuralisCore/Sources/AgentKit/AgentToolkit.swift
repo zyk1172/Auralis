@@ -493,7 +493,7 @@ public struct AgentToolkit {
             let recentDays = (try? intParam(call, "recentDays")) ?? 7
             let excludeTrackIDs = try listParam(call, "excludeTrackIDs")
             // playableOnly 已弃用（deprecated）：不因瞬时未缓存 streamURL 排除可播放歌曲。
-            let playableOnly = (try? boolParam(call, "playableOnly")) ?? false
+            _ = (try? boolParam(call, "playableOnly")) ?? false
             let sort = (try? require(call, "sort"))?.lowercased() ?? "popularityProxy"
 
             var tracks = try await catalog.allTracks(serverID: serverID, limit: 20000)

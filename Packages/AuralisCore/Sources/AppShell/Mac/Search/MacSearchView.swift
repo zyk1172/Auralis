@@ -172,11 +172,12 @@ struct MacSearchView: View {
         guard !Task.isCancelled else { return }
         let store = model.catalogCoordinator.store
         let serverID = model.catalog.activeServerID
-        tracks = (try? await store.searchTracks(query: q, serverID: serverID)) ?? []
-        albums = (try? await store.searchAlbums(query: q, serverID: serverID)) ?? []
-        artists = (try? await store.searchArtists(query: q, serverID: serverID)) ?? []
-        playlists = model.catalog.playlists.filter { $0.name.localizedCaseInsensitiveContains(q) }
+        let catalogResults = try? await store.searchAll(query: q, serverID: serverID)
         guard !Task.isCancelled else { return }
+        tracks = catalogResults?.tracks ?? []
+        albums = catalogResults?.albums ?? []
+        artists = catalogResults?.artists ?? []
+        playlists = model.catalog.playlists.filter { $0.name.localizedCaseInsensitiveContains(q) }
         if tracks.isEmpty && albums.isEmpty && artists.isEmpty && playlists.isEmpty {
             state = .empty
         } else {

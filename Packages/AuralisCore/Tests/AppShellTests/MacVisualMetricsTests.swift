@@ -1,11 +1,48 @@
 @testable import AppShell
+import Domain
 import Foundation
+import LocalCatalog
 import Testing
 
 /// Apple Music macOS 27 Visual Parity 纯逻辑度量测试（REFERENCE_A / REFERENCE_B）。
 /// 允许安全视觉范围，不要求单个精确 px。
 @Suite("Mac visual metrics")
 struct MacVisualMetricsTests {
+    @Test("歌曲表行修订不会因播放进度 tick 改变")
+    func songRowsRevisionOnlyTracksLibraryFacts() {
+        let first = GlobalID(serverID: "server-a", remoteID: "track-1")
+        let last = GlobalID(serverID: "server-a", remoteID: "track-25100")
+        let baseline = MacSongRowsRevision(
+            catalog: 8,
+            metadata: 13,
+            visibleCount: 25_100,
+            firstID: first,
+            lastID: last,
+            contentDigest: 0xA11CE
+        )
+
+        // playbackPosition / playbackState intentionally are not part of this key.
+        let afterPlaybackTick = MacSongRowsRevision(
+            catalog: 8,
+            metadata: 13,
+            visibleCount: 25_100,
+            firstID: first,
+            lastID: last,
+            contentDigest: 0xA11CE
+        )
+        let afterPlayCountChange = MacSongRowsRevision(
+            catalog: 8,
+            metadata: 14,
+            visibleCount: 25_100,
+            firstID: first,
+            lastID: last,
+            contentDigest: 0xA11CE
+        )
+
+        #expect(afterPlaybackTick == baseline)
+        #expect(afterPlayCountChange != baseline)
+    }
+
     // MARK: - Albums Grid（REFERENCE_A：detail ≈1268 → 4 列，item ≈267-275）
 
     @Test("detailWidth ≈1268 → 4 列")

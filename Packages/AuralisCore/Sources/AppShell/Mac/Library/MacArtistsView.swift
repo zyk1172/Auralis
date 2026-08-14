@@ -11,14 +11,38 @@ struct MacArtistsView: View {
     @Binding var selection: Set<GlobalID>
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
-    @State private var selectedArtist: Artist?
+    /// Selection 只保存跨服务器稳定 ID。搜索、同步或服务器切换替换 backing
+    /// collection 后，不会留下一个已经不在 List 中的旧 Artist value。
+    @State private var selectedArtistID: GlobalID?
     @State private var localSearch = ""
+    @State private var visibleArtists: [Artist] = []
 
-    private var artists: [Artist] {
+    private var derivationKey: String {
+        "\(model.catalogRevision)|\(localSearch)"
+    }
+
+    private func rebuildVisibleArtists() {
         let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.catalog.artists
+        let artists = model.catalog.artists
             .filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        visibleArtists = artists
+
+        if let selectedArtistID {
+            let remainsVisible = artists.contains {
+                GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == selectedArtistID
+            }
+            if !remainsVisible {
+                self.selectedArtistID = nil
+            }
+        }
+    }
+
+    private var selectedArtist: Artist? {
+        guard let selectedArtistID else { return nil }
+        return visibleArtists.first {
+            GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == selectedArtistID
+        }
     }
 
     var body: some View {
@@ -26,8 +50,8 @@ struct MacArtistsView: View {
             MacPageSearchHeader(text: $localSearch, prompt: "在艺术家中查找")
             Divider()
             HSplitView {
-                List(selection: $selectedArtist) {
-                    ForEach(artists) { artist in
+                List(selection: $selectedArtistID) {
+                    ForEach(visibleArtists) { artist in
                         HStack(spacing: 10) {
                             ArtworkView(
                                 title: artist.name,
@@ -44,7 +68,7 @@ struct MacArtistsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .tag(artist)
+                        .tag(GlobalID(serverID: artist.serverID, remoteID: artist.id.rawValue))
                     }
                 }
                 .listStyle(.inset)
@@ -60,6 +84,9 @@ struct MacArtistsView: View {
             }
         }
         .navigationTitle("艺术家")
+        .task(id: derivationKey) {
+            rebuildVisibleArtists()
+        }
     }
 }
 #endif

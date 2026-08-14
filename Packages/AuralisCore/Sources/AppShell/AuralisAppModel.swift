@@ -108,8 +108,15 @@ public final class AuralisAppModel: ObservableObject {
     }
     public private(set) var catalog: LibraryCatalog {
         get { libraryStore.catalog }
-        set { libraryStore.catalog = newValue }
+        set {
+            libraryStore.catalog = newValue
+            catalogRevision &+= 1
+        }
     }
+    /// O(1) 的目录内容修订号。只在 catalog 替换/实体内容改变时递增；播放进度 tick 不变。
+    @Published public private(set) var catalogRevision: UInt64 = 0
+    /// O(1) 的歌曲行元数据修订号。播放次数或首次入库日期改变时递增；播放进度 tick 不变。
+    @Published public private(set) var libraryRowMetadataRevision: UInt64 = 0
     /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
     @Published public private(set) var connectionDiagnostics: ConnectionDiagnosticsSnapshot?
 
@@ -232,6 +239,12 @@ public final class AuralisAppModel: ObservableObject {
     public var downloadingTrackIDs: Set<GlobalID> { downloadStore.downloadingTrackIDs }
     /// 全部服务器作用域的下载进度（0...1）。
     public var downloadingProgressByGlobalID: [GlobalID: Double] { downloadStore.progress }
+    /// 排队、传输、失败与完成状态的完整快照。下载页用它保留失败原因并提供重试。
+    public var downloadRecords: [GlobalID: DownloadTaskInfo] { downloadStore.records }
+    public var lastDownloadOperationError: String? { downloadStore.lastOperationError }
+    public var downloadedAudioBytes: Int64 {
+        downloadStore.cachedEntries.values.reduce(into: Int64(0)) { $0 += $1.byteCount }
+    }
     /// 当前活跃服务器的兼容投影；内部状态始终使用 GlobalID，避免同 TrackID 跨服务器碰撞。
     public var downloadingProgress: [TrackID: Double] {
         guard let serverID = catalog.activeServerID else { return [:] }
@@ -346,12 +359,23 @@ public final class AuralisAppModel: ObservableObject {
         directoryURL: LibraryCatalogIndexStore.defaultDirectory()
     )
     public private(set) lazy var catalogCoordinator: CatalogCoordinator = {
-        let coordinator = CatalogCoordinator(
-            connector: connector,
-            storeURL: storeURL,
-            trackCache: cacheStore,
-            lyricsCache: lyricsCache
-        )
+        let coordinator: CatalogCoordinator
+        if let runtimeCatalogStore {
+            coordinator = CatalogCoordinator(
+                connector: connector,
+                store: runtimeCatalogStore,
+                trackCache: cacheStore,
+                lyricsCache: lyricsCache
+            )
+        } else {
+            // 自定义 connector 的测试/预览便利路径；生产一定走上面的共享 store。
+            coordinator = CatalogCoordinator(
+                connector: connector,
+                storeURL: storeURL,
+                trackCache: cacheStore,
+                lyricsCache: lyricsCache
+            )
+        }
         // 同步完成后刷新曲库分类索引文件，让 Agent 始终能读到最新元数据；
         // 并把内存目录从本地 SQLite 重建出来，让首页「最近添加」与音乐库立刻反映
         // 新下载到服务器的曲目（此前只刷索引文件，内存目录要等用户重连/重启 apply() 才更新）。
@@ -372,14 +396,23 @@ public final class AuralisAppModel: ObservableObject {
     /// App 级公开音乐资料服务：歌曲信息 UI、Agent、无歌词补全共用同一实例。
     public private(set) lazy var musicEnrichment = MusicEnrichmentService(catalog: catalogCoordinator.store)
     /// AI 助手运行时（会话 / 工具调用 / 确认 / 操作日志 / 偏好）。
-    public private(set) lazy var agentCoordinator = AgentCoordinator(
-        model: self,
-        coordinator: catalogCoordinator,
-        musicEnrichment: musicEnrichment
-    )
+    private(set) var agentCoordinatorWasInitialized = false
+    public private(set) lazy var agentCoordinator: AgentCoordinator = {
+        agentCoordinatorWasInitialized = true
+        return AgentCoordinator(
+            model: self,
+            coordinator: catalogCoordinator,
+            musicEnrichment: musicEnrichment
+        )
+    }()
 
     private let engine: any PlaybackControlling
     private let connector: any ServerConnecting
+    /// 生产 composition root 创建的唯一目录 actor；Connector/Coordinator/Agent 共用。
+    private let runtimeCatalogStore: LocalCatalogStore?
+    /// 目录 SQLite 是否发生过降级（临时文件/内存库）。为 true 时设置页会展示提示，
+    /// 避免「目录库打不开」被静默吞掉、用户只看到空资料库。
+    @Published public private(set) var catalogFallbackUsed: Bool = false
     private let cacheStore: TrackCacheStore
     /// 封面磁盘缓存：冷启动直接读本地，不再每次打开 App 都重下全部封面。
     public let artworkCache: ArtworkDiskCache
@@ -469,13 +502,27 @@ public final class AuralisAppModel: ObservableObject {
     public init(
         catalog: LibraryCatalog = .empty,
         engine: any PlaybackControlling = AVFoundationPlaybackEngine(),
-        connector: any ServerConnecting = ApplicationComposition.makeServerConnector(),
+        connector: (any ServerConnecting)? = nil,
         cacheStore: TrackCacheStore = TrackCacheStore(),
         artworkCache: ArtworkDiskCache = ArtworkDiskCache(),
         lyricsCache: LyricsDiskCache = LyricsDiskCache(),
         defaults: UserDefaults = .standard,
-        storeURL: URL? = nil
+        storeURL: URL? = nil,
+        catalogStore: LocalCatalogStore? = nil
     ) {
+        let appModelInitStartedAt = ContinuousClock.now
+        let runtime: ApplicationRuntimeDependencies?
+        if connector == nil {
+            if let catalogStore {
+                runtime = ApplicationComposition.makeRuntimeDependencies(catalogStore: catalogStore)
+            } else {
+                runtime = ApplicationComposition.makeRuntimeDependencies(catalogStoreURL: storeURL)
+            }
+        } else {
+            runtime = nil
+        }
+        let resolvedConnector = connector ?? runtime!.connector
+        let resolvedCatalogStore = catalogStore ?? runtime?.catalogStore
         let initialTrack = catalog.tracks.first ?? Track(
             id: "placeholder", serverID: "local",
             albumID: "placeholder", artistID: "placeholder",
@@ -485,13 +532,15 @@ public final class AuralisAppModel: ObservableObject {
         self.homeStore = HomeStore(defaults: defaults)
         self.libraryStore = LibraryStore(catalog: catalog)
         self.serverStore = ServerStore()
-        self.downloadStore = DownloadStore(connector: connector, cacheStore: cacheStore)
+        self.downloadStore = DownloadStore(connector: resolvedConnector, cacheStore: cacheStore)
         self.engine = engine
-        self.connector = connector
+        self.connector = resolvedConnector
+        self.runtimeCatalogStore = resolvedCatalogStore
+        self.catalogFallbackUsed = runtime?.catalogFallbackUsed ?? false
         self.cacheStore = cacheStore
         self.artworkCache = artworkCache
         self.artworkStore = ArtworkStore(
-            connector: connector,
+            connector: resolvedConnector,
             diskCache: artworkCache,
             initialServerID: catalog.activeServerID?.rawValue ?? catalog.tracks.first?.serverID.rawValue
         )
@@ -589,6 +638,7 @@ public final class AuralisAppModel: ObservableObject {
             }
             await downloadStore.restoreCachedIDs()
         }
+        StartupPerformanceTrace.record(.appModelInit, since: appModelInitStartedAt)
     }
 
     /// 确保音频会话保持激活（进入后台/返回前台/输出设备切换时调用，防后台停止）。
@@ -1313,12 +1363,12 @@ public final class AuralisAppModel: ObservableObject {
             // 避免「播放了但控制中心看不到」。播放成功后再刷新进度。
             self.syncNowPlayingTrack()
 
-            // 已下载的歌曲优先播放本地缓存文件
-            var playable = track
-            if let localURL = await self.cacheStore.cachedFileURL(for: self.cacheID(for: track)) {
-                playable.streamURL = localURL
-                // 不记录本地文件路径（隐私：完整路径不得进日志/诊断）。
-                CrashLog.shared.log("使用本地缓存播放")
+            // 已下载文件 → 现有 URL → 按需刷新，所有播放入口共用同一解析规则。
+            guard var playable = await self.resolvePlayableTrack(track) else {
+                self.playbackError = .engineFailure("无法取得可播放地址")
+                self.playbackState = .failed(.engineFailure("无法取得可播放地址"))
+                self.syncProgressTimer()
+                return
             }
             // 只记录脱敏后的流地址（去掉查询串与主机信息，查询串含认证参数）。
             let safeURL = playable.streamURL.map { AVFoundationPlaybackEngine.redactedURL($0) } ?? "nil"
@@ -1539,10 +1589,9 @@ public final class AuralisAppModel: ObservableObject {
         dismissPlaybackError()
         guard currentTrack.id.rawValue != "placeholder" else { return }
         Task { @MainActor in
-            var track = self.currentTrack
-            if self.catalog.activeServerID != nil,
-               let url = await self.connector.refreshStreamURL(trackID: track.id) {
-                track.streamURL = url
+            guard let track = await self.resolvePlayableTrack(self.currentTrack, forceRefresh: true) else {
+                self.playbackError = .engineFailure("无法取得可播放地址")
+                return
             }
             self.selectAndPlay(track)
         }
@@ -1674,6 +1723,7 @@ public final class AuralisAppModel: ObservableObject {
             duration: track.duration,
             force: force
         ) else { return }
+        libraryRowMetadataRevision &+= 1
         let storedCounts = playbackHistoryStore.encodedCounts
         Task { @Sendable [defaults, catalogStore = catalogCoordinator.store] in
             defaults.set(storedCounts, forKey: Self.playCountsDefaultsKey)
@@ -1771,6 +1821,7 @@ public final class AuralisAppModel: ObservableObject {
 
     private func reconcileLibraryAddedDates(tracks: [Track], serverID: ServerID) {
         guard libraryAddedTracker.reconcile(tracks: tracks, serverID: serverID) else { return }
+        libraryRowMetadataRevision &+= 1
         let stored = libraryAddedTracker.encoded
         Task { @Sendable [defaults] in
             defaults.set(stored, forKey: Self.libraryAddedDefaultsKey)
@@ -1854,6 +1905,33 @@ public final class AuralisAppModel: ObservableObject {
         TrackCacheStore.TrackCacheID(serverID: track.serverID, trackID: track.id)
     }
 
+    /// 唯一的可播放曲目解析入口：本地下载优先，其次复用仍可用的 URL，最后只为
+    /// 当前需要播放/预载的单曲向 connector 解析 URL。目录本身允许 streamURL 为 nil。
+    private func resolvePlayableTrack(
+        _ track: Track,
+        forceRefresh: Bool = false
+    ) async -> Track? {
+        if let localURL = await cacheStore.cachedFileURL(for: cacheID(for: track)) {
+            var playable = track
+            playable.streamURL = localURL
+            // 不记录本地文件路径（隐私：完整路径不得进日志/诊断）。
+            CrashLog.shared.log("使用本地缓存播放")
+            return playable
+        }
+        if !forceRefresh, track.streamURL != nil {
+            return track
+        }
+        if catalog.activeServerID != nil,
+           let refreshedURL = await connector.refreshStreamURL(trackID: track.id) {
+            var playable = track
+            playable.streamURL = refreshedURL
+            return playable
+        }
+        // 无活动服务器的测试/本地来源仍可继续使用已有 URL；forceRefresh 只要求
+        // 服务器曲目刷新，不能让本地独立 URL 因没有服务器而失效。
+        return track.streamURL == nil ? nil : track
+    }
+
     /// 已下载到本地的曲目（首页「下载」快捷入口与下载浏览页的数据源）。
     public var downloadedTracks: [Track] {
         catalog.tracks.filter { downloadStore.isDownloaded($0) }
@@ -1866,6 +1944,25 @@ public final class AuralisAppModel: ObservableObject {
         await downloadStore.allCachedTrackIDs()
     }
     public func isDownloading(_ track: Track) -> Bool { downloadStore.isDownloading(track) }
+
+    public func downloadInfo(for track: Track) -> DownloadTaskInfo? {
+        downloadStore.info(for: track)
+    }
+
+    public func downloadedEntry(for track: Track) -> TrackCacheStore.CachedTrackEntry? {
+        downloadStore.cachedEntry(for: track)
+    }
+
+    public var activeDownloadTracks: [Track] {
+        catalog.tracks.filter {
+            guard let status = downloadStore.info(for: $0)?.status else { return false }
+            return status == .queued || status == .downloading
+        }
+    }
+
+    public var failedDownloadTracks: [Track] {
+        catalog.tracks.filter { downloadStore.info(for: $0)?.status == .failed }
+    }
 
     /// 下载歌曲到本地缓存；完成后该歌曲优先本地播放。
     public func download(_ track: Track) {
@@ -1883,6 +1980,18 @@ public final class AuralisAppModel: ObservableObject {
         downloadStore.cancel(track)
     }
 
+    public func retryDownload(_ track: Track) {
+        downloadStore.retry(track)
+    }
+
+    public func cancelAllDownloads() {
+        downloadStore.cancelAll()
+    }
+
+    public func clearDownloadOperationError() {
+        downloadStore.clearOperationError()
+    }
+
     /// 删除本地缓存文件。
     /// 批量下载：跳过已下载 / 正在下载的曲目。用于专辑 / 歌单 / 艺术家整批离线。
     public func downloadAll(_ tracks: [Track]) {
@@ -1895,6 +2004,10 @@ public final class AuralisAppModel: ObservableObject {
 
     public func removeDownload(_ track: Track) {
         Task { await downloadStore.remove(track) }
+    }
+
+    public func removeAllDownloads() async {
+        await downloadStore.removeAll()
     }
 
     // MARK: - Playlists
@@ -2339,7 +2452,10 @@ public final class AuralisAppModel: ObservableObject {
                     do {
                         if self.playbackState == .idle {
                             // 进程重启恢复后引擎没有加载曲目：直接从头播放并 seek 到保存的进度。
-                            try await self.engine.play(track: self.currentTrack)
+                            guard let playable = await self.resolvePlayableTrack(self.currentTrack) else {
+                                throw PlaybackError.engineFailure("无法取得可播放地址")
+                            }
+                            try await self.engine.play(track: playable)
                             if self.playbackPosition > 0 {
                                 await self.engine.seek(to: self.playbackPosition)
                             }
@@ -2807,13 +2923,7 @@ public final class AuralisAppModel: ObservableObject {
         let currentID = currentTrack.id
         prepareNextTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            var playable = candidate
-            if let localURL = await cacheStore.cachedFileURL(for: cacheID(for: candidate)) {
-                playable.streamURL = localURL
-            } else if playable.streamURL == nil,
-                      let refreshed = await connector.refreshStreamURL(trackID: candidate.id) {
-                playable.streamURL = refreshed
-            }
+            guard let playable = await resolvePlayableTrack(candidate) else { return }
             guard !Task.isCancelled,
                   currentTrack.id == currentID,
                   seamlessNextCandidate()?.id == candidate.id,
@@ -2874,16 +2984,7 @@ public final class AuralisAppModel: ObservableObject {
         playbackState = .buffering
         CrashLog.shared.log("流地址失效，刷新后重试（第 \(attempts + 1) 次）")
         Task { @MainActor in
-            var refreshed: Track?
-            if catalog.activeServerID != nil {
-                if let url = await connector.refreshStreamURL(trackID: track.id) {
-                    var updated = track
-                    updated.streamURL = url
-                    refreshed = updated
-                }
-            } else if track.streamURL != nil {
-                refreshed = track
-            }
+            let refreshed = await resolvePlayableTrack(track, forceRefresh: true)
             guard self.currentTrack.id == track.id else { return }
             guard let refreshed else {
                 // 无法获取新流地址（服务器离线等）：按重试耗尽处理，自动下一首或提示。
@@ -2970,9 +3071,7 @@ public final class AuralisAppModel: ObservableObject {
     public func restorePersistedLibrary() async {
         guard !attemptedRestore else { return }
         attemptedRestore = true
-        // 旧「不感兴趣」反馈迁移到 disliked_tracks（幂等），并加载 dislike 镜像。
-        await agentCoordinator.migrateLegacyDislikedIfNeeded()
-        await refreshDislikedState()
+        let restoreStartedAt = ContinuousClock.now
         do {
             // 优先恢复「上次活跃服务器」，其次回退到首个已保存账户，
             // 保证切换服务器后冷启动不会错误地回到第一台服务器。
@@ -2992,6 +3091,21 @@ public final class AuralisAppModel: ObservableObject {
                 return
             }
             apply(result)
+            let startupMetadata = StartupPerformanceTrace.Metadata(
+                entityCount: result.tracks.count,
+                serverIDHash: StartupPerformanceTrace.redactedServerID(result.account.id.rawValue)
+            )
+            StartupPerformanceTrace.record(
+                .localCatalogReady,
+                since: restoreStartedAt,
+                metadata: startupMetadata
+            )
+            StartupPerformanceTrace.record(
+                .serverConnectionStateConnected,
+                since: restoreStartedAt,
+                metadata: startupMetadata
+            )
+            schedulePostRestoreMaintenance()
             // apply() 末尾已触发 registerAndSync，此处不再重复。
             // 自愈：恢复出的资料库为空（旧快照损坏 / 历史某次同步失败遗留）时，
             // 后台用服务器凭据重新全量同步并刷回界面，避免资料库一直显示 0 首。
@@ -3011,11 +3125,42 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
+    /// 本地目录已可见后再执行完整性检查与旧 dislike 迁移。Agent 在此之前完全不会
+    /// 初始化；utility task 也先让出首帧，避免与窗口首次交互竞争主线程/磁盘。
+    private func schedulePostRestoreMaintenance() {
+        let store = catalogCoordinator.store
+        Task.detached(priority: .utility) { [weak self, store] in
+            try? await Task.sleep(for: .seconds(2))
+            do {
+                try await store.verifyIntegrityIfDue()
+            } catch {
+                // 完整性检查失败是数据库损坏信号，必须留痕；不阻塞本地目录继续使用。
+                AuralisLog.library.error("catalog integrity check failed: \(error.localizedDescription)")
+            }
+            await self?.performDeferredAgentMaintenance()
+        }
+    }
+
+    private func performDeferredAgentMaintenance() async {
+        let startedAt = ContinuousClock.now
+        await agentCoordinator.migrateLegacyDislikedIfNeeded()
+        StartupPerformanceTrace.record(.restoreDislikeMigration, since: startedAt)
+        await refreshDislikedState()
+    }
+
     private func apply(_ result: ServerConnectionResult) {
         serverAuthenticationFailed = false
         serverCapabilities = result.capabilities
+        let serverHash = StartupPerformanceTrace.redactedServerID(result.account.id.rawValue)
         // 全链路以去重后的曲目为准，避免服务端返回的重复 ID 进入界面导致 ForEach 崩溃。
+        let dedupeStartedAt = ContinuousClock.now
         let tracks = uniquedTracks(result.tracks)
+        StartupPerformanceTrace.record(
+            .appApplyDedupe,
+            since: dedupeStartedAt,
+            metadata: .init(entityCount: tracks.count, serverIDHash: serverHash)
+        )
+        let genresStartedAt = ContinuousClock.now
         let derivedGenres = Dictionary(grouping: tracks.flatMap(\.genres), by: { $0.lowercased() })
             .map { Genre(name: $0.key, songCount: $0.value.count) }
         // 合并「服务器 getGenres」与「按曲目标签推导」两套流派来源（按名称小写归并，
@@ -3037,12 +3182,18 @@ public final class AuralisAppModel: ObservableObject {
         let mergedGenres = genreIndex.values.sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
+        StartupPerformanceTrace.record(
+            .appApplyGenres,
+            since: genresStartedAt,
+            metadata: .init(entityCount: mergedGenres.count, serverIDHash: serverHash)
+        )
         // 是否换了一台服务器。同一台服务器的增量刷新不应丢弃已加载的封面 / 歌词，
         // 否则每次同步都要把所有封面重新下载一遍。
         let switchedServer = appliedServerID != nil && appliedServerID != result.account.id
         appliedServerID = result.account.id
         defaults.set(result.account.id.rawValue, forKey: Self.lastActiveServerKey)
         if playbackHistoryStore.reconcileLegacy(serverID: result.account.id) {
+            libraryRowMetadataRevision &+= 1
             defaults.set(playbackHistoryStore.encodedCounts, forKey: Self.playCountsDefaultsKey)
             defaults.set(playbackHistoryStore.encodedRecentKeys, forKey: Self.recentlyPlayedDefaultsKey)
         }
@@ -3122,14 +3273,26 @@ public final class AuralisAppModel: ObservableObject {
         // 那会停用 AVAudioSession 并清空 MPNowPlayingInfoCenter，导致后台播放被杀、
         // 控制中心丢失歌曲信息。正在播放时只更新目录，音频与系统信息保持不变。
 
+        let libraryAddedStartedAt = ContinuousClock.now
         reconcileLibraryAddedDates(tracks: tracks, serverID: result.account.id)
+        StartupPerformanceTrace.record(
+            .appApplyLibraryAdded,
+            since: libraryAddedStartedAt,
+            metadata: .init(entityCount: tracks.count, serverIDHash: serverHash)
+        )
 
         // “不喜欢”是私人状态：每次目录就绪/服务器切换后从 SQLite 刷新镜像。
         Task { await self.refreshDislikedState() }
         // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
+        let homeSnapshotStartedAt = ContinuousClock.now
         homeStore.regenerateRandom(from: tracks, dislikedTrackIDs: dislikedTrackIDs)
         // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
         refreshHomeSnapshots()
+        StartupPerformanceTrace.record(
+            .appApplyHomeSnapshot,
+            since: homeSnapshotStartedAt,
+            metadata: .init(entityCount: tracks.count, serverIDHash: serverHash)
+        )
 
         // 仅在未播放时恢复「上次播放会话」（队列 + 当前曲目 + 进度），
         // 不自动播放，由用户点击播放后从保存的进度继续；
@@ -3228,6 +3391,18 @@ public final class AuralisAppModel: ObservableObject {
     /// - 更新按 GlobalID 隔离的首次入库时间，并异步持久化到 UserDefaults；
     /// - 重建 catalog 并调用 refreshHomeSnapshots()。
     func refreshCatalogFromStore(serverID: ServerID) async {
+        let refreshStartedAt = ContinuousClock.now
+        var refreshedTrackCount = 0
+        defer {
+            StartupPerformanceTrace.record(
+                .refreshCatalogFromStore,
+                since: refreshStartedAt,
+                metadata: .init(
+                    entityCount: refreshedTrackCount,
+                    serverIDHash: StartupPerformanceTrace.redactedServerID(serverID.rawValue)
+                )
+            )
+        }
         // 防呆：尚未 apply（或已切到其它服务器）时忽略本次刷新。
         guard catalog.activeServerID == serverID else { return }
         let store = catalogCoordinator.store
@@ -3235,9 +3410,11 @@ public final class AuralisAppModel: ObservableObject {
         let fetchedAlbums: [Album]
         let fetchedArtists: [Artist]
         do {
-            fetchedTracks = try await store.allTracks(serverID: serverID, limit: 20000)
-            fetchedAlbums = try await store.allAlbums(serverID: serverID, limit: 20000)
-            fetchedArtists = try await store.allArtists(serverID: serverID, limit: 20000)
+            let snapshot = try await store.catalogSnapshot(serverID: serverID)
+            fetchedTracks = snapshot.tracks
+            fetchedAlbums = snapshot.albums
+            fetchedArtists = snapshot.artists
+            refreshedTrackCount = snapshot.tracks.count
         } catch {
             // 读库失败：保持现有目录，等下次同步 / apply() 再试。
             return
@@ -3638,7 +3815,7 @@ public enum BrowseDestination: Identifiable, Hashable, Sendable {
     case favorites
     case mostPlayed
     case genre(Genre)
-    case recommendationCategory(RecommendationIndexV2Category, tracks: [Track])
+    case recommendationCategory(RecommendationIndexV2Category)
     case random
     case recentlyPlayed
     case recentlyAdded
@@ -3657,7 +3834,7 @@ public enum BrowseDestination: Identifiable, Hashable, Sendable {
         case .favorites: return "favorites"
         case .mostPlayed: return "mostPlayed"
         case let .genre(g): return "genre.\(g.id)"
-        case let .recommendationCategory(category, _): return "recommendationCategory.\(category.id)"
+        case let .recommendationCategory(category): return "recommendationCategory.\(category.id)"
         case .random: return "random"
         case .recentlyPlayed: return "recentlyPlayed"
         case .recentlyAdded: return "recentlyAdded"

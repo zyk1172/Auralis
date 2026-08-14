@@ -105,6 +105,12 @@ struct MacExpandedPlayerView: View {
         .background(MacExpandedWindowChrome())
         .task(id: trackGlobalID) {
             ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
+            lyricsState = .loading
+        }
+        // 歌词属于右侧按需 context。只看封面或队列时不竞争磁盘/网络；切到歌词
+        // 后才读取缓存或服务器，歌曲变化时 task id 会自动取消旧请求。
+        .task(id: "\(trackGlobalID)|\(String(describing: context))") {
+            guard context == .lyrics else { return }
             await loadLyrics()
         }
     }
@@ -678,19 +684,20 @@ private struct MacExpandedWindowChrome: NSViewRepresentable {
     }
 
     func updateNSView(_ view: ChromeHostView, context: Context) {
-        view.scheduleChromeLayout()
+        view.applyIfWindowChanged()
     }
 
     final class ChromeHostView: NSView {
         private var isLayoutScheduled = false
+        private weak var configuredWindow: NSWindow?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             scheduleChromeLayout()
         }
 
-        override func layout() {
-            super.layout()
+        func applyIfWindowChanged() {
+            guard window !== configuredWindow else { return }
             scheduleChromeLayout()
         }
 
@@ -706,6 +713,7 @@ private struct MacExpandedWindowChrome: NSViewRepresentable {
 
         private func applyChromeLayout() {
             guard let window else { return }
+            configuredWindow = window
             window.title = ""
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true

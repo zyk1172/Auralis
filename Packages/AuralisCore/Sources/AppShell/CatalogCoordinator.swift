@@ -4,6 +4,7 @@ import Foundation
 import LocalCatalog
 import LyricsKit
 import MusicLibrary
+import Observability
 import OfflineManager
 
 /// 本地音乐目录的运行时协调器。
@@ -54,7 +55,7 @@ public final class CatalogCoordinator: ObservableObject {
 
     public init(
         connector: any ServerConnecting,
-        storeURL: URL? = nil,
+        store: LocalCatalogStore,
         trackCache: TrackCacheStore = TrackCacheStore(),
         lyricsCache: LyricsDiskCache = LyricsDiskCache(),
         now: @escaping @Sendable () -> Date = Date.init
@@ -63,9 +64,42 @@ public final class CatalogCoordinator: ObservableObject {
         self.trackCache = trackCache
         self.lyricsCache = lyricsCache
         self.now = now
+        self.store = store
+        let reusedAt = ContinuousClock.now
+        StartupPerformanceTrace.record(.catalogStoreOpenCoordinator, since: reusedAt)
+    }
+
+    /// 测试与非生产组合的便利入口。生产 AppModel 注入 composition root 已创建的 store，
+    /// 不会走这里再次打开 catalog.sqlite。
+    public convenience init(
+        connector: any ServerConnecting,
+        storeURL: URL? = nil,
+        trackCache: TrackCacheStore = TrackCacheStore(),
+        lyricsCache: LyricsDiskCache = LyricsDiskCache(),
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
         let url = storeURL ?? Self.defaultStoreURL()
         // 目录库打不开时退化到内存库，保证 App 仍可运行（只是无本地目录能力）。
-        self.store = (try? LocalCatalogStore(url: url)) ?? (try! LocalCatalogStore(url: URL(fileURLWithPath: ":memory:")))
+        // 内存库几乎不会失败；万一失败再试独立临时文件，仍失败才显式记录 fault。
+        var store = (try? LocalCatalogStore(url: url))
+            ?? (try? LocalCatalogStore(url: URL(string: "file::memory:")!))
+        if store == nil {
+            store = try? LocalCatalogStore(
+                url: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("auralis-catalog-\(UUID().uuidString).sqlite")
+            )
+        }
+        guard let store else {
+            AuralisLog.library.fault("catalogStoreOpenFailed: 无法创建任何本地目录存储")
+            preconditionFailure("无法初始化本地目录存储")
+        }
+        self.init(
+            connector: connector,
+            store: store,
+            trackCache: trackCache,
+            lyricsCache: lyricsCache,
+            now: now
+        )
     }
 
     /// 目录库位置：优先使用 App Group 共享容器（供 Siri/小组件等扩展读取），
@@ -144,9 +178,22 @@ public final class CatalogCoordinator: ObservableObject {
             stage: mode == .full ? "首次全量同步" : (skipIfUpToDate ? "检查本地目录是否最新" : "增量同步"),
             processed: 0
         )
+        let syncStartedAt = ContinuousClock.now
+        let serverHash = StartupPerformanceTrace.redactedServerID(serverID.rawValue)
+        StartupPerformanceTrace.record(
+            .backgroundSyncStarted,
+            since: syncStartedAt,
+            metadata: .init(serverIDHash: serverHash)
+        )
 
         syncTask = Task { [store, connector] in
+            var completedTrackCount = 0
             defer {
+                StartupPerformanceTrace.record(
+                    .backgroundSyncFinished,
+                    since: syncStartedAt,
+                    metadata: .init(entityCount: completedTrackCount, serverIDHash: serverHash)
+                )
                 self.syncTask = nil
                 self.syncingServerID = nil
             }
@@ -208,6 +255,7 @@ public final class CatalogCoordinator: ObservableObject {
                     }
                 }
                 self.lastReport = report
+                completedTrackCount = report.trackCount
                 let finalProbe: LibraryRevisionProbe?
                 if let observedProbe {
                     finalProbe = observedProbe

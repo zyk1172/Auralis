@@ -128,6 +128,37 @@ public struct CatalogArtistSummary: Sendable, Hashable, Identifiable {
     }
 }
 
+/// 一次 FTS 查询同时返回三类搜索结果，避免同一关键词重复执行三遍 MATCH。
+public struct LocalCatalogSearchResults: Sendable, Equatable {
+    public let tracks: [CatalogTrackSummary]
+    public let albums: [CatalogAlbumSummary]
+    public let artists: [CatalogArtistSummary]
+
+    public init(
+        tracks: [CatalogTrackSummary],
+        albums: [CatalogAlbumSummary],
+        artists: [CatalogArtistSummary]
+    ) {
+        self.tracks = tracks
+        self.albums = albums
+        self.artists = artists
+    }
+}
+
+/// 指定服务器的完整 SQLite 目录快照。该 API 明确无数量上限；需要完整重建内存
+/// catalog 的调用方统一使用它，避免各处悄悄写入 20,000 之类的截断值。
+public struct LocalCatalogSnapshot: Sendable, Equatable {
+    public let artists: [Artist]
+    public let albums: [Album]
+    public let tracks: [Track]
+
+    public init(artists: [Artist], albums: [Album], tracks: [Track]) {
+        self.artists = artists
+        self.albums = albums
+        self.tracks = tracks
+    }
+}
+
 /// 曲库索引：按分类拆分，供 Agent 按需读取，避免每次把全部元数据塞进对话。
 /// 只含元数据（ID/标题/歌手/专辑/年份/流派/语言/时长/收藏/评分/播放次数），
 /// **不含歌词、海报、流地址**。

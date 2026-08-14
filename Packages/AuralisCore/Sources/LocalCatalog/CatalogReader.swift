@@ -1,9 +1,51 @@
 import Domain
 import Foundation
 import MusicLibrary
+import Observability
 
 extension LocalCatalogStore {
     // MARK: - Catalog queries (Agent + UI)
+
+    /// 完整读取指定服务器目录，无静默数量上限。
+    public func catalogSnapshot(serverID: ServerID) throws -> LocalCatalogSnapshot {
+        let serverHash = StartupPerformanceTrace.redactedServerID(serverID.rawValue)
+
+        let artistsStartedAt = ContinuousClock.now
+        let artists = try allArtists(serverID: serverID)
+        StartupPerformanceTrace.record(
+            .restoreArtists,
+            since: artistsStartedAt,
+            metadata: .init(entityCount: artists.count, serverIDHash: serverHash)
+        )
+
+        let albumsStartedAt = ContinuousClock.now
+        let albums = try allAlbums(serverID: serverID)
+        StartupPerformanceTrace.record(
+            .restoreAlbums,
+            since: albumsStartedAt,
+            metadata: .init(entityCount: albums.count, serverIDHash: serverHash)
+        )
+
+        let tracksStartedAt = ContinuousClock.now
+        let tracks = try allTracks(serverID: serverID)
+        StartupPerformanceTrace.record(
+            .restoreTracks,
+            since: tracksStartedAt,
+            metadata: .init(entityCount: tracks.count, serverIDHash: serverHash)
+        )
+
+        return LocalCatalogSnapshot(artists: artists, albums: albums, tracks: tracks)
+    }
+
+    /// 单次 FTS MATCH 取得所有实体 ID，再分别物化轻量摘要。
+    public func searchAll(query: String, serverID: ServerID? = nil) throws -> LocalCatalogSearchResults {
+        let ids = try ftsGlobalIDs(matching: query)
+        return LocalCatalogSearchResults(
+            tracks: try fetchTrackSummaries(globalIDs: ids.tracks, serverID: serverID),
+            albums: try fetchAlbumSummaries(globalIDs: ids.albums, serverID: serverID),
+            artists: try fetchArtistSummaries(globalIDs: ids.artists, serverID: serverID)
+        )
+    }
 
     public func searchTracks(query: String, serverID: ServerID? = nil) throws -> [CatalogTrackSummary] {
         let (ids, _, _) = try ftsGlobalIDs(matching: query)
@@ -647,7 +689,7 @@ extension LocalCatalogStore {
     /// 生成曲库索引：歌手 / 专辑 / 流派 / 语言 / 年代 / 收藏 / 最近播放 / 热门。
     /// 只含元数据（不含歌词、海报、流地址）。
     public func makeCatalogIndex(serverID: ServerID? = nil) throws -> CatalogIndex {
-        let tracks = try allTracks(serverID: serverID, limit: 20000)
+        let tracks = try allTracks(serverID: serverID)
         let popularity = try popularityScores(serverID: serverID)
         let favoriteIDs = Set(try favoriteTrackIDs().filter { serverID == nil || $0.serverID == serverID })
         let recent = (try getRecentHistory(serverID: serverID, limit: 200)).map(\.globalID)
@@ -794,7 +836,7 @@ extension LocalCatalogStore {
         limit: Int = 100
     ) throws -> [CatalogTrackLine] {
         let safeLimit = min(max(limit, 1), 500)
-        let tracks = try allTracks(serverID: serverID, limit: 20000)
+        let tracks = try allTracks(serverID: serverID)
         let popularity = try popularityScores(serverID: serverID)
         let favoriteIDs = Set(try favoriteTrackIDs().filter { serverID == nil || $0.serverID == serverID })
         let recent = (try getRecentHistory(serverID: serverID, limit: 300)).map(\.globalID)

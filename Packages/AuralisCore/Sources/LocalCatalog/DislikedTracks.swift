@@ -60,7 +60,7 @@ extension LocalCatalogStore {
     public func dislikedTracks(serverID: ServerID, limit: Int? = nil) throws -> [Track] {
         let ids = try dislikedTrackIDs(serverID: serverID)
         guard !ids.isEmpty else { return [] }
-        let tracks = try allTracks(serverID: serverID, limit: 20_000)
+        let tracks = try allTracks(serverID: serverID)
         let byID = Dictionary(uniqueKeysWithValues: tracks.map {
             (GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue), $0)
         })

@@ -84,6 +84,16 @@ struct MacGenreView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
+                    Menu {
+                        Button("下载全部") { model.downloadAll(tracks) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 28, height: 28)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("更多操作")
                 }
             }
             Spacer()

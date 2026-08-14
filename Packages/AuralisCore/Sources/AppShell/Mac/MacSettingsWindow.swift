@@ -42,23 +42,16 @@ public struct MacSettingsWindow: View {
     private var general: some View {
         Form {
             Section("主题") {
-                Picker("主题外观", selection: themeSelection) {
-                    ForEach(themeStore.themes) { candidate in
-                        Text(candidate.name).tag(candidate.id)
-                    }
-                }
-                .pickerStyle(.menu)
+                ThemeChoiceGrid(themeStore: themeStore)
+                Text("已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。")
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            Section("当前主题色板") {
                 ThemeSwatchGrid(colors: theme.colorTokens, name: theme.name)
             }
         }
         .formStyle(.grouped)
-    }
-
-    private var themeSelection: Binding<String> {
-        Binding(
-            get: { themeStore.selectedID },
-            set: { themeStore.select(id: $0) }
-        )
     }
 
     // MARK: - 服务器

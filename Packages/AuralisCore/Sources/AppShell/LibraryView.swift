@@ -14,9 +14,16 @@ struct LibraryView: View {
     /// AI 标签独立区：offset 游标分页（读取优化，不代表标签数量限制）。
     @State private var aiTags: [RecommendationIndexV2Category] = []
     @State private var aiTagSearch = ""
+    @State private var recommendationCategoryError: String?
     @State private var aiTagNextOffset: Int? = 0
     @State private var isLoadingMoreTags = false
     private static let aiTagPageSize = 30
+
+    init(model: AuralisAppModel, theme: BuiltInTheme, initialScope: LibraryScope = .albums) {
+        self.model = model
+        self.theme = theme
+        _scope = State(initialValue: initialScope)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,7 +71,7 @@ struct LibraryView: View {
                     Button {
                         model.selectAndPlay(track)
                     } label: {
-                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, isDownloaded: model.isDownloaded(track), theme: theme)
+                        TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), isDownloaded: model.isDownloaded(track), theme: theme)
                             .contentShape(Rectangle())
                     }
                         .buttonStyle(HapticPlainButtonStyle())
@@ -263,6 +270,13 @@ struct LibraryView: View {
             if isLoadingRecommendationCategories && recommendationCategories.isEmpty {
                 ProgressView("正在读取本地分类…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let recommendationCategoryError {
+                AuralisEmptyState(
+                    icon: "exclamationmark.triangle",
+                    title: "读取分类失败",
+                    message: recommendationCategoryError,
+                    colors: theme.colorTokens
+                )
             } else if recommendationCategories.isEmpty {
                 AuralisEmptyState(
                     icon: "square.grid.2x2",
@@ -404,12 +418,18 @@ struct LibraryView: View {
             return
         }
         isLoadingRecommendationCategories = true
+        recommendationCategoryError = nil
         // 固定维度一次读取（数量有界）；开放语义标签单独分页（tag_catalog），
         // 避免 5000 个 AI 标签一次读进内存。
-        recommendationCategories = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(
-            serverID: serverID,
-            dimensions: RecommendationIndexV2.fixedDimensions
-        )) ?? []
+        do {
+            recommendationCategories = try await model.catalogCoordinator.store.recommendationIndexV2Categories(
+                serverID: serverID,
+                dimensions: RecommendationIndexV2.fixedDimensions
+            )
+        } catch {
+            recommendationCategories = []
+            recommendationCategoryError = "读取分类失败：\(error.localizedDescription)"
+        }
         isLoadingRecommendationCategories = false
         await loadAITags(reset: true)
     }
@@ -444,14 +464,9 @@ struct LibraryView: View {
     }
 
     private func openRecommendationCategory(_ category: RecommendationIndexV2Category) {
-        Task {
-            let tracks = (try? await model.catalogCoordinator.store.recommendationIndexV2Tracks(
-                serverID: model.catalog.activeAccount?.id,
-                dimension: category.dimension,
-                value: category.value
-            )) ?? []
-            model.browseDestination = .recommendationCategory(category, tracks: tracks)
-        }
+        // 路由只携带分类身份，详情页自行按需读取并处理失败，避免把一次性快照
+        // 存进导航值（索引刷新后详情页会重新解析，读库失败也能展示错误与重试）。
+        model.browseDestination = .recommendationCategory(category)
     }
 
     private static func categoryTitle(_ category: RecommendationIndexV2Category) -> String {
@@ -567,7 +582,7 @@ struct LibraryView: View {
                     Button {
                         model.selectAndPlay(track)
                     } label: {
-                        TrackRow(track: track, isCurrent: track.id == model.currentTrack.id, theme: theme)
+                        TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                             .contentShape(Rectangle())
                     }
                         .buttonStyle(HapticPlainButtonStyle())
@@ -593,7 +608,7 @@ struct LibraryView: View {
     }
 }
 
-private enum LibraryScope: String, CaseIterable, Identifiable {
+enum LibraryScope: String, CaseIterable, Identifiable {
     case albums, tracks, artists, playlists, favorites, genres, categories
     var id: String { rawValue }
     var title: String {
