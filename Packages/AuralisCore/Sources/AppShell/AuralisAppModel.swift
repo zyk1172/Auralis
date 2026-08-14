@@ -754,8 +754,8 @@ public final class AuralisAppModel: ObservableObject {
                 onPrevious: { [weak self] in self?.previous() },
                 onNext: { [weak self] in self?.next() },
                 onSeek: { [weak self] position in
-                    guard let self, (self.actualDuration ?? self.currentTrack.duration) > 0 else { return }
-                    self.seek(toProgress: position / (self.actualDuration ?? self.currentTrack.duration))
+                    guard let self, self.effectivePlaybackDuration > 0 else { return }
+                    self.seek(toProgress: position / self.effectivePlaybackDuration)
                 },
                 onShuffle: { [weak self] enabled in self?.setShuffle(enabled) },
                 onRepeatMode: { [weak self] mode in self?.setRepeatMode(mode) }
@@ -1124,7 +1124,7 @@ public final class AuralisAppModel: ObservableObject {
             queueIndex: queueIndex,
             queueCount: queue.count,
             rate: playbackState == .playing ? playbackRate : 0,
-            duration: actualDuration
+            duration: effectivePlaybackDuration
         )
         // 灵动岛 / 锁屏实时活动与「正在播放」小组件（P1-4）。
         let content = liveActivityContent()
@@ -1141,7 +1141,7 @@ public final class AuralisAppModel: ObservableObject {
             artworkKey: currentTrack.artworkKey,
             serverID: catalog.activeServerID?.rawValue,
             trackID: currentTrack.id.rawValue,
-            duration: actualDuration ?? currentTrack.duration,
+            duration: effectivePlaybackDuration,
             position: playbackPosition,
             isPlaying: playbackState == .playing
         )
@@ -1274,10 +1274,23 @@ public final class AuralisAppModel: ObservableObject {
         return .unknown
     }
 
-    /// 0...1 playback progress of the current track.
+    /// 唯一时长事实源：优先引擎解析出的真实 item 时长；否则 metadata 时长，
+    /// 且保证分母不小于真实 position（避免 position 超过 metadata 时比例仍 < 1）。
+    public var effectivePlaybackDuration: TimeInterval {
+        if let actualDuration, actualDuration.isFinite, actualDuration > 0 {
+            return actualDuration
+        }
+        let metadata = currentTrack.duration
+        if metadata > 0 { return metadata }
+        // metadata 缺失（0/未知）时以当前位置兜底并留 1 秒余量，
+        // 保证 duration > position（进度条比例 < 1），不会“到头了还在播”。
+        return playbackPosition > 0 ? playbackPosition + 1 : 0
+    }
+
+    /// 0...1 playback progress of the current track。
     public var playbackProgress: Double {
         get {
-            let duration = actualDuration ?? currentTrack.duration
+            let duration = effectivePlaybackDuration
             guard duration > 0 else { return 0 }
             return min(max(playbackPosition / duration, 0), 1)
         }
@@ -1710,6 +1723,15 @@ public final class AuralisAppModel: ObservableObject {
         agentCoordinator.send(text)
     }
 
+    /// 一级分区切换（iPhone CompactShell 唯一入口，iPad 通过 selection onChange 复用同一
+    /// 语义）：必须同时清掉浏览详情，否则 NavigationStack 的 navigationDestination(item:)
+    /// 详情仍盖在新分区之上，表现为“歌单/收藏详情里点音乐库/AI 助手跳不过去”。
+    /// 纯状态操作，可单测；UI 层（Dock 滚动复位等）由调用方负责。
+    public func selectTopLevelSection(_ section: AppSection) {
+        browseDestination = nil
+        selectedSection = section
+    }
+
     /// 设置页的快捷入口：复用 Agent 已验证的“状态 → 分批分类 → 写回至 0”流程，
     /// 由 AgentRunner 的索引任务约束保证不会在中途把自然语言回复误报为完成。
     public func startOrContinueRecommendationIndexV2() {
@@ -1765,7 +1787,7 @@ public final class AuralisAppModel: ObservableObject {
         guard playbackHistoryStore.qualifyIfNeeded(
             globalID: globalID,
             position: playbackPosition,
-            duration: track.duration,
+            duration: effectivePlaybackDuration,
             force: force
         ) else { return }
         libraryRowMetadataRevision &+= 1
@@ -2433,6 +2455,7 @@ public final class AuralisAppModel: ObservableObject {
         await connector.forgetServer(serverID: serverID)
         guard catalog.activeServerID == serverID else { return }
         Task { await liveActivityManager.endPlayback() }
+        actualDuration = nil
         mediaIntegration.stop()
         catalog = .empty
         queue = []
@@ -2566,7 +2589,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 向前跳转（默认 30 秒）。
     public func skipForward(seconds: TimeInterval = 30) {
-        let duration = actualDuration ?? currentTrack.duration
+        let duration = effectivePlaybackDuration
         let target = duration > 0 ? min(playbackPosition + seconds, duration) : playbackPosition + seconds
         seekToAbsolute(target)
     }
@@ -2753,7 +2776,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 拖动进度：同时更新 UI 位置、驱动引擎真实 seek，并同步锁屏进度。
     public func seek(toProgress progress: Double) {
-        playbackPosition = min(max(progress, 0), 1) * (actualDuration ?? currentTrack.duration)
+        playbackPosition = min(max(progress, 0), 1) * effectivePlaybackDuration
         let position = playbackPosition
         let identity = queueIdentity(currentTrack)
         persistPlaybackSession()
@@ -2864,18 +2887,18 @@ public final class AuralisAppModel: ObservableObject {
         isAdvancingProgress = true
         Task { @MainActor in
             defer { self.isAdvancingProgress = false }
+            // 时长只读缓存：引擎按 item 解析一次/变化时更新，tick 不做重负载读取。
             if let realDuration = await self.engine.currentDuration() {
                 self.actualDuration = realDuration
             }
+            // 只显示/持久化位置；不把真实位置 clamp 回可能偏短的 metadata 时长。
             if let real = await self.engine.currentPosition() {
-                self.playbackPosition = min(real, self.actualDuration ?? self.currentTrack.duration)
+                self.playbackPosition = max(real, 0)
             } else {
                 self.playbackPosition += 0.5
-                if self.playbackPosition >= self.currentTrack.duration {
-                    self.handleTrackEnded()
-                    return
-                }
             }
+            // 注意：不在这里宣布“歌曲播完”。自然结束的唯一权威事件是
+            // AVPlayerItemDidPlayToEndTime + PlayerItemBoundaryCoordinator。
             self.qualifyCurrentPlaybackIfNeeded()
             // 每 2 秒落盘一次进度，避免高频写入。
             if Date().timeIntervalSince(self.lastPlaybackPersistAt) >= 2 {
@@ -2927,6 +2950,8 @@ public final class AuralisAppModel: ObservableObject {
     /// history and platform metadata; calling selectAndPlay here would tear
     /// down the prebuffered player and reintroduce the gap we just removed.
     private func handlePreparedTrackStarted(_ prepared: Track) {
+        // gapless A→B：B 的前几个 UI tick 不得沿用 A 的真实时长。
+        actualDuration = nil
         let finished = currentTrack
         finalizeCompletedTrack(finished)
         if applySleepTimerAtTrackEnd() { return }
@@ -3022,6 +3047,7 @@ public final class AuralisAppModel: ObservableObject {
     private func pauseAtQueueEnd() {
         lastStopReason = .queueEnded
         playbackPosition = 0
+        actualDuration = nil
         Task { await liveActivityManager.endPlayback() }
         Task {
             await engine.pause()
@@ -3361,26 +3387,36 @@ public final class AuralisAppModel: ObservableObject {
         // 那会停用 AVAudioSession 并清空 MPNowPlayingInfoCenter，导致后台播放被杀、
         // 控制中心丢失歌曲信息。正在播放时只更新目录，音频与系统信息保持不变。
 
-        let libraryAddedStartedAt = ContinuousClock.now
-        reconcileLibraryAddedDates(tracks: tracks, serverID: result.account.id)
-        StartupPerformanceTrace.record(
-            .appApplyLibraryAdded,
-            since: libraryAddedStartedAt,
-            metadata: .init(entityCount: tracks.count, serverIDHash: serverHash)
-        )
-
         // “不喜欢”是私人状态：每次目录就绪/服务器切换后从 SQLite 刷新镜像。
         Task { await self.refreshDislikedState() }
-        // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
-        let homeSnapshotStartedAt = ContinuousClock.now
-        homeStore.regenerateRandom(from: tracks, dislikedTrackIDs: dislikedTrackIDs)
-        // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
-        refreshHomeSnapshots()
-        StartupPerformanceTrace.record(
-            .appApplyHomeSnapshot,
-            since: homeSnapshotStartedAt,
-            metadata: .init(entityCount: tracks.count, serverIDHash: serverHash)
-        )
+
+        // 首屏优化（RC）：library-added 对齐、随机音乐采样与首页货架快照都是 O(N)
+        // 派生工作，全部延后到 catalog 发布后的后台 MainActor 任务执行（保持原顺序），
+        // 让冷启动「SQLite 已读 → 首屏出现」之间不再被这几轮全库遍历阻塞。
+        let libraryAddedStartedAt = ContinuousClock.now
+        let randomTracks = tracks
+        let serverIDForAdded = result.account.id
+        let disliked = dislikedTrackIDs
+        let serverHashForTrace = serverHash
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.reconcileLibraryAddedDates(tracks: randomTracks, serverID: serverIDForAdded)
+            StartupPerformanceTrace.record(
+                .appApplyLibraryAdded,
+                since: libraryAddedStartedAt,
+                metadata: .init(entityCount: randomTracks.count, serverIDHash: serverHashForTrace)
+            )
+            // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
+            let homeSnapshotStartedAt = ContinuousClock.now
+            self.homeStore.regenerateRandom(from: randomTracks, dislikedTrackIDs: disliked)
+            // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
+            self.refreshHomeSnapshots()
+            StartupPerformanceTrace.record(
+                .appApplyHomeSnapshot,
+                since: homeSnapshotStartedAt,
+                metadata: .init(entityCount: randomTracks.count, serverIDHash: serverHashForTrace)
+            )
+        }
 
         // 仅在未播放时恢复「上次播放会话」（队列 + 当前曲目 + 进度），
         // 不自动播放，由用户点击播放后从保存的进度继续；

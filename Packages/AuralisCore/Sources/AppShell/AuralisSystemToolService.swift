@@ -436,7 +436,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         let isPlaceholder = model.currentTrack.id.rawValue == "placeholder"
         let appTitle = isPlaceholder ? nil : model.currentTrack.title
         let consistent = (snapshot?.title == appTitle)
-            && (snapshot?.duration ?? 0) == model.currentTrack.duration
+            && (snapshot?.duration ?? 0) == model.effectivePlaybackDuration
         return AgentNowPlayingStatus(
             title: snapshot?.title,
             artist: snapshot?.artist,

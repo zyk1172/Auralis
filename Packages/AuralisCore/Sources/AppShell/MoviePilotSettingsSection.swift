@@ -46,7 +46,7 @@ struct MoviePilotSettingsSection: View {
         } header: {
             Text("音乐下载（MoviePilot）")
         } footer: {
-            Text("填写内网地址及可选外网地址后，澜音会同时探测两端；内网 30 秒内可达则优先使用，内网不可达才降级外网。外网请填写完整的 http:// 或 https:// 地址；HTTPS 更安全，HTTP 会明文传输调用 Token。Agent 会通过插件搜索并下载到 NAS 音乐目录（仅下载，不刮削/整理）。")
+            Text("填写内网地址及可选外网地址后，Auralis会同时探测两端；内网 30 秒内可达则优先使用，内网不可达才降级外网。外网请填写完整的 http:// 或 https:// 地址；HTTPS 更安全，HTTP 会明文传输调用 Token。Agent 会通过插件搜索并下载到 NAS 音乐目录（仅下载，不刮削/整理）。")
         }
         .task {
             await loadToken()

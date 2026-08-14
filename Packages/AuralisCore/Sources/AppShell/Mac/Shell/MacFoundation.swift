@@ -10,6 +10,22 @@ extension Track {
     }
 }
 
+extension Artist {
+    /// SwiftUI 列表和网格的稳定身份必须包含服务器：
+    /// 跨服务器相同 ArtistID 会共用 Identifiable.id，导致 ForEach 重复身份崩溃。
+    var macGlobalID: GlobalID {
+        GlobalID(serverID: serverID, remoteID: id.rawValue)
+    }
+}
+
+extension Album {
+    /// SwiftUI 列表和网格的稳定身份必须包含服务器：
+    /// 跨服务器相同 AlbumID 会共用 Identifiable.id，导致 ForEach 重复身份崩溃。
+    var macGlobalID: GlobalID {
+        GlobalID(serverID: serverID, remoteID: id.rawValue)
+    }
+}
+
 // MARK: - 键盘命令广播（App 菜单 → 主窗口）
 
 /// macOS 键盘命令广播名称。所有 Toolbar / PlayerBar 动作都必须能通过 Menu Bar 触发，

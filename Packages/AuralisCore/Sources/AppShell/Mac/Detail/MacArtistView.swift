@@ -6,6 +6,10 @@ import ThemeEngine
 
 /// Artist Detail：Hero（mosaic/monogram）+ 常听歌曲 + 专辑网格。
 /// 「常听歌曲」按本机播放次数排序（用户个人常听，不是外部热门），单曲行不嵌套 Table。
+///
+/// 崩溃/卡顿防护：艺术家曲目与专辑按 `artist.macGlobalID|catalogRevision` 在 `.task(id:)`
+/// 里解析一次并缓存到 @State，body 只消费缓存数组；不再在每次 body 求值时全库扫描
+/// （数千歌曲/专辑的艺术家 + 播放中频繁重绘时，原本 O(N) × body 次数会卡死主线程）。
 struct MacArtistView: View {
     let artist: Artist
     @ObservedObject var model: AuralisAppModel
@@ -13,17 +17,27 @@ struct MacArtistView: View {
     @Binding var selection: Set<GlobalID>
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
-    private var tracks: [Track] { MacLibraryQuery.artistTracks(artist, model: model) }
-    private var albums: [Album] { MacLibraryQuery.artistAlbums(artist, model: model) }
+    @State private var artistTracks: [Track] = []
+    @State private var artistAlbums: [Album] = []
+
+    /// 缓存键：艺术家身份 + 目录修订号。目录刷新或切换艺术家时重新解析。
+    private var artistResolveKey: String {
+        "\(artist.macGlobalID)|\(model.catalogRevision)"
+    }
 
     /// 用户自己的常听歌曲：只展示真正播放过的 Top 12。完整曲目仍可从歌曲页搜索，
     /// Artist Hero 不再因一个拥有数千首歌的艺术家而创建整套行视图。
     private var topTracks: [Track] {
-        let counts = model.playCounts
-        return Array(tracks
-            .filter { (counts[$0.id] ?? 0) > 0 }
-            .sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
-            .prefix(12))
+        Self.topPlayedTracks(artistTracks, playCounts: model.playCounts)
+    }
+
+    /// 常听 Top N（纯函数，供测试直接调用）：只取播放次数 > 0 的曲目，
+    /// 按播放次数降序，取前 limit 首。基于缓存后的 artistTracks，不重新扫描目录。
+    static func topPlayedTracks(_ tracks: [Track], playCounts: [TrackID: Int], limit: Int = 12) -> [Track] {
+        Array(tracks
+            .filter { (playCounts[$0.id] ?? 0) > 0 }
+            .sorted { (playCounts[$0.id] ?? 0) > (playCounts[$1.id] ?? 0) }
+            .prefix(limit))
     }
 
     private let columns = [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: MacUIVisualTokens.Artwork.gridGap)]
@@ -45,12 +59,12 @@ struct MacArtistView: View {
                         )
                     }
                 }
-                if !albums.isEmpty {
+                if !artistAlbums.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("专辑")
                             .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         LazyVGrid(columns: columns, spacing: 24) {
-                            ForEach(albums) { album in
+                            ForEach(artistAlbums, id: \.macGlobalID) { album in
                                 MacAlbumTile(
                                     album: album,
                                     model: model,
@@ -68,6 +82,22 @@ struct MacArtistView: View {
             .padding(.bottom, 24)
         }
         .navigationTitle(artist.name)
+        .onAppear {
+            MacUITrace.action(
+                "MacArtistView.create",
+                "artists=\(model.catalog.artists.count) tracks=\(model.catalog.tracks.count) "
+                    + "albums=\(model.catalog.albums.count) rev=\(model.catalogRevision)"
+            )
+        }
+        .task(id: artistResolveKey) {
+            artistTracks = MacLibraryQuery.artistTracks(artist, model: model)
+            artistAlbums = MacLibraryQuery.artistAlbums(artist, model: model)
+            MacUITrace.action(
+                "MacArtistView.resolve",
+                "artistTracks=\(artistTracks.count) artistAlbums=\(artistAlbums.count) "
+                    + "rev=\(model.catalogRevision)"
+            )
+        }
     }
 
     private var hero: some View {
@@ -77,7 +107,7 @@ struct MacArtistView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(artist.name)
                     .font(.system(size: 30, weight: .bold, design: .default))
-                Text("\(albums.count) 张专辑 · \(tracks.count) 首歌曲")
+                Text("\(artistAlbums.count) 张专辑 · \(artistTracks.count) 首歌曲")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
@@ -89,7 +119,7 @@ struct MacArtistView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
                     Button {
-                        model.playShuffledQueue(tracks)
+                        model.playShuffledQueue(artistTracks)
                     } label: {
                         Label("随机播放", systemImage: "shuffle")
                     }
@@ -105,8 +135,8 @@ struct MacArtistView: View {
                     .help(model.isArtistFavorite(artist) ? "取消收藏艺术家" : "收藏艺术家")
                     .accessibilityLabel(model.isArtistFavorite(artist) ? "取消收藏艺术家" : "收藏艺术家")
                     Menu {
-                        Button("下载全部") { model.downloadAll(tracks) }
-                        Button("随机播放全部") { model.playShuffledQueue(tracks) }
+                        Button("下载全部") { model.downloadAll(artistTracks) }
+                        Button("随机播放全部") { model.playShuffledQueue(artistTracks) }
                     } label: {
                         Image(systemName: "ellipsis")
                             .frame(width: 28, height: 28)
@@ -124,12 +154,12 @@ struct MacArtistView: View {
 
     @ViewBuilder
     private var mosaic: some View {
-        let reps = Array(albums.prefix(4))
+        let reps = Array(artistAlbums.prefix(4))
         if let key = artist.artworkKey {
             ArtworkView(title: artist.name, artworkKey: key, colors: theme.colorTokens, size: 200, cornerRadius: 100)
         } else if reps.count == 4 {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
-                ForEach(reps) { album in
+                ForEach(reps, id: \.macGlobalID) { album in
                     ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: theme.colorTokens, size: 96, cornerRadius: 8)
                 }
             }

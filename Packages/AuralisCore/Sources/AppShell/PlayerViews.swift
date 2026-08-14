@@ -443,7 +443,7 @@ struct NowPlayingView: View {
                 HStack {
                     Text(formatDuration(playbackStore.position))
                     Spacer()
-                    Text("-" + formatDuration(max(model.currentTrack.duration - playbackStore.position, 0)))
+                    Text("-" + formatDuration(max(model.effectivePlaybackDuration - playbackStore.position, 0)))
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(theme.colorTokens.secondaryText.color)

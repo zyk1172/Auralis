@@ -622,11 +622,14 @@ public actor LocalCatalogStore: LibrarySyncStore {
         ).first?["processed_count"]?.int ?? 0)
 
         try db.transaction {
-            if session.mode == .full {
-                try db.run("DELETE FROM artists WHERE server_id = ?", [.text(serverID)])
-                try db.run("DELETE FROM albums WHERE server_id = ?", [.text(serverID)])
-                try db.run("DELETE FROM tracks WHERE server_id = ?", [.text(serverID)])
-            }
+            // OpenSubsonic 的「增量」实际也是全量遍历（staging 覆盖完整目录），因此
+            // 任何完成的同步都会先删除旧记录再写入，保证服务器上已删除的歌曲同步后
+            // 在本地消失——旧的「incremental 只 INSERT OR REPLACE」会让已删除曲目
+            // 永久残留在本地。若未来接入真正的 delta API（只 stage 变更集），
+            // 增量模式才需要改为不删除。
+            try db.run("DELETE FROM artists WHERE server_id = ?", [.text(serverID)])
+            try db.run("DELETE FROM albums WHERE server_id = ?", [.text(serverID)])
+            try db.run("DELETE FROM tracks WHERE server_id = ?", [.text(serverID)])
 
             try db.run(
                 """

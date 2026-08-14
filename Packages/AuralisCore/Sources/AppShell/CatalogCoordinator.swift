@@ -279,7 +279,9 @@ public final class CatalogCoordinator: ObservableObject {
             } catch let error as LibrarySyncError {
                 self.phase = .failed(Self.describe(error))
             } catch {
-                self.phase = .failed(error.localizedDescription)
+                // 统一分类：本地网络被拒 / 超时 / 认证 / HTTP / OpenSubsonic 解码 /
+                // SQLite 读写失败等各有明确文案，不能全部退化成笼统的「同步失败」。
+                self.phase = .failed(ConnectionErrorDescription.describe(error))
             }
         }
     }

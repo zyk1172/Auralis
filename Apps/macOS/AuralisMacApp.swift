@@ -10,7 +10,7 @@ struct AuralisMacApp: App {
     @StateObject private var settingsRouter = MacSettingsRouter()
 
     var body: some Scene {
-        WindowGroup("澜音") {
+        WindowGroup("Auralis") {
             MacMusicShell(model: .shared, themeStore: themeStore, settingsRouter: settingsRouter)
                 .frame(minWidth: 900, minHeight: 600)
         }

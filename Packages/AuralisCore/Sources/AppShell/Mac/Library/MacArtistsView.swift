@@ -21,6 +21,11 @@ struct MacArtistsView: View {
         "\(model.catalogRevision)|\(localSearch)"
     }
 
+    /// 红色化日志：只记录是否已有选中项，不输出原始 serverID/remoteID。
+    private func redactedSelection(_ id: GlobalID?) -> String {
+        id == nil ? "none" : "set"
+    }
+
     private func rebuildVisibleArtists() {
         let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let artists = model.catalog.artists
@@ -29,20 +34,23 @@ struct MacArtistsView: View {
         visibleArtists = artists
 
         if let selectedArtistID {
-            let remainsVisible = artists.contains {
-                GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == selectedArtistID
-            }
+            let remainsVisible = artists.contains { $0.macGlobalID == selectedArtistID }
             if !remainsVisible {
                 self.selectedArtistID = nil
             }
         }
+
+        MacUITrace.action(
+            "MacArtistsView.rebuild",
+            "visible=\(visibleArtists.count) artists=\(model.catalog.artists.count) "
+                + "tracks=\(model.catalog.tracks.count) albums=\(model.catalog.albums.count) "
+                + "rev=\(model.catalogRevision) selection=\(redactedSelection(selectedArtistID))"
+        )
     }
 
     private var selectedArtist: Artist? {
         guard let selectedArtistID else { return nil }
-        return visibleArtists.first {
-            GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == selectedArtistID
-        }
+        return visibleArtists.first { $0.macGlobalID == selectedArtistID }
     }
 
     var body: some View {
@@ -51,7 +59,7 @@ struct MacArtistsView: View {
             Divider()
             HSplitView {
                 List(selection: $selectedArtistID) {
-                    ForEach(visibleArtists) { artist in
+                    ForEach(visibleArtists, id: \.macGlobalID) { artist in
                         HStack(spacing: 10) {
                             ArtworkView(
                                 title: artist.name,
@@ -68,7 +76,7 @@ struct MacArtistsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .tag(GlobalID(serverID: artist.serverID, remoteID: artist.id.rawValue))
+                        .tag(artist.macGlobalID)
                     }
                 }
                 .listStyle(.inset)
@@ -84,6 +92,21 @@ struct MacArtistsView: View {
             }
         }
         .navigationTitle("艺术家")
+        .onAppear {
+            MacUITrace.action(
+                "MacArtistsView.appear",
+                "artists=\(model.catalog.artists.count) tracks=\(model.catalog.tracks.count) "
+                    + "albums=\(model.catalog.albums.count) rev=\(model.catalogRevision) "
+                    + "selection=\(redactedSelection(selectedArtistID))"
+            )
+        }
+        .onChange(of: selectedArtistID) { _, newValue in
+            MacUITrace.action(
+                "MacArtistsView.select",
+                "visible=\(visibleArtists.count) rev=\(model.catalogRevision) "
+                    + "selection=\(redactedSelection(newValue))"
+            )
+        }
         .task(id: derivationKey) {
             rebuildVisibleArtists()
         }

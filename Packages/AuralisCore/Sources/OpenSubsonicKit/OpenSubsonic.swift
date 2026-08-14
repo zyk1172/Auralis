@@ -274,9 +274,9 @@ extension OpenSubsonicClientError: LocalizedError {
         let lanCodes: Set<Int> = [-1009, -1001, -1003, -1004, -1005]
         guard lanCodes.contains(code), let host, Self.isPrivateOrLocal(host: host) else { return "" }
         #if os(macOS)
-        return "如果是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「澜音」访问本地网络，并确认 Mac 与服务器在同一网络。"
+        return "如果是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
         #else
-        return "如果是局域网地址（\(host)），请检查 设置 → 隐私与安全 → 本地网络 是否允许「澜音」访问本地网络，并确认设备与服务器在同一网络。"
+        return "如果是局域网地址（\(host)），请检查 设置 → 隐私与安全 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
         #endif
     }
 
