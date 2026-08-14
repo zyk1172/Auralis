@@ -53,6 +53,28 @@ private struct RecommendationIndexV2PendingState {
 }
 
 extension LocalCatalogStore {
+    /// 清空一个服务器的 Recommendation Index V2 结果。
+    /// 只删除该服务器的 state / tag 行，不触碰歌曲、封面、下载、播放历史或其他服务器的索引。
+    /// 语义标签词表是跨服务器共享的 canonical 化辅助数据，因此保留，避免影响其他服务器。
+    public func clearRecommendationIndexV2(serverID: ServerID) throws {
+        try db.transaction {
+            // tags 表没有 server_id，必须先由 state 表限定身份再删除，防止跨服务器误删。
+            try db.run(
+                """
+                DELETE FROM recommendation_index_v2_tags
+                WHERE global_id IN (
+                    SELECT global_id FROM recommendation_index_v2_state WHERE server_id = ?
+                )
+                """,
+                [.text(serverID.rawValue)]
+            )
+            try db.run(
+                "DELETE FROM recommendation_index_v2_state WHERE server_id = ?",
+                [.text(serverID.rawValue)]
+            )
+        }
+    }
+
     /// 统一计算 pending 集合：固定分类（content hash 未匹配/过期）与开放语义标签
     /// （semanticTagRulesVersion 低于当前）。status / nextBatch / completion 共用。
     private func recommendationIndexV2PendingState(

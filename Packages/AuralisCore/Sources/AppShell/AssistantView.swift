@@ -175,7 +175,7 @@ struct AssistantView: View {
                 }
                 .buttonStyle(HapticBorderedButtonStyle())
                 .help("新建会话")
-                batchManagementButton
+                sessionSettingsMenu
             }
             .padding(.horizontal, AuralisSpacing.medium)
             .padding(.top, AuralisSpacing.medium)
@@ -191,12 +191,6 @@ struct AssistantView: View {
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
             .padding(.horizontal, AuralisSpacing.medium)
             .padding(.vertical, AuralisSpacing.small)
-
-            Toggle("显示已归档", isOn: $agent.showArchivedSessions)
-                .toggleStyle(.switch)
-                .font(.caption)
-                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                .padding(.horizontal, AuralisSpacing.medium)
 
             List {
                 ForEach(agent.sessions) { session in
@@ -415,11 +409,11 @@ struct AssistantView: View {
                 )
         }
         #else
-        // macOS 没有底部 Dock，输入框作为本页底部安全区浮层；
-        // 主窗口底部还有常驻悬浮播放条（≈70pt + 22pt 底距），输入框需抬升避免被遮挡。
+        // macOS：AI 输入胶囊与常规悬浮播放条共用窗口底部基线。AI 页的播放封面
+        // 球已转移到 sidebar，detail 不再预留播放条高度或将输入框向上抬起。
         .safeAreaInset(edge: .bottom, spacing: 0) {
             inputBar
-                .padding(.bottom, 100)
+                .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
         }
         #endif
     }
@@ -472,38 +466,34 @@ struct AssistantView: View {
     }
 
     /// 新建会话仅保留在会话页顶部；进入批量管理后，全选收纳到同一管理按钮中。
-    private var batchManagementButton: some View {
-        Group {
+    private var sessionSettingsMenu: some View {
+        Menu {
+            Toggle("显示已归档", isOn: $agent.showArchivedSessions)
+            Divider()
             if isBatchManaging {
-                Menu {
-                    Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? "取消全选" : "全选") {
-                        if selectedSessionIDs.count == agent.sessions.count {
-                            selectedSessionIDs.removeAll()
-                        } else {
-                            selectedSessionIDs = Set(agent.sessions.map(\.id))
-                        }
-                    }
-                    Button("完成批量管理") {
-                        isBatchManaging = false
+                Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? "取消全选" : "全选") {
+                    if selectedSessionIDs.count == agent.sessions.count {
                         selectedSessionIDs.removeAll()
+                    } else {
+                        selectedSessionIDs = Set(agent.sessions.map(\.id))
                     }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 24, weight: .semibold))
-                        .frame(width: 52, height: 52)
                 }
-                .buttonStyle(HapticBorderedButtonStyle())
-                .help("批量管理：全选或完成")
+                Button("完成批量管理") {
+                    isBatchManaging = false
+                    selectedSessionIDs.removeAll()
+                }
             } else {
-                Button { isBatchManaging = true } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 24, weight: .semibold))
-                        .frame(width: 52, height: 52)
-                }
-                .buttonStyle(HapticBorderedButtonStyle())
-                .help("批量管理")
+                Button("管理会话") { isBatchManaging = true }
             }
         }
+        label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 24, weight: .semibold))
+                .frame(width: 52, height: 52)
+        }
+        .buttonStyle(HapticBorderedButtonStyle())
+        .help("会话设置")
+        .accessibilityLabel("会话设置")
     }
 
     private var sessionListButton: some View {
@@ -684,36 +674,35 @@ struct AssistantView: View {
         }
     }
 
-    /// 输入框（macOS 版）：原生 macOS 样式，固定在底部安全区。
+    /// 输入框（macOS 版）：液态玻璃胶囊，固定在与常规播放条相同的底部基线。
     /// iOS 版的输入框由底部 Dock 统一渲染（见 AuralisRootView 的 DockAssistantInputBar），
     /// 避免嵌套 safeAreaInset 与 Dock 主菜单栏重叠。
     #if os(macOS)
     private var inputBar: some View {
-        HStack(alignment: .center, spacing: AuralisSpacing.medium) {
-            Image(systemName: "sparkles")
-                .foregroundStyle(theme.colorTokens.accent.color)
-                .frame(width: 22, height: 22)
-            TextField("描述你想听的音乐，或让我帮你操作", text: $model.assistantDraft)
-                .textFieldStyle(.roundedBorder)
-                .focused($assistantInputFocused)
-                .onSubmit { model.sendAssistantMessage(); assistantInputFocused = false }
-            Button {
-                if model.assistantIsRunning { model.cancelAssistant() } else { model.sendAssistantMessage(); assistantInputFocused = false }
-            } label: {
-                Image(systemName: model.assistantIsRunning ? "stop.circle.fill" : "arrow.up.circle.fill")
-                    .font(.title2)
+        MacGlassCapsule {
+            HStack(alignment: .center, spacing: AuralisSpacing.medium) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(theme.colorTokens.accent.color)
+                    .frame(width: 22, height: 22)
+                TextField("描述你想听的音乐，或让我帮你操作", text: $model.assistantDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($assistantInputFocused)
+                    .onSubmit { model.sendAssistantMessage(); assistantInputFocused = false }
+                Button {
+                    if model.assistantIsRunning { model.cancelAssistant() } else { model.sendAssistantMessage(); assistantInputFocused = false }
+                } label: {
+                    Image(systemName: model.assistantIsRunning ? "stop.circle.fill" : "arrow.up.circle.fill")
+                        .font(.title2)
+                }
+                .buttonStyle(HapticPlainButtonStyle())
+                .accessibilityLabel(model.assistantIsRunning ? "停止" : "发送")
+                .frame(width: 44, height: 44)
             }
-            .buttonStyle(HapticPlainButtonStyle())
-            .accessibilityLabel(model.assistantIsRunning ? "停止" : "发送")
-            .frame(width: 44, height: 44)
+            .padding(.horizontal, 16)
+            .frame(height: 62)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(theme.colorTokens.surface.color)
-        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
-        .padding(.bottom, 8)
     }
     #endif
 

@@ -98,10 +98,15 @@ enum MacUIVisualTokens {
         static let playerColumnMin: CGFloat = 440
         static let playerColumnMax: CGFloat = 520
         static let playerColumnWidthRatio: CGFloat = 0.316
-        static let artworkMin: CGFloat = 280
-        static let artworkMax: CGFloat = 420
-        static let artworkWidthRatio: CGFloat = 0.23
-        static let artworkHeightRatio: CGFloat = 0.36
+        /// 播放态封面是与进度 / 运输控制轨等宽的正方形；暂停态只在视觉层缩小。
+        static let artworkToColumnRatio: CGFloat = 1
+        /// 矮窗口保护；不会改变正常宽窗口里封面与控制轨的比例。
+        /// 允许常见 Mac 窗口中封面完整达到控制轨宽度；仅更矮的窗口才限幅。
+        static let artworkHeightRatio: CGFloat = 0.54
+        static let artworkMin: CGFloat = 300
+        static let artworkMax: CGFloat = 520
+        /// 暂停时只缩放视觉层，布局仍保留播放态的最大封面占位。
+        static let pausedArtworkScale: CGFloat = 0.74
         static let leftMarginRatio: CGFloat = 0.092
         /// Music.app 的封面在窗口内容中部开始；右侧队列则更靠上。
         static let topInsetMin: CGFloat = 190
@@ -120,18 +125,21 @@ enum MacUIVisualTokens {
         static let transportSpacing: CGFloat = 10
         static let lyricsLineGap: CGFloat = 20
         static let queueRowSpacing: CGFloat = 8
-        static let topLeftGlassHeight: CGFloat = 50
-        static let topLeftGlassPaddingH: CGFloat = 20
-        /// 紧邻 traffic lights 后的系统安全位置，和 Music.app 的 close / mini group 对齐。
-        static let topLeftGlassPaddingL: CGFloat = 140
-        static let topLeftGlassPaddingT: CGFloat = 10
-        static let topRightGlassHeight: CGFloat = 50
-        static let topRightGlassPaddingH: CGFloat = 20
-        static let topRightGlassPaddingR: CGFloat = 20
-        /// 与左侧收起 / 迷你播放器控制保持同一水平线。
-        static let topRightGlassPaddingT: CGFloat = 10
-        static let topRightGlassWidth: CGFloat = 180
-        static let topRightControlSpacing: CGFloat = 24
+        /// 对齐 Music.app 顶栏：胶囊约 38pt 高，贴近 titlebar 而非内容 safe area。
+        static let topLeftGlassHeight: CGFloat = 38
+        static let topLeftGlassPaddingH: CGFloat = 12
+        /// 三色窗口按钮右侧的 Music.app close / mini 胶囊起点。
+        static let topLeftGlassPaddingL: CGFloat = 100
+        /// 胶囊保持 Music.app 的 titlebar 基线；系统 traffic lights 会下移至这条基线。
+        static let topLeftGlassPaddingT: CGFloat = 8
+        static let topRightGlassHeight: CGFloat = 38
+        static let topRightGlassPaddingH: CGFloat = 16
+        static let topRightGlassPaddingR: CGFloat = 8
+        /// 与左侧胶囊处于同一条 titlebar 水平线。
+        static let topRightGlassPaddingT: CGFloat = 8
+        /// 124 + 12 + 17 + 32 = 185pt，与 Music.app 音量胶囊接近。
+        static let topRightGlassWidth: CGFloat = 124
+        static let topRightControlSpacing: CGFloat = 14
     }
 
     // MARK: - Mini Player

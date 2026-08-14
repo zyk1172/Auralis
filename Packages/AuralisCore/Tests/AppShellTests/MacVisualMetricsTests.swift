@@ -46,10 +46,12 @@ struct MacVisualMetricsTests {
 
     // MARK: - Full Player（Music.app 左播放轨道 + 右歌词/队列轨道）
 
-    @Test("full player artwork 1536×1050 → 340...370")
+    @Test("full player artwork 1536×1050 与控制轨等宽")
     func fullPlayerArtworkSize() {
-        let s = MacFullPlayerMetrics.artworkSize(window: CGSize(width: 1536, height: 1050))
-        #expect(s >= 340 && s <= 370)
+        let size = CGSize(width: 1536, height: 1050)
+        let artwork = MacFullPlayerMetrics.artworkSize(window: size)
+        let column = MacFullPlayerMetrics.playerColumnWidth(window: size)
+        #expect(artwork == column)
     }
 
     @Test("full player left margin ≈ 9.2% 窗口宽（130...150）")
@@ -58,10 +60,10 @@ struct MacVisualMetricsTests {
         #expect(m >= 130 && m <= 150)
     }
 
-    @Test("full player artwork 位于窗口中部（220...250）")
+    @Test("full player 封面、资料与控制整组垂直居中（145...150）")
     func fullPlayerTop() {
         let t = MacFullPlayerMetrics.topY(window: CGSize(width: 1536, height: 1050))
-        #expect(t >= 220 && t <= 250)
+        #expect(t >= 145 && t <= 150)
     }
 
     @Test("full player 左轨 440...520，右轨更靠上")
@@ -74,11 +76,20 @@ struct MacVisualMetricsTests {
         #expect(contextTop < playerTop)
     }
 
-    @Test("窗口缩放时 artwork 不固定 420")
-    func artworkScalesWithWindow() {
-        let small = MacFullPlayerMetrics.artworkSize(window: CGSize(width: 1280, height: 800))
-        let big = MacFullPlayerMetrics.artworkSize(window: CGSize(width: 1728, height: 1117))
-        #expect(small < big)
-        #expect(small >= 280 && small <= 420)
+    @Test("三种常见窗口下封面与控制轨保持 Apple Music 比例")
+    func artworkMatchesPlayerColumnAcrossWindowSizes() {
+        for size in [
+            CGSize(width: 1280, height: 820),
+            CGSize(width: 1440, height: 900),
+            CGSize(width: 1728, height: 1117),
+        ] {
+            let artwork = MacFullPlayerMetrics.artworkSize(window: size)
+            let column = MacFullPlayerMetrics.playerColumnWidth(window: size)
+            let playingRatio = artwork / column
+            let pausedRatio = playingRatio * MacUIVisualTokens.ExpandedPlayer.pausedArtworkScale
+            #expect(artwork <= column)
+            #expect(playingRatio == 1)
+            #expect(pausedRatio >= 0.73 && pausedRatio <= 0.75)
+        }
     }
 }

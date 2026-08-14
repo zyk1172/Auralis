@@ -76,6 +76,27 @@ struct MacArchitectureContractTests {
         #expect(state.context == .none)
     }
 
+    @MainActor
+    @Test("每次展开均从无 context 的居中主轨开始")
+    func expandAlwaysStartsWithoutContext() {
+        let state = MacPlayerPresentationState()
+        state.expand()
+        #expect(state.presentation == .expanded)
+        #expect(state.context == .none)
+
+        state.toggleContext(.queue)
+        #expect(state.context == .queue)
+        state.toggleContext(.queue)
+        #expect(state.context == .none)
+
+        state.toggleContext(.lyrics)
+        #expect(state.context == .lyrics)
+        state.collapse()
+        state.expand()
+        #expect(state.presentation == .expanded)
+        #expect(state.context == .none)
+    }
+
     // MARK: - Mac 循环模式 UI（cycleRepeatMode）
 
     @MainActor

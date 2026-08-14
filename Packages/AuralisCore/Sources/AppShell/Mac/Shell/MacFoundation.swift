@@ -287,14 +287,16 @@ final class MacPlayerPresentationState: ObservableObject {
 
     func expand() {
         guard presentation == .library else { return }
-        // 与 Music.app 一致：展开播放页时直接展示“继续播放”队列，而不是
-        // 先给一张只有封面的空白页。
-        context = .queue
+        // Expanded Player 初始只展示居中的 Now Playing 主轨；Lyrics / Queue
+        // 均由用户显式打开，且每次收起后再展开都回到无 context 状态。
+        context = .none
         presentation = .expanded
     }
 
     func collapse() {
         guard presentation == .expanded else { return }
+        // 关闭时一并归零，保证任何后续展开都不会恢复旧歌词/队列面板。
+        context = .none
         presentation = .library
     }
 
@@ -333,13 +335,21 @@ enum MacFullPlayerMetrics {
     }
     static func artworkSize(window: CGSize) -> CGFloat {
         let t = MacUIVisualTokens.ExpandedPlayer.self
-        return min(t.artworkMax, max(t.artworkMin, min(window.width * t.artworkWidthRatio, window.height * t.artworkHeightRatio)))
+        // 最大（播放态）封面与标题、进度条、Transport 共用同一条控制轨；
+        // 仅在矮窗口时按高度限幅，暂停时由 View 的 scaleEffect 视觉收拢，
+        // 不改变这里的布局占位。
+        let widthBased = playerColumnWidth(window: window) * t.artworkToColumnRatio
+        let heightBased = window.height * t.artworkHeightRatio
+        return min(t.artworkMax, max(t.artworkMin, min(widthBased, heightBased)))
     }
     static func leftMargin(window: CGSize) -> CGFloat { window.width * MacUIVisualTokens.ExpandedPlayer.leftMarginRatio }
     static func topY(window: CGSize) -> CGFloat {
-        // 封面与左侧播放轨道从窗口中部开始；不与顶部的队列上下齐平。
-        let t = MacUIVisualTokens.ExpandedPlayer.self
-        return max(t.topInsetMin, min(t.topInsetMax, window.height * t.topInsetRatio))
+        // 封面、歌名、进度与运输控制是一组，按整组高度居中，而不是只把封面
+        // 放到中部再把控制区向下堆叠。这个估值覆盖 artwork 以下的固定间距、
+        // 双行歌曲资料、进度以及 transport，因而不同窗口高度仍保持视觉中心。
+        let artwork = artworkSize(window: window)
+        let controlsBelowArtwork: CGFloat = 232
+        return max(64, min(150, (window.height - artwork - controlsBelowArtwork) / 2))
     }
     static func contextTopY(window: CGSize) -> CGFloat {
         let t = MacUIVisualTokens.ExpandedPlayer.self

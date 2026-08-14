@@ -43,9 +43,13 @@ public struct MacMusicShell: View {
 
     private var contents: some View {
         ZStack {
-            libraryUI
-                .opacity(playerState.isExpanded ? 0 : 1)
-                .allowsHitTesting(!playerState.isExpanded)
+            // 展开页不保留资料库 View 本身，避免其 NavigationSplitView 自动生成的
+            // Hide Sidebar、页面标题和“编辑首页”等 toolbar item 泄漏进 titlebar。
+            // navigation / sidebar 偏好均由 MacMusicShell 的 StateObject 持有，收起时
+            // 会恢复原 selection/path，而不是重建导航状态。
+            if !playerState.isExpanded {
+                libraryUI
+            }
 
             if playerState.isExpanded {
                 MacExpandedPlayerView(
@@ -61,11 +65,10 @@ public struct MacMusicShell: View {
                 .transition(.opacity)
             }
         }
-        // 展开播放器不是资料库目的地：隐藏原页面的标题与 toolbar actions，避免
-        // “最近添加”等导航标题和随机播放按钮遗留在播放器顶部。window toolbar
-        // 隐藏后仍由系统保留 titlebar / traffic lights；Expanded Player 内的左、右
-        // 控件会与它们处于同一顶栏水平线。
-        .toolbarVisibility(playerState.isExpanded ? .hidden : .automatic, for: .windowToolbar)
+        // 展开页不能隐藏整个 window toolbar：那会连同 macOS 的红/黄/绿
+        // traffic lights 一起移除。保留透明 titlebar，资料库的内容由展开层覆盖。
+        .toolbarVisibility(.automatic, for: .windowToolbar)
+        .toolbarBackground(.hidden, for: .windowToolbar)
         // 用户选择主题后，主窗口、AI 助手与每个资料库目的地共享同一套色彩和控件强调色。
         .tint(theme.colorTokens.accent.color)
         .preferredColorScheme(theme.colorScheme)
@@ -79,7 +82,13 @@ public struct MacMusicShell: View {
 
     private var libraryUI: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            MacSidebar(model: model, prefs: sidebarPrefs, selection: $navigation.selection)
+            MacSidebar(
+                model: model,
+                prefs: sidebarPrefs,
+                selection: $navigation.selection,
+                theme: theme,
+                onOpenAssistantPlayer: { expandCurrentWindowPlayer() }
+            )
         } detail: {
             // 不能把播放条挂在页面内容的 safeAreaInset 上：空态 VStack 会给它一个
             // 非窗口高度，导致下载/不喜欢等页面的播放条上跳。这里由 detail 的
@@ -113,7 +122,10 @@ public struct MacMusicShell: View {
     }
 
     private var playerDockReservedHeight: CGFloat {
-        MacUIVisualTokens.FloatingPlayer.height
+        // AI 页不再在 detail 内渲染播放条：封面球已固定在 sidebar 底部，输入栏
+        // 可以与普通播放条共享窗口底部基线，不被旧的预留高度抬起。
+        if navigation.selection == .assistant { return 0 }
+        return MacUIVisualTokens.FloatingPlayer.height
             + MacUIVisualTokens.FloatingPlayer.topInset
             + MacUIVisualTokens.FloatingPlayer.bottomInset
     }
@@ -121,18 +133,7 @@ public struct MacMusicShell: View {
     @ViewBuilder
     private var playerBar: some View {
         if navigation.selection == .assistant {
-            // 先占用与常规胶囊完全相同的宽度，再将封面球贴到该轨道左端；
-            // 不会因页面切换而跑到 detail 的最左侧或内容中部。
-            HStack(spacing: 0) {
-                MacFloatingPlayerBar(
-                    model: model,
-                    theme: theme,
-                    presentation: .assistantArtworkOrb,
-                    onOpenFullPlayer: { expandCurrentWindowPlayer() }
-                )
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: MacUIVisualTokens.FloatingPlayer.maxWidth, alignment: .leading)
+            EmptyView()
         } else {
             MacFloatingPlayerBar(
                 model: model,
@@ -156,8 +157,6 @@ public struct MacMusicShell: View {
         withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.42, bounce: 0.0)) {
             playerState.expand()
         }
-        // 展开页面不能吞掉标准红/黄/绿窗口按钮；toolbar 处于隐藏状态时也显式保留它们。
-        DispatchQueue.main.async { restoreTrafficLights() }
         if fullscreen {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 enterSystemFullscreenIfNeeded()
@@ -174,11 +173,13 @@ public struct MacMusicShell: View {
                 withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
                     playerState.collapse()
                 }
+                DispatchQueue.main.async { restoreTrafficLights() }
             }
         } else {
             withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
                 playerState.collapse()
             }
+            DispatchQueue.main.async { restoreTrafficLights() }
         }
     }
 
@@ -189,6 +190,9 @@ public struct MacMusicShell: View {
 
     private func restoreTrafficLights() {
         guard let window = NSApp.keyWindow else { return }
+        // 离开展开页后恢复原生 traffic lights 与普通资料库 titlebar。
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
         [.closeButton, .miniaturizeButton, .zoomButton].forEach { button in
             window.standardWindowButton(button)?.isHidden = false
         }

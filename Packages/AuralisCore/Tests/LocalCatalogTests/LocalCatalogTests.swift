@@ -235,6 +235,39 @@ func recommendationIndexV2RoundTrip() async throws {
     #expect(try await store.readRecommendationIndexV2(serverID: serverID, dimension: "texture", value: "钢琴").map(\.track.id) == [firstID])
 }
 
+@Test("清空 Recommendation Index V2 只影响当前服务器，不删除歌曲")
+func clearRecommendationIndexV2IsScopedAndPreservesLibrary() async throws {
+    let store = try makeStore()
+    let alpha: ServerID = "clear-v2-alpha"
+    let beta: ServerID = "clear-v2-beta"
+    let alphaTrack = makeTrack(serverID: alpha, remoteID: "a1", title: "Alpha")
+    let betaTrack = makeTrack(serverID: beta, remoteID: "b1", title: "Beta")
+    let alphaID = GlobalID(serverID: alpha, remoteID: alphaTrack.id.rawValue)
+    let betaID = GlobalID(serverID: beta, remoteID: betaTrack.id.rawValue)
+    try await seed(store, [alphaTrack])
+    try await seed(store, [betaTrack])
+
+    try await store.writeRecommendationIndexV2([
+        .init(id: alphaID.description, moods: ["平静"], scenes: ["深夜"], semanticTags: [.init(value: "夜行", confidence: 0.9)], confidence: 0.9),
+    ], serverID: alpha)
+    try await store.writeRecommendationIndexV2([
+        .init(id: betaID.description, moods: ["明亮"], scenes: ["清晨"], semanticTags: [.init(value: "晨跑", confidence: 0.8)], confidence: 0.8),
+    ], serverID: beta)
+
+    try await store.clearRecommendationIndexV2(serverID: alpha)
+
+    let alphaStatus = try await store.recommendationIndexV2Status(serverID: alpha)
+    #expect(alphaStatus.totalTracks == 1)
+    #expect(alphaStatus.indexedTracks == 0)
+    #expect(alphaStatus.pendingTracks == 1)
+    #expect(try await store.recommendationIndexV2Categories(serverID: alpha).isEmpty)
+    #expect(try await store.allTracks(serverID: alpha).map(\.id) == [alphaTrack.id])
+
+    let betaStatus = try await store.recommendationIndexV2Status(serverID: beta)
+    #expect(betaStatus.indexedTracks == 1)
+    #expect(try await store.recommendationIndexV2TrackIDs(serverID: beta, query: "清晨") == [betaID])
+}
+
 @Test("Recommendation Index V2 category detail has no 20,000-track ceiling")
 func recommendationIndexV2CategoryDetailExceedsTwentyThousandTracks() async throws {
     let store = try makeStore()

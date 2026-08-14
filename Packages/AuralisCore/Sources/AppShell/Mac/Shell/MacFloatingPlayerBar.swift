@@ -118,7 +118,6 @@ struct MacFloatingPlayerBar: View {
                 .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
-            .disabled(!hasTrack)
             .help("展开播放器")
             .accessibilityLabel("展开播放器")
         }

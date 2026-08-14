@@ -157,6 +157,8 @@ public struct MacSettingsWindow: View {
     @State private var isImportingIndex = false
     @State private var isPerformingIndexTransfer = false
     @State private var indexTransferMessage: String?
+    @State private var isConfirmingIndexClear = false
+    @State private var isClearingIndex = false
 
     private let credentialVault = KeychainCredentialVault()
 
@@ -245,6 +247,10 @@ public struct MacSettingsWindow: View {
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
                         Button("导入索引…") { isImportingIndex = true }
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
+                        Button(role: .destructive) { isConfirmingIndexClear = true } label: {
+                            Label(isClearingIndex ? "正在清空索引…" : "清空索引…", systemImage: "trash")
+                        }
+                            .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning || isClearingIndex || isPerformingIndexTransfer)
                         Button("刷新状态") { Task { await refreshIndexStatus() } }
                     }
                 } else {
@@ -292,6 +298,14 @@ public struct MacSettingsWindow: View {
             await refreshIndexStatus()
         }
         .task(id: model.catalog.activeServerID) { await refreshIndexStatus() }
+        .confirmationDialog("清空本机推荐索引 V2？", isPresented: $isConfirmingIndexClear, titleVisibility: .visible) {
+            Button("清空索引", role: .destructive) {
+                Task { await clearRecommendationIndex() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。")
+        }
     }
 
     private var defaultIndexExportFilename: String {
@@ -308,6 +322,21 @@ public struct MacSettingsWindow: View {
         isLoadingIndexStatus = true
         indexStatus = try? await model.catalogCoordinator.store.recommendationIndexV2Status(serverID: serverID)
         isLoadingIndexStatus = false
+    }
+
+    private func clearRecommendationIndex() async {
+        guard let serverID = model.catalog.activeServerID else { return }
+        isClearingIndex = true
+        indexTransferMessage = nil
+        defer { isClearingIndex = false }
+        do {
+            try await model.catalogCoordinator.store.clearRecommendationIndexV2(serverID: serverID)
+            guard model.catalog.activeServerID == serverID else { return }
+            indexTransferMessage = "当前服务器的推荐索引 V2 已清空，可重新开始索引。"
+            await refreshIndexStatus()
+        } catch {
+            indexTransferMessage = "清空索引失败：\(error.localizedDescription)"
+        }
     }
 
     private func clearExternalMusicCache() async {
@@ -412,4 +441,5 @@ public struct MacSettingsWindow: View {
         .formStyle(.grouped)
     }
 }
+
 #endif

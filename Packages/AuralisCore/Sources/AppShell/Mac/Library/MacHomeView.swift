@@ -163,7 +163,9 @@ struct MacHomeView: View {
     private func randomShelf(metrics: MacArtworkGridMetrics) -> some View {
         let items = Array(deduped(model.randomTracks).prefix(14)).map(MacHomeTrackItem.init)
         if !items.isEmpty {
-            let size = min(150, metrics.itemWidth)
+            // 首页的随机歌曲与专辑货架使用同一张卡片尺度；此前歌曲卡被单独
+            // 限制为 150pt，导致“随机音乐”比最近播放/最近添加明显小一档。
+            let size = min(210, metrics.itemWidth)
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("随机音乐")
@@ -210,7 +212,7 @@ struct MacHomeView: View {
     ) -> some View {
         let items = Array(tracks.prefix(14)).map(MacHomeTrackItem.init)
         if !items.isEmpty {
-            let size = min(150, metrics.itemWidth)
+            let size = min(210, metrics.itemWidth)
             VStack(alignment: .leading, spacing: 12) {
                 MacSectionHeader(title: title, actionTitle: actionTitle, onAction: onAction)
                 ScrollView(.horizontal, showsIndicators: false) {

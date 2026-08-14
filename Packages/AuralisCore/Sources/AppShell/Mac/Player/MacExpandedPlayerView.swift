@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Domain
 import DesignSystem
 import LocalCatalog
@@ -79,6 +80,7 @@ struct MacExpandedPlayerView: View {
 
                 // Glass Capsules（只对内容命中）
             }
+            .overlay(alignment: .topLeading) { topTrafficLights }
             .overlay(alignment: .topLeading) { topLeftGlass }
             .overlay(alignment: .topTrailing) { topRightVolumeGlass }
             .overlay(alignment: .bottomTrailing) { bottomRightContextGlass }
@@ -93,6 +95,9 @@ struct MacExpandedPlayerView: View {
                 }
             }
         }
+        // 原生 titlebar 只负责窗口宿主；展开页的三点与两侧胶囊由同一 SwiftUI
+        // 坐标系绘制，桥接仅隐藏原生副本并清空窗口标题。
+        .background(MacExpandedWindowChrome())
         .task(id: trackGlobalID) {
             ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
             await loadLyrics()
@@ -132,11 +137,16 @@ struct MacExpandedPlayerView: View {
                 size: artworkSize,
                 cornerRadius: MacUIVisualTokens.ExpandedPlayer.artworkCornerRadius
             )
-            .frame(maxWidth: .infinity)
-            // Apple Music 的呼吸式反馈：播放时封面铺满轨道，暂停时收拢。
-            // 参考 Music.app：暂停封面约为播放态的 73%，而不是轻微缩小。
-            .scaleEffect(isPlaying ? 1 : 0.73)
-            .animation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.16), value: isPlaying)
+            // frame 始终是播放态的最大尺寸：暂停只改变视觉层，标题/进度/控制
+            // 不会因 Artwork 尺寸变化而重新排版。
+            .frame(width: artworkSize, height: artworkSize)
+            .frame(maxWidth: .infinity, alignment: .center)
+            // Music.app 式呼吸反馈：播放时几乎填满控制轨，暂停从中心收拢。
+            .scaleEffect(
+                isPlaying ? 1 : MacUIVisualTokens.ExpandedPlayer.pausedArtworkScale,
+                anchor: .center
+            )
+            .animation(reduceMotion ? nil : .spring(duration: 0.30, bounce: 0.08), value: isPlaying)
             .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
             .accessibilityLabel("\(track.albumTitle) 封面")
 
@@ -467,6 +477,32 @@ struct MacExpandedPlayerView: View {
 
     // MARK: - Glass Capsules（.overlay(alignment:) 定位，避免整屏透明容器吞点击）
 
+    /// Expanded Player 自己承载三个窗口控制点，和左右胶囊共用相同 38pt 高度与
+    /// 8pt 顶部基线；不再让 AppKit toolbar 在异步 layout 后把它们弹回旧位置。
+    private var topTrafficLights: some View {
+        HStack(spacing: 10) {
+            trafficLight(color: .red) { NSApp.keyWindow?.performClose(nil) }
+            trafficLight(color: .yellow) { NSApp.keyWindow?.miniaturize(nil) }
+            trafficLight(color: .green) { NSApp.keyWindow?.zoom(nil) }
+        }
+        .frame(height: MacUIVisualTokens.ExpandedPlayer.topLeftGlassHeight)
+        .padding(.leading, 16)
+        .padding(.top, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingT)
+        .ignoresSafeArea(edges: .top)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("窗口控制")
+    }
+
+    private func trafficLight(color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Circle()
+                .fill(color)
+                .frame(width: 12, height: 12)
+                .overlay(Circle().stroke(.black.opacity(0.18), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var topLeftGlass: some View {
         MacGlassCapsule {
             HStack(spacing: MacUIVisualTokens.ExpandedPlayer.topRightControlSpacing) {
@@ -492,6 +528,8 @@ struct MacExpandedPlayerView: View {
         }
         .padding(.leading, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingL)
         .padding(.top, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingT)
+        // 胶囊属于 titlebar 控件，不能被安全区向下推到内容区。
+        .ignoresSafeArea(edges: .top)
     }
 
     private var topRightVolumeGlass: some View {
@@ -513,6 +551,8 @@ struct MacExpandedPlayerView: View {
         }
         .padding(.trailing, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingR)
         .padding(.top, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingT)
+        // 与左侧胶囊一起进入 titlebar；背景不再覆盖系统 traffic lights。
+        .ignoresSafeArea(edges: .top)
     }
 
     private var bottomRightContextGlass: some View {
@@ -559,6 +599,57 @@ struct MacExpandedPlayerView: View {
         } else {
             guard expectedID == trackGlobalID, !Task.isCancelled else { return }
             lyricsState = .unavailable
+        }
+    }
+}
+
+/// Expanded Player 的窗口级 titlebar 布局。
+///
+/// 系统 titlebar 会在其自己的 Auto Layout 周期重排原生 traffic lights；展开页
+/// 改为用同一 SwiftUI overlay 承载可操作的三点，因此此桥接只负责隐藏原生副本
+/// 与清空窗口标题。
+private struct MacExpandedWindowChrome: NSViewRepresentable {
+    func makeNSView(context: Context) -> ChromeHostView {
+        ChromeHostView()
+    }
+
+    func updateNSView(_ view: ChromeHostView, context: Context) {
+        view.scheduleChromeLayout()
+    }
+
+    final class ChromeHostView: NSView {
+        private var isLayoutScheduled = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            scheduleChromeLayout()
+        }
+
+        override func layout() {
+            super.layout()
+            scheduleChromeLayout()
+        }
+
+        func scheduleChromeLayout() {
+            guard !isLayoutScheduled else { return }
+            isLayoutScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.isLayoutScheduled = false
+                self.applyChromeLayout()
+            }
+        }
+
+        private func applyChromeLayout() {
+            guard let window else { return }
+            window.title = ""
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+
+            let trafficLightTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+            for type in trafficLightTypes {
+                window.standardWindowButton(type)?.isHidden = true
+            }
         }
     }
 }

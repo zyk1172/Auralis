@@ -1,6 +1,7 @@
 #if os(macOS)
 import Domain
 import SwiftUI
+import ThemeEngine
 
 /// 侧边栏（REFERENCE_A）：顶部 搜索/主页；资料库（可编辑显示/隐藏+排序）；
 /// 播放列表 = 收藏歌曲 + 所有播放列表（不再把每个用户歌单铺进 Sidebar）；Auralis 扩展区。
@@ -8,34 +9,51 @@ struct MacSidebar: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var prefs: MacSidebarPreferences
     @Binding var selection: MacSidebarDestination?
+    let theme: BuiltInTheme
+    let onOpenAssistantPlayer: () -> Void
 
     @State private var isEditingLibrary = false
     @State private var isHoveringLibrary = false
 
     var body: some View {
-        List(selection: $selection) {
-            Section {
-                sidebarRow(.search)
-                sidebarRow(.home)
-            }
-            Section {
-                ForEach(prefs.enabledDestinations) { destination in
-                    sidebarRow(destination)
+        VStack(spacing: 0) {
+            List(selection: $selection) {
+                Section {
+                    sidebarRow(.search)
+                    sidebarRow(.home)
                 }
-            } header: {
-                libraryHeader
+                Section {
+                    ForEach(prefs.enabledDestinations) { destination in
+                        sidebarRow(destination)
+                    }
+                } header: {
+                    libraryHeader
+                }
+                Section("播放列表") {
+                    sidebarRow(.favorites)
+                    sidebarRow(.playlists)
+                }
+                Section("Auralis") {
+                    sidebarRow(.categories)
+                    sidebarRow(.disliked)
+                    sidebarRow(.assistant)
+                }
             }
-            Section("播放列表") {
-                sidebarRow(.favorites)
-                sidebarRow(.playlists)
-            }
-            Section("Auralis") {
-                sidebarRow(.categories)
-                sidebarRow(.disliked)
-                sidebarRow(.assistant)
+            .listStyle(.sidebar)
+
+            // AI 页的封面球不再占用聊天区或播放条原先的轨道，而是固定在左侧
+            // 导航栏底部中心；点击它始终进入展开播放器。
+            if selection == .assistant {
+                MacFloatingPlayerBar(
+                    model: model,
+                    theme: theme,
+                    presentation: .assistantArtworkOrb,
+                    onOpenFullPlayer: onOpenAssistantPlayer
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
             }
         }
-        .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: MacUIVisualTokens.Sidebar.minWidth, ideal: MacUIVisualTokens.Sidebar.idealWidth, max: MacUIVisualTokens.Sidebar.maxWidth)
     }
 

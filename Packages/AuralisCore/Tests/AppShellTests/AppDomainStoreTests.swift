@@ -37,6 +37,37 @@ struct AppDomainStoreTests {
         #expect(second.layout.preference(moduleID: "random")?.isVisible == false)
     }
 
+    @Test("本地缓存资料库首次生成首页快照时补齐随机音乐")
+    @MainActor
+    func homeStoreSeedsRandomMusicForCachedCatalog() {
+        let suite = "AppDomainStoreTests.cached-random.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let serverID: ServerID = "cached-server"
+        var catalog = LibraryCatalog.empty
+        catalog.tracks = [
+            Track(
+                id: "cached-track",
+                serverID: serverID,
+                albumID: "cached-album",
+                artistID: "cached-artist",
+                title: "Cached Track",
+                artistName: "Artist",
+                albumTitle: "Album",
+                duration: 180
+            ),
+        ]
+        let store = HomeStore(defaults: defaults)
+
+        store.refresh(catalog: catalog, playCounts: [:], recentIDs: [], addedDates: [:])
+        let initialRandom = store.randomTracks
+        store.refresh(catalog: catalog, playCounts: [:], recentIDs: [], addedDates: [:])
+
+        #expect(initialRandom.map(\.id) == [TrackID(rawValue: "cached-track")])
+        #expect(store.randomTracks == initialRandom)
+    }
+
     @Test("LibraryStore 与 ServerStore 各自拥有领域状态")
     @MainActor
     func storesOwnIndependentState() {

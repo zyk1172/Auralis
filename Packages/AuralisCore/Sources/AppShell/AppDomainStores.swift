@@ -90,6 +90,13 @@ final class HomeStore: ObservableObject {
         addedDates: [GlobalID: Date],
         dislikedTrackIDs: Set<GlobalID> = []
     ) {
+        // 从本地缓存恢复资料库时不会经过网络同步的 `regenerateRandom`。
+        // 此处只在初始快照为空时补齐，既恢复首页“随机音乐 / 随机播放”入口，
+        // 也不会在播放记录、收藏等普通快照刷新时让货架无故换一批。
+        if randomTracks.isEmpty, !catalog.tracks.isEmpty {
+            regenerateRandom(from: catalog.tracks, dislikedTrackIDs: dislikedTrackIDs)
+        }
+
         guard catalog.tracks.count >= 2_000 else {
             apply(HomeSnapshotBuilder.build(
                 catalog: catalog,
