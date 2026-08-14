@@ -403,55 +403,71 @@ public struct MacMusicShell: View {
                 if !newValue.isEmpty { showRightPanel = false }
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.search)) { _ in
+                guard !isTypingText else { return }
                 navigation.selectSidebar(.search)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.revealNowPlaying)) { _ in
+                guard !isTypingText else { return }
                 expandCurrentWindowPlayer()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.toggleSidebar)) { _ in
+                guard !isTypingText else { return }
                 withAnimation {
                     columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.toggleLyrics)) { _ in
+                guard !isTypingText else { return }
                 toggleRightPanel(.lyrics)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.toggleQueue)) { _ in
+                guard !isTypingText else { return }
                 toggleRightPanel(.queue)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.toggleInspector)) { _ in
+                guard !isTypingText else { return }
                 showRightPanel.toggle()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.previous)) { _ in
+                guard !isTypingText else { return }
                 model.previous()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.next)) { _ in
+                guard !isTypingText else { return }
                 model.next()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.togglePlay)) { _ in
+                guard !isTypingText else { return }
                 model.togglePlayback()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.toggleShuffle)) { _ in
+                guard !isTypingText else { return }
                 model.setShuffle(!model.isShuffled)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.cycleRepeat)) { _ in
+                guard !isTypingText else { return }
                 model.cycleRepeatMode()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.songAppreciation)) { note in
+                guard !isTypingText else { return }
                 guard let track = note.object as? Track else { return }
                 beginSongAppreciation(track)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.showTrackInformation)) { note in
+                guard !isTypingText else { return }
                 guard let track = note.object as? Track else { return }
                 getInfoTrack = track
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.showFullScreenPlayer)) { _ in
+                guard !isTypingText else { return }
                 expandCurrentWindowPlayer(fullscreen: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.showMiniPlayer)) { _ in
+                guard !isTypingText else { return }
                 openWindow(id: MacWindowID.miniPlayer)
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.newPlaylist)) { _ in
+                guard !isTypingText else { return }
                 newPlaylistName = ""
                 isCreatingPlaylist = true
             }

@@ -528,6 +528,9 @@
 - Expanded 时：左上角绝无「澜音」、无原生窗口标题、标题栏透明、自定义 traffic lights 正常；
 - Collapse 后：普通窗口 traffic lights 恢复、toolbar/sidebar/navigation title 正常、窗口可拖动/缩放/最小化/关闭；
 - 全屏进出后同样正确；Mini Player 不受影响；播放进度 tick 不重排 titlebar。
+- 键盘：在任意 TextField（搜索/歌单命名/AI 输入等）编辑时，Space / Return / ← / →
+  Esc / Command-F / Command-L / Command-I / Command-Option-L / Command-Option-U /
+  Command-Up / Command-Down 等菜单命令不得误触播放控制（已按 firstResponder 守卫）。
 - 逻辑已由 `MacExpandedChromeTests`（8 项）覆盖；此处为真窗口视觉确认。
 
 ## RC-3 iPad Sheet 仲裁
