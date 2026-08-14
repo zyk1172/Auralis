@@ -1,5 +1,6 @@
 import Domain
 import Foundation
+import LocalCatalog
 #if os(iOS)
 import CoreSpotlight
 import UniformTypeIdentifiers
@@ -11,17 +12,22 @@ import UniformTypeIdentifiers
 @MainActor
 public enum SpotlightIndexer {
     /// 重新登记整个资料库（幂等：同 uniqueIdentifier 会覆盖）。
+    /// `dislikedTrackIDs` 用于排除「不喜欢」的歌曲：Spotlight 是发现面，
+    /// 不应把用户明确排斥的歌曲推回搜索（P2-2；显式回跳播放仍不受限）。
     public static func reindex(
         artists: [Artist],
         albums: [Album],
         tracks: [Track],
-        playlists: [Playlist]
+        playlists: [Playlist],
+        dislikedTrackIDs: Set<GlobalID> = []
     ) {
         #if os(iOS)
         guard CSSearchableIndex.isIndexingAvailable() else { return }
         var items: [CSSearchableItem] = []
 
-        for track in tracks {
+        for track in tracks where !dislikedTrackIDs.contains(
+            GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        ) {
             let attribute = CSSearchableItemAttributeSet(contentType: .audio)
             attribute.title = track.title
             attribute.contentDescription = "\(track.artistName) · \(track.albumTitle)"

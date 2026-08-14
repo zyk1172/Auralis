@@ -385,13 +385,14 @@ struct MacExpandedPlayerView: View {
                 let activeIndex = currentLyricIndex
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
+                        LazyVStack(alignment: .center, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                                 let isCurrent = activeIndex == index
                                 Text(line.text)
                                     .font(.system(size: isCurrent ? MacUIVisualTokens.Typography.lyricActive : MacUIVisualTokens.Typography.lyricInactive, weight: isCurrent ? .semibold : .regular))
                                     .foregroundStyle(isCurrent ? palette.primary : palette.lyricInactive)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: .infinity, alignment: .center)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         if let start = line.startTime {
@@ -673,35 +674,155 @@ private struct MacExpandedPlayerPalette {
     }
 }
 
+/// 展开播放页窗口 chrome 的幂等修正策略（纯逻辑，可单测）。
+///
+/// 输入当前窗口 chrome 状态，输出“需要修正的项”；当所有展开页要求都已满足时
+/// 输出空集合，调用方因此不会在每个播放位置 tick 都触发 titlebar 重排。
+struct MacExpandedChromePolicy: Equatable {
+    /// 展开页要求的窗口 chrome 状态。
+    struct WindowChromeState: Equatable {
+        /// 当前窗口标题（SwiftUI 可能重新提交 WindowGroup 的“澜音”）。
+        var title: String
+        /// true 表示 titleVisibility 已是 .hidden
+        var isTitleHidden: Bool
+        /// true 表示 titlebarAppearsTransparent 已是 true
+        var isTitlebarTransparent: Bool
+        /// true 表示三个原生 traffic lights 均已隐藏
+        var areTrafficLightsHidden: Bool
+
+        init(
+            title: String,
+            isTitleHidden: Bool,
+            isTitlebarTransparent: Bool,
+            areTrafficLightsHidden: Bool
+        ) {
+            self.title = title
+            self.isTitleHidden = isTitleHidden
+            self.isTitlebarTransparent = isTitlebarTransparent
+            self.areTrafficLightsHidden = areTrafficLightsHidden
+        }
+    }
+
+    /// 需要的修正集合；isEmpty 表示无需任何操作。
+    struct NeededChanges: Equatable {
+        var clearTitle = false
+        var hideTitle = false
+        var makeTitlebarTransparent = false
+        var hideTrafficLights = false
+
+        var isEmpty: Bool {
+            !clearTitle && !hideTitle && !makeTitlebarTransparent && !hideTrafficLights
+        }
+    }
+
+    static func neededChanges(for state: WindowChromeState) -> NeededChanges {
+        var changes = NeededChanges()
+        if state.title != "" { changes.clearTitle = true }
+        if !state.isTitleHidden { changes.hideTitle = true }
+        if !state.isTitlebarTransparent { changes.makeTitlebarTransparent = true }
+        if !state.areTrafficLightsHidden { changes.hideTrafficLights = true }
+        return changes
+    }
+}
+
 /// Expanded Player 的窗口级 titlebar 布局。
 ///
 /// 系统 titlebar 会在其自己的 Auto Layout 周期重排原生 traffic lights；展开页
 /// 改为用同一 SwiftUI overlay 承载可操作的三点，因此此桥接只负责隐藏原生副本
 /// 与清空窗口标题。
+///
+/// “澜音”泄漏修复：SwiftUI 可能在展开页出现后重新提交 WindowGroup 的窗口标题，
+/// 而窗口身份不变，因此旧的 `window !== configuredWindow` 守卫会跳过清理，标题
+/// 悄悄回到 titlebar。这里改为幂等的状态检查：只有实际状态与展开页要求不一致时
+/// 才调度一次修正（updateNSView 每个 tick 都会调用，但状态正确时直接返回，
+/// 不会触发 titlebar 重排）。
 private struct MacExpandedWindowChrome: NSViewRepresentable {
     func makeNSView(context: Context) -> ChromeHostView {
         ChromeHostView()
     }
 
     func updateNSView(_ view: ChromeHostView, context: Context) {
-        view.applyIfWindowChanged()
+        view.ensureExpandedChrome()
     }
 
     final class ChromeHostView: NSView {
         private var isLayoutScheduled = false
-        private weak var configuredWindow: NSWindow?
+        private var didPerformDeferredReassert = false
+        /// 窗口标题 KVO：SwiftUI 可能在播放/状态变化时重新提交 WindowGroup 标题（“澜音”），
+        /// 此时 updateNSView 不一定被调用。标题一变就幂等复检，确保展开页左上角绝不出现标题。
+        private var titleObservation: NSKeyValueObservation?
+        /// 展开期间的低频幂等复检：播放过程模型会反复发布状态，SwiftUI 会周期性重新
+        /// 提交“澜音”，仅靠 KVO 仍会一帧帧闪（忽隐忽现）。用 0.1s 定时器兜底：
+        /// ensureExpandedChrome 只读状态、仅在确实不对时才修改 titlebar，因此正确时
+        /// 没有开销，错误时最长 0.1s 内被纠正，视觉上不再闪烁。
+        private var reassertTimer: Timer?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            guard let window else {
+                titleObservation?.invalidate()
+                titleObservation = nil
+                stopReassertTimer()
+                return
+            }
+            // 1) 进入窗口时立即复检。
+            ensureExpandedChrome()
+            // 2) 观测窗口标题：任意时刻被重提交为“澜音”都立刻清掉。
+            titleObservation?.invalidate()
+            titleObservation = window.observe(\.title, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { [weak self] in
+                    self?.ensureExpandedChrome()
+                }
+            }
+            // 3) 展开期间低频幂等复检（消除忽隐忽现）。
+            startReassertTimer()
+            // 4) onAppear 之后的一次性延迟复检：SwiftUI 可能随后重新提交
+            //    WindowGroup 标题，延迟到运行循环稳定后再纠正一次。
+            guard !didPerformDeferredReassert else { return }
+            didPerformDeferredReassert = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.ensureExpandedChrome()
+            }
+        }
+
+        private func startReassertTimer() {
+            stopReassertTimer()
+            let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.ensureExpandedChrome()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            reassertTimer = timer
+        }
+
+        private func stopReassertTimer() {
+            reassertTimer?.invalidate()
+            reassertTimer = nil
+        }
+
+        /// 幂等：仅当实际 chrome 状态与展开页要求不一致时才调度修正；
+        /// 状态已正确时什么都不做（不会在播放位置 tick 上触发 titlebar 重排）。
+        func ensureExpandedChrome() {
+            guard let window else { return }
+            let changes = MacExpandedChromePolicy.neededChanges(for: currentChromeState(in: window))
+            guard !changes.isEmpty else { return }
             scheduleChromeLayout()
         }
 
-        func applyIfWindowChanged() {
-            guard window !== configuredWindow else { return }
-            scheduleChromeLayout()
+        private func currentChromeState(in window: NSWindow) -> MacExpandedChromePolicy.WindowChromeState {
+            MacExpandedChromePolicy.WindowChromeState(
+                title: window.title,
+                isTitleHidden: window.titleVisibility == .hidden,
+                isTitlebarTransparent: window.titlebarAppearsTransparent,
+                areTrafficLightsHidden: areTrafficLightsHidden(in: window)
+            )
         }
 
-        func scheduleChromeLayout() {
+        private func areTrafficLightsHidden(in window: NSWindow) -> Bool {
+            let trafficLightTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+            return trafficLightTypes.allSatisfy { window.standardWindowButton($0)?.isHidden ?? false }
+        }
+
+        private func scheduleChromeLayout() {
             guard !isLayoutScheduled else { return }
             isLayoutScheduled = true
             DispatchQueue.main.async { [weak self] in
@@ -713,14 +834,15 @@ private struct MacExpandedWindowChrome: NSViewRepresentable {
 
         private func applyChromeLayout() {
             guard let window else { return }
-            configuredWindow = window
-            window.title = ""
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-
-            let trafficLightTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-            for type in trafficLightTypes {
-                window.standardWindowButton(type)?.isHidden = true
+            let changes = MacExpandedChromePolicy.neededChanges(for: currentChromeState(in: window))
+            if changes.clearTitle { window.title = "" }
+            if changes.hideTitle { window.titleVisibility = .hidden }
+            if changes.makeTitlebarTransparent { window.titlebarAppearsTransparent = true }
+            if changes.hideTrafficLights {
+                let trafficLightTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+                for type in trafficLightTypes {
+                    window.standardWindowButton(type)?.isHidden = true
+                }
             }
         }
     }
