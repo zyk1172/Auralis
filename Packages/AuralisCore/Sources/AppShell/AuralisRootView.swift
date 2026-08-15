@@ -113,7 +113,7 @@ public struct AuralisRootView: View {
         .environmentObject(model)
         .environmentObject(bottomDockScroll)
         .environment(\.bottomDockScrollCoordinator, bottomDockScroll)
-        .environment(model.artworkStore)
+        .environment(\.artworkStore, model.artworkStore)
         .environmentObject(themeStore)
         .preferredColorScheme(themeStore.current.colorScheme)
         .tint(themeStore.current.colorTokens.accent.color)

@@ -116,7 +116,8 @@ final class ArtworkPaletteStore: @unchecked Sendable {
 /// - 播放时缓慢呼吸（3.6s 周期），暂停保持弱静态光，Reduce Motion 完全静止；
 /// - 不进行每帧图片分析，调色板只在封面变化时计算并缓存。
 struct NowPlayingArtworkGlowView: View {
-    @Environment(ArtworkStore.self) private var artworkStore
+    /// 可选注入：环境缺失时只保留回退色板光，不读取封面，也不强解包崩溃。
+    @Environment(\.artworkStore) private var artworkStore: ArtworkStore?
     @State private var artworkImage: PlatformImage?
     let isPlaying: Bool
     let artworkKey: String?
@@ -138,7 +139,7 @@ struct NowPlayingArtworkGlowView: View {
     private var pixelSize: Int { max(64, Int(size * 2)) }
 
     private var requestIdentifier: String? {
-        artworkStore.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
+        artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
     }
 
     private var animates: Bool { isPlaying && !reduceMotion }
@@ -171,6 +172,7 @@ struct NowPlayingArtworkGlowView: View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .task(id: requestIdentifier) {
+            guard let artworkStore else { return }
             artworkImage = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
             if artworkImage == nil {
                 artworkImage = await artworkStore.load(

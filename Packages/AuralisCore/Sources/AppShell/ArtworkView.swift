@@ -43,7 +43,8 @@ enum ArtworkPlaceholderStyle: Sendable {
 /// 服务器封面视图：已加载时显示真实封面，加载中或服务器没有封面时
 /// 回退到占位组件（Mac 为灰色 music note）。视图只订阅独立封面管线，不观察全局 AppModel。
 struct ArtworkView: View {
-    @Environment(ArtworkStore.self) private var artworkStore
+    /// 可选注入：环境缺失时降级为占位图，避免强解包崩溃。
+    @Environment(\.artworkStore) private var artworkStore: ArtworkStore?
     @State private var image: PlatformImage?
     let title: String
     let artworkKey: String?
@@ -56,7 +57,7 @@ struct ArtworkView: View {
     private var pixelSize: Int { max(64, Int(size * 2)) }
 
     private var requestIdentifier: String? {
-        artworkStore.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
+        artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
     }
 
     var body: some View {
@@ -74,6 +75,7 @@ struct ArtworkView: View {
         .frame(width: size, height: size)
         .accessibilityLabel("\(title) 封面")
         .task(id: requestIdentifier) {
+            guard let artworkStore else { return }
             image = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
             if image == nil {
                 image = await artworkStore.load(

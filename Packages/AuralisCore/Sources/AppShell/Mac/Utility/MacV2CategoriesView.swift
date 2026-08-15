@@ -230,7 +230,7 @@ struct MacV2CategoryTracksView: View {
                     theme: theme,
                     onNavigate: onNavigate
                 )
-                .environment(model.artworkStore)
+                .environment(\.artworkStore, model.artworkStore)
             }
         }
         .navigationTitle(category.macCategoryTitle)

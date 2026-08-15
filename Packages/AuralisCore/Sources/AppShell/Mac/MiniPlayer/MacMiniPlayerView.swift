@@ -144,7 +144,7 @@ public struct MacMiniPlayerWindow: View {
     }
     public var body: some View {
         MacMiniPlayerView(model: .shared, themeStore: themeStore)
-            .environment(AuralisAppModel.shared.artworkStore)
+            .environment(\.artworkStore, AuralisAppModel.shared.artworkStore)
             .environmentObject(themeStore)
             .tint(themeStore.current.colorTokens.accent.color)
             .preferredColorScheme(themeStore.current.colorScheme)

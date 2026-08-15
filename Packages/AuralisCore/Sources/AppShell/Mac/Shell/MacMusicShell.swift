@@ -100,7 +100,7 @@ public struct MacMusicShell: View {
         .preferredColorScheme(theme.colorScheme)
         // 环境注入放到 ZStack 层：libraryUI 与同窗口 Expanded Player 都能继承
         // ArtworkStore / ThemeStore（否则 Expanded 内的 ArtworkView 强解包崩溃）。
-        .environment(model.artworkStore)
+        .environment(\.artworkStore, model.artworkStore)
         .environmentObject(themeStore)
     }
 

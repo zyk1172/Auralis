@@ -2,6 +2,7 @@ import Application
 import Foundation
 import ImagePipeline
 import Observation
+import SwiftUI
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
@@ -277,5 +278,22 @@ private final class ArtworkMemoryPressureMonitor: @unchecked Sendable {
         #elseif os(macOS)
         source?.cancel()
         #endif
+    }
+}
+
+// MARK: - 可选环境注入
+
+/// 可选封面存储注入：以 key-path 形式注入（`\\.artworkStore`）。
+/// 封面视图用 `@Environment(\\ .artworkStore)` 读取；注入缺失时优雅降级为占位图，
+/// 而不是像 `@Environment(ArtworkStore.self)` 那样强解包崩溃（
+/// “Expanded 内 ArtworkView 强解包崩溃”的根治：环境缺失不再致命）。
+private struct ArtworkStoreEnvironmentKey: EnvironmentKey {
+    static let defaultValue: ArtworkStore? = nil
+}
+
+extension EnvironmentValues {
+    var artworkStore: ArtworkStore? {
+        get { self[ArtworkStoreEnvironmentKey.self] }
+        set { self[ArtworkStoreEnvironmentKey.self] = newValue }
     }
 }
