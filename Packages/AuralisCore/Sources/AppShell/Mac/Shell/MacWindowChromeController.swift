@@ -3,9 +3,14 @@ import AppKit
 
 /// Mac 主窗口 chrome 的唯一所有者。
 ///
-/// 标题文本由 SwiftUI WindowGroup 管理（品牌名 `Auralis`），但**视觉上永久隐藏**：
-/// `titleVisibility = .hidden` 在普通资料库与 Expanded Player 都保持（内容区用
-/// `navigationTitle` 显示页面标题，不需要原生窗口标题再显示一次）。
+/// 标题显示分两个不同层次：
+/// - SwiftUI toolbar title：由 `MacMusicShell.toolbar(removing: .title)` 处理
+///   （Expanded 时移除 SwiftUI 自动生成的 default toolbar title/subtitle item，
+///   normal 时传 nil 恢复页面标题）。这是「左上角出现 Auralis」的真正来源。
+/// - AppKit native title：本控制器负责。`titleVisibility = .hidden` 在普通资料库
+///   与 Expanded Player 都保持（内容区用 `navigationTitle` 显示页面标题，不需要
+///   原生窗口标题再显示一次）。窗口语义标题 `window.title` 由 SwiftUI WindowGroup
+///   管理（品牌名 `Auralis`），本控制器不修改它。
 ///
 /// 本控制器只在 expanded / normal 之间切换：
 /// - expanded：原生 traffic lights 隐藏、titlebar 透明；
