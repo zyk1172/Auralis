@@ -162,6 +162,9 @@ struct MacHomeView: View {
     @ViewBuilder
     private func randomShelf(metrics: MacArtworkGridMetrics) -> some View {
         let items = Array(deduped(model.randomTracks).prefix(14)).map(MacHomeTrackItem.init)
+        // 货架整体即播放上下文：点任意一首都把整列写入队列（与 iOS Home 同一机制），
+        // 随机播放按钮与单曲点击共享同一份去重后的货架队列。
+        let shelfTracks = model.uniquedTracks(items.map(\.track))
         if !items.isEmpty {
             // 首页的随机歌曲与专辑货架使用同一张卡片尺度；此前歌曲卡被单独
             // 限制为 150pt，导致“随机音乐”比最近播放/最近添加明显小一档。
@@ -172,7 +175,7 @@ struct MacHomeView: View {
                         .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                     Spacer()
                     Button("随机播放") {
-                        model.playShuffledQueue(model.uniquedTracks(items.map(\.track)))
+                        model.playShuffledQueue(shelfTracks)
                     }
                     .buttonStyle(.link)
                     Button("换一批") {
@@ -190,8 +193,8 @@ struct MacHomeView: View {
                                 model: model,
                                 theme: theme,
                                 size: size,
-                                onOpen: { model.selectAndPlay(track) },
-                                onPlay: { model.selectAndPlay(track) },
+                                onOpen: { model.playTrack(track, in: shelfTracks) },
+                                onPlay: { model.playTrack(track, in: shelfTracks) },
                                 moreActions: trackMenuActions(track)
                             )
                         }
@@ -224,8 +227,8 @@ struct MacHomeView: View {
                                 model: model,
                                 theme: theme,
                                 size: size,
-                                onOpen: { model.selectAndPlay(track) },
-                                onPlay: { model.selectAndPlay(track) },
+                                onOpen: { model.playTrack(track, in: tracks) },
+                                onPlay: { model.playTrack(track, in: tracks) },
                                 moreActions: trackMenuActions(track)
                             )
                         }

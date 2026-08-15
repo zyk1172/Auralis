@@ -16,6 +16,10 @@ struct MacDetailTrackRow: View {
     var showArtist = false
     var showAlbum = false
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
+    /// 播放上下文（所在专辑/歌单/流派/艺术家详情页的完整曲目列表）：
+    /// 双击或 hover 播放时先把整列写入队列，与 iOS 列表点击同一机制。
+    /// 为空时退化为只播放当前这首。
+    var contextTracks: [Track] = []
 
     @State private var isHovering = false
 
@@ -107,7 +111,7 @@ struct MacDetailTrackRow: View {
             macTrackMenuContent(track: track, model: model, onNavigate: onNavigate)
         }
         .onTapGesture(count: 2) {
-            model.selectAndPlay(track)
+            model.playTrack(track, in: contextTracks)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(track.title)，\(track.artistName)，\(MacFormat.time(track.duration))")
@@ -117,7 +121,7 @@ struct MacDetailTrackRow: View {
     private var leading: some View {
         if isHovering {
             Button {
-                model.selectAndPlay(track)
+                model.playTrack(track, in: contextTracks)
             } label: {
                 Image(systemName: "play.fill")
                     .font(.system(size: 11))
@@ -179,7 +183,8 @@ struct MacDetailTrackList: View {
                     number: numberText(track),
                     showArtist: showArtist,
                     showAlbum: showAlbum,
-                    onNavigate: onNavigate
+                    onNavigate: onNavigate,
+                    contextTracks: tracks
                 )
                 // 最后一个 row 不画分隔线，避免列表底部多出一条；无需 enumerate。
                 if track.macGlobalID != tracks.last?.macGlobalID {

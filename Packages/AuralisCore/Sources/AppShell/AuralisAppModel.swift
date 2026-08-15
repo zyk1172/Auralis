@@ -1355,6 +1355,18 @@ public final class AuralisAppModel: ObservableObject {
         selectAndPlay(tracks[0])
     }
 
+    /// 在指定上下文内播放某一首歌曲（与 iOS Home 货架同一机制）：
+    /// 先把整个上下文写入播放队列，再播放点击的这首，保证后续歌曲自动连续播放。
+    /// 上下文为空时退化为只播放这首（与 selectAndPlay 原语义一致）。
+    public func playTrack(_ track: Track, in context: [Track]) {
+        if context.isEmpty {
+            selectAndPlay(track)
+            return
+        }
+        queue = context
+        selectAndPlay(track)
+    }
+
     /// 在用户明确选择的集合内随机播放（最近播放 / 最近添加 / 收藏等页面）。
     /// 只随机传入的集合，绝不回退到整库 discovery playRandom()。
     public func playShuffledQueue(_ tracks: [Track]) {

@@ -184,7 +184,10 @@ struct MacSongTable: View {
             }
         } primaryAction: { ids in
             if let gid = ids.first, let track = model.track(for: gid) {
-                model.selectAndPlay(track)
+                // 双击/回车播放时把整张表（当前排序后的可见行）写入队列，
+                // 与 iOS 列表点击同一机制：播放该首并自动续播表中其余歌曲。
+                let context = orderedRows.isEmpty ? tracks : orderedRows.map(\.track)
+                model.playTrack(track, in: context)
             }
         }
         .onDeleteCommand {
