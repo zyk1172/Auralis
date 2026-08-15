@@ -637,7 +637,7 @@ struct NowPlayingView: View {
         Task { @MainActor in
             // 先让播放页完成关闭，再呈现资料库详情，避免同一时刻竞争两个 sheet。
             try? await Task.sleep(for: .milliseconds(180))
-            model.selectedSection = .library
+            model.selectTopLevelSection(.library)
             model.browseDestination = destination
         }
     }
@@ -665,7 +665,7 @@ struct NowPlayingView: View {
         Task { @MainActor in
             if model.assistantIsRunning { model.cancelAssistant() }
             _ = await model.agentCoordinator.newSession()
-            model.selectedSection = .assistant
+            model.selectTopLevelSection(.assistant)
             model.agentCoordinator.send(
                 "请调用 music_appreciate，专业鉴赏《\(track.title)》—\(track.artistName)（trackID: \(globalID)），并按应用规定的鉴赏格式输出，区分已核验事实、专业听感与大众评价。",
                 intent: .musicAppreciation

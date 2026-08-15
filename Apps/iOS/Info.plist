@@ -35,7 +35,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Auralis需要连接您选择的私人音乐服务器，以同步资料库和播放音乐。</string>
+	<string>Auralis 需要连接您选择的私人音乐服务器，以同步资料库和播放音乐。</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

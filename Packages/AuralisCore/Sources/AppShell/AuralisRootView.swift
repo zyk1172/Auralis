@@ -1162,8 +1162,7 @@ private struct PadMusicShell: View {
             selection = .defaultDestination(for: model.selectedSection)
         }
         .onChange(of: selection) { _, destination in
-            model.selectedSection = destination.appSection
-            model.browseDestination = nil
+            model.selectTopLevelSection(destination.appSection)
         }
         .onChange(of: model.selectedSection) { _, section in
             guard selection.appSection != section else { return }

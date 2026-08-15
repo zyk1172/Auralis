@@ -49,17 +49,17 @@ public final class AuralisSystemToolService: AgentSystemService {
         let normalized = page.lowercased()
         switch normalized {
         case "首页", "home":
-            model.selectedSection = .home
+            model.selectTopLevelSection(.home)
         case "音乐库", "library":
-            model.selectedSection = .library
+            model.selectTopLevelSection(.library)
         case "搜索", "search":
             // 搜索已融合到 AI 助手：仍保留本地/服务器搜索能力，但不再跳到独立主页面。
-            model.selectedSection = .assistant
+            model.selectTopLevelSection(.assistant)
             model.shouldPresentAssistantSearch = true
         case "ai助手", "assistant":
-            model.selectedSection = .assistant
+            model.selectTopLevelSection(.assistant)
         case "设置", "settings":
-            model.selectedSection = .settings
+            model.selectTopLevelSection(.settings)
         case "当前播放", "nowplaying":
             model.isNowPlayingPresented = true
         case "歌词", "lyrics":
@@ -69,7 +69,7 @@ public final class AuralisSystemToolService: AgentSystemService {
             model.isNowPlayingPresented = true
             model.inspector = .queue
         case "下载管理", "downloads":
-            model.selectedSection = .library
+            model.selectTopLevelSection(.library)
         case "服务器管理", "servers":
             model.shouldPresentServerSetup = true
         default:

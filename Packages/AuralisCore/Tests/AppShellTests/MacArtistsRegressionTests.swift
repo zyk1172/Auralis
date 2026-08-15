@@ -255,4 +255,44 @@ struct MacArtistsRegressionTests {
         #expect(store.albumsByArtist.count == 2)
         #expect(store.tracksByArtist[a1GID]?.count == 1) // 去重
     }
+
+    // MARK: - CatalogEntityUniquing（Artist/Album 进入 catalog 前按 GlobalID 去重）
+
+    @Test("重复 Artist GlobalID：uniquedArtists 去重并保持顺序，跨服务器同 remoteID 保留")
+    func uniquedArtistsDeduplicatesByGlobalID() {
+        let input = [
+            artist("a1", serverID: "s1"),
+            artist("a1", serverID: "s1"), // 同服务器重复 → 去重
+            artist("a1", serverID: "s2"), // 跨服务器同 remoteID：不同实体 → 保留
+            artist("a2", serverID: "s1"),
+        ]
+        let unique = CatalogEntityUniquing.uniquedArtists(input)
+        #expect(unique.count == 3)
+        #expect(unique.map(\.id.rawValue) == ["a1", "a1", "a2"])
+        #expect(unique.map(\.serverID) == ["s1", "s2", "s1"])
+    }
+
+    @Test("重复 Album GlobalID：uniquedAlbums 去重并保持顺序")
+    func uniquedAlbumsDeduplicatesByGlobalID() {
+        let input = [
+            album("al1", artistID: "a1", serverID: "s1"),
+            album("al1", artistID: "a1", serverID: "s1"),
+            album("al1", artistID: "a1", serverID: "s2"),
+            album("al2", artistID: "a1", serverID: "s1"),
+        ]
+        let unique = CatalogEntityUniquing.uniquedAlbums(input)
+        #expect(unique.count == 3)
+        #expect(unique.map(\.id.rawValue) == ["al1", "al1", "al2"])
+    }
+
+    @Test("uniquedTracks 与 apply() 同一语义：按 GlobalID 去重")
+    func uniquedTracksMatchesApplySemantics() {
+        let input = [
+            track("t1", artistID: "a1", albumID: "al1", serverID: "s1"),
+            track("t1", artistID: "a1", albumID: "al1", serverID: "s1"),
+            track("t1", artistID: "a1", albumID: "al1", serverID: "s2"),
+        ]
+        let unique = CatalogEntityUniquing.uniquedTracks(input)
+        #expect(unique.count == 2)
+    }
 }

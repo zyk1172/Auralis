@@ -1201,8 +1201,9 @@ public final class AuralisAppModel: ObservableObject {
             currentTrack = restoredQueue[0]
         }
         let position = (info["position"] as? Double) ?? 0
-        let duration = currentTrack.duration > 0 ? currentTrack.duration : position
-        playbackPosition = min(max(position, 0), duration)
+        // 不按 metadata 时长截断保存位置：metadata 可能比真实音频短，
+        // 截断会把“已听到 243s”的会话退回 240s。真实时长由引擎解析后校正。
+        playbackPosition = max(position, 0)
         playbackState = .idle
         loadLyricsIfNeeded(for: currentTrack)
         persistPlaybackSession()
@@ -1274,17 +1275,21 @@ public final class AuralisAppModel: ObservableObject {
         return .unknown
     }
 
-    /// 唯一时长事实源：优先引擎解析出的真实 item 时长；否则 metadata 时长，
-    /// 且保证分母不小于真实 position（避免 position 超过 metadata 时比例仍 < 1）。
+    /// 唯一时长事实源：优先引擎解析出的真实 item 时长；否则 metadata 时长。
+    /// 两种情况下都保证分母不小于真实 position：
+    /// - 真实时长已解析：返回 max(actualDuration, position)；
+    /// - 真实时长尚未解析而 position 已超过 metadata（metadata 偏短的真实播放）：
+    ///   动态扩容为 position + 1，进度条比例 < 1，不会“提前到头”；
+    /// - metadata 缺失（0/未知）时以当前位置兜底并留 1 秒余量。
     public var effectivePlaybackDuration: TimeInterval {
         if let actualDuration, actualDuration.isFinite, actualDuration > 0 {
-            return actualDuration
+            return max(actualDuration, playbackPosition)
         }
-        let metadata = currentTrack.duration
-        if metadata > 0 { return metadata }
-        // metadata 缺失（0/未知）时以当前位置兜底并留 1 秒余量，
-        // 保证 duration > position（进度条比例 < 1），不会“到头了还在播”。
-        return playbackPosition > 0 ? playbackPosition + 1 : 0
+        let metadata = max(currentTrack.duration, 0)
+        if playbackPosition > metadata {
+            return playbackPosition + 1
+        }
+        return metadata
     }
 
     /// 0...1 playback progress of the current track。
@@ -1735,7 +1740,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 设置页的快捷入口：复用 Agent 已验证的“状态 → 分批分类 → 写回至 0”流程，
     /// 由 AgentRunner 的索引任务约束保证不会在中途把自然语言回复误报为完成。
     public func startOrContinueRecommendationIndexV2() {
-        selectedSection = .assistant
+        selectTopLevelSection(.assistant)
         agentCoordinator.send(
             "开始并一次性完成推荐索引 V2：先读取状态，持续分批分类并写回，直到待分类为 0。",
             intent: .libraryManagement
@@ -1838,8 +1843,9 @@ public final class AuralisAppModel: ObservableObject {
         queue = restoredQueue
         if !queue.contains(where: { queueIdentity($0) == queueIdentity(current) }) { queue.insert(current, at: 0) }
         currentTrack = current
-        let duration = current.duration > 0 ? current.duration : snapshot.position
-        playbackPosition = min(max(snapshot.position, 0), duration)
+        // 不按 metadata 时长截断保存位置：metadata 可能比真实音频短，
+        // 截断会把“已听到 243s”的会话退回 240s。真实时长由引擎解析后校正。
+        playbackPosition = max(snapshot.position, 0)
         playbackState = .idle
         loadLyricsIfNeeded(for: current)
         // 有持久化播放会话但此前没有显式停止记录 → 进程被系统终止（诊断用启发式）。
@@ -1955,14 +1961,11 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
-    /// 保持顺序、按 id 去重。服务端偶发会对同一首歌返回重复条目，
+    /// 保持顺序、按 GlobalID 去重。服务端偶发会对同一首歌返回重复条目，
     /// 若直接喂给 SwiftUI 的 ForEach / List，会因 duplicate ID 在运行期 fatal error 崩溃。
     /// 全链路（队列、随机货架、最近添加、流派筛选）统一在此收敛，避免重复 ID 进入界面。
     func uniquedTracks(_ tracks: [Track]) -> [Track] {
-        var seen = Set<GlobalID>()
-        return tracks.filter {
-            seen.insert(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue)).inserted
-        }
+        CatalogEntityUniquing.uniquedTracks(tracks)
     }
 
     // MARK: - Downloads
@@ -3254,6 +3257,10 @@ public final class AuralisAppModel: ObservableObject {
         // 全链路以去重后的曲目为准，避免服务端返回的重复 ID 进入界面导致 ForEach 崩溃。
         let dedupeStartedAt = ContinuousClock.now
         let tracks = uniquedTracks(result.tracks)
+        // Artist / Album 同样按 GlobalID 去重：跨服务器相同 remoteID 或服务端重复条目
+        // 会让 ForEach(id: \.macGlobalID) 产生 duplicate identity，Mac 艺术家页会崩溃。
+        let artists = CatalogEntityUniquing.uniquedArtists(result.artists)
+        let albums = CatalogEntityUniquing.uniquedAlbums(result.albums)
         StartupPerformanceTrace.record(
             .appApplyDedupe,
             since: dedupeStartedAt,
@@ -3306,8 +3313,8 @@ public final class AuralisAppModel: ObservableObject {
         }
         catalog = LibraryCatalog(
             account: result.account,
-            artists: result.artists,
-            albums: result.albums,
+            artists: artists,
+            albums: albums,
             tracks: tracks,
             genres: mergedGenres,
             playlists: result.playlists,
@@ -3468,8 +3475,8 @@ public final class AuralisAppModel: ObservableObject {
         processSiriPlayRequest()
 
         // Spotlight：把本地资料库登记到系统搜索（后台执行，幂等覆盖）。
-        let spotlightArtists = result.artists
-        let spotlightAlbums = result.albums
+        let spotlightArtists = artists
+        let spotlightAlbums = albums
         let spotlightTracks = tracks
         let spotlightPlaylists = result.playlists
         Task { @MainActor in
@@ -3548,6 +3555,8 @@ public final class AuralisAppModel: ObservableObject {
         guard catalog.activeServerID == serverID else { return }
 
         let tracks = uniquedTracks(fetchedTracks)
+        let artists = CatalogEntityUniquing.uniquedArtists(fetchedArtists)
+        let albums = CatalogEntityUniquing.uniquedAlbums(fetchedAlbums)
         // 同步不落 genres 表，按 apply() 的做法从曲目标签派生。
         let genres = Dictionary(grouping: tracks.flatMap(\.genres), by: { $0.lowercased() })
             .map { Genre(name: $0.key, songCount: $0.value.count) }
@@ -3557,8 +3566,8 @@ public final class AuralisAppModel: ObservableObject {
 
         catalog = LibraryCatalog(
             account: catalog.account,
-            artists: fetchedArtists,
-            albums: fetchedAlbums,
+            artists: artists,
+            albums: albums,
             tracks: tracks,
             genres: genres,
             playlists: playlists,
@@ -3927,6 +3936,35 @@ public enum InspectorSection: String, CaseIterable, Identifiable, Sendable {
         case .lyrics: String(localized: "歌词")
         case .quality: String(localized: "音质")
         case .metadata: String(localized: "元数据")
+        }
+    }
+}
+
+/// 目录实体的 GlobalID 去重（保持顺序）。
+///
+/// 服务端偶发会对同一实体返回重复条目；跨服务器时相同 remoteID 也绝不代表同一实体。
+/// Track / Artist / Album 在进入 catalog 前统一按 `(serverID, remoteID)` 收敛，
+/// 否则 SwiftUI 的 ForEach(id:) 会因 duplicate identity 在运行期崩溃。
+/// 纯逻辑、可单测；Artist 页面/列表即使不经过 catalog 也能用同一 helper 防御。
+enum CatalogEntityUniquing {
+    static func uniquedTracks(_ tracks: [Track]) -> [Track] {
+        var seen = Set<GlobalID>()
+        return tracks.filter {
+            seen.insert(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue)).inserted
+        }
+    }
+
+    static func uniquedArtists(_ artists: [Artist]) -> [Artist] {
+        var seen = Set<GlobalID>()
+        return artists.filter {
+            seen.insert(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue)).inserted
+        }
+    }
+
+    static func uniquedAlbums(_ albums: [Album]) -> [Album] {
+        var seen = Set<GlobalID>()
+        return albums.filter {
+            seen.insert(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue)).inserted
         }
     }
 }

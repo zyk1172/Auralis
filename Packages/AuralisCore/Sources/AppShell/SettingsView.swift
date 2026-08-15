@@ -272,7 +272,7 @@ struct ServerConnectionSheet: View {
                         }
                     }
                     .disabled(isTesting || isRequestingLocalNetworkAuthorization || model.serverConnectionState.isConnecting)
-                    Text("内网与外网会同时探测；内网在 30 秒内可用时始终优先使用，确认不可用后才降级外网。首次连接局域网服务器时，Auralis会自动请求「本地网络」授权。")
+                    Text("内网与外网会同时探测；内网在 30 秒内可用时始终优先使用，确认不可用后才降级外网。首次连接局域网服务器时，Auralis 会自动请求「本地网络」授权。")
                         .font(.caption2)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     if let testResult {
@@ -303,7 +303,7 @@ struct ServerConnectionSheet: View {
                 Section("连接安全") {
                     Label("凭据仅写入系统 Keychain", systemImage: "key.fill")
                     Label("HTTP 仅允许本机或私有局域网", systemImage: "network")
-                    Text("公共服务器必须使用 HTTPS。Auralis不会记录密码、认证 Token 或完整请求地址。")
+                    Text("公共服务器必须使用 HTTPS。Auralis 不会记录密码、认证 Token 或完整请求地址。")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
@@ -550,7 +550,7 @@ struct ServerConnectionSheet: View {
         let result = await LocalNetworkProbe.probe(host: host, port: port, timeout: 15)
         guard result.isLocalNetworkDenied else { return true }
 
-        localValidationError = "本地网络访问已被 macOS 拒绝。Auralis会在首次连接时自动申请；若此前点过“不允许”，系统不会再次弹窗。请在“系统设置 → 隐私与安全性 → 本地网络”中打开“Auralis”后重试。"
+        localValidationError = "本地网络访问已被 macOS 拒绝。Auralis 会在首次连接时自动申请；若此前点过“不允许”，系统不会再次弹窗。请在“系统设置 → 隐私与安全性 → 本地网络”中打开“Auralis”后重试。"
         return false
 #else
         return true

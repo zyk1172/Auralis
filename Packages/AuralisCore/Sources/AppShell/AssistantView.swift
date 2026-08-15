@@ -453,7 +453,7 @@ struct AssistantView: View {
             }
             Spacer(minLength: 0)
             if !isLive {
-                Button { model.selectedSection = .settings } label: {
+                Button { model.selectTopLevelSection(.settings) } label: {
                     Label("配置", systemImage: "gearshape")
                 }
                 .buttonStyle(HapticBorderedButtonStyle())

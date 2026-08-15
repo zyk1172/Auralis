@@ -28,7 +28,9 @@ struct MacArtistsView: View {
 
     private func rebuildVisibleArtists() {
         let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let artists = model.catalog.artists
+        // 防御性按 macGlobalID 去重：即使 catalog 意外包含重复 (serverID, remoteID)，
+        // ForEach(id: \.macGlobalID) 也不会因 duplicate identity 崩溃。
+        let artists = CatalogEntityUniquing.uniquedArtists(model.catalog.artists)
             .filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         visibleArtists = artists

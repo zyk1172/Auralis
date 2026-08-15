@@ -40,7 +40,7 @@ struct HomeView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    model.selectedSection = .settings
+                    model.selectTopLevelSection(.settings)
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 16, weight: .semibold))

@@ -211,9 +211,10 @@ enum MacFormat {
 @MainActor
 enum MacLibraryQuery {
     /// 专辑曲目，按 disc/track 排序。
+    /// 使用 LibraryStore 的 tracksByAlbum 派生索引（O(1) 取桶），只对结果做小规模排序，
+    /// 不再每次全库 filter。
     static func albumTracks(_ album: Album, model: AuralisAppModel) -> [Track] {
-        model.catalog.tracks
-            .filter { $0.albumID == album.id && $0.serverID == album.serverID }
+        model.libraryStore.tracks(album: album)
             .sorted { lhs, rhs in
                 let l = (lhs.discNumber ?? 1, lhs.trackNumber ?? Int.max)
                 let r = (rhs.discNumber ?? 1, rhs.trackNumber ?? Int.max)
@@ -224,9 +225,10 @@ enum MacLibraryQuery {
     }
 
     /// 艺术家专辑，按年份倒序（无年份排后）。
+    /// 使用 LibraryStore 的 albumsByArtist 派生索引（O(1) 取桶），只对结果做小规模排序，
+    /// 不再每次全库 filter。
     static func artistAlbums(_ artist: Artist, model: AuralisAppModel) -> [Album] {
-        model.catalog.albums
-            .filter { $0.artistID == artist.id && $0.serverID == artist.serverID }
+        model.libraryStore.albums(artist: artist)
             .sorted { lhs, rhs in
                 let ly = lhs.year ?? Int.min
                 let ry = rhs.year ?? Int.min
@@ -235,10 +237,10 @@ enum MacLibraryQuery {
             }
     }
 
-    /// 艺术家曲目。
+    /// 艺术家曲目。使用 LibraryStore 的 tracksByArtist 派生索引（O(1) 取桶），
+    /// 不再每次全库 filter。
     static func artistTracks(_ artist: Artist, model: AuralisAppModel) -> [Track] {
-        model.catalog.tracks
-            .filter { $0.artistID == artist.id && $0.serverID == artist.serverID }
+        model.libraryStore.tracks(artist: artist)
     }
 
     /// 歌单曲目（按歌单内顺序，本地缺歌则跳过）。
