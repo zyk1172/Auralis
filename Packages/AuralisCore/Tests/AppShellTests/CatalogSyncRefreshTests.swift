@@ -65,7 +65,10 @@ private func makeIsolatedModel(tracks: [Track]) -> AuralisAppModel {
     )
 }
 
-/// 把曲目写入本地 SQLite（模拟一次增量同步会话；incremental 不清空已有数据）。
+/// 把曲目写入本地 SQLite（模拟一次增量同步会话）。
+/// 注意：OpenSubsonic 的「增量」实际是全量遍历，completeSync 对 full 与 incremental
+/// 都会先删除该服务器的旧记录再写入 staged 集——因此每次 seed 必须包含该服务器的完整目录，
+/// 否则未 stage 的旧记录会被正确删除（这是删除正确性契约，不是 bug）。
 @MainActor
 private func seedStore(
     _ model: AuralisAppModel,
@@ -108,12 +111,14 @@ func syncCompletionRefreshesCatalogAndRecentlyAdded() async throws {
     try await seedStore(model, serverID: serverID, tracks: existing)
 
     // 模拟后台增量同步把新歌 / 专辑 / 艺术家写进本地 SQLite（页面不重启）。
+    // 增量同步 staging 的是完整目录：第二次 seed 必须包含既有曲目 + 新曲目，
+    // 否则 completeSync 的删除语义会正确移除未 stage 的旧记录。
     let newTrack = makeTrack(remoteID: "remote-new", title: "Fresh Download")
     let newAlbum = Album(id: "new-album", serverID: serverID, artistID: "new-artist", title: "New Album", artistName: "New Artist")
     let newArtist = Artist(id: "new-artist", serverID: serverID, name: "New Artist", albumCount: 1)
     try await seedStore(
         model, serverID: serverID,
-        tracks: [newTrack], albums: [newAlbum], artists: [newArtist]
+        tracks: existing + [newTrack], albums: [newAlbum], artists: [newArtist]
     )
 
     // 同步完成回调（CatalogCoordinator.startSync 成功后的 onSyncCompleted 路径）：

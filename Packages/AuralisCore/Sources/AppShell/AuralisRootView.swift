@@ -82,7 +82,6 @@ public struct AuralisRootView: View {
     /// 用 @State 只保持引用生命周期，不让每次滚动进度变化都使整个 AuralisRootView 失效。
     /// 真正需要重绘的 Dock 子视图会单独 @ObservedObject 订阅它。
     @State private var bottomDockScroll = BottomDockScrollCoordinator()
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.scenePhase) private var scenePhase
@@ -105,11 +104,10 @@ public struct AuralisRootView: View {
 #if os(macOS)
             MacMusicShell(model: model, themeStore: themeStore)
 #elseif os(iOS)
-            if horizontalSizeClass == .compact {
-                CompactShell(model: model, themeStore: themeStore, bottomDockScroll: bottomDockScroll)
-            } else {
-                PadMusicShell(model: model, themeStore: themeStore)
-            }
+            // iPhone 与 iPad 始终使用同一个 iOS Shell（同一导航 / 同一 Bottom Dock）。
+            // size class 只允许影响局部布局尺寸，绝不允许切换整套 UI 架构——
+            // Stage Manager / 分屏改变 horizontalSizeClass 时不能替换 root Shell。
+            IOSMusicShell(model: model, themeStore: themeStore, bottomDockScroll: bottomDockScroll)
 #endif
         }
         .environmentObject(model)
@@ -142,6 +140,32 @@ public struct AuralisRootView: View {
     }
 }
 
+/// 统一 iOS UI 的布局视觉 token（iPhone 与 iPad 共用同一套 Shell）。
+/// 这些只是「可用宽度」约束，不承载任何业务状态：
+/// - 浮动控件（Bottom Dock / AI 输入框）在 iPad 宽屏不铺满，居中、最大约 760pt；
+/// - 可读内容宽度上限约 960pt；
+/// - 播放页内容宽度上限约 680pt（与 NowPlayingView 既有策略一致）。
+enum IOSLayoutMetrics {
+    /// 底部浮动控件（Dock / 输入框）在宽屏的最大宽度。
+    static let floatingChromeMaxWidth: CGFloat = 760
+    /// 主内容容器可读宽度上限（宽屏居中）。
+    static let readableContentMaxWidth: CGFloat = 960
+    /// 播放页内容最大宽度。
+    static let playerContentMaxWidth: CGFloat = 680
+    /// 最小触控目标高度（44pt），回归测试守护不回退。
+    static let minimumTouchTargetHeight: CGFloat = 44
+
+    /// 浮动控件宽度：窄屏取满可用宽度，宽屏封顶 floatingChromeMaxWidth，无负数。
+    static func floatingChromeWidth(containerWidth: CGFloat) -> CGFloat {
+        min(max(containerWidth, 0), floatingChromeMaxWidth)
+    }
+
+    /// 可读内容宽度：窄屏取满可用宽度，宽屏封顶 readableContentMaxWidth。
+    static func readableContentWidth(containerWidth: CGFloat) -> CGFloat {
+        min(max(containerWidth, 0), readableContentMaxWidth)
+    }
+}
+
 #if os(iOS)
 /// 底部双层 Dock 两控件共享的可见高度（迷你播放条与主菜单栏完全一致）。
 /// 之前 72pt 太大、占用过多纵向空间，现统一收小到 56pt。
@@ -151,7 +175,8 @@ let dockSpacing: CGFloat = 8
 /// Dock 整体的底部内边距（与 BottomDock 的 .padding(.bottom) 同源）。
 let dockBottomPadding: CGFloat = 6
 
-private struct CompactShell: View {
+
+private struct IOSMusicShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
     let bottomDockScroll: BottomDockScrollCoordinator
@@ -260,6 +285,9 @@ private struct CompactShell: View {
             },
             onSelect: { selectTopLevelSection($0) }
         )
+        // iPhone 窄屏接近全宽；iPad 宽屏最大约 760pt 并居中，不横贯整屏。
+        .frame(maxWidth: IOSLayoutMetrics.floatingChromeMaxWidth)
+        .frame(maxWidth: .infinity)
     }
 
     private var dockAnimation: Animation? {
@@ -351,7 +379,7 @@ struct BottomDockScrollReportingModifier: ViewModifier {
     }
 }
 
-/// 将高频进度订阅限制在 Dock 本身。CompactShell、NavigationStack 和当前页面不再
+/// 将高频进度订阅限制在 Dock 本身。IOSMusicShell、NavigationStack 和当前页面不再
 /// 因为用户滚动一两个像素而整体重新求值。
 private struct MorphingBottomDockProgressHost: View {
     @ObservedObject var model: AuralisAppModel
@@ -910,377 +938,6 @@ extension View {
 }
 #endif
 
-// MARK: - iPad 弹窗仲裁（共享纯逻辑，供 PadMusicShell 与单元测试使用）
-
-/// iPad 弹窗仲裁中的唯一可呈现弹窗。
-/// 优先级：服务器配置 > 正在播放 > 浏览详情；同一时刻至多呈现一个。
-enum PadPresentedSheet: Equatable, Identifiable {
-    case serverSetup
-    case nowPlaying
-    case browse(BrowseDestination)
-
-    var id: String {
-        switch self {
-        case .serverSetup: "serverSetup"
-        case .nowPlaying: "nowPlaying"
-        case let .browse(destination): "browse.\(destination.id)"
-        }
-    }
-}
-
-/// 纯逻辑弹窗仲裁策略（不依赖 SwiftUI，可单元测试）：
-/// - `presentedSheet` 由三个底层状态推导唯一应呈现的弹窗；
-/// - `dismissals` 描述“打开某个动作”时应清除的其它底层状态，保持互斥。
-enum PadPresentationArbitration {
-    /// 将要打开的动作。
-    enum Open: Equatable {
-        case nowPlaying
-        case browse(BrowseDestination)
-        case serverSetup
-    }
-
-    /// 打开动作时需要清除的其它底层状态。
-    struct Dismissals: Equatable {
-        var nowPlaying = false
-        var browse = false
-
-        static let none = Dismissals()
-    }
-
-    /// 根据三个底层状态推导当前应呈现的唯一弹窗。服务器配置始终优先；
-    /// 正在播放优先于浏览详情（底层状态可能同时为真，但呈现只允许一个）。
-    static func presentedSheet(
-        serverSetupPresented: Bool,
-        nowPlayingPresented: Bool,
-        browseDestination: BrowseDestination?
-    ) -> PadPresentedSheet? {
-        if serverSetupPresented { return .serverSetup }
-        if nowPlayingPresented { return .nowPlaying }
-        if let browseDestination { return .browse(browseDestination) }
-        return nil
-    }
-
-    /// 打开动作后应清除的其它状态。
-    /// 服务器配置优先级最高：只遮盖不销毁（关闭后可恢复之前的弹窗）；
-    /// 正在播放与浏览详情彼此互斥：打开一方即关闭另一方。
-    static func dismissals(
-        opening: Open,
-        serverSetupPresented: Bool,
-        nowPlayingPresented: Bool,
-        browseDestination: BrowseDestination?
-    ) -> Dismissals {
-        switch opening {
-        case .serverSetup:
-            return .none
-        case .nowPlaying:
-            // 服务器配置打开时不允许打开正在播放。
-            guard !serverSetupPresented else { return .none }
-            return Dismissals(nowPlaying: false, browse: browseDestination != nil)
-        case .browse:
-            // 服务器配置打开时不允许打开浏览详情。
-            guard !serverSetupPresented else { return .none }
-            return Dismissals(nowPlaying: nowPlayingPresented, browse: false)
-        }
-    }
-}
-
-#if os(iOS)
-private enum PadSidebarDestination: String, CaseIterable, Hashable, Identifiable {
-    case search
-    case home
-    case recentlyAdded
-    case artists
-    case albums
-    case songs
-    case genres
-    case downloads
-    case recentlyPlayed
-    case favorites
-    case playlists
-    case categories
-    case assistant
-    case settings
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .search: "搜索"
-        case .home: "首页"
-        case .recentlyAdded: "最近添加"
-        case .artists: "艺术家"
-        case .albums: "专辑"
-        case .songs: "歌曲"
-        case .genres: "流派"
-        case .downloads: "下载"
-        case .recentlyPlayed: "最近播放"
-        case .favorites: "收藏歌曲"
-        case .playlists: "播放列表"
-        case .categories: "分类"
-        case .assistant: "AI 助手"
-        case .settings: "设置"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .search: "magnifyingglass"
-        case .home: "house"
-        case .recentlyAdded: "tray.and.arrow.down"
-        case .artists: "person.2"
-        case .albums: "square.stack"
-        case .songs: "music.note"
-        case .genres: "music.quarternote.3"
-        case .downloads: "arrow.down.circle"
-        case .recentlyPlayed: "clock.arrow.circlepath"
-        case .favorites: "heart"
-        case .playlists: "music.note.list"
-        case .categories: "square.grid.2x2"
-        case .assistant: "sparkles"
-        case .settings: "gearshape"
-        }
-    }
-
-    var appSection: AppSection {
-        switch self {
-        case .search: .search
-        case .home: .home
-        case .assistant: .assistant
-        case .settings: .settings
-        default: .library
-        }
-    }
-
-    static func defaultDestination(for section: AppSection) -> Self {
-        switch section {
-        case .home: .home
-        case .library: .albums
-        case .assistant: .assistant
-        case .search: .search
-        case .settings: .settings
-        }
-    }
-}
-
-/// iPadOS 使用与 Mac 相同的信息架构，但保持 iPad 原生的三栏折叠、触控目标和
-/// 系统导航行为。横屏显示三栏，窄窗口由 NavigationSplitView 自动折叠。
-private struct PadMusicShell: View {
-    @ObservedObject var model: AuralisAppModel
-    @ObservedObject var themeStore: ThemeStore
-    @State private var selection: PadSidebarDestination = .home
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-
-    var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            List {
-                sidebarRow(.search)
-                sidebarRow(.home)
-                Section("资料库") {
-                    sidebarRow(.recentlyAdded)
-                    sidebarRow(.artists)
-                    sidebarRow(.albums)
-                    sidebarRow(.songs)
-                    sidebarRow(.genres)
-                    sidebarRow(.downloads)
-                    sidebarRow(.recentlyPlayed)
-                }
-                Section("播放列表") {
-                    sidebarRow(.favorites)
-                    sidebarRow(.playlists)
-                }
-                Section("Auralis") {
-                    sidebarRow(.categories)
-                    sidebarRow(.assistant)
-                    sidebarRow(.settings)
-                }
-            }
-            .listStyle(.sidebar)
-            .navigationTitle("Auralis")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 290)
-            .safeAreaInset(edge: .bottom) {
-                ServerStatus(model: model, theme: themeStore.current)
-            }
-        } content: {
-            padContent
-                .id(selection)
-                .navigationTitle(selection.title)
-                .frame(maxWidth: 1080)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } detail: {
-            InspectorView(model: model, theme: themeStore.current)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
-        }
-        .navigationSplitViewStyle(.balanced)
-        .safeAreaInset(edge: .bottom) {
-            if model.hasCurrentTrack && model.selectedSection != .assistant && model.selectedSection != .settings {
-                MiniPlayer(model: model, theme: themeStore.current)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 4)
-            }
-        }
-        // 单一弹窗仲裁：服务器配置 > 正在播放 > 浏览详情，同一时刻至多呈现一个弹窗，
-        // 从根上避免 UIKit "Attempt to present … which is already presenting …" 冲突导致卡顿。
-        .sheet(item: presentedSheetBinding) { sheet in
-            switch sheet {
-            case .serverSetup:
-                ServerConnectionSheet(model: model, theme: themeStore.current)
-            case .nowPlaying:
-                NowPlayingView(model: model, theme: themeStore.current)
-                    #if os(iOS)
-                    .presentationDragIndicator(.visible)
-                    .presentationDetents([.large])
-                    #endif
-                    .frame(minWidth: 620, minHeight: 680)
-            case let .browse(destination):
-                BrowseDetailSheet(destination: destination, model: model, theme: themeStore.current)
-            }
-        }
-        .alert("播放失败", isPresented: .init(
-            get: { model.playbackError != nil },
-            set: { if !$0 { model.dismissPlaybackError() } }
-        )) {
-            Button("重试") { model.retryPlayback() }
-            if model.canGoNext {
-                Button("下一首") { model.next() }
-            }
-            Button("确定") { model.dismissPlaybackError() }
-        } message: {
-            if let error = model.playbackError {
-                switch error {
-                case .networkUnavailable:
-                    Text("网络不可用，请检查网络连接")
-                case .unsupportedFormat(let format):
-                    Text("不支持的音频格式：\(format)")
-                case .authorizationFailed:
-                    Text("授权失败，请检查登录状态")
-                case .engineFailure(let message):
-                    Text(message)
-                }
-            }
-        }
-        .onAppear {
-            selection = .defaultDestination(for: model.selectedSection)
-        }
-        .onChange(of: selection) { _, destination in
-            model.selectTopLevelSection(destination.appSection)
-        }
-        .onChange(of: model.selectedSection) { _, section in
-            guard selection.appSection != section else { return }
-            selection = .defaultDestination(for: section)
-        }
-        // 直接写入模型状态（快捷指令 / AI 助手 / 页面按钮）时也执行互斥仲裁：
-        // 打开正在播放即关闭浏览详情；打开浏览详情即关闭正在播放。
-        .onChange(of: model.isNowPlayingPresented) { _, presented in
-            guard presented else { return }
-            let dismissals = PadPresentationArbitration.dismissals(
-                opening: .nowPlaying,
-                serverSetupPresented: model.shouldPresentServerSetup,
-                nowPlayingPresented: presented,
-                browseDestination: model.browseDestination
-            )
-            if dismissals.browse { model.browseDestination = nil }
-        }
-        .onChange(of: model.browseDestination) { _, destination in
-            guard let destination else { return }
-            let dismissals = PadPresentationArbitration.dismissals(
-                opening: .browse(destination),
-                serverSetupPresented: model.shouldPresentServerSetup,
-                nowPlayingPresented: model.isNowPlayingPresented,
-                browseDestination: destination
-            )
-            if dismissals.nowPlaying { model.isNowPlayingPresented = false }
-        }
-    }
-
-    private func sidebarRow(_ destination: PadSidebarDestination) -> some View {
-        Button {
-            selection = destination
-        } label: {
-            Label(destination.title, systemImage: destination.symbol)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .padding(.vertical, 4)
-                // iPad 触控目标：整行至少 44pt 可点，行高与视觉不变。
-                .frame(minHeight: 44)
-        }
-        .buttonStyle(HapticPlainButtonStyle())
-        .listRowBackground(
-            destination == selection
-            ? themeStore.current.colorTokens.accent.color.opacity(0.16)
-            : Color.clear
-        )
-        .accessibilityAddTraits(destination == selection ? .isSelected : [])
-    }
-
-    @ViewBuilder
-    private var padContent: some View {
-        switch selection {
-        case .search:
-            SearchView(model: model, theme: themeStore.current)
-        case .home:
-            HomeView(model: model, theme: themeStore.current)
-        case .recentlyAdded:
-            BrowseDetailSheet(destination: .recentlyAdded, model: model, theme: themeStore.current, showsCloseButton: false)
-        case .artists:
-            LibraryView(model: model, theme: themeStore.current, initialScope: .artists)
-        case .albums:
-            LibraryView(model: model, theme: themeStore.current, initialScope: .albums)
-        case .songs:
-            LibraryView(model: model, theme: themeStore.current, initialScope: .tracks)
-        case .genres:
-            LibraryView(model: model, theme: themeStore.current, initialScope: .genres)
-        case .downloads:
-            DownloadManagementView(model: model, theme: themeStore.current)
-        case .recentlyPlayed:
-            BrowseDetailSheet(destination: .recentlyPlayed, model: model, theme: themeStore.current, showsCloseButton: false)
-        case .favorites:
-            LibraryView(model: model, theme: themeStore.current, initialScope: .favorites)
-        case .playlists:
-            LibraryView(model: model, theme: themeStore.current, initialScope: .playlists)
-        case .categories:
-            LibraryView(model: model, theme: themeStore.current, initialScope: .categories)
-        case .assistant:
-            AssistantView(model: model, theme: themeStore.current)
-        case .settings:
-            SettingsView(model: model, themeStore: themeStore)
-        }
-    }
-
-    /// 单一弹窗仲裁绑定：呈现由 `PadPresentationArbitration.presentedSheet` 推导
-    /// （服务器配置 > 正在播放 > 浏览详情）；关闭弹窗（SwiftUI 写入 nil）时只清除
-    /// 当前实际呈现的那一个底层状态，避免误删被服务器配置遮盖的旧状态。
-    private var presentedSheetBinding: Binding<PadPresentedSheet?> {
-        Binding(
-            get: {
-                PadPresentationArbitration.presentedSheet(
-                    serverSetupPresented: model.shouldPresentServerSetup,
-                    nowPlayingPresented: model.isNowPlayingPresented,
-                    browseDestination: model.browseDestination
-                )
-            },
-            set: { sheet in
-                // 呈现由 get 推导；set 只处理 SwiftUI 关闭弹窗（写入 nil）的情况。
-                guard sheet == nil else { return }
-                switch PadPresentationArbitration.presentedSheet(
-                    serverSetupPresented: model.shouldPresentServerSetup,
-                    nowPlayingPresented: model.isNowPlayingPresented,
-                    browseDestination: model.browseDestination
-                ) {
-                case .serverSetup:
-                    model.shouldPresentServerSetup = false
-                case .nowPlaying:
-                    model.isNowPlayingPresented = false
-                case .browse:
-                    model.browseDestination = nil
-                case nil:
-                    break
-                }
-            }
-        )
-    }
-
-}
-#endif
 private struct SectionContent: View {
     let section: AppSection
     @ObservedObject var model: AuralisAppModel

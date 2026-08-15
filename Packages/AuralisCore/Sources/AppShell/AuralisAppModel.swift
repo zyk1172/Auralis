@@ -119,6 +119,9 @@ public final class AuralisAppModel: ObservableObject {
     /// 当前 item 的真实时长（秒），由引擎按需回报；目录元数据时长可能不准，
     /// 播放页进度条、控制中心与 Live Activity 以此为准（真机反馈：进度条到头仍在播）。
     @Published public private(set) var actualDuration: TimeInterval?
+    /// apply() 排队的后台派生任务（首页货架 / 随机音乐 / library-added 对齐）。
+    /// 生产首帧不等待它；测试通过 `awaitPendingApplyDerivations()` 确定性等待。
+    private var pendingApplyDerivations: Task<Void, Never>?
     /// O(1) 的歌曲行元数据修订号。播放次数或首次入库日期改变时递增；播放进度 tick 不变。
     @Published public private(set) var libraryRowMetadataRevision: UInt64 = 0
     /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
@@ -1735,6 +1738,13 @@ public final class AuralisAppModel: ObservableObject {
     public func selectTopLevelSection(_ section: AppSection) {
         browseDestination = nil
         selectedSection = section
+    }
+
+    /// 测试钩子：确定性等待 apply() 排队的后台派生（首页货架 / 随机音乐 /
+    /// library-added 对齐）完成。生产 UI 首帧不等待它（首屏只依赖 catalog 本身）。
+    func awaitPendingApplyDerivations() async {
+        await pendingApplyDerivations?.value
+        pendingApplyDerivations = nil
     }
 
     /// 设置页的快捷入口：复用 Agent 已验证的“状态 → 分批分类 → 写回至 0”流程，
@@ -3405,7 +3415,7 @@ public final class AuralisAppModel: ObservableObject {
         let serverIDForAdded = result.account.id
         let disliked = dislikedTrackIDs
         let serverHashForTrace = serverHash
-        Task { @MainActor [weak self] in
+        pendingApplyDerivations = Task { @MainActor [weak self] in
             guard let self else { return }
             self.reconcileLibraryAddedDates(tracks: randomTracks, serverID: serverIDForAdded)
             StartupPerformanceTrace.record(

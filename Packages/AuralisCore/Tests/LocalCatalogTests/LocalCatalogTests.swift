@@ -188,8 +188,8 @@ func durableSyncStagingSurvivesRestart() async throws {
     await reopened.discardSync(freshSession)
 }
 
-@Test("Incremental staging is invisible until commit and merges atomically")
-func incrementalStagingMergesOnlyAtCommit() async throws {
+@Test("Incremental staging is invisible until commit and replaces the server set atomically")
+func incrementalStagingIsAtomicAndReplacesAtCommit() async throws {
     let store = try makeStore()
     let serverID: ServerID = "incremental-server"
     let original = makeTrack(serverID: serverID, remoteID: "old", title: "Original")
@@ -198,10 +198,13 @@ func incrementalStagingMergesOnlyAtCommit() async throws {
     let session = try await store.beginSync(serverID: serverID, mode: .incremental)
     let added = makeTrack(serverID: serverID, remoteID: "new", title: "Added")
     try await store.stageTracks([added], session: session)
+    // 提交前不可见：未提交的 staged 集不会暴露半替换目录。
     #expect(try await store.allTracks(serverID: serverID).map(\.id) == [original.id])
 
     try await store.completeSync(session, completedAt: .now)
-    #expect(Set(try await store.allTracks(serverID: serverID).map(\.id)) == Set([original.id, added.id]))
+    // 提交后原子替换该服务器的完整集合：OpenSubsonic 的「增量」实际是全量遍历，
+    // staging 覆盖完整目录，因此未 stage 的旧记录会被正确删除（删除正确性契约）。
+    #expect(Set(try await store.allTracks(serverID: serverID).map(\.id)) == Set([added.id]))
 }
 
 @Test("Recommendation Index V2 batches, validates, and reuses metadata classifications")

@@ -31,7 +31,7 @@
 
 - **共用**：所有播放策略统一在 `AuralisAppModel`；异步身份 GlobalID 化（重试预算、seek、预载、歌词、评分、切服守卫）。
 - **iPhone**：传输控制 ≥44pt 且带 label；双击事件队列守卫；sheet 仲裁。
-- **iPad**：`PadMusicShell` sheet 由 `PadPresentationArbitration` 统一仲裁（serverSetup > nowPlaying > browse），14 个目的地触控目标 ≥44pt。
+- **iPad**：`PadMusicShell` sheet 由 `PadPresentationArbitration` 统一仲裁（serverSetup > nowPlaying > browse），14 个目的地触控目标 ≥44pt。（已废弃：RC 收敛后 iPad 与 iPhone 共用统一 iOS Shell `IOSMusicShell`，`PadMusicShell` / `PadPresentationArbitration` 已删除，本文档为历史记录。）
 - **macOS**：Expanded Player 标题栏幂等 `MacExpandedChromePolicy`（左上角绝无“Auralis”）；Collapse 恢复 titlebar/traffic lights；菜单命令与 Space/←/→/Esc 统一 firstResponder 守卫（文本编辑不误触）。
 - **Siri/Spotlight/Handoff**：显式播放允许 disliked；自动发现排除 disliked；ID 均 serverID+remoteID；Handoff 不传 repeat/shuffle（接收端保持本机设置）；Siri/快捷指令文案已本地化（en）。
 

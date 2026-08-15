@@ -535,12 +535,22 @@
   Command-Up / Command-Down 等菜单命令不得误触播放控制（已按 firstResponder 守卫）。
 - 逻辑已由 `MacExpandedChromeTests`（8 项）覆盖；此处为真窗口视觉确认。
 
-## RC-3 iPad Sheet 仲裁
-- 打开 Browse 详情时点 MiniPlayer：只出现 Now Playing，Browse 关闭；
-- 从 Now Playing 打开 Browse 链接：Now Playing 关闭，只出现 Browse；
-- 上述任一生效时触发服务器设置（助手/快捷指令/连接错误路径）：只出现一个 sheet，关闭后恢复原 sheet；
-- Siri/快捷指令在 Browse 打开时触发 Now Playing：不得双 sheet。
-- 逻辑已由 `PadPresentationArbitrationTests`（14 项）覆盖；此处为真机确认。
+## RC-3 iPad Unified iOS Shell
+- iPhone 与 iPad 使用同一个 iOS Shell（同一导航 / 同一 Bottom Dock / 同一 Now Playing / 同一 AI 交互）。
+- iPad 不再使用模仿 macOS 信息架构的 `PadMusicShell`（该架构及其仲裁已删除）。
+- 真机验收：
+  - iPad 全屏 portrait / landscape；
+  - Split View 1/2、2/3；
+  - Stage Manager 窄窗口；
+  - Stage Manager regular → compact → regular 连续切换；
+  - 上述尺寸变化期间：仍是同一个 Shell、`selectedSection` 不丢、`browseDestination` 不丢、
+    当前专辑详情不消失、Bottom Dock 不重建闪动、Now Playing 状态不丢、播放不中断、AI 会话不丢；
+  - 首页 → 专辑 → 音乐库；首页 → 收藏 → AI 助手；AI → 会话列表 → 返回；
+  - 打开 Now Playing / 歌词 / 队列后 resize；
+  - 键盘弹出 → resize → 收起键盘；
+  - 服务器设置 sheet、播放错误 alert。
+- 布局策略由 `IOSLayoutMetricsTests`（浮动控件 760pt 封顶 / 可读宽度 960 / 44pt 触控目标）覆盖；
+  此处为真机确认。
 
 ## RC-4 Live Activity / 灵动岛 / 小组件
 - 首次播放后：灵动岛出现当前歌曲（标题/艺术家/进度/播放状态）；

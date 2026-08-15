@@ -6,54 +6,8 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
-struct MiniPlayer: View {
-    @ObservedObject var model: AuralisAppModel
-    let theme: BuiltInTheme
-    var height: CGFloat = 50
-    @Environment(\.auralisReduceTransparency) private var reduceTransparency
-
-    var body: some View {
-        ZStack {
-            capsuleBackground
-            MiniPlayerContent(model: model, theme: theme, height: height)
-        }
-        .frame(height: height)
-        .contentShape(Rectangle())
-        .onTapGesture { model.isNowPlayingPresented = true }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var capsuleBackground: some View {
-        Group {
-            if reduceTransparency {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(theme.colorTokens.elevated.color)
-            } else {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-                    .background(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(theme.colorTokens.elevated.color.opacity(theme.materials.opacity))
-                    )
-            }
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(theme.colorTokens.separator.color.opacity(0.28), lineWidth: 0.5)
-        )
-        .shadow(
-            color: Color.black.opacity(reduceTransparency ? 0.08 : 0.16),
-            radius: 16,
-            x: 0,
-            y: 6
-        )
-    }
-
-    private var cornerRadius: CGFloat { max(height / 2, 20) }
-}
-
-/// 迷你播放条内部内容（不含背景与外壳）。iOS 双层 Dock 与桌面版共用同一套布局，
-/// 外层尺寸、玻璃材质与边距由调用方（BottomGlassBarShell / MiniPlayer）统一决定。
+/// 迷你播放条内部内容（不含背景与外壳）。iOS 双层 Dock 共用同一套布局，
+/// 外层尺寸、玻璃材质与边距由调用方（BottomGlassBarShell）统一决定。
 struct MiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -247,9 +201,10 @@ struct NowPlayingView: View {
                 }
             }
             .padding(AuralisSpacing.large)
-            // iPad 等宽屏：内容按 Mac 的“居中 + 最大宽度”约束，避免整页被拉成
-            // 一条横贯全屏的宽条；iPhone 紧凑布局保持原样（不限宽）。
-            .frame(maxWidth: horizontalSizeClass == .regular ? 680 : .infinity)
+            // iPad 宽屏可读宽度：内容居中并限宽（IOSLayoutMetrics.playerContentMaxWidth），
+            // 避免整页被拉成一条横贯全屏的宽条；iPhone 紧凑布局保持原样（不限宽）。
+            // 这是同一 View 的局部宽度自适应，不切换 UI 架构。
+            .frame(maxWidth: horizontalSizeClass == .regular ? IOSLayoutMetrics.playerContentMaxWidth : .infinity)
         }
         .foregroundStyle(theme.colorTokens.primaryText.color)
         .sheet(isPresented: $isPlaylistSheetPresented) {

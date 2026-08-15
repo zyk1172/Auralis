@@ -27,7 +27,6 @@ struct AssistantView: View {
 
     @ObservedObject private var agent: AgentCoordinator
     @AppStorage("auralis.ai.enabled") private var aiEnabled = true
-    @State private var showsSessionList = true
     @State private var showsSessionListSheet = false
     @State private var showsLibrarySearch = false
     @State private var showsActionLog = false
@@ -42,7 +41,6 @@ struct AssistantView: View {
     @FocusState private var assistantInputFocused: Bool
 
     @Environment(\.bottomDockScrollCoordinator) private var bottomDockScroll: BottomDockScrollCoordinator?
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: AuralisAppModel, theme: BuiltInTheme) {
@@ -57,24 +55,14 @@ struct AssistantView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if horizontalSizeClass == .compact {
-                conversation
-                    .frame(maxWidth: .infinity)
-                .sheet(isPresented: $showsSessionListSheet) {
-                    sessionSidebar
-                        .presentationDetents([.medium, .large])
-                        .presentationBackground(.ultraThinMaterial)
-                }
-            } else if showsSessionList {
-                HStack(spacing: 0) {
-                    sessionSidebar
-                        .frame(width: 240)
-                    Divider()
-                    conversation
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                conversation
+            // iPhone 与 iPad 统一：会话列表始终以 sheet 呈现（不再有 regular-width 的
+            // 桌面式 Sidebar 分支）；宽屏只通过可用宽度约束布局，不切换 UI 架构。
+            conversation
+                .frame(maxWidth: .infinity)
+            .sheet(isPresented: $showsSessionListSheet) {
+                sessionSidebar
+                    .presentationDetents([.medium, .large])
+                    .presentationBackground(.ultraThinMaterial)
             }
         }
         .background {
@@ -392,6 +380,9 @@ struct AssistantView: View {
         // 键盘打开时输入框底边停在距键盘顶 8pt 处。输入框宽度/高度/圆角始终不变。
         .safeAreaInset(edge: .bottom, spacing: 0) {
             DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: $assistantInputFocused)
+                // iPad 宽屏：与底部 Dock 共用同一浮动控件最大宽度并居中，不横贯整屏。
+                .frame(maxWidth: IOSLayoutMetrics.floatingChromeMaxWidth)
+                .frame(maxWidth: .infinity)
                 // 收拢态时输入栏进入底部导航栏的中间槽位；一旦获得输入焦点、键盘弹出，
                 // 必须立即恢复完整输入宽度，而不能继续沿用窄胶囊。
                 .padding(.horizontal, assistantInputFocused ? 0 : 64 * (bottomDockScroll?.collapseProgress ?? 0))
@@ -399,14 +390,13 @@ struct AssistantView: View {
                 // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
                 // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
                 // 避免「键盘与输入框之间一大段空白」。
-                // iPad（regular width）没有底部 Dock，不预留 Dock 高度，输入框贴近底部安全区。
+                // iPhone 与 iPad 共用同一底部 Dock：统一按 Dock 收拢进度避让
+                // （收拢态输入栏进入 Dock 中间槽位；展开态输入栏停在 Dock 上方）。
                 .padding(
                     .bottom,
                     assistantInputFocused
                         ? AuralisSpacing.small
-                        : (horizontalSizeClass == .regular
-                            ? AuralisSpacing.medium
-                            : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - (bottomDockScroll?.collapseProgress ?? 0)))
+                        : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - (bottomDockScroll?.collapseProgress ?? 0))
                 )
                 // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
                 // 不再按拖动位移逐帧改变宽度，快滑和慢滑的视觉节奏完全一致。
@@ -509,11 +499,8 @@ struct AssistantView: View {
             accessibilityLabel: "会话列表",
             help: "会话列表"
         ) {
-            if horizontalSizeClass == .compact {
-                showsSessionListSheet = true
-            } else {
-                withAnimation { showsSessionList.toggle() }
-            }
+            // iPhone / iPad 统一：会话列表始终以 sheet 呈现。
+            showsSessionListSheet = true
         }
     }
 

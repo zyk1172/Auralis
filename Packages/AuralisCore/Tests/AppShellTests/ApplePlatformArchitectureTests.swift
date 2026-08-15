@@ -47,4 +47,16 @@ struct ApplePlatformArchitectureTests {
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 1, height: -43)) == nil)
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 1, height: -44)) == 1)
     }
+
+    /// 产品契约（RC 收敛）：iPhone 与 iPad 共用同一 iOS navigation / dock 架构；
+    /// macOS 是独立 MacMusicShell。这里只断言可提取的纯状态/布局策略，
+    /// 不测试私有 View 类型名称。
+    @Test func iphoneAndIPadShareSingleIOSDockArchitecture() {
+        // iPhone 与 iPad 的根 Shell 只有这一套 Dock 入口集合，不因 size class 切换。
+        #expect(AppSection.compactDockSections == [.home, .library, .assistant])
+        // 宽屏（iPad regular）浮动控件统一封顶，不横贯整屏；触控目标 ≥ 44pt。
+        #expect(IOSLayoutMetrics.floatingChromeWidth(containerWidth: 1194) == 760)
+        #expect(IOSLayoutMetrics.floatingChromeWidth(containerWidth: 390) == 390)
+        #expect(IOSLayoutMetrics.minimumTouchTargetHeight >= 44)
+    }
 }

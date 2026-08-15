@@ -34,6 +34,10 @@ struct HomeView: View {
             .padding(.horizontal, AuralisSpacing.large)
             .padding(.top, AuralisSpacing.medium)
             .padding(.bottom, AuralisSpacing.large)
+            // iPad 宽屏：主内容限宽并居中（可读宽度），卡片仍是固定 140pt，
+            // 宽屏只是自然多显示几张，不拉伸成超宽卡片。
+            .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
+            .frame(maxWidth: .infinity)
         }
         .reportsBottomDockScroll()
         .background(ambientBackground)

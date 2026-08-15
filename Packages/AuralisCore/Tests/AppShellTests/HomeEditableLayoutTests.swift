@@ -1,4 +1,4 @@
-import AppShell
+@testable import AppShell
 import Application
 import Domain
 import Foundation
@@ -239,6 +239,8 @@ func homeSnapshotDataRules() async throws {
         username: "listener",
         password: "test-only-value"
     ))
+    // apply() 的首页货架派生是后台任务（首屏只等 catalog）；测试确定性等待其完成。
+    await model.awaitPendingApplyDerivations()
 
     // 最近播放：最近在前、去重（t2, t1）。
     #expect(model.homeRecentlyPlayedTracks.map(\.id) == [t2.id, t1.id])
@@ -307,6 +309,8 @@ func regenerateFavoriteRandomResamplesLocally() async throws {
         username: "listener",
         password: "test-only-value"
     ))
+    // apply() 的首页货架派生是后台任务（首屏只等 catalog）；测试确定性等待其完成。
+    await model.awaitPendingApplyDerivations()
     let firstSample = model.homeFavoriteRandomTracks
     model.regenerateFavoriteRandomMusic()
     let secondSample = model.homeFavoriteRandomTracks
