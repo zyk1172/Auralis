@@ -100,9 +100,9 @@ struct MacExpandedPlayerView: View {
                 }
             }
         }
-        // 原生 titlebar 只负责窗口宿主；展开页的三点与两侧胶囊由同一 SwiftUI
-        // 坐标系绘制，桥接仅隐藏原生副本并清空窗口标题。
-        .background(MacExpandedWindowChrome())
+        // 窗口 chrome（traffic lights / titlebar 透明 / titleVisibility）由
+        // MacMusicShell 的 MacWindowAttacher(isExpanded:) 唯一写入（P2-1），
+        // 展开页不再持有第二个 chrome writer。
         .task(id: trackGlobalID) {
             ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
             lyricsState = .loading
@@ -674,32 +674,4 @@ private struct MacExpandedPlayerPalette {
     }
 }
 
-/// Expanded Player 的窗口级 chrome 桥接。
-///
-/// 窗口 chrome 的唯一所有者在 `MacWindowChromeController`（Mac/Shell）：
-/// - 标题文本由 WindowGroup 管理（品牌名 `Auralis`），但 titleVisibility 永久 hidden，
-///   本桥接与 MacMusicShell 都不修改 window.title，也不做 KVO/Timer/轮询；
-/// - expanded：原生 traffic lights 隐藏、titlebar 透明；
-/// - collapse（MacMusicShell.restoreTrafficLights）：恢复 traffic lights 与不透明 titlebar，
-///   titleVisibility 继续保持 hidden。
-private struct MacExpandedWindowChrome: NSViewRepresentable {
-    func makeNSView(context: Context) -> ChromeHostView {
-        ChromeHostView()
-    }
-
-    func updateNSView(_ view: ChromeHostView, context: Context) {
-        // 幂等：仅在实际属性与目标不一致时才写入，正确状态零开销。
-        MacWindowChromeController.shared.setExpanded(true)
-    }
-
-    final class ChromeHostView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            MacWindowChromeController.shared.attach(window)
-            if window != nil {
-                MacWindowChromeController.shared.setExpanded(true)
-            }
-        }
-    }
-}
 #endif

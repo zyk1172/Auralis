@@ -122,6 +122,9 @@ public final class AuralisAppModel: ObservableObject {
     /// apply() 排队的后台派生任务（首页货架 / 随机音乐 / library-added 对齐）。
     /// 生产首帧不等待它；测试通过 `awaitPendingApplyDerivations()` 确定性等待。
     private var pendingApplyDerivations: Task<Void, Never>?
+    /// apply 派生代际计数：快速切换服务器/连续 apply 时，旧代际后台任务完成后
+    /// 必须被丢弃，避免旧服务器/旧目录的派生结果覆盖新状态（P1-3）。
+    private var applyGeneration: UInt64 = 0
     /// O(1) 的歌曲行元数据修订号。播放次数或首次入库日期改变时递增；播放进度 tick 不变。
     @Published public private(set) var libraryRowMetadataRevision: UInt64 = 0
     /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
@@ -2470,8 +2473,9 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 备份恢复：把服务器账号与登录凭据写回本地（不联网、不触发资料同步）。
     /// 仅登记账号信息，不会自动下载 / 同步音乐资料库。
-    public func restoreServerAccountFromBackup(_ account: ServerAccount, secret: String?) async {
-        try? await catalogCoordinator.store.upsertServer(account)
+    /// 关键写入失败必须抛出，禁止「界面显示恢复成功、实际凭据没写进去」（P2-4）。
+    public func restoreServerAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {
+        try await catalogCoordinator.store.upsertServer(account)
         await connector.restoreAccountFromBackup(account, secret: secret)
     }
 
@@ -2726,12 +2730,18 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 从 SQLite 权威状态刷新“不喜欢”内存镜像。
+    /// 读取失败视为“权威数据暂不可用”：保留现有内存状态并记录错误，
+    /// 绝不因为一次数据库读取失败就把用户的不喜欢列表清空（P1-4）。
     public func refreshDislikedState() async {
         guard let serverID = catalog.activeServerID else {
             dislikedTrackIDs = []
             return
         }
-        dislikedTrackIDs = (try? await catalogCoordinator.store.dislikedTrackIDs(serverID: serverID)) ?? []
+        do {
+            dislikedTrackIDs = try await catalogCoordinator.store.dislikedTrackIDs(serverID: serverID)
+        } catch {
+            AuralisLog.library.error("读取 dislikedTrackIDs 失败：\(error.localizedDescription)")
+        }
     }
 
     /// 设置/取消“不喜欢”。产品规则：
@@ -3416,35 +3426,65 @@ public final class AuralisAppModel: ObservableObject {
         // 那会停用 AVAudioSession 并清空 MPNowPlayingInfoCenter，导致后台播放被杀、
         // 控制中心丢失歌曲信息。正在播放时只更新目录，音频与系统信息保持不变。
 
-        // “不喜欢”是私人状态：每次目录就绪/服务器切换后从 SQLite 刷新镜像。
-        Task { await self.refreshDislikedState() }
-
-        // 首屏优化（RC）：library-added 对齐、随机音乐采样与首页货架快照都是 O(N)
-        // 派生工作，全部延后到 catalog 发布后的后台 MainActor 任务执行（保持原顺序），
-        // 让冷启动「SQLite 已读 → 首屏出现」之间不再被这几轮全库遍历阻塞。
-        let libraryAddedStartedAt = ContinuousClock.now
-        let randomTracks = tracks
-        let serverIDForAdded = result.account.id
-        let disliked = dislikedTrackIDs
+        // 派生任务（P1-2/3/4）：
+        // - 先刷新权威「不喜欢」状态（SQLite），再基于其派生一次，避免随机货架
+        //   使用旧服务器/空集合；
+        // - library-added 对齐与随机采样在 utility 后台任务计算（不再阻塞 MainActor）；
+        // - cancel + applyGeneration 代际守卫：连续 apply / 快速切服时，旧代际结果作废。
+        applyGeneration &+= 1
+        let generation = applyGeneration
+        let tracksSnapshot = tracks
+        let serverIDSnapshot = result.account.id
+        let trackerSnapshot = libraryAddedTracker
         let serverHashForTrace = serverHash
-        pendingApplyDerivations = Task { @MainActor [weak self] in
+        pendingApplyDerivations?.cancel()
+        pendingApplyDerivations = Task { [weak self] in
             guard let self else { return }
-            self.reconcileLibraryAddedDates(tracks: randomTracks, serverID: serverIDForAdded)
-            StartupPerformanceTrace.record(
-                .appApplyLibraryAdded,
-                since: libraryAddedStartedAt,
-                metadata: .init(entityCount: randomTracks.count, serverIDHash: serverHashForTrace)
-            )
-            // 随机音乐：从资料库随机采样，载入时定一次，避免界面频繁重排。
-            let homeSnapshotStartedAt = ContinuousClock.now
-            self.homeStore.regenerateRandom(from: randomTracks, dislikedTrackIDs: disliked)
-            // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
-            self.refreshHomeSnapshots()
-            StartupPerformanceTrace.record(
-                .appApplyHomeSnapshot,
-                since: homeSnapshotStartedAt,
-                metadata: .init(entityCount: randomTracks.count, serverIDHash: serverHashForTrace)
-            )
+            let libraryAddedStartedAt = ContinuousClock.now
+            // 1) 权威「不喜欢」状态先就绪（读取失败保留现有状态，见 refreshDislikedState）。
+            await self.refreshDislikedState()
+            guard !Task.isCancelled else { return }
+            let dislikedSnapshot = self.dislikedTrackIDs
+
+            // 2) 真正的后台计算（utility）：library-added 对齐 + 随机采样。
+            let derived = await Task.detached(priority: .utility) {
+                LibraryDerivedBuilder.build(
+                    tracks: tracksSnapshot,
+                    serverID: serverIDSnapshot,
+                    dislikedTrackIDs: dislikedSnapshot,
+                    tracker: trackerSnapshot
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+
+            // 3) 仅当代际仍为当前时才应用结果，否则静默丢弃（旧任务反扑防护）。
+            await MainActor.run {
+                // self 在上方已强捕获（guard let self），这里只做代际校验。
+                guard self.applyGeneration == generation else { return }
+                if derived.addedDatesChanged {
+                    self.libraryAddedTracker = derived.tracker
+                    self.libraryRowMetadataRevision &+= 1
+                    let stored = derived.tracker.encoded
+                    Task { @Sendable [defaults = self.defaults] in
+                        defaults.set(stored, forKey: Self.libraryAddedDefaultsKey)
+                    }
+                }
+                StartupPerformanceTrace.record(
+                    .appApplyLibraryAdded,
+                    since: libraryAddedStartedAt,
+                    metadata: .init(entityCount: tracksSnapshot.count, serverIDHash: serverHashForTrace)
+                )
+                // 随机音乐：使用后台已算好的采样（保持稳定，不二次 shuffle）。
+                let homeSnapshotStartedAt = ContinuousClock.now
+                self.homeStore.applyRandomSample(derived.randomTracks)
+                // 资料库就绪：刷新首页货架快照（收藏 / 最常听 / 最近播放 / 最近添加）。
+                self.refreshHomeSnapshots()
+                StartupPerformanceTrace.record(
+                    .appApplyHomeSnapshot,
+                    since: homeSnapshotStartedAt,
+                    metadata: .init(entityCount: tracksSnapshot.count, serverIDHash: serverHashForTrace)
+                )
+            }
         }
 
         // 仅在未播放时恢复「上次播放会话」（队列 + 当前曲目 + 进度），

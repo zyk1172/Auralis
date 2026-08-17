@@ -5,6 +5,8 @@ import SecurityKit
 public enum AIProviderError: Error, Equatable, Sendable {
     case missingCredential
     case invalidEndpoint
+    /// 接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（Bearer Key 会明文外发）。
+    case insecureEndpoint
     case transport(String)
     case httpStatus(Int)
     /// 模型因输出上限停止，function-call arguments 不能被当成完整工具调用。
@@ -28,7 +30,7 @@ public extension AIProviderError {
             return true
         case let .malformedResponse(_, retryable):
             return retryable
-        case .missingCredential, .invalidEndpoint, .outputTruncated:
+        case .missingCredential, .invalidEndpoint, .insecureEndpoint, .outputTruncated:
             return false
         }
     }
@@ -41,6 +43,8 @@ extension AIProviderError: LocalizedError {
             "尚未配置 API Key，请先在设置中填写。"
         case .invalidEndpoint:
             "接口地址无效，请检查 Base URL 与 API 路径。"
+        case .insecureEndpoint:
+            "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。"
         case .outputTruncated:
             "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。"
         case let .transport(message):
@@ -436,8 +440,51 @@ public struct OpenAICompatibleProvider: AIProvider {
         let path = configuration.apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let component = path.hasPrefix("/") ? String(path.dropFirst()) : path
         let url = configuration.baseURL.appendingPathComponent(component)
-        guard url.scheme != nil else { throw AIProviderError.invalidEndpoint }
+        guard let scheme = url.scheme?.lowercased() else { throw AIProviderError.invalidEndpoint }
+        try Self.validate(scheme: scheme, host: url.host)
         return url
+    }
+
+    /// AI 接口 URL 安全策略：
+    /// - https：允许（推荐，Ollama/LM Studio 等也支持 https 反代）；
+    /// - http：只允许本机环回或私有局域网（Ollama 127.0.0.1:11434、LM Studio localhost 等），
+    ///   防止 Bearer API Key 被明文发送到公网；
+    /// - 其它 scheme：拒绝。
+    private static func validate(scheme: String, host: String?) throws {
+        switch scheme {
+        case "https":
+            return
+        case "http":
+            guard let host, isPrivateOrLoopbackHost(host) else {
+                throw AIProviderError.insecureEndpoint
+            }
+        default:
+            throw AIProviderError.invalidEndpoint
+        }
+    }
+
+    /// 判断主机是否为本机环回或私有局域网（支持 localhost / 127.0.0.0/8 / 10.0.0.0/8 /
+    /// 172.16.0.0/12 / 192.168.0.0/16 / ::1）。
+    static func isPrivateOrLoopbackHost(_ host: String) -> Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed == "localhost" || trimmed.hasSuffix(".localhost") || trimmed == "::1" || trimmed == "[::1]" {
+            return true
+        }
+        let octets = trimmed.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        guard let first = octets.first, let firstOctet = Int(first) else { return false }
+        // 127.0.0.0/8 环回
+        if firstOctet == 127 { return true }
+        // 10.0.0.0/8
+        if firstOctet == 10 { return true }
+        // 172.16.0.0/12
+        if firstOctet == 172, octets.count >= 2, let second = Int(octets[1]), (16...31).contains(second) {
+            return true
+        }
+        // 192.168.0.0/16
+        if firstOctet == 192, octets.count >= 2, octets[1] == "168" {
+            return true
+        }
+        return false
     }
 
     private static let maxRetries = 3

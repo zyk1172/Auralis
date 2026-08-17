@@ -8,16 +8,24 @@ import ThemeEngine
 /// macOS 主窗口 Shell（Round-4）：
 /// 普通资料库 UI + 同一窗口内的 Expanded Player 覆盖（不新建 Full Player 窗口）。
 /// 展开/收起只改 presentation state，不改 navigation selection / path / scroll / search。
-/// 普通模式窗口 chrome 附着器：进入窗口即把窗口交给唯一所有者，确保
-/// titleVisibility 保持 hidden（不显示原生窗口标题），traffic lights 正常显示。
+/// 主窗口 chrome 的**唯一**状态 writer：
+/// - 进入窗口时只把窗口交给唯一所有者（attach）；
+/// - 展开状态完全由 `isExpanded` 驱动，updateNSView 幂等写入
+///   `setExpanded(isExpanded)`。
+/// 不再有第二个 writer（旧的 MacExpandedWindowChrome 已删除），
+/// 避免 SwiftUI 重挂载/窗口重排时普通与展开两个附着器互相写回。
 private struct MacWindowAttacher: NSViewRepresentable {
+    let isExpanded: Bool
+
     func makeNSView(context: Context) -> AttacherView { AttacherView() }
-    func updateNSView(_ view: AttacherView, context: Context) {}
+    func updateNSView(_ view: AttacherView, context: Context) {
+        MacWindowChromeController.shared.attach(view.window)
+        MacWindowChromeController.shared.setExpanded(isExpanded)
+    }
     final class AttacherView: NSView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             MacWindowChromeController.shared.attach(window)
-            MacWindowChromeController.shared.setExpanded(false)
         }
     }
 }
@@ -38,6 +46,8 @@ public struct MacMusicShell: View {
     @State private var newPlaylistName = ""
 
     @StateObject private var playerState = MacPlayerPresentationState()
+    /// 退出系统全屏的真实事件观察者（替换 0.35s 魔法延迟）。
+    @State private var fullscreenExitObserver: NSObjectProtocol?
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -53,7 +63,7 @@ public struct MacMusicShell: View {
 
     public var body: some View {
         attachLifecycle(attachModals(contents))
-            .background(MacWindowAttacher())
+            .background(MacWindowAttacher(isExpanded: playerState.isExpanded))
     }
 
     private var contents: some View {
@@ -184,9 +194,7 @@ public struct MacMusicShell: View {
             playerState.expand()
         }
         if fullscreen {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                enterSystemFullscreenIfNeeded()
-            }
+            enterSystemFullscreenIfNeeded()
         }
     }
 
@@ -194,30 +202,40 @@ public struct MacMusicShell: View {
         guard playerState.isExpanded else { return }
         MacUITrace.action("collapsePlayer")
         if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
-            window.toggleFullScreen(nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
-                    playerState.collapse()
-                }
-                DispatchQueue.main.async { restoreTrafficLights() }
-            }
+            collapseAfterLeavingFullscreen(window: window)
         } else {
             withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
                 playerState.collapse()
             }
-            DispatchQueue.main.async { restoreTrafficLights() }
         }
+    }
+
+    /// 退出系统全屏后收播放器：监听真正的 `didExitFullScreenNotification`，
+    /// 不依赖固定 0.35s 魔法延迟（Reduce Motion / 系统负载 / 多显示器都会改变动画时长）。
+    private func collapseAfterLeavingFullscreen(window: NSWindow) {
+        if let fullscreenExitObserver {
+            NotificationCenter.default.removeObserver(fullscreenExitObserver)
+        }
+        let presentation = playerState
+        let reduceMotion = self.reduceMotion
+        fullscreenExitObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didExitFullScreenNotification,
+            object: window,
+            queue: .main
+        ) { [weak presentation] _ in
+            Task { @MainActor in
+                guard let presentation else { return }
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
+                    presentation.collapse()
+                }
+            }
+        }
+        window.toggleFullScreen(nil)
     }
 
     private func enterSystemFullscreenIfNeeded() {
         guard let window = NSApp.keyWindow, !window.styleMask.contains(.fullScreen) else { return }
         window.toggleFullScreen(nil)
-    }
-
-    private func restoreTrafficLights() {
-        // 统一由窗口 chrome 唯一所有者处理：恢复原生 traffic lights 与不透明 titlebar，
-        // titleVisibility 始终保持 hidden（内容区用 navigationTitle 显示页面标题）。
-        MacWindowChromeController.shared.setExpanded(false)
     }
 
     // MARK: - 主内容（普通模式）

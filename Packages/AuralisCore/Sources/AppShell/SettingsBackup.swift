@@ -164,8 +164,8 @@ struct SettingsBackupSection: View {
         exportError = nil
         defer { isGenerating = false }
         do {
-            let servers = (try? await model.catalogCoordinator.store.listServers()) ?? []
-            let backup = await Self.makeBackupPayload(servers: servers)
+            let servers = try await model.catalogCoordinator.store.listServers()
+            let backup = try await Self.makeBackupPayload(servers: servers)
             let data = try service.encrypt(backup, password: exportPassword)
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("Auralis设置备份-\(Self.dateStamp()).auralisbackup")
@@ -238,7 +238,7 @@ struct SettingsBackupSection: View {
             }
             let data = try Data(contentsOf: url)
             let backup = try service.decrypt(data, password: importPassword)
-            await Self.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
+            try await Self.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
             restoreError = "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。"
         } catch {
             restoreError = error.localizedDescription
@@ -247,22 +247,37 @@ struct SettingsBackupSection: View {
 
     // MARK: 共享
 
+    /// 读取可选凭据：未配置（item 不存在）返回 nil；其它 Keychain 异常（不可用、
+    /// 数据损坏等）必须抛出，避免导出静默缺失凭据。
+    private static func retrieveOptionalSecret(
+        _ vault: KeychainCredentialVault,
+        id: CredentialID
+    ) async throws -> String? {
+        do {
+            return try await vault.retrieve(id: id)
+        } catch CredentialVaultError.missing {
+            return nil
+        }
+    }
+
     /// 收集备份内容：服务器账号 + 登录凭据（Keychain）、大模型配置 + API Key（Keychain）、
     /// 以及其他白名单设置（UserDefaults）。不触碰任何歌曲相关资料。
-    fileprivate static func makeBackupPayload(servers: [ServerAccount]) async -> SettingsBackup {
+    fileprivate static func makeBackupPayload(servers: [ServerAccount]) async throws -> SettingsBackup {
         let vault = KeychainCredentialVault()
         var backupServers: [BackupServer] = []
         for server in servers {
             var secret: String?
             if let reference = server.credentialReference {
-                secret = try? await vault.retrieve(id: CredentialID(rawValue: reference))
+                // 凭据读取异常（非「未配置」）不应静默产出「没有密码」的不完整备份（P2-4）；
+                // 未配置（item 不存在）仍视为可选字段为空，不阻塞导出。
+                secret = try await retrieveOptionalSecret(vault, id: CredentialID(rawValue: reference))
             }
             backupServers.append(BackupServer(account: server, secret: secret))
         }
         let ai = AIConnectionSettings()
-        let aiKey = try? await vault.retrieve(id: AIConnectionSettings.credentialID)
+        let aiKey = try await retrieveOptionalSecret(vault, id: AIConnectionSettings.credentialID)
         let download = MoviePilotSettings()
-        let downloadToken = try? await vault.retrieve(id: MoviePilotSettings.tokenCredentialID)
+        let downloadToken = try await retrieveOptionalSecret(vault, id: MoviePilotSettings.tokenCredentialID)
         return SettingsBackup(
             createdAt: Date(),
             servers: backupServers,
@@ -287,28 +302,29 @@ struct SettingsBackupSection: View {
         model: AuralisAppModel,
         themeStore: ThemeStore,
         vault: KeychainCredentialVault
-    ) async {
+    ) async throws {
         SettingsBackupService.writePreferences(backup.preferences, defaults: .standard)
         let defaults = UserDefaults.standard
         defaults.set(backup.ai.baseURL, forKey: AIConnectionSettings.Keys.baseURL)
         defaults.set(backup.ai.apiPath, forKey: AIConnectionSettings.Keys.apiPath)
         defaults.set(backup.ai.model, forKey: AIConnectionSettings.Keys.model)
 
+        // 关键凭据写入失败必须抛出，禁止「恢复完成」但重启后密码/API Key 全没（P2-4）。
         if let apiKey = backup.ai.apiKey, !apiKey.isEmpty {
-            try? await vault.store(apiKey, for: AIConnectionSettings.credentialID)
+            try await vault.store(apiKey, for: AIConnectionSettings.credentialID)
         }
         if let download = backup.musicDownload {
             defaults.set(download.baseURL, forKey: MoviePilotSettings.baseURLKey)
             defaults.set(download.externalBaseURL, forKey: MoviePilotSettings.externalBaseURLKey)
             if let token = download.token, !token.isEmpty {
-                try? await vault.store(token, for: MoviePilotSettings.tokenCredentialID)
+                try await vault.store(token, for: MoviePilotSettings.tokenCredentialID)
             }
         }
         if let themeID = backup.preferences["auralis.selected-theme"] {
             await MainActor.run { themeStore.select(id: themeID) }
         }
         for entry in backup.servers {
-            await model.restoreServerAccountFromBackup(entry.account, secret: entry.secret)
+            try await model.restoreServerAccountFromBackup(entry.account, secret: entry.secret)
         }
     }
 
@@ -383,8 +399,8 @@ struct BackupExportPage: View {
         exportError = nil
         defer { isGenerating = false }
         do {
-            let servers = (try? await model.catalogCoordinator.store.listServers()) ?? []
-            let backup = await SettingsBackupSection.makeBackupPayload(servers: servers)
+            let servers = try await model.catalogCoordinator.store.listServers()
+            let backup = try await SettingsBackupSection.makeBackupPayload(servers: servers)
             let data = try service.encrypt(backup, password: exportPassword)
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("Auralis设置备份-\(SettingsBackupSection.dateStamp()).auralisbackup")
@@ -491,7 +507,7 @@ struct BackupImportPage: View {
             }
             let data = try Data(contentsOf: url)
             let backup = try service.decrypt(data, password: importPassword)
-            await SettingsBackupSection.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
+            try await SettingsBackupSection.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
             restoreMessage = "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。"
         } catch {
             restoreError = error.localizedDescription

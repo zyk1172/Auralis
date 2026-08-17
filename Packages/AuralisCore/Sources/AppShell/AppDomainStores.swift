@@ -75,6 +75,12 @@ final class HomeStore: ObservableObject {
             .shuffled().prefix(18))
     }
 
+    /// 应用后台已算好的随机采样：直接写入采样结果，避免在主线程二次 filter/shuffle，
+    /// 也保证「换一批」之外的采样结果稳定（P1-2）。
+    func applyRandomSample(_ tracks: [Track]) {
+        randomTracks = tracks
+    }
+
     func regenerateFavoriteRandom(from tracks: [Track], dislikedTrackIDs: Set<GlobalID> = []) {
         favoriteRandom = Array(tracks
             .filter { track in

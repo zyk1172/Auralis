@@ -365,7 +365,7 @@ public enum AgentFailureClassifier {
         if error is AgentRunnerError { return .timeout }
         if let provider = error as? AIProviderError {
             switch provider {
-            case .missingCredential, .invalidEndpoint:
+            case .missingCredential, .invalidEndpoint, .insecureEndpoint:
                 return .invalidConfiguration
             case .outputTruncated:
                 // 由 V2 Runtime 缩批恢复；不能触发同一超大请求的通用网络重试。

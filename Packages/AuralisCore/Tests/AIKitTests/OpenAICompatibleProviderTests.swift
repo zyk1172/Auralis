@@ -326,4 +326,51 @@ struct OpenAICompatibleProviderTests {
         #expect(OpenAICompatibleProvider.streamUsage(from: #"{"choices":[{"delta":{"content":"x"}}]}"#) == nil)
         #expect(OpenAICompatibleProvider.responsesUsage(from: #"{"type":"response.output_text.delta","delta":"x"}"#) == nil)
     }
+
+    // MARK: - AI Endpoint HTTP 安全策略（P2-8）
+
+    @Test func endpointAllowsHTTPSPublic() throws {
+        let provider = makeProvider(baseURL: "https://api.example.com")
+        _ = try provider.endpoint()
+    }
+
+    @Test func endpointAllowsHTTPSWithPath() throws {
+        let provider = makeProvider(baseURL: "https://example.com/api", apiPath: "v1/chat/completions")
+        _ = try provider.endpoint()
+    }
+
+    @Test func endpointAllowsHTTPLoopback() throws {
+        for base in ["http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434"] {
+            let provider = makeProvider(baseURL: base)
+            _ = try provider.endpoint()
+        }
+    }
+
+    @Test func endpointAllowsHTTPPrivateLAN() throws {
+        for base in ["http://192.168.1.10:11434", "http://10.0.0.5:11434", "http://172.16.0.4:11434", "http://172.31.255.1:11434"] {
+            let provider = makeProvider(baseURL: base)
+            _ = try provider.endpoint()
+        }
+    }
+
+    @Test func endpointRejectsHTTPPublic() {
+        let provider = makeProvider(baseURL: "http://public.example.com")
+        #expect(throws: AIProviderError.insecureEndpoint) {
+            try provider.endpoint()
+        }
+    }
+
+    @Test func endpointRejectsPublicHostClassifier() {
+        #expect(OpenAICompatibleProvider.isPrivateOrLoopbackHost("public.example.com") == false)
+        #expect(OpenAICompatibleProvider.isPrivateOrLoopbackHost("8.8.8.8") == false)
+        #expect(OpenAICompatibleProvider.isPrivateOrLoopbackHost("172.32.0.1") == false)
+        #expect(OpenAICompatibleProvider.isPrivateOrLoopbackHost("192.169.0.1") == false)
+    }
+
+    @Test func endpointRejectsUnsupportedScheme() {
+        let provider = makeProvider(baseURL: "ftp://example.com")
+        #expect(throws: AIProviderError.invalidEndpoint) {
+            try provider.endpoint()
+        }
+    }
 }

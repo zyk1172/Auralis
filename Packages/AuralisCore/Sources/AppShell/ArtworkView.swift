@@ -75,7 +75,15 @@ struct ArtworkView: View {
         .frame(width: size, height: size)
         .accessibilityLabel("\(title) 封面")
         .task(id: requestIdentifier) {
-            guard let artworkStore else { return }
+            guard let artworkStore else {
+                // Release 不崩溃（占位图兜底），但 Debug 必须暴露依赖注入错误：
+                // 覆盖环境缺失前可能残留的旧封面，避免「显示错封面」静默发生。
+                image = nil
+                #if DEBUG
+                assertionFailure("ArtworkView rendered without ArtworkStore environment")
+                #endif
+                return
+            }
             image = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
             if image == nil {
                 image = await artworkStore.load(

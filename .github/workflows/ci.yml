@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-and-build:
+    name: Unit tests + builds
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: git diff --check
+        run: git diff --check
+
+      - name: Swift 6 tests (AuralisCore)
+        run: swift test --package-path Packages/AuralisCore
+
+      - name: Build macOS app
+        run: |
+          xcodebuild \
+            -project Auralis.xcodeproj \
+            -scheme AuralisMac \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build iOS app (generic)
+        run: |
+          xcodebuild \
+            -project Auralis.xcodeproj \
+            -scheme Auralis \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+  # AVFoundation 真实播放边界测试需要能驱动 AVPlayer 的环境，
+  # 与纯单元测试分开，避免不稳定环境阻塞主 CI。
+  macOS-av-integration:
+    name: macOS AV integration tests
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: AVFoundation playback integration tests
+        run: |
+          AURALIS_RUN_AV_TESTS=1 \
+            swift test \
+            --package-path Packages/AuralisCore \
+            --filter AVFoundationPlaybackEngine

@@ -172,7 +172,13 @@ struct NowPlayingArtworkGlowView: View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .task(id: requestIdentifier) {
-            guard let artworkStore else { return }
+            guard let artworkStore else {
+                artworkImage = nil
+                #if DEBUG
+                assertionFailure("NowPlayingArtworkGlowView rendered without ArtworkStore environment")
+                #endif
+                return
+            }
             artworkImage = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
             if artworkImage == nil {
                 artworkImage = await artworkStore.load(

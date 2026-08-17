@@ -168,11 +168,14 @@ struct SystemKeychainBackend: KeychainBackend {
         let status = SecItemAdd(item as CFDictionary, nil)
 #if os(macOS)
         // 某些 macOS 版本 / 无解锁会话环境下，kSecAttrAccessible + kSecAttrSynchronizable
-        // 组合会返回 errSecInteractionNotAllowed (-128)。去掉这两个属性重试一次，
-        // 让凭据仍能进入系统 Keychain（其它属性保持不变）。
+        // 组合会返回 errSecInteractionNotAllowed (-128)。分级降级：
+        // 第一次：完整策略（accessible + synchronizable=false）；
+        // 第二次：只移除同步标记，**保留 kSecAttrAccessible**（凭据保护策略不降级）；
+        // 仍失败则原样返回状态，由上层映射为 .unavailable，绝不静默写入无保护项目。
         if status == errSecInteractionNotAllowed {
             var fallback = attributes(for: request.query)
             fallback[kSecValueData] = request.valueData
+            fallback[kSecAttrAccessible] = accessibilityValue(for: request.accessibility)
             return SecItemAdd(fallback as CFDictionary, nil)
         }
 #endif

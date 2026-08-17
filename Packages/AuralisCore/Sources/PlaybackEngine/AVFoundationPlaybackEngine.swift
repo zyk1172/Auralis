@@ -67,10 +67,18 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         applyOutputVolume()
     }
 
-    /// 播放速度：直接驱动 AVPlayer.rate（0.5x–2.0x，夹取）。
+    /// 当前保存的播放速度（0.5x–2.0x，夹取）。
+    /// play()/resume() 每次新建或恢复 AVPlayer 时都会重新应用，避免
+    /// 冷启动首次播放 / 换曲 / 暂停恢复 / 失败重试后悄悄回到 1.0×。
+    private var playbackRate: Float = 1.0
+
+    /// 播放速度：保存夹取值，并在正在播放时直接驱动 AVPlayer.rate。
     public func setRate(_ rate: Float) {
         let clamped = min(max(rate, 0.5), 2.0)
-        avPlayer?.rate = clamped
+        playbackRate = clamped
+        if playbackState == .playing || playbackState == .buffering || playbackState == .stalled {
+            avPlayer?.rate = clamped
+        }
     }
 
     public func setTrackEndedHandler(_ handler: (@Sendable () -> Void)?) {
@@ -136,6 +144,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
         CrashLog.shared.log("调用 player.play()")
         player.play()
+        // 新建 AVPlayer 后立即应用保存的播放速度（setRate 可能发生在播放器创建前）。
+        if playbackRate != 1.0 {
+            player.rate = playbackRate
+        }
         if pauseRequestedDuringPreparing {
             // preparing 期间已请求暂停：起播后立即生效（F13）。
             player.pause()
@@ -195,6 +207,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         }
         cancelStallTimeout()
         avPlayer?.play()
+        // 暂停恢复后重新应用保存的播放速度。
+        if playbackRate != 1.0 {
+            avPlayer?.rate = playbackRate
+        }
         playbackState = .playing
     }
 
@@ -443,6 +459,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observeItemFailure(for: item)
         if let player = avPlayer { observeTimeControl(for: player) }
         observeDuration(for: item)
+        // AVQueuePlayer 在 item 切换时可能回到默认 rate：无缝推进完成后幂等重应用一次。
+        if playbackRate != 1.0 {
+            avPlayer?.rate = playbackRate
+        }
         playbackState = avPlayer?.timeControlStatus == .playing ? .playing : .buffering
         preparedTrackStartedHandler?(track)
     }

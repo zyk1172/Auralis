@@ -83,13 +83,16 @@ internal func performAudioSession(
     let session = AVAudioSession.sharedInstance()
     // allowAirPlay / allowBluetooth 让音频在隔空播放、蓝牙耳机等路由下也能持续，
     // 避免后台或外设切换时音频会话被系统挂起导致 App 被回收。
-    // 注意：不要用已废弃的 allowBluetoothHFP，搭配 .playback 分类会返回 OSStatus -50（paramErr）。
+    // 注意：不要用已废弃的 allowBluetoothHFP，它只能用于 .record / .playAndRecord，
+    // 搭配 .playback 分类会返回 OSStatus -50（paramErr）。
     if let category {
+        let requestedOptions = categoryOptions(for: category)
         do {
-            try session.setCategory(category, mode: mode, options: [.allowAirPlay, .allowBluetoothHFP])
+            try session.setCategory(category, mode: mode, options: requestedOptions)
         } catch {
-            // 个别系统/外设组合会拒绝某个选项（OSStatus -50 paramErr）：
+            // 极端系统/外设组合仍可能拒绝个别选项（OSStatus -50 paramErr）：
             // 降级为不带选项也要把分类配上，避免配置失败影响播放。
+            AuralisLog.playback.error("音频会话分类选项设置失败：\(error.localizedDescription)，降级为无选项")
             try session.setCategory(category, mode: mode)
         }
     }
@@ -155,6 +158,19 @@ internal func performAudioSession(
                 }
             }
         }
+    }
+}
+
+/// 每个分类允许的路由选项：allowBluetoothHFP 只能用于 .record / .playAndRecord，
+/// 搭配 .playback 会返回 OSStatus -50（paramErr）；其余分类不附加任何选项。
+private func categoryOptions(for category: AVAudioSession.Category) -> AVAudioSession.CategoryOptions {
+    switch category {
+    case .playback:
+        return [.allowAirPlay]
+    case .playAndRecord:
+        return [.allowAirPlay, .allowBluetoothHFP]
+    default:
+        return []
     }
 }
 

@@ -105,6 +105,8 @@ func syncCompletionRefreshesCatalogAndRecentlyAdded() async throws {
     await model.restorePersistedLibrary()
     // 等 apply() 触发的后台 registerAndSync（桩同步器 → 不产生同步完成事件）settle。
     await waitUntil { model.catalog.tracks.count == 2 }
+    // 首页「最近添加」等派生在后台任务中完成（P1-2）：确定性等待后再断言。
+    await model.awaitPendingApplyDerivations()
     #expect(model.homeRecentlyAdded30DaysTracks.count == 2)
 
     // 模拟此前已完成的全量同步：现有曲目在本地 SQLite 中。

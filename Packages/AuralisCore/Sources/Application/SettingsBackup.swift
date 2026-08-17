@@ -85,6 +85,7 @@ public enum SettingsBackupError: Error, LocalizedError, Equatable, Sendable {
     case wrongPassword
     case encodingFailed
     case invalidData
+    case keyDerivationFailed
 
     public var errorDescription: String? {
         switch self {
@@ -102,6 +103,8 @@ public enum SettingsBackupError: Error, LocalizedError, Equatable, Sendable {
             "生成备份文件失败，请重试。"
         case .invalidData:
             "备份文件内容无法解析。"
+        case .keyDerivationFailed:
+            "备份密钥派生失败，请重试。"
         }
     }
 }
@@ -124,7 +127,7 @@ public struct SettingsBackupService: Sendable {
         guard !password.isEmpty else { throw SettingsBackupError.emptyPassword }
         let payload = try JSONEncoder().encode(backup)
         let salt = Self.randomSalt()
-        let key = Self.deriveKey(password: password, salt: salt, version: Self.versionByte)
+        let key = try Self.deriveKey(password: password, salt: salt, version: Self.versionByte)
         let sealed = try AES.GCM.seal(payload, using: key)
         guard let combined = sealed.combined else { throw SettingsBackupError.encodingFailed }
 
@@ -155,17 +158,21 @@ public struct SettingsBackupService: Sendable {
         cursor = data.index(cursor, offsetBy: Self.saltLength)
         let combined = Data(data[cursor...])
 
-        let key = Self.deriveKey(password: password, salt: salt, version: version)
+        let key = try Self.deriveKey(password: password, salt: salt, version: version)
+        // 分开处理两类错误：认证失败 = 密码错误/数据被篡改；
+        // 解密成功但 JSON 无法解析 = 内容损坏，不再被吞成 wrongPassword（P2-6）。
+        let payload: Data
         do {
             let sealed = try AES.GCM.SealedBox(combined: combined)
-            let payload = try AES.GCM.open(sealed, using: key)
-            guard let backup = try? JSONDecoder().decode(SettingsBackup.self, from: payload) else {
-                throw SettingsBackupError.invalidData
-            }
-            return backup
+            payload = try AES.GCM.open(sealed, using: key)
         } catch {
             // 密码错误或数据被篡改：AES-GCM 认证失败。
             throw SettingsBackupError.wrongPassword
+        }
+        do {
+            return try JSONDecoder().decode(SettingsBackup.self, from: payload)
+        } catch {
+            throw SettingsBackupError.invalidData
         }
     }
 
@@ -249,7 +256,7 @@ public struct SettingsBackupService: Sendable {
     /// 故意取高轮数以对抗离线暴力破解：备份文件含服务器密码与 AI API Key。
     private static let pbkdf2Rounds: UInt32 = 600_000
 
-    private static func deriveKey(password: String, salt: Data, version: UInt8) -> SymmetricKey {
+    private static func deriveKey(password: String, salt: Data, version: UInt8) throws -> SymmetricKey {
         switch version {
         case 1:
             // 旧版格式：单次 HKDF（弱于口令拉伸，仅保留用于解密历史备份）。
@@ -260,11 +267,13 @@ public struct SettingsBackupService: Sendable {
                 outputByteCount: 32
             )
         default:
-            return pbkdf2Key(password: password, salt: salt)
+            return try pbkdf2Key(password: password, salt: salt)
         }
     }
 
-    private static func pbkdf2Key(password: String, salt: Data) -> SymmetricKey {
+    /// PBKDF2 派生失败是用户主动操作的业务错误，不应 precondition 杀掉整个 App：
+    /// 底层 CommonCrypto 异常时抛出 `keyDerivationFailed`，由调用方展示可恢复错误。
+    private static func pbkdf2Key(password: String, salt: Data) throws -> SymmetricKey {
         let passwordData = Data(password.utf8)
         let keyLength = 32
         var derived = Data(count: keyLength)
@@ -290,7 +299,9 @@ public struct SettingsBackupService: Sendable {
                 }
             }
         }
-        precondition(status == kCCSuccess, "PBKDF2 派生失败（状态 \(status)）")
+        guard status == kCCSuccess else {
+            throw SettingsBackupError.keyDerivationFailed
+        }
         return SymmetricKey(data: derived)
     }
 }
