@@ -19,13 +19,28 @@ private struct MacWindowAttacher: NSViewRepresentable {
 
     func makeNSView(context: Context) -> AttacherView { AttacherView() }
     func updateNSView(_ view: AttacherView, context: Context) {
-        view.controller.attach(view.window)
-        view.controller.setExpanded(isExpanded)
+        let controller = view.controller
+        let window = view.window
+        let expanded = isExpanded
+        // 不要在 SwiftUI 视图更新事务内同步修改 NSWindow 属性：
+        // updateNSView 属于视图更新事务，直接写 titlebar / traffic lights 会让
+        // SwiftUI 窗口系统在事务内发布状态变化，触发
+        // "Publishing changes from within view updates is not allowed" 断言。
+        // 推迟到下一轮 MainActor 执行（视觉无差异，apply 幂等）。
+        Task { @MainActor in
+            controller.attach(window)
+            controller.setExpanded(expanded)
+        }
     }
     final class AttacherView: NSView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            controller.attach(window)
+            let controller = controller
+            let window = window
+            // 同上：NSView 挂载也发生在 SwiftUI 更新事务内，推迟窗口 chrome 写入。
+            Task { @MainActor in
+                controller.attach(window)
+            }
         }
         let controller = MacWindowChromeController()
     }
