@@ -18,6 +18,8 @@ public actor ArtworkDiskCache {
     /// 最近访问时间，用于 LRU。
     private var accessedAt: [String: Date] = [:]
     private var didLoadIndex = false
+    /// 内存索引已知总字节数：正常新增/读取时 O(1) 维护，容量检查不再每次 O(N) 求和。
+    private var knownTotalBytes: Int64 = 0
     /// 后台索引维护任务（首次 store 后触发一次），不占用前台 actor 太久。
     private var maintenanceTask: Task<Void, Never>?
 
@@ -44,7 +46,10 @@ public actor ArtworkDiskCache {
         let name = Self.fileName(for: key)
         let url = directory.appendingPathComponent(name)
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
-        sizes[name] = Int64(data.count)
+        let newSize = Int64(data.count)
+        let oldSize = sizes[name] ?? 0
+        sizes[name] = newSize
+        knownTotalBytes += newSize - oldSize
         accessedAt[name] = Date()
         return data
     }
@@ -59,7 +64,10 @@ public actor ArtworkDiskCache {
         let name = Self.fileName(for: key)
         let url = directory.appendingPathComponent(name)
         guard (try? data.write(to: url, options: .atomic)) != nil else { return }
-        sizes[name] = Int64(data.count)
+        let newSize = Int64(data.count)
+        let oldSize = sizes[name] ?? 0
+        sizes[name] = newSize
+        knownTotalBytes += newSize - oldSize
         accessedAt[name] = Date()
         scheduleMaintenanceIfNeeded()
     }
@@ -86,6 +94,7 @@ public actor ArtworkDiskCache {
         }
         sizes = [:]
         accessedAt = [:]
+        knownTotalBytes = 0
         didLoadIndex = true
     }
 
@@ -106,6 +115,7 @@ public actor ArtworkDiskCache {
             sizes[name] = Int64(values?.fileSize ?? 0)
             accessedAt[name] = values?.contentAccessDate ?? values?.contentModificationDate ?? .distantPast
         }
+        knownTotalBytes = sizes.values.reduce(0, +)
     }
 
     /// store 后排一个后台维护任务。
@@ -174,19 +184,23 @@ public actor ArtworkDiskCache {
             sizes[name] = sizes[name] ?? entry.fileSize
             accessedAt[name] = max(accessedAt[name] ?? .distantPast, entry.accessDate)
         }
+        knownTotalBytes = sizes.values.reduce(0, +)
         evictIfNeeded()
     }
 
     /// 超过预算时按最近访问时间从旧到新删除，直到降到预算的 80%。
+    /// 容量检查用 O(1) 的 knownTotalBytes；只有真正超预算时才排序做 LRU。
     private func evictIfNeeded() {
-        var total = sizes.values.reduce(0, +)
+        var total = knownTotalBytes
         guard total > budget else { return }
         let target = Int64(Double(budget) * 0.8)
         let ordered = sizes.keys.sorted { (accessedAt[$0] ?? .distantPast) < (accessedAt[$1] ?? .distantPast) }
         for name in ordered {
             guard total > target else { break }
             try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
-            total -= sizes[name] ?? 0
+            let removed = sizes[name] ?? 0
+            total -= removed
+            knownTotalBytes -= removed
             sizes[name] = nil
             accessedAt[name] = nil
         }

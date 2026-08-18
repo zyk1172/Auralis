@@ -33,6 +33,9 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
 
     @Published public private(set) var mode: Mode = .main
     private var transition: Transition = .idle
+    /// 动画进行中收到的反向请求（如 toMini 动画期间用户点 Dock 要回 Main）：
+    /// 动画完成后接力执行，不吞掉用户最后一次操作。
+    private var requestedModeAfterTransition: Mode?
 
     /// Main ↔ Mini 窗口切换动画时长。只做轻微 frame 缩放 + alpha 交叉，
     /// 不把 1280×820 主窗口真正一路 resize 到 Mini 尺寸，避免复杂 UI 重排。
@@ -81,9 +84,16 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
             return
         }
 
-        // 切换动画进行中：忽略重复触发，避免动画重叠。
-        guard transition == .idle else { return }
+        // 切换动画进行中：记录待执行的模式，动画完成后接力，不吞用户最后一次操作。
+        guard transition == .idle else {
+            requestedModeAfterTransition = .mini
+            return
+        }
 
+        // 请求一开始就进入 transition：避免「pending 置位但 transition 仍 idle」
+        // 的空窗期——Mini Window 创建期间用户点 Dock 恢复时，旧 Mini 请求
+        // 可能在注册完成后反扑、重新隐藏主窗口。
+        transition = .toMini
         pendingMiniPresentation = true
         // 第一次使用 MiniPlayer 时先要求 SwiftUI 创建 Scene。
         openMiniWindow()
@@ -94,7 +104,11 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
     }
 
     private func completeMiniPresentation() {
-        guard let mainWindow,
+        // 只有仍处于「请求中」才继续：restoreMainPlayer 取消 pending 后，
+        // 迟到的 Mini 注册不应再自动完成切换（防止旧请求反扑）。
+        guard transition == .toMini,
+              pendingMiniPresentation,
+              let mainWindow,
               let miniWindow
         else {
             return
@@ -110,7 +124,6 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
             mainWindow.orderOut(nil)
         } else {
             // 动画期间 transition 非 idle，阻止新的切换；完成后落 mode + idle。
-            transition = .toMini
             animateMainToMini(main: mainWindow, mini: miniWindow)
         }
 
@@ -129,6 +142,21 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
             return false
         }
 
+        // Mini 还在等待 Window 创建（transition == .toMini 且 pending）：
+        // 用户现在明确要求 Main，取消尚未真正执行的 Mini 请求，防止
+        // 迟到的 Mini 注册再反扑隐藏主窗口。
+        if transition == .toMini,
+           pendingMiniPresentation {
+            pendingMiniPresentation = false
+            transition = .idle
+            mode = .main
+            mainWindow.makeKeyAndOrderFront(nil)
+            miniWindow?.orderOut(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            if expandPlayer { revealNowPlaying() }
+            return true
+        }
+
         // 已在 Main 且无进行中切换：直接置前即可（幂等，例如 Mini 曾打开过
         // 但用户已回到主窗口后点击 Dock，不应再跑一次 Mini → Main 动画）。
         if mode == .main,
@@ -139,8 +167,11 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
             return true
         }
 
-        // 切换动画进行中：视为已处理，不排队新的切换。
-        guard transition == .idle else { return true }
+        // 切换动画进行中：记录待执行的模式，动画完成后接力，不吞用户最后一次操作。
+        guard transition == .idle else {
+            requestedModeAfterTransition = .main
+            return true
+        }
 
         if let miniWindow, !reduceMotionEnabled {
             transition = .toMain
@@ -162,6 +193,19 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
             name: MacCommand.revealNowPlaying,
             object: nil
         )
+    }
+
+    /// 动画完成后的接力：执行动画期间记录的反向请求（.main → 回主窗口，
+    /// .mini → 再去迷你播放器），保证用户最后一次操作不被吞掉。
+    private func settleRequestedMode() {
+        guard let requested = requestedModeAfterTransition else { return }
+        requestedModeAfterTransition = nil
+        switch requested {
+        case .main:
+            _ = restoreMainPlayer(expandPlayer: false)
+        case .mini:
+            requestMiniPlayer(openMiniWindow: { miniWindow?.makeKeyAndOrderFront(nil) })
+        }
     }
 
     // MARK: - 窗口切换动画
@@ -200,6 +244,7 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
                 // coordinator 是 shared 单例，强捕获无生命周期风险。
                 self.mode = .mini
                 self.transition = .idle
+                self.settleRequestedMode()
             }
         }
     }
@@ -237,6 +282,7 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
                 // coordinator 是 shared 单例，强捕获无生命周期风险。
                 self.mode = .main
                 self.transition = .idle
+                self.settleRequestedMode()
             }
         }
     }

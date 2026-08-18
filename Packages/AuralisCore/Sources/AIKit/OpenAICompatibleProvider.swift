@@ -440,10 +440,13 @@ public struct OpenAICompatibleProvider: AIProvider {
     func endpoint() throws -> URL {
         var path = configuration.apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // baseURL 路径以 /v1 结尾（含 /api/v1 之类）时，去掉 apiPath 开头的 /v1，
-        // 避免 https://host/v1/v1/chat/completions 这类地址。
+        // baseURL 路径以 v1 结尾（覆盖 /v1、/v1/、/api/v1、/api/v1/、/V1/ 等）时，
+        // 去掉 apiPath 开头的 /v1，避免 https://host/v1/v1/chat/completions 这类地址。
         let basePath = configuration.baseURL.path
-        if basePath == "/v1" || basePath.hasSuffix("/v1") {
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .lowercased()
+        let baseEndsInV1 = basePath == "v1" || basePath.hasSuffix("/v1")
+        if baseEndsInV1 {
             let lowered = path.lowercased()
             if lowered.hasPrefix("/v1/") {
                 path = String(path.dropFirst(4)) // 去掉 "/v1"

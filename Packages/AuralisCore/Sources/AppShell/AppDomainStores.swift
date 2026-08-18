@@ -256,7 +256,9 @@ final class DownloadStore: ObservableObject {
     @Published private(set) var downloadedTrackIDs: Set<GlobalID> = []
     /// 已下载歌曲集合本身的内容修订号：只在集合 insert/remove 成功时递增。
     /// 下载进度/records 等高频变化**不**递增，避免下载中反复重建歌曲 Table。
-    @Published private(set) var downloadedContentRevision: UInt64 = 0
+    /// 不需要 @Published：downloadedTrackIDs 本身已 @Published，集合变化已触发
+    /// UI invalidation；这里只给 MacSongTable 提供新的 O(1) revision 数字。
+    private(set) var downloadedContentRevision: UInt64 = 0
     @Published private(set) var downloadingTrackIDs: Set<GlobalID> = []
     @Published private(set) var progress: [GlobalID: Double] = [:]
     @Published private(set) var records: [GlobalID: DownloadTaskInfo] = [:]
@@ -446,12 +448,16 @@ final class DownloadStore: ObservableObject {
     }
 
     func clearVisibleState() {
+        let hadDownloadedContent = !downloadedTrackIDs.isEmpty
         downloadedTrackIDs = []
         downloadingTrackIDs = []
         progress = [:]
         records = [:]
         cachedEntries = [:]
         requestTokens.removeAll()
+        if hadDownloadedContent {
+            downloadedContentRevision &+= 1
+        }
     }
 
     func handleBackgroundEvents(identifier: String, completion: @escaping () -> Void) {
