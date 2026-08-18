@@ -14,7 +14,10 @@ struct AuralisMacApp: App {
     @StateObject private var settingsRouter = MacSettingsRouter()
 
     var body: some Scene {
-        WindowGroup("Auralis") {
+        // 唯一主窗口：Auralis 是「主界面 ↔ MiniPlayer」单主窗口模型。
+        // WindowGroup 允许多个主窗口，会与 MacWindowVisibilityCoordinator 的
+        // 单例 mainWindow 冲突（可能隐藏/恢复错误的窗口）。
+        Window("Auralis", id: MacWindowID.main) {
             MacMusicShell(model: .shared, themeStore: themeStore, settingsRouter: settingsRouter)
                 .frame(minWidth: 900, minHeight: 600)
         }

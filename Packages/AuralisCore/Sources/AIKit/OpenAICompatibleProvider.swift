@@ -425,7 +425,8 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// （覆盖网关带 `/api/v1/responses` 之类前缀路径的偏差）时走 Responses 格式；
     /// 否则保持 Chat Completions。
     static func usesResponsesAPI(apiPath: String) -> Bool {
-        let path = apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        // lowercased：兼容 /V1/RESPONSES 等历史/自定义大小写配置。
+        let path = apiPath.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return path.hasSuffix("/responses") || path.contains("/v1/responses")
     }
 
@@ -434,29 +435,36 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// 由 baseURL + apiPath 拼出完整接口地址。
-    /// 用 `appendingPathComponent` 处理结尾斜杠，避免产出 `//v1/...` 这类
-    /// 某些网关会拒绝（返回 503）的重复斜杠；同时消除 baseURL 已含 `/v1`
-    /// 与 apiPath 也以 `/v1` 开头时拼出的 `/v1/v1/...` 重叠段。
+    /// 两端斜杠统一 trim 后按 path segment 处理，覆盖：
+    /// - `/v1/chat/completions` 与 `v1/chat/completions`（无前导斜杠的历史配置）；
+    /// - baseURL 已含 `/v1`、`/v1/`、`/api/v1/`、`/V1/` 时，消除拼出的 `/v1/v1/...` 重叠段；
+    /// - 结尾斜杠与重复斜杠（某些网关对 `//` 返回 503）。
     func endpoint() throws -> URL {
-        var path = configuration.apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        var component = configuration.apiPath
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
         // baseURL 路径以 v1 结尾（覆盖 /v1、/v1/、/api/v1、/api/v1/、/V1/ 等）时，
-        // 去掉 apiPath 开头的 /v1，避免 https://host/v1/v1/chat/completions 这类地址。
+        // 去掉 apiPath 开头的 v1，避免 https://host/v1/v1/chat/completions 这类地址。
         let basePath = configuration.baseURL.path
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .lowercased()
         let baseEndsInV1 = basePath == "v1" || basePath.hasSuffix("/v1")
         if baseEndsInV1 {
-            let lowered = path.lowercased()
-            if lowered.hasPrefix("/v1/") {
-                path = String(path.dropFirst(4)) // 去掉 "/v1"
-            } else if lowered == "/v1" {
-                path = ""
+            let lowered = component.lowercased()
+            if lowered == "v1" {
+                component = ""
+            } else if lowered.hasPrefix("v1/") {
+                component.removeFirst(3) // 去掉 "v1/"
             }
         }
 
-        let component = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        let url = configuration.baseURL.appendingPathComponent(component)
+        let url: URL
+        if component.isEmpty {
+            url = configuration.baseURL
+        } else {
+            url = configuration.baseURL.appendingPathComponent(component)
+        }
         guard let scheme = url.scheme?.lowercased() else { throw AIProviderError.invalidEndpoint }
         try Self.validate(scheme: scheme, host: url.host)
         return url

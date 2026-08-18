@@ -77,7 +77,7 @@ public actor ArtworkDiskCache {
     /// 缓存总大小（字节），供设置页展示。
     public func totalBytes() -> Int64 {
         loadIndexIfNeeded()
-        return sizes.values.reduce(0, +)
+        return knownTotalBytes
     }
 
     /// 已缓存的封面文件数量。
@@ -191,18 +191,21 @@ public actor ArtworkDiskCache {
     /// 超过预算时按最近访问时间从旧到新删除，直到降到预算的 80%。
     /// 容量检查用 O(1) 的 knownTotalBytes；只有真正超预算时才排序做 LRU。
     private func evictIfNeeded() {
-        var total = knownTotalBytes
-        guard total > budget else { return }
+        guard knownTotalBytes > budget else { return }
         let target = Int64(Double(budget) * 0.8)
         let ordered = sizes.keys.sorted { (accessedAt[$0] ?? .distantPast) < (accessedAt[$1] ?? .distantPast) }
         for name in ordered {
-            guard total > target else { break }
-            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
-            let removed = sizes[name] ?? 0
-            total -= removed
-            knownTotalBytes -= removed
-            sizes[name] = nil
-            accessedAt[name] = nil
+            guard knownTotalBytes > target else { break }
+            do {
+                try FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+                let removed = sizes[name] ?? 0
+                knownTotalBytes -= removed
+                sizes[name] = nil
+                accessedAt[name] = nil
+            } catch {
+                // 删除失败：保留索引与容量，不得假装文件已删除。
+                continue
+            }
         }
     }
 

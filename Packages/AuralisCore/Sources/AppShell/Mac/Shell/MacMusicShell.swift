@@ -642,8 +642,11 @@ public struct MacMusicShell: View {
     }
 }
 
-/// 独立窗口 ID（仅 MiniPlayer）。
+/// App 窗口 ID：主窗口为唯一 Window，MiniPlayer 为独立窗口。
 public enum MacWindowID {
+    /// 唯一主窗口。Auralis 是「主界面 ↔ MiniPlayer」单主窗口模型，
+    /// 不用 WindowGroup（避免出现多个主窗口与单例 coordinator 矛盾）。
+    public static let main = "auralis-main"
     public static let miniPlayer = "auralis.miniplayer"
 }
 

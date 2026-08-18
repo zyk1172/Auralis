@@ -33,9 +33,16 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
 
     @Published public private(set) var mode: Mode = .main
     private var transition: Transition = .idle
+
     /// 动画进行中收到的反向请求（如 toMini 动画期间用户点 Dock 要回 Main）：
     /// 动画完成后接力执行，不吞掉用户最后一次操作。
-    private var requestedModeAfterTransition: Mode?
+    private struct PendingModeRequest {
+        let mode: Mode
+        /// Mini 内「返回正在播放」时 expandPlayer == true：动画排队期间也要保留
+        /// 这个意图，动画结束后正确展开播放页，而不是退回普通主窗口。
+        let expandPlayer: Bool
+    }
+    private var requestAfterTransition: PendingModeRequest?
 
     /// Main ↔ Mini 窗口切换动画时长。只做轻微 frame 缩放 + alpha 交叉，
     /// 不把 1280×820 主窗口真正一路 resize 到 Mini 尺寸，避免复杂 UI 重排。
@@ -86,7 +93,7 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
 
         // 切换动画进行中：记录待执行的模式，动画完成后接力，不吞用户最后一次操作。
         guard transition == .idle else {
-            requestedModeAfterTransition = .mini
+            requestAfterTransition = PendingModeRequest(mode: .mini, expandPlayer: false)
             return
         }
 
@@ -148,6 +155,8 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
         if transition == .toMini,
            pendingMiniPresentation {
             pendingMiniPresentation = false
+            // 旧 Mini 请求已取消：顺带清掉排队中的反向意图。
+            requestAfterTransition = nil
             transition = .idle
             mode = .main
             mainWindow.makeKeyAndOrderFront(nil)
@@ -167,9 +176,9 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
             return true
         }
 
-        // 切换动画进行中：记录待执行的模式，动画完成后接力，不吞用户最后一次操作。
+        // 切换动画进行中：记录待执行的模式与 expandPlayer 意图，动画完成后接力。
         guard transition == .idle else {
-            requestedModeAfterTransition = .main
+            requestAfterTransition = PendingModeRequest(mode: .main, expandPlayer: expandPlayer)
             return true
         }
 
@@ -196,13 +205,14 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
     }
 
     /// 动画完成后的接力：执行动画期间记录的反向请求（.main → 回主窗口，
-    /// .mini → 再去迷你播放器），保证用户最后一次操作不被吞掉。
+    /// .mini → 再去迷你播放器），保证用户最后一次操作（含 expandPlayer 意图）
+    /// 不被吞掉。
     private func settleRequestedMode() {
-        guard let requested = requestedModeAfterTransition else { return }
-        requestedModeAfterTransition = nil
-        switch requested {
+        guard let request = requestAfterTransition else { return }
+        requestAfterTransition = nil
+        switch request.mode {
         case .main:
-            _ = restoreMainPlayer(expandPlayer: false)
+            _ = restoreMainPlayer(expandPlayer: request.expandPlayer)
         case .mini:
             requestMiniPlayer(openMiniWindow: { miniWindow?.makeKeyAndOrderFront(nil) })
         }
