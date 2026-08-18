@@ -127,11 +127,55 @@ public struct MacMiniPlayerView: View {
                 .buttonStyle(.plain)
                 .help(hideArtwork ? "显示封面" : "隐藏封面")
                 .accessibilityLabel(hideArtwork ? "显示封面" : "隐藏封面")
+
+                Button {
+                    MacWindowVisibilityCoordinator.shared.restoreMainPlayer(expandPlayer: true)
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.plain)
+                .help("返回正在播放")
+                .accessibilityLabel("返回正在播放")
             }
         }
         .padding(16)
         .frame(width: hideArtwork ? MacUIVisualTokens.MiniPlayer.compactWindowWidth : MacUIVisualTokens.MiniPlayer.windowWidth, height: hideArtwork ? MacUIVisualTokens.MiniPlayer.compactWindowHeight : MacUIVisualTokens.MiniPlayer.windowHeight)
         .background(.regularMaterial)
+        .background(MacMiniWindowAttacher(coordinator: .shared))
+    }
+}
+
+/// MiniPlayer 窗口注册：把窗口引用交给全局窗口协调器，
+/// 使「主窗口 ↔ 迷你播放器」双向切换与 Dock 恢复可以工作。
+private struct MacMiniWindowAttacher: NSViewRepresentable {
+    let coordinator: MacWindowVisibilityCoordinator
+
+    func makeNSView(context: Context) -> NSView {
+        RegistrationView(coordinator: coordinator)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class RegistrationView: NSView {
+        let coordinator: MacWindowVisibilityCoordinator
+
+        init(coordinator: MacWindowVisibilityCoordinator) {
+            self.coordinator = coordinator
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let currentWindow = window
+            // NSView 挂载发生在 SwiftUI 更新事务内，推迟到下一轮 MainActor 执行。
+            Task { @MainActor in
+                coordinator.registerMiniWindow(currentWindow)
+            }
+        }
     }
 }
 // MARK: - 窗口场景包装（注入共享环境）

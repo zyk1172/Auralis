@@ -67,7 +67,6 @@ struct MacArtistView: View {
                             ForEach(artistAlbums, id: \.macGlobalID) { album in
                                 MacAlbumTile(
                                     album: album,
-                                    model: model,
                                     theme: theme,
                                     size: 150,
                                     onOpen: { onNavigate(.album(album)) },

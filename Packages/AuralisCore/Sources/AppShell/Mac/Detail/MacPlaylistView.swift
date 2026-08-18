@@ -51,7 +51,12 @@ struct MacPlaylistView: View {
 
     private var hero: some View {
         HStack(alignment: .center, spacing: 24) {
-            MacPlaylistArtwork(playlist: playlist, model: model, theme: theme, size: 200)
+            MacPlaylistArtwork(
+                playlist: playlist,
+                artworkKeys: MacPlaylistArtwork.artworkKeys(playlist: playlist, model: model),
+                theme: theme,
+                size: 200
+            )
                 .frame(width: 200, height: 200)
             VStack(alignment: .leading, spacing: 10) {
                 Text(playlist.name)

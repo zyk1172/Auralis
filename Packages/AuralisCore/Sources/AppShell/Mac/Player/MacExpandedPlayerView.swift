@@ -20,8 +20,6 @@ struct MacExpandedPlayerView: View {
     @State private var lyricsState: MacLyricsPresentationState = .loading
     @State private var isScrubbing = false
     @State private var scrubValue: TimeInterval = 0
-    /// 让背景、封面和控制器作为一个 presentation layer 同步进入，避免封面先闪现。
-    @State private var isPresentationVisible = false
 
     @ObservedObject private var playbackStore: PlaybackStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -90,15 +88,8 @@ struct MacExpandedPlayerView: View {
             .overlay(alignment: .topTrailing) { topRightVolumeGlass }
             .overlay(alignment: .bottomTrailing) { bottomRightContextGlass }
             .animation(.easeInOut(duration: 0.25), value: context)
-            // 整个 Expanded Player 作为一层淡入并向上就位；ArtworkView 的异步图片
-            // 也会受同一个 opacity/offset 约束，不会比背景与控制器先出现。
-            .opacity(isPresentationVisible ? 1 : 0)
-            .offset(y: isPresentationVisible ? 0 : 46)
-            .onAppear {
-                withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .easeOut(duration: 0.30)) {
-                    isPresentationVisible = true
-                }
-            }
+            // 页面出现/消失由 MacMusicShell 统一管理（scale + opacity transition），
+            // 这里只负责内部控件动画（封面播放/暂停、Lyrics/Queue context 切换、按钮 hover）。
         }
         // 窗口 chrome（traffic lights / titlebar 透明 / titleVisibility）由
         // MacMusicShell 的 MacWindowAttacher(isExpanded:) 唯一写入（P2-1），

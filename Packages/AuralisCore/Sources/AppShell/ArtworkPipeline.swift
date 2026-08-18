@@ -54,7 +54,10 @@ actor ArtworkPipeline {
                 return ArtworkPipelinePayload(decoded: decoded, encodedData: data)
             }
 
-            await limiter.acquire()
+            guard await limiter.acquire() else {
+                // 排队期间被取消（封面已滚出屏幕）——直接让路。
+                return nil
+            }
             guard !Task.isCancelled else {
                 await limiter.release()
                 return nil
@@ -70,8 +73,12 @@ actor ArtworkPipeline {
                   let decoded = await decoder.decode(data, maxPixelSize: targetPixelSize)
             else { return nil }
 
-            await diskCache.store(data, for: cacheKey)
-            return ArtworkPipelinePayload(decoded: decoded, encodedData: data)
+            // 磁盘写入不阻塞首屏显示：先让用户看到图片，再慢慢落盘。
+            let payload = ArtworkPipelinePayload(decoded: decoded, encodedData: data)
+            Task(priority: .utility) { [diskCache] in
+                await diskCache.store(data, for: cacheKey)
+            }
+            return payload
         }
 
         inFlight[cacheKey] = task
@@ -87,22 +94,39 @@ actor ArtworkPipeline {
 }
 
 /// 无轮询的协作式并发门，避免服务器离线时堆出几十个封面请求。
+///
+/// cancellation-aware：等待队列按 UUID 登记，任务被取消（封面滚出屏幕、
+/// SwiftUI task 已 cancel）时立即让出队列，不再排在那些无意义请求后面，
+/// 让当前屏幕上的封面真正插队。
 private actor ArtworkRequestLimiter {
     private let limit: Int
     private var active = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiterOrder: [UUID] = []
+    private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
     init(limit: Int) {
         self.limit = max(1, limit)
     }
 
-    func acquire() async {
+    /// 获取一个并发名额。返回 `false` 表示排队期间任务已被取消。
+    func acquire() async -> Bool {
         if active < limit {
             active += 1
-            return
+            return true
         }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+        let id = UUID()
+        waiterOrder.append(id)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                waiters[id] = continuation
+                // 防御：若取消在注册前已把 id 移出队列，直接恢复 false。
+                if !waiterOrder.contains(id) {
+                    waiters.removeValue(forKey: id)
+                    continuation.resume(returning: false)
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
         }
     }
 
@@ -110,7 +134,17 @@ private actor ArtworkRequestLimiter {
         if waiters.isEmpty {
             active = max(0, active - 1)
         } else {
-            waiters.removeFirst().resume()
+            let id = waiterOrder.removeFirst()
+            waiters.removeValue(forKey: id)?.resume(returning: true)
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        if let index = waiterOrder.firstIndex(of: id) {
+            waiterOrder.remove(at: index)
+        }
+        if let continuation = waiters.removeValue(forKey: id) {
+            continuation.resume(returning: false)
         }
     }
 }

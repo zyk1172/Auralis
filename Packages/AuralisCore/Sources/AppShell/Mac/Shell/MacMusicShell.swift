@@ -16,12 +16,14 @@ import ThemeEngine
 /// 避免 SwiftUI 重挂载/窗口重排时普通与展开两个附着器互相写回。
 private struct MacWindowAttacher: NSViewRepresentable {
     let isExpanded: Bool
+    let windowCoordinator: MacWindowVisibilityCoordinator
 
     func makeNSView(context: Context) -> AttacherView { AttacherView() }
     func updateNSView(_ view: AttacherView, context: Context) {
         let controller = view.controller
         let window = view.window
         let expanded = isExpanded
+        let coordinator = windowCoordinator
         // 不要在 SwiftUI 视图更新事务内同步修改 NSWindow 属性：
         // updateNSView 属于视图更新事务，直接写 titlebar / traffic lights 会让
         // SwiftUI 窗口系统在事务内发布状态变化，触发
@@ -30,6 +32,7 @@ private struct MacWindowAttacher: NSViewRepresentable {
         Task { @MainActor in
             controller.attach(window)
             controller.setExpanded(expanded)
+            coordinator.registerMainWindow(window)
         }
     }
     final class AttacherView: NSView {
@@ -107,6 +110,22 @@ public struct MacMusicShell: View {
 
     private var theme: BuiltInTheme { themeStore.current }
 
+    /// Expanded Player 页面开关动画：Shell 负责整个页面的出现/消失，
+    /// ExpandedPlayer 内部只负责控件动画。
+    private var playerTransition: AnyTransition {
+        if reduceMotion {
+            return .opacity
+        }
+        return .asymmetric(
+            insertion:
+                .scale(scale: 0.92, anchor: .bottom)
+                .combined(with: .opacity),
+            removal:
+                .scale(scale: 0.94, anchor: .bottom)
+                .combined(with: .opacity)
+        )
+    }
+
     public init(model: AuralisAppModel, themeStore: ThemeStore, settingsRouter: MacSettingsRouter = MacSettingsRouter()) {
         self.model = model
         self.themeStore = themeStore
@@ -115,7 +134,7 @@ public struct MacMusicShell: View {
 
     public var body: some View {
         attachLifecycle(attachModals(contents))
-            .background(MacWindowAttacher(isExpanded: playerState.isExpanded))
+            .background(MacWindowAttacher(isExpanded: playerState.isExpanded, windowCoordinator: .shared))
     }
 
     private var contents: some View {
@@ -134,12 +153,12 @@ public struct MacMusicShell: View {
                     theme: theme,
                     context: $playerState.context,
                     onCollapse: collapseExpandedPlayer,
-                    onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) }
+                    onOpenMiniPlayer: switchToMiniPlayer
                 )
                 .zIndex(100)
                 // 展开页内部负责统一的封面/背景/控制层进入动画；外层只做淡出，
                 // 避免 ArtworkView 与页面容器各自执行不同的 move transition。
-                .transition(.opacity)
+                .transition(playerTransition)
             }
         }
         // Expanded Player 仍保留 window toolbar host：不允许隐藏整个 windowToolbar，
@@ -227,10 +246,19 @@ public struct MacMusicShell: View {
                 model: model,
                 theme: theme,
                 onOpenFullPlayer: { expandCurrentWindowPlayer() },
-                onOpenMiniPlayer: { openWindow(id: MacWindowID.miniPlayer) },
+                onOpenMiniPlayer: switchToMiniPlayer,
                 onToggleLyrics: { toggleRightPanel(.lyrics) },
                 onToggleQueue: { toggleRightPanel(.queue) }
             )
+        }
+    }
+
+    // MARK: - 主窗口 ↔ 迷你播放器切换
+
+    /// 统一切换到迷你播放器：隐藏主窗口、显示 Mini，由窗口协调器管理生命周期。
+    private func switchToMiniPlayer() {
+        MacWindowVisibilityCoordinator.shared.requestMiniPlayer {
+            openWindow(id: MacWindowID.miniPlayer)
         }
     }
 
@@ -242,7 +270,7 @@ public struct MacMusicShell: View {
             return
         }
         MacUITrace.action("expandPlayer", "fullscreen=\(fullscreen) track=\(model.currentTrack.serverID):\(model.currentTrack.id.rawValue)")
-        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.42, bounce: 0.0)) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.38, bounce: 0.06)) {
             playerState.expand()
         }
         if fullscreen {
@@ -256,7 +284,7 @@ public struct MacMusicShell: View {
         if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
             collapseAfterLeavingFullscreen(window: window)
         } else {
-            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
+            withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.32, bounce: 0)) {
                 playerState.collapse()
             }
         }
@@ -269,7 +297,7 @@ public struct MacMusicShell: View {
         let reduceMotion = self.reduceMotion
         fullscreenCoordinator.observeExit(of: window) { [weak presentation] in
             guard let presentation else { return }
-            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
+            withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.32, bounce: 0)) {
                 presentation.collapse()
             }
         }

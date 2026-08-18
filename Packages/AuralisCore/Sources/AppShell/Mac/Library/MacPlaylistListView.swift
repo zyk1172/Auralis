@@ -12,6 +12,7 @@ struct MacPlaylistListView: View {
 
     @State private var localSearch = ""
     @State private var visiblePlaylists: [Playlist] = []
+    @State private var playlistTileData: [MacPlaylistTileData] = []
 
     private var derivationKey: String {
         "\(model.catalogRevision)|\(localSearch)"
@@ -19,9 +20,19 @@ struct MacPlaylistListView: View {
 
     private func rebuildVisiblePlaylists() {
         let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        visiblePlaylists = model.catalog.playlists
+        let filtered = model.catalog.playlists
             .filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        visiblePlaylists = filtered
+        // 一次性生成 Tile 的轻量数据：滚动中不再重复解析歌单歌曲。
+        playlistTileData = filtered.map { playlist in
+            let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
+            return MacPlaylistTileData(
+                playlist: playlist,
+                artworkKeys: MacPlaylistArtwork.artworkKeys(playlist: playlist, tracks: tracks),
+                trackCount: tracks.count
+            )
+        }
     }
 
     var body: some View {
@@ -45,15 +56,14 @@ struct MacPlaylistListView: View {
                     let columns = Array(repeating: GridItem(.fixed(metrics.itemWidth), spacing: metrics.spacing), count: metrics.columnCount)
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 28) {
-                            ForEach(visiblePlaylists) { playlist in
+                            ForEach(playlistTileData) { data in
                                 MacPlaylistTile(
-                                    playlist: playlist,
-                                    model: model,
+                                    data: data,
                                     theme: theme,
                                     size: metrics.itemWidth,
-                                    onOpen: { onNavigate(.playlist(playlist)) },
+                                    onOpen: { onNavigate(.playlist(data.playlist)) },
                                     onPlay: {
-                                        let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
+                                        let tracks = MacLibraryQuery.playlistTracks(data.playlist, model: model)
                                         if !tracks.isEmpty { model.playQueue(tracks) }
                                     }
                                 )

@@ -78,7 +78,6 @@ struct MacAlbumsView: View {
                         ForEach(visibleAlbums) { album in
                             MacAlbumTile(
                                 album: album,
-                                model: model,
                                 theme: theme,
                                 size: metrics.itemWidth,
                                 onOpen: { onNavigate(.album(album)) },

@@ -1,6 +1,7 @@
 #if os(macOS)
 import DesignSystem
 import Domain
+import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
@@ -10,13 +11,14 @@ import ThemeEngine
 /// 3+ 首 → 2×2（取前 4 个不同 artworkKey）。整体统一圆角，避免小图胶囊感。
 struct MacPlaylistArtwork: View {
     let playlist: Playlist
-    @ObservedObject var model: AuralisAppModel
+    /// 父层一次性算好的封面 key（最多 4 个，去重），滚动中不再解析歌单。
+    let artworkKeys: [String]
     let theme: BuiltInTheme
     let size: CGFloat
     var cornerRadius: CGFloat = 10
 
     var body: some View {
-        let keys = distinctArtworkKeys
+        let keys = artworkKeys
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(.quaternary)
@@ -49,14 +51,14 @@ struct MacPlaylistArtwork: View {
     /// 2×2 马赛克每格尺寸（扣除 2pt 间距后的半格）。
     private var cellHalf: CGFloat { max(1, (size - 2) / 2) }
 
-    private var distinctArtworkKeys: [String] {
-        Self.artworkKeys(playlist: playlist, model: model)
-    }
-
-    /// 前 4 个不同 artworkKey（nil 视为同一占位，只取一次）。供测试直接调用。
+    /// 前 4 个不同 artworkKey（nil 视为同一占位，只取一次）。供父层与测试直接调用。
     @MainActor
     static func artworkKeys(playlist: Playlist, model: AuralisAppModel) -> [String] {
-        let tracks = MacLibraryQuery.playlistTracks(playlist, model: model)
+        artworkKeys(playlist: playlist, tracks: MacLibraryQuery.playlistTracks(playlist, model: model))
+    }
+
+    /// 基于已解析的歌曲列表计算封面 key（避免父层重复解析两遍歌单）。
+    static func artworkKeys(playlist: Playlist, tracks: [Track]) -> [String] {
         var seen = Set<String>()
         var keys: [String] = []
         for track in tracks {
@@ -94,7 +96,6 @@ struct MacPlaylistArtwork: View {
 
 struct MacAlbumTile: View {
     let album: Album
-    @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var size: CGFloat = MacUIVisualTokens.Artwork.tileFallbackSize
     let onOpen: () -> Void
@@ -198,15 +199,14 @@ struct MacAlbumTile: View {
 
 struct MacArtistTile: View {
     let artist: Artist
-    @ObservedObject var model: AuralisAppModel
+    /// 父层一次性算好的代表专辑（无真实头像时拼 mosaic 用），滚动中不再查库。
+    let representativeAlbums: [Album]
     let theme: BuiltInTheme
     var size: CGFloat = 150
     let onOpen: () -> Void
     var onPlay: (() -> Void)? = nil
 
     @State private var isHovering = false
-
-    private var albums: [Album] { MacLibraryQuery.artistAlbums(artist, model: model) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -269,8 +269,8 @@ struct MacArtistTile: View {
     private var artistArtwork: some View {
         if let key = artist.artworkKey {
             ArtworkView(title: artist.name, artworkKey: key, colors: theme.colorTokens, size: size, cornerRadius: size / 2)
-        } else if albums.count >= 4 {
-            let reps = Array(albums.prefix(4))
+        } else if representativeAlbums.count >= 4 {
+            let reps = Array(representativeAlbums.prefix(4))
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)], spacing: 2) {
                 ForEach(reps) { album in
                     ArtworkView(title: album.title, artworkKey: album.artworkKey, colors: theme.colorTokens, size: size / 2, cornerRadius: 0)
@@ -290,9 +290,20 @@ struct MacArtistTile: View {
 
 // MARK: - Playlist Tile
 
-struct MacPlaylistTile: View {
+/// 歌单 Tile 的轻量 presentation 数据：父层一次性算好封面 key 与数量，
+/// 滚动中不再重复解析 `playlist.trackIDs → trackByGlobalID → 去重 artwork → count`。
+struct MacPlaylistTileData: Identifiable, Equatable {
     let playlist: Playlist
-    @ObservedObject var model: AuralisAppModel
+    let artworkKeys: [String]
+    let trackCount: Int
+
+    var id: GlobalID {
+        GlobalID(serverID: playlist.serverID, remoteID: playlist.id.rawValue)
+    }
+}
+
+struct MacPlaylistTile: View {
+    let data: MacPlaylistTileData
     let theme: BuiltInTheme
     var size: CGFloat = MacUIVisualTokens.Artwork.tileFallbackSize
     let onOpen: () -> Void
@@ -307,7 +318,7 @@ struct MacPlaylistTile: View {
                 Button {
                     onOpen()
                 } label: {
-                    MacPlaylistArtwork(playlist: playlist, model: model, theme: theme, size: size)
+                    MacPlaylistArtwork(playlist: data.playlist, artworkKeys: data.artworkKeys, theme: theme, size: size)
                         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -359,12 +370,12 @@ struct MacPlaylistTile: View {
                 onOpen()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.name)
+                    Text(data.playlist.name)
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
-                    Text("\(MacLibraryQuery.playlistTracks(playlist, model: model).count) 首")
+                    Text("\(data.trackCount) 首")
                         .font(.system(size: 12))
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
@@ -387,7 +398,6 @@ struct MacPlaylistTile: View {
 
 struct MacTrackTile: View {
     let track: Track
-    @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var size: CGFloat = 132
     let onOpen: () -> Void

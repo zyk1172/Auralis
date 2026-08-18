@@ -44,7 +44,6 @@ struct MacGenreView: View {
                             ForEach(albums) { album in
                                 MacAlbumTile(
                                     album: album,
-                                    model: model,
                                     theme: theme,
                                     size: 150,
                                     onOpen: { onNavigate(.album(album)) },

@@ -136,7 +136,21 @@ struct NowPlayingArtworkGlowView: View {
     /// 高斯模糊半径随封面尺寸缩放；使用 SwiftUI 系统 GPU 路径。
     private var blurRadius: CGFloat { max(12, size * 0.10) }
 
-    private var pixelSize: Int { max(64, Int(size * 2)) }
+    @Environment(\.displayScale) private var displayScale
+
+    /// 请求像素尺寸：按实际 displayScale 折算并量化到固定档位。
+    private var requestedPixelSize: Int {
+        max(64, Int((size * displayScale).rounded()))
+    }
+
+    private static func normalizedPixelSize(_ requested: Int) -> Int {
+        let buckets = [64, 96, 160, 256, 384, 512, 768, 1024, 1536, 2048]
+        return buckets.min { abs($0 - requested) < abs($1 - requested) } ?? requested
+    }
+
+    private var pixelSize: Int {
+        Self.normalizedPixelSize(requestedPixelSize)
+    }
 
     private var requestIdentifier: String? {
         artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)

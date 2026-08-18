@@ -146,6 +146,7 @@ struct AgentSettingsPage: View {
     @AppStorage(ExternalMusicPreferences.Keys.critiqueBrainz) private var critiqueBrainzEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.listenBrainz) private var listenBrainzEnabled = true
     @AppStorage(AIConnectionSettings.Keys.baseURL) private var aiBaseURL = AIConnectionSettings.defaultBaseURL
+    @AppStorage(AIConnectionSettings.Keys.apiPath) private var aiAPIPath = AIConnectionSettings.defaultAPIPath
     @AppStorage(AIConnectionSettings.Keys.model) private var aiModel = AIConnectionSettings.defaultModel
     @State private var hasAPIKey = false
     @State private var indexStatus: RecommendationIndexV2Status?
@@ -166,7 +167,8 @@ struct AgentSettingsPage: View {
     var body: some View {
         SettingsDetailForm(title: "Agent", theme: theme) {
             Section("大模型") {
-                LabeledContent("接口", value: aiBaseURL)
+                LabeledContent("接口协议", value: AIEndpointMode.infer(from: aiAPIPath).title)
+                LabeledContent("Base URL", value: aiBaseURL)
                 LabeledContent("模型", value: aiModel)
                 LabeledContent("API Key", value: hasAPIKey ? "已配置" : "未配置")
                 NavigationLink("配置大模型…") {

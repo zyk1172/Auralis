@@ -190,7 +190,6 @@ struct MacHomeView: View {
                             let track = item.track
                             MacTrackTile(
                                 track: track,
-                                model: model,
                                 theme: theme,
                                 size: size,
                                 onOpen: { model.playTrack(track, in: shelfTracks) },
@@ -224,7 +223,6 @@ struct MacHomeView: View {
                             let track = item.track
                             MacTrackTile(
                                 track: track,
-                                model: model,
                                 theme: theme,
                                 size: size,
                                 onOpen: { model.playTrack(track, in: tracks) },
@@ -253,7 +251,6 @@ struct MacHomeView: View {
                         ForEach(items) { album in
                             MacAlbumTile(
                                 album: album,
-                                model: model,
                                 theme: theme,
                                 size: size,
                                 onOpen: { onNavigate(.album(album)) },
@@ -280,9 +277,10 @@ struct MacHomeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 20) {
                         ForEach(items) { artist in
+                            let representativeAlbums = MacLibraryQuery.artistAlbums(artist, model: model)
                             MacArtistTile(
                                 artist: artist,
-                                model: model,
+                                representativeAlbums: representativeAlbums,
                                 theme: theme,
                                 size: size,
                                 onOpen: { onNavigate(.artist(artist)) },

@@ -34,13 +34,16 @@ public actor ArtworkDiskCache {
     // MARK: - 读写
 
     /// 读取缓存的封面数据；不存在时返回 nil。
+    ///
+    /// 前台快路径：**不**先做全目录 LRU 索引扫描（冷启动时若已有数千张封面，
+    /// 全量 `loadIndexIfNeeded()` 会挡住当前真正需要的那张封面）。
+    /// 直接读目标文件；全量索引只交给统计 / 清理 / 淘汰等后台路径。
     public func data(for key: String) -> Data? {
-        loadIndexIfNeeded()
         let name = Self.fileName(for: key)
         let url = directory.appendingPathComponent(name)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        accessedAt[name] = Date()
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
         sizes[name] = Int64(data.count)
+        accessedAt[name] = Date()
         return data
     }
 

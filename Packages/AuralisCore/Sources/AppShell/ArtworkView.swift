@@ -53,8 +53,23 @@ struct ArtworkView: View {
     var cornerRadius: CGFloat = AuralisRadius.artwork
     var placeholderStyle: ArtworkPlaceholderStyle = .platformDefault
 
-    /// 按 2x 屏幕密度请求，兼顾清晰度与流量。
-    private var pixelSize: Int { max(64, Int(size * 2)) }
+    @Environment(\.displayScale) private var displayScale
+
+    /// 请求像素尺寸：先按实际 displayScale 折算，再量化到固定档位，
+    /// 让窗口/列表轻微 resize 时命中同一封面缓存（Mac 尤其重要）。
+    private var requestedPixelSize: Int {
+        max(64, Int((size * displayScale).rounded()))
+    }
+
+    /// 量化到固定档位，避免同一封面因尺寸微调产生一堆 cache miss。
+    private static func normalizedPixelSize(_ requested: Int) -> Int {
+        let buckets = [64, 96, 160, 256, 384, 512, 768, 1024, 1536, 2048]
+        return buckets.min { abs($0 - requested) < abs($1 - requested) } ?? requested
+    }
+
+    private var pixelSize: Int {
+        Self.normalizedPixelSize(requestedPixelSize)
+    }
 
     private var requestIdentifier: String? {
         artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)

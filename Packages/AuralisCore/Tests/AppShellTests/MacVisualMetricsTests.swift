@@ -10,37 +10,33 @@ import Testing
 struct MacVisualMetricsTests {
     @Test("歌曲表行修订不会因播放进度 tick 改变")
     func songRowsRevisionOnlyTracksLibraryFacts() {
-        let first = GlobalID(serverID: "server-a", remoteID: "track-1")
-        let last = GlobalID(serverID: "server-a", remoteID: "track-25100")
         let baseline = MacSongRowsRevision(
-            catalog: 8,
-            metadata: 13,
-            visibleCount: 25_100,
-            firstID: first,
-            lastID: last,
-            contentDigest: 0xA11CE
+            catalogRevision: 8,
+            metadataRevision: 13,
+            contentRevision: 0
         )
 
         // playbackPosition / playbackState intentionally are not part of this key.
         let afterPlaybackTick = MacSongRowsRevision(
-            catalog: 8,
-            metadata: 13,
-            visibleCount: 25_100,
-            firstID: first,
-            lastID: last,
-            contentDigest: 0xA11CE
+            catalogRevision: 8,
+            metadataRevision: 13,
+            contentRevision: 0
         )
         let afterPlayCountChange = MacSongRowsRevision(
-            catalog: 8,
-            metadata: 14,
-            visibleCount: 25_100,
-            firstID: first,
-            lastID: last,
-            contentDigest: 0xA11CE
+            catalogRevision: 8,
+            metadataRevision: 14,
+            contentRevision: 0
+        )
+        // 搜索词变化 → 调用方 contentRevision 变化 → 触发重建。
+        let afterSearchChange = MacSongRowsRevision(
+            catalogRevision: 8,
+            metadataRevision: 13,
+            contentRevision: 42
         )
 
         #expect(afterPlaybackTick == baseline)
         #expect(afterPlayCountChange != baseline)
+        #expect(afterSearchChange != baseline)
     }
 
     // MARK: - Albums Grid（REFERENCE_A：detail ≈1268 → 4 列，item ≈267-275）

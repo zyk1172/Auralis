@@ -603,6 +603,7 @@ struct AIProviderSettingsPage: View {
     @AppStorage(AIConnectionSettings.Keys.model) private var aiModel = AIConnectionSettings.defaultModel
     @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
     @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
+    @State private var endpointMode: AIEndpointMode = .chatCompletions
     @State private var isConfiguringAPIKey = false
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
@@ -618,11 +619,32 @@ struct AIProviderSettingsPage: View {
                     .keyboardType(.URL)
 #endif
                     .autocorrectionDisabled()
-                TextField("API 路径", text: $aiAPIPath, prompt: Text(AIConnectionSettings.defaultAPIPath))
-#if os(iOS)
-                    .textInputAutocapitalization(.never)
+                Picker("接口协议", selection: $endpointMode) {
+                    ForEach(AIEndpointMode.allCases) { mode in
+                        VStack(alignment: .leading) {
+                            Text(mode.title)
+                            Text(mode.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(mode)
+                    }
+                }
+#if os(macOS)
+                .pickerStyle(.menu)
 #endif
-                    .autocorrectionDisabled()
+                .onChange(of: endpointMode) { _, newValue in
+                    if let apiPath = newValue.apiPath {
+                        aiAPIPath = apiPath
+                    }
+                }
+                if endpointMode == .custom {
+                    TextField("API 路径", text: $aiAPIPath, prompt: Text("/v1/chat/completions"))
+#if os(iOS)
+                        .textInputAutocapitalization(.never)
+#endif
+                        .autocorrectionDisabled()
+                }
                 TextField("模型", text: $aiModel, prompt: Text(AIConnectionSettings.defaultModel))
 #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -708,6 +730,9 @@ struct AIProviderSettingsPage: View {
             }
         }
         .navigationTitle("OpenAI 兼容接口")
+        .onAppear {
+            endpointMode = AIEndpointMode.infer(from: aiAPIPath)
+        }
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif

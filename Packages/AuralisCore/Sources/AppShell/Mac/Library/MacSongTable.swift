@@ -31,14 +31,11 @@ struct MacSongRow: Identifiable {
 /// Table 重建只依赖真正会改变行内容的 O(1) revision。播放进度每秒发布时这几个
 /// 值保持不变，因此不会重新 map/sort 数万首歌曲。
 struct MacSongRowsRevision: Hashable {
-    let catalog: UInt64
-    let metadata: UInt64
-    let visibleCount: Int
-    let firstID: GlobalID?
-    let lastID: GlobalID?
-    /// 有序内容摘要：两个集合即使首尾与数量相同也能区分，避免中间曲目变化时
-    /// 行数据陈旧。只对 GlobalID 哈希，不拼大字符串、不做字典查询。
-    let contentDigest: UInt64
+    let catalogRevision: UInt64
+    let metadataRevision: UInt64
+    /// 调用方提供的「行内容」修订号（如搜索过滤词变化时递增）；
+    /// catalog 内容变化由 catalogRevision 覆盖。完全 O(1)，不再对 tracks 做 O(N) 哈希。
+    let contentRevision: UInt64
 }
 
 /// 统一 Mac 歌曲 Table：sortable / resizable / 多选 / 双击播放 / 右键菜单。
@@ -48,6 +45,10 @@ struct MacSongTable: View {
     let model: AuralisAppModel
     let theme: BuiltInTheme
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
+    /// 行内容修订号（默认 0）：搜索过滤等「catalogRevision 不变但行内容变」的场景，
+    /// 由调用方传入自己的内容 revision。catalog / metadata 变化由 model 侧的
+    /// O(1) revision 自动覆盖。
+    var contentRevision: UInt64 = 0
     var numberText: (Track) -> String? = { _ in nil }
     var showAlbumColumn = true
     var showYearColumn = true
@@ -66,18 +67,10 @@ struct MacSongTable: View {
     @State private var orderedRows: [MacSongRow] = []
 
     private var rowsRevision: MacSongRowsRevision {
-        var hasher = Hasher()
-        for track in tracks {
-            hasher.combine(track.serverID)
-            hasher.combine(track.id)
-        }
-        return MacSongRowsRevision(
-            catalog: model.catalogRevision,
-            metadata: model.libraryRowMetadataRevision,
-            visibleCount: tracks.count,
-            firstID: tracks.first?.macGlobalID,
-            lastID: tracks.last?.macGlobalID,
-            contentDigest: UInt64(truncatingIfNeeded: hasher.finalize())
+        .init(
+            catalogRevision: model.catalogRevision,
+            metadataRevision: model.libraryRowMetadataRevision,
+            contentRevision: contentRevision
         )
     }
 

@@ -3,6 +3,74 @@ import Domain
 import Foundation
 import SecurityKit
 
+/// AI 接口协议：把 `apiPath` 从「用户手填字符串」正式类型化。
+/// 底层仍保存完整 `apiPath`（UserDefaults key 不变，备份/历史配置不受影响），
+/// 这里只负责设置页的选择与展示。
+enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
+    case chatCompletions
+    case responses
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .chatCompletions:
+            return "OpenAI 兼容"
+        case .responses:
+            return "OpenAI 原生"
+        case .custom:
+            return "自定义"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .chatCompletions:
+            return "Chat Completions"
+        case .responses:
+            return "Responses API"
+        case .custom:
+            return "自定义 API 路径"
+        }
+    }
+
+    /// 用户说的「v1 后面的后缀」。
+    var suffix: String? {
+        switch self {
+        case .chatCompletions:
+            return "chat/completions"
+        case .responses:
+            return "responses"
+        case .custom:
+            return nil
+        }
+    }
+
+    var apiPath: String? {
+        suffix.map { "/v1/\($0)" }
+    }
+
+    static func infer(from apiPath: String) -> Self {
+        let normalized = apiPath
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        switch normalized {
+        case "/v1/chat/completions",
+             "v1/chat/completions":
+            return .chatCompletions
+
+        case "/v1/responses",
+             "v1/responses":
+            return .responses
+
+        default:
+            return .custom
+        }
+    }
+}
+
 /// 设置页与 AI 助手共用的接口配置。普通字段存 UserDefaults，
 /// API Key 只存系统 Keychain（见 `credentialID`）。
 struct AIConnectionSettings: Sendable {

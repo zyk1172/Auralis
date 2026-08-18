@@ -4,6 +4,10 @@ import ThemeEngine
 
 @main
 struct AuralisMacApp: App {
+    /// Dock 图标点击恢复主窗口（迷你播放器模式时主窗口被隐藏）。
+    @NSApplicationDelegateAdaptor(AuralisMacAppDelegate.self)
+    private var appDelegate
+
     /// 唯一长期 ThemeStore：主窗口与 Settings Scene 共享。
     @StateObject private var themeStore = ThemeStore()
     /// 设置路由：主窗口错误恢复可深链到 Settings 的「服务器」分类。
@@ -111,5 +115,21 @@ struct MacSettingsHost: View {
         MacSettingsWindow(model: model, themeStore: themeStore, settingsRouter: settingsRouter)
             .environmentObject(model)
             .environmentObject(themeStore)
+    }
+}
+
+
+/// App 生命周期委托：点击 Dock 图标时恢复主窗口。
+/// MiniPlayer 模式会把主窗口 orderOut 隐藏，若没有这个回调，
+/// 用户点击 Dock 图标将无法找回主窗口。
+final class AuralisMacAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        Task { @MainActor in
+            MacWindowVisibilityCoordinator.shared.restoreMainPlayer(expandPlayer: false)
+        }
+        return true
     }
 }

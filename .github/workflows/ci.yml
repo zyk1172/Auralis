@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # 手动触发：改动面较大时避免每次推送/PR 都自动跑，需要时在 Actions 页手动运行。
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

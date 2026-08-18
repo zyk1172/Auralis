@@ -1,5 +1,6 @@
 #if os(macOS)
 import Domain
+import Foundation
 import LocalCatalog
 import SwiftUI
 import ThemeEngine
@@ -13,18 +14,40 @@ struct MacSongsView: View {
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     @State private var localSearch = ""
+    /// 搜索派生结果：无搜索时直接等于 catalog.tracks；有搜索时 120ms debounce +
+    /// 后台过滤，避免输入期间每个字符都在 body 里全库 filter。
+    @State private var visibleTracks: [Track] = []
+    @State private var searchGeneration: UInt64 = 0
     @AppStorage("auralis.mac.songs.showYear") private var showYear = false
     @AppStorage("auralis.mac.songs.showGenre") private var showGenre = false
     @AppStorage("auralis.mac.songs.showPlayCount") private var showPlayCount = false
     @AppStorage("auralis.mac.songs.showAddedDate") private var showAddedDate = false
 
-    private var filteredTracks: [Track] {
-        let q = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return model.catalog.tracks }
-        return model.catalog.tracks.filter {
-            $0.title.localizedCaseInsensitiveContains(q)
-                || $0.artistName.localizedCaseInsensitiveContains(q)
-                || $0.albumTitle.localizedCaseInsensitiveContains(q)
+    private var filteredTracks: [Track] { visibleTracks }
+
+    private func updateVisibleTracks() {
+        searchGeneration &+= 1
+        let generation = searchGeneration
+        let tracks = model.catalog.tracks
+        let query = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !query.isEmpty else {
+            visibleTracks = tracks
+            return
+        }
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard generation == searchGeneration else { return }
+            let result = await Task.detached(priority: .userInitiated) {
+                tracks.filter {
+                    $0.title.localizedCaseInsensitiveContains(query)
+                        || $0.artistName.localizedCaseInsensitiveContains(query)
+                        || $0.albumTitle.localizedCaseInsensitiveContains(query)
+                }
+            }.value
+            guard generation == searchGeneration else { return }
+            visibleTracks = result
         }
     }
 
@@ -38,6 +61,7 @@ struct MacSongsView: View {
                 model: model,
                 theme: theme,
                 onNavigate: onNavigate,
+                contentRevision: UInt64(truncatingIfNeeded: localSearch.hashValue),
                 numberText: { _ in nil },
                 showYearColumn: showYear,
                 showGenreColumn: showGenre,
@@ -46,6 +70,9 @@ struct MacSongsView: View {
             )
         }
         .navigationTitle("歌曲")
+        .onAppear { updateVisibleTracks() }
+        .onChange(of: localSearch) { _, _ in updateVisibleTracks() }
+        .onChange(of: model.catalogRevision) { _, _ in updateVisibleTracks() }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Menu {

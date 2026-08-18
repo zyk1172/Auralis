@@ -283,7 +283,6 @@ struct MacSearchView: View {
         if let album = model.catalog.albums.first(where: { $0.serverID == summary.globalID.serverID && $0.id.rawValue == summary.globalID.remoteID }) {
             MacAlbumTile(
                 album: album,
-                model: model,
                 theme: theme,
                 onOpen: { onNavigate(.album(album)) },
                 onPlay: { model.playQueue(MacLibraryQuery.albumTracks(album, model: model)) }
