@@ -282,7 +282,9 @@ public extension ServerConnecting {
     func addToPlaylist(playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }
     func setFavorite(trackID: TrackID, isFavorite: Bool) async {}
     func makeSynchronizer(store: LocalCatalogStore) async -> LibrarySynchronizer? { nil }
-    func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {}
+    func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {
+        throw ServerConnectionError.unsupportedResponse
+    }
     func testConnection(_ input: ServerConnectionInput) async throws -> ServerConnectionTestResult {
         throw ServerConnectionError.unsupportedResponse
     }

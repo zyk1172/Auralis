@@ -467,7 +467,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 172.16.0.0/12 / 192.168.0.0/16 / ::1）。
     static func isPrivateOrLoopbackHost(_ host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed == "localhost" || trimmed == "::1" || trimmed == "[::1]" {
+        if trimmed == "localhost" || trimmed.hasSuffix(".localhost") || trimmed == "::1" || trimmed == "[::1]" {
             return true
         }
         guard let octets = parseIPv4Literal(trimmed) else { return false }
@@ -494,7 +494,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         var octets: [UInt8] = []
         octets.reserveCapacity(4)
         for part in parts {
-            guard !part.isEmpty, part.allSatisfy({ $0.isNumber }),
+            guard !part.isEmpty, part.allSatisfy({ $0.isASCII && $0.isNumber }),
                   let value = Int(part), (0...255).contains(value) else { return nil }
             octets.append(UInt8(value))
         }

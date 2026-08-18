@@ -3458,6 +3458,8 @@ public final class AuralisAppModel: ObservableObject {
             // 1) 读取这次同步对应服务器的权威状态，避免异步切服后旧结果反扑。
             let loadedDisliked = await self.loadDislikedTrackIDs(serverID: serverIDSnapshot)
             guard !Task.isCancelled else { return }
+            guard self.applyGeneration == generation else { return }
+            guard self.catalog.activeServerID == serverIDSnapshot else { return }
             let dislikedSnapshot: Set<GlobalID>
             if let loadedDisliked {
                 dislikedSnapshot = loadedDisliked
@@ -3482,6 +3484,11 @@ public final class AuralisAppModel: ObservableObject {
             await MainActor.run {
                 // self 在上方已强捕获（guard let self），这里只做代际校验。
                 guard self.applyGeneration == generation else { return }
+                guard self.catalog.activeServerID == serverIDSnapshot else { return }
+                if let loadedDisliked {
+                    self.dislikedTrackIDs = loadedDisliked
+                    self.dislikedStateServerID = serverIDSnapshot
+                }
                 if derived.addedDatesChanged {
                     self.libraryAddedTracker = derived.tracker
                     self.libraryRowMetadataRevision &+= 1
