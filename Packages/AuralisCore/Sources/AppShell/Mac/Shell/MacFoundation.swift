@@ -286,81 +286,18 @@ extension MacNavigationTarget {
 
 // MARK: - 播放器展示状态（Round-4 同窗口展开）
 
-/// 播放器在窗口内的展示模式：
-/// - `.library`：普通资料库 + 底部悬浮播放器；
-/// - `.expanded`：同一主窗口内展开为沉浸播放器（不新建窗口）。
-enum MacPlayerPresentation: Equatable {
-    case library
-    case expanded
-}
-
-/// 播放器展开/收起四阶段：library → expanding → expanded → collapsing → library。
-/// 让 library / Expanded 覆盖层 / toolbar 标题的挂载与动画解耦：
-/// - expanding：Expanded 挂载、背景铺满、toolbar/chrome 激活，library 保持在底层；
-/// - expanded：入场动画完成后再移除底层 library；
-/// - collapsing：library 重新挂载到背景、toolbar/chrome 仍激活（标题不闪现）；
-/// - library：退场动画完成后再移除 Expanded、恢复 toolbar 标题。
-enum MacPlayerPresentationPhase: Equatable {
-    case library
-    case expanding
-    case expanded
-    case collapsing
-}
-
-/// Expanded Player 展示状态（可测试）：展开/收起是纯 Presentation 状态，
-/// 绝不改变 navigation selection / path / search / AppModel。
+/// Expanded Player 的右侧上下文（歌词/队列）展示状态。
+/// 展开/收起本身不再是 AppModel/PresentationState 的状态：
+/// 主界面（NavigationSplitView/NavigationStack/libraryUI）从窗口创建到关闭
+/// **永远保持挂载**，播放器只是其上的 transient overlay（由 MacMusicShell 的
+/// playerOverlayMounted / playerOverlayVisible 驱动），因此不再有
+/// library/expanding/expanded/collapsing 四阶段挂载/卸载逻辑。
 @MainActor
 final class MacPlayerPresentationState: ObservableObject {
-    @Published var phase: MacPlayerPresentationPhase = .library
     @Published var context: MacExpandedPlayerContext = .none
 
-    /// 兼容旧二元展示状态（library / expanded）。
-    var presentation: MacPlayerPresentation { phase == .library ? .library : .expanded }
-
-    var isExpanded: Bool { phase != .library }
-    /// Expanded 覆盖层是否挂载：expanding/expanded/collapsing 都挂载。
-    var overlayMounted: Bool { phase != .library }
-    /// 普通资料库是否挂载：仅 expanded 移除，expanding/collapsing 保持底层。
-    var libraryMounted: Bool { phase != .expanded }
-    /// 窗口 chrome / toolbar title 是否激活：expanding 开始激活，collapsing 结束才关闭。
-    var chromeActive: Bool { phase != .library }
-
-    func beginExpand() {
-        guard phase == .library else { return }
-        // Expanded Player 初始只展示居中的 Now Playing 主轨；Lyrics / Queue
-        // 均由用户显式打开，且每次收起后再展开都回到无 context 状态。
+    func resetContext() {
         context = .none
-        phase = .expanding
-    }
-
-    /// 入场动画完成（Expanded 背景已铺满）→ 移除底层 library。
-    func finishExpand() {
-        guard phase == .expanding else { return }
-        phase = .expanded
-    }
-
-    func beginCollapse() {
-        guard phase == .expanded else { return }
-        // 关闭时一并归零，保证任何后续展开都不会恢复旧歌词/队列面板。
-        context = .none
-        phase = .collapsing
-    }
-
-    /// 退场动画完成 → 移除 Expanded、恢复 library 与 toolbar。
-    func finishCollapse() {
-        guard phase == .collapsing else { return }
-        phase = .library
-    }
-
-    /// 同步完整切换（测试与无动画路径）。
-    func expand() {
-        beginExpand()
-        finishExpand()
-    }
-
-    func collapse() {
-        beginCollapse()
-        finishCollapse()
     }
 
     func toggleContext(_ tapped: MacExpandedPlayerContext) {

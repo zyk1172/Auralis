@@ -10,12 +10,14 @@ struct MacRightPanel: View {
     let mode: MacRightPanelMode
 
     @ObservedObject private var playbackStore: PlaybackStore
+    @ObservedObject private var queueStore: PlaybackQueuePresentationStore
 
     init(model: AuralisAppModel, theme: BuiltInTheme, mode: MacRightPanelMode) {
         self.model = model
         self.theme = theme
         self.mode = mode
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self._queueStore = ObservedObject(wrappedValue: model.queueStore)
     }
 
     var body: some View {
@@ -108,8 +110,11 @@ struct MacRightPanel: View {
 
     // MARK: - 队列
 
-    private var currentIndex: Int? { model.currentQueueIndex }
-    private var upcoming: [Track] { model.upcomingTracks }
+    private var currentIndex: Int? { queueStore.currentIndex }
+    private var upcoming: [Track] {
+        guard let index = queueStore.currentIndex else { return queueStore.tracks }
+        return Array(queueStore.tracks.dropFirst(index + 1))
+    }
 
     private var queueContent: some View {
         List {

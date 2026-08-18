@@ -15,50 +15,44 @@ struct MacExpandedPlayerView: View {
     @Binding var context: MacExpandedPlayerContext
     let onCollapse: () -> Void
     let onOpenMiniPlayer: () -> Void
-    /// 外部（MacMusicShell）进入 collapsing 阶段的信号：触发本页退场动画。
-    let isCollapsing: Bool
-    /// 入场动画完成回调：外部据此把 phase 从 .expanding 推到 .expanded（移除底层 library）。
-    let onExpandComplete: () -> Void
-    /// 退场动画完成回调：外部据此把 phase 从 .collapsing 推到 .library（移除 Expanded、恢复标题）。
-    let onCollapseComplete: () -> Void
+    /// 前景是否可见：由 MacMusicShell 驱动（playerOverlayVisible），
+    /// 本页**不在 onAppear 里自行 withAnimation**——保证动画从外部明确开始。
+    let isVisible: Bool
 
     @State private var ambienceImage: PlatformImage?
     @State private var lyricsState: MacLyricsPresentationState = .loading
-    @State private var isScrubbing = false
-    @State private var scrubValue: TimeInterval = 0
-    /// 页面出现/消失动画：背景只淡入淡出（不参与缩放，绝不留白边），
-    /// 前景内容（封面/标题/进度/控制）做 0.96 → 1.0 缩放 + 淡入淡出。
-    @State private var presentationVisible = false
 
     @ObservedObject private var playbackStore: PlaybackStore
+    @ObservedObject private var queueStore: PlaybackQueuePresentationStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         model: AuralisAppModel,
         theme: BuiltInTheme,
         context: Binding<MacExpandedPlayerContext>,
+        isVisible: Bool,
         onCollapse: @escaping () -> Void,
-        onOpenMiniPlayer: @escaping () -> Void,
-        isCollapsing: Bool = false,
-        onExpandComplete: @escaping () -> Void = {},
-        onCollapseComplete: @escaping () -> Void = {}
+        onOpenMiniPlayer: @escaping () -> Void
     ) {
         self.model = model
         self.theme = theme
         self._context = context
+        self.isVisible = isVisible
         self.onCollapse = onCollapse
         self.onOpenMiniPlayer = onOpenMiniPlayer
-        self.isCollapsing = isCollapsing
-        self.onExpandComplete = onExpandComplete
-        self.onCollapseComplete = onCollapseComplete
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self._queueStore = ObservedObject(wrappedValue: model.queueStore)
     }
 
     private var track: Track { model.currentTrack }
     private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
-    private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
     private var trackGlobalID: String { "\(track.serverID):\(track.id.rawValue)" }
     private var isPlaying: Bool { playbackStore.state == .playing }
+    /// 待播队列（当前曲目之后），由 queueStore 提供，随队列/当前曲目变化更新。
+    private var queueStoreUpcoming: [Track] {
+        guard let index = queueStore.currentIndex else { return queueStore.tracks }
+        return Array(queueStore.tracks.dropFirst(index + 1))
+    }
     /// 展开播放页只从 ThemeColors 取前景色。背景可以是浅色渐变、封面氛围图或深色
     /// 主题，但文字和按钮不能再假设它一定是黑底。
     private var palette: MacExpandedPlayerPalette {
@@ -77,19 +71,20 @@ struct MacExpandedPlayerView: View {
             let contextLeading = playerLeading + playerWidth + MacFullPlayerMetrics.horizontalGap(window: size)
 
             ZStack {
-                // 背景从第一帧铺满窗口，只做淡入淡出，**不参与缩放**：
-                // 缩放背景会在顶部露出窗口/toolbar 底色（白条）。
+                // 背景从第一帧铺满窗口：始终 opacity 1、不缩放、不 offset，
+                // 任何时刻都不露出窗口/toolbar 底色（白条）。
                 background
-                    .opacity(presentationVisible ? 1 : 0)
 
-                // 前景播放内容（封面/标题/进度/控制/歌词/队列）做 0.96 → 1.0 缩放 + 淡入。
+                // 前景播放内容（封面/标题/进度/控制/歌词/队列）：
+                // 由外部 isVisible 驱动 offset + scale + opacity，动画在 Shell 侧开启。
                 playerColumn(artworkSize: artwork, columnWidth: playerWidth)
                     .frame(width: playerWidth, alignment: .leading)
                     .padding(.leading, playerLeading)
                     .padding(.top, MacFullPlayerMetrics.topY(window: size))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .scaleEffect(presentationVisible ? 1 : 0.96, anchor: .bottom)
-                    .opacity(presentationVisible ? 1 : 0)
+                    .offset(y: isVisible ? 0 : 36)
+                    .scaleEffect(isVisible ? 1 : 0.97, anchor: .bottom)
+                    .opacity(isVisible ? 1 : 0)
 
                 if hasContext {
                     rightContext(artworkSize: artwork)
@@ -98,41 +93,28 @@ struct MacExpandedPlayerView: View {
                         .padding(.top, MacFullPlayerMetrics.contextTopY(window: size))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .transition(.opacity)
-                        .scaleEffect(presentationVisible ? 1 : 0.96, anchor: .bottom)
-                        .opacity(presentationVisible ? 1 : 0)
+                        .offset(y: isVisible ? 0 : 36)
+                        .scaleEffect(isVisible ? 1 : 0.97, anchor: .bottom)
+                        .opacity(isVisible ? 1 : 0)
                 }
 
                 // Glass Capsules（只对内容命中）
             }
-            .overlay(alignment: .topLeading) { topTrafficLights }
-            .overlay(alignment: .topLeading) { topLeftGlass }
-            .overlay(alignment: .topTrailing) { topRightVolumeGlass }
-            .overlay(alignment: .bottomTrailing) { bottomRightContextGlass }
+            .overlay(alignment: .topLeading) {
+                topTrafficLights.opacity(isVisible ? 1 : 0)
+            }
+            .overlay(alignment: .topLeading) {
+                topLeftGlass.opacity(isVisible ? 1 : 0)
+            }
+            .overlay(alignment: .topTrailing) {
+                topRightVolumeGlass.opacity(isVisible ? 1 : 0)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                bottomRightContextGlass.opacity(isVisible ? 1 : 0)
+            }
             .animation(.easeInOut(duration: 0.25), value: context)
-        }
-        // 页面出现/消失动画：入场由 onAppear 驱动，退场由外部 isCollapsing 信号驱动；
-        // 动画 completion 通过回调通知 Shell 推进 phase（不用 Task.sleep 魔法延迟）。
-        .onAppear {
-            guard !presentationVisible else { return }
-            withAnimation(
-                reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.38, bounce: 0.06),
-                completionCriteria: .logicallyComplete
-            ) {
-                presentationVisible = true
-            } completion: {
-                Task { @MainActor in onExpandComplete() }
-            }
-        }
-        .onChange(of: isCollapsing) { _, newValue in
-            guard newValue, presentationVisible else { return }
-            withAnimation(
-                reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.32, bounce: 0),
-                completionCriteria: .logicallyComplete
-            ) {
-                presentationVisible = false
-            } completion: {
-                Task { @MainActor in onCollapseComplete() }
-            }
+            // 页面出现/消失动画完全由 MacMusicShell 的 playerOverlayVisible 驱动，
+            // 本页不在 onAppear 里自行 withAnimation。
         }
         // 窗口 chrome（traffic lights / titlebar 透明 / titleVisibility）由
         // MacMusicShell 的 MacWindowAttacher(isExpanded:) 唯一写入（P2-1），
@@ -300,26 +282,20 @@ struct MacExpandedPlayerView: View {
 
     private func progressView(width: CGFloat) -> some View {
         VStack(spacing: 4) {
-            Slider(
-                value: Binding(
-                    get: { progress },
-                    set: { isScrubbing = true; scrubValue = $0 }
-                ),
-                in: 0...duration,
-                onEditingChanged: { editing in
-                    if !editing {
-                        model.seek(toProgress: scrubValue / duration)
-                        isScrubbing = false
-                    }
-                }
+            MacPlaybackSlider(
+                value: playbackStore.position,
+                minValue: 0,
+                maxValue: duration,
+                isEnabled: model.hasCurrentTrack,
+                onCommit: { model.seek(toProgress: min(1, max(0, $0 / duration))) }
             )
             .controlSize(.small)
             .tint(palette.accent)
             .accessibilityLabel("播放进度")
             HStack {
-                Text(MacFormat.time(progress))
+                Text(MacFormat.time(playbackStore.position))
                 Spacer()
-                Text("-" + MacFormat.time(max(0, duration - progress)))
+                Text("-" + MacFormat.time(max(0, duration - playbackStore.position)))
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(palette.secondary)
@@ -495,7 +471,7 @@ struct MacExpandedPlayerView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(palette.primary)
                 Spacer()
-                if !model.upcomingTracks.isEmpty {
+                if !queueStoreUpcoming.isEmpty {
                     Button("清除") { model.clearUpcoming() }
                         .buttonStyle(.plain)
                         .foregroundStyle(palette.destructive)
@@ -503,7 +479,7 @@ struct MacExpandedPlayerView: View {
             }
             .padding(.bottom, 14)
             Divider().overlay(palette.separator)
-            if model.upcomingTracks.isEmpty {
+            if queueStoreUpcoming.isEmpty {
                 VStack {
                     Spacer()
                     Text("队列中无音乐。")
@@ -515,12 +491,12 @@ struct MacExpandedPlayerView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.queueRowSpacing) {
-                        ForEach(Array(model.upcomingTracks.enumerated()), id: \.element.macGlobalID) { offset, queueTrack in
+                        ForEach(Array(queueStoreUpcoming.enumerated()), id: \.element.macGlobalID) { offset, queueTrack in
                             queueRow(queueTrack, isCurrent: false)
                                 .contextMenu {
                                     Button("立即播放") { model.selectAndPlay(queueTrack) }
                                     Button("从队列移除") {
-                                        let real = (model.currentQueueIndex ?? -1) + 1 + offset
+                                        let real = (queueStore.currentIndex ?? -1) + 1 + offset
                                         model.removeFromQueue(atOffsets: IndexSet([real]))
                                     }
                                 }

@@ -26,6 +26,9 @@ public final class AuralisAppModel: ObservableObject {
     public static let shared = AuralisAppModel()
     @Published public var selectedSection: AppSection = .home
     public let playbackStore: PlaybackStore
+    /// 播放队列展示状态：与高频播放状态分离，上万首队列更新只发布到这里，
+    /// 普通播放器控件不再因 queue 变化整体 invalidate。
+    public let queueStore = PlaybackQueuePresentationStore()
     /// 领域状态由独立 Store 持有；AppModel 保留兼容门面与跨领域编排。
     let homeStore: HomeStore
     let libraryStore: LibraryStore
@@ -39,6 +42,7 @@ public final class AuralisAppModel: ObservableObject {
             guard playbackStore.currentTrack != newValue else { return }
             objectWillChange.send()
             playbackStore.currentTrack = newValue
+            queueStore.updateCurrentIndex(currentTrackID: queueIdentity(newValue))
         }
     }
     /// AI 助手输入框的草稿文本。提升到模型层是为了让底部 Dock（iOS）
@@ -74,17 +78,20 @@ public final class AuralisAppModel: ObservableObject {
     /// 这里在每次写入时强制去重（保留首次出现的位置），从根源杜绝重复 id 进入界面。
     /// 这样即便调用方（加入队列 / 下一首播放 / AI 代理 / 首页货架）忘记去重，也不会崩溃。
     public var queue: [Track] {
-        get { playbackStore.queue }
+        get { queueStore.tracks }
         set {
             let unique = uniquedTracks(newValue)
-            guard playbackStore.queue != unique else { return }
-            objectWillChange.send()
-            playbackStore.queue = unique
+            guard queueStore.tracks != unique else { return }
+            // 不再 objectWillChange.send()：queue 变化只发布到 queueStore，
+            // 观察 AppModel 的普通播放器控件不会因上万首队列更新整体重算。
+            queueStore.replace(unique, currentTrackID: queueIdentity(currentTrack))
             // 队列变更：开启新一轮随机（避免旧轮次的“已播放”标记污染新队列）。
             shufflePlayedIDs.removeAll()
             // 队列是播放会话的一部分：变更即持久化（按服务器隔离），
             // 进程重启后可恢复上次的队列与当前曲目。
-            persistPlaybackSession()
+            // 用 debounce 调度（350ms 合并 + utility 后台），禁止在队列 setter
+            // 里同步 JSON encode + UserDefaults 写大队列。
+            schedulePlaybackSessionPersistence()
             schedulePreparedNext()
         }
     }
@@ -759,7 +766,7 @@ public final class AuralisAppModel: ObservableObject {
             self.playbackState = await self.engine.state()
             self.syncProgressTimer()
             self.mediaIntegration.stop()
-            self.persistPlaybackSession()
+            self.schedulePlaybackSessionPersistence()
         }
     }
 
@@ -1227,7 +1234,7 @@ public final class AuralisAppModel: ObservableObject {
         playbackPosition = max(position, 0)
         playbackState = .idle
         loadLyricsIfNeeded(for: currentTrack)
-        persistPlaybackSession()
+        schedulePlaybackSessionPersistence()
     }
 
     public var currentLyrics: LyricsDocument? { lyrics(for: currentTrack) }
@@ -1373,16 +1380,32 @@ public final class AuralisAppModel: ObservableObject {
         selectAndPlay(tracks[0])
     }
 
-    /// 在指定上下文内播放某一首歌曲（与 iOS Home 货架同一机制）：
-    /// 先把整个上下文写入播放队列，再播放点击的这首，保证后续歌曲自动连续播放。
-    /// 上下文为空时退化为只播放这首（与 selectAndPlay 原语义一致）。
+    /// 在指定上下文内播放某一首歌曲（macOS 表格双击等）。
+    /// 原则：**当前歌曲立即播放**优先于「建立完整播放上下文」——
+    /// 大 context（如全库 10000 首）先去重/准备放后台，不再同步阻塞双击事件；
+    /// 后台准备完成后校验当前歌曲未变，再替换播放队列。
     public func playTrack(_ track: Track, in context: [Track]) {
         if context.isEmpty {
             selectAndPlay(track)
             return
         }
-        queue = context
+        let expectedID = queueIdentity(track)
+        AuralisLog.playback.debug("PLAY_REQUEST_RECEIVED contextCount=\(context.count, privacy: .public)")
+        // 1) 第一优先级：立即开始播放当前歌曲。
         selectAndPlay(track)
+        // 2) 后台整理大队列（去重），完成后校验身份再替换。
+        let snapshot = context
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let startedAt = ContinuousClock.now
+            let prepared = await Task.detached(priority: .userInitiated) {
+                CatalogEntityUniquing.uniquedTracks(snapshot)
+            }.value
+            guard queueIdentity(self.currentTrack) == expectedID else { return }
+            let elapsedMs = startedAt.duration(to: .now)
+            AuralisLog.playback.debug("QUEUE_CONTEXT_READY count=\(prepared.count, privacy: .public) durationMs=\(elapsedMs, privacy: .public)")
+            self.queue = prepared
+        }
     }
 
     /// 在用户明确选择的集合内随机播放（最近播放 / 最近添加 / 收藏等页面）。
@@ -1854,17 +1877,32 @@ public final class AuralisAppModel: ObservableObject {
 
     // MARK: - Playback session persistence
 
-    /// 保存当前播放会话（当前曲目、队列、进度），按服务器隔离。
-    /// 只记录展示状态：不保存「正在播放」标记，进程重启后永远恢复为暂停。
-    private func persistPlaybackSession() {
+    /// 播放会话持久化任务（debounce）：队列/进度变更不立即同步落盘，
+    /// 350ms 合并 + utility 后台执行 JSON encode 与 UserDefaults 写入。
+    /// 连续变更只保存最后一次；大队列（如 10000 首）不再阻塞双击事件同步链。
+    private var playbackSessionPersistenceTask: Task<Void, Never>?
+
+    private func schedulePlaybackSessionPersistence() {
+        playbackSessionPersistenceTask?.cancel()
         guard let serverID = catalog.activeServerID else { return }
         let snapshot = PlaybackSessionSnapshot(
             currentTrackID: currentTrack.id.rawValue == "placeholder" ? nil : currentTrack.id.rawValue,
             queueTrackIDs: queue.map(\.id.rawValue),
             position: playbackPosition
         )
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        defaults.set(data, forKey: Self.playbackSessionKey(serverID))
+        let defaults = self.defaults
+        let key = Self.playbackSessionKey(serverID)
+        playbackSessionPersistenceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            // JSON encode 在 detached 后台做（只捕获 Sendable 快照）；
+            // UserDefaults 写入回到 MainActor。
+            let data = await Task.detached(priority: .utility) {
+                try? JSONEncoder().encode(snapshot)
+            }.value
+            guard let data, !Task.isCancelled else { return }
+            defaults.set(data, forKey: key)
+        }
     }
 
     /// 从本地恢复上次播放会话（当前曲目、队列、进度）。返回是否成功恢复。
@@ -2599,7 +2637,7 @@ public final class AuralisAppModel: ObservableObject {
                 }
                 self.playbackState = await self.engine.state()
                 self.syncProgressTimer()
-                self.persistPlaybackSession()
+                self.schedulePlaybackSessionPersistence()
                 self.mediaIntegration.playbackStateChanged(
                     isPlaying: self.playbackState == .playing,
                     position: self.playbackPosition,
@@ -2629,7 +2667,7 @@ public final class AuralisAppModel: ObservableObject {
         playbackPosition = 0
         playbackTask?.cancel()
         handoffActivity?.invalidate()
-        persistPlaybackSession()
+        schedulePlaybackSessionPersistence()
         Task { @MainActor in
             await self.engine.stop()
             self.playbackState = await self.engine.state()
@@ -2652,7 +2690,7 @@ public final class AuralisAppModel: ObservableObject {
 
     private func seekToAbsolute(_ position: TimeInterval) {
         playbackPosition = position
-        persistPlaybackSession()
+        schedulePlaybackSessionPersistence()
         let identity = queueIdentity(currentTrack)
         Task {
             // seek 竞态防护（P2-18）：执行前若已切歌则放弃旧 seek，避免落到新曲目。
@@ -2855,7 +2893,7 @@ public final class AuralisAppModel: ObservableObject {
         playbackPosition = min(max(progress, 0), 1) * effectivePlaybackDuration
         let position = playbackPosition
         let identity = queueIdentity(currentTrack)
-        persistPlaybackSession()
+        schedulePlaybackSessionPersistence()
         Task {
             // seek 竞态防护（P2-18）：执行前若已切歌则放弃旧 seek，避免落到新曲目。
             guard queueIdentity(self.currentTrack) == identity else { return }
@@ -2866,9 +2904,9 @@ public final class AuralisAppModel: ObservableObject {
 
     // MARK: - Queue editing
 
-    /// 当前曲目在播放队列中的下标（按 serverID + trackID 匹配）。
+    /// 当前曲目在播放队列中的下标（O(1)，由 queueStore 维护）。
     public var currentQueueIndex: Int? {
-        queue.firstIndex { queueIdentity($0) == queueIdentity(currentTrack) }
+        queueStore.currentIndex
     }
 
     /// 待播队列：当前曲目之后的部分。
@@ -2979,7 +3017,7 @@ public final class AuralisAppModel: ObservableObject {
             // 每 2 秒落盘一次进度，避免高频写入。
             if Date().timeIntervalSince(self.lastPlaybackPersistAt) >= 2 {
                 self.lastPlaybackPersistAt = .now
-                self.persistPlaybackSession()
+                self.schedulePlaybackSessionPersistence()
             }
         }
     }
@@ -3057,7 +3095,7 @@ public final class AuralisAppModel: ObservableObject {
         loadLyricsIfNeeded(for: canonical)
         syncProgressTimer()
         syncNowPlayingTrack()
-        persistPlaybackSession()
+        schedulePlaybackSessionPersistence()
         schedulePreparedNext()
     }
 
@@ -3458,7 +3496,7 @@ public final class AuralisAppModel: ObservableObject {
                 self.playbackState = await self.engine.state()
                 self.syncProgressTimer()
                 self.mediaIntegration.stop()
-                self.persistPlaybackSession()
+                self.schedulePlaybackSessionPersistence()
             }
         } else if !wasPlaying {
             queue = Array(tracks.prefix(30))

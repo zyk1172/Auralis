@@ -124,6 +124,12 @@ public struct MacMusicShell: View {
 
     @StateObject private var playerState = MacPlayerPresentationState()
     @StateObject private var fullscreenCoordinator = MacFullscreenTransitionCoordinator()
+    /// 播放器覆盖层是否已挂载（transient overlay，libraryUI 永不卸载）。
+    @State private var playerOverlayMounted = false
+    /// 覆盖层前景是否可见（由 Shell 驱动动画，Expanded 内部不自行 withAnimation）。
+    @State private var playerOverlayVisible = false
+    /// 播放器挂载期间压住 library 的 toolbar title；关闭动画完成前绝不恢复。
+    @State private var suppressLibraryToolbar = false
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -139,29 +145,27 @@ public struct MacMusicShell: View {
 
     public var body: some View {
         attachLifecycle(attachModals(contents))
-            .background(MacWindowAttacher(isExpanded: playerState.chromeActive, windowCoordinator: .shared))
+            .background(MacWindowAttacher(isExpanded: playerOverlayMounted, windowCoordinator: .shared))
     }
 
     private var contents: some View {
         ZStack {
-            // 四阶段挂载：expanding/collapsing 期间 library 保持在底层、Expanded 覆盖其上，
-            // 只有 expanded 才移除 library、只有回到 library 才移除 Expanded。
-            // 这样关闭时第一帧不会重建 library / 恢复标题（首页闪现），
-            // 展开时也不会在背景未铺满前露出窗口底色（白条）。
-            if playerState.libraryMounted {
-                libraryUI
-            }
+            // 主界面（NavigationSplitView / NavigationStack / libraryUI）从窗口创建到关闭
+            // **永远保持挂载**，展开/关闭播放器绝不重建导航树——这消灭：
+            // 1) 首页标题闪现；2) NavigationRequestObserver 同帧重建；3) sheet/搜索/滚动
+            // /selection 因播放器切换被重新挂载。
+            libraryUI
+                .allowsHitTesting(!playerOverlayMounted)
+                .accessibilityHidden(playerOverlayMounted)
 
-            if playerState.overlayMounted {
+            if playerOverlayMounted {
                 MacExpandedPlayerView(
                     model: model,
                     theme: theme,
                     context: $playerState.context,
+                    isVisible: playerOverlayVisible,
                     onCollapse: collapseExpandedPlayer,
-                    onOpenMiniPlayer: switchToMiniPlayer,
-                    isCollapsing: playerState.phase == .collapsing,
-                    onExpandComplete: { playerState.finishExpand() },
-                    onCollapseComplete: { playerState.finishCollapse() }
+                    onOpenMiniPlayer: switchToMiniPlayer
                 )
                 .zIndex(100)
             }
@@ -175,7 +179,7 @@ public struct MacMusicShell: View {
         // SwiftUI 的 toolbar title item。normal 状态传 nil，因此 NavigationStack 的页面
         // 标题正常恢复。
         .toolbar(
-            removing: playerState.chromeActive
+            removing: suppressLibraryToolbar
                 ? ToolbarDefaultItemKind.title
                 : nil
         )
@@ -205,8 +209,12 @@ public struct MacMusicShell: View {
             // 不能把播放条挂在页面内容的 safeAreaInset 上：空态 VStack 会给它一个
             // 非窗口高度，导致下载/不喜欢等页面的播放条上跳。这里由 detail 的
             // GeometryReader 提供稳定窗口坐标，内容仅预留播放器所占底部空间。
-            GeometryReader { _ in
-                ZStack(alignment: .bottom) {
+            GeometryReader { geo in
+                let playerWidth = min(
+                    MacUIVisualTokens.FloatingPlayer.maxWidth,
+                    geo.size.width - 2 * MacUIVisualTokens.FloatingPlayer.horizontalInset
+                )
+                ZStack {
                     NavigationStack(path: $navigation.path) {
                         detailContent
                             .navigationDestination(for: MacDetailRoute.self) { route in
@@ -223,12 +231,18 @@ public struct MacMusicShell: View {
                         MacRightPanel(model: model, theme: theme, mode: rightPanelMode)
                     }
 
+                    // 播放条用明确坐标严格水平居中：不再依赖 ZStack alignment +
+                    // padding + maxWidth 间接推算（父容器 proposal 改变时会左右漂移）。
                     playerBar
-                        .padding(.horizontal, MacUIVisualTokens.FloatingPlayer.horizontalInset)
-                        .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
-                        .padding(.top, MacUIVisualTokens.FloatingPlayer.topInset)
+                        .frame(width: playerWidth)
+                        .position(
+                            x: geo.size.width / 2,
+                            y: geo.size.height
+                                - MacUIVisualTokens.FloatingPlayer.bottomInset
+                                - MacUIVisualTokens.FloatingPlayer.height / 2
+                        )
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -270,38 +284,59 @@ public struct MacMusicShell: View {
     // MARK: - 播放器展开 / 收起（同窗口）
 
     private func expandCurrentWindowPlayer(fullscreen: Bool = false) {
-        guard !playerState.isExpanded else {
+        guard !playerOverlayMounted else {
             if fullscreen { enterSystemFullscreenIfNeeded() }
             return
         }
         MacUITrace.action("expandPlayer", "fullscreen=\(fullscreen) track=\(model.currentTrack.serverID):\(model.currentTrack.id.rawValue)")
-        // 进入 expanding：立即挂载 Expanded（背景铺满）、激活 toolbar/chrome，
-        // library 保持在底层；入场动画由 Expanded 内部完成，完成后回调推进到 .expanded。
-        playerState.beginExpand()
+        // 先挂载覆盖层并压住 library toolbar title；下一 RunLoop 再开始前景动画，
+        // 保证「第 N 帧已挂载但前景在起始位置、第 N+1 帧开始动画」，动画明显且
+        // 背景始终满屏（不露白条）。libraryUI 始终在底层，绝不重建。
+        playerState.resetContext()
+        suppressLibraryToolbar = true
+        playerOverlayMounted = true
+        DispatchQueue.main.async {
+            withAnimation(
+                reduceMotion ? .easeOut(duration: 0.14) : .spring(duration: 0.34, bounce: 0.05)
+            ) {
+                playerOverlayVisible = true
+            }
+        }
         if fullscreen {
             enterSystemFullscreenIfNeeded()
         }
     }
 
     private func collapseExpandedPlayer() {
-        guard playerState.isExpanded else { return }
+        guard playerOverlayMounted else { return }
         MacUITrace.action("collapsePlayer")
         if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
             collapseAfterLeavingFullscreen(window: window)
         } else {
-            // 进入 collapsing：library 挂载回底层、toolbar/chrome 仍激活（标题不闪现），
-            // Expanded 退场动画由内部 isCollapsing 信号驱动，完成后回调推进到 .library。
-            playerState.beginCollapse()
+            dismissOverlay()
+        }
+    }
+
+    /// 关闭覆盖层：前景淡出动画完成后才卸载 Expanded、恢复 library toolbar title。
+    /// 关闭动画完成之前绝不恢复 toolbar title（避免「首页」标题闪现）。
+    private func dismissOverlay() {
+        withAnimation(
+            reduceMotion ? .easeOut(duration: 0.14) : .easeInOut(duration: 0.22)
+        ) {
+            playerOverlayVisible = false
+        } completion: {
+            Task { @MainActor in
+                playerOverlayMounted = false
+                suppressLibraryToolbar = false
+            }
         }
     }
 
     /// 退出系统全屏后收播放器：监听真正的 `didExitFullScreenNotification`，
     /// 不依赖固定 0.35s 魔法延迟（Reduce Motion / 系统负载 / 多显示器都会改变动画时长）。
     private func collapseAfterLeavingFullscreen(window: NSWindow) {
-        let presentation = playerState
-        fullscreenCoordinator.observeExit(of: window) { [weak presentation] in
-            guard let presentation else { return }
-            presentation.beginCollapse()
+        fullscreenCoordinator.observeExit(of: window) {
+            self.dismissOverlay()
         }
         window.toggleFullScreen(nil)
     }
@@ -620,7 +655,7 @@ public struct MacMusicShell: View {
             }
             .onKeyPress(.escape) {
                 if isTypingText { return .ignored }
-                if playerState.isExpanded {
+                if playerOverlayMounted {
                     collapseExpandedPlayer()
                     return .handled
                 }

@@ -41,7 +41,9 @@ struct MacHomeView: View {
             }
         }
         .sheet(isPresented: $isEditingLayout) {
-            HomeLayoutEditView(model: model, theme: theme)
+            // Mac 专用首页编辑器：只编辑内容模块（quickEntries 在 Mac 首页不显示），
+            // 固定 560×600，不再复用 iOS HomeLayoutEditView。
+            MacHomeLayoutEditor(model: model, theme: theme)
         }
     }
 

@@ -12,17 +12,16 @@ public final class PlaybackStore: ObservableObject {
     @Published public var currentTrack: Track
     @Published public var state: PlaybackState
     @Published public var position: TimeInterval
-    @Published public var queue: [Track]
+    // 队列已拆到 PlaybackQueuePresentationStore：上万首队列更新不再让
+    // 所有观察本 store 的播放器控件一起 invalidate。
 
     public init(
         currentTrack: Track,
         state: PlaybackState = .paused,
-        position: TimeInterval = 0,
-        queue: [Track] = []
+        position: TimeInterval = 0
     ) {
         self.currentTrack = currentTrack
         self.state = state
         self.position = position
-        self.queue = queue
     }
 }

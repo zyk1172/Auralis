@@ -160,6 +160,7 @@ struct CompactMiniPlayerContent: View {
 struct NowPlayingView: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
+    @ObservedObject private var queueStore: PlaybackQueuePresentationStore
     let theme: BuiltInTheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -178,6 +179,7 @@ struct NowPlayingView: View {
     init(model: AuralisAppModel, theme: BuiltInTheme) {
         self.model = model
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self._queueStore = ObservedObject(wrappedValue: model.queueStore)
         self.theme = theme
     }
 
@@ -677,7 +679,7 @@ struct NowPlayingView: View {
 
     private var queue: some View {
         List {
-            ForEach(model.queue) { track in
+            ForEach(queueStore.tracks) { track in
                 Button {
                     model.selectAndPlay(track)
                 } label: {

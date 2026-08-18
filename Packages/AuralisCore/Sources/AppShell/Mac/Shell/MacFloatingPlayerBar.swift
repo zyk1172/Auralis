@@ -19,8 +19,6 @@ struct MacFloatingPlayerBar: View {
     var onToggleQueue: () -> Void = {}
 
     @ObservedObject private var playbackStore: PlaybackStore
-    @State private var isScrubbing = false
-    @State private var scrubValue: TimeInterval = 0
     @State private var isVolumePopoverPresented = false
 
     init(
@@ -44,7 +42,6 @@ struct MacFloatingPlayerBar: View {
 
     private var hasTrack: Bool { model.hasCurrentTrack }
     private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
-    private var progress: TimeInterval { isScrubbing ? scrubValue : playbackStore.position }
 
     var body: some View {
         switch presentation {
@@ -238,21 +235,14 @@ struct MacFloatingPlayerBar: View {
                 .help("展开播放器")
                 .accessibilityLabel("展开播放器")
 
-                Slider(
-                    value: Binding(
-                        get: { progress },
-                        set: { isScrubbing = true; scrubValue = $0 }
-                    ),
-                    in: 0...duration,
-                    onEditingChanged: { editing in
-                        if !editing {
-                            model.seek(toProgress: scrubValue / duration)
-                            isScrubbing = false
-                        }
-                    }
+                MacPlaybackSlider(
+                    value: playbackStore.position,
+                    minValue: 0,
+                    maxValue: duration,
+                    isEnabled: hasTrack,
+                    onCommit: { model.seek(toProgress: min(1, max(0, $0 / duration))) }
                 )
                 .controlSize(.mini)
-                .disabled(!hasTrack)
                 .accessibilityLabel("播放进度")
             }
             .frame(maxWidth: MacUIVisualTokens.FloatingPlayer.titleMaxWidth, alignment: .leading)
