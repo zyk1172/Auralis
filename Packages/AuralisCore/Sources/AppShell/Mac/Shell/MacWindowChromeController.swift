@@ -22,8 +22,6 @@ import AppKit
 /// “Auralis 忽隐忽现”从状态模型上消失。
 @MainActor
 public final class MacWindowChromeController {
-    public static let shared = MacWindowChromeController()
-
     private weak var window: NSWindow?
     private var isExpanded = false
 

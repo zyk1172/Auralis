@@ -19,13 +19,48 @@ private struct MacWindowAttacher: NSViewRepresentable {
 
     func makeNSView(context: Context) -> AttacherView { AttacherView() }
     func updateNSView(_ view: AttacherView, context: Context) {
-        MacWindowChromeController.shared.attach(view.window)
-        MacWindowChromeController.shared.setExpanded(isExpanded)
+        view.controller.attach(view.window)
+        view.controller.setExpanded(isExpanded)
     }
     final class AttacherView: NSView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            MacWindowChromeController.shared.attach(window)
+            controller.attach(window)
+        }
+        let controller = MacWindowChromeController()
+    }
+}
+
+@MainActor
+private final class MacFullscreenTransitionCoordinator: ObservableObject {
+    private var observer: NSObjectProtocol?
+
+    func observeExit(of window: NSWindow, action: @escaping @MainActor () -> Void) {
+        cancelPendingExit()
+        observer = NotificationCenter.default.addObserver(
+            forName: NSWindow.didExitFullScreenNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // 退出全屏是一次性状态转换，回调一到就注销，避免重复收播放器。
+                self.cancelPendingExit()
+                action()
+            }
+        }
+    }
+
+    func cancelPendingExit() {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+            self.observer = nil
+        }
+    }
+
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 }
@@ -46,8 +81,7 @@ public struct MacMusicShell: View {
     @State private var newPlaylistName = ""
 
     @StateObject private var playerState = MacPlayerPresentationState()
-    /// 退出系统全屏的真实事件观察者（替换 0.35s 魔法延迟）。
-    @State private var fullscreenExitObserver: NSObjectProtocol?
+    @StateObject private var fullscreenCoordinator = MacFullscreenTransitionCoordinator()
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -213,21 +247,12 @@ public struct MacMusicShell: View {
     /// 退出系统全屏后收播放器：监听真正的 `didExitFullScreenNotification`，
     /// 不依赖固定 0.35s 魔法延迟（Reduce Motion / 系统负载 / 多显示器都会改变动画时长）。
     private func collapseAfterLeavingFullscreen(window: NSWindow) {
-        if let fullscreenExitObserver {
-            NotificationCenter.default.removeObserver(fullscreenExitObserver)
-        }
         let presentation = playerState
         let reduceMotion = self.reduceMotion
-        fullscreenExitObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didExitFullScreenNotification,
-            object: window,
-            queue: .main
-        ) { [weak presentation] _ in
-            Task { @MainActor in
-                guard let presentation else { return }
-                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
-                    presentation.collapse()
-                }
+        fullscreenCoordinator.observeExit(of: window) { [weak presentation] in
+            guard let presentation else { return }
+            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.0)) {
+                presentation.collapse()
             }
         }
         window.toggleFullScreen(nil)

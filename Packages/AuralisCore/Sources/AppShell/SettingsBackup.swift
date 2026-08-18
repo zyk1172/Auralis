@@ -30,6 +30,7 @@ struct SettingsBackupSection: View {
     @State private var importPassword = ""
     @State private var importFileURL: URL?
     @State private var isRestoring = false
+    @State private var restoreMessage: String?
     @State private var restoreError: String?
 
     private let service = SettingsBackupService()
@@ -79,8 +80,10 @@ struct SettingsBackupSection: View {
                 importFileURL = url
                 importPassword = ""
                 restoreError = nil
+                restoreMessage = nil
                 isImportPasswordSheetPresented = true
             case let .failure(error):
+                restoreMessage = nil
                 restoreError = "无法读取备份文件：\(error.localizedDescription)"
             }
         }
@@ -103,6 +106,7 @@ struct SettingsBackupSection: View {
 
     private func presentImport() {
         restoreError = nil
+        restoreMessage = nil
         DispatchQueue.main.async {
             self.isImportSheetPresented = true
         }
@@ -204,6 +208,11 @@ struct SettingsBackupSection: View {
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.error.color)
                     }
+                    if let restoreMessage {
+                        Label(restoreMessage, systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(theme.colorTokens.success.color)
+                    }
                 }
             }
             .navigationTitle("从备份恢复")
@@ -213,6 +222,8 @@ struct SettingsBackupSection: View {
                         isImportPasswordSheetPresented = false
                         importFileURL = nil
                         importPassword = ""
+                        restoreMessage = nil
+                        restoreError = nil
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) {
@@ -220,6 +231,8 @@ struct SettingsBackupSection: View {
                         isImportPasswordSheetPresented = false
                         importFileURL = nil
                         importPassword = ""
+                        restoreMessage = nil
+                        restoreError = nil
                     }
                 }
             }
@@ -230,6 +243,7 @@ struct SettingsBackupSection: View {
         guard let url = importFileURL else { return }
         isRestoring = true
         restoreError = nil
+        restoreMessage = nil
         defer { isRestoring = false }
         do {
             let accessing = url.startAccessingSecurityScopedResource()
@@ -239,7 +253,7 @@ struct SettingsBackupSection: View {
             let data = try Data(contentsOf: url)
             let backup = try service.decrypt(data, password: importPassword)
             try await Self.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
-            restoreError = "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。"
+            restoreMessage = "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。"
         } catch {
             restoreError = error.localizedDescription
         }

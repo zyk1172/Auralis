@@ -240,7 +240,7 @@ public protocol ServerConnecting: Sendable {
     func updateServerConfiguration(serverID: ServerID, update: ServerConfigurationUpdate) async -> ServerAccount?
     /// 备份恢复：把服务器账号与登录凭据写回本地持久化（不联网、不触发资料同步）。
     /// `secret` 为解密后的登录密码 / Token，仅在备份恢复流程中传入。
-    func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async
+    func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws
     /// 用「用户当前输入」执行一次真实连接测试：不保存凭据、不同步、不改变当前连接。
     /// 失败时抛出分类错误（地址/认证/网络/超时/非 OpenSubsonic 等）。
     func testConnection(_ input: ServerConnectionInput) async throws -> ServerConnectionTestResult
@@ -282,7 +282,7 @@ public extension ServerConnecting {
     func addToPlaylist(playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }
     func setFavorite(trackID: TrackID, isFavorite: Bool) async {}
     func makeSynchronizer(store: LocalCatalogStore) async -> LibrarySynchronizer? { nil }
-    func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async {}
+    func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {}
     func testConnection(_ input: ServerConnectionInput) async throws -> ServerConnectionTestResult {
         throw ServerConnectionError.unsupportedResponse
     }

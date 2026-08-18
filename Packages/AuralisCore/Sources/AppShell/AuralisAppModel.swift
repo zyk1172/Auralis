@@ -47,6 +47,8 @@ public final class AuralisAppModel: ObservableObject {
     /// “不喜欢”状态的内存镜像（SQLite disliked_tracks 是唯一权威）。
     /// 用于同步 UI 读取；启动/同步/变更时从目录刷新。
     @Published public private(set) var dislikedTrackIDs: Set<GlobalID> = []
+    /// 内存镜像所属的服务器。异步刷新完成后必须匹配当前服务器，避免切服时旧结果反扑。
+    private var dislikedStateServerID: ServerID?
     /// 搜索不再是主导航页；系统入口需要搜索时由 AI 助手展示本地/服务器搜索兜底页。
     @Published public var shouldPresentAssistantSearch = false
     /// 桌面版仅在已有实际播放项目时显示底部迷你播放器；iPhone 的 Dock 则在首页和
@@ -2475,8 +2477,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 仅登记账号信息，不会自动下载 / 同步音乐资料库。
     /// 关键写入失败必须抛出，禁止「界面显示恢复成功、实际凭据没写进去」（P2-4）。
     public func restoreServerAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {
-        try await catalogCoordinator.store.upsertServer(account)
-        await connector.restoreAccountFromBackup(account, secret: secret)
+        try await connector.restoreAccountFromBackup(account, secret: secret)
     }
 
     /// 移除服务器：只清理本地凭据与本地数据，绝不向远端发送删除请求。
@@ -2735,12 +2736,24 @@ public final class AuralisAppModel: ObservableObject {
     public func refreshDislikedState() async {
         guard let serverID = catalog.activeServerID else {
             dislikedTrackIDs = []
+            dislikedStateServerID = nil
             return
         }
+        let loaded = await loadDislikedTrackIDs(serverID: serverID)
+        guard catalog.activeServerID == serverID else { return }
+        if let loaded {
+            dislikedTrackIDs = loaded
+            dislikedStateServerID = serverID
+        }
+    }
+
+    /// 读取指定服务器的不喜欢状态，不触碰当前内存镜像。
+    private func loadDislikedTrackIDs(serverID: ServerID) async -> Set<GlobalID>? {
         do {
-            dislikedTrackIDs = try await catalogCoordinator.store.dislikedTrackIDs(serverID: serverID)
+            return try await catalogCoordinator.store.dislikedTrackIDs(serverID: serverID)
         } catch {
             AuralisLog.library.error("读取 dislikedTrackIDs 失败：\(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -2761,6 +2774,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 可等待的 dislike 持久化（UI 通过 setDisliked 触发；测试直接调用以同步断言）。
     func persistDisliked(_ track: Track, value: Bool, source: String?) async {
         let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        dislikedStateServerID = track.serverID
         if value == dislikedTrackIDs.contains(gid) { return }
         if value {
             dislikedTrackIDs.insert(gid)
@@ -3441,10 +3455,17 @@ public final class AuralisAppModel: ObservableObject {
         pendingApplyDerivations = Task { [weak self] in
             guard let self else { return }
             let libraryAddedStartedAt = ContinuousClock.now
-            // 1) 权威「不喜欢」状态先就绪（读取失败保留现有状态，见 refreshDislikedState）。
-            await self.refreshDislikedState()
+            // 1) 读取这次同步对应服务器的权威状态，避免异步切服后旧结果反扑。
+            let loadedDisliked = await self.loadDislikedTrackIDs(serverID: serverIDSnapshot)
             guard !Task.isCancelled else { return }
-            let dislikedSnapshot = self.dislikedTrackIDs
+            let dislikedSnapshot: Set<GlobalID>
+            if let loadedDisliked {
+                dislikedSnapshot = loadedDisliked
+            } else if self.dislikedStateServerID == serverIDSnapshot {
+                dislikedSnapshot = self.dislikedTrackIDs
+            } else {
+                dislikedSnapshot = []
+            }
 
             // 2) 真正的后台计算（utility）：library-added 对齐 + 随机采样。
             let derived = await Task.detached(priority: .utility) {

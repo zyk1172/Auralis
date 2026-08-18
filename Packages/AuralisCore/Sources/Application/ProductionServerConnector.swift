@@ -697,12 +697,12 @@ public actor ProductionServerConnector: ServerConnecting {
 
     /// 备份恢复：把服务器账号与登录凭据写回本地（不联网、不触发资料同步）。
     /// 凭据写入 Keychain，账号写入持久化快照；SQLite 目录由 AppModel 另行登记。
-    public func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async {
+    public func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {
         if let secret, let reference = account.credentialReference {
-            try? await credentialVault.store(secret, for: CredentialID(rawValue: reference))
+            try await credentialVault.store(secret, for: CredentialID(rawValue: reference))
         }
-        try? await persistence.saveAccount(account)
-        try? await catalogStore.upsertServer(account)
+        try await persistence.saveAccount(account)
+        try await catalogStore.upsertServer(account)
     }
 
     // MARK: - 歌单编辑

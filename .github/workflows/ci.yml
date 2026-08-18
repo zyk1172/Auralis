@@ -17,9 +17,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: git diff --check
-        run: git diff --check
+      - name: git whitespace check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          else
+            git show --check --oneline HEAD
+          fi
+
+      - name: Toolchain diagnostics
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Swift 6 tests (AuralisCore)
         run: swift test --package-path Packages/AuralisCore
@@ -53,6 +65,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: AVFoundation playback integration tests
         run: |

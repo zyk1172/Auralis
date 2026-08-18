@@ -467,24 +467,38 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 172.16.0.0/12 / 192.168.0.0/16 / ::1）。
     static func isPrivateOrLoopbackHost(_ host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed == "localhost" || trimmed.hasSuffix(".localhost") || trimmed == "::1" || trimmed == "[::1]" {
+        if trimmed == "localhost" || trimmed == "::1" || trimmed == "[::1]" {
             return true
         }
-        let octets = trimmed.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-        guard let first = octets.first, let firstOctet = Int(first) else { return false }
+        guard let octets = parseIPv4Literal(trimmed) else { return false }
+        let firstOctet = Int(octets[0])
         // 127.0.0.0/8 环回
         if firstOctet == 127 { return true }
         // 10.0.0.0/8
         if firstOctet == 10 { return true }
         // 172.16.0.0/12
-        if firstOctet == 172, octets.count >= 2, let second = Int(octets[1]), (16...31).contains(second) {
+        if firstOctet == 172, (16...31).contains(Int(octets[1])) {
             return true
         }
         // 192.168.0.0/16
-        if firstOctet == 192, octets.count >= 2, octets[1] == "168" {
+        if firstOctet == 192, octets[1] == 168 {
             return true
         }
         return false
+    }
+
+    /// 只接受四段十进制 IPv4 literal，拒绝带数字前缀的普通 hostname。
+    private static func parseIPv4Literal(_ host: String) -> [UInt8]? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var octets: [UInt8] = []
+        octets.reserveCapacity(4)
+        for part in parts {
+            guard !part.isEmpty, part.allSatisfy({ $0.isNumber }),
+                  let value = Int(part), (0...255).contains(value) else { return nil }
+            octets.append(UInt8(value))
+        }
+        return octets
     }
 
     private static let maxRetries = 3
