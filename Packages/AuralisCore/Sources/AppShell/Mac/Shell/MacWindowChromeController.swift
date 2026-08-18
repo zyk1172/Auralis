@@ -43,7 +43,9 @@ public final class MacWindowChromeController {
 
     /// 幂等应用：仅在属性与目标不一致时写入，正确状态下零开销。
     private func apply() {
-        guard let window = window ?? NSApp.keyWindow else { return }
+        // 不再猜 NSApp.keyWindow：App 现在有 Main / Mini / Settings 多个窗口，
+        // keyWindow 可能不是主窗口。本控制器只属于 Main Attacher。
+        guard let window else { return }
         if window.titleVisibility != .hidden {
             window.titleVisibility = .hidden
         }

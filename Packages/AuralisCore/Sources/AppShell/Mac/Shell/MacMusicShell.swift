@@ -22,24 +22,16 @@ private struct MacWindowAttacher: NSViewRepresentable {
         AttacherView(windowCoordinator: windowCoordinator)
     }
     func updateNSView(_ view: AttacherView, context: Context) {
-        let controller = view.controller
-        let window = view.window
-        let expanded = isExpanded
-        let coordinator = windowCoordinator
-        // 不要在 SwiftUI 视图更新事务内同步修改 NSWindow 属性：
-        // updateNSView 属于视图更新事务，直接写 titlebar / traffic lights 会让
-        // SwiftUI 窗口系统在事务内发布状态变化，触发
-        // "Publishing changes from within view updates is not allowed" 断言。
-        // 推迟到下一轮 MainActor 执行（视觉无差异，apply 幂等）。
-        Task { @MainActor in
-            controller.attach(window)
-            controller.setExpanded(expanded)
-            coordinator.registerMainWindow(window)
-        }
+        // 由 AttacherView 自己做 last-write-wins 合并：快速开关播放器时
+        // updateNSView 可能被高频调用，只保留最后一次 expanded 值，
+        // 合并到下一轮 MainActor 执行（避免每个 Task 各写一次窗口属性）。
+        view.scheduleApply(expanded: isExpanded)
     }
     final class AttacherView: NSView {
         let controller = MacWindowChromeController()
         let windowCoordinator: MacWindowVisibilityCoordinator
+        private var pendingExpanded = false
+        private var applyScheduled = false
 
         init(windowCoordinator: MacWindowVisibilityCoordinator) {
             self.windowCoordinator = windowCoordinator
@@ -50,18 +42,30 @@ private struct MacWindowAttacher: NSViewRepresentable {
             fatalError()
         }
 
+        /// 记录最新状态并合并到下一轮 MainActor 执行：
+        /// - 不在 SwiftUI 视图更新事务内同步修改 NSWindow 属性（避免
+        ///   "Publishing changes from within view updates is not allowed"）；
+        /// - 同一 run loop 内多次调用只执行一次 apply（last-write-wins）。
+        func scheduleApply(expanded: Bool) {
+            pendingExpanded = expanded
+            guard !applyScheduled else { return }
+            applyScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.applyScheduled = false
+                    self.controller.attach(self.window)
+                    self.controller.setExpanded(self.pendingExpanded)
+                    self.windowCoordinator.registerMainWindow(self.window)
+                }
+            }
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            let controller = controller
-            let window = window
-            let coordinator = windowCoordinator
             // NSView 挂载是真正可靠的窗口就绪信号（updateNSView 可能在
-            // view.window == nil 时先跑），这里同时注册 chrome 与主窗口。
-            // 同上：挂载发生在 SwiftUI 更新事务内，推迟写入。
-            Task { @MainActor in
-                controller.attach(window)
-                coordinator.registerMainWindow(window)
-            }
+            // view.window == nil 时先跑），这里同样注册 chrome 与主窗口。
+            scheduleApply(expanded: pendingExpanded)
         }
     }
 }
@@ -127,22 +131,6 @@ public struct MacMusicShell: View {
 
     private var theme: BuiltInTheme { themeStore.current }
 
-    /// Expanded Player 页面开关动画：Shell 负责整个页面的出现/消失，
-    /// ExpandedPlayer 内部只负责控件动画。
-    private var playerTransition: AnyTransition {
-        if reduceMotion {
-            return .opacity
-        }
-        return .asymmetric(
-            insertion:
-                .scale(scale: 0.92, anchor: .bottom)
-                .combined(with: .opacity),
-            removal:
-                .scale(scale: 0.94, anchor: .bottom)
-                .combined(with: .opacity)
-        )
-    }
-
     public init(model: AuralisAppModel, themeStore: ThemeStore, settingsRouter: MacSettingsRouter = MacSettingsRouter()) {
         self.model = model
         self.themeStore = themeStore
@@ -151,31 +139,31 @@ public struct MacMusicShell: View {
 
     public var body: some View {
         attachLifecycle(attachModals(contents))
-            .background(MacWindowAttacher(isExpanded: playerState.isExpanded, windowCoordinator: .shared))
+            .background(MacWindowAttacher(isExpanded: playerState.chromeActive, windowCoordinator: .shared))
     }
 
     private var contents: some View {
         ZStack {
-            // 展开页不保留资料库 View 本身，避免其 NavigationSplitView 自动生成的
-            // Hide Sidebar、页面标题和“编辑首页”等 toolbar item 泄漏进 titlebar。
-            // navigation / sidebar 偏好均由 MacMusicShell 的 StateObject 持有，收起时
-            // 会恢复原 selection/path，而不是重建导航状态。
-            if !playerState.isExpanded {
+            // 四阶段挂载：expanding/collapsing 期间 library 保持在底层、Expanded 覆盖其上，
+            // 只有 expanded 才移除 library、只有回到 library 才移除 Expanded。
+            // 这样关闭时第一帧不会重建 library / 恢复标题（首页闪现），
+            // 展开时也不会在背景未铺满前露出窗口底色（白条）。
+            if playerState.libraryMounted {
                 libraryUI
             }
 
-            if playerState.isExpanded {
+            if playerState.overlayMounted {
                 MacExpandedPlayerView(
                     model: model,
                     theme: theme,
                     context: $playerState.context,
                     onCollapse: collapseExpandedPlayer,
-                    onOpenMiniPlayer: switchToMiniPlayer
+                    onOpenMiniPlayer: switchToMiniPlayer,
+                    isCollapsing: playerState.phase == .collapsing,
+                    onExpandComplete: { playerState.finishExpand() },
+                    onCollapseComplete: { playerState.finishCollapse() }
                 )
                 .zIndex(100)
-                // 展开页内部负责统一的封面/背景/控制层进入动画；外层只做淡出，
-                // 避免 ArtworkView 与页面容器各自执行不同的 move transition。
-                .transition(playerTransition)
             }
         }
         // Expanded Player 仍保留 window toolbar host：不允许隐藏整个 windowToolbar，
@@ -187,7 +175,7 @@ public struct MacMusicShell: View {
         // SwiftUI 的 toolbar title item。normal 状态传 nil，因此 NavigationStack 的页面
         // 标题正常恢复。
         .toolbar(
-            removing: playerState.isExpanded
+            removing: playerState.chromeActive
                 ? ToolbarDefaultItemKind.title
                 : nil
         )
@@ -287,9 +275,9 @@ public struct MacMusicShell: View {
             return
         }
         MacUITrace.action("expandPlayer", "fullscreen=\(fullscreen) track=\(model.currentTrack.serverID):\(model.currentTrack.id.rawValue)")
-        withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.38, bounce: 0.06)) {
-            playerState.expand()
-        }
+        // 进入 expanding：立即挂载 Expanded（背景铺满）、激活 toolbar/chrome，
+        // library 保持在底层；入场动画由 Expanded 内部完成，完成后回调推进到 .expanded。
+        playerState.beginExpand()
         if fullscreen {
             enterSystemFullscreenIfNeeded()
         }
@@ -301,9 +289,9 @@ public struct MacMusicShell: View {
         if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
             collapseAfterLeavingFullscreen(window: window)
         } else {
-            withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.32, bounce: 0)) {
-                playerState.collapse()
-            }
+            // 进入 collapsing：library 挂载回底层、toolbar/chrome 仍激活（标题不闪现），
+            // Expanded 退场动画由内部 isCollapsing 信号驱动，完成后回调推进到 .library。
+            playerState.beginCollapse()
         }
     }
 
@@ -311,12 +299,9 @@ public struct MacMusicShell: View {
     /// 不依赖固定 0.35s 魔法延迟（Reduce Motion / 系统负载 / 多显示器都会改变动画时长）。
     private func collapseAfterLeavingFullscreen(window: NSWindow) {
         let presentation = playerState
-        let reduceMotion = self.reduceMotion
         fullscreenCoordinator.observeExit(of: window) { [weak presentation] in
             guard let presentation else { return }
-            withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.32, bounce: 0)) {
-                presentation.collapse()
-            }
+            presentation.beginCollapse()
         }
         window.toggleFullScreen(nil)
     }
@@ -526,8 +511,9 @@ public struct MacMusicShell: View {
             .onOpenURL { model.handleIncomingURL($0) }
             .onContinueUserActivity("INPlayMediaIntent") { model.handleSiriUserActivity($0) }
             .onChange(of: navigation.selection) { _, _ in
+                // path 的唯一 writer 是 MacNavigationModel.selectSidebar()，
+                // 这里只清选中行，不再重复 removeAll（避免同帧多次导航写入）。
                 selectedTracks = []
-                navigation.path.removeAll()
             }
             .onChange(of: selectedTracks) { _, newValue in
                 if !newValue.isEmpty { showRightPanel = false }
@@ -594,7 +580,8 @@ public struct MacMusicShell: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.showMiniPlayer)) { _ in
                 guard !isTypingText else { return }
-                openWindow(id: MacWindowID.miniPlayer)
+                // 走统一切换入口，与点击播放页 Mini 按钮同一套 Main ↔ Mini 生命周期。
+                switchToMiniPlayer()
             }
             .onReceive(NotificationCenter.default.publisher(for: MacCommand.newPlaylist)) { _ in
                 guard !isTypingText else { return }

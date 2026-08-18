@@ -15,11 +15,20 @@ struct MacExpandedPlayerView: View {
     @Binding var context: MacExpandedPlayerContext
     let onCollapse: () -> Void
     let onOpenMiniPlayer: () -> Void
+    /// 外部（MacMusicShell）进入 collapsing 阶段的信号：触发本页退场动画。
+    let isCollapsing: Bool
+    /// 入场动画完成回调：外部据此把 phase 从 .expanding 推到 .expanded（移除底层 library）。
+    let onExpandComplete: () -> Void
+    /// 退场动画完成回调：外部据此把 phase 从 .collapsing 推到 .library（移除 Expanded、恢复标题）。
+    let onCollapseComplete: () -> Void
 
     @State private var ambienceImage: PlatformImage?
     @State private var lyricsState: MacLyricsPresentationState = .loading
     @State private var isScrubbing = false
     @State private var scrubValue: TimeInterval = 0
+    /// 页面出现/消失动画：背景只淡入淡出（不参与缩放，绝不留白边），
+    /// 前景内容（封面/标题/进度/控制）做 0.96 → 1.0 缩放 + 淡入淡出。
+    @State private var presentationVisible = false
 
     @ObservedObject private var playbackStore: PlaybackStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -29,13 +38,19 @@ struct MacExpandedPlayerView: View {
         theme: BuiltInTheme,
         context: Binding<MacExpandedPlayerContext>,
         onCollapse: @escaping () -> Void,
-        onOpenMiniPlayer: @escaping () -> Void
+        onOpenMiniPlayer: @escaping () -> Void,
+        isCollapsing: Bool = false,
+        onExpandComplete: @escaping () -> Void = {},
+        onCollapseComplete: @escaping () -> Void = {}
     ) {
         self.model = model
         self.theme = theme
         self._context = context
         self.onCollapse = onCollapse
         self.onOpenMiniPlayer = onOpenMiniPlayer
+        self.isCollapsing = isCollapsing
+        self.onExpandComplete = onExpandComplete
+        self.onCollapseComplete = onCollapseComplete
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
     }
 
@@ -62,15 +77,19 @@ struct MacExpandedPlayerView: View {
             let contextLeading = playerLeading + playerWidth + MacFullPlayerMetrics.horizontalGap(window: size)
 
             ZStack {
+                // 背景从第一帧铺满窗口，只做淡入淡出，**不参与缩放**：
+                // 缩放背景会在顶部露出窗口/toolbar 底色（白条）。
                 background
+                    .opacity(presentationVisible ? 1 : 0)
 
-                // Music.app 的左侧是固定宽度的「播放轨道」：封面居中，标题、进度和运输控制
-                // 左右对齐。队列/歌词是另一条更靠上的右轨，不能与封面同一顶部基线。
+                // 前景播放内容（封面/标题/进度/控制/歌词/队列）做 0.96 → 1.0 缩放 + 淡入。
                 playerColumn(artworkSize: artwork, columnWidth: playerWidth)
                     .frame(width: playerWidth, alignment: .leading)
                     .padding(.leading, playerLeading)
                     .padding(.top, MacFullPlayerMetrics.topY(window: size))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .scaleEffect(presentationVisible ? 1 : 0.96, anchor: .bottom)
+                    .opacity(presentationVisible ? 1 : 0)
 
                 if hasContext {
                     rightContext(artworkSize: artwork)
@@ -79,6 +98,8 @@ struct MacExpandedPlayerView: View {
                         .padding(.top, MacFullPlayerMetrics.contextTopY(window: size))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .transition(.opacity)
+                        .scaleEffect(presentationVisible ? 1 : 0.96, anchor: .bottom)
+                        .opacity(presentationVisible ? 1 : 0)
                 }
 
                 // Glass Capsules（只对内容命中）
@@ -88,8 +109,30 @@ struct MacExpandedPlayerView: View {
             .overlay(alignment: .topTrailing) { topRightVolumeGlass }
             .overlay(alignment: .bottomTrailing) { bottomRightContextGlass }
             .animation(.easeInOut(duration: 0.25), value: context)
-            // 页面出现/消失由 MacMusicShell 统一管理（scale + opacity transition），
-            // 这里只负责内部控件动画（封面播放/暂停、Lyrics/Queue context 切换、按钮 hover）。
+        }
+        // 页面出现/消失动画：入场由 onAppear 驱动，退场由外部 isCollapsing 信号驱动；
+        // 动画 completion 通过回调通知 Shell 推进 phase（不用 Task.sleep 魔法延迟）。
+        .onAppear {
+            guard !presentationVisible else { return }
+            withAnimation(
+                reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.38, bounce: 0.06),
+                completionCriteria: .logicallyComplete
+            ) {
+                presentationVisible = true
+            } completion: {
+                Task { @MainActor in onExpandComplete() }
+            }
+        }
+        .onChange(of: isCollapsing) { _, newValue in
+            guard newValue, presentationVisible else { return }
+            withAnimation(
+                reduceMotion ? .easeOut(duration: 0.16) : .spring(duration: 0.32, bounce: 0),
+                completionCriteria: .logicallyComplete
+            ) {
+                presentationVisible = false
+            } completion: {
+                Task { @MainActor in onCollapseComplete() }
+            }
         }
         // 窗口 chrome（traffic lights / titlebar 透明 / titleVisibility）由
         // MacMusicShell 的 MacWindowAttacher(isExpanded:) 唯一写入（P2-1），

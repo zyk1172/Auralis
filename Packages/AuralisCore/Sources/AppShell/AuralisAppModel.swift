@@ -1591,9 +1591,14 @@ public final class AuralisAppModel: ObservableObject {
 
     public func setVolume(_ value: Float) {
         let clamped = min(max(value, 0), 1)
+        // 变化阈值：Slider 拖动/进度回调可能高频带几乎相同的值，
+        // 值没实际变化时不 publish、不写 defaults、不创建引擎 Task。
+        guard abs(clamped - volume) > 0.0005 else { return }
         volume = clamped
         defaults.set(Double(clamped), forKey: Self.volumeDefaultsKey)
-        Task { await engine.setVolume(clamped) }
+        Task { [engine] in
+            await engine.setVolume(clamped)
+        }
     }
 
     public func setReplayGainMode(_ mode: ReplayGainMode) {

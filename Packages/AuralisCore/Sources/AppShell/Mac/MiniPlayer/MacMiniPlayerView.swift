@@ -63,80 +63,106 @@ public struct MacMiniPlayerView: View {
             .controlSize(.mini)
             .disabled(!hasTrack)
 
-            HStack(spacing: MacUIVisualTokens.MiniPlayer.controlSpacing) {
-                Button {
-                    model.previous()
-                } label: {
-                    Image(systemName: "backward.fill")
-                }
-                .buttonStyle(.plain)
-                .disabled(!model.canGoPrevious)
-                .accessibilityLabel("上一首")
+            // 8 个按钮两排排布：220pt 控制区塞不下单排 8 个按钮（会裁切），
+            // 每排 4 个 + Spacer 均分，每个按钮固定 32×28 hit target。
+            VStack(spacing: 9) {
+                HStack {
+                    Button {
+                        model.previous()
+                    } label: {
+                        Image(systemName: "backward.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .disabled(!model.canGoPrevious)
+                    .accessibilityLabel("上一首")
 
-                Button {
-                    model.togglePlayback()
-                } label: {
-                    Image(systemName: model.playbackStore.state == .playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: 20, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .disabled(!hasTrack)
-                .accessibilityLabel("播放 / 暂停")
+                    Spacer()
 
-                Button {
-                    model.next()
-                } label: {
-                    Image(systemName: "forward.fill")
-                }
-                .buttonStyle(.plain)
-                .disabled(!model.canGoNext)
-                .accessibilityLabel("下一首")
+                    Button {
+                        model.togglePlayback()
+                    } label: {
+                        Image(systemName: model.playbackStore.state == .playing ? "pause.fill" : "play.fill")
+                            .font(.system(size: 20, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .disabled(!hasTrack)
+                    .accessibilityLabel("播放 / 暂停")
 
-                Button {
-                    model.toggleFavorite(model.currentTrack)
-                } label: {
-                    Image(systemName: model.currentTrack.isFavorite ? "heart.fill" : "heart")
-                }
-                .buttonStyle(.plain)
-                .disabled(!hasTrack)
-                .accessibilityLabel(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+                    Spacer()
 
-                Button {
-                    model.setVolume(min(1, model.volume + 0.05))
-                } label: {
-                    Image(systemName: "speaker.wave.2")
-                }
-                .buttonStyle(.plain)
-                .help("音量 +")
-                .accessibilityLabel("音量增加")
+                    Button {
+                        model.next()
+                    } label: {
+                        Image(systemName: "forward.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .disabled(!model.canGoNext)
+                    .accessibilityLabel("下一首")
 
-                Button {
-                    model.setVolume(max(0, model.volume - 0.05))
-                } label: {
-                    Image(systemName: "speaker.slash")
-                }
-                .buttonStyle(.plain)
-                .help("音量 -")
-                .accessibilityLabel("音量减小")
+                    Spacer()
 
-                Button {
-                    hideArtwork.toggle()
-                } label: {
-                    Image(systemName: hideArtwork ? "rectangle" : "rectangle.fill")
+                    Button {
+                        model.toggleFavorite(model.currentTrack)
+                    } label: {
+                        Image(systemName: model.currentTrack.isFavorite ? "heart.fill" : "heart")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .disabled(!hasTrack)
+                    .accessibilityLabel(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
                 }
-                .buttonStyle(.plain)
-                .help(hideArtwork ? "显示封面" : "隐藏封面")
-                .accessibilityLabel(hideArtwork ? "显示封面" : "隐藏封面")
+                HStack {
+                    Button {
+                        model.setVolume(max(0, model.volume - 0.05))
+                    } label: {
+                        Image(systemName: "speaker.slash")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .help("音量 -")
+                    .accessibilityLabel("音量减小")
 
-                Button {
-                    MacWindowVisibilityCoordinator.shared.restoreMainPlayer(expandPlayer: true)
-                } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    Spacer()
+
+                    Button {
+                        model.setVolume(min(1, model.volume + 0.05))
+                    } label: {
+                        Image(systemName: "speaker.wave.2")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .help("音量 +")
+                    .accessibilityLabel("音量增加")
+
+                    Spacer()
+
+                    Button {
+                        hideArtwork.toggle()
+                    } label: {
+                        Image(systemName: hideArtwork ? "rectangle" : "rectangle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .help(hideArtwork ? "显示封面" : "隐藏封面")
+                    .accessibilityLabel(hideArtwork ? "显示封面" : "隐藏封面")
+
+                    Spacer()
+
+                    Button {
+                        MacWindowVisibilityCoordinator.shared.restoreMainPlayer(expandPlayer: true)
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 28)
+                    .help("返回正在播放")
+                    .accessibilityLabel("返回正在播放")
                 }
-                .buttonStyle(.plain)
-                .help("返回正在播放")
-                .accessibilityLabel("返回正在播放")
             }
+            .frame(maxWidth: .infinity)
         }
         .padding(16)
         .frame(width: hideArtwork ? MacUIVisualTokens.MiniPlayer.compactWindowWidth : MacUIVisualTokens.MiniPlayer.windowWidth, height: hideArtwork ? MacUIVisualTokens.MiniPlayer.compactWindowHeight : MacUIVisualTokens.MiniPlayer.windowHeight)

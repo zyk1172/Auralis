@@ -46,11 +46,26 @@ final class SQLiteDatabase: @unchecked Sendable {
         }
         guard let openedHandle else { throw LocalCatalogError.openFailed(url.path) }
         self.handle = openedHandle
-        try exec("PRAGMA journal_mode = WAL;")
-        try exec("PRAGMA foreign_keys = ON;")
+
+        // 分阶段诊断：每个 PRAGMA 失败时错误信息带阶段名（OPEN / WAL /
+        // FOREIGN_KEYS / BUSY_TIMEOUT），便于定位正式库打不开的真实原因。
+        do {
+            try exec("PRAGMA journal_mode = WAL;")
+        } catch {
+            throw LocalCatalogError.openFailed("\(url.path) · WAL · \(error)")
+        }
+        do {
+            try exec("PRAGMA foreign_keys = ON;")
+        } catch {
+            throw LocalCatalogError.openFailed("\(url.path) · FOREIGN_KEYS · \(error)")
+        }
         // App 与 Siri/小组件扩展共享同一 App Group 数据库：设置 busy_timeout，
         // 避免并发写直接返回 SQLITE_BUSY 而失败。
-        try exec("PRAGMA busy_timeout = 5000;")
+        do {
+            try exec("PRAGMA busy_timeout = 5000;")
+        } catch {
+            throw LocalCatalogError.openFailed("\(url.path) · BUSY_TIMEOUT · \(error)")
+        }
     }
 
     /// 显式完整性检查。调用方负责在本地目录已可用后按时间策略后台执行，避免每次

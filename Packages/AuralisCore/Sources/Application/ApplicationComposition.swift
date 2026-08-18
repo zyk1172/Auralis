@@ -113,13 +113,26 @@ public enum ApplicationComposition {
 
     private static func makeCatalogStore(url: URL) -> (store: LocalCatalogStore, fallbackUsed: Bool) {
         let startedAt = ContinuousClock.now
-        if let store = try? LocalCatalogStore(url: url) {
+        do {
+            let store = try LocalCatalogStore(url: url)
             StartupPerformanceTrace.record(
                 .catalogStoreOpenConnector,
                 since: startedAt,
                 metadata: .init(fallbackUsed: false)
             )
             return (store, false)
+        } catch {
+            // 不要吞掉真实错误：正式库打不开时记录完整原因（含 SQLiteDatabase 的
+            // OPEN/WAL/FOREIGN_KEYS/BUSY_TIMEOUT 分阶段诊断），便于定位。
+            // 注意：**不自动删除/重建 catalog.sqlite**——里面除曲目外还可能有
+            // 本地不喜欢状态、推荐索引、AI 标签等本地数据，先抓根因再决定修复。
+            AuralisLog.library.error(
+                """
+                catalogPrimaryOpenFailed \
+                url=\(url.path, privacy: .public) \
+                error=\(String(describing: error), privacy: .public)
+                """
+            )
         }
         // 兜底 1：临时目录文件库（避免相对路径 ":memory:" 在不可写 cwd 下 `try!` 崩溃）。
         let fallback = FileManager.default.temporaryDirectory

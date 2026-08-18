@@ -150,7 +150,7 @@ enum MacUIVisualTokens {
         static let artworkSize: CGFloat = 220
         static let artworkCornerRadius: CGFloat = 12
         static let windowWidth: CGFloat = 252
-        static let windowHeight: CGFloat = 380
+        static let windowHeight: CGFloat = 410
         static let compactWindowWidth: CGFloat = 300
         static let compactWindowHeight: CGFloat = 120
         static let contentSpacing: CGFloat = 10
