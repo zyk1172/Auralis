@@ -1,5 +1,5 @@
 #if os(macOS)
-import AppKit
+@preconcurrency import AppKit
 import Domain
 import LocalCatalog
 import SwiftUI
@@ -33,7 +33,10 @@ private struct MacWindowAttacher: NSViewRepresentable {
 
 @MainActor
 private final class MacFullscreenTransitionCoordinator: ObservableObject {
-    private var observer: NSObjectProtocol?
+    /// 仅在 MainActor 上读写（observeExit / cancelPendingExit）；
+    /// deinit 中移除 observer 是 NSNotificationCenter 推荐的兜底清理，
+    /// removeObserver(_:) 线程安全，故用 nonisolated(unsafe) 声明。
+    private nonisolated(unsafe) var observer: NSObjectProtocol?
 
     func observeExit(of window: NSWindow, action: @escaping @MainActor () -> Void) {
         cancelPendingExit()
