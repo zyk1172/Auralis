@@ -143,9 +143,10 @@ struct NowPlayingArtworkGlowView: View {
         max(64, Int((size * displayScale).rounded()))
     }
 
+    /// 向上取整：Retina 下宁愿稍高一点，也不拿低分辨率封面放大。
     private static func normalizedPixelSize(_ requested: Int) -> Int {
         let buckets = [64, 96, 160, 256, 384, 512, 768, 1024, 1536, 2048]
-        return buckets.min { abs($0 - requested) < abs($1 - requested) } ?? requested
+        return buckets.first { $0 >= requested } ?? min(requested, 4096)
     }
 
     private var pixelSize: Int {

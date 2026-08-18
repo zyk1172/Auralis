@@ -109,7 +109,17 @@ func artworkPipelineCoalescesConcurrentRequests() async throws {
 
     #expect(firstResult?.decoded.pixelWidth == secondResult?.decoded.pixelWidth)
     #expect(await connector.callCount() == 1)
-    #expect(await cache.data(for: "server|cover-1@180") != nil)
+
+    // 落盘是异步的（utility 优先级，先显示后写盘），轮询等待写入完成再断言。
+    var written = false
+    for _ in 0..<100 {
+        if await cache.data(for: "server|cover-1@180") != nil {
+            written = true
+            break
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(written)
 }
 
 @Test("内存告警清理解码位图，随后从磁盘恢复且不重复联网")

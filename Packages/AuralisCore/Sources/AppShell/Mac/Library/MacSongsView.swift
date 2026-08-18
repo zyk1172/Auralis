@@ -18,12 +18,23 @@ struct MacSongsView: View {
     /// 后台过滤，避免输入期间每个字符都在 body 里全库 filter。
     @State private var visibleTracks: [Track] = []
     @State private var searchGeneration: UInt64 = 0
+    /// 真正提交搜索结果的修订号：只在结果落地后递增，用于驱动 Table 重建。
+    /// 不能用 localSearch.hashValue——搜索词一变 revision 就先跳，
+    /// 后台结果 120ms 后才落地，会导致 Table 显示上一轮旧结果。
+    @State private var visibleTracksRevision: UInt64 = 0
     @AppStorage("auralis.mac.songs.showYear") private var showYear = false
     @AppStorage("auralis.mac.songs.showGenre") private var showGenre = false
     @AppStorage("auralis.mac.songs.showPlayCount") private var showPlayCount = false
     @AppStorage("auralis.mac.songs.showAddedDate") private var showAddedDate = false
 
     private var filteredTracks: [Track] { visibleTracks }
+
+    /// 提交搜索结果：只有仍是最新一代时才落地，并递增内容修订号驱动 Table 重建。
+    private func commitVisibleTracks(_ tracks: [Track], generation: UInt64) {
+        guard generation == searchGeneration else { return }
+        visibleTracks = tracks
+        visibleTracksRevision &+= 1
+    }
 
     private func updateVisibleTracks() {
         searchGeneration &+= 1
@@ -32,7 +43,7 @@ struct MacSongsView: View {
         let query = localSearch.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !query.isEmpty else {
-            visibleTracks = tracks
+            commitVisibleTracks(tracks, generation: generation)
             return
         }
 
@@ -46,8 +57,7 @@ struct MacSongsView: View {
                         || $0.albumTitle.localizedCaseInsensitiveContains(query)
                 }
             }.value
-            guard generation == searchGeneration else { return }
-            visibleTracks = result
+            commitVisibleTracks(result, generation: generation)
         }
     }
 
@@ -61,7 +71,7 @@ struct MacSongsView: View {
                 model: model,
                 theme: theme,
                 onNavigate: onNavigate,
-                contentRevision: UInt64(truncatingIfNeeded: localSearch.hashValue),
+                contentRevision: visibleTracksRevision,
                 numberText: { _ in nil },
                 showYearColumn: showYear,
                 showGenreColumn: showGenre,

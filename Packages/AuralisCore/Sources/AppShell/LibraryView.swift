@@ -39,6 +39,22 @@ struct LibraryView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.colorTokens.background.color)
+#if os(iOS)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.selectTopLevelSection(.settings)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(HapticPlainButtonStyle())
+                .accessibilityLabel("设置")
+            }
+        }
+#endif
         .sheet(item: $playlistTarget) { track in
             AddToPlaylistSheet(model: model, theme: theme, track: track)
         }

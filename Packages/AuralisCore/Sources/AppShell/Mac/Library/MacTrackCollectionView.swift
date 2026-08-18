@@ -13,6 +13,9 @@ struct MacTrackCollectionView: View {
     let theme: BuiltInTheme
     @Binding var selection: Set<GlobalID>
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
+    /// 行内容修订号：动态集合（最近播放/收藏等）在 catalogRevision 不变但内容变化时，
+    /// 由调用方传入对应领域的 O(1) revision 驱动 Table 重建。
+    var contentRevision: UInt64 = 0
     var showsDislike = false
 
     var body: some View {
@@ -26,6 +29,7 @@ struct MacTrackCollectionView: View {
                     model: model,
                     theme: theme,
                     onNavigate: onNavigate,
+                    contentRevision: contentRevision,
                     numberText: { _ in nil },
                     showAlbumColumn: true,
                     showYearColumn: true,
@@ -76,6 +80,7 @@ struct MacDislikedView: View {
                     model: model,
                     theme: theme,
                     onNavigate: onNavigate,
+                    contentRevision: model.dislikedRevision,
                     numberText: { _ in nil },
                     showGenreColumn: false,
                 )

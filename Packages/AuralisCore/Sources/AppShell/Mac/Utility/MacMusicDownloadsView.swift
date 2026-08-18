@@ -105,6 +105,7 @@ struct MacMusicDownloadsView: View {
                     model: model,
                     theme: theme,
                     onNavigate: onNavigate,
+                    contentRevision: model.downloadsRevision,
                     showGenreColumn: false
                 )
             }

@@ -129,6 +129,14 @@ public final class AuralisAppModel: ObservableObject {
     private var applyGeneration: UInt64 = 0
     /// O(1) 的歌曲行元数据修订号。播放次数或首次入库日期改变时递增；播放进度 tick 不变。
     @Published public private(set) var libraryRowMetadataRevision: UInt64 = 0
+    /// O(1) 的「不喜欢」集合修订号：dislikedTrackIDs 内容变化时递增。
+    @Published public private(set) var dislikedRevision: UInt64 = 0
+    /// O(1) 的「最近播放」修订号：播放记录变化时递增（驱动最近播放 Table 重建）。
+    @Published public private(set) var recentlyPlayedRevision: UInt64 = 0
+    /// O(1) 的「收藏」修订号：歌曲收藏状态变化时递增（驱动收藏 Table 重建）。
+    @Published public private(set) var favoritesRevision: UInt64 = 0
+    /// O(1) 的「下载」修订号：下载状态变化时递增（驱动下载 Table 重建）。
+    @Published public private(set) var downloadsRevision: UInt64 = 0
     /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
     @Published public private(set) var connectionDiagnostics: ConnectionDiagnosticsSnapshot?
 
@@ -621,7 +629,11 @@ public final class AuralisAppModel: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &childStoreSubscriptions)
         downloadStore.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.objectWillChange.send()
+                self.downloadsRevision &+= 1
+            }
             .store(in: &childStoreSubscriptions)
 
         // 下载地址用活动连接器获取；等待期间服务器切换时按此判断放弃（P1-2）。
@@ -1809,7 +1821,10 @@ public final class AuralisAppModel: ObservableObject {
             defaults.set(recentRaw, forKey: Self.recentlyPlayedDefaultsKey)
             defaults.set(trackID, forKey: Self.lastTrackKey(track.serverID))
         }
-        if recentChanged { refreshHomeSnapshots() }
+        if recentChanged {
+            recentlyPlayedRevision &+= 1
+            refreshHomeSnapshots()
+        }
     }
 
     private func qualifyCurrentPlaybackIfNeeded(force: Bool = false) {
@@ -2710,6 +2725,7 @@ public final class AuralisAppModel: ObservableObject {
         let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
         if dislikedTrackIDs.contains(gid) {
             dislikedTrackIDs.remove(gid)
+            dislikedRevision &+= 1
             try? await catalogCoordinator.store.setDisliked(gid, value: false, source: "user")
             refreshHomeSnapshots()
         }
@@ -2720,6 +2736,7 @@ public final class AuralisAppModel: ObservableObject {
         if let index = catalog.tracks.firstIndex(where: { $0.id == track.id }) {
             catalog.tracks[index].isFavorite = updated.isFavorite
         }
+        favoritesRevision &+= 1
         if currentTrack.isSame(as: track) { currentTrack = updated }
         refreshHomeSnapshots()
         await connector.setFavorite(trackID: updated.id, isFavorite: updated.isFavorite)
@@ -2737,6 +2754,7 @@ public final class AuralisAppModel: ObservableObject {
         guard let serverID = catalog.activeServerID else {
             dislikedTrackIDs = []
             dislikedStateServerID = nil
+            dislikedRevision &+= 1
             return
         }
         let loaded = await loadDislikedTrackIDs(serverID: serverID)
@@ -2744,6 +2762,7 @@ public final class AuralisAppModel: ObservableObject {
         if let loaded {
             dislikedTrackIDs = loaded
             dislikedStateServerID = serverID
+            dislikedRevision &+= 1
         }
     }
 
@@ -2785,6 +2804,7 @@ public final class AuralisAppModel: ObservableObject {
         } else {
             dislikedTrackIDs.remove(gid)
         }
+        dislikedRevision &+= 1
         refreshHomeSnapshots()
         try? await catalogCoordinator.store.setDisliked(gid, value: value, source: source)
     }
@@ -2793,6 +2813,7 @@ public final class AuralisAppModel: ObservableObject {
     private func unfavoriteTrack(_ track: Track) async {
         var updated = track
         updated.isFavorite = false
+        favoritesRevision &+= 1
         if let index = catalog.tracks.firstIndex(where: { $0.id == track.id }) {
             catalog.tracks[index].isFavorite = false
         }

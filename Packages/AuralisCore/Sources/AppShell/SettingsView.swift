@@ -724,7 +724,12 @@ struct AIProviderSettingsPage: View {
                 }
             }
             Section {
-                Text("任何兼容 OpenAI Chat Completions 的服务都可使用：OpenAI、DeepSeek、通义千问、Kimi、Ollama、LM Studio 及各类中转网关。API Key 仅写入系统 Keychain，不同步；仅在「设置备份」导出时会以加密形式包含（见备份密码保护）。")
+                Text("""
+支持 OpenAI Chat Completions、OpenAI Responses API，
+以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio
+和兼容 OpenAI 协议的中转服务。
+API Key 仅保存于系统 Keychain。
+""")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }

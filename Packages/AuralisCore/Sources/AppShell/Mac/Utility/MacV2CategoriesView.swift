@@ -202,6 +202,8 @@ struct MacV2CategoryTracksView: View {
     @State private var selection: Set<GlobalID> = []
     @State private var isLoading = true
     @State private var loadError: String?
+    /// 本地行内容修订号：loadTracks 真正落地新结果后递增，驱动 Table 重建。
+    @State private var tracksRevision: UInt64 = 0
 
     var body: some View {
         Group {
@@ -228,7 +230,8 @@ struct MacV2CategoryTracksView: View {
                     selection: $selection,
                     model: model,
                     theme: theme,
-                    onNavigate: onNavigate
+                    onNavigate: onNavigate,
+                    contentRevision: tracksRevision
                 )
                 .environment(\.artworkStore, model.artworkStore)
             }
@@ -264,6 +267,7 @@ struct MacV2CategoryTracksView: View {
             )
             guard model.catalog.activeServerID == serverID, !Task.isCancelled else { return }
             tracks = loaded
+            tracksRevision &+= 1
             selection = MacV2BrowserState.cleanedSelection(
                 selection,
                 validTrackIDs: Set(loaded.map(\.macGlobalID))

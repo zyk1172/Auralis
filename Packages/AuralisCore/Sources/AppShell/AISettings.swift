@@ -144,6 +144,7 @@ struct AIConnectionSettings: Sendable {
     /// Key 缺失时 Provider 仍会在请求阶段报 `AIProviderError.missingCredential`。
     var isComplete: Bool {
         normalizedBaseURL() != nil
+            && !apiPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 

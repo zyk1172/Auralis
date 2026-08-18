@@ -18,7 +18,9 @@ private struct MacWindowAttacher: NSViewRepresentable {
     let isExpanded: Bool
     let windowCoordinator: MacWindowVisibilityCoordinator
 
-    func makeNSView(context: Context) -> AttacherView { AttacherView() }
+    func makeNSView(context: Context) -> AttacherView {
+        AttacherView(windowCoordinator: windowCoordinator)
+    }
     func updateNSView(_ view: AttacherView, context: Context) {
         let controller = view.controller
         let window = view.window
@@ -36,16 +38,31 @@ private struct MacWindowAttacher: NSViewRepresentable {
         }
     }
     final class AttacherView: NSView {
+        let controller = MacWindowChromeController()
+        let windowCoordinator: MacWindowVisibilityCoordinator
+
+        init(windowCoordinator: MacWindowVisibilityCoordinator) {
+            self.windowCoordinator = windowCoordinator
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError()
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             let controller = controller
             let window = window
-            // 同上：NSView 挂载也发生在 SwiftUI 更新事务内，推迟窗口 chrome 写入。
+            let coordinator = windowCoordinator
+            // NSView 挂载是真正可靠的窗口就绪信号（updateNSView 可能在
+            // view.window == nil 时先跑），这里同时注册 chrome 与主窗口。
+            // 同上：挂载发生在 SwiftUI 更新事务内，推迟写入。
             Task { @MainActor in
                 controller.attach(window)
+                coordinator.registerMainWindow(window)
             }
         }
-        let controller = MacWindowChromeController()
     }
 }
 
@@ -328,7 +345,8 @@ public struct MacMusicShell: View {
         case .recentlyPlayed:
             MacTrackCollectionView(
                 title: "最近播放", tracks: model.recentlyPlayedTracks,
-                model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate
+                model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate,
+                contentRevision: model.recentlyPlayedRevision
             )
         case .recentlyAdded:
             MacTrackCollectionView(
@@ -346,7 +364,8 @@ public struct MacMusicShell: View {
         case .favorites:
             MacTrackCollectionView(
                 title: "收藏歌曲", tracks: model.favoriteTracks,
-                model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate
+                model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate,
+                contentRevision: model.favoritesRevision
             )
         case .disliked:
             MacDislikedView(model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate)

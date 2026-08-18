@@ -41,20 +41,6 @@ struct HomeView: View {
         }
         .reportsBottomDockScroll()
         .background(ambientBackground)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.selectTopLevelSection(.settings)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(colors.accent.color)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel("设置")
-            }
-        }
     }
 
     // MARK: - 模块可见性（用户开启 + 有数据）

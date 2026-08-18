@@ -18,6 +18,8 @@ public actor ArtworkDiskCache {
     /// 最近访问时间，用于 LRU。
     private var accessedAt: [String: Date] = [:]
     private var didLoadIndex = false
+    /// 后台索引维护任务（首次 store 后触发一次），不占用前台 actor 太久。
+    private var maintenanceTask: Task<Void, Never>?
 
     public init(directory: URL? = nil, budget: Int64 = ArtworkDiskCache.defaultBudget) {
         let manager = FileManager.default
@@ -48,15 +50,18 @@ public actor ArtworkDiskCache {
     }
 
     /// 写入封面数据并在超预算时做一次 LRU 淘汰。
+    ///
+    /// 前台快路径：**不**在这里同步做全目录索引扫描（扫描与 `data(for:)` 同 actor，
+    /// 会挡住后续封面读取）。写文件 + 更新内存后，排一个低优先级后台任务做
+    /// 索引合并与淘汰；目录遍历在 `Task.detached` 中进行，不占用 cache actor。
     public func store(_ data: Data, for key: String) {
         guard !data.isEmpty else { return }
-        loadIndexIfNeeded()
         let name = Self.fileName(for: key)
         let url = directory.appendingPathComponent(name)
         guard (try? data.write(to: url, options: .atomic)) != nil else { return }
         sizes[name] = Int64(data.count)
         accessedAt[name] = Date()
-        evictIfNeeded()
+        scheduleMaintenanceIfNeeded()
     }
 
     // MARK: - 统计与清理
@@ -101,6 +106,57 @@ public actor ArtworkDiskCache {
             sizes[name] = Int64(values?.fileSize ?? 0)
             accessedAt[name] = values?.contentAccessDate ?? values?.contentModificationDate ?? .distantPast
         }
+    }
+
+    /// 首次 store 后排一个后台维护任务：目录遍历放 detached，避免占用 cache actor。
+    private func scheduleMaintenanceIfNeeded() {
+        guard maintenanceTask == nil else { return }
+        let directory = self.directory
+        maintenanceTask = Task(priority: .utility) { [weak self] in
+            let index = await Task.detached(priority: .utility) {
+                ArtworkDiskCache.scanIndex(directory: directory)
+            }.value
+            guard let self else { return }
+            await self.applyIndex(index)
+            await self.clearMaintenanceTask()
+        }
+    }
+
+    /// 维护任务结束：清空标记，允许后续再次调度。
+    private func clearMaintenanceTask() {
+        maintenanceTask = nil
+    }
+
+    /// 在 detached 任务中遍历缓存目录（真正慢的部分，不占 actor）。
+    private nonisolated static func scanIndex(
+        directory: URL
+    ) -> [String: (fileSize: Int64, accessDate: Date)] {
+        var result: [String: (fileSize: Int64, accessDate: Date)] = [:]
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: keys
+        ) else { return result }
+        for entry in entries {
+            let values = try? entry.resourceValues(forKeys: Set(keys))
+            let name = entry.lastPathComponent
+            result[name] = (
+                fileSize: Int64(values?.fileSize ?? 0),
+                accessDate: values?.contentAccessDate ?? values?.contentModificationDate ?? .distantPast
+            )
+        }
+        return result
+    }
+
+    /// 把后台扫描结果合并进 actor 索引，并做一次预算淘汰。
+    private func applyIndex(_ index: [String: (fileSize: Int64, accessDate: Date)]) {
+        guard !didLoadIndex else { return }
+        didLoadIndex = true
+        for (name, entry) in index {
+            sizes[name] = entry.fileSize
+            accessedAt[name] = entry.accessDate
+        }
+        evictIfNeeded()
     }
 
     /// 超过预算时按最近访问时间从旧到新删除，直到降到预算的 80%。
