@@ -150,11 +150,16 @@ struct AIConnectionSettings: Sendable {
 
     /// 校验未通过时的可读原因，便于设置页给出明确提示。
     var completenessError: String? {
-        guard normalizedBaseURL() == nil else {
-            return model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "请填写模型名称（如 gpt-4o-mini、deepseek-chat）。" : nil
+        if normalizedBaseURL() == nil {
+            return "Base URL 需要是合法地址，例如 https://api.deepseek.com 或 http://localhost:11434。"
         }
-        return "Base URL 需要是合法地址，例如 https://api.deepseek.com 或 http://localhost:11434。"
+        if apiPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "请填写 API 路径（如 /v1/chat/completions 或 /v1/responses）。"
+        }
+        if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "请填写模型名称（如 gpt-4o-mini、deepseek-chat）。"
+        }
+        return nil
     }
 
     func makeProvider(

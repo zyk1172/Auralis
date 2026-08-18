@@ -1,10 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  # 额外保留手动触发入口，便于按需跑一次完整构建。
+  # 仅手动触发：先让手动 CI 完整成功一次后再恢复自动触发（push/PR）。
   workflow_dispatch:
 
 concurrency:

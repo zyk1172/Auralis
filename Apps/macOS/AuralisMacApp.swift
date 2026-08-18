@@ -127,9 +127,10 @@ final class AuralisMacAppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        Task { @MainActor in
-            MacWindowVisibilityCoordinator.shared.restoreMainPlayer(expandPlayer: false)
-        }
-        return true
+        let handled = MacWindowVisibilityCoordinator.shared.restoreMainPlayer(expandPlayer: false)
+
+        // 已自行处理 → 不再执行 AppKit 默认 reopen（避免重复建窗口）。
+        // 没有可恢复的主窗口 → 返回 false 交给系统默认行为。
+        return !handled
     }
 }

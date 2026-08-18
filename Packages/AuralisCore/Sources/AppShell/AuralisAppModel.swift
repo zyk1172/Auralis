@@ -135,8 +135,11 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var recentlyPlayedRevision: UInt64 = 0
     /// O(1) 的「收藏」修订号：歌曲收藏状态变化时递增（驱动收藏 Table 重建）。
     @Published public private(set) var favoritesRevision: UInt64 = 0
-    /// O(1) 的「下载」修订号：下载状态变化时递增（驱动下载 Table 重建）。
-    @Published public private(set) var downloadsRevision: UInt64 = 0
+    /// O(1) 的「已下载集合」修订号：只在已下载歌曲集合本身变化时递增
+    /// （下载进度等高频状态不递增，避免下载中反复重建歌曲 Table）。
+    public var downloadsRevision: UInt64 {
+        downloadStore.downloadedContentRevision
+    }
     /// 最近一次「测试连接 / 连接」的客观诊断快照（DEBUG 网络诊断页使用）。
     @Published public private(set) var connectionDiagnostics: ConnectionDiagnosticsSnapshot?
 
@@ -630,9 +633,7 @@ public final class AuralisAppModel: ObservableObject {
             .store(in: &childStoreSubscriptions)
         downloadStore.objectWillChange
             .sink { [weak self] _ in
-                guard let self else { return }
-                self.objectWillChange.send()
-                self.downloadsRevision &+= 1
+                self?.objectWillChange.send()
             }
             .store(in: &childStoreSubscriptions)
 

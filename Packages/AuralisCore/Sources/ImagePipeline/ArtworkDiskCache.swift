@@ -108,16 +108,30 @@ public actor ArtworkDiskCache {
         }
     }
 
-    /// 首次 store 后排一个后台维护任务：目录遍历放 detached，避免占用 cache actor。
+    /// store 后排一个后台维护任务。
+    ///
+    /// 关键原则：**目录全扫描进程生命周期最多一次**。首次 store 时 detached 扫描
+    /// 建索引；之后 `didLoadIndex == true`，后续 store 只基于内存 sizes/accessedAt
+    /// 做 LRU 淘汰，绝不再扫目录。
     private func scheduleMaintenanceIfNeeded() {
         guard maintenanceTask == nil else { return }
+
+        if didLoadIndex {
+            maintenanceTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                await self.evictIfNeeded()
+                await self.clearMaintenanceTask()
+            }
+            return
+        }
+
         let directory = self.directory
         maintenanceTask = Task(priority: .utility) { [weak self] in
             let index = await Task.detached(priority: .utility) {
                 ArtworkDiskCache.scanIndex(directory: directory)
             }.value
             guard let self else { return }
-            await self.applyIndex(index)
+            await self.applyInitialIndex(index)
             await self.clearMaintenanceTask()
         }
     }
@@ -148,13 +162,17 @@ public actor ArtworkDiskCache {
         return result
     }
 
-    /// 把后台扫描结果合并进 actor 索引，并做一次预算淘汰。
-    private func applyIndex(_ index: [String: (fileSize: Int64, accessDate: Date)]) {
+    /// 初次全量扫描结果合并进 actor 索引（进程生命周期内只执行一次），并做一次预算淘汰。
+    ///
+    /// 合并时不覆盖扫描期间已被前台 data(for:)/store 更新过的条目：
+    /// - 大小：已存在则保留内存值（前台刚写入的文件更准）；
+    /// - 访问时间：取两者较新，避免把前台刚读过的封面标记成旧条目被误淘汰。
+    private func applyInitialIndex(_ index: [String: (fileSize: Int64, accessDate: Date)]) {
         guard !didLoadIndex else { return }
         didLoadIndex = true
         for (name, entry) in index {
-            sizes[name] = entry.fileSize
-            accessedAt[name] = entry.accessDate
+            sizes[name] = sizes[name] ?? entry.fileSize
+            accessedAt[name] = max(accessedAt[name] ?? .distantPast, entry.accessDate)
         }
         evictIfNeeded()
     }

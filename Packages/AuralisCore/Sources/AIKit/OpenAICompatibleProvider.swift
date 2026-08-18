@@ -435,9 +435,23 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// 由 baseURL + apiPath 拼出完整接口地址。
     /// 用 `appendingPathComponent` 处理结尾斜杠，避免产出 `//v1/...` 这类
-    /// 某些网关会拒绝（返回 503）的重复斜杠。
+    /// 某些网关会拒绝（返回 503）的重复斜杠；同时消除 baseURL 已含 `/v1`
+    /// 与 apiPath 也以 `/v1` 开头时拼出的 `/v1/v1/...` 重叠段。
     func endpoint() throws -> URL {
-        let path = configuration.apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        var path = configuration.apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // baseURL 路径以 /v1 结尾（含 /api/v1 之类）时，去掉 apiPath 开头的 /v1，
+        // 避免 https://host/v1/v1/chat/completions 这类地址。
+        let basePath = configuration.baseURL.path
+        if basePath == "/v1" || basePath.hasSuffix("/v1") {
+            let lowered = path.lowercased()
+            if lowered.hasPrefix("/v1/") {
+                path = String(path.dropFirst(4)) // 去掉 "/v1"
+            } else if lowered == "/v1" {
+                path = ""
+            }
+        }
+
         let component = path.hasPrefix("/") ? String(path.dropFirst()) : path
         let url = configuration.baseURL.appendingPathComponent(component)
         guard let scheme = url.scheme?.lowercased() else { throw AIProviderError.invalidEndpoint }

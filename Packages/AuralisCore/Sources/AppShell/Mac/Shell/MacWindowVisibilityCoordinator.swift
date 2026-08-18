@@ -24,7 +24,15 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
         case mini
     }
 
+    /// 窗口切换状态机：防止快速连续点 Main/Mini 时两个 0.24s 动画重叠。
+    private enum Transition {
+        case idle
+        case toMini
+        case toMain
+    }
+
     @Published public private(set) var mode: Mode = .main
+    private var transition: Transition = .idle
 
     /// Main ↔ Mini 窗口切换动画时长。只做轻微 frame 缩放 + alpha 交叉，
     /// 不把 1280×820 主窗口真正一路 resize 到 Mini 尺寸，避免复杂 UI 重排。
@@ -66,6 +74,16 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
 
     /// 切换到迷你播放器。第一次使用时会先要求 SwiftUI 创建 Mini Scene。
     public func requestMiniPlayer(openMiniWindow: () -> Void) {
+        // 已在 Mini 且无进行中切换：直接置前即可（幂等）。
+        if mode == .mini,
+           transition == .idle {
+            miniWindow?.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        // 切换动画进行中：忽略重复触发，避免动画重叠。
+        guard transition == .idle else { return }
+
         pendingMiniPresentation = true
         // 第一次使用 MiniPlayer 时先要求 SwiftUI 创建 Scene。
         openMiniWindow()
@@ -83,13 +101,16 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
         }
 
         pendingMiniPresentation = false
-        mode = .mini
 
         if reduceMotionEnabled {
+            mode = .mini
+            transition = .idle
             miniWindow.makeKeyAndOrderFront(nil)
             // Mini 已经可见后再隐藏主窗口。
             mainWindow.orderOut(nil)
         } else {
+            // 动画期间 transition 非 idle，阻止新的切换；完成后落 mode + idle。
+            transition = .toMini
             animateMainToMini(main: mainWindow, mini: miniWindow)
         }
 
@@ -98,28 +119,49 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
 
     /// 从 Mini 返回主窗口。`expandPlayer` 为 true 时同时展开 Expanded Player
     /// （用于 Mini 内「返回正在播放」）。
-    public func restoreMainPlayer(expandPlayer: Bool) {
+    ///
+    /// 返回是否由本协调器处理了恢复：
+    /// - `true`：主窗口存在且已恢复（调用方不应再让 AppKit 执行默认 reopen）；
+    /// - `false`：没有可恢复的主窗口（调用方应交给系统默认行为）。
+    @discardableResult
+    public func restoreMainPlayer(expandPlayer: Bool) -> Bool {
         guard let mainWindow else {
-            return
+            return false
         }
 
-        mode = .main
+        // 已在 Main 且无进行中切换：直接置前即可（幂等，例如 Mini 曾打开过
+        // 但用户已回到主窗口后点击 Dock，不应再跑一次 Mini → Main 动画）。
+        if mode == .main,
+           transition == .idle {
+            mainWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            if expandPlayer { revealNowPlaying() }
+            return true
+        }
+
+        // 切换动画进行中：视为已处理，不排队新的切换。
+        guard transition == .idle else { return true }
 
         if let miniWindow, !reduceMotionEnabled {
+            transition = .toMain
             animateMiniToMain(mini: miniWindow, main: mainWindow)
         } else {
+            mode = .main
+            transition = .idle
             mainWindow.makeKeyAndOrderFront(nil)
             miniWindow?.orderOut(nil)
         }
 
         NSApp.activate(ignoringOtherApps: true)
+        if expandPlayer { revealNowPlaying() }
+        return true
+    }
 
-        if expandPlayer {
-            NotificationCenter.default.post(
-                name: MacCommand.revealNowPlaying,
-                object: nil
-            )
-        }
+    private func revealNowPlaying() {
+        NotificationCenter.default.post(
+            name: MacCommand.revealNowPlaying,
+            object: nil
+        )
     }
 
     // MARK: - 窗口切换动画
@@ -155,6 +197,9 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
                 main.setFrame(mainFrame, display: false)
                 main.alphaValue = 1
                 mini.makeKeyAndOrderFront(nil)
+                // coordinator 是 shared 单例，强捕获无生命周期风险。
+                self.mode = .mini
+                self.transition = .idle
             }
         }
     }
@@ -189,6 +234,9 @@ public final class MacWindowVisibilityCoordinator: ObservableObject {
                 mini.setFrame(miniFrame, display: false)
                 mini.alphaValue = 1
                 main.makeKeyAndOrderFront(nil)
+                // coordinator 是 shared 单例，强捕获无生命周期风险。
+                self.mode = .main
+                self.transition = .idle
             }
         }
     }

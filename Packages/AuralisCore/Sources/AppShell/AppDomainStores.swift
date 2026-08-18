@@ -254,6 +254,9 @@ final class ServerStore: ObservableObject {
 @MainActor
 final class DownloadStore: ObservableObject {
     @Published private(set) var downloadedTrackIDs: Set<GlobalID> = []
+    /// 已下载歌曲集合本身的内容修订号：只在集合 insert/remove 成功时递增。
+    /// 下载进度/records 等高频变化**不**递增，避免下载中反复重建歌曲 Table。
+    @Published private(set) var downloadedContentRevision: UInt64 = 0
     @Published private(set) var downloadingTrackIDs: Set<GlobalID> = []
     @Published private(set) var progress: [GlobalID: Double] = [:]
     @Published private(set) var records: [GlobalID: DownloadTaskInfo] = [:]
@@ -309,7 +312,11 @@ final class DownloadStore: ObservableObject {
             )
             return (id, entry)
         })
-        downloadedTrackIDs = Set(cachedEntries.keys)
+        let loaded = Set(cachedEntries.keys)
+        if loaded != downloadedTrackIDs {
+            downloadedTrackIDs = loaded
+            downloadedContentRevision &+= 1
+        }
     }
 
     func isDownloaded(_ track: Track) -> Bool { downloadedTrackIDs.contains(globalID(for: track)) }
@@ -385,7 +392,9 @@ final class DownloadStore: ObservableObject {
         if downloadingTrackIDs.contains(globalID) { cancel(track) }
         do {
             try await cacheStore.remove(for: cacheID(for: track))
-            downloadedTrackIDs.remove(globalID)
+            if downloadedTrackIDs.remove(globalID) != nil {
+                downloadedContentRevision &+= 1
+            }
             cachedEntries[globalID] = nil
             records[globalID] = nil
             lastOperationError = nil
@@ -398,7 +407,10 @@ final class DownloadStore: ObservableObject {
         cancelAll()
         do {
             try await cacheStore.removeAll()
-            downloadedTrackIDs = []
+            if !downloadedTrackIDs.isEmpty {
+                downloadedTrackIDs = []
+                downloadedContentRevision &+= 1
+            }
             cachedEntries = [:]
             records = records.filter { $0.value.status == .failed }
             lastOperationError = nil
@@ -456,7 +468,9 @@ final class DownloadStore: ObservableObject {
         case .downloaded:
             downloadingTrackIDs.remove(globalID)
             progress[globalID] = nil
-            downloadedTrackIDs.insert(globalID)
+            if downloadedTrackIDs.insert(globalID).inserted {
+                downloadedContentRevision &+= 1
+            }
             Task { @MainActor [weak self] in await self?.restoreCachedIDs() }
         case .failed:
             downloadingTrackIDs.remove(globalID)
