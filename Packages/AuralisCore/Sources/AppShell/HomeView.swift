@@ -254,6 +254,7 @@ struct HomeView: View {
         case .longUnplayed: model.homeLongUnplayedTracks
         case .favoriteRandom: model.homeFavoriteRandomTracks
         case .neverPlayed: model.homeNeverPlayedTracks
+        case .downloads: model.downloadedTracks
         default: []
         }
     }
