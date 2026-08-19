@@ -214,13 +214,11 @@ extension LocalCatalogStore {
                 [.integer(Int64(limit))]
             )
         }
-        var result: [CatalogTrackSummary] = []
-        for row in rows {
-            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString),
-                  let summary = try trackSummary(gid), serverIDMatches(summary, serverID) else { continue }
-            result.append(summary)
+        let ids = rows.compactMap { row -> GlobalID? in
+            guard let idString = row["global_id"]?.string else { return nil }
+            return GlobalID(idString)
         }
-        return result
+        return try fetchTrackSummaries(globalIDs: ids, serverID: serverID)
     }
 
     public func getLeastPlayed(serverID: ServerID? = nil, limit: Int = 50) throws -> [CatalogTrackSummary] {
@@ -236,24 +234,20 @@ extension LocalCatalogStore {
                 [.integer(Int64(limit))]
             )
         }
-        var result: [CatalogTrackSummary] = []
-        for row in rows {
-            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString),
-                  let summary = try trackSummary(gid), serverIDMatches(summary, serverID) else { continue }
-            result.append(summary)
+        let ids = rows.compactMap { row -> GlobalID? in
+            guard let idString = row["global_id"]?.string else { return nil }
+            return GlobalID(idString)
         }
-        return result
+        return try fetchTrackSummaries(globalIDs: ids, serverID: serverID)
     }
 
     public func getDownloadedTracks(serverID: ServerID? = nil) throws -> [CatalogTrackSummary] {
         let rows = try db.query("SELECT global_id FROM downloads WHERE state = ?", [.text(DownloadStateValue.cached.rawValue)])
-        var result: [CatalogTrackSummary] = []
-        for row in rows {
-            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString),
-                  let summary = try trackSummary(gid), serverIDMatches(summary, serverID) else { continue }
-            result.append(summary)
+        let ids = rows.compactMap { row -> GlobalID? in
+            guard let idString = row["global_id"]?.string else { return nil }
+            return GlobalID(idString)
         }
-        return result
+        return try fetchTrackSummaries(globalIDs: ids, serverID: serverID)
     }
 
     /// 相似曲目（自动发现候选）。默认硬排除“不喜欢”的歌曲；
@@ -265,15 +259,13 @@ extension LocalCatalogStore {
             "SELECT global_id FROM tracks WHERE server_id = ? AND global_id != ? AND (artist_name = ? OR album_title = ?) LIMIT ?",
             [.text(base.serverID.rawValue), .text(globalID.description), .text(base.artistName), .text(base.albumTitle), .integer(Int64(limit * 4))]
         )
-        var result: [CatalogTrackSummary] = []
-        for row in rows {
+        let ids = rows.compactMap { row -> GlobalID? in
             guard let idString = row["global_id"]?.string, let gid = GlobalID(idString),
-                  !disliked.contains(gid)
-            else { continue }
-            if let summary = try? trackSummary(gid) { result.append(summary) }
-            if result.count >= limit { break }
+                  !disliked.contains(gid) else { return nil }
+            return gid
         }
-        return result
+        // 保持行顺序；候选按 limit*4 截取后，batch 物化再精确截断到 limit。
+        return try fetchTrackSummaries(globalIDs: ids, serverID: base.serverID).prefix(limit).map { $0 }
     }
 
     public func listPlaylists(serverID: ServerID? = nil) throws -> [CatalogPlaylistSummary] {
@@ -329,10 +321,11 @@ extension LocalCatalogStore {
             bindings = [.text(serverID.rawValue)]
         }
         let rows = try db.query(sql, bindings)
-        return try rows.compactMap { row -> CatalogTrackSummary? in
-            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString) else { return nil }
-            return try trackSummary(gid)
+        let ids = rows.compactMap { row -> GlobalID? in
+            guard let idString = row["global_id"]?.string else { return nil }
+            return GlobalID(idString)
         }
+        return try fetchTrackSummaries(globalIDs: ids, serverID: serverID)
     }
 
     public func tracksForAlbum(_ albumGID: GlobalID) throws -> [CatalogTrackSummary] {
@@ -340,10 +333,11 @@ extension LocalCatalogStore {
             "SELECT global_id FROM tracks WHERE album_title = (SELECT name FROM albums WHERE global_id = ?) AND server_id = ?",
             [.text(albumGID.description), .text(albumGID.serverID.rawValue)]
         )
-        return try rows.compactMap { row -> CatalogTrackSummary? in
-            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString) else { return nil }
-            return try trackSummary(gid)
+        let ids = rows.compactMap { row -> GlobalID? in
+            guard let idString = row["global_id"]?.string else { return nil }
+            return GlobalID(idString)
         }
+        return try fetchTrackSummaries(globalIDs: ids, serverID: albumGID.serverID)
     }
 
     public func tracksForArtist(_ artistGID: GlobalID) throws -> [CatalogTrackSummary] {
@@ -351,10 +345,11 @@ extension LocalCatalogStore {
             "SELECT global_id FROM tracks WHERE artist_name = (SELECT name FROM artists WHERE global_id = ?) AND server_id = ?",
             [.text(artistGID.description), .text(artistGID.serverID.rawValue)]
         )
-        return try rows.compactMap { row -> CatalogTrackSummary? in
-            guard let idString = row["global_id"]?.string, let gid = GlobalID(idString) else { return nil }
-            return try trackSummary(gid)
+        let ids = rows.compactMap { row -> GlobalID? in
+            guard let idString = row["global_id"]?.string else { return nil }
+            return GlobalID(idString)
         }
+        return try fetchTrackSummaries(globalIDs: ids, serverID: artistGID.serverID)
     }
 
     public func syncStatus(for serverID: ServerID, isRunning: Bool = false, nextRetryAt: Date? = nil, staleAfter: TimeInterval = 60 * 60 * 24 * 7) -> CatalogSyncStatus {

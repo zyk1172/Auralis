@@ -5,6 +5,17 @@ import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
+// MARK: - Tile 焦点模型
+
+/// Tile 内部可聚焦控件：primary=封面/主按钮，play=播放，more=更多。
+/// 只要 Tile 内任意控件持有焦点，操作按钮就保持可见——避免 Tab 从主按钮
+/// 移向播放/更多时，overlay 因主按钮失焦而被 SwiftUI 从视图树删除。
+private enum MacTileFocus: Hashable {
+    case primary
+    case play
+    case more
+}
+
 // MARK: - Playlist Artwork（真实 mosaic，去重封面）
 
 /// 歌单封面：0 首 → 中性占位；1 首 → 单一封面；2 首 → 左右均分；
@@ -103,11 +114,10 @@ struct MacAlbumTile: View {
     var moreActions: [MacMenuAction] = []
 
     @State private var isHovering = false
-    @FocusState private var isFocused: Bool
+    @FocusState private var focusedControl: MacTileFocus?
 
-    /// 操作按钮可见条件：鼠标 hover 或键盘焦点（全键盘控制 / VoiceOver 可触达），
-    /// 避免「鼠标能看到播放/更多，键盘完全没有」。
-    private var showsActions: Bool { isHovering || isFocused }
+    /// 操作按钮可见条件：鼠标 hover，或 Tile 内任意控件（主按钮/播放/更多）持有键盘焦点。
+    private var showsActions: Bool { isHovering || focusedControl != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -126,7 +136,7 @@ struct MacAlbumTile: View {
                     .contentShape(RoundedRectangle(cornerRadius: MacUIVisualTokens.Artwork.cornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .focused($isFocused)
+                .focused($focusedControl, equals: .primary)
                 .help("打开专辑")
                 .accessibilityLabel("打开专辑")
                 .accessibilityAction(named: Text("播放")) { onPlay?() }
@@ -143,6 +153,7 @@ struct MacAlbumTile: View {
                                     .background(.thinMaterial, in: Circle())
                             }
                             .buttonStyle(.plain)
+                            .focused($focusedControl, equals: .play)
                             .help("播放")
                             .accessibilityLabel("播放")
                         }
@@ -165,6 +176,7 @@ struct MacAlbumTile: View {
                             .menuStyle(.borderlessButton)
                             .menuIndicator(.hidden)
                             .fixedSize()
+                            .focused($focusedControl, equals: .more)
                             .help("更多操作")
                             .accessibilityLabel("更多操作")
                         }
@@ -231,10 +243,10 @@ struct MacArtistTile: View {
     var onPlay: (() -> Void)? = nil
 
     @State private var isHovering = false
-    @FocusState private var isFocused: Bool
+    @FocusState private var focusedControl: MacTileFocus?
 
-    /// 操作按钮可见条件：鼠标 hover 或键盘焦点，避免「鼠标能看到播放，键盘没有」。
-    private var showsActions: Bool { isHovering || isFocused }
+    /// 操作按钮可见条件：鼠标 hover，或 Tile 内任意控件持有键盘焦点。
+    private var showsActions: Bool { isHovering || focusedControl != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -247,7 +259,7 @@ struct MacArtistTile: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .focused($isFocused)
+                .focused($focusedControl, equals: .primary)
                 .help("打开艺术家")
                 .accessibilityLabel("打开艺术家")
                 .accessibilityAction(named: Text("随机播放")) { onPlay?() }
@@ -262,6 +274,7 @@ struct MacArtistTile: View {
                             .background(.thinMaterial, in: Circle())
                     }
                     .buttonStyle(.plain)
+                    .focused($focusedControl, equals: .play)
                     .padding(8)
                     .help("随机播放")
                     .accessibilityLabel("随机播放")
@@ -347,10 +360,10 @@ struct MacPlaylistTile: View {
     var moreActions: [MacMenuAction] = []
 
     @State private var isHovering = false
-    @FocusState private var isFocused: Bool
+    @FocusState private var focusedControl: MacTileFocus?
 
-    /// 操作按钮可见条件：鼠标 hover 或键盘焦点（全键盘控制 / VoiceOver 可触达）。
-    private var showsActions: Bool { isHovering || isFocused }
+    /// 操作按钮可见条件：鼠标 hover，或 Tile 内任意控件持有键盘焦点。
+    private var showsActions: Bool { isHovering || focusedControl != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -362,7 +375,7 @@ struct MacPlaylistTile: View {
                         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .focused($isFocused)
+                .focused($focusedControl, equals: .primary)
                 .help("打开播放列表")
                 .accessibilityLabel("打开播放列表")
                 .accessibilityAction(named: Text("播放")) { onPlay?() }
@@ -379,6 +392,7 @@ struct MacPlaylistTile: View {
                                     .background(.thinMaterial, in: Circle())
                             }
                             .buttonStyle(.plain)
+                            .focused($focusedControl, equals: .play)
                             .help("播放")
                             .accessibilityLabel("播放")
                         }
@@ -400,6 +414,7 @@ struct MacPlaylistTile: View {
                             .menuStyle(.borderlessButton)
                             .menuIndicator(.hidden)
                             .fixedSize()
+                            .focused($focusedControl, equals: .more)
                             .help("更多操作")
                             .accessibilityLabel("更多操作")
                         }
@@ -464,10 +479,10 @@ struct MacTrackTile: View {
     var moreActions: [MacMenuAction] = []
 
     @State private var isHovering = false
-    @FocusState private var isFocused: Bool
+    @FocusState private var focusedControl: MacTileFocus?
 
-    /// 操作按钮可见条件：鼠标 hover 或键盘焦点，避免「鼠标能看到播放，键盘没有」。
-    private var showsActions: Bool { isHovering || isFocused }
+    /// 操作按钮可见条件：鼠标 hover，或 Tile 内任意控件持有键盘焦点。
+    private var showsActions: Bool { isHovering || focusedControl != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -485,7 +500,7 @@ struct MacTrackTile: View {
                     .contentShape(RoundedRectangle(cornerRadius: MacUIVisualTokens.Artwork.cornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .focused($isFocused)
+                .focused($focusedControl, equals: .primary)
                 .help("播放")
                 .accessibilityLabel("播放")
                 .accessibilityAction(named: Text("播放")) { onPlay?() }
@@ -500,6 +515,7 @@ struct MacTrackTile: View {
                             .background(.thinMaterial, in: Circle())
                     }
                     .buttonStyle(.plain)
+                    .focused($focusedControl, equals: .play)
                     .padding(8)
                     .help("播放")
                     .accessibilityLabel("播放")

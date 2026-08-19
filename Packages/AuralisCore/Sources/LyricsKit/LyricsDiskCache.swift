@@ -65,7 +65,13 @@ public actor LyricsDiskCache {
     public func store(_ document: LyricsDocument, forServer serverID: ServerID, trackID: TrackID) {
         guard let data = try? encoder.encode(document) else { return }
         let url = directory.appendingPathComponent(Self.fileName(serverID: serverID, trackID: trackID))
-        try? data.write(to: url, options: .atomic)
+        // 写失败（磁盘满 / 权限 / atomic replace 失败）直接返回：账本必须与磁盘一致，
+        // 不能因为 try? 吞掉错误就把从未落盘的文件计入 fileSizes / knownTotalBytes。
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return
+        }
         // O(1) 账本维护：先确保索引已建立，再按 data.count 增量更新。
         ensureIndexLoadedIfNeeded()
         let name = url.lastPathComponent

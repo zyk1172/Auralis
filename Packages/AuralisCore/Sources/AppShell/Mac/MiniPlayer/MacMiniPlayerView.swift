@@ -215,6 +215,13 @@ public struct MacMiniPlayerView: View {
                     proxy.scrollTo(index, anchor: .center)
                 }
             }
+            // 首次出现定位：视图创建时若已经处于歌词中段（activeLyricIndex 非 nil），
+            // onChange 不会为初始值执行，先无动画定位到当前行；后续跨行仍走上面的
+            // 0.22s 动画。切歌时 task id 变化，重新定位到新歌当前行。
+            .task(id: trackGlobalID) {
+                guard let index = activeLyricIndex else { return }
+                proxy.scrollTo(index, anchor: .center)
+            }
         }
     }
 

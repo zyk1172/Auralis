@@ -170,20 +170,26 @@ public struct MacMusicShell: View {
                 .zIndex(100)
             }
         }
-        // Expanded Player 仍保留 window toolbar host：不允许隐藏整个 windowToolbar，
-        // 否则会改变 macOS titlebar / 红黄绿窗口控制按钮的系统行为。
+        // Expanded Player 从窗口层隔离 library 的 toolbar：
+        // libraryUI 必须保持挂载（导航 / 滚动 / 搜索状态不重建），但它的
+        // toolbar items（歌曲页 Shuffle、显示选项、NavigationSplitView 贡献等）
+        // 会注册到同一个 window toolbar，只删 title 不足以隔离。
+        // 因此 expanded 时对整个 .windowToolbar 用 .hidden——这是 SwiftUI 对
+        // NSWindow toolbar 可见性的原生控制（等价 AppKit 层隐藏 toolbar）。
+        // 系统红黄绿交通灯属于 titlebar 而非 toolbar，隐藏 toolbar 不影响它们。
         //
-        // Expanded 时只删除 SwiftUI 自动生成的 default toolbar title/subtitle item
-        // （ToolbarDefaultItemKind.title），这是「左上角出现 Auralis / 页面标题」的真正来源；
-        // NSWindow.titleVisibility = .hidden 只是 AppKit 层第二道防线，并不等价于移除
-        // SwiftUI 的 toolbar title item。normal 状态传 nil，因此 NavigationStack 的页面
-        // 标题正常恢复。
+        // normal 状态恢复 .automatic：NavigationStack 页面标题与工具栏正常显示。
         .toolbar(
             removing: suppressLibraryToolbar
                 ? ToolbarDefaultItemKind.title
                 : nil
         )
-        .toolbarVisibility(.automatic, for: .windowToolbar)
+        .toolbarVisibility(
+            suppressLibraryToolbar
+                ? .hidden
+                : .automatic,
+            for: .windowToolbar
+        )
         .toolbarBackground(.hidden, for: .windowToolbar)
         // 用户选择主题后，主窗口、AI 助手与每个资料库目的地共享同一套色彩和控件强调色。
         .tint(theme.colorTokens.accent.color)

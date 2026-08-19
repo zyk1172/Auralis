@@ -53,8 +53,19 @@ public final class CrashLog {
     }
 
     /// 清除崩溃日志（用户查看后调用）。
+    /// 只清内存缓冲 + truncate 同一 inode，绝不 unlink 文件——
+    /// signal handler 预打开的 fd（O_APPEND）仍指向该 inode，unlink 后
+    /// 写入会落到一个用户再也找不到的孤儿 inode，导致「普通日志在新文件、
+    /// signal 记录在旧文件」的分裂。
     public func clearCrashLog() {
-        try? fileManager.removeItem(at: crashLogFile)
+        ringBuffer.removeAll()
+        guard let handle = try? FileHandle(forWritingTo: crashLogFile) else { return }
+        do {
+            try handle.truncate(atOffset: 0)
+            try handle.close()
+        } catch {
+            try? handle.close()
+        }
     }
 
     /// 写入一条带时间戳的日志条目（用于关键操作追踪）。
