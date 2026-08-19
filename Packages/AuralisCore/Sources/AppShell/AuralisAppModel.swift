@@ -94,7 +94,7 @@ public final class AuralisAppModel: ObservableObject {
             }
             queueStore.replace(entries: rebuilt, currentTrackID: queueIdentity(currentTrack))
             // 队列变更：开启新一轮随机（避免旧轮次的“已播放”标记污染新队列）。
-            shufflePlayedIDs.removeAll()
+            shufflePlayedEntryIDs.removeAll()
             // 队列是播放会话的一部分：变更即持久化（按服务器隔离），
             // 进程重启后可恢复上次的队列与当前曲目。
             // 用 debounce 调度（350ms 合并 + utility 后台），禁止在队列 setter
@@ -109,7 +109,7 @@ public final class AuralisAppModel: ObservableObject {
         set {
             guard queueStore.entries != newValue else { return }
             queueStore.replace(entries: newValue, currentTrackID: queueIdentity(currentTrack))
-            shufflePlayedIDs.removeAll()
+            shufflePlayedEntryIDs.removeAll()
             schedulePlaybackSessionPersistence()
             schedulePreparedNext()
         }
@@ -264,7 +264,9 @@ public final class AuralisAppModel: ObservableObject {
     /// 本次随机播放轮次中已随机播放过的曲目（TrackID）。
     /// 随机 + 不循环：一轮随机播完即停；随机 + 列表循环：一轮播完重置继续。
     /// 队列变更 / 重新开启随机时清空，避免旧轮次污染新队列。
-    private var shufflePlayedIDs: Set<GlobalID> = []
+    /// 随机模式下本轮已随机播放过的队列项（R05：按 entry UUID 记录）。
+    /// 重复歌曲是独立队列项——[A₁, B, A₂, C] 随机播过 A₁ 后，A₂ 仍可被选中。
+    private var shufflePlayedEntryIDs: Set<UUID> = []
     /// macOS 侧边栏搜索框的查询词（搜索页实时使用）。
     @Published public var macSearchQuery: String = ""
     /// 播放历史与单次播放达标状态由独立组件管理，避免“点选即计数”。
@@ -308,10 +310,10 @@ public final class AuralisAppModel: ObservableObject {
             defaults.set(isShuffled, forKey: Self.shuffleDefaultsKey)
             mediaIntegration.modeChanged(isShuffled: isShuffled, repeatMode: repeatMode)
             if isShuffled {
-                // 重新开启随机：新一轮；当前曲目计入本轮已播放。
-                shufflePlayedIDs.removeAll()
-                if currentTrack.id.rawValue != "placeholder" {
-                    shufflePlayedIDs.insert(queueIdentity(currentTrack))
+                // 重新开启随机：新一轮；当前队列项计入本轮已播放（R05：按 entry UUID）。
+                shufflePlayedEntryIDs.removeAll()
+                if currentTrack.id.rawValue != "placeholder", let entryID = queueStore.currentEntryID {
+                    shufflePlayedEntryIDs.insert(entryID)
                 }
             }
             schedulePreparedNext()
@@ -1263,21 +1265,27 @@ public final class AuralisAppModel: ObservableObject {
         var restoredQueue: [Track] = []
         // R05：Handoff 队列不去重——源设备 [A, B, A] 跨设备后必须仍是 [A, B, A]，
         // 重复歌曲是队列的合法状态（每次都是独立队列项）。
+        // 同时做 source-index → restored-index 映射：接收端曲库可能缺失源队列中
+        // 的某些项目（服务器删除/未同步），跳过后下标错位——用映射后的下标定位当前项。
+        let handoffIndex = info["currentQueueIndex"] as? Int
+        var restoredCurrentIndex: Int?
         if let ids = info["queueTrackIDs"] as? [String] {
-            for id in ids {
-                if let track = trackByID[id] {
-                    restoredQueue.append(track)
+            for (originalIndex, id) in ids.enumerated() {
+                guard let track = trackByID[id] else { continue }
+                if originalIndex == handoffIndex {
+                    restoredCurrentIndex = restoredQueue.count
                 }
+                restoredQueue.append(track)
             }
         }
         guard !restoredQueue.isEmpty else { return }
         queue = restoredQueue
-        // R05：优先用 Handoff 携带的下标定位队列项（重复歌曲 [A,B,A] 恢复后仍指
-        // 第二个 A）；无下标或越界时回退按 currentTrackID 匹配第一个。
-        let restoredIndex = info["currentQueueIndex"] as? Int
-        if let restoredIndex,
-           queueStore.entries.indices.contains(restoredIndex) {
-            let entry = queueStore.entries[restoredIndex]
+        // R05：优先用「映射后的」下标定位队列项（重复歌曲 [A,B,A] 恢复后仍指
+        // 第二个 A，缺失项目导致的下标错位也被修正）；无下标或越界时回退按
+        // currentTrackID 匹配第一个。
+        if let restoredCurrentIndex,
+           queueStore.entries.indices.contains(restoredCurrentIndex) {
+            let entry = queueStore.entries[restoredCurrentIndex]
             _ = queueStore.play(entryID: entry.id)
             currentTrack = entry.track
         } else if let currentRaw = info["currentTrackID"] as? String, let current = trackByID[currentRaw] {
@@ -1433,11 +1441,13 @@ public final class AuralisAppModel: ObservableObject {
         return false
     }
 
-    /// 随机模式下尚未在本轮播放过的候选池（排除当前曲目与已随机播放过的曲目）。
+    /// 随机模式下尚未在本轮播放过的候选池（排除当前队列项与已随机播放过的队列项）。
+    /// R05：按 entry UUID 判定——重复歌曲 A₁ 播过后 A₂ 仍是候选。
     private var shuffleRemainingPool: [Track] {
-        queue.filter {
-            queueIdentity($0) != queueIdentity(currentTrack) && !shufflePlayedIDs.contains(queueIdentity($0))
-        }
+        let currentEntryID = queueStore.currentEntryID
+        return queueStore.entries
+            .filter { $0.id != currentEntryID && !shufflePlayedEntryIDs.contains($0.id) }
+            .map(\.track)
     }
 
     /// 物理队列中是否存在相邻的上一首（不包含 repeat 语义）。
@@ -1545,7 +1555,10 @@ public final class AuralisAppModel: ObservableObject {
         playbackHistoryStore.resetSelection()
         currentTrack = track
         // 随机模式下记录“本轮已播放”：保证随机 + 不循环时每首只播一次，播完即停。
-        if isShuffled { shufflePlayedIDs.insert(queueIdentity(track)) }
+        // R05：按队列项 UUID 记录——重复歌曲是两个独立 occurrence，播过 A₁ 不误伤 A₂。
+        if isShuffled, let entryID = queueStore.currentEntryID {
+            shufflePlayedEntryIDs.insert(entryID)
+        }
         playbackPosition = 0
         if !queue.contains(where: { queueIdentity($0) == queueIdentity(track) }) { queue.insert(track, at: 0) }
         // 播放时自动缓存：当前歌曲的歌词 + 专辑封面（loadArtwork 在 UI 请求时落盘），
@@ -2013,8 +2026,16 @@ public final class AuralisAppModel: ObservableObject {
         var restoredQueue: [Track] = []
         // R05：会话恢复不去重——保存时队列可能含重复歌曲（每次独立队列项），
         // 恢复后必须保持原样 [A, B, A]，不能折叠成 [A, B]。
-        for id in snapshot.queueTrackIDs {
+        // 同时做 source-index → restored-index 映射：保存的 currentQueueIndex 是
+        // 源队列下标，恢复过程中被跳过的项目（服务器已删除）会让下标错位——
+        // [A, X, A, C] 保存 index 2（第二个 A），X 缺失后恢复成 [A, A, C]，
+        // 必须定位到新的 index 1，而不是原 index 2（那会是 C）。
+        var restoredCurrentIndex: Int?
+        for (originalIndex, id) in snapshot.queueTrackIDs.enumerated() {
             guard let track = trackByID[id] else { continue }
+            if originalIndex == snapshot.currentQueueIndex {
+                restoredCurrentIndex = restoredQueue.count
+            }
             restoredQueue.append(track)
         }
         guard !restoredQueue.isEmpty else { return false }
@@ -2025,12 +2046,12 @@ public final class AuralisAppModel: ObservableObject {
             current = restoredQueue[0]
         }
         queue = restoredQueue
-        // R05：优先用保存的下标精确定位队列项——重复歌曲 [A, B, A, C] 保存时当前
+        // R05：优先用「映射后的」下标精确定位队列项——重复歌曲 [A, B, A, C] 保存时
         // 是 index 2 的 A，恢复后必须仍是第二个 A，next() 才正确走到 C。
         // 旧快照没有 currentQueueIndex 时回退按 currentTrackID 匹配第一个。
-        if let savedIndex = snapshot.currentQueueIndex,
-           queueStore.entries.indices.contains(savedIndex) {
-            let entry = queueStore.entries[savedIndex]
+        if let restoredCurrentIndex,
+           queueStore.entries.indices.contains(restoredCurrentIndex) {
+            let entry = queueStore.entries[restoredCurrentIndex]
             _ = queueStore.play(entryID: entry.id)
             currentTrack = entry.track
         } else {
@@ -2874,27 +2895,31 @@ public final class AuralisAppModel: ObservableObject {
         return true
     }
 
-    /// 随机模式：从队列里随机挑一首尚未在本轮随机中播放过的非当前曲目。
+    /// 随机模式：从队列里随机挑一首尚未在本轮随机中播放过的非当前队列项。
+    /// R05：随机池与「已播放」记录都用 QueueEntry（UUID）——重复歌曲是两个独立
+    /// occurrence，选中 A₂ 就播 A₂（play(entryID:)），而不是只能表达「A」。
     /// 返回 false 表示本轮随机已播完（且不循环）或队列不足，由调用方决定暂停/重播。
     @discardableResult
     private func playRandomFromQueue() -> Bool {
-        guard queue.count > 1 else { return false }
-        var pool = queue.filter {
-            queueIdentity($0) != queueIdentity(currentTrack) && !shufflePlayedIDs.contains(queueIdentity($0))
+        guard queueStore.entries.count > 1 else { return false }
+        let currentEntryID = queueStore.currentEntryID
+        var pool = queueStore.entries.filter {
+            $0.id != currentEntryID && !shufflePlayedEntryIDs.contains($0.id)
         }
         if pool.isEmpty {
             if repeatMode == .all {
                 // 列表循环 + 随机：一轮播完，重置后继续随机。
-                shufflePlayedIDs.removeAll()
-                pool = queue.filter { queueIdentity($0) != queueIdentity(currentTrack) }
+                shufflePlayedEntryIDs.removeAll()
+                pool = queueStore.entries.filter { $0.id != currentEntryID }
             } else {
                 // 随机 + 不循环：一轮播完即停（不把“随机”当成隐式循环）。
                 return false
             }
         }
-        guard let next = pool.randomElement() else { return false }
-        shufflePlayedIDs.insert(queueIdentity(next))
-        selectAndPlay(next)
+        guard let entry = pool.randomElement() else { return false }
+        shufflePlayedEntryIDs.insert(entry.id)
+        _ = queueStore.play(entryID: entry.id)
+        selectAndPlay(entry.track)
         return true
     }
 

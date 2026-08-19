@@ -111,9 +111,13 @@ final class ArtworkStore {
     /// - Parameter serverID: 封面所属服务器的显式 ID（R01）。播放器封面必须传
     ///   `currentTrack.serverID`——正在播放 A、浏览 B 时，A 的封面仍要从 A 回源，
     ///   且缓存键落在 A 的命名空间，不污染 B。nil 时回退当前浏览服务器。
+    /// - 竞态边界（R01 收尾）：显式 serverID 的请求（播放器封面）**不受浏览服务器
+    ///   切换影响**——切 B 浏览既不取消 A 的在途请求，也不因 browse generation
+    ///   变化丢弃 A 的结果；只有 serverID == nil 的浏览型请求在切服后被丢弃。
     func load(remoteKey: String?, targetPixelSize: Int, serverID: ServerID? = nil) async -> PlatformImage? {
         guard let remoteKey, !remoteKey.isEmpty else { return nil }
         let target = min(max(1, targetPixelSize), 4_096)
+        let isExplicit = serverID != nil
         let requestServerID = effectiveServerID(serverID)
         let requestGeneration = generation
         let key = Self.cacheKey(
@@ -136,20 +140,28 @@ final class ArtworkStore {
             fallbackCacheKey: fallbackKey,
             targetPixelSize: target
         ) else {
-            guard requestServerID == effectiveServerID(serverID),
+            // 只有浏览型（兜底）请求在切服后丢弃并停止写失败记录。
+            guard !isExplicit else { return nil }
+            guard requestServerID == effectiveServerID(nil),
                   requestGeneration == generation
             else { return nil }
             markUnavailable(key)
             return nil
         }
 
-        // 请求期间来源服务器或缓存代际变化时，旧请求不得污染新服务器内存缓存。
-        // 显式 serverID（播放器封面）不受浏览服务器切换影响；兜底请求（浏览型）
-        // 在切服后丢弃，与旧行为一致。
-        guard requestServerID == effectiveServerID(serverID),
-              requestGeneration == generation,
-              !Task.isCancelled
-        else { return nil }
+        // 请求完成时的「代际是否仍有效」校验：
+        // - 显式 serverID（播放器封面）：只校验任务未取消——缓存键已 server-scoped，
+        //   切浏览服务器不影响 A 的结果落键；
+        // - 浏览型兜底：切服（currentServerID 或 browse generation 变化）后丢弃，
+        //   避免旧浏览服务器的结果污染新浏览状态。
+        if isExplicit {
+            guard !Task.isCancelled else { return nil }
+        } else {
+            guard requestServerID == effectiveServerID(nil),
+                  requestGeneration == generation,
+                  !Task.isCancelled
+            else { return nil }
+        }
         let image = Self.platformImage(from: payload.decoded)
         setImage(image, forKey: key, targetPixelSize: target, cost: payload.decoded.memoryCost)
         onArtworkLoaded?(remoteKey, payload.encodedData)
@@ -166,16 +178,21 @@ final class ArtworkStore {
         unavailable.setObject(NSNumber(value: true), forKey: key as NSString)
     }
 
-    /// 更新服务器命名空间。磁盘缓存按服务器隔离，切库只清理进程内图片与旧请求。
+    /// 更新服务器命名空间。磁盘缓存按服务器隔离。
+    /// R01 收尾：切浏览服务器**只递增浏览代际**（让旧的浏览型在途请求结果被丢弃），
+    /// 不再清空所有服务器的内存缓存、不再 cancelAll 在途请求——缓存键已 server-scoped，
+    /// 显式 serverID 的播放器封面（如 A 的歌在播、切到 B 浏览）不得被 B 的浏览切换
+    /// 取消或清掉内存结果。
     func setServerID(_ serverID: String?) {
         currentServerID = serverID.map(ServerID.init(rawValue:))
         let next = Self.normalizedNamespace(serverID)
         guard namespace != next else { return }
         namespace = next
-        reset()
+        generation &+= 1
     }
 
     /// 清空全部内存封面与失败记录；磁盘缓存由 ArtworkDiskCache 单独管理。
+    /// 仅用于内存压力 / 显式清理路径，不再由切浏览服务器触发。
     func reset() {
         generation &+= 1
         thumbnails.removeAllObjects()

@@ -267,6 +267,28 @@ private actor ArtworkServerSpecificConnector: ServerConnecting {
     func serverIDs() -> [String] { requestedServerIDs }
 }
 
+/// 可控制回源时延的 connector：让测试能在请求在途时切换浏览服务器。
+private actor ArtworkSlowConnector: ServerConnecting {
+    private let data: Data
+    private let delay: Duration
+
+    init(data: Data, delay: Duration) {
+        self.data = data
+        self.delay = delay
+    }
+
+    func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
+        throw ServerConnectionError.serverUnavailable
+    }
+
+    func restoreLastConnection() async throws -> ServerConnectionResult? { nil }
+
+    func artworkData(serverID: ServerID, key: String, targetPixelSize: Int) async -> Data? {
+        try? await Task.sleep(for: delay)
+        return data
+    }
+}
+
 @Test("R01：播 A 浏览 B、同 coverKey 不同图片——按 serverID 取回 A 图，不串用 B 的缓存")
 @MainActor
 func nowPlayingArtworkFollowsTrackServerNotBrowseServer() async throws {
@@ -308,4 +330,39 @@ func nowPlayingArtworkFollowsTrackServerNotBrowseServer() async throws {
     #expect(fetchedBrowse != nil)
     // 两次 fetch 来自不同缓存键（不同图片），对象不同——不发生串用。
     #expect(!(fetchedA === fetchedBrowse))
+}
+
+@Test("R01 收尾：显式 A 封面加载在途时切到 B 浏览——A 请求不被取消、结果落 A 键、内存缓存保留")
+@MainActor
+func explicitArtworkLoadSurvivesBrowseServerSwitch() async throws {
+    let data = try artworkTestData(red: 0.85, green: 0.1, blue: 0.1)
+    let connector = ArtworkSlowConnector(data: data, delay: .milliseconds(200))
+    let cache = temporaryArtworkCache()
+    let store = ArtworkStore(
+        connector: connector,
+        diskCache: cache,
+        initialServerID: "server-a"
+    )
+
+    // 启动显式 server-a 封面加载（在途 200ms）。
+    let loadTask = Task { @MainActor in
+        await store.load(remoteKey: "cover", targetPixelSize: 128, serverID: ServerID(rawValue: "server-a"))
+    }
+    // 请求尚未完成时切换浏览服务器到 B。
+    try? await Task.sleep(for: .milliseconds(50))
+    store.setServerID("server-b")
+
+    // A 请求必须照常完成并返回图片——切浏览服务器不得取消显式播放器封面。
+    let image = await loadTask.value
+    #expect(image != nil, "显式 A 封面请求不得被 B 的浏览切换取消")
+
+    // A 的内存缓存仍在（未被切服清空）。
+    let cachedA = store.image(remoteKey: "cover", targetPixelSize: 128, serverID: ServerID(rawValue: "server-a"))
+    #expect(cachedA != nil, "切浏览服务器不得清掉 A 的内存封面")
+
+    // 结果落在 A 键，B 命名空间无内容。
+    let aDisk = await cache.data(for: "server-a|cover@128")
+    let bDisk = await cache.data(for: "server-b|cover@128")
+    #expect(aDisk != nil)
+    #expect(bDisk == nil, "A 的封面不得写进 B 的缓存键")
 }
