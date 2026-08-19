@@ -205,6 +205,10 @@ public struct MacMusicShell: View {
                 theme: theme,
                 onOpenAssistantPlayer: { expandCurrentWindowPlayer() }
             )
+            // 顶部不留按钮：移除系统 Hide Sidebar 按钮。必须挂在 sidebar 视图上
+            // 才生效（挂 NavigationSplitView 整体不生效——macOS 已知行为）。
+            // 菜单栏「显示」里的显示/隐藏侧边栏仍可用（AuralisMacApp CommandMenu）。
+            .toolbar(removing: .sidebarToggle)
         } detail: {
             // 不能把播放条挂在页面内容的 safeAreaInset 上：空态 VStack 会给它一个
             // 非窗口高度，导致下载/不喜欢等页面的播放条上跳。这里由 detail 的
@@ -245,10 +249,6 @@ public struct MacMusicShell: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        // 顶部不留按钮：移除系统 Hide Sidebar 按钮。
-        // 菜单栏「显示」里的显示/隐藏侧边栏仍可用（AuralisMacApp CommandMenu），
-        // 侧边栏本身保留。
-        .toolbar(removing: .sidebarToggle)
     }
 
     private var playerDockReservedHeight: CGFloat {
