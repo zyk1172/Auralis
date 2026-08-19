@@ -85,7 +85,8 @@ struct MacPlaybackSlider: NSViewRepresentable {
         case commit
     }
 
-    static func phase(for eventType: NSEvent.EventType?) -> ScrubPhase {
+    /// 纯函数：不访问任何 actor 隔离状态，供 @objc 回调（非隔离上下文）直接调用。
+    nonisolated static func phase(for eventType: NSEvent.EventType?) -> ScrubPhase {
         switch eventType {
         case .leftMouseDown, .leftMouseDragged:
             return .scrubbing

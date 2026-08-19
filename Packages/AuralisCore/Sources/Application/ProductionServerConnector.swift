@@ -689,9 +689,10 @@ public actor ProductionServerConnector: ServerConnecting {
             // 与 Keychain 旧密码，杜绝「新 username/URL + 旧密码」跨存储不一致。
             return try await withAccountMutationRollback(serverID: serverID, credentialID: credentialID) {
                 if let newPassword, !newPassword.isEmpty {
-                    guard (try await credentialVault.store(newPassword, for: credentialID)) != nil else {
-                        throw AccountMutationError.credentialStoreFailed
-                    }
+                    // store 返回 Void（非 Optional），`!= nil` 恒为 true 是无效检查；
+                    // 失败由 throws 表达——抛错会进入 withAccountMutationRollback 的
+                    // 补偿回滚，并由外层 catch 返回 nil。
+                    try await credentialVault.store(newPassword, for: credentialID)
                 }
                 try await persistence.saveAccount(account)
                 try await catalogStore.upsertServer(account)
