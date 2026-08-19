@@ -7,6 +7,7 @@ options:
   xcodeVersion: "27.0"
   createIntermediateGroups: true
   generateEmptyDirectories: true
+  developmentLanguage: zh-Hans
 configs:
   Debug: debug
   Release: release
@@ -19,6 +20,7 @@ settings:
     CURRENT_PROJECT_VERSION: 3
     MARKETING_VERSION: 1.0.2
     CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_LANGUAGE: "zh-Hans"
 packages:
   AuralisCore:
     path: Packages/AuralisCore
@@ -61,6 +63,7 @@ targets:
           - Info.plist
           - AuralisMac.entitlements
       - path: Apps/Shared
+      - path: Apps/iOS/Resources
     dependencies:
       - package: AuralisCore
         product: AppShell
@@ -84,6 +87,7 @@ targets:
         ENABLE_RESOURCE_ACCESS_LOCATION: NO
         ENABLE_RESOURCE_ACCESS_PRINTING: NO
         ENABLE_RESOURCE_ACCESS_USB: NO
+        DEVELOPMENT_LANGUAGE: "zh-Hans"
   AuralisIntents:
     type: app-extension
     platform: iOS

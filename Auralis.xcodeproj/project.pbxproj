@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		094EA6B511660FC72EF58C8D /* Domain in Frameworks */ = {isa = PBXBuildFile; productRef = 67F9E818418E7523CD352BE2 /* Domain */; };
 		14D728D1EB7E51853F7DEBF9 /* MacShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 755404A1DB56C96714E863E6 /* MacShortcuts.swift */; };
+		17FB643FDFEA01BE7401C87E /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 37512AECC1D8665440BBB4DB /* Localizable.xcstrings */; };
 		1CCC7D2F778ECB1009DB59A9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 483C81986AF30F3B1A051853 /* Assets.xcassets */; };
 		20F4CEED549B426035A9144A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 483C81986AF30F3B1A051853 /* Assets.xcassets */; };
 		2117506507D83D589008A8AA /* LocalCatalog in Frameworks */ = {isa = PBXBuildFile; productRef = AE74FECA5A40223CCA6415A5 /* LocalCatalog */; };
@@ -336,11 +337,13 @@
 				};
 			};
 			buildConfigurationList = 0B12CD0DAC0F27104E8CA213 /* Build configuration list for PBXProject "Auralis" */;
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				Base,
 				en,
+				"zh-Hans",
+				"zh-Hant",
 			);
 			mainGroup = AE5D21F5E737E11601AE71A4;
 			minimizedProjectReferenceProxies = 1;
@@ -375,6 +378,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1CCC7D2F778ECB1009DB59A9 /* Assets.xcassets in Resources */,
+				17FB643FDFEA01BE7401C87E /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -465,6 +469,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Apps/macOS/AuralisMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_LANGUAGE = "zh-Hans";
 				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
@@ -526,6 +531,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_LANGUAGE = "zh-Hans";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -586,6 +592,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Apps/macOS/AuralisMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_LANGUAGE = "zh-Hans";
 				DEVELOPMENT_TEAM = JUQXD87P93;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
@@ -720,6 +727,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_LANGUAGE = "zh-Hans";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
