@@ -1,70 +1,46 @@
 {
-  "sourceLanguage" : "zh-Hans",
-  "strings" : {
-    "Auralis 推荐索引 V2" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Auralis Recommendation Index V2"
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "Auralis 推荐索引 V2": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auralis Recommendation Index V2"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Auralis 推薦索引 V2"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auralis 推薦索引 V2"
           }
         }
       }
     },
-    "CFBundleDisplayName" : {
-      "comment" : "Bundle display name",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Auralis"
-          }
-        }
-      }
-    },
-    "CFBundleName" : {
-      "comment" : "Bundle name",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Auralis"
-          }
-        }
-      }
-    },
-    "NSLocalNetworkUsageDescription" : {
-      "comment" : "Privacy - Local Network Usage Description",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Auralis needs to connect to your private music server to sync your library and play music."
+    "NSLocalNetworkUsageDescription": {
+      "comment": "Privacy - Local Network Usage Description",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auralis needs to connect to your private music server to sync your library and play music."
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Auralis 需要连接您选择的私人音乐服务器，以同步资料库和播放音乐。"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Auralis 需要连接您选择的私人音乐服务器，以同步资料库和播放音乐。"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "needs_review",
-            "value" : "Auralis 需要連接您選擇的私人音樂伺服器，以同步資料庫和播放音樂。"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auralis 需要連接您選擇的私人音樂伺服器，以同步資料庫和播放音樂。"
           }
         }
       }
     }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }

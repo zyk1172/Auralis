@@ -1,3325 +1,3667 @@
 {
-  "sourceLanguage" : "zh-Hans",
-  "strings" : {
-    "App 进程被系统终止" : {
-
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "App 进程被系统终止": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App Process Terminated"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App 行程被系統終止"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App 进程被系统终止"
+          }
+        }
+      }
     },
-    "genre.8bit" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "8-Bit"
+    "genre.8bit": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8-Bit"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "8-bit"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8-bit"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "8-bit"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8-bit"
           }
         }
       }
     },
-    "genre.acoustic" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Acoustic"
+    "genre.acoustic": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acoustic"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "原声"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原声"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "原聲"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原聲"
           }
         }
       }
     },
-    "genre.afrobeat" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Afrobeat"
+    "genre.afrobeat": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afrobeat"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "非洲节拍"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非洲节拍"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "非洲節拍"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非洲節拍"
           }
         }
       }
     },
-    "genre.alt_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alt Rock"
+    "genre.alt_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alt Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "另类摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另类摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "另類搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另類搖滾"
           }
         }
       }
     },
-    "genre.alternative" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alternative"
+    "genre.alternative": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alternative"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "另类"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另类"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "另類"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另類"
           }
         }
       }
     },
-    "genre.ambient" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ambient"
+    "genre.ambient": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ambient"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "氛围"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "氛围"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "氛圍"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "氛圍"
           }
         }
       }
     },
-    "genre.americana" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Americana"
+    "genre.americana": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Americana"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "美式民谣"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "美式民谣"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "美式民謠"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "美式民謠"
           }
         }
       }
     },
-    "genre.anime" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anime"
+    "genre.anime": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anime"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "动漫"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "动漫"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "動漫"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "動漫"
           }
         }
       }
     },
-    "genre.art_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Art Rock"
+    "genre.art_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "艺术摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "艺术摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "藝術搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "藝術搖滾"
           }
         }
       }
     },
-    "genre.avant_garde" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Avant-Garde"
+    "genre.avant_garde": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avant-Garde"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "先锋"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先锋"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "先鋒"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先鋒"
           }
         }
       }
     },
-    "genre.ballad" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ballad"
+    "genre.ballad": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ballad"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "抒情"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "抒情"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "抒情"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "抒情"
           }
         }
       }
     },
-    "genre.baroque" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Baroque"
+    "genre.baroque": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baroque"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "巴洛克"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "巴洛克"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "巴洛克"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "巴洛克"
           }
         }
       }
     },
-    "genre.bebop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bebop"
+    "genre.bebop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bebop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "比波普"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "比波普"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "比波普"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "比波普"
           }
         }
       }
     },
-    "genre.big_band" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Big Band"
+    "genre.big_band": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Big Band"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大乐队"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "大乐队"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大樂隊"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "大樂隊"
           }
         }
       }
     },
-    "genre.bluegrass" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bluegrass"
+    "genre.bluegrass": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluegrass"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "蓝草"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "蓝草"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "藍草"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "藍草"
           }
         }
       }
     },
-    "genre.blues" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Blues"
+    "genre.blues": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blues"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "蓝调"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "蓝调"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "藍調"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "藍調"
           }
         }
       }
     },
-    "genre.blues_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Blues Rock"
+    "genre.blues_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blues Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "蓝调摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "蓝调摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "藍調搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "藍調搖滾"
           }
         }
       }
     },
-    "genre.bossa" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bossa"
+    "genre.bossa": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bossa"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "波萨"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "波萨"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "波薩"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "波薩"
           }
         }
       }
     },
-    "genre.bossa_nova" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bossa Nova"
+    "genre.bossa_nova": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bossa Nova"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "波萨诺瓦"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "波萨诺瓦"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "波薩諾瓦"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "波薩諾瓦"
           }
         }
       }
     },
-    "genre.breakbeat" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Breakbeat"
+    "genre.breakbeat": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Breakbeat"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "碎拍"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "碎拍"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "碎拍"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "碎拍"
           }
         }
       }
     },
-    "genre.britpop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Britpop"
+    "genre.britpop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Britpop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "英伦摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英伦摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "英倫搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英倫搖滾"
           }
         }
       }
     },
-    "genre.cantopop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cantopop"
+    "genre.cantopop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cantopop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "粤语流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "粤语流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "粵語流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "粵語流行"
           }
         }
       }
     },
-    "genre.celtic" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Celtic"
+    "genre.celtic": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Celtic"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "凯尔特"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "凯尔特"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "凱爾特"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "凱爾特"
           }
         }
       }
     },
-    "genre.chicago_blues" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chicago Blues"
+    "genre.chicago_blues": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chicago Blues"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "芝加哥蓝调"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "芝加哥蓝调"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "芝加哥藍調"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "芝加哥藍調"
           }
         }
       }
     },
-    "genre.children" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Children"
+    "genre.children": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Children"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "儿歌"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "儿歌"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "兒歌"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "兒歌"
           }
         }
       }
     },
-    "genre.chillout" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chillout"
+    "genre.chillout": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chillout"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "弛放"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "弛放"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "馳放"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "馳放"
           }
         }
       }
     },
-    "genre.chiptune" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chiptune"
+    "genre.chiptune": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiptune"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "芯片音乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "芯片音乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "晶片音樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "晶片音樂"
           }
         }
       }
     },
-    "genre.choral" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choral"
+    "genre.choral": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choral"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "合唱"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合唱"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "合唱"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合唱"
           }
         }
       }
     },
-    "genre.christmas" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Christmas"
+    "genre.christmas": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Christmas"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "圣诞"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "圣诞"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "聖誕"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "聖誕"
           }
         }
       }
     },
-    "genre.city_pop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "City Pop"
+    "genre.city_pop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "City Pop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "城市流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "城市流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "城市流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "城市流行"
           }
         }
       }
     },
-    "genre.classical" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Classical"
+    "genre.classical": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Classical"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "古典"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "古典"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "古典"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "古典"
           }
         }
       }
     },
-    "genre.comedy" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Comedy"
+    "genre.comedy": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comedy"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "喜剧"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "喜剧"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "喜劇"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "喜劇"
           }
         }
       }
     },
-    "genre.contemporary" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Contemporary"
+    "genre.contemporary": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contemporary"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当代"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当代"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "當代"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "當代"
           }
         }
       }
     },
-    "genre.cool_jazz" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cool Jazz"
+    "genre.cool_jazz": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cool Jazz"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "冷爵士"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "冷爵士"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "冷爵士"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "冷爵士"
           }
         }
       }
     },
-    "genre.country" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Country"
+    "genre.country": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Country"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "乡村"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "乡村"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "鄉村"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "鄉村"
           }
         }
       }
     },
-    "genre.cover" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cover"
+    "genre.cover": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cover"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "翻唱"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻唱"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "翻唱"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "翻唱"
           }
         }
       }
     },
-    "genre.cumbia" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cumbia"
+    "genre.cumbia": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cumbia"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "昆比亚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "昆比亚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "昆比亞"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "昆比亞"
           }
         }
       }
     },
-    "genre.dance" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dance"
+    "genre.dance": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dance"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "舞曲"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "舞曲"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "舞曲"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "舞曲"
           }
         }
       }
     },
-    "genre.darkwave" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Darkwave"
+    "genre.darkwave": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Darkwave"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暗潮"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗潮"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暗潮"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗潮"
           }
         }
       }
     },
-    "genre.deep_house" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Deep House"
+    "genre.deep_house": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deep House"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "深浩室"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "深浩室"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "深浩室"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "深浩室"
           }
         }
       }
     },
-    "genre.delta_blues" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Delta Blues"
+    "genre.delta_blues": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delta Blues"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "三角洲蓝调"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "三角洲蓝调"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "三角洲藍調"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "三角洲藍調"
           }
         }
       }
     },
-    "genre.disco" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Disco"
+    "genre.disco": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disco"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迪斯科"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迪斯科"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迪斯可"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迪斯可"
           }
         }
       }
     },
-    "genre.downtempo" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Downtempo"
+    "genre.downtempo": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downtempo"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "缓拍"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缓拍"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "緩拍"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "緩拍"
           }
         }
       }
     },
-    "genre.dream_pop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dream Pop"
+    "genre.dream_pop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dream Pop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "梦幻流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "梦幻流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "夢幻流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "夢幻流行"
           }
         }
       }
     },
-    "genre.drum_and_bass" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Drum & Bass"
+    "genre.drum_and_bass": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drum & Bass"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "鼓打贝斯"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "鼓打贝斯"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "鼓打貝斯"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "鼓打貝斯"
           }
         }
       }
     },
-    "genre.drumstep" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Drumstep"
+    "genre.drumstep": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drumstep"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "鼓打回响"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "鼓打回响"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "鼓打迴響"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "鼓打迴響"
           }
         }
       }
     },
-    "genre.dubstep" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dubstep"
+    "genre.dubstep": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dubstep"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "回响贝斯"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回响贝斯"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迴響貝斯"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迴響貝斯"
           }
         }
       }
     },
-    "genre.easy_listening" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Easy Listening"
+    "genre.easy_listening": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Easy Listening"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "轻音乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "轻音乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "輕音樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "輕音樂"
           }
         }
       }
     },
-    "genre.ebm" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "EBM"
+    "genre.ebm": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EBM"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "电子体乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电子体乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "電子體樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電子體樂"
           }
         }
       }
     },
-    "genre.electro" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Electro"
+    "genre.electro": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Electro"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "电子放克"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电子放克"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "電子放克"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電子放克"
           }
         }
       }
     },
-    "genre.electronic" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Electronic"
+    "genre.electronic": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Electronic"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "电子"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电子"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "電子"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電子"
           }
         }
       }
     },
-    "genre.electropop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Electropop"
+    "genre.electropop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Electropop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "电子流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电子流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "電子流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電子流行"
           }
         }
       }
     },
-    "genre.emo" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Emo"
+    "genre.emo": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emo"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "情绪摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "情绪摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "情緒搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "情緒搖滾"
           }
         }
       }
     },
-    "genre.experimental" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Experimental"
+    "genre.experimental": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Experimental"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "实验"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "实验"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "實驗"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "實驗"
           }
         }
       }
     },
-    "genre.flamenco" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Flamenco"
+    "genre.flamenco": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flamenco"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "弗拉门戈"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "弗拉门戈"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "佛朗明哥"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "佛朗明哥"
           }
         }
       }
     },
-    "genre.folk" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Folk"
+    "genre.folk": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folk"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "民谣"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "民谣"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "民謠"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "民謠"
           }
         }
       }
     },
-    "genre.folk_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Folk Rock"
+    "genre.folk_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folk Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "民谣摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "民谣摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "民謠搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "民謠搖滾"
           }
         }
       }
     },
-    "genre.free_jazz" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Free Jazz"
+    "genre.free_jazz": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Free Jazz"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自由爵士"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自由爵士"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自由爵士"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自由爵士"
           }
         }
       }
     },
-    "genre.funk" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Funk"
+    "genre.funk": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funk"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "放克"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "放克"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "放克"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "放克"
           }
         }
       }
     },
-    "genre.garage" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Garage"
+    "genre.garage": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Garage"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "车库"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "车库"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "車庫"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "車庫"
           }
         }
       }
     },
-    "genre.garage_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Garage Rock"
+    "genre.garage_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Garage Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "车库摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "车库摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "車庫搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "車庫搖滾"
           }
         }
       }
     },
-    "genre.glam_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Glam Rock"
+    "genre.glam_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Glam Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "华丽摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "华丽摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "華麗搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "華麗搖滾"
           }
         }
       }
     },
-    "genre.glitch" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Glitch"
+    "genre.glitch": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Glitch"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "故障电子"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "故障电子"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "故障電子"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "故障電子"
           }
         }
       }
     },
-    "genre.gospel" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gospel"
+    "genre.gospel": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gospel"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "福音"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "福音"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "福音"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "福音"
           }
         }
       }
     },
-    "genre.grunge" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Grunge"
+    "genre.grunge": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grunge"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "垃圾摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "垃圾摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "垃圾搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "垃圾搖滾"
           }
         }
       }
     },
-    "genre.hard_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hard Rock"
+    "genre.hard_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hard Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "硬摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "硬摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "硬搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "硬搖滾"
           }
         }
       }
     },
-    "genre.hip_hop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hip Hop"
+    "genre.hip_hop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hip Hop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "嘻哈"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "嘻哈"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "嘻哈"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "嘻哈"
           }
         }
       }
     },
-    "genre.holiday" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Holiday"
+    "genre.holiday": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Holiday"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "节日"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节日"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "節日"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "節日"
           }
         }
       }
     },
-    "genre.house" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "House"
+    "genre.house": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "House"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "浩室"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浩室"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "浩室"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浩室"
           }
         }
       }
     },
-    "genre.idm" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "IDM"
+    "genre.idm": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "IDM"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "智能舞曲"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "智能舞曲"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "智慧舞曲"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "智慧舞曲"
           }
         }
       }
     },
-    "genre.indie" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Indie"
+    "genre.indie": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indie"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "独立"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "独立"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "獨立"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "獨立"
           }
         }
       }
     },
-    "genre.indie_pop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Indie Pop"
+    "genre.indie_pop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indie Pop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "独立流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "独立流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "獨立流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "獨立流行"
           }
         }
       }
     },
-    "genre.indie_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Indie Rock"
+    "genre.indie_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indie Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "独立摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "独立摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "獨立搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "獨立搖滾"
           }
         }
       }
     },
-    "genre.industrial" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Industrial"
+    "genre.industrial": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Industrial"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "工业"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工业"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "工業"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工業"
           }
         }
       }
     },
-    "genre.instrumental" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Instrumental"
+    "genre.instrumental": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Instrumental"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "器乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "器乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "器樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "器樂"
           }
         }
       }
     },
-    "genre.j_pop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "J-Pop"
+    "genre.j_pop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J-Pop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "日语流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日语流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "日語流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日語流行"
           }
         }
       }
     },
-    "genre.j_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "J-Rock"
+    "genre.j_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J-Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "日系摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日系摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "日系搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日系搖滾"
           }
         }
       }
     },
-    "genre.jazz" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Jazz"
+    "genre.jazz": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jazz"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "爵士"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "爵士"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "爵士"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "爵士"
           }
         }
       }
     },
-    "genre.jazz_fusion" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Jazz Fusion"
+    "genre.jazz_fusion": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jazz Fusion"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "融合爵士"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "融合爵士"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "融合爵士"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "融合爵士"
           }
         }
       }
     },
-    "genre.jazz_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Jazz Rock"
+    "genre.jazz_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jazz Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "爵士摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "爵士摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "爵士搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "爵士搖滾"
           }
         }
       }
     },
-    "genre.jungle" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Jungle"
+    "genre.jungle": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jungle"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "丛林舞曲"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "丛林舞曲"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "叢林舞曲"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "叢林舞曲"
           }
         }
       }
     },
-    "genre.k_pop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "K-Pop"
+    "genre.k_pop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "K-Pop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "韩语流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "韩语流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "韓語流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "韓語流行"
           }
         }
       }
     },
-    "genre.karaoke" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Karaoke"
+    "genre.karaoke": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Karaoke"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "卡拉OK"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "卡拉OK"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "卡拉OK"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "卡拉OK"
           }
         }
       }
     },
-    "genre.latin" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Latin"
+    "genre.latin": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Latin"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "拉丁"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拉丁"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "拉丁"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拉丁"
           }
         }
       }
     },
-    "genre.latin_jazz" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Latin Jazz"
+    "genre.latin_jazz": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Latin Jazz"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "拉丁爵士"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拉丁爵士"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "拉丁爵士"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拉丁爵士"
           }
         }
       }
     },
-    "genre.live" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Live"
+    "genre.live": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "现场"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现场"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "現場"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現場"
           }
         }
       }
     },
-    "genre.lofi" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lo-Fi"
+    "genre.lofi": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo-Fi"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "低保真"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "低保真"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "低保真"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "低保真"
           }
         }
       }
     },
-    "genre.lounge" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lounge"
+    "genre.lounge": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lounge"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "沙发音乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "沙发音乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "沙發音樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "沙發音樂"
           }
         }
       }
     },
-    "genre.mandopop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mandopop"
+    "genre.mandopop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mandopop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "华语流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "华语流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "華語流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "華語流行"
           }
         }
       }
     },
-    "genre.math_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Math Rock"
+    "genre.math_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Math Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "数学摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "数学摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "數學搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "數學搖滾"
           }
         }
       }
     },
-    "genre.metal" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Metal"
+    "genre.metal": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metal"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "金属"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "金属"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "金屬"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "金屬"
           }
         }
       }
     },
-    "genre.minimal" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Minimal"
+    "genre.minimal": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimal"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "极简"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "极简"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "極簡"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "極簡"
           }
         }
       }
     },
-    "genre.musical" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Musical"
+    "genre.musical": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Musical"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "音乐剧"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音乐剧"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "音樂劇"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音樂劇"
           }
         }
       }
     },
-    "genre.musicals" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Musicals"
+    "genre.musicals": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Musicals"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "音乐剧"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音乐剧"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "音樂劇"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音樂劇"
           }
         }
       }
     },
-    "genre.new_age" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Age"
+    "genre.new_age": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Age"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新世纪"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新世纪"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新世紀"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新世紀"
           }
         }
       }
     },
-    "genre.new_wave" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Wave"
+    "genre.new_wave": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Wave"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新浪潮"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新浪潮"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新浪潮"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新浪潮"
           }
         }
       }
     },
-    "genre.noise_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Noise Rock"
+    "genre.noise_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noise Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "噪音摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "噪音摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "噪音搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "噪音搖滾"
           }
         }
       }
     },
-    "genre.opera" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Opera"
+    "genre.opera": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opera"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "歌剧"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "歌剧"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "歌劇"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "歌劇"
           }
         }
       }
     },
-    "genre.pop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pop"
+    "genre.pop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "流行"
           }
         }
       }
     },
-    "genre.post_punk" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Post-Punk"
+    "genre.post_punk": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Punk"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "后朋克"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后朋克"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "後龐克"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "後龐克"
           }
         }
       }
     },
-    "genre.post_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Post-Rock"
+    "genre.post_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "后摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "後搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "後搖滾"
           }
         }
       }
     },
-    "genre.progressive_house" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Progressive House"
+    "genre.progressive_house": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Progressive House"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "前卫浩室"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前卫浩室"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "前衛浩室"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前衛浩室"
           }
         }
       }
     },
-    "genre.progressive_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Progressive Rock"
+    "genre.progressive_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Progressive Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "前卫摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前卫摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "前衛搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "前衛搖滾"
           }
         }
       }
     },
-    "genre.psychedelic" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Psychedelic"
+    "genre.psychedelic": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Psychedelic"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迷幻"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迷幻"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迷幻"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迷幻"
           }
         }
       }
     },
-    "genre.psychedelic_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Psychedelic Rock"
+    "genre.psychedelic_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Psychedelic Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迷幻摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迷幻摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迷幻搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迷幻搖滾"
           }
         }
       }
     },
-    "genre.punk" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Punk"
+    "genre.punk": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punk"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "朋克"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "朋克"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "龐克"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "龐克"
           }
         }
       }
     },
-    "genre.punk_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Punk Rock"
+    "genre.punk_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punk Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "朋克摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "朋克摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "龐克搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "龐克搖滾"
           }
         }
       }
     },
-    "genre.rap" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rap"
+    "genre.rap": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rap"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "说唱"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "说唱"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "饒舌"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "饒舌"
           }
         }
       }
     },
-    "genre.reggae" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reggae"
+    "genre.reggae": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reggae"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "雷鬼"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "雷鬼"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "雷鬼"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "雷鬼"
           }
         }
       }
     },
-    "genre.reggaeton" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reggaeton"
+    "genre.reggaeton": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reggaeton"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "雷鬼顿"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "雷鬼顿"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "雷鬼頓"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "雷鬼頓"
           }
         }
       }
     },
-    "genre.remix" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Remix"
+    "genre.remix": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remix"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "混音"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "混音"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "混音"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "混音"
           }
         }
       }
     },
-    "genre.rnb" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "R&B"
+    "genre.rnb": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "R&B"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "节奏布鲁斯"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节奏布鲁斯"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "節奏藍調"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "節奏藍調"
           }
         }
       }
     },
-    "genre.rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rock"
+    "genre.rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搖滾"
           }
         }
       }
     },
-    "genre.rock_and_roll" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rock & Roll"
+    "genre.rock_and_roll": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rock & Roll"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "摇滚乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "摇滚乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搖滾樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搖滾樂"
           }
         }
       }
     },
-    "genre.romance" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Romance"
+    "genre.romance": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Romance"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "浪漫"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浪漫"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "浪漫"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浪漫"
           }
         }
       }
     },
-    "genre.romantic" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Romantic"
+    "genre.romantic": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Romantic"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "浪漫主义"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浪漫主义"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "浪漫主義"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浪漫主義"
           }
         }
       }
     },
-    "genre.salsa" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Salsa"
+    "genre.salsa": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salsa"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "萨尔萨"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "萨尔萨"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "薩爾薩"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "薩爾薩"
           }
         }
       }
     },
-    "genre.score" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Score"
+    "genre.score": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Score"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "影视配乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "影视配乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "影視配樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "影視配樂"
           }
         }
       }
     },
-    "genre.seasonal" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Seasonal"
+    "genre.seasonal": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seasonal"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "季节"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "季节"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "季節"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "季節"
           }
         }
       }
     },
-    "genre.shoegaze" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shoegaze"
+    "genre.shoegaze": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shoegaze"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自赏"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自赏"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自賞"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自賞"
           }
         }
       }
     },
-    "genre.ska" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ska"
+    "genre.ska": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ska"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "斯卡"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "斯卡"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "斯卡"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "斯卡"
           }
         }
       }
     },
-    "genre.smooth_jazz" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Smooth Jazz"
+    "genre.smooth_jazz": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smooth Jazz"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "舒缓爵士"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "舒缓爵士"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "舒緩爵士"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "舒緩爵士"
           }
         }
       }
     },
-    "genre.soft_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Soft Rock"
+    "genre.soft_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soft Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "软摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "软摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "軟搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "軟搖滾"
           }
         }
       }
     },
-    "genre.soul" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Soul"
+    "genre.soul": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soul"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "灵魂乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "灵魂乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "靈魂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "靈魂"
           }
         }
       }
     },
-    "genre.soul_jazz" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Soul Jazz"
+    "genre.soul_jazz": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soul Jazz"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "灵魂爵士"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "灵魂爵士"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "靈魂爵士"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "靈魂爵士"
           }
         }
       }
     },
-    "genre.soundtrack" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Soundtrack"
+    "genre.soundtrack": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soundtrack"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "原声带"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原声带"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "原聲帶"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原聲帶"
           }
         }
       }
     },
-    "genre.soundtrackscore" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Soundtrack"
+    "genre.soundtrackscore": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soundtrack"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "原声带"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原声带"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "原聲帶"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原聲帶"
           }
         }
       }
     },
-    "genre.southern_rock" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Southern Rock"
+    "genre.southern_rock": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Southern Rock"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "南方摇滚"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "南方摇滚"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "南方搖滾"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "南方搖滾"
           }
         }
       }
     },
-    "genre.spoken_word" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Spoken Word"
+    "genre.spoken_word": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spoken Word"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "朗诵"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "朗诵"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "朗誦"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "朗誦"
           }
         }
       }
     },
-    "genre.swing" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Swing"
+    "genre.swing": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swing"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "摇摆乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "摇摆乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搖擺樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搖擺樂"
           }
         }
       }
     },
-    "genre.synth_pop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Synth Pop"
+    "genre.synth_pop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synth Pop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "合成器流行"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合成器流行"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "合成器流行"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合成器流行"
           }
         }
       }
     },
-    "genre.synthwave" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Synthwave"
+    "genre.synthwave": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synthwave"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "合成器浪潮"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合成器浪潮"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "合成器浪潮"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合成器浪潮"
           }
         }
       }
     },
-    "genre.tango" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tango"
+    "genre.tango": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tango"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "探戈"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "探戈"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "探戈"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "探戈"
           }
         }
       }
     },
-    "genre.techno" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Techno"
+    "genre.techno": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Techno"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "科技舞曲"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "科技舞曲"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "科技舞曲"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "科技舞曲"
           }
         }
       }
     },
-    "genre.techno_house" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Techno House"
+    "genre.techno_house": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Techno House"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "科技浩室"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "科技浩室"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "科技浩室"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "科技浩室"
           }
         }
       }
     },
-    "genre.traditional" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Traditional"
+    "genre.traditional": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Traditional"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "传统"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "传统"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "傳統"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "傳統"
           }
         }
       }
     },
-    "genre.trance" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Trance"
+    "genre.trance": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trance"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迷幻舞曲"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迷幻舞曲"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "迷幻舞曲"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "迷幻舞曲"
           }
         }
       }
     },
-    "genre.trip_hop" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Trip Hop"
+    "genre.trip_hop": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trip Hop"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "神游舞曲"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "神游舞曲"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "神遊舞曲"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "神遊舞曲"
           }
         }
       }
     },
-    "genre.uk_garage" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "UK Garage"
+    "genre.uk_garage": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UK Garage"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "英式车库"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英式车库"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "英式車庫"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "英式車庫"
           }
         }
       }
     },
-    "genre.vaporwave" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vaporwave"
+    "genre.vaporwave": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vaporwave"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "蒸汽波"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "蒸汽波"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "蒸氣波"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "蒸氣波"
           }
         }
       }
     },
-    "genre.world" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "World"
+    "genre.world": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "World"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "世界音乐"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "世界音乐"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "世界音樂"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "世界音樂"
           }
         }
       }
     },
-    "不循环" : {
-
+    "不循环": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Repeat"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不循環"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不循环"
+          }
+        }
+      }
     },
-    "关闭" : {
-
+    "关闭": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "關閉"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭"
+          }
+        }
+      }
     },
-    "列表循环" : {
-
+    "列表循环": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repeat All"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "列表循環"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "列表循环"
+          }
+        }
+      }
     },
-    "单曲循环" : {
-
+    "单曲循环": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repeat One"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "單曲循環"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "单曲循环"
+          }
+        }
+      }
     },
-    "按专辑" : {
-
+    "按专辑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Album"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按專輯"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按专辑"
+          }
+        }
+      }
     },
-    "按歌曲" : {
-
+    "按歌曲": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Song"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按歌曲"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按歌曲"
+          }
+        }
+      }
     },
-    "播放器对象被释放" : {
-
+    "播放器对象被释放": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Player Released"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "播放器物件已釋放"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "播放器对象被释放"
+          }
+        }
+      }
     },
-    "播放队列结束" : {
-
+    "播放队列结束": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Playback Queue Finished"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "播放佇列結束"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "播放队列结束"
+          }
+        }
+      }
     },
-    "服务器连接中断" : {
-
+    "服务器连接中断": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server Disconnected"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "伺服器連接中斷"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器连接中断"
+          }
+        }
+      }
     },
-    "未知" : {
-
+    "未知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未知"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未知"
+          }
+        }
+      }
     },
-    "未连接服务器" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Not Connected"
+    "未连接服务器": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Connected"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未连接服务器"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未连接服务器"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未連接伺服器"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未連接伺服器"
           }
         }
       }
     },
-    "流地址失效" : {
-
+    "流地址失效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stream Expired"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "串流地址失效"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "流地址失效"
+          }
+        }
+      }
     },
-    "用户主动停止" : {
-
+    "用户主动停止": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped by User"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用者主動停止"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户主动停止"
+          }
+        }
+      }
     },
-    "用户主动暂停" : {
-
+    "用户主动暂停": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paused by User"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用者主動暫停"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户主动暂停"
+          }
+        }
+      }
     },
-    "网络中断" : {
-
+    "网络中断": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network Interrupted"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "網路中斷"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络中断"
+          }
+        }
+      }
     },
-    "输出设备断开" : {
-
+    "输出设备断开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Output Device Disconnected"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "輸出裝置已斷開"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输出设备断开"
+          }
+        }
+      }
     },
-    "音频会话中断" : {
-
+    "音频会话中断": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio Session Interrupted"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音訊會話中斷"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音频会话中断"
+          }
+        }
+      }
     },
-    "音频解码失败" : {
-
+    "音频解码失败": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio Decode Failed"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音訊解碼失敗"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "音频解码失败"
+          }
+        }
+      }
     }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }
