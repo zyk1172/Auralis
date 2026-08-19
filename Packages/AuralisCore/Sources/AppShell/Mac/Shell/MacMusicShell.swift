@@ -214,9 +214,12 @@ public struct MacMusicShell: View {
             // 非窗口高度，导致下载/不喜欢等页面的播放条上跳。这里由 detail 的
             // GeometryReader 提供稳定窗口坐标，内容仅预留播放器所占底部空间。
             GeometryReader { geo in
+                // 窗口极窄或 GeometryReader 首帧给出 0/极小宽度时，
+                // “宽度 - 2*inset” 会变成负数，.frame(width:) 会报
+                // “Invalid frame dimension (negative or non-finite)”。用 max(0, _) 夹住。
                 let playerWidth = min(
                     MacUIVisualTokens.FloatingPlayer.maxWidth,
-                    geo.size.width - 2 * MacUIVisualTokens.FloatingPlayer.horizontalInset
+                    max(0, geo.size.width - 2 * MacUIVisualTokens.FloatingPlayer.horizontalInset)
                 )
                 ZStack {
                     NavigationStack(path: $navigation.path) {
