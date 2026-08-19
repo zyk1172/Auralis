@@ -70,7 +70,7 @@ struct MacSidebarLibraryEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("资料库")
+            Text(String(localized: "资料库", bundle: .module))
                 .font(.headline)
             List {
                 ForEach($prefs.items) { $item in

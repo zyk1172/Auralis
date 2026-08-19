@@ -32,7 +32,7 @@ struct MacMusicDownloadsView: View {
                 subtitle: "\(tracks.count) 首离线音乐 · \(DownloadManagementView.byteText(model.downloadedAudioBytes))"
             ) {
                 if !tracks.isEmpty {
-                    MacPrimaryButton(title: "随机播放", systemImage: "shuffle") {
+                    MacPrimaryButton(title: String(localized: "随机播放", bundle: .module), systemImage: "shuffle") {
                         model.playShuffledQueue(tracks)
                     }
                 }
@@ -41,26 +41,26 @@ struct MacMusicDownloadsView: View {
                         Button(role: .destructive) {
                             model.cancelAllDownloads()
                         } label: {
-                            Label("取消全部下载", systemImage: "xmark.circle")
+                            Label(String(localized: "取消全部下载", bundle: .module), systemImage: "xmark.circle")
                         }
                     }
                     Button(role: .destructive) {
                         confirmsRemoveSelected = true
                     } label: {
-                        Label("删除所选下载", systemImage: "trash")
+                        Label(String(localized: "删除所选下载", bundle: .module), systemImage: "trash")
                     }
                     .disabled(selectedDownloadedTracks.isEmpty)
                     Button(role: .destructive) {
                         confirmsRemoveAll = true
                     } label: {
-                        Label("删除全部本地音乐", systemImage: "trash.slash")
+                        Label(String(localized: "删除全部本地音乐", bundle: .module), systemImage: "trash.slash")
                     }
                     .disabled(tracks.isEmpty && activeTracks.isEmpty)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
                 .menuStyle(.borderlessButton)
-                .accessibilityLabel("下载管理")
+                .accessibilityLabel(String(localized: "下载管理", bundle: .module))
             }
 
             if let error = model.lastDownloadOperationError {
@@ -76,7 +76,7 @@ struct MacMusicDownloadsView: View {
                         Image(systemName: "xmark")
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("关闭下载错误")
+                    .accessibilityLabel(String(localized: "关闭下载错误", bundle: .module))
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 10)
@@ -93,7 +93,7 @@ struct MacMusicDownloadsView: View {
                 ContentUnavailableView(
                     "暂无下载",
                     systemImage: "arrow.down.circle",
-                    description: Text("在歌曲、专辑或播放列表菜单中选择“下载”，即可离线播放。")
+                    description: Text(String(localized: "在歌曲、专辑或播放列表菜单中选择“下载”，即可离线播放。", bundle: .module))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if tracks.isEmpty {
@@ -110,31 +110,31 @@ struct MacMusicDownloadsView: View {
                 )
             }
         }
-        .navigationTitle("下载")
+        .navigationTitle(String(localized: "下载", bundle: .module))
         .confirmationDialog(
             "删除全部本地音乐？",
             isPresented: $confirmsRemoveAll,
             titleVisibility: .visible
         ) {
-            Button("删除全部下载", role: .destructive) {
+            Button(String(localized: "删除全部下载", bundle: .module), role: .destructive) {
                 Task { await model.removeAllDownloads() }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("只删除这台 Mac 上的离线文件，不会删除音乐服务器上的歌曲。")
+            Text(String(localized: "只删除这台 Mac 上的离线文件，不会删除音乐服务器上的歌曲。", bundle: .module))
         }
         .confirmationDialog(
             "删除所选的 \(selectedDownloadedTracks.count) 首本地音乐？",
             isPresented: $confirmsRemoveSelected,
             titleVisibility: .visible
         ) {
-            Button("删除所选下载", role: .destructive) {
+            Button(String(localized: "删除所选下载", bundle: .module), role: .destructive) {
                 for track in selectedDownloadedTracks { model.removeDownload(track) }
                 selection.removeAll()
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("这些歌曲仍保留在音乐服务器上。")
+            Text(String(localized: "这些歌曲仍保留在音乐服务器上。", bundle: .module))
         }
     }
 
@@ -142,13 +142,13 @@ struct MacMusicDownloadsView: View {
         VStack(alignment: .leading, spacing: 12) {
             if !activeTracks.isEmpty {
                 HStack {
-                    Text("正在下载")
+                    Text(String(localized: "正在下载", bundle: .module))
                         .font(.headline)
                     Text("\(activeTracks.count)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("全部取消", role: .destructive) { model.cancelAllDownloads() }
+                    Button(String(localized: "全部取消", bundle: .module), role: .destructive) { model.cancelAllDownloads() }
                         .buttonStyle(.plain)
                 }
                 ForEach(activeTracks) { track in
@@ -165,13 +165,13 @@ struct MacMusicDownloadsView: View {
             if !failedTracks.isEmpty {
                 Divider()
                 HStack {
-                    Text("需要处理")
+                    Text(String(localized: "需要处理", bundle: .module))
                         .font(.headline)
                     Text("\(failedTracks.count)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.orange)
                     Spacer()
-                    Button("全部重试") {
+                    Button(String(localized: "全部重试", bundle: .module)) {
                         for track in failedTracks { model.retryDownload(track) }
                     }
                     .buttonStyle(.plain)

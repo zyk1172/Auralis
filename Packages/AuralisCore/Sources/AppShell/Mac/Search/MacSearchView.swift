@@ -49,7 +49,7 @@ struct MacSearchView: View {
                     VStack(spacing: 12) {
                         Spacer()
                         ProgressView().controlSize(.small)
-                        Text("正在搜索你的资料库")
+                        Text(String(localized: "正在搜索你的资料库", bundle: .module))
                             .font(.body)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -95,9 +95,9 @@ struct MacSearchView: View {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 44))
                             .foregroundStyle(.secondary)
-                        Text("搜索你的资料库")
+                        Text(String(localized: "搜索你的资料库", bundle: .module))
                             .font(.title3.weight(.semibold))
-                        Text("查找歌曲、专辑、艺术家和播放列表。")
+                        Text(String(localized: "查找歌曲、专辑、艺术家和播放列表。", bundle: .module))
                             .font(.body)
                             .foregroundStyle(.secondary)
                     }
@@ -265,7 +265,7 @@ struct MacSearchView: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(summary.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    Text("该项目已不在本地资料库中")
+                    Text(String(localized: "该项目已不在本地资料库中", bundle: .module))
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -274,7 +274,7 @@ struct MacSearchView: View {
             }
             .padding(.vertical, 4)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(summary.title)，已不在本地资料库")
+            .accessibilityLabel(String(localized: "\(summary.title)，已不在本地资料库", bundle: .module))
         }
     }
 
@@ -292,7 +292,7 @@ struct MacSearchView: View {
                 ArtworkView(title: summary.title, artworkKey: nil, colors: theme.colorTokens, size: MacUIVisualTokens.Artwork.searchResultSize, cornerRadius: MacUIVisualTokens.Artwork.searchResultCornerRadius)
                     .accessibilityHidden(true)
                 Text(summary.title).font(.system(size: 13, weight: .medium)).lineLimit(1).foregroundStyle(.primary)
-                Text("该项目已不在本地资料库中").font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1)
+                Text(String(localized: "该项目已不在本地资料库中", bundle: .module)).font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1)
             }
             .frame(width: MacUIVisualTokens.Artwork.searchResultSize, alignment: .leading)
         }
@@ -320,7 +320,7 @@ struct MacSearchView: View {
                 ArtworkView(title: summary.name, artworkKey: nil, colors: theme.colorTokens, size: 44, cornerRadius: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(summary.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    Text("该项目已不在本地资料库中").font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1)
+                    Text(String(localized: "该项目已不在本地资料库中", bundle: .module)).font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1)
                 }
                 Spacer()
             }

@@ -128,7 +128,7 @@ public struct MacMiniPlayerView: View {
             serverID: model.currentTrack.serverID,
             cornerRadius: MacUIVisualTokens.MiniPlayer.artworkCornerRadius
         )
-        .accessibilityLabel("封面")
+        .accessibilityLabel(String(localized: "封面", bundle: .module))
         .transition(.opacity.combined(with: .scale(scale: 0.985)))
     }
 
@@ -143,7 +143,7 @@ public struct MacMiniPlayerView: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(theme.colorTokens.accent.color)
-                    Text("正在加载歌词…")
+                    Text(String(localized: "正在加载歌词…", bundle: .module))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -163,7 +163,7 @@ public struct MacMiniPlayerView: View {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 20))
                         .foregroundStyle(.secondary)
-                    Text("歌词加载失败")
+                    Text(String(localized: "歌词加载失败", bundle: .module))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -179,7 +179,7 @@ public struct MacMiniPlayerView: View {
             Image(systemName: "text.quote")
                 .font(.system(size: 20))
                 .foregroundStyle(.secondary)
-            Text("暂无歌词")
+            Text(String(localized: "暂无歌词", bundle: .module))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
@@ -289,7 +289,7 @@ public struct MacMiniPlayerView: View {
                 Image(systemName: "music.note.list")
                     .font(.system(size: 20))
                     .foregroundStyle(.secondary)
-                Text("队列为空")
+                Text(String(localized: "队列为空", bundle: .module))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -348,7 +348,7 @@ public struct MacMiniPlayerView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("播放《\(queueTrack.title)》，艺术家 \(queueTrack.artistName)")
+        .accessibilityLabel(String(localized: "播放《\(queueTrack.title)》，艺术家 \(queueTrack.artistName)", bundle: .module))
     }
 
     // MARK: - 模式切换
@@ -394,10 +394,10 @@ public struct MacMiniPlayerView: View {
 
     private var infoBlock: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(hasTrack ? model.currentTrack.title : "未在播放")
+            Text(hasTrack ? model.currentTrack.title : String(localized: "未在播放", bundle: .module))
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
-            Text(hasTrack ? model.currentTrack.artistName : "选择歌曲开始播放")
+            Text(hasTrack ? model.currentTrack.artistName : String(localized: "选择歌曲开始播放", bundle: .module))
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
@@ -425,7 +425,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .disabled(!model.canGoPrevious)
-        .accessibilityLabel("上一首")
+        .accessibilityLabel(String(localized: "上一首", bundle: .module))
     }
 
     private var playButton: some View {
@@ -438,7 +438,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .disabled(!hasTrack)
-        .accessibilityLabel("播放 / 暂停")
+        .accessibilityLabel(String(localized: "播放 / 暂停", bundle: .module))
     }
 
     private var nextButton: some View {
@@ -450,7 +450,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .disabled(!model.canGoNext)
-        .accessibilityLabel("下一首")
+        .accessibilityLabel(String(localized: "下一首", bundle: .module))
     }
 
     private var favoriteButton: some View {
@@ -462,7 +462,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .disabled(!hasTrack)
-        .accessibilityLabel(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+        .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
     }
 
     /// Compact 专用：单个音量按钮 + popover Slider（不再放音量-/音量+ 两个按钮）。
@@ -475,7 +475,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .help("音量")
-        .accessibilityLabel("音量")
+        .accessibilityLabel(String(localized: "音量", bundle: .module))
         .popover(isPresented: $isVolumePopoverPresented, arrowEdge: .bottom) {
             Slider(
                 value: Binding(
@@ -487,7 +487,7 @@ public struct MacMiniPlayerView: View {
             .controlSize(.small)
             .frame(width: 120)
             .padding(12)
-            .accessibilityLabel("音量")
+            .accessibilityLabel(String(localized: "音量", bundle: .module))
         }
     }
 
@@ -502,7 +502,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .help("歌词")
-        .accessibilityLabel("歌词")
+        .accessibilityLabel(String(localized: "歌词", bundle: .module))
     }
 
     /// 大号 Mini 第二排：队列按钮。点击在 队列 ↔ 封面 之间切换。
@@ -516,7 +516,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .help("队列")
-        .accessibilityLabel("队列")
+        .accessibilityLabel(String(localized: "队列", bundle: .module))
     }
 
     private var artworkToggleButton: some View {
@@ -528,7 +528,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .help(hideArtwork ? "显示封面" : "隐藏封面")
-        .accessibilityLabel(hideArtwork ? "显示封面" : "隐藏封面")
+        .accessibilityLabel(hideArtwork ? String(localized: "显示封面", bundle: .module) : String(localized: "隐藏封面", bundle: .module))
     }
 
     private var returnMainButton: some View {
@@ -540,7 +540,7 @@ public struct MacMiniPlayerView: View {
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
         .help("返回正在播放")
-        .accessibilityLabel("返回正在播放")
+        .accessibilityLabel(String(localized: "返回正在播放", bundle: .module))
     }
 }
 

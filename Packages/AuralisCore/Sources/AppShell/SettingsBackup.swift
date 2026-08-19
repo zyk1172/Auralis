@@ -37,31 +37,31 @@ struct SettingsBackupSection: View {
     private let credentialVault = KeychainCredentialVault()
 
     var body: some View {
-        Section("备份与恢复") {
+        Section(String(localized: "备份与恢复", bundle: .module)) {
 #if os(iOS)
             NavigationLink {
                 BackupExportPage(model: model, themeStore: themeStore, theme: theme)
             } label: {
-                Label("导出备份…", systemImage: "square.and.arrow.up")
+                Label(String(localized: "导出备份…", bundle: .module), systemImage: "square.and.arrow.up")
             }
             NavigationLink {
                 BackupImportPage(model: model, themeStore: themeStore, theme: theme)
             } label: {
-                Label("从备份恢复…", systemImage: "square.and.arrow.down")
+                Label(String(localized: "从备份恢复…", bundle: .module), systemImage: "square.and.arrow.down")
             }
 #else
             Button {
                 presentExport()
             } label: {
-                Label("导出备份…", systemImage: "square.and.arrow.up")
+                Label(String(localized: "导出备份…", bundle: .module), systemImage: "square.and.arrow.up")
             }
             Button {
                 presentImport()
             } label: {
-                Label("从备份恢复…", systemImage: "square.and.arrow.down")
+                Label(String(localized: "从备份恢复…", bundle: .module), systemImage: "square.and.arrow.down")
             }
 #endif
-            Text("备份内容：App 设置、音乐服务器（含登录凭据）、大模型接口、音乐下载插件（含 Token）。不包含本地数据库、歌曲、专辑、歌单、收藏、播放记录、缓存或下载文件。备份文件使用密码加密，请妥善保管密码。")
+            Text(String(localized: "备份内容：App 设置、音乐服务器（含登录凭据）、大模型接口、音乐下载插件（含 Token）。不包含本地数据库、歌曲、专辑、歌单、收藏、播放记录、缓存或下载文件。备份文件使用密码加密，请妥善保管密码。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
         }
@@ -120,16 +120,16 @@ struct SettingsBackupSection: View {
                 if let url = generatedBackupURL {
                     Section {
                         ShareLink(item: url) {
-                            Label("分享 / 保存备份文件", systemImage: "square.and.arrow.up")
+                            Label(String(localized: "分享 / 保存备份文件", bundle: .module), systemImage: "square.and.arrow.up")
                         }
-                        Text("备份已加密生成。请保存到「文件」或其它安全位置；恢复时需要同一密码。")
+                        Text(String(localized: "备份已加密生成。请保存到「文件」或其它安全位置；恢复时需要同一密码。", bundle: .module))
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
                 } else {
-                    Section("导出备份") {
+                    Section(String(localized: "导出备份", bundle: .module)) {
                         SecureField("备份密码（至少 8 位，建议混合大小写与数字）", text: $exportPassword)
-                        Text("恢复时需要同一密码。密码不会被保存。")
+                        Text(String(localized: "恢复时需要同一密码。密码不会被保存。", bundle: .module))
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                         Button {
@@ -138,7 +138,7 @@ struct SettingsBackupSection: View {
                             if isGenerating {
                                 ProgressView().controlSize(.small)
                             } else {
-                                Text("生成备份")
+                                Text(String(localized: "生成备份", bundle: .module))
                             }
                         }
                         .disabled(isGenerating || exportPassword.count < 8)
@@ -150,10 +150,10 @@ struct SettingsBackupSection: View {
                     }
                 }
             }
-            .navigationTitle("导出备份")
+            .navigationTitle(String(localized: "导出备份", bundle: .module))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") {
+                    Button(String(localized: "完成", bundle: .module)) {
                         isExportSheetPresented = false
                         generatedBackupURL = nil
                         exportPassword = ""
@@ -185,12 +185,12 @@ struct SettingsBackupSection: View {
     private var importPasswordSheet: some View {
         NavigationStack {
             Form {
-                Section("恢复备份") {
+                Section(String(localized: "恢复备份", bundle: .module)) {
                     SecureField("备份密码", text: $importPassword)
                     if let url = importFileURL {
                         LabeledContent("备份文件", value: url.lastPathComponent)
                     }
-                    Text("将恢复：App 设置、音乐服务器、大模型与音乐下载配置。不会覆盖或删除本地数据库、歌曲、歌单、收藏、播放记录、缓存或下载文件。")
+                    Text(String(localized: "将恢复：App 设置、音乐服务器、大模型与音乐下载配置。不会覆盖或删除本地数据库、歌曲、歌单、收藏、播放记录、缓存或下载文件。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     Button {
@@ -199,7 +199,7 @@ struct SettingsBackupSection: View {
                         if isRestoring {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text("恢复")
+                            Text(String(localized: "恢复", bundle: .module))
                         }
                     }
                     .disabled(isRestoring || importPassword.count < 8)
@@ -215,10 +215,10 @@ struct SettingsBackupSection: View {
                     }
                 }
             }
-            .navigationTitle("从备份恢复")
+            .navigationTitle(String(localized: "从备份恢复", bundle: .module))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") {
+                    Button(String(localized: "完成", bundle: .module)) {
                         isImportPasswordSheetPresented = false
                         importFileURL = nil
                         importPassword = ""
@@ -227,7 +227,7 @@ struct SettingsBackupSection: View {
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
+                    Button(String(localized: "取消", bundle: .module)) {
                         isImportPasswordSheetPresented = false
                         importFileURL = nil
                         importPassword = ""
@@ -370,16 +370,16 @@ struct BackupExportPage: View {
             if let url = generatedBackupURL {
                 Section {
                     ShareLink(item: url) {
-                        Label("分享 / 保存备份文件", systemImage: "square.and.arrow.up")
+                        Label(String(localized: "分享 / 保存备份文件", bundle: .module), systemImage: "square.and.arrow.up")
                     }
-                    Text("备份已加密生成。请保存到「文件」或其它安全位置；恢复时需要同一密码。")
+                    Text(String(localized: "备份已加密生成。请保存到「文件」或其它安全位置；恢复时需要同一密码。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             } else {
-                Section("导出备份") {
+                Section(String(localized: "导出备份", bundle: .module)) {
                     SecureField("备份密码（至少 8 位，建议混合大小写与数字）", text: $exportPassword)
-                    Text("恢复时需要同一密码。密码不会被保存。")
+                    Text(String(localized: "恢复时需要同一密码。密码不会被保存。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     Button {
@@ -388,7 +388,7 @@ struct BackupExportPage: View {
                         if isGenerating {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text("生成备份")
+                            Text(String(localized: "生成备份", bundle: .module))
                         }
                     }
                     .disabled(isGenerating || exportPassword.count < 8)
@@ -400,10 +400,10 @@ struct BackupExportPage: View {
                 }
             }
         }
-        .navigationTitle("导出备份")
+        .navigationTitle(String(localized: "导出备份", bundle: .module))
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("完成") { dismiss() }
+                Button(String(localized: "完成", bundle: .module)) { dismiss() }
             }
         }
     }
@@ -446,19 +446,19 @@ struct BackupImportPage: View {
 
     var body: some View {
         Form {
-            Section("恢复备份") {
+            Section(String(localized: "恢复备份", bundle: .module)) {
                 Button {
                     isFilePickerPresented = true
                 } label: {
                     if let url = importFileURL {
                         Label("已选择：\(url.lastPathComponent)", systemImage: "doc.fill")
                     } else {
-                        Label("选择备份文件…", systemImage: "folder")
+                        Label(String(localized: "选择备份文件…", bundle: .module), systemImage: "folder")
                     }
                 }
                 if importFileURL != nil {
                     SecureField("备份密码", text: $importPassword)
-                    Text("将恢复：服务器信息、大模型配置与其他设置。不会覆盖或删除歌曲、歌单、收藏与播放记录。")
+                    Text(String(localized: "将恢复：服务器信息、大模型配置与其他设置。不会覆盖或删除歌曲、歌单、收藏与播放记录。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     Button {
@@ -467,7 +467,7 @@ struct BackupImportPage: View {
                         if isRestoring {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text("恢复")
+                            Text(String(localized: "恢复", bundle: .module))
                         }
                     }
                     .disabled(isRestoring || importPassword.count < 8)
@@ -484,10 +484,10 @@ struct BackupImportPage: View {
                 }
             }
         }
-        .navigationTitle("从备份恢复")
+        .navigationTitle(String(localized: "从备份恢复", bundle: .module))
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("完成") { dismiss() }
+                Button(String(localized: "完成", bundle: .module)) { dismiss() }
             }
         }
         .fileImporter(

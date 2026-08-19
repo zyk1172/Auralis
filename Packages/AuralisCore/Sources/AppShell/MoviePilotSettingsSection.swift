@@ -34,7 +34,7 @@ struct MoviePilotSettingsSection: View {
                     persistToken()
                     testResult = nil
                 }
-            Button(isTesting ? "测试中…" : "测试连接") {
+            Button(isTesting ? String(localized: "测试中…", bundle: .module) : String(localized: "测试连接", bundle: .module)) {
                 Task { await testConnection() }
             }
             .disabled(isTesting)
@@ -44,9 +44,9 @@ struct MoviePilotSettingsSection: View {
                     .foregroundStyle(secondaryText)
             }
         } header: {
-            Text("音乐下载（MoviePilot）")
+            Text(String(localized: "音乐下载（MoviePilot）", bundle: .module))
         } footer: {
-            Text("填写内网地址及可选外网地址后，Auralis 会同时探测两端；内网 30 秒内可达则优先使用，内网不可达才降级外网。外网请填写完整的 http:// 或 https:// 地址；HTTPS 更安全，HTTP 会明文传输调用 Token。Agent 会通过插件搜索并下载到 NAS 音乐目录（仅下载，不刮削/整理）。")
+            Text(String(localized: "填写内网地址及可选外网地址后，Auralis 会同时探测两端；内网 30 秒内可达则优先使用，内网不可达才降级外网。外网请填写完整的 http:// 或 https:// 地址；HTTPS 更安全，HTTP 会明文传输调用 Token。Agent 会通过插件搜索并下载到 NAS 音乐目录（仅下载，不刮削/整理）。", bundle: .module))
         }
         .task {
             await loadToken()

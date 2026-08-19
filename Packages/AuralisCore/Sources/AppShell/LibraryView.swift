@@ -51,7 +51,7 @@ struct LibraryView: View {
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel("设置")
+                .accessibilityLabel(String(localized: "设置", bundle: .module))
             }
         }
 #endif
@@ -91,26 +91,26 @@ struct LibraryView: View {
                             .contentShape(Rectangle())
                     }
                         .buttonStyle(HapticPlainButtonStyle())
-                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
+                        .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                         .contextMenu {
-                            Button("立即播放") { model.selectAndPlay(track) }
-                            Button("下一首播放") { insertNext(track) }
-                            Button("加入队列") {
+                            Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
+                            Button(String(localized: "下一首播放", bundle: .module)) { insertNext(track) }
+                            Button(String(localized: "加入队列", bundle: .module)) {
                                 // R05：queueStore.append 直调，不重建 entry UUID——
                                 // 重复队列中当前项不会因追加而漂回第一个匹配。
                                 model.appendToQueue(track)
                             }
-                            Button("添加到歌单") { playlistTarget = track }
+                            Button(String(localized: "添加到歌单", bundle: .module)) { playlistTarget = track }
                             Divider()
                             if model.isDownloaded(track) {
-                                Button("删除本地缓存", role: .destructive) { model.removeDownload(track) }
+                                Button(String(localized: "删除本地缓存", bundle: .module), role: .destructive) { model.removeDownload(track) }
                             } else if model.isDownloading(track) {
-                                Button("取消下载") { model.cancelDownload(track) }
+                                Button(String(localized: "取消下载", bundle: .module)) { model.cancelDownload(track) }
                             } else {
-                                Button("下载到本地") { model.download(track) }
+                                Button(String(localized: "下载到本地", bundle: .module)) { model.download(track) }
                             }
                             Divider()
-                            Button(track.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(track) }
+                            Button(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module)) { model.toggleFavorite(track) }
                         }
                 }
                 .listStyle(.plain)
@@ -149,14 +149,14 @@ struct LibraryView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(HapticPlainButtonStyle())
-                            .accessibilityLabel("专辑《\(album.title)》，艺术家 \(album.artistName)")
+                            .accessibilityLabel(String(localized: "专辑《\(album.title)》，艺术家 \(album.artistName)", bundle: .module))
                             .contextMenu {
-                                Button("播放全部") {
+                                Button(String(localized: "播放全部", bundle: .module)) {
                                     let tracks = model.catalog.tracks.filter { $0.albumID == album.id }
                                     model.playTracks(tracks)
                                 }
-                                Button(model.isAlbumFavorite(album) ? "取消收藏" : "收藏专辑") { model.toggleAlbumFavorite(album) }
-                                Button("下载专辑") {
+                                Button(model.isAlbumFavorite(album) ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏专辑", bundle: .module)) { model.toggleAlbumFavorite(album) }
+                                Button(String(localized: "下载专辑", bundle: .module)) {
                                     model.downloadAll(model.catalog.tracks.filter { $0.albumID == album.id })
                                 }
                             }
@@ -196,13 +196,13 @@ struct LibraryView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(HapticPlainButtonStyle())
-                    .accessibilityLabel("艺术家 \(artist.name)，\(artist.albumCount) 张专辑")
+                    .accessibilityLabel(String(localized: "艺术家 \(artist.name)，\(artist.albumCount) 张专辑", bundle: .module))
                     .contextMenu {
-                        Button("播放全部") {
+                        Button(String(localized: "播放全部", bundle: .module)) {
                             model.playTracks(model.catalog.tracks.filter { $0.artistID == artist.id })
                         }
-                        Button(model.isArtistFavorite(artist) ? "取消收藏" : "收藏艺术家") { model.toggleArtistFavorite(artist) }
-                        Button("下载全部") {
+                        Button(model.isArtistFavorite(artist) ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏艺术家", bundle: .module)) { model.toggleArtistFavorite(artist) }
+                        Button(String(localized: "下载全部", bundle: .module)) {
                             model.downloadAll(model.catalog.tracks.filter { $0.artistID == artist.id })
                         }
                     }
@@ -342,7 +342,7 @@ struct LibraryView: View {
                     // AI 标签独立区：搜索 + 分页（读取优化，不代表标签数量限制）。
                     if !aiTags.isEmpty || !aiTagSearch.isEmpty {
                         HStack {
-                            Text("AI 标签")
+                            Text(String(localized: "AI 标签", bundle: .module))
                                 .font(.headline)
                                 .foregroundStyle(theme.colorTokens.primaryText.color)
                             Spacer()
@@ -407,7 +407,7 @@ struct LibraryView: View {
                             } label: {
                                 HStack {
                                     if isLoadingMoreTags { ProgressView().controlSize(.small) }
-                                    Text("加载更多标签")
+                                    Text(String(localized: "加载更多标签", bundle: .module))
                                 }
                                 .frame(maxWidth: .infinity)
                             }
@@ -574,7 +574,7 @@ struct LibraryView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(HapticPlainButtonStyle())
-                            .accessibilityLabel("歌单《\(playlist.name)》")
+                            .accessibilityLabel(String(localized: "歌单《\(playlist.name)》", bundle: .module))
                         }
                     }
                     .padding()
@@ -602,11 +602,11 @@ struct LibraryView: View {
                             .contentShape(Rectangle())
                     }
                         .buttonStyle(HapticPlainButtonStyle())
-                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
+                        .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                         .contextMenu {
-                            Button("立即播放") { model.selectAndPlay(track) }
-                            Button("下一首播放") { insertNext(track) }
-                            Button(track.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(track) }
+                            Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
+                            Button(String(localized: "下一首播放", bundle: .module)) { insertNext(track) }
+                            Button(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module)) { model.toggleFavorite(track) }
                         }
                 }
                 .listStyle(.plain)
@@ -628,13 +628,13 @@ enum LibraryScope: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .albums: String(localized: "专辑")
-        case .tracks: String(localized: "歌曲")
-        case .artists: String(localized: "艺术家")
-        case .playlists: String(localized: "歌单")
-        case .favorites: String(localized: "收藏")
-        case .genres: String(localized: "流派")
-        case .categories: String(localized: "分类")
+        case .albums: String(localized: "专辑", bundle: .module)
+        case .tracks: String(localized: "歌曲", bundle: .module)
+        case .artists: String(localized: "艺术家", bundle: .module)
+        case .playlists: String(localized: "歌单", bundle: .module)
+        case .favorites: String(localized: "收藏", bundle: .module)
+        case .genres: String(localized: "流派", bundle: .module)
+        case .categories: String(localized: "分类", bundle: .module)
         }
     }
 }
@@ -662,12 +662,12 @@ struct TrackRow: View {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.success.color)
-                    .accessibilityLabel("已下载")
+                    .accessibilityLabel(String(localized: "已下载", bundle: .module))
             }
             if track.isFavorite {
                 Image(systemName: "heart.fill")
                     .foregroundStyle(theme.colorTokens.accent.color)
-                    .accessibilityLabel("已收藏")
+                    .accessibilityLabel(String(localized: "已收藏", bundle: .module))
             }
             Text(formatDuration(track.duration))
                 .font(.caption.monospacedDigit())

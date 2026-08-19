@@ -97,7 +97,7 @@ struct MacFloatingPlayerBar: View {
         }
         .buttonStyle(.plain)
         .help("展开播放器")
-        .accessibilityLabel("展开播放器")
+        .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
     }
 
     /// AI 助手页只保留播放条最左端的圆弧，并将它收拢成可展开的封面球。
@@ -117,7 +117,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .help("展开播放器")
-            .accessibilityLabel("展开播放器")
+            .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
         }
         .frame(
             width: MacUIVisualTokens.FloatingPlayer.assistantOrbSize,
@@ -138,7 +138,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .help(model.isShuffled ? "关闭随机播放" : "随机播放")
-            .accessibilityLabel("随机播放")
+            .accessibilityLabel(String(localized: "随机播放", bundle: .module))
 
             Button {
                 if hasTrack { model.previous() }
@@ -148,7 +148,7 @@ struct MacFloatingPlayerBar: View {
             .buttonStyle(.plain)
             .disabled(!model.canGoPrevious)
             .help("上一首")
-            .accessibilityLabel("上一首")
+            .accessibilityLabel(String(localized: "上一首", bundle: .module))
 
             Button {
                 if hasTrack { model.togglePlayback() }
@@ -159,7 +159,7 @@ struct MacFloatingPlayerBar: View {
             .buttonStyle(.plain)
             .disabled(!hasTrack)
             .help("播放 / 暂停")
-            .accessibilityLabel("播放 / 暂停")
+            .accessibilityLabel(String(localized: "播放 / 暂停", bundle: .module))
 
             Button {
                 if hasTrack { model.next() }
@@ -169,7 +169,7 @@ struct MacFloatingPlayerBar: View {
             .buttonStyle(.plain)
             .disabled(!model.canGoNext)
             .help("下一首")
-            .accessibilityLabel("下一首")
+            .accessibilityLabel(String(localized: "下一首", bundle: .module))
 
             Button {
                 model.cycleRepeatMode()
@@ -180,7 +180,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .help(repeatHelp)
-            .accessibilityLabel("循环模式")
+            .accessibilityLabel(String(localized: "循环模式", bundle: .module))
             .accessibilityValue(repeatHelp)
         }
     }
@@ -211,10 +211,10 @@ struct MacFloatingPlayerBar: View {
             .buttonStyle(.plain)
             .disabled(!hasTrack)
             .help("展开播放器")
-            .accessibilityLabel("展开播放器")
+            .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
             .contextMenu {
-                Button("展开播放器") { onOpenFullPlayer() }
-                Button("迷你播放器") { onOpenMiniPlayer() }
+                Button(String(localized: "展开播放器", bundle: .module)) { onOpenFullPlayer() }
+                Button(String(localized: "迷你播放器", bundle: .module)) { onOpenMiniPlayer() }
             }
 
             // 标题 / 艺术家：点击展开播放器（Apple Music 同款交互）。
@@ -222,10 +222,10 @@ struct MacFloatingPlayerBar: View {
             VStack(alignment: .leading, spacing: 2) {
                 Button(action: onOpenFullPlayer) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(hasTrack ? model.currentTrack.title : "未在播放")
+                        Text(hasTrack ? model.currentTrack.title : String(localized: "未在播放", bundle: .module))
                             .font(.system(size: 13, weight: .semibold))
                             .lineLimit(1)
-                        Text(hasTrack ? model.currentTrack.artistName : "选择歌曲开始播放")
+                        Text(hasTrack ? model.currentTrack.artistName : String(localized: "选择歌曲开始播放", bundle: .module))
                             .font(.system(size: 12))
                             .lineLimit(1)
                             .foregroundStyle(.secondary)
@@ -235,7 +235,7 @@ struct MacFloatingPlayerBar: View {
                 .buttonStyle(.plain)
                 .disabled(!hasTrack)
                 .help("展开播放器")
-                .accessibilityLabel("展开播放器")
+                .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
 
                 MacPlaybackSlider(
                     value: playbackStore.position,
@@ -245,7 +245,7 @@ struct MacFloatingPlayerBar: View {
                     onCommit: { model.seek(toProgress: min(1, max(0, $0 / duration))) }
                 )
                 .controlSize(.mini)
-                .accessibilityLabel("播放进度")
+                .accessibilityLabel(String(localized: "播放进度", bundle: .module))
             }
             .frame(maxWidth: MacUIVisualTokens.FloatingPlayer.titleMaxWidth, alignment: .leading)
         }
@@ -264,21 +264,21 @@ struct MacFloatingPlayerBar: View {
             .buttonStyle(.plain)
             .disabled(!hasTrack)
             .help(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
-            .accessibilityLabel(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+            .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
 
             Button(action: onToggleLyrics) {
                 Image(systemName: "quote.bubble")
             }
             .buttonStyle(.plain)
             .help("歌词")
-            .accessibilityLabel("歌词")
+            .accessibilityLabel(String(localized: "歌词", bundle: .module))
 
             Button(action: onToggleQueue) {
                 Image(systemName: "list.bullet")
             }
             .buttonStyle(.plain)
             .help("队列")
-            .accessibilityLabel("队列")
+            .accessibilityLabel(String(localized: "队列", bundle: .module))
 
             Button {
                 isVolumePopoverPresented.toggle()
@@ -287,7 +287,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .help("音量")
-            .accessibilityLabel("音量")
+            .accessibilityLabel(String(localized: "音量", bundle: .module))
             .popover(isPresented: $isVolumePopoverPresented, arrowEdge: .bottom) {
                 VStack(spacing: MacUIVisualTokens.FloatingPlayer.volumePopoverContentSpacing) {
                     Slider(value: Binding(
@@ -305,10 +305,10 @@ struct MacFloatingPlayerBar: View {
             Menu {
                 if hasTrack {
                     let disliked = model.isDisliked(model.currentTrack)
-                    Button(disliked ? "取消不喜欢" : "不喜欢") {
+                    Button(disliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module)) {
                         model.setDisliked(model.currentTrack, value: !disliked, source: "player-more")
                     }
-                    Button("歌曲信息") {
+                    Button(String(localized: "歌曲信息", bundle: .module)) {
                         NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
                     }
                 }
@@ -320,7 +320,7 @@ struct MacFloatingPlayerBar: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("更多")
-            .accessibilityLabel("更多")
+            .accessibilityLabel(String(localized: "更多", bundle: .module))
             .disabled(!hasTrack)
         }
     }

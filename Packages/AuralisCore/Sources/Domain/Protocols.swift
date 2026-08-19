@@ -58,9 +58,9 @@ public enum ReplayGainMode: String, CaseIterable, Codable, Sendable {
 
     public var title: String {
         switch self {
-        case .off: String(localized: "关闭")
-        case .track: String(localized: "按歌曲")
-        case .album: String(localized: "按专辑")
+        case .off: String(localized: "关闭", bundle: .module)
+        case .track: String(localized: "按歌曲", bundle: .module)
+        case .album: String(localized: "按专辑", bundle: .module)
         }
     }
 }
@@ -85,9 +85,9 @@ public enum RepeatMode: String, CaseIterable, Codable, Sendable {
 
     public var title: String {
         switch self {
-        case .off: String(localized: "不循环")
-        case .all: String(localized: "列表循环")
-        case .one: String(localized: "单曲循环")
+        case .off: String(localized: "不循环", bundle: .module)
+        case .all: String(localized: "列表循环", bundle: .module)
+        case .one: String(localized: "单曲循环", bundle: .module)
         }
     }
 

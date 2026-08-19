@@ -161,14 +161,14 @@ struct MacHomeView: View {
             let size = min(210, metrics.itemWidth)
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("随机音乐")
+                    Text(String(localized: "随机音乐", bundle: .module))
                         .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                     Spacer()
-                    Button("随机播放") {
+                    Button(String(localized: "随机播放", bundle: .module)) {
                         model.playShuffledQueue(shelfTracks)
                     }
                     .buttonStyle(.link)
-                    Button("换一批") {
+                    Button(String(localized: "换一批", bundle: .module)) {
                         model.regenerateRandomMusic()
                     }
                     .buttonStyle(.link)

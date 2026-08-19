@@ -50,6 +50,9 @@ jobs:
           fi
           echo "XcodeGen 输出与已提交工程一致"
 
+      - name: Localization audit
+        run: python3 Scripts/check_localization.py --hardcoded
+
       - name: Swift 6 tests (AuralisCore)
         run: swift test --package-path Packages/AuralisCore
 

@@ -150,7 +150,7 @@ struct MacSongTable: View {
                 }
                 .buttonStyle(.plain)
                 .help(row.track.isFavorite ? "取消收藏" : "收藏")
-                .accessibilityLabel(row.track.isFavorite ? "取消收藏" : "收藏")
+                .accessibilityLabel(row.track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .width(min: 40, ideal: 44, max: 48)
@@ -164,12 +164,12 @@ struct MacSongTable: View {
                     let chosen = ids.compactMap { model.track(for: $0) }
                     model.playQueue(chosen)
                 }
-                Button("加入队列") {
+                Button(String(localized: "加入队列", bundle: .module)) {
                     for gid in ids {
                         model.addToQueue(globalID: gid)
                     }
                 }
-                Button("下载") {
+                Button(String(localized: "下载", bundle: .module)) {
                     for gid in ids.compactMap({ model.track(for: $0) }) {
                         model.download(gid)
                     }
@@ -210,7 +210,7 @@ struct MacSongTable: View {
                     Image(systemName: "speaker.wave.2.fill")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.accent.color)
-                        .accessibilityLabel("正在播放")
+                        .accessibilityLabel(String(localized: "正在播放", bundle: .module))
                 }
                 Text(row.track.title)
                     .font(.system(size: 13, weight: isCurrent(row.track) ? .semibold : .regular))
@@ -220,7 +220,7 @@ struct MacSongTable: View {
                     Image(systemName: "arrow.down.circle.fill")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel("已下载")
+                        .accessibilityLabel(String(localized: "已下载", bundle: .module))
                 }
             }
         }

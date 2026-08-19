@@ -585,18 +585,18 @@ public enum PlaybackStopReason: String, Codable, Hashable, Sendable, CaseIterabl
 
     public var title: String {
         switch self {
-        case .unknown: String(localized: "未知")
-        case .userPaused: String(localized: "用户主动暂停")
-        case .userStopped: String(localized: "用户主动停止")
-        case .queueEnded: String(localized: "播放队列结束")
-        case .serverDisconnected: String(localized: "服务器连接中断")
-        case .networkInterrupted: String(localized: "网络中断")
-        case .streamExpired: String(localized: "流地址失效")
-        case .decodeFailed: String(localized: "音频解码失败")
-        case .audioSessionInterrupted: String(localized: "音频会话中断")
-        case .outputDisconnected: String(localized: "输出设备断开")
-        case .playerReleased: String(localized: "播放器对象被释放")
-        case .processTerminated: String(localized: "App 进程被系统终止")
+        case .unknown: String(localized: "未知", bundle: .module)
+        case .userPaused: String(localized: "用户主动暂停", bundle: .module)
+        case .userStopped: String(localized: "用户主动停止", bundle: .module)
+        case .queueEnded: String(localized: "播放队列结束", bundle: .module)
+        case .serverDisconnected: String(localized: "服务器连接中断", bundle: .module)
+        case .networkInterrupted: String(localized: "网络中断", bundle: .module)
+        case .streamExpired: String(localized: "流地址失效", bundle: .module)
+        case .decodeFailed: String(localized: "音频解码失败", bundle: .module)
+        case .audioSessionInterrupted: String(localized: "音频会话中断", bundle: .module)
+        case .outputDisconnected: String(localized: "输出设备断开", bundle: .module)
+        case .playerReleased: String(localized: "播放器对象被释放", bundle: .module)
+        case .processTerminated: String(localized: "App 进程被系统终止", bundle: .module)
         }
     }
 }

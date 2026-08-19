@@ -121,7 +121,7 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(HapticPlainButtonStyle())
-        .accessibilityLabel("\(module.title)，\(quickEntryCount(module)) 项")
+        .accessibilityLabel(String(localized: "\(module.title)，\(quickEntryCount(module)) 项", bundle: .module))
     }
 
     private func quickEntryCount(_ module: HomeModule) -> String {
@@ -151,7 +151,7 @@ struct HomeView: View {
     @ViewBuilder
     private func moduleSection(_ module: HomeModule) -> some View {
         switch module.id {
-        case .random, .recentlyPlayed, .recentlyAdded, .longUnplayed, .favoriteRandom, .neverPlayed:
+        case .random, .recentlyPlayed, .recentlyAdded, .longUnplayed, .favoriteRandom, .neverPlayed, .downloads:
             trackShelf(module)
         case .topArtists:
             artistShelf(module)
@@ -277,7 +277,7 @@ struct HomeView: View {
                 refreshButton {
                     model.regenerateRandomMusic()
                 }
-                detailButton("\(count) 首") {
+                detailButton(L10n.songs(count)) {
                     model.browseDestination = .random
                 }
             }
@@ -286,24 +286,24 @@ struct HomeView: View {
                 refreshButton {
                     model.regenerateFavoriteRandomMusic()
                 }
-                detailButton("\(count) 首") {
+                detailButton(L10n.songs(count)) {
                     model.browseDestination = .favoriteRandom
                 }
             }
         case .recentlyAdded:
-            detailButton("近30天新增 \(count) 首") {
+            detailButton(L10n.tracksRecentlyAdded(count)) {
                 model.browseDestination = .recentlyAdded
             }
         case .topArtists:
-            detailButton("\(count) 位") {
+            detailButton(L10n.artists(count)) {
                 model.browseDestination = .topArtists
             }
         case .topAlbums:
-            detailButton("\(count) 张") {
+            detailButton(L10n.albums(count)) {
                 model.browseDestination = .topAlbums
             }
         default:
-            detailButton("\(count) 首") {
+            detailButton(L10n.songs(count)) {
                 openContentModule(module)
             }
         }
@@ -314,7 +314,7 @@ struct HomeView: View {
         Button(action: action) {
             HStack(spacing: 2) {
                 Image(systemName: "arrow.clockwise")
-                Text("换一批")
+                Text(String(localized: "换一批", bundle: .module))
             }
             .font(.caption)
             .foregroundStyle(colors.secondaryText.color)
@@ -433,7 +433,7 @@ private struct HomeArtistCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(height: HomeCardMetrics.titleHeight, alignment: .top)
-            Text("\(playCount) 次播放")
+            Text(L10n.playCount(playCount))
                 .font(.caption)
                 .foregroundStyle(colors.secondaryText.color)
                 .lineLimit(1)
@@ -457,7 +457,7 @@ private struct HomeAlbumCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(height: HomeCardMetrics.titleHeight, alignment: .top)
-            Text("\(playCount) 次播放")
+            Text(L10n.playCount(playCount))
                 .font(.caption)
                 .foregroundStyle(colors.secondaryText.color)
                 .lineLimit(1)

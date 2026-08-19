@@ -83,13 +83,13 @@ public enum MoviePilotError: Error, LocalizedError, Equatable, Sendable {
         case let .pluginFailed(message):
             // 插件常见鉴权错误直接给出可操作提示（用户能看到真实原因而不是笼统的 HTTP 401）。
             if message.contains("apikey") || message.contains("校验不通过") {
-                return "\(message)（请核对「音乐下载」设置里的 Token）"
+                return String(localized: "\(message)（请核对「音乐下载」设置里的 Token）", bundle: .module)
             }
             return message
         case let .transport(message):
-            return "网络请求失败：\(message)"
+            return String(localized: "网络请求失败：\(message)", bundle: .module)
         case let .malformedResponse(message):
-            return "响应解析失败：\(message)"
+            return String(localized: "响应解析失败：\(message)", bundle: .module)
         }
     }
 }
@@ -727,7 +727,7 @@ public struct MoviePilotClient: Sendable {
             try Self.checkHTTP(response, data: data)
             let envelope = try JSONDecoder().decode(MoviePilotEnvelope<MoviePilotTestData>.self, from: data)
             guard envelope.success else {
-                return .failed(.pluginFailed(envelope.message ?? "插件返回失败"))
+                return .failed(.pluginFailed(envelope.message ?? String(localized: "插件返回失败", bundle: .module)))
             }
             return .reachable
         } catch let error as MoviePilotError {

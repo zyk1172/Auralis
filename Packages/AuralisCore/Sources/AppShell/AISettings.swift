@@ -16,11 +16,11 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .chatCompletions:
-            return "OpenAI 兼容"
+            return String(localized: "OpenAI 兼容", bundle: .module)
         case .responses:
-            return "OpenAI 原生"
+            return String(localized: "OpenAI 原生", bundle: .module)
         case .custom:
-            return "自定义"
+            return String(localized: "自定义", bundle: .module)
         }
     }
 
@@ -31,7 +31,7 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
         case .responses:
             return "Responses API"
         case .custom:
-            return "自定义 API 路径"
+            return String(localized: "自定义 API 路径", bundle: .module)
         }
     }
 
@@ -151,13 +151,13 @@ struct AIConnectionSettings: Sendable {
     /// 校验未通过时的可读原因，便于设置页给出明确提示。
     var completenessError: String? {
         if normalizedBaseURL() == nil {
-            return "Base URL 需要是合法地址，例如 https://api.deepseek.com 或 http://localhost:11434。"
+            return String(localized: "Base URL 需要是合法地址，例如 https://api.deepseek.com 或 http://localhost:11434。", bundle: .module)
         }
         if apiPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "请填写 API 路径（如 /v1/chat/completions 或 /v1/responses）。"
+            return String(localized: "请填写 API 路径（如 /v1/chat/completions 或 /v1/responses）。", bundle: .module)
         }
         if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "请填写模型名称（如 gpt-4o-mini、deepseek-chat）。"
+            return String(localized: "请填写模型名称（如 gpt-4o-mini、deepseek-chat）。", bundle: .module)
         }
         return nil
     }

@@ -29,7 +29,7 @@ struct MacSidebar: View {
                 } header: {
                     libraryHeader
                 }
-                Section("播放列表") {
+                Section(String(localized: "播放列表", bundle: .module)) {
                     sidebarRow(.favorites)
                     sidebarRow(.playlists)
                 }
@@ -59,13 +59,13 @@ struct MacSidebar: View {
 
     private var libraryHeader: some View {
         HStack {
-            Text("资料库")
+            Text(String(localized: "资料库", bundle: .module))
             Spacer()
             if isHoveringLibrary || isEditingLibrary {
-                Button("编辑") { isEditingLibrary = true }
+                Button(String(localized: "编辑", bundle: .module)) { isEditingLibrary = true }
                     .buttonStyle(.link)
                     .help("显示或隐藏资料库项目、拖动排序")
-                    .accessibilityLabel("编辑资料库")
+                    .accessibilityLabel(String(localized: "编辑资料库", bundle: .module))
                     // Section header 不是稳定 popover 锚点。把 popover 直接挂在按钮上，
                     // 使这个编辑入口在资料库页面与所有窗口尺寸下都可点开。
                     .popover(isPresented: $isEditingLibrary, arrowEdge: .trailing) {

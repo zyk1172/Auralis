@@ -516,11 +516,11 @@ public final class AuralisAppModel: ObservableObject {
 
         public var title: String {
             switch self {
-            case .off: String(localized: "关闭")
-            case .afterMinutes: String(localized: "若干分钟后停止")
-            case .afterCurrentTrack: String(localized: "当前歌曲结束后停止")
-            case .afterCurrentAlbum: String(localized: "当前专辑结束后停止")
-            case .afterCurrentQueue: String(localized: "当前队列结束后停止")
+            case .off: String(localized: "关闭", bundle: .module)
+            case .afterMinutes: String(localized: "若干分钟后停止", bundle: .module)
+            case .afterCurrentTrack: String(localized: "当前歌曲结束后停止", bundle: .module)
+            case .afterCurrentAlbum: String(localized: "当前专辑结束后停止", bundle: .module)
+            case .afterCurrentQueue: String(localized: "当前队列结束后停止", bundle: .module)
             }
         }
     }
@@ -952,15 +952,15 @@ public final class AuralisAppModel: ObservableObject {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = query.lowercased()
         if query.isEmpty { return .playMusic }
-        if lower.contains("暂停") { return .control(.pause) }
-        if lower.contains("继续") { return .control(.resume) }
-        if lower.contains("上一首") || lower.contains("上首") { return .control(.previous) }
-        if lower.contains("下一首") || lower.contains("下首") { return .control(.next) }
-        if lower.contains("切换随机") || (lower.contains("随机") && lower.contains("播放")) { return .control(.toggleShuffle) }
-        if lower.contains("切换循环") || (lower.contains("循环") && lower.contains("播放")) { return .control(.toggleRepeat) }
-        if lower.contains("收藏") { return .playFavorites }
-        if lower.contains("最近") || lower.contains("听过") { return .playRecent }
-        if lower.contains("随机") { return .playRandom }
+        if lower.contains(String(localized: "暂停", bundle: .module)) { return .control(.pause) }
+        if lower.contains(String(localized: "继续", bundle: .module)) { return .control(.resume) }
+        if lower.contains(String(localized: "上一首", bundle: .module)) || lower.contains(String(localized: "上首", bundle: .module)) { return .control(.previous) }
+        if lower.contains(String(localized: "下一首", bundle: .module)) || lower.contains(String(localized: "下首", bundle: .module)) { return .control(.next) }
+        if lower.contains(String(localized: "切换随机", bundle: .module)) || (lower.contains(String(localized: "随机", bundle: .module)) && lower.contains(String(localized: "播放", bundle: .module))) { return .control(.toggleShuffle) }
+        if lower.contains(String(localized: "切换循环", bundle: .module)) || (lower.contains(String(localized: "循环", bundle: .module)) && lower.contains(String(localized: "播放", bundle: .module))) { return .control(.toggleRepeat) }
+        if lower.contains(String(localized: "收藏", bundle: .module)) { return .playFavorites }
+        if lower.contains(String(localized: "最近", bundle: .module)) || lower.contains(String(localized: "听过", bundle: .module)) { return .playRecent }
+        if lower.contains(String(localized: "随机", bundle: .module)) { return .playRandom }
         if lower.contains("流派") || lower.contains("风格") {
             let name = Self.extractName(query, markers: ["播放", "流派", "风格", "的", "音乐", "歌"])
             return .playGenre(name.isEmpty ? query : name)
@@ -4205,10 +4205,10 @@ public enum PlayMode: Int, CaseIterable, Identifiable, Sendable {
     public var id: Int { rawValue }
     public var title: String {
         switch self {
-        case .list: String(localized: "列表顺序")
-        case .shuffle: String(localized: "随机播放")
-        case .repeatAll: String(localized: "列表循环")
-        case .repeatOne: String(localized: "单曲循环")
+        case .list: String(localized: "列表顺序", bundle: .module)
+        case .shuffle: String(localized: "随机播放", bundle: .module)
+        case .repeatAll: String(localized: "列表循环", bundle: .module)
+        case .repeatOne: String(localized: "单曲循环", bundle: .module)
         }
     }
     public var symbol: String {
@@ -4264,11 +4264,11 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
     public var title: String {
         switch self {
-        case .home: String(localized: "首页")
-        case .library: String(localized: "音乐库")
-        case .assistant: String(localized: "AI 助手")
-        case .search: String(localized: "搜索")
-        case .settings: String(localized: "设置")
+        case .home: String(localized: "首页", bundle: .module)
+        case .library: String(localized: "音乐库", bundle: .module)
+        case .assistant: String(localized: "AI 助手", bundle: .module)
+        case .search: String(localized: "搜索", bundle: .module)
+        case .settings: String(localized: "设置", bundle: .module)
         }
     }
     public var symbol: String {
@@ -4290,10 +4290,10 @@ public enum InspectorSection: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
     public var title: String {
         switch self {
-        case .queue: String(localized: "队列")
-        case .lyrics: String(localized: "歌词")
-        case .quality: String(localized: "音质")
-        case .metadata: String(localized: "元数据")
+        case .queue: String(localized: "队列", bundle: .module)
+        case .lyrics: String(localized: "歌词", bundle: .module)
+        case .quality: String(localized: "音质", bundle: .module)
+        case .metadata: String(localized: "元数据", bundle: .module)
         }
     }
 }

@@ -88,12 +88,12 @@ struct MacArtistsView: View {
                     MacArtistView(artist: artist, model: model, theme: theme, selection: $selection, onNavigate: onNavigate)
                 } else {
                     ContentUnavailableView("选择一个艺术家", systemImage: "person.2",
-                                           description: Text("从左侧选择艺术家查看详情。"))
+                                           description: Text(String(localized: "从左侧选择艺术家查看详情。", bundle: .module)))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
-        .navigationTitle("艺术家")
+        .navigationTitle(String(localized: "艺术家", bundle: .module))
         .onAppear {
             MacUITrace.action(
                 "MacArtistsView.appear",

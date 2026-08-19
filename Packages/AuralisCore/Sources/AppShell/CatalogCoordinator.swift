@@ -342,11 +342,11 @@ public final class CatalogCoordinator: ObservableObject {
         case .none: sectionTitle = ""
         }
         switch stage {
-        case .beginning: return "准备同步"
-        case .fetching: return sectionTitle.isEmpty ? "拉取数据" : "拉取\(sectionTitle)"
-        case .persisting: return sectionTitle.isEmpty ? "写入本地" : "写入\(sectionTitle)"
-        case .completedSection: return sectionTitle.isEmpty ? "分段完成" : "\(sectionTitle)完成"
-        case .completed: return "同步完成"
+        case .beginning: return String(localized: "准备同步", bundle: .module)
+        case .fetching: return sectionTitle.isEmpty ? String(localized: "拉取数据", bundle: .module) : "拉取\(sectionTitle)"
+        case .persisting: return sectionTitle.isEmpty ? String(localized: "写入本地", bundle: .module) : "写入\(sectionTitle)"
+        case .completedSection: return sectionTitle.isEmpty ? String(localized: "分段完成", bundle: .module) : "\(sectionTitle)完成"
+        case .completed: return String(localized: "同步完成", bundle: .module)
         }
     }
 

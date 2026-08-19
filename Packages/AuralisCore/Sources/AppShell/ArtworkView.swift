@@ -93,7 +93,7 @@ struct ArtworkView: View {
             }
         }
         .frame(width: size, height: size)
-        .accessibilityLabel("\(title) 封面")
+        .accessibilityLabel(String(localized: "\(title) 封面", bundle: .module))
         .task(id: requestIdentifier) {
             guard let artworkStore else {
                 // Release 不崩溃（占位图兜底），但 Debug 必须暴露依赖注入错误：

@@ -91,7 +91,7 @@ struct MacAlbumsView: View {
                 }
             }
         }
-        .navigationTitle("专辑")
+        .navigationTitle(String(localized: "专辑", bundle: .module))
         .task(id: derivationKey) {
             rebuildVisibleAlbums()
         }

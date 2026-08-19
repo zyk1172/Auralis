@@ -42,11 +42,11 @@ struct MacPlaylistListView: View {
             GeometryReader { geo in
                 if visiblePlaylists.isEmpty {
                     ContentUnavailableView {
-                        Label("暂无播放列表", systemImage: "music.note.list")
+                        Label(String(localized: "暂无播放列表", bundle: .module), systemImage: "music.note.list")
                     } description: {
-                        Text("你可以创建播放列表，也可以使用音乐服务器中已经存在的播放列表。")
+                        Text(String(localized: "你可以创建播放列表，也可以使用音乐服务器中已经存在的播放列表。", bundle: .module))
                     } actions: {
-                        Button("新建播放列表") {
+                        Button(String(localized: "新建播放列表", bundle: .module)) {
                             NotificationCenter.default.post(name: MacCommand.newPlaylist, object: nil)
                         }
                         .buttonStyle(.borderedProminent)
@@ -75,7 +75,7 @@ struct MacPlaylistListView: View {
                 }
             }
         }
-        .navigationTitle("播放列表")
+        .navigationTitle(String(localized: "播放列表", bundle: .module))
         .task(id: derivationKey) {
             rebuildVisiblePlaylists()
         }

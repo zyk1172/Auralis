@@ -25,17 +25,17 @@ struct MacTrackInfoSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             TabView {
-                detailsPane.tabItem { Label("详细信息", systemImage: "info.circle") }
-                artworkPane.tabItem { Label("插图", systemImage: "photo") }
-                lyricsPane.tabItem { Label("歌词", systemImage: "quote.bubble") }
-                filePane.tabItem { Label("文件", systemImage: "doc") }
+                detailsPane.tabItem { Label(String(localized: "详细信息", bundle: .module), systemImage: "info.circle") }
+                artworkPane.tabItem { Label(String(localized: "插图", bundle: .module), systemImage: "photo") }
+                lyricsPane.tabItem { Label(String(localized: "歌词", bundle: .module), systemImage: "quote.bubble") }
+                filePane.tabItem { Label(String(localized: "文件", bundle: .module), systemImage: "doc") }
                 auralisPane.tabItem { Label("Auralis", systemImage: "sparkles") }
             }
             .padding(.top, 8)
             Divider()
             HStack {
                 Spacer()
-                Button("完成") { dismiss() }
+                Button(String(localized: "完成", bundle: .module)) { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(12)
@@ -75,7 +75,7 @@ struct MacTrackInfoSheet: View {
                 size: 220,
                 cornerRadius: 12
             )
-            Text("封面来自服务器元数据；详细来源见服务器歌曲信息。")
+            Text(String(localized: "封面来自服务器元数据；详细来源见服务器歌曲信息。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -117,7 +117,7 @@ struct MacTrackInfoSheet: View {
             if let bitDepth = track.sourceInfo.bitDepth { infoRow("位深", "\(bitDepth)-bit") }
             if let channels = track.sourceInfo.channelCount { infoRow("声道", "\(channels)") }
             infoRow("时长", MacFormat.time(track.duration))
-            Text("不显示服务器凭据、令牌或私有 URL 参数。")
+            Text(String(localized: "不显示服务器凭据、令牌或私有 URL 参数。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -128,37 +128,37 @@ struct MacTrackInfoSheet: View {
 
     private var auralisPane: some View {
         Form {
-            Section("私人状态") {
-                Button(track.isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(track) }
-                Button(model.isDisliked(track) ? "取消不喜欢" : "不喜欢") {
+            Section(String(localized: "私人状态", bundle: .module)) {
+                Button(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module)) { model.toggleFavorite(track) }
+                Button(model.isDisliked(track) ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module)) {
                     model.setDisliked(track, value: !model.isDisliked(track), source: "user")
                 }
                 if model.isDownloaded(track) {
-                    Button("删除下载") { model.removeDownload(track) }
+                    Button(String(localized: "删除下载", bundle: .module)) { model.removeDownload(track) }
                 } else {
-                    Button("下载") { model.download(track) }
+                    Button(String(localized: "下载", bundle: .module)) { model.download(track) }
                 }
             }
-            Section("公开音乐资料") {
+            Section(String(localized: "公开音乐资料", bundle: .module)) {
                 if isLoadingExternal {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("正在按需查询…").foregroundStyle(.secondary)
+                        Text(String(localized: "正在按需查询…", bundle: .module)).foregroundStyle(.secondary)
                     }
                 } else if let result = externalResult {
                     communityRow(.musicBrainz, result: result)
                     communityRow(.critiqueBrainz, result: result)
                     communityRow(.listenBrainz, result: result)
-                    Text("数据来自 MusicBrainz / CritiqueBrainz / ListenBrainz 公开只读接口，按需查询并本地缓存。")
+                    Text(String(localized: "数据来自 MusicBrainz / CritiqueBrainz / ListenBrainz 公开只读接口，按需查询并本地缓存。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("暂无可核验的大众评价数据。")
+                    Text(String(localized: "暂无可核验的大众评价数据。", bundle: .module))
                         .foregroundStyle(.secondary)
                 }
             }
-            Section("操作") {
-                Button("歌曲鉴赏") {
+            Section(String(localized: "操作", bundle: .module)) {
+                Button(String(localized: "歌曲鉴赏", bundle: .module)) {
                     dismiss()
                     NotificationCenter.default.post(name: MacCommand.songAppreciation, object: track)
                 }
@@ -197,21 +197,21 @@ struct MacTrackInfoSheet: View {
         switch metric.source {
         case .musicBrainz:
             if let rating = metric.rating, let count = metric.ratingCount {
-                return String(format: "%.1f / 5 · %d 次评分", rating, count)
+                return String(format: String(localized: "%.1f / 5 · %d 次评分", bundle: .module), rating, count)
             }
-            return "有评分数据"
+            return String(localized: "有评分数据", bundle: .module)
         case .critiqueBrainz:
             var parts: [String] = []
             if let rating = metric.rating, let count = metric.ratingCount {
                 parts.append(String(format: "%.1f / 5 · %d 次评分", rating, count))
             }
             if let reviews = metric.reviewCount { parts.append("\(reviews) 篇评论") }
-            return parts.isEmpty ? "有评论数据" : parts.joined(separator: " · ")
+            return parts.isEmpty ? String(localized: "有评论数据", bundle: .module) : parts.joined(separator: " · ")
         case .listenBrainz:
             var parts: [String] = []
             if let listens = metric.listenCount { parts.append("\(listens) 次收听") }
             if let listeners = metric.listenerCount { parts.append("\(listeners) 位听众") }
-            return parts.isEmpty ? "有收听数据" : parts.joined(separator: " · ")
+            return parts.isEmpty ? String(localized: "有收听数据", bundle: .module) : parts.joined(separator: " · ")
         }
     }
 

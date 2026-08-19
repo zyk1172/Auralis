@@ -393,7 +393,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         transform: (Raw, URLResponse) throws -> Value
     ) async throws -> Value {
         var attempt = 0
-        var lastError: Error = AIProviderError.transport("请求失败")
+        var lastError: Error = AIProviderError.transport(String(localized: "请求失败", bundle: .module))
         while attempt < Self.maxRetries {
             do {
                 let urlRequest = try await makeRequest(body: body)
@@ -918,8 +918,8 @@ public struct OpenAICompatibleProvider: AIProvider {
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return "<\(data.count) 字节非文本内容>" }
-        let suffix = data.count > limit ? "…（共 \(data.count) 字节）" : ""
+        guard !text.isEmpty else { return String(localized: "<\(data.count) 字节非文本内容>", bundle: .module) }
+        let suffix = data.count > limit ? String(localized: "…（共 \(data.count) 字节）", bundle: .module) : ""
         return text + suffix
     }
 
@@ -1099,9 +1099,9 @@ public struct OpenAICompatibleProvider: AIProvider {
         case "response.completed", "response.incomplete":
             return .done
         case "response.failed":
-            return .failed(responseErrorMessage(from: object) ?? "响应流失败")
+            return .failed(responseErrorMessage(from: object) ?? String(localized: "响应流失败", bundle: .module))
         case "error":
-            return .failed(responseErrorMessage(from: object) ?? "未知错误")
+            return .failed(responseErrorMessage(from: object) ?? String(localized: "未知错误", bundle: .module))
         case let type? where type.hasPrefix("response."):
             // 其余所有语义事件都不是正文，统一忽略，避免掉进下面的默认兜底：
             // - response.reasoning_text.delta / reasoning_summary_text.delta 字段也叫 delta，

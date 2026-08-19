@@ -37,13 +37,13 @@ struct HomeLayoutEditView: View {
             #endif
             .scrollContentBackground(.hidden)
             .background(colors.background.color)
-            .navigationTitle("编辑首页")
+            .navigationTitle(String(localized: "编辑首页", bundle: .module))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
+                    Button(String(localized: "完成", bundle: .module)) { dismiss() }
                         .fontWeight(.semibold)
                 }
             }
@@ -59,15 +59,15 @@ struct HomeLayoutEditView: View {
                 isPresented: $isConfirmingReset,
                 titleVisibility: .visible
             ) {
-                Button("恢复默认", role: .destructive) {
+                Button(String(localized: "恢复默认", bundle: .module), role: .destructive) {
                     let defaults = HomeModuleRegistry.defaultPreference()
                     quickEntries = defaults.quickEntries
                     contentModules = defaults.contentModules
                     model.resetHomeLayout()
                 }
-                Button("取消", role: .cancel) {}
+                Button(String(localized: "取消", bundle: .module), role: .cancel) {}
             } message: {
-                Text("仅重置首页模块的显示与排序，不会删除任何歌曲、缓存或播放记录。")
+                Text(String(localized: "仅重置首页模块的显示与排序，不会删除任何歌曲、缓存或播放记录。", bundle: .module))
             }
         }
     }
@@ -141,7 +141,7 @@ struct HomeLayoutEditView: View {
         Button(role: .destructive) {
             isConfirmingReset = true
         } label: {
-            Text("恢复默认布局")
+            Text(String(localized: "恢复默认布局", bundle: .module))
                 .font(.body.weight(.medium))
                 .frame(maxWidth: .infinity)
         }

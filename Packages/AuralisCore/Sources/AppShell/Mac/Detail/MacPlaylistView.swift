@@ -23,7 +23,7 @@ struct MacPlaylistView: View {
                 Divider()
                 if tracks.isEmpty {
                     ContentUnavailableView("歌单为空", systemImage: "music.note.list",
-                                           description: Text("这个歌单还没有歌曲。"))
+                                           description: Text(String(localized: "这个歌单还没有歌曲。", bundle: .module)))
                 } else {
                     MacDetailTrackList(
                         tracks: tracks,
@@ -40,12 +40,12 @@ struct MacPlaylistView: View {
         }
         .navigationTitle(playlist.name)
         .confirmationDialog("删除歌单「\(playlist.name)」？", isPresented: $isConfirmingDelete, titleVisibility: .visible) {
-            Button("删除歌单", role: .destructive) {
+            Button(String(localized: "删除歌单", bundle: .module), role: .destructive) {
                 Task { _ = await model.deletePlaylist(id: playlist.id) }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("只会删除歌单本身，不会删除其中的歌曲。")
+            Text(String(localized: "只会删除歌单本身，不会删除其中的歌曲。", bundle: .module))
         }
     }
 
@@ -75,25 +75,25 @@ struct MacPlaylistView: View {
                     Button {
                         model.playQueue(tracks)
                     } label: {
-                        Label("播放", systemImage: "play.fill")
+                        Label(String(localized: "播放", bundle: .module), systemImage: "play.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
                     Button {
                         model.playShuffledQueue(tracks)
                     } label: {
-                        Label("随机播放", systemImage: "shuffle")
+                        Label(String(localized: "随机播放", bundle: .module), systemImage: "shuffle")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
                     Menu {
-                        Button("下载歌单") { model.downloadAll(tracks) }
-                        Button("添加到队列") {
+                        Button(String(localized: "下载歌单", bundle: .module)) { model.downloadAll(tracks) }
+                        Button(String(localized: "添加到队列", bundle: .module)) {
                             for track in tracks {
                                 model.addToQueue(globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
                             }
                         }
-                        Button("删除歌单", role: .destructive) { isConfirmingDelete = true }
+                        Button(String(localized: "删除歌单", bundle: .module), role: .destructive) { isConfirmingDelete = true }
                     } label: {
                         Image(systemName: "ellipsis")
                             .frame(width: 28, height: 28)

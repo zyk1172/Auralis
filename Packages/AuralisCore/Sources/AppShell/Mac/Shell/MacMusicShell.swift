@@ -408,7 +408,7 @@ public struct MacMusicShell: View {
             AssistantView(model: model, theme: theme)
         case nil:
             ContentUnavailableView("选择一个项目", systemImage: "music.note.list",
-                                   description: Text("从左侧选择资料库或工具开始"))
+                                   description: Text(String(localized: "从左侧选择资料库或工具开始", bundle: .module)))
         }
     }
 
@@ -419,25 +419,25 @@ public struct MacMusicShell: View {
             if let album = resolveAlbum(id) {
                 MacAlbumView(album: album, model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate)
             } else {
-                ContentUnavailableView("专辑不可用", systemImage: "square.stack", description: Text("这张专辑不在当前资料库中。"))
+                ContentUnavailableView(String(localized: "专辑不可用", bundle: .module), systemImage: "square.stack", description: Text(String(localized: "这张专辑不在当前资料库中。", bundle: .module)))
             }
         case let .artist(id):
             if let artist = resolveArtist(id) {
                 MacArtistView(artist: artist, model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate)
             } else {
-                ContentUnavailableView("艺术家不可用", systemImage: "person.2", description: Text("这位艺术家不在当前资料库中。"))
+                ContentUnavailableView(String(localized: "艺术家不可用", bundle: .module), systemImage: "person.2", description: Text(String(localized: "这位艺术家不在当前资料库中。", bundle: .module)))
             }
         case let .playlist(id):
             if let playlist = resolvePlaylist(id) {
                 MacPlaylistView(playlist: playlist, model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate)
             } else {
-                ContentUnavailableView("歌单不可用", systemImage: "music.note.list", description: Text("这个歌单不在当前资料库中。"))
+                ContentUnavailableView(String(localized: "歌单不可用", bundle: .module), systemImage: "music.note.list", description: Text(String(localized: "这个歌单不在当前资料库中。", bundle: .module)))
             }
         case let .genre(name):
             if let genre = model.catalog.genres.first(where: { $0.name == name }) {
                 MacGenreView(genre: genre, model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate)
             } else {
-                ContentUnavailableView("流派不可用", systemImage: "music.quarternote.3", description: Text("这个流派不在当前资料库中。"))
+                ContentUnavailableView(String(localized: "流派不可用", bundle: .module), systemImage: "music.quarternote.3", description: Text(String(localized: "这个流派不在当前资料库中。", bundle: .module)))
             }
         case let .recommendationCategory(category):
             MacV2CategoryTracksView(category: category, model: model, theme: theme, onNavigate: navigate)
@@ -447,9 +447,9 @@ public struct MacMusicShell: View {
     private var currentTitle: String {
         if let route = navigation.path.last {
             switch route {
-            case let .album(id): return resolveAlbum(id)?.title ?? "专辑"
-            case let .artist(id): return resolveArtist(id)?.name ?? "艺术家"
-            case let .playlist(id): return resolvePlaylist(id)?.name ?? "播放列表"
+            case let .album(id): return resolveAlbum(id)?.title ?? String(localized: "专辑", bundle: .module)
+            case let .artist(id): return resolveArtist(id)?.name ?? String(localized: "艺术家", bundle: .module)
+            case let .playlist(id): return resolvePlaylist(id)?.name ?? String(localized: "播放列表", bundle: .module)
             case let .genre(name): return name
             case let .recommendationCategory(category): return category.macCategoryTitle
             }
@@ -520,32 +520,32 @@ public struct MacMusicShell: View {
             .sheet(item: $getInfoTrack) { track in
                 MacTrackInfoSheet(model: model, theme: theme, track: track)
             }
-            .alert("播放失败", isPresented: .init(
+            .alert(String(localized: "播放失败", bundle: .module), isPresented: .init(
                 get: { model.playbackError != nil },
                 set: { if !$0 { model.dismissPlaybackError() } }
             )) {
-                Button("好") { model.dismissPlaybackError() }
+                Button(String(localized: "好", bundle: .module)) { model.dismissPlaybackError() }
                 if model.playbackError != nil {
-                    Button("重试") { model.retryPlayback() }
-                    Button("停止") { model.stopPlayback() }
-                    Button("查看诊断", role: .none) { presentDiagnostics() }
+                    Button(String(localized: "重试", bundle: .module)) { model.retryPlayback() }
+                    Button(String(localized: "停止", bundle: .module)) { model.stopPlayback() }
+                    Button(String(localized: "查看诊断", bundle: .module), role: .none) { presentDiagnostics() }
                 }
             } message: {
-                Text(model.playbackError?.localizedDescription ?? "未知错误")
+                Text(model.playbackError?.localizedDescription ?? String(localized: "未知错误", bundle: .module))
             }
-            .alert("新建播放列表", isPresented: $isCreatingPlaylist) {
+            .alert(String(localized: "新建播放列表", bundle: .module), isPresented: $isCreatingPlaylist) {
                 TextField("播放列表名称", text: $newPlaylistName)
-                Button("创建") {
+                Button(String(localized: "创建", bundle: .module)) {
                     let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
                     newPlaylistName = ""
                     guard !name.isEmpty else { return }
                     Task { _ = await model.createPlaylist(named: name) }
                 }
-                Button("取消", role: .cancel) {
+                Button(String(localized: "取消", bundle: .module), role: .cancel) {
                     newPlaylistName = ""
                 }
             } message: {
-                Text("创建一个新的播放列表。")
+                Text(String(localized: "创建一个新的播放列表。", bundle: .module))
             }
     }
 
@@ -687,11 +687,11 @@ struct MacServerEmptyState: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("尚未连接音乐服务器", systemImage: "server.rack")
+            Label(String(localized: "尚未连接音乐服务器", bundle: .module), systemImage: "server.rack")
         } description: {
-            Text("连接 Navidrome 或其他 OpenSubsonic 服务器后，你的音乐资料库会显示在这里。")
+            Text(String(localized: "连接 Navidrome 或其他 OpenSubsonic 服务器后，你的音乐资料库会显示在这里。", bundle: .module))
         } actions: {
-            Button("打开服务器设置", action: onOpenSettings)
+            Button(String(localized: "打开服务器设置", bundle: .module), action: onOpenSettings)
                 .buttonStyle(.borderedProminent)
         }
     }

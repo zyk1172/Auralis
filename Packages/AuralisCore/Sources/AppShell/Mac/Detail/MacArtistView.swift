@@ -48,7 +48,7 @@ struct MacArtistView: View {
                 hero
                 if !topTracks.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("常听歌曲")
+                        Text(String(localized: "常听歌曲", bundle: .module))
                             .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         MacDetailTrackList(
                             tracks: topTracks,
@@ -61,7 +61,7 @@ struct MacArtistView: View {
                 }
                 if !artistAlbums.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("专辑")
+                        Text(String(localized: "专辑", bundle: .module))
                             .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         LazyVGrid(columns: columns, spacing: 24) {
                             ForEach(artistAlbums, id: \.macGlobalID) { album in
@@ -113,14 +113,14 @@ struct MacArtistView: View {
                     Button {
                         if !topTracks.isEmpty { model.playQueue(topTracks) }
                     } label: {
-                        Label("播放", systemImage: "play.fill")
+                        Label(String(localized: "播放", bundle: .module), systemImage: "play.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
                     Button {
                         model.playShuffledQueue(artistTracks)
                     } label: {
-                        Label("随机播放", systemImage: "shuffle")
+                        Label(String(localized: "随机播放", bundle: .module), systemImage: "shuffle")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
@@ -132,10 +132,10 @@ struct MacArtistView: View {
                     }
                     .buttonStyle(.bordered)
                     .help(model.isArtistFavorite(artist) ? "取消收藏艺术家" : "收藏艺术家")
-                    .accessibilityLabel(model.isArtistFavorite(artist) ? "取消收藏艺术家" : "收藏艺术家")
+                    .accessibilityLabel(model.isArtistFavorite(artist) ? String(localized: "取消收藏艺术家", bundle: .module) : String(localized: "收藏艺术家", bundle: .module))
                     Menu {
-                        Button("下载全部") { model.downloadAll(artistTracks) }
-                        Button("随机播放全部") { model.playShuffledQueue(artistTracks) }
+                        Button(String(localized: "下载全部", bundle: .module)) { model.downloadAll(artistTracks) }
+                        Button(String(localized: "随机播放全部", bundle: .module)) { model.playShuffledQueue(artistTracks) }
                     } label: {
                         Image(systemName: "ellipsis")
                             .frame(width: 28, height: 28)

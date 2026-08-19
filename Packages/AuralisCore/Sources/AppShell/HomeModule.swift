@@ -7,8 +7,8 @@ public enum HomeModuleGroup: String, Codable, Sendable, CaseIterable {
 
     public var title: String {
         switch self {
-        case .quickEntry: String(localized: "快捷入口")
-        case .content: String(localized: "内容模块")
+        case .quickEntry: String(localized: "快捷入口", bundle: .module)
+        case .content: String(localized: "内容模块", bundle: .module)
         }
     }
 }
@@ -65,8 +65,8 @@ public struct HomeModule: Identifiable, Sendable {
 
 /// 首页模块注册表：所有可选模块的唯一来源。
 /// 默认配置（首次安装 / 无配置时）：
-/// - 快捷入口仅 歌单 / 收藏 / 最常听（不提供播放历史 / 下载）。
-/// - 内容模块默认 随机音乐 / 最近播放 / 很久没听 / 最近添加 / 收藏里随便听；
+/// - 快捷入口仅 歌单 / 收藏 / 最常听（不提供播放历史）。
+/// - 内容模块默认 随机音乐 / 最近播放 / 很久没听 / 最近添加 / 收藏里随便听 / 下载；
 ///   默认隐藏 从未播放 / 常听艺术家 / 常听专辑。
 public enum HomeModuleRegistry {
     public static let allModules: [HomeModule] = {
@@ -74,60 +74,65 @@ public enum HomeModuleRegistry {
         // 快捷入口（默认顺序 0...4）
         modules.append(HomeModule(
             id: .playlists, group: .quickEntry,
-            title: String(localized: "歌单"), icon: "music.note.list",
+            title: String(localized: "歌单", bundle: .module), icon: "music.note.list",
             defaultVisible: true, defaultOrder: 0
         ))
         modules.append(HomeModule(
             id: .favorites, group: .quickEntry,
-            title: String(localized: "收藏"), icon: "heart.fill",
+            title: String(localized: "收藏", bundle: .module), icon: "heart.fill",
             defaultVisible: true, defaultOrder: 1
         ))
         modules.append(HomeModule(
             id: .mostPlayed, group: .quickEntry,
-            title: String(localized: "最常听"), icon: "play.circle.fill",
+            title: String(localized: "最常听", bundle: .module), icon: "play.circle.fill",
             defaultVisible: true, defaultOrder: 2
         ))
-        // 快捷入口仅保留 歌单/收藏/最常听（用户要求：不要播放历史、不要下载；
-        // 一行 3 个，超过自动换行，不做横向滚动）。内容模块默认顺序 0...7。
+        // 快捷入口仅保留 歌单/收藏/最常听（一行 3 个，超过自动换行，不做横向滚动）。
+        // 内容模块默认顺序 0...8。
         modules.append(HomeModule(
             id: .random, group: .content,
-            title: String(localized: "随机音乐"), icon: "shuffle",
+            title: String(localized: "随机音乐", bundle: .module), icon: "shuffle",
             defaultVisible: true, defaultOrder: 0
         ))
         modules.append(HomeModule(
             id: .recentlyPlayed, group: .content,
-            title: String(localized: "最近播放"), icon: "clock.fill",
+            title: String(localized: "最近播放", bundle: .module), icon: "clock.fill",
             defaultVisible: true, defaultOrder: 1
         ))
         modules.append(HomeModule(
             id: .longUnplayed, group: .content,
-            title: String(localized: "很久没听"), icon: "moon.zzz.fill",
+            title: String(localized: "很久没听", bundle: .module), icon: "moon.zzz.fill",
             defaultVisible: true, defaultOrder: 2
         ))
         modules.append(HomeModule(
             id: .recentlyAdded, group: .content,
-            title: String(localized: "最近添加"), icon: "plus.circle.fill",
+            title: String(localized: "最近添加", bundle: .module), icon: "plus.circle.fill",
             defaultVisible: true, defaultOrder: 3
         ))
         modules.append(HomeModule(
             id: .favoriteRandom, group: .content,
-            title: String(localized: "收藏里随便听"), icon: "heart.text.square.fill",
+            title: String(localized: "收藏里随便听", bundle: .module), icon: "heart.text.square.fill",
             defaultVisible: true, defaultOrder: 4
         ))
         modules.append(HomeModule(
-            id: .neverPlayed, group: .content,
-            title: String(localized: "从未播放"), icon: "music.note.house.fill",
-            defaultVisible: false, defaultOrder: 5
+            id: .downloads, group: .content,
+            title: String(localized: "下载", bundle: .module), icon: "arrow.down.circle.fill",
+            defaultVisible: true, defaultOrder: 5
         ))
         modules.append(HomeModule(
-            id: .topArtists, group: .content,
-            title: String(localized: "常听艺术家"), icon: "person.crop.rectangle.stack.fill",
+            id: .neverPlayed, group: .content,
+            title: String(localized: "从未播放", bundle: .module), icon: "music.note.house.fill",
             defaultVisible: false, defaultOrder: 6
         ))
         modules.append(HomeModule(
-            id: .topAlbums, group: .content,
-            title: String(localized: "常听专辑"), icon: "square.stack.fill",
+            id: .topArtists, group: .content,
+            title: String(localized: "常听艺术家", bundle: .module), icon: "person.crop.rectangle.stack.fill",
             defaultVisible: false, defaultOrder: 7
+        ))
+        modules.append(HomeModule(
+            id: .topAlbums, group: .content,
+            title: String(localized: "常听专辑", bundle: .module), icon: "square.stack.fill",
+            defaultVisible: false, defaultOrder: 8
         ))
         return modules
     }()

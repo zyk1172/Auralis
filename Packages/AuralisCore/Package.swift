@@ -14,7 +14,7 @@ let package = Package(
         .library(name: "LocalCatalog", targets: ["LocalCatalog"]),
     ],
     targets: [
-        .target(name: "Domain"),
+        .target(name: "Domain", resources: [.process("Resources")]),
         .target(name: "DesignSystem"),
         .target(name: "ThemeEngine", dependencies: ["DesignSystem"]),
         .target(name: "SecurityKit"),
@@ -27,19 +27,20 @@ let package = Package(
         .target(name: "ImagePipeline", dependencies: ["Domain"]),
         .target(name: "LyricsKit", dependencies: ["Domain"]),
         .target(name: "MetadataKit", dependencies: ["Domain"]),
-        .target(name: "AIKit", dependencies: ["Domain", "SecurityKit"]),
+        .target(name: "AIKit", dependencies: ["Domain", "SecurityKit"], resources: [.process("Resources")]),
         .target(name: "RecommendationEngine", dependencies: ["Domain"]),
         .target(name: "Persistence", dependencies: ["Domain"]),
         .target(name: "SystemMediaIntegration", dependencies: ["Domain", "Observability"]),
         .target(name: "LocalCatalog", dependencies: ["Domain", "MusicLibrary", "Observability"]),
-        .target(name: "AgentKit", dependencies: ["Domain", "AIKit", "LocalCatalog"]),
+        .target(name: "AgentKit", dependencies: ["Domain", "AIKit", "LocalCatalog"], resources: [.process("Resources")]),
         .target(name: "TestSupport", dependencies: ["Domain"]),
         .target(
             name: "Application",
             dependencies: [
                 "Domain", "OpenSubsonicKit", "MusicLibrary", "Persistence",
                 "SecurityKit", "Observability", "LocalCatalog",
-            ]
+            ],
+            resources: [.process("Resources")]
         ),
         .target(
             name: "AppShell",
@@ -48,7 +49,8 @@ let package = Package(
                 "PlaybackEngine", "PlaybackQueue", "OfflineManager", "LyricsKit", "ImagePipeline",
                 "MetadataKit", "AIKit", "RecommendationEngine", "Observability",
                 "SecurityKit", "SystemMediaIntegration", "LocalCatalog", "AgentKit",
-            ]
+            ],
+            resources: [.process("Resources")]
         ),
         .testTarget(name: "DomainTests", dependencies: ["Domain", "TestSupport"]),
         .testTarget(name: "OpenSubsonicKitTests", dependencies: ["OpenSubsonicKit", "Domain"]),

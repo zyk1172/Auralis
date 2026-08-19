@@ -21,7 +21,7 @@ struct MacTrackCollectionView: View {
     var body: some View {
         VStack(spacing: 0) {
             if tracks.isEmpty {
-                ContentUnavailableView("暂无内容", systemImage: "music.note", description: Text("这里还没有歌曲。"))
+                ContentUnavailableView(String(localized: "暂无内容", bundle: .module), systemImage: "music.note", description: Text(String(localized: "这里还没有歌曲。", bundle: .module)))
             } else {
                 MacSongTable(
                     tracks: tracks,
@@ -57,7 +57,7 @@ struct MacDislikedView: View {
     var body: some View {
         VStack(spacing: 0) {
             if tracks.isEmpty {
-                ContentUnavailableView("没有不喜欢的歌曲", systemImage: "heart.slash", description: Text("右键歌曲可选择「不喜欢」。"))
+                ContentUnavailableView(String(localized: "没有不喜欢的歌曲", bundle: .module), systemImage: "heart.slash", description: Text(String(localized: "右键歌曲可选择「不喜欢」。", bundle: .module)))
             } else {
                 MacSongTable(
                     tracks: tracks,
@@ -71,7 +71,7 @@ struct MacDislikedView: View {
                 )
             }
         }
-        .navigationTitle("不喜欢")
+        .navigationTitle(String(localized: "不喜欢", bundle: .module))
         // 顶部不留按钮：随机播放按钮移除。
     }
 }

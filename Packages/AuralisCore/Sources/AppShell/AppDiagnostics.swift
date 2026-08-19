@@ -14,7 +14,7 @@ enum AppDiagnostics {
     /// 当前运行形态：原生 macOS / iOS（与「Designed for iPad / Catalyst」区分）。
     static var targetKind: String {
         #if os(macOS)
-        return "原生 macOS（AuralisMac target）"
+        return String(localized: "原生 macOS（AuralisMac target）", bundle: .module)
         #else
         return "iOS"
         #endif

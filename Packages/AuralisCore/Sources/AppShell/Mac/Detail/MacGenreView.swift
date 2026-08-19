@@ -24,7 +24,7 @@ struct MacGenreView: View {
                 header
                 if !tracks.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("歌曲")
+                        Text(String(localized: "歌曲", bundle: .module))
                             .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         MacDetailTrackList(
                             tracks: tracks,
@@ -38,7 +38,7 @@ struct MacGenreView: View {
                 }
                 if !albums.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("专辑")
+                        Text(String(localized: "专辑", bundle: .module))
                             .font(.system(size: MacUIVisualTokens.Typography.sectionTitle, weight: .bold))
                         LazyVGrid(columns: columns, spacing: 24) {
                             ForEach(albums) { album in
@@ -72,19 +72,19 @@ struct MacGenreView: View {
                     Button {
                         model.playQueue(tracks)
                     } label: {
-                        Label("播放", systemImage: "play.fill")
+                        Label(String(localized: "播放", bundle: .module), systemImage: "play.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
                     Button {
                         model.playShuffledQueue(tracks)
                     } label: {
-                        Label("随机播放", systemImage: "shuffle")
+                        Label(String(localized: "随机播放", bundle: .module), systemImage: "shuffle")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
                     Menu {
-                        Button("下载全部") { model.downloadAll(tracks) }
+                        Button(String(localized: "下载全部", bundle: .module)) { model.downloadAll(tracks) }
                     } label: {
                         Image(systemName: "ellipsis")
                             .frame(width: 28, height: 28)

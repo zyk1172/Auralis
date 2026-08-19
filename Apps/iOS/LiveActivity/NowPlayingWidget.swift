@@ -42,7 +42,7 @@ struct NowPlayingWidgetView: View {
     var body: some View {
         if let snapshot {
             VStack(alignment: .leading, spacing: 4) {
-                Text("正在播放")
+                Text(String(localized: "正在播放"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(snapshot.title)
@@ -66,9 +66,9 @@ struct NowPlayingWidgetView: View {
                 Image(systemName: "music.note")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                Text("暂无播放")
+                Text(String(localized: "暂无播放"))
                     .font(.headline)
-                Text("打开 Auralis 开始播放后，这里会显示当前歌曲。")
+                Text(String(localized: "打开 Auralis 开始播放后，这里会显示当前歌曲。"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -84,8 +84,8 @@ struct AuralisNowPlayingWidget: Widget {
             NowPlayingWidgetView(snapshot: entry.snapshot)
                 .containerBackground(.fill.tertiary, for: .widget)
         }
-        .configurationDisplayName("正在播放")
-        .description("显示当前播放的歌曲、艺术家与进度")
+        .configurationDisplayName(String(localized: "正在播放"))
+        .description(String(localized: "显示当前播放的歌曲、艺术家与进度"))
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

@@ -44,7 +44,7 @@ struct CommunityMusicDetailView: View {
     @ViewBuilder
     private var musicBrainzSection: some View {
         if let detail = result.evidence?.musicBrainz {
-            Section("评分") {
+            Section(String(localized: "评分", bundle: .module)) {
                 if let rating = detail.rating {
                     detailRow("平均评分", String(format: "%.1f / 5", rating))
                 }
@@ -52,14 +52,14 @@ struct CommunityMusicDetailView: View {
                     detailRow("评分票数", "\(votes)")
                 }
             }
-            Section("身份") {
+            Section(String(localized: "身份", bundle: .module)) {
                 if let id = detail.recordingMBID { detailRow("Recording MBID", id) }
                 if let id = detail.releaseMBID { detailRow("Release MBID", id) }
                 if let id = detail.releaseGroupMBID { detailRow("Release Group MBID", id) }
                 if let id = detail.artistMBID { detailRow("Artist MBID", id) }
                 if let isrc = detail.isrc, !isrc.isEmpty { detailRow("ISRC", isrc) }
             }
-            Section("录音信息") {
+            Section(String(localized: "录音信息", bundle: .module)) {
                 if let title = detail.title { detailRow("标题", title) }
                 if let credit = detail.artistCredit, !credit.isEmpty { detailRow("艺术家", credit) }
                 if let date = detail.releaseDate, !date.isEmpty { detailRow("发行日期", date) }
@@ -70,14 +70,14 @@ struct CommunityMusicDetailView: View {
         } else if let metric = result.metrics.value(for: .musicBrainz) {
             switch metric.status {
             case .noData, .notSupported:
-                Section { Text("暂无 MusicBrainz 评分数据。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+                Section { Text(String(localized: "暂无 MusicBrainz 评分数据。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
             case .failed, .unavailable, .rateLimited:
-                Section { Text("MusicBrainz 数据暂时不可用。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+                Section { Text(String(localized: "MusicBrainz 数据暂时不可用。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
             default:
-                Section { Text("暂无详情。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+                Section { Text(String(localized: "暂无详情。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
             }
         } else {
-            Section { Text("暂无详情。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+            Section { Text(String(localized: "暂无详情。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
         }
     }
 
@@ -87,7 +87,7 @@ struct CommunityMusicDetailView: View {
     private var critiqueBrainzSection: some View {
         let metric = result.metrics.value(for: .critiqueBrainz)
         if let metric, metric.status == .available {
-            Section("聚合") {
+            Section(String(localized: "聚合", bundle: .module)) {
                 if let rating = metric.rating, let count = metric.ratingCount {
                     detailRow("平均评分", String(format: "%.1f / 5（%d 次评分）", rating, count))
                 }
@@ -98,11 +98,11 @@ struct CommunityMusicDetailView: View {
         }
         let reviews = result.evidence?.reviews ?? []
         if !reviews.isEmpty {
-            Section("评论（真实来源）") {
+            Section(String(localized: "评论（真实来源）", bundle: .module)) {
                 ForEach(reviews.prefix(10), id: \.reviewID) { review in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text(review.authorName ?? "匿名")
+                            Text(review.authorName ?? String(localized: "匿名", bundle: .module))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(theme.colorTokens.primaryText.color)
                             Spacer()
@@ -145,11 +145,11 @@ struct CommunityMusicDetailView: View {
                 }
             }
         } else if let metric, metric.status == .available || metric.status == .noData || metric.status == .notSupported {
-            Section { Text("暂无评论。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+            Section { Text(String(localized: "暂无评论。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
         } else if let metric {
-            Section { Text(metric.status == .rateLimited ? "CritiqueBrainz 请求过于频繁，请稍后再试。" : "CritiqueBrainz 数据暂时不可用。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+            Section { Text(metric.status == .rateLimited ? String(localized: "CritiqueBrainz 请求过于频繁，请稍后再试。", bundle: .module) : String(localized: "CritiqueBrainz 数据暂时不可用。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
         } else {
-            Section { Text("暂无评论。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+            Section { Text(String(localized: "暂无评论。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
         }
     }
 
@@ -167,7 +167,7 @@ struct CommunityMusicDetailView: View {
         if let metric = result.metrics.value(for: .listenBrainz) {
             switch metric.status {
             case .available:
-                Section("收听统计") {
+                Section(String(localized: "收听统计", bundle: .module)) {
                     if let listens = metric.listenCount {
                         detailRow("总收听次数", formattedCount(listens))
                     }
@@ -180,17 +180,17 @@ struct CommunityMusicDetailView: View {
                     }
                 }
                 Section {
-                    Text("收听量与评分描述不同人群与时间，不与其他来源合并为综合分。")
+                    Text(String(localized: "收听量与评分描述不同人群与时间，不与其他来源合并为综合分。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             case .noData, .notSupported:
-                Section { Text("暂无 ListenBrainz 收听数据。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+                Section { Text(String(localized: "暂无 ListenBrainz 收听数据。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
             default:
-                Section { Text("ListenBrainz 数据暂时不可用。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+                Section { Text(String(localized: "ListenBrainz 数据暂时不可用。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
             }
         } else {
-            Section { Text("暂无 ListenBrainz 收听数据。").foregroundStyle(theme.colorTokens.secondaryText.color) }
+            Section { Text(String(localized: "暂无 ListenBrainz 收听数据。", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color) }
         }
     }
 

@@ -54,13 +54,13 @@ struct ThemeSettingsPage: View {
 
     var body: some View {
         SettingsDetailForm(title: "主题", theme: theme) {
-            Section("主题外观") {
+            Section(String(localized: "主题外观", bundle: .module)) {
                 ThemeChoiceGrid(themeStore: themeStore)
-                Text("已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。")
+                Text(String(localized: "已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            Section("当前主题色板") {
+            Section(String(localized: "当前主题色板", bundle: .module)) {
                 ThemeSwatchGrid(colors: theme.colorTokens, name: theme.name)
             }
         }
@@ -75,7 +75,7 @@ struct PlaybackSettingsPage: View {
 
     var body: some View {
         SettingsDetailForm(title: "播放与音质", theme: theme) {
-            Section("网络音质") {
+            Section(String(localized: "网络音质", bundle: .module)) {
                 Toggle("Wi-Fi 优先原始音质", isOn: $highQualityWiFi)
                 Toggle("蜂窝网络允许转码", isOn: $cellularTranscoding)
             }
@@ -96,7 +96,7 @@ struct PlaybackSettingsPage: View {
                     in: -12...12,
                     step: 0.5
                 ) {
-                    Text("前级")
+                    Text(String(localized: "前级", bundle: .module))
                 } minimumValueLabel: {
                     Text("-12")
                 } maximumValueLabel: {
@@ -109,7 +109,7 @@ struct PlaybackSettingsPage: View {
                     get: { model.replayGainSettings.peakProtection },
                     set: { model.setReplayGainPeakProtection($0) }
                 ))
-                Text("默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。")
+                Text(String(localized: "默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -166,7 +166,7 @@ struct AgentSettingsPage: View {
 
     var body: some View {
         SettingsDetailForm(title: "Agent", theme: theme) {
-            Section("大模型") {
+            Section(String(localized: "大模型", bundle: .module)) {
                 LabeledContent("接口协议", value: AIEndpointMode.infer(from: aiAPIPath).title)
                 LabeledContent("Base URL", value: aiBaseURL)
                 LabeledContent("模型", value: aiModel)
@@ -175,9 +175,9 @@ struct AgentSettingsPage: View {
                     AIProviderSettingsPage(theme: theme, hasAPIKey: $hasAPIKey)
                 }
             }
-            Section("推荐索引 V2") {
+            Section(String(localized: "推荐索引 V2", bundle: .module)) {
                 if isLoadingIndexStatus && indexStatus == nil {
-                    HStack { ProgressView(); Text("正在读取索引状态…") }
+                    HStack { ProgressView(); Text(String(localized: "正在读取索引状态…", bundle: .module)) }
                 } else if let status = indexStatus {
                     LabeledContent("已分类", value: "\(status.indexedTracks) / \(status.totalTracks) 首")
                     LabeledContent("待处理", value: "\(status.pendingTracks) 首")
@@ -195,16 +195,16 @@ struct AgentSettingsPage: View {
                     }
                     .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
                     HStack {
-                        Button("导出索引…") { Task { await exportIndex() } }
+                        Button(String(localized: "导出索引…", bundle: .module)) { Task { await exportIndex() } }
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
-                        Button("导入索引…") { isImportingIndex = true }
+                        Button(String(localized: "导入索引…", bundle: .module)) { isImportingIndex = true }
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
                     }
                     Button(role: .destructive) { isConfirmingIndexClear = true } label: {
                         if isClearingIndex {
-                            Label("正在清空索引…", systemImage: "trash")
+                            Label(String(localized: "正在清空索引…", bundle: .module), systemImage: "trash")
                         } else {
-                            Label("清空索引…", systemImage: "trash")
+                            Label(String(localized: "清空索引…", bundle: .module), systemImage: "trash")
                         }
                     }
                         .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning || isClearingIndex || isPerformingIndexTransfer)
@@ -213,39 +213,39 @@ struct AgentSettingsPage: View {
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
-                    Button("刷新状态") { Task { await refreshIndexStatus() } }
+                    Button(String(localized: "刷新状态", bundle: .module)) { Task { await refreshIndexStatus() } }
                 } else {
-                    Text("连接并同步音乐库后，可查看索引进度。")
+                    Text(String(localized: "连接并同步音乐库后，可查看索引进度。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     Button {
                         model.startOrContinueRecommendationIndexV2()
                     } label: {
-                        Label("开始全量索引", systemImage: "sparkles.rectangle.stack")
+                        Label(String(localized: "开始全量索引", bundle: .module), systemImage: "sparkles.rectangle.stack")
                     }
                     .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
                 }
             }
-            Section("助手偏好") {
+            Section(String(localized: "助手偏好", bundle: .module)) {
                 Picker("推荐场景", selection: sceneBinding) {
-                    Text("无偏好").tag("")
-                    Text("深夜").tag("深夜")
-                    Text("通勤").tag("通勤")
-                    Text("学习").tag("学习")
-                    Text("运动").tag("运动")
+                    Text(String(localized: "无偏好", bundle: .module)).tag("")
+                    Text(String(localized: "深夜", bundle: .module)).tag(String(localized: "深夜", bundle: .module))
+                    Text(String(localized: "通勤", bundle: .module)).tag(String(localized: "通勤", bundle: .module))
+                    Text(String(localized: "学习", bundle: .module)).tag(String(localized: "学习", bundle: .module))
+                    Text(String(localized: "运动", bundle: .module)).tag(String(localized: "运动", bundle: .module))
                 }
                 Picker("重复容忍度", selection: repeatBinding) {
-                    Text("允许少量重复").tag("allow")
-                    Text("尽量不重复").tag("avoid")
+                    Text(String(localized: "允许少量重复", bundle: .module)).tag("allow")
+                    Text(String(localized: "尽量不重复", bundle: .module)).tag("avoid")
                 }
             }
-            Section("AI 与隐私") {
+            Section(String(localized: "AI 与隐私", bundle: .module)) {
                 Toggle("启用 AI 功能", isOn: $aiEnabled)
                 Toggle("允许发送歌曲元数据", isOn: $allowsMetadata)
                 Toggle("允许发送歌词", isOn: $allowsLyrics)
                 Toggle("允许发送播放历史摘要", isOn: $allowsHistory)
             }
-            Section("公开音乐数据") {
+            Section(String(localized: "公开音乐数据", bundle: .module)) {
                 Toggle("启用公开音乐数据", isOn: $externalMusicEnabled)
                 Toggle("MusicBrainz", isOn: $musicBrainzEnabled)
                     .disabled(!externalMusicEnabled)
@@ -253,20 +253,20 @@ struct AgentSettingsPage: View {
                     .disabled(!externalMusicEnabled)
                 Toggle("ListenBrainz", isOn: $listenBrainzEnabled)
                     .disabled(!externalMusicEnabled)
-                Text("仅在打开歌曲信息、歌曲鉴赏等需要公开音乐资料的功能时按需查询。不会上传音频文件、歌词、播放地址、NAS 密码或完整音乐库。查询结果默认缓存 14 天。")
+                Text(String(localized: "仅在打开歌曲信息、歌曲鉴赏等需要公开音乐资料的功能时按需查询。不会上传音频文件、歌词、播放地址、NAS 密码或完整音乐库。查询结果默认缓存 14 天。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
                 Button {
                     Task { await clearExternalMusicCache() }
                 } label: {
                     if isClearingExternalMusicCache {
-                        HStack { ProgressView(); Text("正在清除…") }
+                        HStack { ProgressView(); Text(String(localized: "正在清除…", bundle: .module)) }
                     } else {
-                        Label("清除公开音乐数据缓存", systemImage: "trash")
+                        Label(String(localized: "清除公开音乐数据缓存", bundle: .module), systemImage: "trash")
                     }
                 }
                 .disabled(isClearingExternalMusicCache)
-                Button("重置音乐身份匹配…", role: .destructive) {
+                Button(String(localized: "重置音乐身份匹配…", bundle: .module), role: .destructive) {
                     Task { await resetExternalMusicIdentity() }
                 }
                 .disabled(isResettingExternalIdentity)
@@ -304,13 +304,13 @@ struct AgentSettingsPage: View {
             await refreshIndexStatus()
         }
         .task(id: model.catalog.activeServerID) { await refreshIndexStatus() }
-        .confirmationDialog("清空本机推荐索引 V2？", isPresented: $isConfirmingIndexClear, titleVisibility: .visible) {
-            Button("清空索引", role: .destructive) {
+        .confirmationDialog(String(localized: "清空本机推荐索引 V2？", bundle: .module), isPresented: $isConfirmingIndexClear, titleVisibility: .visible) {
+            Button(String(localized: "清空索引", bundle: .module), role: .destructive) {
                 Task { await clearRecommendationIndex() }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。")
+            Text(String(localized: "将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
         }
     }
 
@@ -437,10 +437,10 @@ struct ServerSettingsPage: View {
 
     var body: some View {
         SettingsDetailForm(title: "服务器", theme: theme) {
-            Section("当前服务器") {
+            Section(String(localized: "当前服务器", bundle: .module)) {
                 if model.catalogFallbackUsed {
                     Label {
-                        Text("本地目录库打不开，当前运行在临时降级目录上：同步与搜索只对本次会话有效，请检查磁盘空间或应用支持目录。")
+                        Text(String(localized: "本地目录库打不开，当前运行在临时降级目录上：同步与搜索只对本次会话有效，请检查磁盘空间或应用支持目录。", bundle: .module))
                             .font(.caption)
                     } icon: {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -450,7 +450,7 @@ struct ServerSettingsPage: View {
                 }
                 serverSummary
                 if case .connected = model.serverConnectionState {
-                    Button("测试连接") { Task { pingResult = await model.testActiveServerConnection() } }
+                    Button(String(localized: "测试连接", bundle: .module)) { Task { pingResult = await model.testActiveServerConnection() } }
                     if let pingResult {
                         Label(
                             pingResult ? "服务器可达" : "服务器无响应",
@@ -459,12 +459,12 @@ struct ServerSettingsPage: View {
                         .font(.caption)
                         .foregroundStyle(pingResult ? theme.colorTokens.success.color : theme.colorTokens.error.color)
                     }
-                    Button("移除当前服务器（仅本机）", role: .destructive) { isRemovingServer = true }
+                    Button(String(localized: "移除当前服务器（仅本机）", bundle: .module), role: .destructive) { isRemovingServer = true }
                 }
             }
-            Section("已保存的服务器") {
+            Section(String(localized: "已保存的服务器", bundle: .module)) {
                 ForEach(savedServers) { server in serverRow(server) }
-                Button("添加 OpenSubsonic 服务器") { isAddingServer = true }
+                Button(String(localized: "添加 OpenSubsonic 服务器", bundle: .module)) { isAddingServer = true }
             }
             CatalogSyncSection(model: model, theme: theme)
             MoviePilotSettingsSection()
@@ -481,7 +481,7 @@ struct ServerSettingsPage: View {
             isPresented: Binding(get: { serverToSwitch != nil }, set: { if !$0 { serverToSwitch = nil } }),
             titleVisibility: .visible
         ) {
-            Button("切换") {
+            Button(String(localized: "切换", bundle: .module)) {
                 guard let server = serverToSwitch else { return }
                 serverToSwitch = nil
                 Task {
@@ -489,12 +489,12 @@ struct ServerSettingsPage: View {
                     await reloadServers()
                 }
             }
-            Button("取消", role: .cancel) { serverToSwitch = nil }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { serverToSwitch = nil }
         } message: {
-            Text("切换只影响本机资料库和播放会话，不会修改服务器数据。")
+            Text(String(localized: "切换只影响本机资料库和播放会话，不会修改服务器数据。", bundle: .module))
         }
-        .alert("移除服务器？", isPresented: $isRemovingServer) {
-            Button("移除", role: .destructive) {
+        .alert(String(localized: "移除服务器？", bundle: .module), isPresented: $isRemovingServer) {
+            Button(String(localized: "移除", bundle: .module), role: .destructive) {
                 guard let serverID = model.catalog.activeServerID else { return }
                 Task {
                     await model.catalogCoordinator.purgeLocalData(serverID: serverID)
@@ -502,9 +502,9 @@ struct ServerSettingsPage: View {
                     await reloadServers()
                 }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("仅删除本机登录凭据、目录与缓存；服务器上的音乐、歌单和收藏不会被删除。")
+            Text(String(localized: "仅删除本机登录凭据、目录与缓存；服务器上的音乐、歌单和收藏不会被删除。", bundle: .module))
         }
     }
 
@@ -519,10 +519,10 @@ struct ServerSettingsPage: View {
             LabeledContent("资料库", value: account.displayName)
             LabeledContent("已同步", value: "\(trackCount) 首歌曲")
         case let .failed(message):
-            Label("连接失败", systemImage: "exclamationmark.triangle.fill")
+            Label(String(localized: "连接失败", bundle: .module), systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.colorTokens.error.color)
             Text(message).font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color)
-            Button("重新连接") { isAddingServer = true }
+            Button(String(localized: "重新连接", bundle: .module)) { isAddingServer = true }
         }
     }
 
@@ -532,14 +532,14 @@ struct ServerSettingsPage: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(server.displayName)
-                Text(active ? "当前使用" : (server.baseURL?.host ?? "未设地址"))
+                Text(active ? String(localized: "当前使用", bundle: .module) : (server.baseURL?.host ?? String(localized: "未设地址", bundle: .module)))
                     .font(.caption)
                     .foregroundStyle(active ? theme.colorTokens.success.color : theme.colorTokens.secondaryText.color)
             }
             Spacer()
             Menu {
-                Button("编辑服务器") { serverToEdit = server }
-                if !active { Button("切换到此服务器") { serverToSwitch = server } }
+                Button(String(localized: "编辑服务器", bundle: .module)) { serverToEdit = server }
+                if !active { Button(String(localized: "切换到此服务器", bundle: .module)) { serverToSwitch = server } }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }

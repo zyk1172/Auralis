@@ -43,7 +43,7 @@ public struct LibraryCatalog: Sendable {
 extension LibraryCatalog {
     /// 空 catalog，App 启动时未连接服务器使用。连接成功后替换为服务器数据。
     public static let empty = LibraryCatalog(
-        account: ServerAccount(id: "local", displayName: "未连接服务器"),
+        account: ServerAccount(id: "local", displayName: String(localized: "未连接服务器", bundle: .module)),
         artists: [], albums: [], tracks: [], genres: [], playlists: [],
         history: [], downloads: [], lyrics: [:], recommendations: []
     )

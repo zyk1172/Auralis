@@ -321,7 +321,14 @@ struct AgentSystemPromptTests {
     @Test("无记忆 / 无技能时给出占位文案")
     func emptyMemoryAndSkillPlaceholders() {
         let prompt = AgentRunner.systemPrompt(context: AgentRunner.Context(), tools: [], nativeToolCalling: false)
-        #expect(prompt.contains("还没有记住关于主人的事情"))
-        #expect(prompt.contains("还没有创建技能"))
+        // 占位文案跟随 App 语言：zh-Hans 为中文，en 为英文，zh-Hant 为繁体
+        let hasMemoryPlaceholder = prompt.contains("还没有记住关于主人的事情")
+            || prompt.contains("還沒有記住")
+            || prompt.contains("No memories yet")
+        let hasSkillPlaceholder = prompt.contains("还没有创建技能")
+            || prompt.contains("還沒有創建技能")
+            || prompt.contains("No skills yet")
+        #expect(hasMemoryPlaceholder, "prompt should contain memory placeholder in any supported language")
+        #expect(hasSkillPlaceholder, "prompt should contain skill placeholder in any supported language")
     }
 }

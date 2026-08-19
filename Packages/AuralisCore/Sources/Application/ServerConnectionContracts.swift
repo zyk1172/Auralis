@@ -323,12 +323,12 @@ public enum ServerConnectionStage: String, CaseIterable, Equatable, Sendable {
 
     public var title: String {
         switch self {
-        case .validating: String(localized: "检查地址")
-        case .storingCredential: String(localized: "保护凭据")
-        case .authenticating: String(localized: "验证服务器")
-        case .detectingCapabilities: String(localized: "检测能力")
-        case .loadingLibrary: String(localized: "读取音乐库")
-        case .savingLibrary: String(localized: "保存资料库")
+        case .validating: String(localized: "检查地址", bundle: .module)
+        case .storingCredential: String(localized: "保护凭据", bundle: .module)
+        case .authenticating: String(localized: "验证服务器", bundle: .module)
+        case .detectingCapabilities: String(localized: "检测能力", bundle: .module)
+        case .loadingLibrary: String(localized: "读取音乐库", bundle: .module)
+        case .savingLibrary: String(localized: "保存资料库", bundle: .module)
         }
     }
 }
@@ -351,20 +351,20 @@ public enum ServerConnectionError: Error, Equatable, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .missingDisplayName: "请输入服务器名称。"
-        case .invalidURL: "服务器地址无效，请包含 http:// 或 https://。"
-        case .embeddedCredentials: "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。"
-        case .insecurePublicServer: "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。"
-        case .missingUsername: "请输入用户名。"
-        case .missingCredential: "请输入密码或 API Key。"
-        case .authenticationFailed: "认证失败，请检查用户名和凭据。"
-        case .serverUnavailable: "无法访问服务器，请检查地址、网络和服务状态。"
-        case .emptyLibrary: "服务器连接成功，但当前账户没有可见歌曲。"
-        case .secureStorageUnavailable: "无法访问系统 Keychain，请解锁设备后重试。"
-        case .libraryStorageUnavailable: "无法安全保存音乐库，请检查可用空间后重试。"
-        case .unsupportedResponse: "服务器返回了无法识别的 OpenSubsonic 响应。"
-        case .cancelled: "连接已取消，未完成的资料不会覆盖本地音乐库。"
-        case .unexpected: "连接未完成。请重试；如问题持续，请检查服务器兼容性。"
+        case .missingDisplayName: String(localized: "请输入服务器名称。", bundle: .module)
+        case .invalidURL: String(localized: "服务器地址无效，请包含 http:// 或 https://。", bundle: .module)
+        case .embeddedCredentials: String(localized: "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。", bundle: .module)
+        case .insecurePublicServer: String(localized: "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。", bundle: .module)
+        case .missingUsername: String(localized: "请输入用户名。", bundle: .module)
+        case .missingCredential: String(localized: "请输入密码或 API Key。", bundle: .module)
+        case .authenticationFailed: String(localized: "认证失败，请检查用户名和凭据。", bundle: .module)
+        case .serverUnavailable: String(localized: "无法访问服务器，请检查地址、网络和服务状态。", bundle: .module)
+        case .emptyLibrary: String(localized: "服务器连接成功，但当前账户没有可见歌曲。", bundle: .module)
+        case .secureStorageUnavailable: String(localized: "无法访问系统 Keychain，请解锁设备后重试。", bundle: .module)
+        case .libraryStorageUnavailable: String(localized: "无法安全保存音乐库，请检查可用空间后重试。", bundle: .module)
+        case .unsupportedResponse: String(localized: "服务器返回了无法识别的 OpenSubsonic 响应。", bundle: .module)
+        case .cancelled: String(localized: "连接已取消，未完成的资料不会覆盖本地音乐库。", bundle: .module)
+        case .unexpected: String(localized: "连接未完成。请重试；如问题持续，请检查服务器兼容性。", bundle: .module)
         }
     }
 }
@@ -404,9 +404,9 @@ public enum ConnectionErrorDescription {
         if let error = error as? CredentialVaultError {
             switch error {
             case .unavailable:
-                return "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。"
+                return String(localized: "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。", bundle: .module)
             case let .operationFailed(status):
-                return "系统 Keychain 写入失败（状态 \(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
+                return String(localized: "系统 Keychain 写入失败（状态 \(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。", bundle: .module)
             default:
                 return error.localizedDescription
             }
@@ -414,23 +414,23 @@ public enum ConnectionErrorDescription {
         if let error = error as? OpenSubsonicClientError {
             switch error {
             case let .server(code, message):
-                return "服务器返回错误（代码 \(code)）：\(message)"
+                return String(localized: "服务器返回错误（代码 \(code)）：\(message)", bundle: .module)
             case let .serverFailure(serverError):
-                return "服务器返回错误（代码 \(serverError.code)）：\(serverError.message)"
+                return String(localized: "服务器返回错误（代码 \(serverError.code)）：\(serverError.message)", bundle: .module)
             case let .httpStatus(status):
-                return "服务器返回 HTTP \(status)"
+                return String(localized: "服务器返回 HTTP \(status)", bundle: .module)
             case let .transport(code, host):
                 return Self.transport(code, host: host)
             case .malformedResponse, .missingPayload:
-                return "服务器返回的不是有效的 OpenSubsonic 响应"
+                return String(localized: "服务器返回的不是有效的 OpenSubsonic 响应", bundle: .module)
             case .invalidBaseURL:
-                return "服务器地址格式错误"
+                return String(localized: "服务器地址格式错误", bundle: .module)
             case let .invalidConfiguration(reason):
-                return "连接配置无效：\(reason)"
+                return String(localized: "连接配置无效：\(reason)", bundle: .module)
             case let .invalidParameter(name):
-                return "请求参数无效：\(name)"
+                return String(localized: "请求参数无效：\(name)", bundle: .module)
             case let .unsupportedCapability(name):
-                return "服务器不支持该功能：\(name)（API 版本可能不兼容）"
+                return String(localized: "服务器不支持该功能：\(name)（API 版本可能不兼容）", bundle: .module)
             }
         }
         if let error = error as? URLError {
@@ -442,21 +442,21 @@ public enum ConnectionErrorDescription {
     private static func transport(_ code: Int, host: String? = nil) -> String {
         switch code {
         case NSURLErrorTimedOut:
-            return "连接超时，请检查服务器地址与网络" + localNetworkHint(host: host)
+            return String(localized: "连接超时，请检查服务器地址与网络", bundle: .module) + localNetworkHint(host: host)
         case NSURLErrorCannotFindHost:
-            return "找不到主机，请检查服务器地址（IP / 主机名 / .local）" + localNetworkHint(host: host)
+            return String(localized: "找不到主机，请检查服务器地址（IP / 主机名 / .local）", bundle: .module) + localNetworkHint(host: host)
         case NSURLErrorCannotConnectToHost:
-            return "无法连接到服务器（服务器可能未启动或拒绝连接）" + localNetworkHint(host: host)
+            return String(localized: "无法连接到服务器（服务器可能未启动或拒绝连接）", bundle: .module) + localNetworkHint(host: host)
         case NSURLErrorNotConnectedToInternet:
-            return "网络不可用" + localNetworkHint(host: host)
+            return String(localized: "网络不可用", bundle: .module) + localNetworkHint(host: host)
         case NSURLErrorNetworkConnectionLost:
-            return "网络连接中断" + localNetworkHint(host: host)
+            return String(localized: "网络连接中断", bundle: .module) + localNetworkHint(host: host)
         case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted:
-            return "HTTPS 连接失败（证书不受信任或被安全策略拦截）"
+            return String(localized: "HTTPS 连接失败（证书不受信任或被安全策略拦截）", bundle: .module)
         case NSURLErrorAppTransportSecurityRequiresSecureConnection:
-            return "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）"
+            return String(localized: "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）", bundle: .module)
         default:
-            return "网络错误（\(code)）"
+            return String(localized: "网络错误（\(code)）", bundle: .module)
         }
     }
 
@@ -465,12 +465,12 @@ public enum ConnectionErrorDescription {
     /// 公共地址保持通用提示，避免把普通断网误判为权限问题。
     private static func localNetworkHint(host: String?) -> String {
         guard let host, ServerURLPolicy.isPrivateOrLocal(host: host) else {
-            return "，请检查网络连接"
+            return String(localized: "，请检查网络连接", bundle: .module)
         }
         #if os(macOS)
-        return "。若是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
+        return String(localized: "。若是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。", bundle: .module)
         #else
-        return "。若是局域网地址（\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
+        return String(localized: "。若是局域网地址（\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。", bundle: .module)
         #endif
     }
 }

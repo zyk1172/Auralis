@@ -36,7 +36,7 @@ struct MacDetailTrackRow: View {
                         Image(systemName: "speaker.wave.2.fill")
                             .font(.system(size: 9))
                             .foregroundStyle(theme.colorTokens.accent.color)
-                            .accessibilityLabel("正在播放")
+                            .accessibilityLabel(String(localized: "正在播放", bundle: .module))
                     }
                     Text(track.title)
                         .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
@@ -62,7 +62,7 @@ struct MacDetailTrackRow: View {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("已下载")
+                    .accessibilityLabel(String(localized: "已下载", bundle: .module))
             }
             Text(MacFormat.time(track.duration))
                 .font(.caption.monospacedDigit())
@@ -77,7 +77,7 @@ struct MacDetailTrackRow: View {
             }
             .buttonStyle(.plain)
             .help(track.isFavorite ? "取消收藏" : "收藏")
-            .accessibilityLabel(track.isFavorite ? "取消收藏" : "收藏")
+            .accessibilityLabel(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
             .frame(width: 22)
 
             if isHovering || !moreActions.isEmpty {
@@ -100,7 +100,7 @@ struct MacDetailTrackRow: View {
                 .fixedSize()
                 .opacity(isHovering ? 1 : 0.4)
                 .help("更多操作")
-                .accessibilityLabel("更多操作")
+                .accessibilityLabel(String(localized: "更多操作", bundle: .module))
             }
         }
         .padding(.horizontal, 14)
@@ -130,7 +130,7 @@ struct MacDetailTrackRow: View {
             }
             .buttonStyle(.plain)
             .help("播放")
-            .accessibilityLabel("播放")
+            .accessibilityLabel(String(localized: "播放", bundle: .module))
         } else if let number {
             Text("\(number)")
                 .font(.system(size: 12))

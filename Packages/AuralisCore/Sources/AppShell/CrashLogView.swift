@@ -13,7 +13,7 @@ struct CrashLogView: View {
         ScrollView {
             if let log = crashLog {
                 VStack(alignment: .leading, spacing: AuralisSpacing.medium) {
-                    Text("上次崩溃日志")
+                    Text(String(localized: "上次崩溃日志", bundle: .module))
                         .font(.headline)
                         .foregroundStyle(theme.colorTokens.primaryText.color)
                     Text(log)
@@ -24,7 +24,7 @@ struct CrashLogView: View {
                         .background(theme.colorTokens.surface.color)
                         .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
                     HStack {
-                        Button("复制日志") {
+                        Button(String(localized: "复制日志", bundle: .module)) {
                             #if os(iOS)
                             UIPasteboard.general.string = log
                             #else
@@ -34,7 +34,7 @@ struct CrashLogView: View {
                         }
                         .buttonStyle(HapticButtonStyle())
                         Spacer()
-                        Button("清除日志", role: .destructive) {
+                        Button(String(localized: "清除日志", bundle: .module), role: .destructive) {
                             showingClearAlert = true
                         }
                         .buttonStyle(HapticButtonStyle())
@@ -46,10 +46,10 @@ struct CrashLogView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.largeTitle)
                         .foregroundStyle(theme.colorTokens.success.color)
-                    Text("没有崩溃日志")
+                    Text(String(localized: "没有崩溃日志", bundle: .module))
                         .font(.headline)
                         .foregroundStyle(theme.colorTokens.primaryText.color)
-                    Text("上次启动没有发生崩溃。")
+                    Text(String(localized: "上次启动没有发生崩溃。", bundle: .module))
                         .font(.subheadline)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
@@ -58,21 +58,21 @@ struct CrashLogView: View {
             }
         }
         .background(theme.colorTokens.background.color)
-        .navigationTitle("崩溃日志")
+        .navigationTitle(String(localized: "崩溃日志", bundle: .module))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .onAppear {
             crashLog = CrashLog.shared.readLastCrashLog()
         }
-        .alert("确认清除", isPresented: $showingClearAlert) {
-            Button("清除", role: .destructive) {
+        .alert(String(localized: "确认清除", bundle: .module), isPresented: $showingClearAlert) {
+            Button(String(localized: "清除", bundle: .module), role: .destructive) {
                 CrashLog.shared.clearCrashLog()
                 crashLog = nil
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("确定要清除崩溃日志吗？")
+            Text(String(localized: "确定要清除崩溃日志吗？", bundle: .module))
         }
     }
 }

@@ -92,7 +92,7 @@ struct SearchView: View {
                 }
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                 .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel("清除搜索")
+                .accessibilityLabel(String(localized: "清除搜索", bundle: .module))
                 .frame(minWidth: 44, minHeight: 44)
             }
         }
@@ -124,7 +124,7 @@ struct SearchView: View {
                     Button {
                         model.searchOnServer(query)
                     } label: {
-                        Label("在线搜索服务器", systemImage: "antenna.radiowaves.left.and.right")
+                        Label(String(localized: "在线搜索服务器", bundle: .module), systemImage: "antenna.radiowaves.left.and.right")
                     }
                     .buttonStyle(HapticBorderedButtonStyle())
                 }
@@ -151,12 +151,12 @@ struct SearchView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: AuralisSpacing.medium) {
                     HStack {
-                        Text("最近搜索").font(.headline)
+                        Text(String(localized: "最近搜索", bundle: .module)).font(.headline)
                         Spacer()
-                        Button("清除") { model.clearSearchHistory() }
+                        Button(String(localized: "清除", bundle: .module)) { model.clearSearchHistory() }
                             .font(.caption)
                             .buttonStyle(HapticPlainButtonStyle())
-                            .accessibilityLabel("清除搜索历史")
+                            .accessibilityLabel(String(localized: "清除搜索历史", bundle: .module))
                     }
                     .padding(.horizontal, AuralisSpacing.large)
                     .padding(.top, AuralisSpacing.medium)
@@ -185,7 +185,7 @@ struct SearchView: View {
     private func resultList(results: LocalResults) -> some View {
         List {
             if !model.serverSearchResults.isEmpty {
-                Section("服务器在线结果") {
+                Section(String(localized: "服务器在线结果", bundle: .module)) {
                     ForEach(model.serverSearchResults) { track in
                         Button {
                                 model.recordSearch(query)
@@ -195,12 +195,12 @@ struct SearchView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(HapticPlainButtonStyle())
-                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
+                        .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                     }
                 }
             }
             if !results.songs.isEmpty {
-                Section("歌曲") {
+                Section(String(localized: "歌曲", bundle: .module)) {
                     ForEach(results.songs) { track in
                         Button {
                                 model.recordSearch(query)
@@ -210,12 +210,12 @@ struct SearchView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(HapticPlainButtonStyle())
-                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
+                        .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                     }
                 }
             }
             if !results.albums.isEmpty {
-                Section("专辑") {
+                Section(String(localized: "专辑", bundle: .module)) {
                     ForEach(results.albums) { album in
                         Button {
                             model.recordSearch(query)
@@ -236,7 +236,7 @@ struct SearchView: View {
                 }
             }
             if !results.artists.isEmpty {
-                Section("艺术家") {
+                Section(String(localized: "艺术家", bundle: .module)) {
                     ForEach(results.artists) { artist in
                         Button {
                             model.recordSearch(query)
@@ -258,7 +258,7 @@ struct SearchView: View {
                 }
             }
             if !results.playlists.isEmpty {
-                Section("歌单") {
+                Section(String(localized: "歌单", bundle: .module)) {
                     ForEach(results.playlists) { playlist in
                         Button {
                             model.recordSearch(query)

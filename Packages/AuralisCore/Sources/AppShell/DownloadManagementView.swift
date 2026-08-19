@@ -33,7 +33,7 @@ struct DownloadManagementView: View {
             }
 
             if !activeTracks.isEmpty {
-                Section("正在下载") {
+                Section(String(localized: "正在下载", bundle: .module)) {
                     ForEach(activeTracks) { track in
                         DownloadActivityRow(track: track, info: model.downloadInfo(for: track), theme: theme) {
                             model.cancelDownload(track)
@@ -43,13 +43,13 @@ struct DownloadManagementView: View {
             }
 
             if !failedTracks.isEmpty {
-                Section("需要处理") {
+                Section(String(localized: "需要处理", bundle: .module)) {
                     ForEach(failedTracks) { track in
                         DownloadActivityRow(track: track, info: model.downloadInfo(for: track), theme: theme) {
                             model.retryDownload(track)
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button("重试") { model.retryDownload(track) }
+                            Button(String(localized: "重试", bundle: .module)) { model.retryDownload(track) }
                                 .tint(theme.colorTokens.accent.color)
                         }
                     }
@@ -90,7 +90,7 @@ struct DownloadManagementView: View {
                             Button(role: .destructive) {
                                 model.removeDownload(track)
                             } label: {
-                                Label("删除下载", systemImage: "trash")
+                                Label(String(localized: "删除下载", bundle: .module), systemImage: "trash")
                             }
                         }
                     }
@@ -102,7 +102,7 @@ struct DownloadManagementView: View {
                     ContentUnavailableView(
                         "暂无下载",
                         systemImage: "arrow.down.circle",
-                        description: Text("在歌曲、专辑或歌单菜单中选择“下载到本地”，即可离线播放。")
+                        description: Text(String(localized: "在歌曲、专辑或歌单菜单中选择“下载到本地”，即可离线播放。", bundle: .module))
                     )
                 }
                 .listRowBackground(Color.clear)
@@ -118,12 +118,12 @@ struct DownloadManagementView: View {
             isPresented: $confirmsRemoveAll,
             titleVisibility: .visible
         ) {
-            Button("删除全部下载", role: .destructive) {
+            Button(String(localized: "删除全部下载", bundle: .module), role: .destructive) {
                 Task { await model.removeAllDownloads() }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("只删除这台设备上的离线文件，不会删除音乐服务器上的歌曲。")
+            Text(String(localized: "只删除这台设备上的离线文件，不会删除音乐服务器上的歌曲。", bundle: .module))
         }
     }
 
@@ -134,7 +134,7 @@ struct DownloadManagementView: View {
                     .font(.system(size: 34))
                     .foregroundStyle(theme.colorTokens.accent.color)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("离线音乐")
+                    Text(String(localized: "离线音乐", bundle: .module))
                         .font(.headline)
                     Text("\(downloadedTracks.count) 首 · \(Self.byteText(model.downloadedAudioBytes))")
                         .font(.caption)
@@ -146,20 +146,20 @@ struct DownloadManagementView: View {
                         Button(role: .destructive) {
                             model.cancelAllDownloads()
                         } label: {
-                            Label("取消全部下载", systemImage: "xmark.circle")
+                            Label(String(localized: "取消全部下载", bundle: .module), systemImage: "xmark.circle")
                         }
                     }
                     Button(role: .destructive) {
                         confirmsRemoveAll = true
                     } label: {
-                        Label("删除全部本地音乐", systemImage: "trash")
+                        Label(String(localized: "删除全部本地音乐", bundle: .module), systemImage: "trash")
                     }
                     .disabled(downloadedTracks.isEmpty && activeTracks.isEmpty)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.title3)
                 }
-                .accessibilityLabel("下载管理")
+                .accessibilityLabel(String(localized: "下载管理", bundle: .module))
             }
             .padding(.vertical, AuralisSpacing.xSmall)
         }
@@ -197,14 +197,14 @@ struct DownloadActivityRow: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(isFailed ? .orange : theme.colorTokens.secondaryText.color)
                 }
-                Text(isFailed ? (info?.failure?.message ?? "下载失败，请重试") : track.artistName)
+                Text(isFailed ? (info?.failure?.message ?? String(localized: "下载失败，请重试", bundle: .module)) : track.artistName)
                     .font(.caption)
                     .foregroundStyle(isFailed ? .orange : theme.colorTokens.secondaryText.color)
                     .lineLimit(2)
                 if !isFailed, !isQueued {
                     ProgressView(value: info?.progress ?? 0)
                         .tint(theme.colorTokens.accent.color)
-                        .accessibilityLabel("《\(track.title)》下载进度")
+                        .accessibilityLabel(String(localized: "《\(track.title)》下载进度", bundle: .module))
                         .accessibilityValue(statusText)
                 }
             }
@@ -217,24 +217,24 @@ struct DownloadActivityRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(isFailed ? theme.colorTokens.accent.color : .secondary)
             .help(isFailed ? "重试" : "取消下载")
-            .accessibilityLabel(isFailed ? "重试下载《\(track.title)》" : "取消下载《\(track.title)》")
+            .accessibilityLabel(isFailed ? String(localized: "重试下载《\(track.title)》", bundle: .module) : "取消下载《\(track.title)》")
         }
         .padding(.vertical, 3)
     }
 
     private var statusText: String {
-        guard let info else { return "准备中" }
+        guard let info else { return String(localized: "准备中", bundle: .module) }
         switch info.status {
-        case .queued: return "排队中"
+        case .queued: return String(localized: "排队中", bundle: .module)
         case .downloading:
             let percent = Int((info.progress * 100).rounded())
             if info.byteCount > 0 {
                 return "\(percent)% · \(DownloadManagementView.byteText(info.byteCount))"
             }
             return "\(percent)%"
-        case .failed: return "下载失败"
-        case .downloaded: return "已完成"
-        case .notDownloaded: return "未下载"
+        case .failed: return String(localized: "下载失败", bundle: .module)
+        case .downloaded: return String(localized: "已完成", bundle: .module)
+        case .notDownloaded: return String(localized: "未下载", bundle: .module)
         }
     }
 }

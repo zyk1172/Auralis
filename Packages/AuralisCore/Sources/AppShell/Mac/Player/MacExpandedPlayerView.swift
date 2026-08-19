@@ -225,7 +225,7 @@ struct MacExpandedPlayerView: View {
             )
             .animation(reduceMotion ? nil : .spring(duration: 0.30, bounce: 0.08), value: isPlaying)
             .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
-            .accessibilityLabel("\(track.albumTitle) 封面")
+            .accessibilityLabel(String(localized: "\(track.albumTitle) 封面", bundle: .module))
 
             Spacer().frame(height: 26)  // trackInfo 上间距（保留）
 
@@ -265,23 +265,23 @@ struct MacExpandedPlayerView: View {
             }
             .buttonStyle(.plain)
             .help(track.isFavorite ? "取消收藏" : "收藏")
-            .accessibilityLabel(track.isFavorite ? "取消收藏" : "收藏")
+            .accessibilityLabel(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
             Menu {
                 if model.hasCurrentTrack {
                     let disliked = model.isDisliked(model.currentTrack)
-                    Button(disliked ? "取消不喜欢" : "不喜欢") {
+                    Button(disliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module)) {
                         model.setDisliked(model.currentTrack, value: !disliked, source: "expanded-player")
                     }
-                    Button("歌曲信息") {
+                    Button(String(localized: "歌曲信息", bundle: .module)) {
                         NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
                     }
-                    Button("歌曲鉴赏") {
+                    Button(String(localized: "歌曲鉴赏", bundle: .module)) {
                         NotificationCenter.default.post(name: MacCommand.songAppreciation, object: model.currentTrack)
                     }
                     if model.isDownloaded(model.currentTrack) {
-                        Button("删除下载", role: .destructive) { model.removeDownload(model.currentTrack) }
+                        Button(String(localized: "删除下载", bundle: .module), role: .destructive) { model.removeDownload(model.currentTrack) }
                     } else {
-                        Button("下载") { model.download(model.currentTrack) }
+                        Button(String(localized: "下载", bundle: .module)) { model.download(model.currentTrack) }
                     }
                 }
             } label: {
@@ -293,7 +293,7 @@ struct MacExpandedPlayerView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("更多")
-            .accessibilityLabel("更多")
+            .accessibilityLabel(String(localized: "更多", bundle: .module))
         }
     }
 
@@ -320,7 +320,7 @@ struct MacExpandedPlayerView: View {
             .id(trackGlobalID)
             .controlSize(.small)
             .tint(palette.accent)
-            .accessibilityLabel("播放进度")
+            .accessibilityLabel(String(localized: "播放进度", bundle: .module))
             HStack {
                 Text(MacFormat.time(displayedProgress))
                 Spacer()
@@ -348,7 +348,7 @@ struct MacExpandedPlayerView: View {
                     .foregroundStyle(model.isShuffled ? palette.accent : palette.control)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("随机播放")
+            .accessibilityLabel(String(localized: "随机播放", bundle: .module))
             Spacer()
             Button {
                 model.previous()
@@ -359,7 +359,7 @@ struct MacExpandedPlayerView: View {
             }
             .buttonStyle(.plain)
             .disabled(!model.canGoPrevious)
-            .accessibilityLabel("上一首")
+            .accessibilityLabel(String(localized: "上一首", bundle: .module))
             Spacer()
             Button {
                 model.togglePlayback()
@@ -370,7 +370,7 @@ struct MacExpandedPlayerView: View {
             }
             .buttonStyle(.plain)
             .disabled(!model.hasCurrentTrack)
-            .accessibilityLabel("播放 / 暂停")
+            .accessibilityLabel(String(localized: "播放 / 暂停", bundle: .module))
             Spacer()
             Button {
                 model.next()
@@ -381,7 +381,7 @@ struct MacExpandedPlayerView: View {
             }
             .buttonStyle(.plain)
             .disabled(!model.canGoNext)
-            .accessibilityLabel("下一首")
+            .accessibilityLabel(String(localized: "下一首", bundle: .module))
             Spacer()
             Button {
                 model.cycleRepeatMode()
@@ -393,7 +393,7 @@ struct MacExpandedPlayerView: View {
             }
             .buttonStyle(.plain)
             .help("循环模式")
-            .accessibilityLabel("循环模式")
+            .accessibilityLabel(String(localized: "循环模式", bundle: .module))
         }
         .frame(width: width)
     }
@@ -421,7 +421,7 @@ struct MacExpandedPlayerView: View {
                 VStack(spacing: 10) {
                     Spacer()
                     ProgressView().controlSize(.small).tint(palette.accent)
-                    Text("正在加载歌词…")
+                    Text(String(localized: "正在加载歌词…", bundle: .module))
                         .font(.body)
                         .foregroundStyle(palette.secondary)
                     Spacer()
@@ -462,7 +462,7 @@ struct MacExpandedPlayerView: View {
             case let .error(message):
                 VStack(spacing: 8) {
                     Spacer()
-                    Text("歌词加载失败")
+                    Text(String(localized: "歌词加载失败", bundle: .module))
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(palette.primary)
                     Text(message)
@@ -478,10 +478,10 @@ struct MacExpandedPlayerView: View {
     private var unavailableView: some View {
         VStack(spacing: 10) {
             Spacer()
-            Text("无可用歌词")
+            Text(String(localized: "无可用歌词", bundle: .module))
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(palette.primary)
-            Text("此歌曲没有任何可用的歌词。")
+            Text(String(localized: "此歌曲没有任何可用的歌词。", bundle: .module))
                 .font(.body)
                 .foregroundStyle(palette.secondary)
             Spacer()
@@ -502,12 +502,12 @@ struct MacExpandedPlayerView: View {
     private var queuePane: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("继续播放")
+                Text(String(localized: "继续播放", bundle: .module))
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(palette.primary)
                 Spacer()
                 if !queueStoreUpcomingEntries.isEmpty {
-                    Button("清除") { model.clearUpcoming() }
+                    Button(String(localized: "清除", bundle: .module)) { model.clearUpcoming() }
                         .buttonStyle(.plain)
                         .foregroundStyle(palette.destructive)
                 }
@@ -517,7 +517,7 @@ struct MacExpandedPlayerView: View {
             if queueStoreUpcomingEntries.isEmpty {
                 VStack {
                     Spacer()
-                    Text("队列中无音乐。")
+                    Text(String(localized: "队列中无音乐。", bundle: .module))
                         .font(.system(size: 16))
                         .foregroundStyle(palette.secondary)
                     Spacer()
@@ -530,8 +530,8 @@ struct MacExpandedPlayerView: View {
                             let queueTrack = entry.track
                             queueRow(queueTrack, isCurrent: false, entryID: entry.id)
                                 .contextMenu {
-                                    Button("立即播放") { model.playQueueEntry(id: entry.id) }
-                                    Button("从队列移除") { model.removeQueueEntry(id: entry.id) }
+                                    Button(String(localized: "立即播放", bundle: .module)) { model.playQueueEntry(id: entry.id) }
+                                    Button(String(localized: "从队列移除", bundle: .module)) { model.removeQueueEntry(id: entry.id) }
                                 }
                         }
                     }
@@ -580,7 +580,7 @@ struct MacExpandedPlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .help("收起播放器")
-                .accessibilityLabel("收起播放器")
+                .accessibilityLabel(String(localized: "收起播放器", bundle: .module))
                 Button(action: onOpenMiniPlayer) {
                     Image(systemName: "rectangle.on.rectangle")
                         .font(.system(size: 16, weight: .semibold))
@@ -588,7 +588,7 @@ struct MacExpandedPlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .help("切换迷你播放器")
-                .accessibilityLabel("切换迷你播放器")
+                .accessibilityLabel(String(localized: "切换迷你播放器", bundle: .module))
             }
             .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingH)
             .frame(height: MacUIVisualTokens.ExpandedPlayer.topLeftGlassHeight)
@@ -608,7 +608,7 @@ struct MacExpandedPlayerView: View {
                 ), in: 0...1)
                 .controlSize(.small)
                 .frame(width: MacUIVisualTokens.ExpandedPlayer.topRightGlassWidth)
-                .accessibilityLabel("音量")
+                .accessibilityLabel(String(localized: "音量", bundle: .module))
                 Image(systemName: "speaker.wave.3.fill")
                     .font(.system(size: 17))
                     .foregroundStyle(palette.control)
@@ -635,7 +635,7 @@ struct MacExpandedPlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .help("歌词")
-                .accessibilityLabel("歌词")
+                .accessibilityLabel(String(localized: "歌词", bundle: .module))
                 Button {
                     MacUITrace.action("toggleQueue", "from=\(String(describing: context))")
                     context = context == .queue ? .none : .queue
@@ -646,7 +646,7 @@ struct MacExpandedPlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .help("队列")
-                .accessibilityLabel("队列")
+                .accessibilityLabel(String(localized: "队列", bundle: .module))
             }
             .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)
             .frame(height: MacUIVisualTokens.ExpandedPlayer.topRightGlassHeight)

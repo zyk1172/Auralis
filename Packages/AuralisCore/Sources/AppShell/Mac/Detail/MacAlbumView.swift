@@ -120,14 +120,14 @@ struct MacAlbumView: View {
             Button {
                 model.playQueue(tracks)
             } label: {
-                Label("播放", systemImage: "play.fill")
+                Label(String(localized: "播放", bundle: .module), systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
             Button {
                 model.playShuffledQueue(tracks)
             } label: {
-                Label("随机播放", systemImage: "shuffle")
+                Label(String(localized: "随机播放", bundle: .module), systemImage: "shuffle")
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
@@ -139,17 +139,17 @@ struct MacAlbumView: View {
             }
             .buttonStyle(.bordered)
             .help(model.isAlbumFavorite(album) ? "取消收藏专辑" : "收藏专辑")
-            .accessibilityLabel(model.isAlbumFavorite(album) ? "取消收藏专辑" : "收藏专辑")
+            .accessibilityLabel(model.isAlbumFavorite(album) ? String(localized: "取消收藏专辑", bundle: .module) : String(localized: "收藏专辑", bundle: .module))
             Menu {
-                Button("随机播放专辑") { model.playShuffledQueue(tracks) }
-                Button("下载专辑") { model.downloadAll(tracks) }
-                Button(model.isAlbumFavorite(album) ? "取消收藏专辑" : "收藏专辑") {
+                Button(String(localized: "随机播放专辑", bundle: .module)) { model.playShuffledQueue(tracks) }
+                Button(String(localized: "下载专辑", bundle: .module)) { model.downloadAll(tracks) }
+                Button(model.isAlbumFavorite(album) ? String(localized: "取消收藏专辑", bundle: .module) : String(localized: "收藏专辑", bundle: .module)) {
                     model.toggleAlbumFavorite(album)
                 }
                 if let artist = model.catalog.artists.first(where: { $0.id == album.artistID && $0.serverID == album.serverID }) {
-                    Button("前往艺术家") { onNavigate(.artist(artist)) }
+                    Button(String(localized: "前往艺术家", bundle: .module)) { onNavigate(.artist(artist)) }
                 }
-                Button("加入队列") {
+                Button(String(localized: "加入队列", bundle: .module)) {
                     for track in tracks {
                         model.addToQueue(globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
                     }
@@ -208,7 +208,7 @@ struct MacAlbumView: View {
     private var codecSummary: String? {
         let set = Set(tracks.compactMap { MacFormat.codec($0) })
         guard !set.isEmpty else { return nil }
-        return "格式：" + set.sorted().joined(separator: " / ")
+        return String(localized: "格式：", bundle: .module) + set.sorted().joined(separator: " / ")
     }
 }
 #endif

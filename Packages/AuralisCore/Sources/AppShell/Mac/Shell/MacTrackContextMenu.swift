@@ -20,15 +20,15 @@ func macTrackMenuContent(
     let playlists = model.catalog.playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
     return Group {
-        Button("播放") { model.selectAndPlay(track) }
-        Button("下一首播放") { model.playNext(globalID: gid) }
-        Button("加入队列") { model.addToQueue(globalID: gid) }
+        Button(String(localized: "播放", bundle: .module)) { model.selectAndPlay(track) }
+        Button(String(localized: "下一首播放", bundle: .module)) { model.playNext(globalID: gid) }
+        Button(String(localized: "加入队列", bundle: .module)) { model.addToQueue(globalID: gid) }
 
         Divider()
 
         Menu("添加到歌单") {
             if playlists.isEmpty {
-                Text("暂无歌单")
+                Text(String(localized: "暂无歌单", bundle: .module))
             }
             ForEach(playlists) { playlist in
                 Button(playlist.name) {
@@ -38,22 +38,22 @@ func macTrackMenuContent(
         }
 
         if let album {
-            Button("前往专辑") { onNavigate(.album(album)) }
+            Button(String(localized: "前往专辑", bundle: .module)) { onNavigate(.album(album)) }
         }
         if let artist {
-            Button("前往艺术家") { onNavigate(.artist(artist)) }
+            Button(String(localized: "前往艺术家", bundle: .module)) { onNavigate(.artist(artist)) }
         }
 
         Divider()
 
-        Button(isFavorite ? "取消收藏" : "收藏") { model.toggleFavorite(track) }
-        Button(isDisliked ? "取消不喜欢" : "不喜欢") {
+        Button(isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module)) { model.toggleFavorite(track) }
+        Button(isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module)) {
             model.setDisliked(track, value: !isDisliked, source: "user")
         }
 
         Divider()
 
-        Button(isDownloaded ? "删除下载" : "下载") {
+        Button(isDownloaded ? String(localized: "删除下载", bundle: .module) : String(localized: "下载", bundle: .module)) {
             if isDownloaded {
                 model.removeDownload(track)
             } else {
@@ -63,10 +63,10 @@ func macTrackMenuContent(
 
         Divider()
 
-        Button("歌曲鉴赏") {
+        Button(String(localized: "歌曲鉴赏", bundle: .module)) {
             NotificationCenter.default.post(name: MacCommand.songAppreciation, object: track)
         }
-        Button("歌曲信息") {
+        Button(String(localized: "歌曲信息", bundle: .module)) {
             NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: track)
         }
     }

@@ -92,7 +92,7 @@ struct MacSongsView: View {
                 showAddedDateColumn: showAddedDate
             )
         }
-        .navigationTitle("歌曲")
+        .navigationTitle(String(localized: "歌曲", bundle: .module))
         .onAppear { updateVisibleTracks() }
         .onChange(of: localSearch) { _, _ in updateVisibleTracks() }
         .onChange(of: model.catalogRevision) { _, _ in updateVisibleTracks() }

@@ -22,7 +22,7 @@ struct CatalogSyncSection: View {
     }
 
     var body: some View {
-        Section("本地音乐目录") {
+        Section(String(localized: "本地音乐目录", bundle: .module)) {
             phaseRow
             if let status = currentStatus {
                 LabeledContent(
@@ -30,7 +30,7 @@ struct CatalogSyncSection: View {
                     value: status.lastCompletedAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "从未同步"
                 )
                 if status.isStale {
-                    Label("目录可能已过期，建议刷新", systemImage: "clock.badge.exclamationmark")
+                    Label(String(localized: "目录可能已过期，建议刷新", bundle: .module), systemImage: "clock.badge.exclamationmark")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.warning.color)
                 }
@@ -39,33 +39,33 @@ struct CatalogSyncSection: View {
 
             HStack {
                 if isSyncing {
-                    Button("取消同步") { coordinator.cancelSync() }
+                    Button(String(localized: "取消同步", bundle: .module)) { coordinator.cancelSync() }
                         .buttonStyle(HapticBorderedButtonStyle())
                 } else {
-                    Button("立即刷新") { withServerID { coordinator.manualRefresh(serverID: $0) } }
+                    Button(String(localized: "立即刷新", bundle: .module)) { withServerID { coordinator.manualRefresh(serverID: $0) } }
                         .buttonStyle(HapticBorderedButtonStyle())
-                    Button("完全重建") { isRebuilding = true }
+                    Button(String(localized: "完全重建", bundle: .module)) { isRebuilding = true }
                         .buttonStyle(HapticDestructiveButtonStyle())
                     if case .failed = coordinator.phase {
-                        Button("重试") { withServerID { coordinator.retry(serverID: $0) } }
+                        Button(String(localized: "重试", bundle: .module)) { withServerID { coordinator.retry(serverID: $0) } }
                             .buttonStyle(HapticBorderedButtonStyle())
                     }
                 }
             }
             .disabled(!model.catalog.isConnected)
 
-            Text("目录保存在本机 SQLite（含全文检索索引），按服务器隔离。助手只查询你需要的结果，绝不会把整个曲库发给大模型。")
+            Text(String(localized: "目录保存在本机 SQLite（含全文检索索引），按服务器隔离。助手只查询你需要的结果，绝不会把整个曲库发给大模型。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
         }
         .task { await coordinator.refreshStatuses() }
-        .alert("完全重建目录？", isPresented: $isRebuilding) {
-            Button("重建", role: .destructive) {
+        .alert(String(localized: "完全重建目录？", bundle: .module), isPresented: $isRebuilding) {
+            Button(String(localized: "重建", bundle: .module), role: .destructive) {
                 withServerID { coordinator.fullRebuild(serverID: $0) }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("将清空本机目录并从服务器重新拉取全部数据，耗时较长。服务器数据不受影响。")
+            Text(String(localized: "将清空本机目录并从服务器重新拉取全部数据，耗时较长。服务器数据不受影响。", bundle: .module))
         }
     }
 
@@ -104,14 +104,14 @@ struct CatalogSyncSection: View {
                 .foregroundStyle(theme.colorTokens.success.color)
         case let .failed(message):
             VStack(alignment: .leading, spacing: 2) {
-                Label("同步失败", systemImage: "exclamationmark.triangle.fill")
+                Label(String(localized: "同步失败", bundle: .module), systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(theme.colorTokens.error.color)
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
         case .cancelled:
-            Label("已取消同步", systemImage: "xmark.circle")
+            Label(String(localized: "已取消同步", bundle: .module), systemImage: "xmark.circle")
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
         }
     }
@@ -136,10 +136,10 @@ struct CacheManagementSection: View {
     @State private var confirmClearAudio = false
 
     var body: some View {
-        Section("本地缓存") {
+        Section(String(localized: "本地缓存", bundle: .module)) {
             LabeledContent("临时音频缓存", value: "\(usage.audioCount) 首 · \(Self.format(usage.audioBytes))")
             LabeledContent("元数据目录", value: Self.format(usage.catalogBytes))
-            Text("App 只在本机持久化音乐库元数据（歌曲、专辑、艺术家、流派、歌单、收藏与播放记录）。封面与歌词按需从服务器加载，不主动缓存；离线下载的歌曲仍会占用临时音频缓存。")
+            Text(String(localized: "App 只在本机持久化音乐库元数据（歌曲、专辑、艺术家、流派、歌单、收藏与播放记录）。封面与歌词按需从服务器加载，不主动缓存；离线下载的歌曲仍会占用临时音频缓存。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             ViewThatFits(in: .horizontal) {
@@ -159,17 +159,17 @@ struct CacheManagementSection: View {
             .disabled(isWorking)
         }
         .task { await reload() }
-        .alert("清理历史封面缓存？", isPresented: $confirmClearArtwork) {
-            Button("清理", role: .destructive) { run { await model.clearArtworkCache() } }
-            Button("取消", role: .cancel) {}
+        .alert(String(localized: "清理历史封面缓存？", bundle: .module), isPresented: $confirmClearArtwork) {
+            Button(String(localized: "清理", bundle: .module), role: .destructive) { run { await model.clearArtworkCache() } }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("将删除本机已缓存的全部封面图片。今后封面只按需从服务器加载，不再主动缓存。")
+            Text(String(localized: "将删除本机已缓存的全部封面图片。今后封面只按需从服务器加载，不再主动缓存。", bundle: .module))
         }
-        .alert("清理临时音频缓存？", isPresented: $confirmClearAudio) {
-            Button("清理", role: .destructive) { run { await model.clearAudioCache() } }
-            Button("取消", role: .cancel) {}
+        .alert(String(localized: "清理临时音频缓存？", bundle: .module), isPresented: $confirmClearAudio) {
+            Button(String(localized: "清理", bundle: .module), role: .destructive) { run { await model.clearAudioCache() } }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("将删除本机已下载的临时音频缓存文件；用户主动下载的离线音乐不会被删除。")
+            Text(String(localized: "将删除本机已下载的临时音频缓存文件；用户主动下载的离线音乐不会被删除。", bundle: .module))
         }
     }
 
@@ -283,36 +283,36 @@ struct AgentMemoryManagementSection: View {
             memoryFileDisclosure
             skillsDirectoryDisclosure
         } header: {
-            Text("小猫的记忆（AI 助手）")
+            Text(String(localized: "小猫的记忆（AI 助手）", bundle: .module))
         } footer: {
-            Text("默认只显示数量摘要，具体信息需手动展开。记忆与技能只存在本机 App Support，不会上传；每次 AI 对话开始时会按需注入相关记忆。")
+            Text(String(localized: "默认只显示数量摘要，具体信息需手动展开。记忆与技能只存在本机 App Support，不会上传；每次 AI 对话开始时会按需注入相关记忆。", bundle: .module))
         }
         .task { reload() }
-        .alert("清空小猫的全部记忆？", isPresented: $confirmClear) {
-            Button("清空", role: .destructive) {
+        .alert(String(localized: "清空小猫的全部记忆？", bundle: .module), isPresented: $confirmClear) {
+            Button(String(localized: "清空", bundle: .module), role: .destructive) {
                 _ = store.clearMemory()
                 reload()
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("清空后小猫将不再记得这些信息。技能文件不会被删除。")
+            Text(String(localized: "清空后小猫将不再记得这些信息。技能文件不会被删除。", bundle: .module))
         }
         .confirmationDialog(
             removalTarget?.title ?? "删除这项内容？",
             isPresented: removalConfirmationBinding,
             titleVisibility: .visible
         ) {
-            Button("删除", role: .destructive) { performPendingRemoval() }
-            Button("取消", role: .cancel) { removalTarget = nil }
+            Button(String(localized: "删除", bundle: .module), role: .destructive) { performPendingRemoval() }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { removalTarget = nil }
         } message: {
-            Text("此操作只删除本机对应内容，无法撤销。")
+            Text(String(localized: "此操作只删除本机对应内容，无法撤销。", bundle: .module))
         }
     }
 
     private var memoryFileDisclosure: some View {
         DisclosureGroup(isExpanded: $isMemoryFileExpanded) {
             if memories.isEmpty {
-                Label("还没有长期记忆。跟小猫说“我叫…”或“我喜欢…”，它就会记住。", systemImage: "brain")
+                Label(String(localized: "还没有长期记忆。跟小猫说“我叫…”或“我喜欢…”，它就会记住。", bundle: .module), systemImage: "brain")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             } else {
@@ -328,7 +328,7 @@ struct AgentMemoryManagementSection: View {
                                 .font(.caption2)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                             Spacer()
-                            Button("删除", role: .destructive) {
+                            Button(String(localized: "删除", bundle: .module), role: .destructive) {
                                 removalTarget = .memory(memory.key)
                             }
                         }
@@ -344,7 +344,7 @@ struct AgentMemoryManagementSection: View {
                     }
                 }
 
-                Button("清空全部长期记忆", role: .destructive) { confirmClear = true }
+                Button(String(localized: "清空全部长期记忆", bundle: .module), role: .destructive) { confirmClear = true }
             }
         } label: {
             collectionLabel(
@@ -358,7 +358,7 @@ struct AgentMemoryManagementSection: View {
     private var skillsDirectoryDisclosure: some View {
         DisclosureGroup(isExpanded: $isSkillsDirectoryExpanded) {
             if skills.isEmpty {
-                Label("还没有技能文件。可让小猫用“创建一个技能”保存可复用指令。", systemImage: "doc.badge.plus")
+                Label(String(localized: "还没有技能文件。可让小猫用“创建一个技能”保存可复用指令。", bundle: .module), systemImage: "doc.badge.plus")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             } else {
@@ -374,7 +374,7 @@ struct AgentMemoryManagementSection: View {
                                 .font(.caption2)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                             Spacer()
-                            Button("删除技能", role: .destructive) {
+                            Button(String(localized: "删除技能", bundle: .module), role: .destructive) {
                                 removalTarget = .skill(skill.name)
                             }
                         }

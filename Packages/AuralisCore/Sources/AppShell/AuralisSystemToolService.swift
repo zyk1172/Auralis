@@ -388,7 +388,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         }
 
         let cards = candidates.map(Self.card)
-        return AgentRecommendationResult(mood: "组合约束", tracks: cards)
+        return AgentRecommendationResult(mood: String(localized: "组合约束", bundle: .module), tracks: cards)
     }
 
     private static func isLossless(_ track: Track) -> Bool {
@@ -592,7 +592,7 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func musicSearch(artist: String?, album: String?, albumAliases: [String], keyword: String?, year: Int?, limit: Int, preferLossless: Bool, minSeeders: Int, kind: String? = nil) async -> AgentMusicSearchResult {
         guard let connection = await movipNoteConnection() else {
-            return AgentMusicSearchResult(configured: false, message: "音乐下载（MoviePilot）未配置")
+            return AgentMusicSearchResult(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
         }
         do {
             let data = try await MoviePilotClient().search(
@@ -630,7 +630,7 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func musicDownload(ref: String?, siteID: Int?, index: Int?, magnet: String?, title: String?, maxSizeGB: Double? = nil, verifySong: String? = nil, verifyArtist: String? = nil) async -> AgentMusicDownloadResult {
         guard let connection = await movipNoteConnection() else {
-            return AgentMusicDownloadResult(configured: false, message: "音乐下载（MoviePilot）未配置")
+            return AgentMusicDownloadResult(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
         }
         do {
             let data = try await MoviePilotClient().download(
@@ -688,7 +688,7 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func musicStatus() async -> AgentMusicStatus {
         guard let connection = await movipNoteConnection() else {
-            return AgentMusicStatus(configured: false, message: "音乐下载（MoviePilot）未配置")
+            return AgentMusicStatus(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
         }
         do {
             let data = try await MoviePilotClient().status(connection)
@@ -715,7 +715,7 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func musicHistoryRemove(hash: String) async -> AgentMusicHistoryMutation {
         guard let connection = await movipNoteConnection() else {
-            return AgentMusicHistoryMutation(configured: false, message: "音乐下载（MoviePilot）未配置")
+            return AgentMusicHistoryMutation(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
         }
         do {
             let result = try await MoviePilotClient().historyRemove(connection, hash: hash)
@@ -731,7 +731,7 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func musicHistoryClean(status: String?, keep: Int?, orphans: Bool?) async -> AgentMusicHistoryMutation {
         guard let connection = await movipNoteConnection() else {
-            return AgentMusicHistoryMutation(configured: false, message: "音乐下载（MoviePilot）未配置")
+            return AgentMusicHistoryMutation(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
         }
         do {
             let result = try await MoviePilotClient().historyClean(connection, status: status, keep: keep, orphans: orphans)
@@ -843,9 +843,9 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     private static func playbackErrorText(_ error: PlaybackError) -> String {
         switch error {
-        case .networkUnavailable: return "网络不可用"
+        case .networkUnavailable: return String(localized: "网络不可用", bundle: .module)
         case let .unsupportedFormat(format): return "不支持的格式：\(format)"
-        case .authorizationFailed: return "认证失败"
+        case .authorizationFailed: return String(localized: "认证失败", bundle: .module)
         case let .engineFailure(message): return message
         }
     }

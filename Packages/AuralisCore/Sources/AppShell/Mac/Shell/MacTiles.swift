@@ -56,7 +56,7 @@ struct MacPlaylistArtwork: View {
             }
         }
         .frame(width: size, height: size)
-        .accessibilityLabel("\(playlist.name) 封面")
+        .accessibilityLabel(String(localized: "\(playlist.name) 封面", bundle: .module))
     }
 
     /// 2×2 马赛克每格尺寸（扣除 2pt 间距后的半格）。
@@ -138,8 +138,8 @@ struct MacAlbumTile: View {
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
                 .help("打开专辑")
-                .accessibilityLabel("打开专辑")
-                .accessibilityAction(named: Text("播放")) { onPlay?() }
+                .accessibilityLabel(String(localized: "打开专辑", bundle: .module))
+                .accessibilityAction(named: Text(String(localized: "播放", bundle: .module))) { onPlay?() }
 
                 if showsActions {
                     HStack(spacing: 6) {
@@ -155,7 +155,7 @@ struct MacAlbumTile: View {
                             .buttonStyle(.plain)
                             .focused($focusedControl, equals: .play)
                             .help("播放")
-                            .accessibilityLabel("播放")
+                            .accessibilityLabel(String(localized: "播放", bundle: .module))
                         }
                         if !moreActions.isEmpty {
                             Menu {
@@ -178,7 +178,7 @@ struct MacAlbumTile: View {
                             .fixedSize()
                             .focused($focusedControl, equals: .more)
                             .help("更多操作")
-                            .accessibilityLabel("更多操作")
+                            .accessibilityLabel(String(localized: "更多操作", bundle: .module))
                         }
                     }
                     .padding(8)
@@ -206,14 +206,14 @@ struct MacAlbumTile: View {
             }
             .buttonStyle(.plain)
             .help("打开专辑")
-            .accessibilityLabel("打开专辑")
+            .accessibilityLabel(String(localized: "打开专辑", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
         // 右键菜单提供与 hover「更多」等价的键盘/辅助功能路径。
         .contextMenu {
             if let onPlay {
-                Button("播放") { onPlay() }
+                Button(String(localized: "播放", bundle: .module)) { onPlay() }
             }
             if !moreActions.isEmpty {
                 Divider()
@@ -261,8 +261,8 @@ struct MacArtistTile: View {
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
                 .help("打开艺术家")
-                .accessibilityLabel("打开艺术家")
-                .accessibilityAction(named: Text("随机播放")) { onPlay?() }
+                .accessibilityLabel(String(localized: "打开艺术家", bundle: .module))
+                .accessibilityAction(named: Text(String(localized: "随机播放", bundle: .module))) { onPlay?() }
 
                 if showsActions, let onPlay {
                     Button {
@@ -277,7 +277,7 @@ struct MacArtistTile: View {
                     .focused($focusedControl, equals: .play)
                     .padding(8)
                     .help("随机播放")
-                    .accessibilityLabel("随机播放")
+                    .accessibilityLabel(String(localized: "随机播放", bundle: .module))
                     .transition(.opacity)
                 }
             }
@@ -301,14 +301,14 @@ struct MacArtistTile: View {
             }
             .buttonStyle(.plain)
             .help("打开艺术家")
-            .accessibilityLabel("打开艺术家")
+            .accessibilityLabel(String(localized: "打开艺术家", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
         // 右键菜单提供键盘/辅助功能等价的播放入口。
         .contextMenu {
             if let onPlay {
-                Button("随机播放") { onPlay() }
+                Button(String(localized: "随机播放", bundle: .module)) { onPlay() }
             }
         }
         .animation(.easeOut(duration: 0.16), value: showsActions)
@@ -377,8 +377,8 @@ struct MacPlaylistTile: View {
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
                 .help("打开播放列表")
-                .accessibilityLabel("打开播放列表")
-                .accessibilityAction(named: Text("播放")) { onPlay?() }
+                .accessibilityLabel(String(localized: "打开播放列表", bundle: .module))
+                .accessibilityAction(named: Text(String(localized: "播放", bundle: .module))) { onPlay?() }
 
                 if showsActions {
                     HStack(spacing: 6) {
@@ -394,7 +394,7 @@ struct MacPlaylistTile: View {
                             .buttonStyle(.plain)
                             .focused($focusedControl, equals: .play)
                             .help("播放")
-                            .accessibilityLabel("播放")
+                            .accessibilityLabel(String(localized: "播放", bundle: .module))
                         }
                         if !moreActions.isEmpty {
                             Menu {
@@ -417,7 +417,7 @@ struct MacPlaylistTile: View {
                             .fixedSize()
                             .focused($focusedControl, equals: .more)
                             .help("更多操作")
-                            .accessibilityLabel("更多操作")
+                            .accessibilityLabel(String(localized: "更多操作", bundle: .module))
                         }
                     }
                     .padding(8)
@@ -444,14 +444,14 @@ struct MacPlaylistTile: View {
             }
             .buttonStyle(.plain)
             .help("打开播放列表")
-            .accessibilityLabel("打开播放列表")
+            .accessibilityLabel(String(localized: "打开播放列表", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
         // 右键菜单提供与 hover「更多」等价的键盘/辅助功能路径。
         .contextMenu {
             if let onPlay {
-                Button("播放") { onPlay() }
+                Button(String(localized: "播放", bundle: .module)) { onPlay() }
             }
             if !moreActions.isEmpty {
                 Divider()
@@ -503,8 +503,8 @@ struct MacTrackTile: View {
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
                 .help("播放")
-                .accessibilityLabel("播放")
-                .accessibilityAction(named: Text("播放")) { onPlay?() }
+                .accessibilityLabel(String(localized: "播放", bundle: .module))
+                .accessibilityAction(named: Text(String(localized: "播放", bundle: .module))) { onPlay?() }
 
                 if showsActions, let onPlay {
                     Button {
@@ -519,7 +519,7 @@ struct MacTrackTile: View {
                     .focused($focusedControl, equals: .play)
                     .padding(8)
                     .help("播放")
-                    .accessibilityLabel("播放")
+                    .accessibilityLabel(String(localized: "播放", bundle: .module))
                     .transition(.opacity)
                 }
             }
@@ -544,14 +544,14 @@ struct MacTrackTile: View {
             }
             .buttonStyle(.plain)
             .help("播放")
-            .accessibilityLabel("播放")
+            .accessibilityLabel(String(localized: "播放", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
         // 右键菜单提供键盘/辅助功能等价的播放入口。
         .contextMenu {
             if let onPlay {
-                Button("播放") { onPlay() }
+                Button(String(localized: "播放", bundle: .module)) { onPlay() }
             }
         }
         .animation(.easeOut(duration: 0.16), value: showsActions)

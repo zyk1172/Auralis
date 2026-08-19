@@ -15,13 +15,13 @@ struct MacHomeLayoutEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text("编辑首页")
+                Text(String(localized: "编辑首页", bundle: .module))
                     .font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button("恢复默认布局") {
+                Button(String(localized: "恢复默认布局", bundle: .module)) {
                     model.homeStore.resetLayout()
                 }
-                Button("完成") {
+                Button(String(localized: "完成", bundle: .module)) {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

@@ -1,0 +1,38 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "NSLocalNetworkUsageDescription" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis needs to connect to your private music server to sync your library and play music."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis 需要連接您選擇的私人音樂伺服器，以同步資料庫和播放音樂。"
+          }
+        }
+      }
+    },
+    "Auralis 推荐索引 V2" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis Recommendation Index V2"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis 推薦索引 V2"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

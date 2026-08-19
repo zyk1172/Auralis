@@ -36,7 +36,7 @@ struct MacLocalSearchField: View {
                 }
                 .buttonStyle(.plain)
                 .help("清除")
-                .accessibilityLabel("清除搜索")
+                .accessibilityLabel(String(localized: "清除搜索", bundle: .module))
             }
         }
         .padding(.horizontal, 8)

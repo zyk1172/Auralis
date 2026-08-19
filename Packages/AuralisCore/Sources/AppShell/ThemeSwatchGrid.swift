@@ -49,7 +49,7 @@ struct ThemeChoiceGrid: View {
                     colorDot(colors.accentSecondary.color)
                     colorDot(colors.surface.color)
                     Spacer()
-                    Text(candidate.colorScheme == .dark ? "深色" : "浅色")
+                    Text(candidate.colorScheme == .dark ? String(localized: "深色", bundle: .module) : String(localized: "浅色", bundle: .module))
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(colors.secondaryText.color)
                 }
@@ -74,7 +74,7 @@ struct ThemeChoiceGrid: View {
             .shadow(color: isSelected ? colors.accent.color.opacity(0.18) : .clear, radius: 8, y: 3)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(candidate.name)，\(candidate.summary)，\(candidate.colorScheme == .dark ? "深色" : "浅色")")
+        .accessibilityLabel("\(candidate.name)，\(candidate.summary)，\(candidate.colorScheme == .dark ? String(localized: "深色", bundle: .module) : String(localized: "浅色", bundle: .module))")
         .accessibilityValue(isSelected ? "已选择" : "未选择")
     }
 
@@ -108,7 +108,7 @@ struct ThemeSwatchGrid: View {
                 .foregroundStyle(colors.secondaryText.color)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("主题 \(name) 色板：8 个颜色")
+        .accessibilityLabel(String(localized: "主题 \(name) 色板：8 个颜色", bundle: .module))
     }
 
     private func swatch(_ color: Color, label: String) -> some View {

@@ -226,24 +226,24 @@ private struct IOSMusicShell: View {
         .onChange(of: model.selectedSection) { _, _ in
             bottomDockScroll.reset()
         }
-        .alert("播放失败", isPresented: .init(
+        .alert(String(localized: "播放失败", bundle: .module), isPresented: .init(
             get: { model.playbackError != nil },
             set: { if !$0 { model.dismissPlaybackError() } }
         )) {
-            Button("重试") { model.retryPlayback() }
+            Button(String(localized: "重试", bundle: .module)) { model.retryPlayback() }
             if model.canGoNext {
-                Button("下一首") { model.next() }
+                Button(String(localized: "下一首", bundle: .module)) { model.next() }
             }
-            Button("确定") { model.dismissPlaybackError() }
+            Button(String(localized: "确定", bundle: .module)) { model.dismissPlaybackError() }
         } message: {
             if let error = model.playbackError {
                 switch error {
                 case .networkUnavailable:
-                    Text("网络不可用，请检查网络连接")
+                    Text(String(localized: "网络不可用，请检查网络连接", bundle: .module))
                 case .unsupportedFormat(let format):
                     Text("不支持的音频格式：\(format)")
                 case .authorizationFailed:
-                    Text("授权失败，请检查登录状态")
+                    Text(String(localized: "授权失败，请检查登录状态", bundle: .module))
                 case .engineFailure(let message):
                     Text(message)
                 }
@@ -667,7 +667,7 @@ private struct CollapsedDock: View {
                     .font(.system(size: 19, weight: .semibold))
             }
             .foregroundStyle(theme.colorTokens.accent.color)
-            .accessibilityLabel("展开首页、音乐库和设置")
+            .accessibilityLabel(String(localized: "展开首页、音乐库和设置", bundle: .module))
 
             Group {
                 switch accessory {
@@ -696,7 +696,7 @@ private struct CollapsedDock: View {
                     .font(.system(size: 21, weight: .semibold))
             }
             .foregroundStyle(theme.colorTokens.primaryText.color)
-            .accessibilityLabel("AI 助手")
+            .accessibilityLabel(String(localized: "AI 助手", bundle: .module))
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
@@ -773,7 +773,7 @@ struct DockAssistantInputBar: View {
                         .font(.title2)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel(agent.isRunning ? "停止" : "发送")
+                .accessibilityLabel(agent.isRunning ? String(localized: "停止", bundle: .module) : String(localized: "发送", bundle: .module))
                 .frame(width: 44, height: 44)
             }
             .padding(.horizontal, 12)
@@ -1186,10 +1186,10 @@ struct BrowseDetailSheet: View {
             isPresented: $isConfirmingDownload,
             titleVisibility: .visible
         ) {
-            Button("开始下载") {
+            Button(String(localized: "开始下载", bundle: .module)) {
                 model.downloadAll(tracks)
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
             Text("预计约 \(estimatedSizeMB(tracks.count)) MB，下载到本地后可离线播放。已下载的歌曲会自动跳过。")
         }
@@ -1198,10 +1198,10 @@ struct BrowseDetailSheet: View {
             isPresented: $confirmsBatchPlaylistDeletion,
             titleVisibility: .visible
         ) {
-            Button("删除", role: .destructive) { deleteSelectedPlaylists() }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "删除", bundle: .module), role: .destructive) { deleteSelectedPlaylists() }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("选中的歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。")
+            Text(String(localized: "选中的歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。", bundle: .module))
         }
     }
 
@@ -1217,7 +1217,7 @@ struct BrowseDetailSheet: View {
                         Button {
                             regenerateCurrentSample()
                         } label: {
-                            Label("换一批", systemImage: "arrow.clockwise")
+                            Label(String(localized: "换一批", bundle: .module), systemImage: "arrow.clockwise")
                         }
                     }
                 }
@@ -1228,7 +1228,7 @@ struct BrowseDetailSheet: View {
                 }
                 if showsCloseButton {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("关闭") { dismiss() }
+                        Button(String(localized: "关闭", bundle: .module)) { dismiss() }
                     }
                 }
             }
@@ -1248,7 +1248,7 @@ struct BrowseDetailSheet: View {
     private var playlistManagementToolbar: some View {
         if isManagingPlaylists {
             HStack(spacing: AuralisSpacing.small) {
-                Button(selectedPlaylistIDs.count == sortedPlaylists.count ? "取消全选" : "全选") {
+                Button(selectedPlaylistIDs.count == sortedPlaylists.count ? String(localized: "取消全选", bundle: .module) : String(localized: "全选", bundle: .module)) {
                     if selectedPlaylistIDs.count == sortedPlaylists.count {
                         selectedPlaylistIDs.removeAll()
                     } else {
@@ -1262,7 +1262,7 @@ struct BrowseDetailSheet: View {
                     Image(systemName: "trash")
                 }
                 .disabled(selectedPlaylistIDs.isEmpty || isDeletingPlaylists)
-                Button("完成") {
+                Button(String(localized: "完成", bundle: .module)) {
                     selectedPlaylistIDs.removeAll()
                     isManagingPlaylists = false
                 }
@@ -1273,7 +1273,7 @@ struct BrowseDetailSheet: View {
                 Button {
                     isManagingPlaylists = true
                 } label: {
-                    Label("批量删除", systemImage: "checkmark.circle")
+                    Label(String(localized: "批量删除", bundle: .module), systemImage: "checkmark.circle")
                 }
                 Menu("排序") {
                     ForEach(PlaylistSortOrder.allCases) { order in
@@ -1287,7 +1287,7 @@ struct BrowseDetailSheet: View {
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
-            .accessibilityLabel("歌单管理与排序")
+            .accessibilityLabel(String(localized: "歌单管理与排序", bundle: .module))
         }
     }
 
@@ -1412,7 +1412,7 @@ struct BrowseDetailSheet: View {
                             Button {
                                 playAll()
                             } label: {
-                                Label("播放全部", systemImage: "play.fill")
+                                Label(String(localized: "播放全部", bundle: .module), systemImage: "play.fill")
                                     .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(HapticProminentButtonStyle())
@@ -1420,7 +1420,7 @@ struct BrowseDetailSheet: View {
                             Button {
                                 isConfirmingDownload = true
                             } label: {
-                                Label("下载", systemImage: "arrow.down.circle")
+                                Label(String(localized: "下载", bundle: .module), systemImage: "arrow.down.circle")
                                     .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(HapticBorderedButtonStyle())
@@ -1431,7 +1431,7 @@ struct BrowseDetailSheet: View {
                 }
                 .padding(.vertical, AuralisSpacing.xSmall)
             }
-            Section("歌曲") {
+            Section(String(localized: "歌曲", bundle: .module)) {
                 ForEach(tracks) { track in
                     Button {
                         model.queue = model.uniquedTracks(tracks)
@@ -1442,7 +1442,7 @@ struct BrowseDetailSheet: View {
                             .contentShape(Rectangle())
                     }
                         .buttonStyle(HapticPlainButtonStyle())
-                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
+                        .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                 }
             }
         }
@@ -1473,7 +1473,7 @@ struct BrowseDetailSheet: View {
                     Button(role: .destructive) {
                         playlistPendingDeletion = playlist
                     } label: {
-                        Label("删除", systemImage: "trash")
+                        Label(String(localized: "删除", bundle: .module), systemImage: "trash")
                     }
                 }
             }
@@ -1487,14 +1487,14 @@ struct BrowseDetailSheet: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("删除", role: .destructive) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
                 guard let playlist = playlistPendingDeletion else { return }
                 playlistPendingDeletion = nil
                 Task { _ = await model.deletePlaylist(id: playlist.id) }
             }
-            Button("取消", role: .cancel) { playlistPendingDeletion = nil }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { playlistPendingDeletion = nil }
         } message: {
-            Text("该歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。")
+            Text(String(localized: "该歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。", bundle: .module))
         }
         .alert(
             "无法删除歌单",
@@ -1503,7 +1503,7 @@ struct BrowseDetailSheet: View {
                 set: { if !$0 { model.clearPlaylistDeletionError() } }
             )
         ) {
-            Button("知道了", role: .cancel) { model.clearPlaylistDeletionError() }
+            Button(String(localized: "知道了", bundle: .module), role: .cancel) { model.clearPlaylistDeletionError() }
         } message: {
             Text(model.playlistDeletionError ?? "")
         }
@@ -1679,7 +1679,7 @@ private struct PlaylistTracksView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(HapticPlainButtonStyle())
-                        .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
+                        .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                     }
                     .onDelete { offsets in
                         // 滑动删除：把服务器歌单里的对应曲目移除（同步到服务器 + 本地目录）。
@@ -1700,49 +1700,49 @@ private struct PlaylistTracksView: View {
                     Button {
                         renameText = playlist.name
                         isRenaming = true
-                    } label: { Label("重命名", systemImage: "pencil") }
+                    } label: { Label(String(localized: "重命名", bundle: .module), systemImage: "pencil") }
                     Button {
                         isDuplicating = true
                         Task {
                             _ = await model.duplicatePlaylist(id: playlist.id)
                             isDuplicating = false
                         }
-                    } label: { Label(isDuplicating ? "复制中…" : "复制歌单", systemImage: "plus.square.on.square") }
+                    } label: { Label(isDuplicating ? String(localized: "复制中…", bundle: .module) : String(localized: "复制歌单", bundle: .module), systemImage: "plus.square.on.square") }
                     .disabled(isDuplicating)
                     Button {
                         Task { await model.removeDuplicateSongs(from: playlist.id) }
-                    } label: { Label("去重歌曲", systemImage: "sparkles") }
+                    } label: { Label(String(localized: "去重歌曲", bundle: .module), systemImage: "sparkles") }
                     Button(role: .destructive) {
                         isDeleting = true
-                    } label: { Label("删除歌单", systemImage: "trash") }
+                    } label: { Label(String(localized: "删除歌单", bundle: .module), systemImage: "trash") }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel("歌单操作")
+                .accessibilityLabel(String(localized: "歌单操作", bundle: .module))
             }
         }
-        .alert("重命名歌单", isPresented: $isRenaming) {
+        .alert(String(localized: "重命名歌单", bundle: .module), isPresented: $isRenaming) {
             TextField("歌单名称", text: $renameText)
-            Button("保存") {
+            Button(String(localized: "保存", bundle: .module)) {
                 let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !name.isEmpty {
                     Task { _ = await model.renamePlaylist(id: playlist.id, to: name) }
                 }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("修改将同步到服务器。")
+            Text(String(localized: "修改将同步到服务器。", bundle: .module))
         }
         .confirmationDialog("删除歌单「\(playlist.name)」？", isPresented: $isDeleting, titleVisibility: .visible) {
-            Button("删除", role: .destructive) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
                 Task {
                     _ = await model.deletePlaylist(id: playlist.id)
                     dismiss()
                 }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("服务器上的歌单也会被删除，此操作不可撤销。")
+            Text(String(localized: "服务器上的歌单也会被删除，此操作不可撤销。", bundle: .module))
         }
         .onAppear { model.loadPlaylistTracks(playlistID: playlist.id) }
     }

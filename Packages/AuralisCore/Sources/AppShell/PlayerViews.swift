@@ -55,7 +55,7 @@ struct MiniPlayerContent: View {
                     systemImage: "backward.fill",
                     action: model.previous,
                     isEnabled: model.canGoPrevious,
-                    accessibilityLabel: "上一首"
+                    accessibilityLabel: String(localized: "上一首", bundle: .module)
                 )
 
                 Button(action: model.togglePlayback) {
@@ -64,13 +64,13 @@ struct MiniPlayerContent: View {
                         .frame(minWidth: 44, minHeight: 44)
                         .foregroundStyle(theme.colorTokens.primaryText.color)
                 }
-                .accessibilityLabel(model.playbackState == .playing ? "暂停" : "播放")
+                .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
 
                 skipControl(
                     systemImage: "forward.fill",
                     action: model.next,
                     isEnabled: model.canGoNext,
-                    accessibilityLabel: "下一首"
+                    accessibilityLabel: String(localized: "下一首", bundle: .module)
                 )
             }
         }
@@ -151,7 +151,7 @@ struct CompactMiniPlayerContent: View {
                     .foregroundStyle(theme.colorTokens.primaryText.color)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(model.playbackState == .playing ? "暂停" : "播放")
+            .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
 
         }
         .padding(.horizontal, 10)
@@ -245,26 +245,26 @@ struct NowPlayingView: View {
         .sheet(isPresented: $showsTrackInformation) {
             TrackInformationSheet(model: model, theme: theme, track: model.currentTrack)
         }
-        .confirmationDialog("更多操作", isPresented: $showsMoreActions, titleVisibility: .visible) {
-            Button("添加到歌单") { isPlaylistSheetPresented = true }
+        .confirmationDialog(String(localized: "更多操作", bundle: .module), isPresented: $showsMoreActions, titleVisibility: .visible) {
+            Button(String(localized: "添加到歌单", bundle: .module)) { isPlaylistSheetPresented = true }
             if model.isDownloading(model.currentTrack) {
                 let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
                 Button("取消下载（\(Int(progress * 100))%）", role: .destructive) {
                     model.cancelDownload(model.currentTrack)
                 }
             } else if model.isDownloaded(model.currentTrack) {
-                Button("删除下载", role: .destructive) { model.removeDownload(model.currentTrack) }
+                Button(String(localized: "删除下载", bundle: .module), role: .destructive) { model.removeDownload(model.currentTrack) }
             } else {
-                Button("下载到本地") { model.download(model.currentTrack) }
+                Button(String(localized: "下载到本地", bundle: .module)) { model.download(model.currentTrack) }
             }
-            Button("前往专辑") { openCurrentAlbum() }
+            Button(String(localized: "前往专辑", bundle: .module)) { openCurrentAlbum() }
                 .disabled(currentAlbum == nil)
-            Button("前往艺术家") { openCurrentArtist() }
+            Button(String(localized: "前往艺术家", bundle: .module)) { openCurrentArtist() }
                 .disabled(currentArtist == nil)
-            Button("由此继续播放") { continueWithSimilarQueue() }
-            Button("歌曲鉴赏") { appreciateCurrentSong() }
-            Button("歌曲信息") { showsTrackInformation = true }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "由此继续播放", bundle: .module)) { continueWithSimilarQueue() }
+            Button(String(localized: "歌曲鉴赏", bundle: .module)) { appreciateCurrentSong() }
+            Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         }
         // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
         .onChange(of: currentTrackIdentity) { _, _ in
@@ -281,11 +281,11 @@ struct NowPlayingView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(HapticBorderedButtonStyle())
-            .accessibilityLabel("关闭")
+            .accessibilityLabel(String(localized: "关闭", bundle: .module))
 #endif
             Spacer(minLength: 0)
             VStack {
-                Text("正在播放").font(.caption.weight(.semibold))
+                Text(String(localized: "正在播放", bundle: .module)).font(.caption.weight(.semibold))
                 Text(model.currentTrack.albumTitle)
                     .font(.caption2)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -310,7 +310,7 @@ struct NowPlayingView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(HapticBorderedButtonStyle())
-        .accessibilityLabel("更多操作")
+        .accessibilityLabel(String(localized: "更多操作", bundle: .module))
     }
 
     /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。
@@ -433,7 +433,7 @@ struct NowPlayingView: View {
                     // VoiceOver 单次步进约 ±5 秒（0...1 fraction 空间）。
                     accessibilityStep: min(1, 5 / max(model.effectivePlaybackDuration, 1))
                 )
-                .accessibilityLabel("播放进度")
+                .accessibilityLabel(String(localized: "播放进度", bundle: .module))
                 .accessibilityValue(Text("\(formatDuration(displayedPlaybackPosition)) / \(formatDuration(model.effectivePlaybackDuration))"))
                 HStack {
                     Text(formatDuration(displayedPlaybackPosition))
@@ -460,7 +460,7 @@ struct NowPlayingView: View {
         .buttonStyle(HapticPlainButtonStyle())
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
-        .accessibilityLabel(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+        .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
     }
 
     /// “不喜欢”按钮：与收藏按钮严格镜像。只影响未来自动推荐，
@@ -478,8 +478,8 @@ struct NowPlayingView: View {
         .buttonStyle(HapticPlainButtonStyle())
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
-        .accessibilityLabel(isDisliked ? "取消不喜欢" : "不喜欢")
-        .accessibilityHint("不喜欢的歌曲不会再出现在自动推荐中。")
+        .accessibilityLabel(isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module))
+        .accessibilityHint(String(localized: "不喜欢的歌曲不会再出现在自动推荐中。", bundle: .module))
         .accessibilityValue(isDisliked ? "已标记不喜欢" : "未标记不喜欢")
     }
 
@@ -498,7 +498,7 @@ struct NowPlayingView: View {
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
-                .accessibilityLabel("播放模式：\(model.playMode.title)")
+                .accessibilityLabel(String(localized: "播放模式：\(model.playMode.title)", bundle: .module))
             }
             transportItem {
                 Button(action: model.previous) {
@@ -508,7 +508,7 @@ struct NowPlayingView: View {
                         .contentShape(Rectangle())
                 }
                 .disabled(!model.canGoPrevious)
-                .accessibilityLabel("上一首")
+                .accessibilityLabel(String(localized: "上一首", bundle: .module))
             }
             transportItem {
                 Button(action: model.togglePlayback) {
@@ -519,7 +519,7 @@ struct NowPlayingView: View {
                         .foregroundStyle(theme.colorTokens.background.color)
                         .clipShape(Circle())
                 }
-                .accessibilityLabel(model.playbackState == .playing ? "暂停" : "播放")
+                .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
             }
             transportItem {
                 Button(action: model.next) {
@@ -529,7 +529,7 @@ struct NowPlayingView: View {
                         .contentShape(Rectangle())
                 }
                 .disabled(!model.canGoNext)
-                .accessibilityLabel("下一首")
+                .accessibilityLabel(String(localized: "下一首", bundle: .module))
             }
             transportItem {
                 moreMenu
@@ -552,7 +552,7 @@ struct NowPlayingView: View {
                 // VoiceOver 单次步进 ±5%。
                 accessibilityStep: 0.05
             )
-            .accessibilityLabel("音量")
+            .accessibilityLabel(String(localized: "音量", bundle: .module))
             .accessibilityValue(Text("\(Int(model.volume * 100))%"))
             Image(systemName: "speaker.wave.3.fill")
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -570,18 +570,18 @@ struct NowPlayingView: View {
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
             .buttonStyle(HapticPlainButtonStyle())
-            .accessibilityLabel("音频格式，点击切换采样率")
+            .accessibilityLabel(String(localized: "音频格式，点击切换采样率", bundle: .module))
             Spacer()
             RoutePickerView()
                 .frame(width: 44, height: 44)
-                .accessibilityLabel("AirPlay 输出设备")
+                .accessibilityLabel(String(localized: "AirPlay 输出设备", bundle: .module))
         }
         .frame(maxWidth: 420)
     }
 
     private var audioTechnicalLabel: String {
         guard showsAudioTechnicalInfo else {
-            return model.currentTrack.effectiveCodec?.uppercased() ?? "未知"
+            return model.currentTrack.effectiveCodec?.uppercased() ?? String(localized: "未知", bundle: .module)
         }
         let info = model.currentTrack.sourceInfo
         let sampleRate = info.sampleRate.map { "\($0 / 1_000) kHz" } ?? "采样率未知"
@@ -731,7 +731,7 @@ struct NowPlayingView: View {
                         .contentShape(Rectangle())
                 }
                     .buttonStyle(HapticPlainButtonStyle())
-                    .accessibilityLabel("播放《\(track.title)》，艺术家 \(track.artistName)")
+                    .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
                     .listRowBackground(Color.clear)
             }
 #if os(iOS)
@@ -746,7 +746,7 @@ struct NowPlayingView: View {
         .environment(\.editMode, $queueEditMode)
         .overlay(alignment: .topTrailing) {
             if !model.queue.isEmpty {
-                Button(queueEditMode.isEditing ? "完成" : "编辑") {
+                Button(queueEditMode.isEditing ? String(localized: "完成", bundle: .module) : String(localized: "编辑", bundle: .module)) {
                     withAnimation { queueEditMode = queueEditMode.isEditing ? .inactive : .active }
                 }
                 .font(.caption.weight(.semibold))
@@ -765,9 +765,9 @@ private enum NowPlayingPage: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .lyrics: String(localized: "歌词")
-        case .player: String(localized: "正在播放")
-        case .queue: String(localized: "队列")
+        case .lyrics: String(localized: "歌词", bundle: .module)
+        case .player: String(localized: "正在播放", bundle: .module)
+        case .queue: String(localized: "队列", bundle: .module)
         }
     }
 }
@@ -952,7 +952,7 @@ private struct TrackInformationSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("基本信息") {
+                Section(String(localized: "基本信息", bundle: .module)) {
                     infoRow("歌曲", track.title)
                     infoRow("艺术家", track.artistName)
                     infoRow("专辑", track.albumTitle)
@@ -961,33 +961,33 @@ private struct TrackInformationSheet: View {
                     infoRow("流派", track.genres.isEmpty ? "未知" : track.genres.joined(separator: "、"))
                     infoRow("语言", track.language ?? "未知")
                 }
-                Section("曲目位置") {
+                Section(String(localized: "曲目位置", bundle: .module)) {
                     infoRow("碟片", track.discNumber.map(String.init) ?? "未知")
                     infoRow("曲目", track.trackNumber.map(String.init) ?? "未知")
                 }
-                Section("音频质量") {
+                Section(String(localized: "音频质量", bundle: .module)) {
                     infoRow("格式", track.effectiveCodec?.uppercased() ?? "未知")
                     infoRow("采样率", track.sourceInfo.sampleRate.map { "\($0) Hz" } ?? "未知")
                     infoRow("位深", track.sourceInfo.bitDepth.map { "\($0) bit" } ?? "未知")
                     infoRow("码率", track.sourceInfo.bitRate.map { "\($0) kbps" } ?? "未知")
                     infoRow("声道", track.sourceInfo.channelCount.map { "\($0)" } ?? "未知")
                 }
-                Section("状态") {
+                Section(String(localized: "状态", bundle: .module)) {
                     infoRow("收藏", track.isFavorite ? "已收藏" : "未收藏")
                     infoRow("评分", track.rating.map { "\($0)/5" } ?? "未评分")
                     infoRow("播放次数", "\(model.playCounts[track.id] ?? 0) 次")
                     infoRow("本地下载", model.isDownloaded(track) ? "已下载" : "未下载")
                     infoRow("歌词", model.currentLyrics == nil ? "无" : "已获取")
                 }
-                Section("大众评价") {
+                Section(String(localized: "大众评价", bundle: .module)) {
                     switch externalMusicViewState {
                     case .disabled:
-                        Text("公开音乐数据已关闭。")
+                        Text(String(localized: "公开音乐数据已关闭。", bundle: .module))
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     case .loading:
                         HStack(spacing: AuralisSpacing.small) {
                             ProgressView()
-                            Text("正在按需查询公开音乐资料…")
+                            Text(String(localized: "正在按需查询公开音乐资料…", bundle: .module))
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                         }
                     case .available:
@@ -996,33 +996,33 @@ private struct TrackInformationSheet: View {
                             communitySourceLink(.critiqueBrainz, result: result, preferences: externalMusicPreferences)
                             communitySourceLink(.listenBrainz, result: result, preferences: externalMusicPreferences)
                         }
-                        Text("各来源含义不同，评分、评论数和收听量不会合并为综合分。")
+                        Text(String(localized: "各来源含义不同，评分、评论数和收听量不会合并为综合分。", bundle: .module))
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     case .noData:
-                        Text("暂无可核验的大众评价数据。")
+                        Text(String(localized: "暂无可核验的大众评价数据。", bundle: .module))
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     case .failed:
-                        Text("公开音乐数据暂时不可用。")
+                        Text(String(localized: "公开音乐数据暂时不可用。", bundle: .module))
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     case .rateLimited:
-                        Text("公开音乐数据请求过于频繁，请稍后再试。")
+                        Text(String(localized: "公开音乐数据请求过于频繁，请稍后再试。", bundle: .module))
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     case .unavailable:
-                        Text("公开音乐数据暂时不可用，请检查网络连接。")
+                        Text(String(localized: "公开音乐数据暂时不可用，请检查网络连接。", bundle: .module))
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
                 }
             }
             .scrollContentBackground(.hidden)
             .background(theme.colorTokens.background.color)
-            .navigationTitle("歌曲信息")
+            .navigationTitle(String(localized: "歌曲信息", bundle: .module))
 #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
 #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
+                    Button(String(localized: "完成", bundle: .module)) { dismiss() }
                 }
             }
             .task(id: externalMusicRequestID) {
@@ -1090,30 +1090,30 @@ private struct TrackInformationSheet: View {
             switch metric.source {
             case .musicBrainz:
                 if let rating = metric.rating, let count = metric.ratingCount {
-                    return String(format: "%.1f / 5 · %d 次评分", rating, count)
+                    return String(format: String(localized: "%.1f / 5 · %d 次评分", bundle: .module), rating, count)
                 }
-                return "有评分数据"
+                return String(localized: "有评分数据", bundle: .module)
             case .critiqueBrainz:
                 var parts: [String] = []
                 if let rating = metric.rating, let count = metric.ratingCount {
                     parts.append(String(format: "%.1f / 5 · %d 次评分", rating, count))
                 }
                 if let reviews = metric.reviewCount { parts.append("\(reviews) 篇评论") }
-                return parts.isEmpty ? "有评论数据" : parts.joined(separator: " · ")
+                return parts.isEmpty ? String(localized: "有评论数据", bundle: .module) : parts.joined(separator: " · ")
             case .listenBrainz:
                 var parts: [String] = []
                 if let listens = metric.listenCount { parts.append("\(listens) 次收听") }
                 if let listeners = metric.listenerCount { parts.append("\(listeners) 位听众") }
-                return parts.isEmpty ? "有收听数据" : parts.joined(separator: " · ")
+                return parts.isEmpty ? String(localized: "有收听数据", bundle: .module) : parts.joined(separator: " · ")
             }
         case .noData, .notSupported:
-            return "暂无数据"
+            return String(localized: "暂无数据", bundle: .module)
         case .failed:
-            return "查询失败"
+            return String(localized: "查询失败", bundle: .module)
         case .rateLimited:
-            return "请求过于频繁"
+            return String(localized: "请求过于频繁", bundle: .module)
         case .unavailable:
-            return "暂时不可用"
+            return String(localized: "暂时不可用", bundle: .module)
         case .disabled, .loading:
             return ""
         }
@@ -1169,18 +1169,18 @@ struct AddToPlaylistSheet: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(HapticPlainButtonStyle())
-                        .accessibilityLabel("添加到歌单《\(playlist.name)》")
+                        .accessibilityLabel(String(localized: "添加到歌单《\(playlist.name)》", bundle: .module))
                     }
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("添加到歌单")
+            .navigationTitle(String(localized: "添加到歌单", bundle: .module))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
+                    Button(String(localized: "关闭", bundle: .module)) { dismiss() }
                 }
             }
         }

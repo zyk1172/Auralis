@@ -75,55 +75,55 @@ struct AssistantView: View {
             #endif
         }
         .task { await agent.bootstrap() }
-        .alert("重命名会话", isPresented: Binding(
+        .alert(String(localized: "重命名会话", bundle: .module), isPresented: Binding(
             get: { renamingSession != nil },
             set: { if !$0 { renamingSession = nil } }
         )) {
             TextField("会话名称", text: $renameText)
-            Button("保存") {
+            Button(String(localized: "保存", bundle: .module)) {
                 if let session = renamingSession {
                     Task { await agent.rename(session.id, to: renameText) }
                 }
                 renamingSession = nil
             }
-            Button("取消", role: .cancel) { renamingSession = nil }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { renamingSession = nil }
         }
-        .alert("删除会话？", isPresented: Binding(
+        .alert(String(localized: "删除会话？", bundle: .module), isPresented: Binding(
             get: { deletingSession != nil },
             set: { if !$0 { deletingSession = nil } }
         )) {
-            Button("删除", role: .destructive) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
                 if let session = deletingSession {
                     Task { await agent.delete(session.id) }
                 }
                 deletingSession = nil
             }
-            Button("取消", role: .cancel) { deletingSession = nil }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { deletingSession = nil }
         } message: {
-            Text("会话及其消息会从本机删除，不影响音乐库与服务器数据。")
+            Text(String(localized: "会话及其消息会从本机删除，不影响音乐库与服务器数据。", bundle: .module))
         }
         .alert("删除 \(selectedSessionIDs.count) 个会话？", isPresented: $confirmBatchDelete) {
-            Button("删除", role: .destructive) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
                 let ids = Array(selectedSessionIDs)
                 selectedSessionIDs.removeAll()
                 Task { await agent.delete(ids) }
             }
-            Button("取消", role: .cancel) { confirmBatchDelete = false }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { confirmBatchDelete = false }
         } message: {
-            Text("选中的会话及其消息会从本机删除，不影响音乐库与服务器数据。")
+            Text(String(localized: "选中的会话及其消息会从本机删除，不影响音乐库与服务器数据。", bundle: .module))
         }
         // 首次外发确认（B5）：consentGiven 未写入且本次请求要发往真实 Provider 时弹出。
         .alert(
-            Text(agent.pendingConsent.map { "允许发送以下内容到「\($0.modelName)」？" } ?? "首次外发确认"),
+            Text(agent.pendingConsent.map { "允许发送以下内容到「\($0.modelName)」？" } ?? String(localized: "首次外发确认", bundle: .module)),
             isPresented: Binding(
                 get: { agent.pendingConsent != nil },
                 set: { if !$0 { agent.denyConsent() } }
             ),
             presenting: agent.pendingConsent
         ) { _ in
-            Button("允许一次") { agent.approveConsent(remember: false) }
-            Button("允许并记住") { agent.approveConsent(remember: true) }
-            Button("取消", role: .cancel) { agent.denyConsent() }
+            Button(String(localized: "允许一次", bundle: .module)) { agent.approveConsent(remember: false) }
+            Button(String(localized: "允许并记住", bundle: .module)) { agent.approveConsent(remember: true) }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { agent.denyConsent() }
         } message: { consent in
             Text("\(consent.purpose)\n\(consent.fields.map { "· \($0)" }.joined(separator: "\n"))")
         }
@@ -133,7 +133,7 @@ struct AssistantView: View {
         .sheet(isPresented: $showsLibrarySearch) {
             NavigationStack {
                 SearchView(model: model, theme: theme)
-                    .navigationTitle("搜索音乐库")
+                    .navigationTitle(String(localized: "搜索音乐库", bundle: .module))
                     #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
                     #endif
@@ -150,7 +150,7 @@ struct AssistantView: View {
     private var sessionSidebar: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("会话").font(.headline)
+                Text(String(localized: "会话", bundle: .module)).font(.headline)
                     .foregroundStyle(theme.colorTokens.primaryText.color)
                 Spacer()
                 Button {
@@ -203,7 +203,7 @@ struct AssistantView: View {
                             selectedSessionIDs.removeAll()
                         }
                     } label: {
-                        Label("归档", systemImage: "archivebox")
+                        Label(String(localized: "归档", bundle: .module), systemImage: "archivebox")
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }
@@ -212,7 +212,7 @@ struct AssistantView: View {
                     Button(role: .destructive) {
                         confirmBatchDelete = true
                     } label: {
-                        Label("删除", systemImage: "trash")
+                        Label(String(localized: "删除", bundle: .module), systemImage: "trash")
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }
@@ -269,23 +269,23 @@ struct AssistantView: View {
                 : Color.clear
         )
         .contextMenu {
-            Button(session.isPinned ? "取消置顶" : "置顶") {
+            Button(session.isPinned ? String(localized: "取消置顶", bundle: .module) : String(localized: "置顶", bundle: .module)) {
                 Task { await agent.togglePin(session.id) }
             }
-            Button("重命名") {
+            Button(String(localized: "重命名", bundle: .module)) {
                 renameText = session.title
                 renamingSession = session
             }
-            Button("清空消息") {
+            Button(String(localized: "清空消息", bundle: .module)) {
                 Task { await agent.clearMessages(session.id) }
             }
             if session.isArchived {
-                Button("取消归档") { Task { await agent.unarchive(session.id) } }
+                Button(String(localized: "取消归档", bundle: .module)) { Task { await agent.unarchive(session.id) } }
             } else {
-                Button("归档") { Task { await agent.archive(session.id) } }
+                Button(String(localized: "归档", bundle: .module)) { Task { await agent.archive(session.id) } }
             }
             Divider()
-            Button("删除", role: .destructive) { deletingSession = session }
+            Button(String(localized: "删除", bundle: .module), role: .destructive) { deletingSession = session }
         }
     }
 
@@ -436,7 +436,7 @@ struct AssistantView: View {
                     .foregroundStyle(theme.colorTokens.success.color)
                     .lineLimit(1)
             } else {
-                Label("未配置模型接口", systemImage: "exclamationmark.triangle.fill")
+                Label(String(localized: "未配置模型接口", bundle: .module), systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundStyle(theme.colorTokens.warning.color)
                     .lineLimit(1)
@@ -444,14 +444,14 @@ struct AssistantView: View {
             Spacer(minLength: 0)
             if !isLive {
                 Button { model.selectTopLevelSection(.settings) } label: {
-                    Label("配置", systemImage: "gearshape")
+                    Label(String(localized: "配置", bundle: .module), systemImage: "gearshape")
                 }
                 .buttonStyle(HapticBorderedButtonStyle())
                 .controlSize(.small)
             }
             assistantHeaderIconButton(
                 symbol: "magnifyingglass",
-                accessibilityLabel: "搜索音乐库",
+                accessibilityLabel: String(localized: "搜索音乐库", bundle: .module),
                 help: "搜索音乐库（兜底）"
             ) {
                 showsLibrarySearch = true
@@ -468,19 +468,19 @@ struct AssistantView: View {
             Toggle("显示已归档", isOn: $agent.showArchivedSessions)
             Divider()
             if isBatchManaging {
-                Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? "取消全选" : "全选") {
+                Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? String(localized: "取消全选", bundle: .module) : String(localized: "全选", bundle: .module)) {
                     if selectedSessionIDs.count == agent.sessions.count {
                         selectedSessionIDs.removeAll()
                     } else {
                         selectedSessionIDs = Set(agent.sessions.map(\.id))
                     }
                 }
-                Button("完成批量管理") {
+                Button(String(localized: "完成批量管理", bundle: .module)) {
                     isBatchManaging = false
                     selectedSessionIDs.removeAll()
                 }
             } else {
-                Button("管理会话") { isBatchManaging = true }
+                Button(String(localized: "管理会话", bundle: .module)) { isBatchManaging = true }
             }
         }
         label: {
@@ -490,13 +490,13 @@ struct AssistantView: View {
         }
         .buttonStyle(HapticBorderedButtonStyle())
         .help("会话设置")
-        .accessibilityLabel("会话设置")
+        .accessibilityLabel(String(localized: "会话设置", bundle: .module))
     }
 
     private var sessionListButton: some View {
         assistantHeaderIconButton(
             symbol: "sidebar.leading",
-            accessibilityLabel: "会话列表",
+            accessibilityLabel: String(localized: "会话列表", bundle: .module),
             help: "会话列表"
         ) {
             // iPhone / iPad 统一：会话列表始终以 sheet 呈现。
@@ -536,7 +536,7 @@ struct AssistantView: View {
         // 空会话不再展示常驻示例词，避免在用户尚未输入前占用首屏空间。
         // 仅在确实无法读取音乐库时保留必要的状态说明。
         if !model.catalog.isConnected {
-            Label("尚未连接服务器，本地目录为空", systemImage: "exclamationmark.triangle")
+            Label(String(localized: "尚未连接服务器，本地目录为空", bundle: .module), systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.warning.color)
         }
@@ -547,9 +547,9 @@ struct AssistantView: View {
             ProgressView().controlSize(.small)
             // 显示任务管理器中的当前阶段（如「正在理解请求」「执行 playTrack」），
             // 不展示 tool_call JSON / 凭据 / 原始服务器响应。
-            Text(agent.activeTask?.currentStep ?? "正在处理…").font(.caption)
+            Text(agent.activeTask?.currentStep ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
-            Button("停止") { agent.cancel() }
+            Button(String(localized: "停止", bundle: .module)) { agent.cancel() }
                 .buttonStyle(HapticBorderedButtonStyle())
                 .controlSize(.small)
         }
@@ -581,12 +581,12 @@ struct AssistantView: View {
                     Button {
                         AssistantTextPasteboard.copy(text)
                     } label: {
-                        Label("复制", systemImage: "doc.on.doc")
+                        Label(String(localized: "复制", bundle: .module), systemImage: "doc.on.doc")
                             .font(.caption.weight(.medium))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    .accessibilityLabel("复制 AI 回复文本")
+                    .accessibilityLabel(String(localized: "复制 AI 回复文本", bundle: .module))
                 }
             }
             .padding(AuralisSpacing.medium)
@@ -597,7 +597,7 @@ struct AssistantView: View {
                 Button {
                     AssistantTextPasteboard.copy(text)
                 } label: {
-                    Label("复制文本", systemImage: "doc.on.doc")
+                    Label(String(localized: "复制文本", bundle: .module), systemImage: "doc.on.doc")
                 }
             }
 
@@ -629,7 +629,7 @@ struct AssistantView: View {
                         .font(.headline)
                         .foregroundStyle(theme.colorTokens.primaryText.color)
                     Spacer()
-                    Button("全部播放") { agent.playAll(cards: tracks) }
+                    Button(String(localized: "全部播放", bundle: .module)) { agent.playAll(cards: tracks) }
                         .buttonStyle(HapticProminentButtonStyle())
                         .controlSize(.small)
                 }
@@ -689,7 +689,7 @@ struct AssistantView: View {
                         .font(.title2)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .accessibilityLabel(model.assistantIsRunning ? "停止" : "发送")
+                .accessibilityLabel(model.assistantIsRunning ? String(localized: "停止", bundle: .module) : String(localized: "发送", bundle: .module))
                 .frame(width: 44, height: 44)
             }
             .padding(.horizontal, 16)
@@ -839,7 +839,7 @@ private struct TrackCardList: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
                 } label: {
-                    Label(expanded ? "收起" : "展开其余 \(cards.count - 5) 首", systemImage: expanded ? "chevron.up" : "chevron.down")
+                    Label(expanded ? String(localized: "收起", bundle: .module) : "展开其余 \(cards.count - 5) 首", systemImage: expanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.accent.color)
                 }
@@ -878,7 +878,7 @@ private struct AlbumCardList: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
                 } label: {
-                    Label(expanded ? "收起" : "展开其余 \(cards.count - 5) 张", systemImage: expanded ? "chevron.up" : "chevron.down")
+                    Label(expanded ? String(localized: "收起", bundle: .module) : "展开其余 \(cards.count - 5) 张", systemImage: expanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.accent.color)
                 }
@@ -930,9 +930,9 @@ private struct TrackCardRow: View {
                 .help(card.isFavorite ? "取消喜爱" : "喜爱")
 
                 Menu {
-                    Button("加入队列") { agent.queue(card: card) }
+                    Button(String(localized: "加入队列", bundle: .module)) { agent.queue(card: card) }
                     Divider()
-                    Section("推荐反馈") {
+                    Section(String(localized: "推荐反馈", bundle: .module)) {
                         ForEach(RecommendationFeedback.allCases) { kind in
                             Button(kind.label) {
                                 Task { await agent.sendFeedback(kind, for: card) }
@@ -972,18 +972,18 @@ private struct ActionLogSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("操作记录").font(.headline)
+                Text(String(localized: "操作记录", bundle: .module)).font(.headline)
                 Spacer()
-                Button("清空") { Task { await agent.clearActionLog() } }
+                Button(String(localized: "清空", bundle: .module)) { Task { await agent.clearActionLog() } }
                     .buttonStyle(HapticBorderedButtonStyle())
-                Button("完成") { dismiss() }
+                Button(String(localized: "完成", bundle: .module)) { dismiss() }
                     .buttonStyle(HapticProminentButtonStyle())
             }
             .padding(AuralisSpacing.medium)
             Divider()
             if agent.actionRecords.isEmpty {
                 Spacer()
-                Text("暂无修改型操作").foregroundStyle(theme.colorTokens.secondaryText.color)
+                Text(String(localized: "暂无修改型操作", bundle: .module)).foregroundStyle(theme.colorTokens.secondaryText.color)
                 Spacer()
             } else {
                 List(agent.actionRecords) { record in
@@ -998,14 +998,14 @@ private struct ActionLogSheet: View {
                         }
                         Spacer()
                         if record.undone {
-                            Text("已撤销").font(.caption2)
+                            Text(String(localized: "已撤销", bundle: .module)).font(.caption2)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                         } else if record.permission == .reversible {
-                            Button("撤销") { Task { await agent.undo(record) } }
+                            Button(String(localized: "撤销", bundle: .module)) { Task { await agent.undo(record) } }
                                 .buttonStyle(HapticBorderedButtonStyle())
                                 .controlSize(.small)
                         } else {
-                            Text("不可撤销").font(.caption2)
+                            Text(String(localized: "不可撤销", bundle: .module)).font(.caption2)
                                 .foregroundStyle(theme.colorTokens.warning.color)
                         }
                     }

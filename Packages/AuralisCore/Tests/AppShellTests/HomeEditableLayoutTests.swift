@@ -30,7 +30,7 @@ func homeModuleDefaultConfigurationMatchesSpec() {
     #expect(quickHidden.isEmpty)
 
     let contentVisible = HomeModuleRegistry.modules(in: .content).filter(\.defaultVisible).map(\.id)
-    #expect(contentVisible == [.random, .recentlyPlayed, .longUnplayed, .recentlyAdded, .favoriteRandom])
+    #expect(contentVisible == [.random, .recentlyPlayed, .longUnplayed, .recentlyAdded, .favoriteRandom, .downloads])
     let contentHidden = HomeModuleRegistry.modules(in: .content).filter { !$0.defaultVisible }.map(\.id)
     #expect(contentHidden == [.neverPlayed, .topArtists, .topAlbums])
 
@@ -38,7 +38,7 @@ func homeModuleDefaultConfigurationMatchesSpec() {
     #expect(defaults.quickEntries.map(\.moduleID) == ["playlists", "favorites", "mostPlayed"])
     #expect(defaults.contentModules.map(\.moduleID) == [
         "random", "recentlyPlayed", "longUnplayed", "recentlyAdded",
-        "favoriteRandom", "neverPlayed", "topArtists", "topAlbums",
+        "favoriteRandom", "downloads", "neverPlayed", "topArtists", "topAlbums",
     ])
     #expect(defaults.preference(moduleID: "random")?.isVisible == true)
     #expect(defaults.preference(moduleID: "neverPlayed")?.isVisible == false)
@@ -107,9 +107,9 @@ func quickAndContentGroupsStaySeparated() {
         defaults: defaults,
         storeURL: nil
     )
-    // 快捷入口只注册 歌单/收藏/最常听；播放历史/下载不在注册表（用户要求移除）。
+    // 快捷入口只注册 歌单/收藏/最常听；播放历史不在注册表（用户要求移除）。下载已移至内容模块。
     #expect(HomeModuleRegistry.module(forID: "playHistory") == nil)
-    #expect(HomeModuleRegistry.module(forID: "downloads") == nil)
+    #expect(HomeModuleRegistry.module(forID: "downloads") != nil)
     model.moveHomeModule(in: .quickEntry, fromOffsets: IndexSet(integer: 2), toOffset: 0)
     model.setHomeModuleVisible("favorites", isVisible: false)
     #expect(model.homeLayout.quickEntries.map(\.moduleID) == ["mostPlayed", "playlists", "favorites"])

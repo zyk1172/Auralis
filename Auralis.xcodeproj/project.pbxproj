@@ -16,6 +16,7 @@
 		2544A1BCC7704C45B9D03714 /* AuralisLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9AA2EE3ADE81172BD503209A /* AuralisLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		372595B4DCABCC5433A1EB38 /* AppShell in Frameworks */ = {isa = PBXBuildFile; productRef = B3FB2EFF6815905FFD2AB2AB /* AppShell */; };
 		40DCC1B683418F858916EBFC /* AppShell in Frameworks */ = {isa = PBXBuildFile; productRef = F0CB3446F841735CD171E2E4 /* AppShell */; };
+		6847613C1701033C047819AC /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 277C164815EFE9449940797F /* InfoPlist.xcstrings */; };
 		6A5E78298A041E838463DBC8 /* AuralisMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */; };
 		716A20002937E551C1F3E00A /* AuralisApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C17241D49F118BD819B4F7A /* AuralisApp.swift */; };
 		7F7F375162E4BF60492F26A8 /* NowPlayingWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */; };
@@ -26,7 +27,9 @@
 		BA881A4DEC3437888B33B836 /* AppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7FF4CE3EC2EF7AFE5C6F006 /* AppIntents.swift */; };
 		BD942ACA6B5C9F8A539371A9 /* AuralisIntents.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C3A5BF12EF8CDA8D52633540 /* IntentHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBF41918A59E1038580AD9CE /* IntentHandler.swift */; };
+		C86EAE6A5A3451F4847224AB /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 41EEE6EE7ABFA5832F1EED76 /* Localizable.xcstrings */; };
 		DE2E4474991E5F09F514D763 /* AssistantAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C361144E585E27577F3148B /* AssistantAppIntent.swift */; };
+		E76FDDD286F4D8186A721B0C /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 277C164815EFE9449940797F /* InfoPlist.xcstrings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,7 +66,9 @@
 
 /* Begin PBXFileReference section */
 		1C17241D49F118BD819B4F7A /* AuralisApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuralisApp.swift; sourceTree = "<group>"; };
+		277C164815EFE9449940797F /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 		37512AECC1D8665440BBB4DB /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		41EEE6EE7ABFA5832F1EED76 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		483C81986AF30F3B1A051853 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		53A83CD2104106116D511C8B /* Auralis.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Auralis.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AuralisIntents.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -126,6 +131,7 @@
 				81C4189C98077B90973200D9 /* AuralisLiveActivity.entitlements */,
 				8E6FF06C24A19B47FC22F91F /* AuralisLiveActivityBundle.swift */,
 				DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */,
+				1E387AF3DA0ECA329EF64C05 /* Resources */,
 			);
 			path = LiveActivity;
 			sourceTree = "<group>";
@@ -144,6 +150,7 @@
 			children = (
 				69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */,
 				755404A1DB56C96714E863E6 /* MacShortcuts.swift */,
+				6084C2012EDBB49265A85CF4 /* Resources */,
 			);
 			path = macOS;
 			sourceTree = "<group>";
@@ -156,10 +163,26 @@
 			path = Packages;
 			sourceTree = "<group>";
 		};
+		1E387AF3DA0ECA329EF64C05 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				41EEE6EE7ABFA5832F1EED76 /* Localizable.xcstrings */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		537240F55E4B105B80C97A1C /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				277C164815EFE9449940797F /* InfoPlist.xcstrings */,
 				37512AECC1D8665440BBB4DB /* Localizable.xcstrings */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		6084C2012EDBB49265A85CF4 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -253,6 +276,7 @@
 			buildConfigurationList = 4E428ED26323820823BC41FB /* Build configuration list for PBXNativeTarget "AuralisLiveActivity" */;
 			buildPhases = (
 				4FF1D220B1F5790EE89B91B8 /* Sources */,
+				EC50D97C8EBCB83F67597FE5 /* Resources */,
 				0998A619A021BB78EE3BB269 /* Frameworks */,
 			);
 			buildRules = (
@@ -369,6 +393,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				20F4CEED549B426035A9144A /* Assets.xcassets in Resources */,
+				E76FDDD286F4D8186A721B0C /* InfoPlist.xcstrings in Resources */,
 				8E4AD7B00E7328844A3677FE /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -378,7 +403,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				1CCC7D2F778ECB1009DB59A9 /* Assets.xcassets in Resources */,
+				6847613C1701033C047819AC /* InfoPlist.xcstrings in Resources */,
 				17FB643FDFEA01BE7401C87E /* Localizable.xcstrings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EC50D97C8EBCB83F67597FE5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C86EAE6A5A3451F4847224AB /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

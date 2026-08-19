@@ -43,19 +43,19 @@ public struct MacSettingsWindow: View {
 
     private var general: some View {
         Form {
-            Section("首页") {
-                Button("编辑首页…") {
+            Section(String(localized: "首页", bundle: .module)) {
+                Button(String(localized: "编辑首页…", bundle: .module)) {
                     isEditingHomeLayout = true
                 }
                 .help("调整 Mac 首页内容模块的显示与顺序（随机音乐 / 最近播放 / 很久没听 / 最近添加 / 收藏里随便听 / 从未播放 / 常听艺术家 / 常听专辑）。")
             }
-            Section("主题") {
+            Section(String(localized: "主题", bundle: .module)) {
                 ThemeChoiceGrid(themeStore: themeStore)
-                Text("已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。")
+                Text(String(localized: "已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            Section("当前主题色板") {
+            Section(String(localized: "当前主题色板", bundle: .module)) {
                 ThemeSwatchGrid(colors: theme.colorTokens, name: theme.name)
             }
         }
@@ -77,16 +77,16 @@ public struct MacSettingsWindow: View {
 
     private var libraryPlayback: some View {
         Form {
-            Section("资料库统计") {
+            Section(String(localized: "资料库统计", bundle: .module)) {
                 LabeledContent("歌曲", value: "\(model.catalog.tracks.count) 首")
                 LabeledContent("专辑", value: "\(model.catalog.albums.count) 张")
                 LabeledContent("艺术家", value: "\(model.catalog.artists.count) 位")
                 LabeledContent("歌单", value: "\(model.catalog.playlists.count) 个")
             }
             CatalogSyncSection(model: model, theme: theme)
-            Section("网络音质") {
+            Section(String(localized: "网络音质", bundle: .module)) {
                 Toggle("Wi-Fi 优先原始音质", isOn: $highQualityWiFi)
-                Text("开启后 Wi-Fi / 有线网络下优先使用服务器原始质量；关闭则限制码率（MP3 320kbps）以节省带宽。")
+                Text(String(localized: "开启后 Wi-Fi / 有线网络下优先使用服务器原始质量；关闭则限制码率（MP3 320kbps）以节省带宽。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
@@ -107,7 +107,7 @@ public struct MacSettingsWindow: View {
                     in: -12...12,
                     step: 0.5
                 ) {
-                    Text("前级")
+                    Text(String(localized: "前级", bundle: .module))
                 } minimumValueLabel: {
                     Text("-12")
                 } maximumValueLabel: {
@@ -120,13 +120,13 @@ public struct MacSettingsWindow: View {
                     get: { model.replayGainSettings.peakProtection },
                     set: { model.setReplayGainPeakProtection($0) }
                 ))
-                Text("默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。")
+                Text(String(localized: "默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            Section("离线下载") {
+            Section(String(localized: "离线下载", bundle: .module)) {
                 LabeledContent("已离线", value: "\(model.catalog.downloads.count) 首")
-                Text("用户主动下载的离线音乐与临时播放缓存分开存储；清理临时缓存不会删除已下载的音乐。")
+                Text(String(localized: "用户主动下载的离线音乐与临时播放缓存分开存储；清理临时缓存不会删除已下载的音乐。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
@@ -202,19 +202,19 @@ public struct MacSettingsWindow: View {
 
     private var ai: some View {
         Form {
-            Section("AI 与隐私") {
+            Section(String(localized: "AI 与隐私", bundle: .module)) {
                 Toggle("启用 AI 功能", isOn: $aiEnabled)
                 Toggle("允许发送歌曲元数据", isOn: $allowsMetadata)
                 Toggle("允许发送歌词", isOn: $allowsLyrics)
                 Toggle("允许发送播放历史摘要", isOn: $allowsHistory)
             }
-            Section("OpenAI 兼容接口") {
+            Section(String(localized: "OpenAI 兼容接口", bundle: .module)) {
                 TextField("Base URL", text: $aiBaseURL)
                 TextField("API 路径", text: $aiAPIPath)
                 TextField("模型", text: $aiModel)
                 LabeledContent("API Key", value: hasAPIKey ? "已配置 · 存于系统 Keychain" : "未配置")
             }
-            Section("高级设置") {
+            Section(String(localized: "高级设置", bundle: .module)) {
                 // 上下文窗口：可直接输入任意正整数（下至 4096，不设人为上限）。
                 LabeledContent("上下文窗口") {
                     HStack(spacing: 6) {
@@ -242,8 +242,8 @@ public struct MacSettingsWindow: View {
                 }
                 // 单次输出上限：预设档位快捷选择 + 自定义任意正整数（不限制在预设档位）。
                 Picker("单次输出上限", selection: outputTokenMode) {
-                    Text("预设档位").tag(OutputTokenMode.preset)
-                    Text("自定义").tag(OutputTokenMode.custom)
+                    Text(String(localized: "预设档位", bundle: .module)).tag(OutputTokenMode.preset)
+                    Text(String(localized: "自定义", bundle: .module)).tag(OutputTokenMode.custom)
                 }
                 .pickerStyle(.segmented)
                 if outputTokenMode.wrappedValue == .preset {
@@ -274,11 +274,11 @@ public struct MacSettingsWindow: View {
                             .foregroundStyle(theme.colorTokens.error.color)
                     }
                 }
-                Text("上下文窗口和单次输出上限均直接使用这里填写的数值，不再由 Auralis 额外设置固定上限。默认仍为 256K / 16K；可按模型实际能力填写更大的数值。最终可用范围由所连接模型或 API 服务端决定。")
+                Text(String(localized: "上下文窗口和单次输出上限均直接使用这里填写的数值，不再由 Auralis 额外设置固定上限。默认仍为 256K / 16K；可按模型实际能力填写更大的数值。最终可用范围由所连接模型或 API 服务端决定。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            Section("公开音乐数据") {
+            Section(String(localized: "公开音乐数据", bundle: .module)) {
                 Toggle("启用公开音乐数据", isOn: $externalMusicEnabled)
                 Toggle("MusicBrainz", isOn: $musicBrainzEnabled)
                     .disabled(!externalMusicEnabled)
@@ -286,7 +286,7 @@ public struct MacSettingsWindow: View {
                     .disabled(!externalMusicEnabled)
                 Toggle("ListenBrainz", isOn: $listenBrainzEnabled)
                     .disabled(!externalMusicEnabled)
-                Text("仅在打开歌曲信息、歌曲鉴赏等需要公开音乐资料的功能时按需查询。不会上传音频文件、歌词、播放地址、NAS 密码或完整音乐库。查询结果默认缓存 14 天。")
+                Text(String(localized: "仅在打开歌曲信息、歌曲鉴赏等需要公开音乐资料的功能时按需查询。不会上传音频文件、歌词、播放地址、NAS 密码或完整音乐库。查询结果默认缓存 14 天。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
                 HStack {
@@ -294,13 +294,13 @@ public struct MacSettingsWindow: View {
                         Task { await clearExternalMusicCache() }
                     } label: {
                         if isClearingExternalMusicCache {
-                            HStack { ProgressView().controlSize(.small); Text("正在清除…") }
+                            HStack { ProgressView().controlSize(.small); Text(String(localized: "正在清除…", bundle: .module)) }
                         } else {
-                            Label("清除公开音乐数据缓存", systemImage: "trash")
+                            Label(String(localized: "清除公开音乐数据缓存", bundle: .module), systemImage: "trash")
                         }
                     }
                     .disabled(isClearingExternalMusicCache)
-                    Button("重置音乐身份匹配…", role: .destructive) {
+                    Button(String(localized: "重置音乐身份匹配…", bundle: .module), role: .destructive) {
                         Task { await resetExternalMusicIdentity() }
                     }
                     .disabled(isResettingExternalIdentity)
@@ -311,9 +311,9 @@ public struct MacSettingsWindow: View {
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             }
-            Section("推荐索引 V2") {
+            Section(String(localized: "推荐索引 V2", bundle: .module)) {
                 if isLoadingIndexStatus && indexStatus == nil {
-                    HStack { ProgressView().controlSize(.small); Text("正在读取索引状态…") }
+                    HStack { ProgressView().controlSize(.small); Text(String(localized: "正在读取索引状态…", bundle: .module)) }
                 } else if let status = indexStatus {
                     LabeledContent("已分类", value: "\(status.indexedTracks) / \(status.totalTracks) 首")
                     LabeledContent("待处理", value: "\(status.pendingTracks) 首")
@@ -322,25 +322,25 @@ public struct MacSettingsWindow: View {
                     LabeledContent("规则版本", value: status.rulesVersion)
                     LabeledContent("索引格式", value: "V2 包 v\(LocalCatalogStore.recommendationIndexV2PackageFormatVersion)")
                     HStack {
-                        Button(status.pendingTracks == 0 ? "检查并更新索引" : "开始/继续全量索引") {
+                        Button(status.pendingTracks == 0 ? String(localized: "检查并更新索引", bundle: .module) : String(localized: "开始/继续全量索引", bundle: .module)) {
                             model.startOrContinueRecommendationIndexV2()
                         }
                         .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
-                        Button("导出索引…") { Task { await exportIndex() } }
+                        Button(String(localized: "导出索引…", bundle: .module)) { Task { await exportIndex() } }
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
-                        Button("导入索引…") { isImportingIndex = true }
+                        Button(String(localized: "导入索引…", bundle: .module)) { isImportingIndex = true }
                             .disabled(model.catalog.activeServerID == nil || isPerformingIndexTransfer)
                         Button(role: .destructive) { isConfirmingIndexClear = true } label: {
-                            Label(isClearingIndex ? "正在清空索引…" : "清空索引…", systemImage: "trash")
+                            Label(isClearingIndex ? String(localized: "正在清空索引…", bundle: .module) : String(localized: "清空索引…", bundle: .module), systemImage: "trash")
                         }
                             .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning || isClearingIndex || isPerformingIndexTransfer)
-                        Button("刷新状态") { Task { await refreshIndexStatus() } }
+                        Button(String(localized: "刷新状态", bundle: .module)) { Task { await refreshIndexStatus() } }
                     }
                 } else {
-                    Text("连接并同步音乐库后，可查看索引进度。")
+                    Text(String(localized: "连接并同步音乐库后，可查看索引进度。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    Button("开始全量索引") {
+                    Button(String(localized: "开始全量索引", bundle: .module)) {
                         model.startOrContinueRecommendationIndexV2()
                     }
                     .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
@@ -381,13 +381,13 @@ public struct MacSettingsWindow: View {
             await refreshIndexStatus()
         }
         .task(id: model.catalog.activeServerID) { await refreshIndexStatus() }
-        .confirmationDialog("清空本机推荐索引 V2？", isPresented: $isConfirmingIndexClear, titleVisibility: .visible) {
-            Button("清空索引", role: .destructive) {
+        .confirmationDialog(String(localized: "清空本机推荐索引 V2？", bundle: .module), isPresented: $isConfirmingIndexClear, titleVisibility: .visible) {
+            Button(String(localized: "清空索引", bundle: .module), role: .destructive) {
                 Task { await clearRecommendationIndex() }
             }
-            Button("取消", role: .cancel) {}
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。")
+            Text(String(localized: "将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
         }
     }
 
@@ -493,16 +493,16 @@ public struct MacSettingsWindow: View {
 
     private var system: some View {
         Form {
-            Section("系统集成") {
+            Section(String(localized: "系统集成", bundle: .module)) {
                 LabeledContent("Siri 媒体播放", value: "已启用（AppIntents）")
                 LabeledContent("快捷指令", value: "已启用")
                 LabeledContent("后台播放", value: "已启用")
             }
-            Text("Siri 与快捷指令只使用本地资料库的名称与标识进行匹配，不会暴露服务器地址、账号或令牌。")
+            Text(String(localized: "Siri 与快捷指令只使用本地资料库的名称与标识进行匹配，不会暴露服务器地址、账号或令牌。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             SettingsBackupSection(model: model, themeStore: themeStore, theme: theme)
-            Section("调试") {
+            Section(String(localized: "调试", bundle: .module)) {
                 Toggle("启用崩溃日志", isOn: $crashLogEnabled)
             }
         }
@@ -516,7 +516,7 @@ public struct MacSettingsWindow: View {
             Section {
                 LabeledContent("版本", value: AppVersionInfo.display)
                 LabeledContent("构建", value: "原生 macOS")
-                Text("Auralis · 私人音乐服务器播放器（OpenSubsonic / Navidrome）")
+                Text(String(localized: "Auralis · 私人音乐服务器播放器（OpenSubsonic / Navidrome）", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }

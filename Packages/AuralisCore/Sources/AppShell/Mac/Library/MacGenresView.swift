@@ -29,7 +29,7 @@ struct MacGenresView: View {
             .buttonStyle(.plain)
         }
         .listStyle(.inset)
-        .navigationTitle("流派")
+        .navigationTitle(String(localized: "流派", bundle: .module))
     }
 }
 #endif

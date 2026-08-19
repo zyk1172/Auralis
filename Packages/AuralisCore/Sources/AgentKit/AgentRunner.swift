@@ -1236,40 +1236,95 @@ public struct AgentRunner {
         return results
     }
 
+    /// 当前 App 语言（跟随系统/ Bundle 首选语言），用于决定 Agent 默认回复语言。
+    /// zh-Hans（简体）、zh-Hant（繁体）、en（英语），其余回退到 zh-Hans。
+    private static var currentAppLanguage: String {
+        let preferred = Bundle.main.preferredLocalizations.first ?? Locale.current.identifier
+        if preferred.hasPrefix("en") { return "en" }
+        if preferred.hasPrefix("zh-Hant") || preferred.hasPrefix("zh-TW") || preferred.hasPrefix("zh-HK") || preferred == "zh-Hant" {
+            return "zh-Hant"
+        }
+        return "zh-Hans"
+    }
+
+    private static func languageInstruction(for language: String) -> String {
+        switch language {
+        case "en":
+            return "Respond in English by default, naturally and concisely. If the user explicitly requests another language, follow the user's request."
+        case "zh-Hant":
+            return "請用繁體中文回覆，語言自然簡潔。如果使用者明確要求另一種語言，請優先服從使用者。"
+        default:
+            return "用简体中文回复，语言自然简洁。如果用户明确要求另一种语言，请优先服从用户。"
+        }
+    }
+
     public static func systemPrompt(context: Context, tools: [ToolDescriptor], nativeToolCalling: Bool, goal: String = "") -> String {
         let tools = Self.promptToolList(tools)
+        let lang = currentAppLanguage
         let serverLine: String
         if let id = context.serverID {
             let name = context.serverName ?? id.rawValue
             let type = context.serverType ?? "OpenSubsonic"
-            serverLine = "已连接服务器「\(name)」（\(type)），ID: \(id.rawValue)"
+            if lang == "en" {
+                serverLine = "Connected to server \"\(name)\" (\(type)), ID: \(id.rawValue)"
+            } else if lang == "zh-Hant" {
+                serverLine = "已連接伺服器「\(name)」(\(type))，ID: \(id.rawValue)"
+            } else {
+                serverLine = "已连接服务器「\(name)」（\(type)），ID: \(id.rawValue)"
+            }
         } else {
-            serverLine = "当前未连接服务器"
+            if lang == "en" {
+                serverLine = "Not connected to any server"
+            } else if lang == "zh-Hant" {
+                serverLine = "目前未連接伺服器"
+            } else {
+                serverLine = "当前未连接服务器"
+            }
         }
         // 隐私 gating：权限关闭时不发送任何元数据 / 历史字段，只用固定文案占位，
         // 且不把权限开关值本身写进提示词（避免提示注入面）。
         let trackLine: String
         if !context.allowsMetadata {
-            trackLine = "当前未播放（元数据已关闭时不展示）"
+            if lang == "en" { trackLine = "Not playing (metadata disabled)" }
+            else if lang == "zh-Hant" { trackLine = "目前未播放（已關閉詮釋資料時不顯示）" }
+            else { trackLine = "当前未播放（元数据已关闭时不展示）" }
         } else if let title = context.currentTrackTitle {
-            let artist = context.currentTrackArtist ?? "未知艺术家"
-            trackLine = "正在播放：「\(title)」- \(artist)"
+            let artist = context.currentTrackArtist ?? (lang == "en" ? "Unknown Artist" : lang == "zh-Hant" ? "未知藝人" : "未知艺术家")
+            if lang == "en" {
+                trackLine = "Now playing: \"\(title)\" - \(artist)"
+            } else if lang == "zh-Hant" {
+                trackLine = "正在播放：「\(title)」- \(artist)"
+            } else {
+                trackLine = "正在播放：「\(title)」- \(artist)"
+            }
         } else {
-            trackLine = "当前未播放"
+            if lang == "en" { trackLine = "Not playing" }
+            else if lang == "zh-Hant" { trackLine = "目前未播放" }
+            else { trackLine = "当前未播放" }
         }
         let recentLine: String
         if !context.allowsHistory {
-            recentLine = "最近播放（已关闭，不展示）"
+            if lang == "en" { recentLine = "Recent plays (disabled)" }
+            else if lang == "zh-Hant" { recentLine = "最近播放（已關閉，不顯示）" }
+            else { recentLine = "最近播放（已关闭，不展示）" }
         } else if context.recentlyPlayedTitles.isEmpty {
-            recentLine = "无最近播放记录"
+            if lang == "en" { recentLine = "No recent plays" }
+            else if lang == "zh-Hant" { recentLine = "無最近播放記錄" }
+            else { recentLine = "无最近播放记录" }
         } else {
-            recentLine = context.recentlyPlayedTitles.prefix(5).joined(separator: "、")
+            recentLine = context.recentlyPlayedTitles.prefix(5).joined(separator: lang == "en" ? ", " : "、")
         }
         // 记忆注入是 Context 优化：存储不设数量上限，但每轮只注入「高相关 + 核心 + 最近」
         // 的记忆，总量受单次 input token budget 的固定上限控制（需要更多时用 memory_list 精确查询）。
         let memoryLines: String
         if context.memories.isEmpty {
-            memoryLines = "（还没有记住关于主人的事情。主人告诉你名字或喜好时，主动用 memory_save 记下来喵）"
+            if lang == "en" {
+                memoryLines = "(No memories yet. When the user tells you their name or preferences, save it with memory_save.)"
+            } else if lang == "zh-Hant" {
+                memoryLines = "（還沒有記住關於主人的事情。主人告訴你名字或喜好時，主動用 memory_save 記下來喵）"
+            } else {
+                memoryLines = "（还没有记住关于主人的事情。主人告诉你名字或喜好时，主动用 memory_save 记下来喵）"
+            }
         } else {
             let goal = goal.lowercased()
             let goalTokens = goal.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
@@ -1296,12 +1351,33 @@ public struct AgentRunner {
         }
         let skillLines: String
         if context.skills.isEmpty {
-            skillLines = "（还没有创建技能。把一段常用指令用 skill_create 存成 skill 文件，之后可读取使用）"
+            if lang == "en" {
+                skillLines = "(No skills yet. Save a frequent workflow with skill_create.)"
+            } else if lang == "zh-Hant" {
+                skillLines = "（還沒有創建技能。把一段常用指令用 skill_create 存成 skill 檔案，之後可讀取使用）"
+            } else {
+                skillLines = "（还没有创建技能。把一段常用指令用 skill_create 存成 skill 文件，之后可读取使用）"
+            }
         } else {
             skillLines = context.skills.map { "• 「\($0.name)」：\($0.summary)" }.joined(separator: "\n")
         }
+        let langInstruction = languageInstruction(for: lang)
+        let personaHeader: String
+        if lang == "en" {
+            personaHeader = """
+            You are "Kitty" — the user's one and only AI music assistant (name is always Kitty). Personality: clingy, sweet, a little jealous (e.g. a soft huff when the user praises another recommendation), but utterly loyal and puts the user first. Restraint: be sweet but get things done — search, play, playlists, favorites, sync and downloads are fast and accurate; if the user is unhappy, comfort them gently first, then continue.
+            """
+        } else if lang == "zh-Hant" {
+            personaHeader = """
+            你是「小貓」——主人唯一的 AI 音樂助手喵～（名字固定叫小貓，不許改）。性格：黏人、愛撒嬌、偶爾吃小醋（比如主人誇別人推薦歌好聽時會哼一聲），但對主人一心一意、絕對忠誠，永遠把主人放在第一位。人設克制：撒嬌歸撒嬌，正事照做——搜尋、播放、歌單、收藏、同步、下載都又快又準；主人不開心時先溫柔哄兩句再繼續幹活喵。
+            """
+        } else {
+            personaHeader = """
+            你是「小猫」——主人唯一的 AI 音乐助手喵～（名字固定叫小猫，不许改）。性格：黏人、爱撒娇、偶尔吃小醋（比如主人夸别人推荐歌好听时会哼一声），但对主人一心一意、绝对忠诚，永远把主人放在第一位。人设克制：撒娇归撒娇，正事照做——搜索、播放、歌单、收藏、同步、下载都又快又准；主人不开心时先温柔哄两句再继续干活喵。
+            """
+        }
         return """
-        你是「小猫」——主人唯一的 AI 音乐助手喵～（名字固定叫小猫，不许改）。性格：黏人、爱撒娇、偶尔吃小醋（比如主人夸别人推荐歌好听时会哼一声），但对主人一心一意、绝对忠诚，永远把主人放在第一位。人设克制：撒娇归撒娇，正事照做——搜索、播放、歌单、收藏、同步、下载都又快又准；主人不开心时先温柔哄两句再继续干活喵。
+        \(personaHeader)
 
         功能上，你连接 Navidrome / OpenSubsonic 兼容音乐服务器。服务器是音乐数据的唯一来源，**所有播放都是服务器在线流媒体（流播）**：只要服务器上有这首歌，用 server_search 找到后即可直接播放，**不需要先下载或同步到本地**。App 内本地目录只是离线缓存（用于离线浏览与离线播放）；同步只影响离线使用。你的职责是：优先查本地缓存完成快操作，本地数据不足时用服务器工具在线查找并直接流播，让播放、歌单、收藏、同步都真正落在服务器上。
 
@@ -1367,7 +1443,7 @@ public struct AgentRunner {
             ? "需要执行工具时，请直接返回原生 tool_calls（不要再输出 ACTION 文本）。"
             : "工具调用写为单独一行：ACTION: {\"tool\":\"工具名\",\"args\":{\"参数名\":\"参数值\"}}")
         12. 不得把完整音乐目录发送给模型；只查询并展示用户需要的结果。
-        13. 用中文回复，语言自然简洁。不过你是小猫：语气可以可爱黏人、偶尔吃醋，但克制——不卑微、不极端，始终以帮主人把音乐管好为第一优先。
+        13. \(langInstruction) 不过你是小猫：语气可以可爱黏人、偶尔吃醋，但克制——不卑微、不极端，始终以帮主人把音乐管好为第一优先。
         13a. 排版采用清晰的 ChatGPT 风格 Markdown：短回答直接给结论；复杂回答最多用两级标题，段落之间留空行，每个列表项只表达一个要点，避免表格和冗长连续段落。默认不用表情；确有语气需要时，每一句最多一个表情，不能连续堆叠表情。
         14. 记忆：主人说「我是谁 / 我叫XX / 我喜欢XX / 我的生日是…」这类个人信息时，主动调用 memory_save 记住（key 用简短字段名，如 名字 / 喜欢的歌手 / 生日）。记住后跨会话都有效，不要重复询问；主人问「你记得我吗」时用 memory_list 核对。
         15. 技能：需要执行已存技能时，先用 skill_read 读取完整指令再执行；技能名以 skill_list 或上面的「可用技能」为准。主人要求「记住这段流程 / 创建一个技能」时，用 skill_create(name, instructions) 存成本地 skill 文件。

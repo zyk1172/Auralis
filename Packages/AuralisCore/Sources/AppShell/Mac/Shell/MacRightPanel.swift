@@ -43,7 +43,7 @@ struct MacRightPanel: View {
 
     private var header: some View {
         HStack {
-            Text(mode == .lyrics ? "歌词" : "待播队列")
+            Text(mode == .lyrics ? String(localized: "歌词", bundle: .module) : String(localized: "待播队列", bundle: .module))
                 .font(.system(size: 15, weight: .semibold))
             Spacer()
         }
@@ -91,7 +91,7 @@ struct MacRightPanel: View {
                     }
                 }
             } else {
-                ContentUnavailableView("暂无歌词", systemImage: "quote.bubble", description: Text("当前歌曲没有可显示的歌词。"))
+                ContentUnavailableView(String(localized: "暂无歌词", bundle: .module), systemImage: "quote.bubble", description: Text(String(localized: "当前歌曲没有可显示的歌词。", bundle: .module)))
             }
         }
     }
@@ -120,13 +120,13 @@ struct MacRightPanel: View {
     private var queueContent: some View {
         List {
             if model.hasCurrentTrack {
-                Section("正在播放") {
+                Section(String(localized: "正在播放", bundle: .module)) {
                     queueRow(model.currentTrack, isCurrent: true)
                 }
             }
             Section {
                 if upcomingEntries.isEmpty {
-                    Text("没有待播放的歌曲。")
+                    Text(String(localized: "没有待播放的歌曲。", bundle: .module))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 } else {
@@ -134,8 +134,8 @@ struct MacRightPanel: View {
                         let track = entry.track
                         queueRow(track, isCurrent: false)
                             .contextMenu {
-                                Button("立即播放") { model.selectAndPlay(track) }
-                                Button("从队列移除") { model.removeQueueEntry(id: entry.id) }
+                                Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
+                                Button(String(localized: "从队列移除", bundle: .module)) { model.removeQueueEntry(id: entry.id) }
                             }
                     }
                     .onMove { source, destination in
@@ -147,16 +147,16 @@ struct MacRightPanel: View {
                 }
             } header: {
                 HStack {
-                    Text("播放下一首")
+                    Text(String(localized: "播放下一首", bundle: .module))
                     Spacer()
                     if !upcomingEntries.isEmpty {
-                        Button("清空") { model.clearUpcoming() }
+                        Button(String(localized: "清空", bundle: .module)) { model.clearUpcoming() }
                             .buttonStyle(.link)
                     }
                 }
             }
             if !historyTracks.isEmpty {
-                Section("历史记录") {
+                Section(String(localized: "历史记录", bundle: .module)) {
                     ForEach(historyTracks, id: \.macGlobalID) { track in
                         queueRow(track, isCurrent: false)
                     }
@@ -189,7 +189,7 @@ struct MacRightPanel: View {
                 Image(systemName: "speaker.wave.2.fill")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.accent.color)
-                    .accessibilityLabel("正在播放")
+                    .accessibilityLabel(String(localized: "正在播放", bundle: .module))
             } else {
                 Text(MacFormat.time(track.duration))
                     .font(.caption.monospacedDigit())

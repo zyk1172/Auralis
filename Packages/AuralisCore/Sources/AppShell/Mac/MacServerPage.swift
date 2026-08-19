@@ -35,11 +35,11 @@ struct MacServerPage: View {
             ServerConnectionSheet(model: model, theme: theme)
                 .frame(minWidth: 540, minHeight: 400)
         }
-        .alert("删除服务器？", isPresented: Binding(
+        .alert(String(localized: "删除服务器？", bundle: .module), isPresented: Binding(
             get: { serverToRemove != nil },
             set: { if !$0 { serverToRemove = nil } }
         )) {
-            Button("删除", role: .destructive) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
                 if let server = serverToRemove {
                     Task {
                         await model.catalogCoordinator.purgeLocalData(serverID: server.id)
@@ -48,21 +48,21 @@ struct MacServerPage: View {
                 }
                 serverToRemove = nil
             }
-            Button("取消", role: .cancel) { serverToRemove = nil }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { serverToRemove = nil }
         } message: {
-            Text("将删除本机保存的登录凭据、离线目录与缓存；服务器上的音乐、歌单与收藏不会被删除。")
+            Text(String(localized: "将删除本机保存的登录凭据、离线目录与缓存；服务器上的音乐、歌单与收藏不会被删除。", bundle: .module))
         }
     }
 
     private var header: some View {
         HStack(spacing: AuralisSpacing.medium) {
-            Text("服务器").font(.title2.bold())
+            Text(String(localized: "服务器", bundle: .module)).font(.title2.bold())
                 .foregroundStyle(theme.colorTokens.primaryText.color)
             Spacer()
             Button {
                 isAddingServer = true
             } label: {
-                Label("添加 OpenSubsonic 服务器", systemImage: "plus.circle.fill")
+                Label(String(localized: "添加 OpenSubsonic 服务器", bundle: .module), systemImage: "plus.circle.fill")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -112,7 +112,7 @@ struct MacServerPage: View {
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: AuralisSpacing.small) {
-            Text("服务器摘要").font(.headline)
+            Text(String(localized: "服务器摘要", bundle: .module)).font(.headline)
                 .foregroundStyle(theme.colorTokens.primaryText.color)
             switch model.serverConnectionState {
             case .idle:
@@ -147,17 +147,17 @@ struct MacServerPage: View {
                 HStack(spacing: AuralisSpacing.small) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(theme.colorTokens.error.color)
-                    Text("连接失败").font(.headline)
+                    Text(String(localized: "连接失败", bundle: .module)).font(.headline)
                         .foregroundStyle(theme.colorTokens.error.color)
                     Spacer()
-                    Button(showErrorDetails ? "收起详情" : "详情") { showErrorDetails.toggle() }
+                    Button(showErrorDetails ? String(localized: "收起详情", bundle: .module) : String(localized: "详情", bundle: .module)) { showErrorDetails.toggle() }
                         .buttonStyle(.link)
                 }
                 Text(showErrorDetails ? message : String(message.prefix(60)) + (message.count > 60 ? "…" : ""))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
                 if message.contains("本地网络") {
-                    Button("打开本地网络设置") {
+                    Button(String(localized: "打开本地网络设置", bundle: .module)) {
                         PlatformLocalNetworkSettings.open()
                     }
                     .buttonStyle(.bordered)
@@ -172,22 +172,22 @@ struct MacServerPage: View {
 
     private var actions: some View {
         HStack(spacing: AuralisSpacing.medium) {
-            Button("重新连接") { isAddingServer = true }
+            Button(String(localized: "重新连接", bundle: .module)) { isAddingServer = true }
                 .disabled(model.serverConnectionState.isConnecting)
-            Button("检查服务器") {
+            Button(String(localized: "检查服务器", bundle: .module)) {
                 Task { _ = await model.testActiveServerConnection() }
             }
             .disabled(!model.catalog.isConnected)
-            Button("编辑服务器") { isAddingServer = true }
+            Button(String(localized: "编辑服务器", bundle: .module)) { isAddingServer = true }
             if case let .failed(message) = model.serverConnectionState {
-                Button("复制错误详情") {
+                Button(String(localized: "复制错误详情", bundle: .module)) {
                     let pasteboard = NSPasteboard.general
                     pasteboard.clearContents()
                     pasteboard.setString(message, forType: .string)
                 }
             }
             if let active = model.catalog.activeAccount {
-                Button("删除服务器", role: .destructive) { serverToRemove = active }
+                Button(String(localized: "删除服务器", bundle: .module), role: .destructive) { serverToRemove = active }
             }
         }
         .buttonStyle(.bordered)
@@ -195,10 +195,10 @@ struct MacServerPage: View {
 
     private var syncArea: some View {
         VStack(alignment: .leading, spacing: AuralisSpacing.small) {
-            Text("音乐库同步").font(.headline)
+            Text(String(localized: "音乐库同步", bundle: .module)).font(.headline)
                 .foregroundStyle(theme.colorTokens.primaryText.color)
             if let serverID = model.catalog.activeServerID {
-                Button("立即同步") { model.catalogCoordinator.manualRefresh(serverID: serverID) }
+                Button(String(localized: "立即同步", bundle: .module)) { model.catalogCoordinator.manualRefresh(serverID: serverID) }
                     .buttonStyle(.bordered)
             }
         }

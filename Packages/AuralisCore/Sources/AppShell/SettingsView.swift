@@ -29,7 +29,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("设置") {
+            Section(String(localized: "设置", bundle: .module)) {
                 NavigationLink {
                     ServerSettingsPage(model: model, theme: theme)
                 } label: {
@@ -59,7 +59,7 @@ struct SettingsView: View {
                     SettingsCategoryRow(title: "数据与备份", subtitle: "本地缓存与配置备份", icon: "externaldrive")
                 }
             }
-            Section("外观") {
+            Section(String(localized: "外观", bundle: .module)) {
                 Button {
                     isEditingHomeLayout = true
                 } label: {
@@ -76,7 +76,7 @@ struct SettingsView: View {
                     SettingsCategoryRow(title: "主题", subtitle: theme.name, icon: "paintpalette")
                 }
             }
-            Section("关于") {
+            Section(String(localized: "关于", bundle: .module)) {
                 LabeledContent("版本", value: AppVersionInfo.display)
             }
         }
@@ -126,7 +126,7 @@ struct ServerEditSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("服务器信息") {
+                Section(String(localized: "服务器信息", bundle: .module)) {
                     TextField("显示名称", text: $displayName)
                     TextField("内网服务器地址", text: $internalURL)
                         .autocorrectionDisabled()
@@ -137,27 +137,27 @@ struct ServerEditSheet: View {
                     SecureField("新密码（留空则不修改）", text: $password)
                 }
                 Section {
-                    Text("内网和外网会同时探测。内网在 30 秒内可达时优先使用；只有内网确认不可达时才使用外网。")
+                    Text(String(localized: "内网和外网会同时探测。内网在 30 秒内可达时优先使用；只有内网确认不可达时才使用外网。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    Text("修改地址不会新建重复服务器，也不会删除本机已同步的音乐库。")
+                    Text(String(localized: "修改地址不会新建重复服务器，也不会删除本机已同步的音乐库。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
                 if let errorMessage {
-                    Section("无法保存") {
+                    Section(String(localized: "无法保存", bundle: .module)) {
                         Text(errorMessage)
                             .foregroundStyle(theme.colorTokens.error.color)
                     }
                 }
             }
-            .navigationTitle("编辑服务器")
+            .navigationTitle(String(localized: "编辑服务器", bundle: .module))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    Button(String(localized: "取消", bundle: .module)) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "保存中…" : "保存") { Task { await save() } }
+                    Button(isSaving ? String(localized: "保存中…", bundle: .module) : String(localized: "保存", bundle: .module)) { Task { await save() } }
                         .disabled(isSaving)
                 }
             }
@@ -265,7 +265,7 @@ struct ServerConnectionSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("添加服务器")
+            Text(String(localized: "添加服务器", bundle: .module))
                 .font(.title2.bold())
                 .foregroundStyle(theme.colorTokens.primaryText.color)
             Text("OpenSubsonic")
@@ -282,35 +282,35 @@ struct ServerConnectionSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
                 GridRow {
-                    fieldLabel("显示名称")
+                    fieldLabel(String(localized: "显示名称", bundle: .module))
                     TextField("输入显示名称", text: $displayName)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.organizationName)
                         .frame(width: 320)
                 }
                 GridRow {
-                    fieldLabel("服务器地址")
+                    fieldLabel(String(localized: "服务器地址", bundle: .module))
                     TextField("输入服务器地址", text: $serverURL)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .frame(width: 320)
                 }
                 GridRow {
-                    fieldLabel("用户名")
+                    fieldLabel(String(localized: "用户名", bundle: .module))
                     TextField("输入用户名", text: $username)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .frame(width: 320)
                 }
                 GridRow {
-                    fieldLabel("密码")
+                    fieldLabel(String(localized: "密码", bundle: .module))
                     SecureField("输入密码", text: $password)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.password)
                         .frame(width: 320)
                 }
                 GridRow {
-                    fieldLabel("外网地址")
+                    fieldLabel(String(localized: "外网地址", bundle: .module))
                     TextField("输入外网地址", text: $externalServerURL)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
@@ -358,8 +358,8 @@ struct ServerConnectionSheet: View {
 
     private var securityNotes: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("凭据安全存储在系统 Keychain 中。", systemImage: "key")
-            Label("公网服务器建议使用 HTTPS。", systemImage: "lock")
+            Label(String(localized: "凭据安全存储在系统 Keychain 中。", bundle: .module), systemImage: "key")
+            Label(String(localized: "公网服务器建议使用 HTTPS。", bundle: .module), systemImage: "lock")
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
@@ -373,10 +373,10 @@ struct ServerConnectionSheet: View {
                 if isTesting || isRequestingLocalNetworkAuthorization {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text(isRequestingLocalNetworkAuthorization ? "正在请求本地网络访问…" : "正在测试连接…")
+                        Text(isRequestingLocalNetworkAuthorization ? String(localized: "正在请求本地网络访问…", bundle: .module) : String(localized: "正在测试连接…", bundle: .module))
                     }
                 } else {
-                    Text("测试连接")
+                    Text(String(localized: "测试连接", bundle: .module))
                 }
             }
             .disabled(isTesting || isRequestingLocalNetworkAuthorization || model.serverConnectionState.isConnecting)
@@ -387,9 +387,9 @@ struct ServerConnectionSheet: View {
 
             Spacer(minLength: 0)
 
-            Button("取消") { cancelOrStop() }
+            Button(String(localized: "取消", bundle: .module)) { cancelOrStop() }
                 .disabled(model.serverConnectionState.isConnecting)
-            Button("保存") { connect() }
+            Button(String(localized: "保存", bundle: .module)) { connect() }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canSave)
         }
@@ -405,18 +405,18 @@ struct ServerConnectionSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("显示名称", text: $displayName, prompt: Text("输入显示名称"))
+                    TextField(String(localized: "显示名称", bundle: .module), text: $displayName, prompt: Text(String(localized: "输入显示名称", bundle: .module)))
                         .textContentType(.organizationName)
-                    TextField("服务器地址", text: $serverURL, prompt: Text("输入服务器地址"))
+                    TextField(String(localized: "服务器地址", bundle: .module), text: $serverURL, prompt: Text(String(localized: "输入服务器地址", bundle: .module)))
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
-                    TextField("用户名", text: $username, prompt: Text("输入用户名"))
+                    TextField(String(localized: "用户名", bundle: .module), text: $username, prompt: Text(String(localized: "输入用户名", bundle: .module)))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     SecureField("输入密码", text: $password)
                         .textContentType(.password)
-                    TextField("外网地址（可选）", text: $externalServerURL, prompt: Text("输入外网地址"))
+                    TextField(String(localized: "外网地址（可选）", bundle: .module), text: $externalServerURL, prompt: Text(String(localized: "输入外网地址", bundle: .module)))
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
@@ -429,10 +429,10 @@ struct ServerConnectionSheet: View {
                             if isTesting || isRequestingLocalNetworkAuthorization {
                                 HStack(spacing: 6) {
                                     ProgressView().controlSize(.small)
-                                    Text(isRequestingLocalNetworkAuthorization ? "正在请求本地网络访问…" : "正在测试连接…")
+                                    Text(isRequestingLocalNetworkAuthorization ? String(localized: "正在请求本地网络访问…", bundle: .module) : String(localized: "正在测试连接…", bundle: .module))
                                 }
                             } else {
-                                Text("测试连接")
+                                Text(String(localized: "测试连接", bundle: .module))
                             }
                         }
                         .disabled(isTesting || isRequestingLocalNetworkAuthorization || model.serverConnectionState.isConnecting)
@@ -442,37 +442,37 @@ struct ServerConnectionSheet: View {
                         }
                     }
                 }
-                Section("连接安全") {
-                    Label("凭据安全存储在系统 Keychain 中。", systemImage: "key")
-                    Label("公网服务器建议使用 HTTPS。", systemImage: "lock")
+                Section(String(localized: "连接安全", bundle: .module)) {
+                    Label(String(localized: "凭据安全存储在系统 Keychain 中。", bundle: .module), systemImage: "key")
+                    Label(String(localized: "公网服务器建议使用 HTTPS。", bundle: .module), systemImage: "lock")
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 if let localValidationError, testStatus == nil {
-                    Section("需要处理") {
+                    Section(String(localized: "需要处理", bundle: .module)) {
                         Label(localValidationError, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(theme.colorTokens.error.color)
                     }
                 }
                 if case let .connecting(stage) = model.serverConnectionState {
-                    Section("连接进度") {
+                    Section(String(localized: "连接进度", bundle: .module)) {
                         HStack { ProgressView(); Text(stage.title) }
                     }
                 }
                 if case let .failed(message) = model.serverConnectionState {
-                    Section("连接失败") {
+                    Section(String(localized: "连接失败", bundle: .module)) {
                         Text(message).lineLimit(nil).textSelection(.enabled)
                     }
                 }
             }
-            .navigationTitle("添加服务器")
+            .navigationTitle(String(localized: "添加服务器", bundle: .module))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(model.serverConnectionState.isConnecting ? "停止" : "取消") { cancelOrStop() }
+                    Button(model.serverConnectionState.isConnecting ? String(localized: "停止", bundle: .module) : String(localized: "取消", bundle: .module)) { cancelOrStop() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { connect() }
+                    Button(String(localized: "保存", bundle: .module)) { connect() }
                         .disabled(model.serverConnectionState.isConnecting || isTesting)
                 }
             }
@@ -487,13 +487,13 @@ struct ServerConnectionSheet: View {
     private func statusLabel(_ status: TestResultStatus) -> some View {
         switch status {
         case .success:
-            Label("连接成功", systemImage: "checkmark.circle.fill")
+            Label(String(localized: "连接成功", bundle: .module), systemImage: "checkmark.circle.fill")
                 .foregroundStyle(theme.colorTokens.success.color)
         case .authFailed:
-            Label("用户名或密码错误", systemImage: "exclamationmark.triangle.fill")
+            Label(String(localized: "用户名或密码错误", bundle: .module), systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.colorTokens.error.color)
         case .unreachable:
-            Label("无法连接服务器", systemImage: "exclamationmark.triangle.fill")
+            Label(String(localized: "无法连接服务器", bundle: .module), systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.colorTokens.error.color)
         }
     }
@@ -645,7 +645,7 @@ struct AIProviderSettingsPage: View {
 
     var body: some View {
         Form {
-            Section("接口地址") {
+            Section(String(localized: "接口地址", bundle: .module)) {
                 TextField("Base URL", text: $aiBaseURL, prompt: Text(AIConnectionSettings.defaultBaseURL))
 #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -672,13 +672,13 @@ struct AIProviderSettingsPage: View {
                     }
                 }
                 if endpointMode == .custom {
-                    TextField("API 路径", text: $aiAPIPath, prompt: Text("/v1/chat/completions"))
+                    TextField(String(localized: "API 路径", bundle: .module), text: $aiAPIPath, prompt: Text("/v1/chat/completions"))
 #if os(iOS)
                         .textInputAutocapitalization(.never)
 #endif
                         .autocorrectionDisabled()
                 }
-                TextField("模型", text: $aiModel, prompt: Text(AIConnectionSettings.defaultModel))
+                TextField(String(localized: "模型", bundle: .module), text: $aiModel, prompt: Text(AIConnectionSettings.defaultModel))
 #if os(iOS)
                     .textInputAutocapitalization(.never)
 #endif
@@ -695,11 +695,11 @@ struct AIProviderSettingsPage: View {
                         }
                     }
                     #else
-                    Button(hasAPIKey ? "更新 API Key" : "配置 API Key") { isConfiguringAPIKey = true }
+                    Button(hasAPIKey ? String(localized: "更新 API Key", bundle: .module) : String(localized: "配置 API Key", bundle: .module)) { isConfiguringAPIKey = true }
                     #endif
                     if hasAPIKey {
                         Spacer()
-                        Button("删除", role: .destructive) {
+                        Button(String(localized: "删除", bundle: .module), role: .destructive) {
                             Task {
                                 try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
                                 hasAPIKey = false
@@ -708,32 +708,32 @@ struct AIProviderSettingsPage: View {
                     }
                 }
             }
-            Section("高级设置") {
+            Section(String(localized: "高级设置", bundle: .module)) {
                 Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
                     HStack {
-                        Text("上下文窗口")
+                        Text(String(localized: "上下文窗口", bundle: .module))
                         Spacer()
                         Text("\(aiMaxContextTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
                 }
                 Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
                     HStack {
-                        Text("单次输出上限")
+                        Text(String(localized: "单次输出上限", bundle: .module))
                         Spacer()
                         Text("\(aiMaxOutputTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
                 }
-                Text("不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。")
+                Text(String(localized: "不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            Section("连接测试") {
+            Section(String(localized: "连接测试", bundle: .module)) {
                 HStack {
                     Button(action: testAIConnection) {
                         if isTestingConnection {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text("测试连接")
+                            Text(String(localized: "测试连接", bundle: .module))
                         }
                     }
                     .disabled(isTestingConnection || !AIConnectionSettings().isComplete)
@@ -767,7 +767,7 @@ API Key 仅保存于系统 Keychain。
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
         }
-        .navigationTitle("OpenAI 兼容接口")
+        .navigationTitle(String(localized: "OpenAI 兼容接口", bundle: .module))
         .onAppear {
             endpointMode = AIEndpointMode.infer(from: aiAPIPath)
         }
@@ -820,7 +820,7 @@ private struct AIProviderSettingsSheet: View {
             AIProviderSettingsPage(theme: theme, hasAPIKey: $hasAPIKey)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("完成") { dismiss() }
+                        Button(String(localized: "完成", bundle: .module)) { dismiss() }
                     }
                 }
         }
@@ -849,23 +849,23 @@ struct APIKeyPage: View {
 #endif
                     .autocorrectionDisabled()
             }
-            Section("存储安全") {
-                Label("仅写入系统 Keychain（本机、不同步）", systemImage: "key.fill")
+            Section(String(localized: "存储安全", bundle: .module)) {
+                Label(String(localized: "仅写入系统 Keychain（本机、不同步）", bundle: .module), systemImage: "key.fill")
                 if hasExistingKey {
-                    Label("保存后将覆盖已存储的 Key", systemImage: "arrow.triangle.2.circlepath")
+                    Label(String(localized: "保存后将覆盖已存储的 Key", bundle: .module), systemImage: "arrow.triangle.2.circlepath")
                 }
             }
             if let saveError {
-                Section("需要处理") {
+                Section(String(localized: "需要处理", bundle: .module)) {
                     Label(saveError, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(theme.colorTokens.error.color)
                 }
             }
         }
-        .navigationTitle(hasExistingKey ? "更新 API Key" : "配置 API Key")
+        .navigationTitle(hasExistingKey ? String(localized: "更新 API Key", bundle: .module) : String(localized: "配置 API Key", bundle: .module))
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("存储到 Keychain", action: save)
+                Button(String(localized: "存储到 Keychain", bundle: .module), action: save)
                     .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
             }
         }
@@ -902,7 +902,7 @@ private struct APIKeySheet: View {
             APIKeyPage(theme: theme, hasExistingKey: hasExistingKey, onSave: onSave)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("取消") { dismiss() }
+                        Button(String(localized: "取消", bundle: .module)) { dismiss() }
                     }
                 }
         }

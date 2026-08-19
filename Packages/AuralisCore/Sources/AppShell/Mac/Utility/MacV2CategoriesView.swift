@@ -31,7 +31,7 @@ struct MacV2CategoriesView: View {
                 ContentUnavailableView(
                     "还没有分类",
                     systemImage: "square.grid.2x2",
-                    description: Text("在设置 → AI 与公开数据中完成推荐索引 V2 后，这里会按歌曲数量展示分类。")
+                    description: Text(String(localized: "在设置 → AI 与公开数据中完成推荐索引 V2 后，这里会按歌曲数量展示分类。", bundle: .module))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -49,7 +49,7 @@ struct MacV2CategoriesView: View {
                 .padding(20)
             }
         }
-        .navigationTitle("分类")
+        .navigationTitle(String(localized: "分类", bundle: .module))
         // 顶部不留按钮：刷新按钮移除（可切换分类重进刷新）。
         .task(id: model.catalog.activeServerID) { await load() }
     }
@@ -83,13 +83,13 @@ struct MacV2CategoriesView: View {
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(category.macCategoryTitle)，\(category.trackCount) 首歌曲")
+        .accessibilityLabel(String(localized: "\(category.macCategoryTitle)，\(category.trackCount) 首歌曲", bundle: .module))
     }
 
     private var aiTagSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("AI 标签")
+                Text(String(localized: "AI 标签", bundle: .module))
                     .font(.headline)
                 Spacer()
                 HStack(spacing: 6) {
@@ -101,7 +101,7 @@ struct MacV2CategoriesView: View {
                     Button {
                         Task { await loadTagPage(reset: true) }
                     } label: {
-                        Label("搜索", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+                        Label(String(localized: "搜索", bundle: .module), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                     }
                     .help("搜索标签")
                 }
@@ -120,7 +120,7 @@ struct MacV2CategoriesView: View {
                 } label: {
                     HStack(spacing: 8) {
                         if isLoadingMoreTags { ProgressView().controlSize(.small) }
-                        Text("加载更多标签")
+                        Text(String(localized: "加载更多标签", bundle: .module))
                     }
                 }
                 .buttonStyle(.bordered)
@@ -209,7 +209,7 @@ struct MacV2CategoryTracksView: View {
                         systemImage: "exclamationmark.triangle",
                         description: Text(loadError)
                     )
-                    Button("重试") { Task { await loadTracks() } }
+                    Button(String(localized: "重试", bundle: .module)) { Task { await loadTracks() } }
                         .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
