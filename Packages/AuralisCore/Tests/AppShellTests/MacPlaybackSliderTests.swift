@@ -88,6 +88,41 @@ struct MacPlaybackSliderTests {
         #expect(commits == [77])
     }
 
+    @Test("完整拖动序列：mouseDown 起点、多次 dragged、mouseUp 提交，第二次拖动重新 start")
+    func fullDragSequenceStartsOncePerGesture() {
+        var startCount = 0
+        var reported: [Double] = []
+        var commits: [Double] = []
+        let coordinator = makeCoordinator(
+            onScrubStart: { startCount += 1 },
+            onScrubChange: { reported.append($0) },
+            onCommit: { commits.append($0) }
+        )
+
+        // 第一次拖动：mouseDown 起手。
+        coordinator.handle(value: 20, eventType: .leftMouseDown)
+        #expect(startCount == 1)
+        #expect(reported == [20])
+        #expect(commits.isEmpty)
+
+        coordinator.handle(value: 30, eventType: .leftMouseDragged)
+        coordinator.handle(value: 60, eventType: .leftMouseDragged)
+        #expect(startCount == 1, "同一手势内 onScrubStart 只触发一次")
+        #expect(reported == [20, 30, 60])
+
+        coordinator.handle(value: 90, eventType: .leftMouseUp)
+        #expect(coordinator.isScrubbing == false)
+        #expect(reported.last == 90)
+        #expect(commits == [90], "松手只 commit 一次，值为最终位置")
+
+        // 第二次拖动：onScrubStart 必须再次触发（新的完整手势）。
+        coordinator.handle(value: 10, eventType: .leftMouseDown)
+        #expect(startCount == 2)
+        #expect(commits == [90], "第二次拖动尚未提交")
+        coordinator.handle(value: 40, eventType: .leftMouseUp)
+        #expect(commits == [90, 40])
+    }
+
     // MARK: - Coordinator 闭包刷新（回归核心）
 
     @Test("切歌后 onCommit 闭包可被替换——不再持有旧 duration 的 seek 比例")

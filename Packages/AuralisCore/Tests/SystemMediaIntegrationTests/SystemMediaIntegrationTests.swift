@@ -1,7 +1,7 @@
 import Domain
 import Foundation
 import MediaPlayer
-import SystemMediaIntegration
+@testable import SystemMediaIntegration
 import Testing
 
 @Test("Now Playing info dictionary carries metadata without artwork")
@@ -110,4 +110,25 @@ func repeatModeMapping() {
     #expect(RemoteCommandCoordinator.repeatType(from: .all) == .all)
     #expect(RemoteCommandCoordinator.repeatType(from: .one) == .one)
     #expect(RemoteCommandCoordinator.repeatType(from: .off) == .off)
+}
+
+// MARK: - Live Activity / Widget 刷新节流
+
+@Test("Live Activity 节流：periodic 受间隔限制，显著事件立即更新")
+func liveActivityThrottleByReason() {
+    #expect(LiveActivityManager.shouldUpdateActivity(reason: .periodic, elapsedSinceLastUpdate: 1) == false)
+    #expect(LiveActivityManager.shouldUpdateActivity(reason: .periodic, elapsedSinceLastUpdate: 5) == true)
+    #expect(LiveActivityManager.shouldUpdateActivity(reason: .periodic, elapsedSinceLastUpdate: 10) == true)
+    #expect(LiveActivityManager.shouldUpdateActivity(reason: .trackChanged, elapsedSinceLastUpdate: 0.1) == true)
+    #expect(LiveActivityManager.shouldUpdateActivity(reason: .playbackStateChanged, elapsedSinceLastUpdate: 0.1) == true)
+    #expect(LiveActivityManager.shouldUpdateActivity(reason: .seek, elapsedSinceLastUpdate: 0.1) == true)
+}
+
+@Test("Widget reload：只有快照写入成功且事件显著才刷新")
+func widgetReloadRequiresSignificantReason() {
+    #expect(LiveActivityManager.shouldReloadWidget(didWrite: false, reason: .trackChanged) == false)
+    #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .periodic) == false)
+    #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .trackChanged) == true)
+    #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .playbackStateChanged) == true)
+    #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .seek) == true)
 }

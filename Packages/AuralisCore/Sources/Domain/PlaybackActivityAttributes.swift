@@ -1,5 +1,11 @@
 import Foundation
 
+/// 「正在播放」小组件的 Widget kind：App（LiveActivityManager 主动 reload）
+/// 与 Widget Extension（StaticConfiguration）共用同一字符串，避免两处散落。
+public enum AuralisNowPlayingWidgetKind {
+    public static let kind = "AuralisNowPlaying"
+}
+
 /// Live Activity（灵动岛 / 锁屏实时活动）的属性模型。
 /// App 与 Widget Extension 共用（通过 AuralisCore 共享），仅含必要标识与展示字段，
 /// 不含服务器地址、凭据或文件路径。

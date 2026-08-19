@@ -57,10 +57,6 @@ struct MacPlaybackSlider: NSViewRepresentable {
             if slider.maxValue != maxValue { slider.maxValue = maxValue }
             slider.isEnabled = isEnabled
 
-            // 兜底：mouseDown 到首次 action 之间 isScrubbing 可能还是 false，
-            // 用 isHighlighted 补一次（仅作写入守卫，不作为主判定）。
-            context.coordinator.syncScrubbingIfNeeded(slider.isHighlighted)
-
             // 非用户拖动时，只把外部 position 写入滑块；
             // 值没真实变化（容差）不写，避免无谓的 KVO/刷新。
             if !context.coordinator.isScrubbing, abs(slider.doubleValue - value) > 0.0005 {
@@ -134,13 +130,6 @@ struct MacPlaybackSlider: NSViewRepresentable {
                 isScrubbing = false
                 onScrubChange(value)
                 onCommit(value)
-            }
-        }
-
-        /// 由 updateNSView 兜底同步（mouseDown→首次 action 空窗）；不覆盖已进入的 scrub。
-        func syncScrubbingIfNeeded(_ scrubbing: Bool) {
-            if isScrubbing != scrubbing {
-                isScrubbing = scrubbing
             }
         }
     }

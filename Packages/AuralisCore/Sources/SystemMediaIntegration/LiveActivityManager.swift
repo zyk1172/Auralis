@@ -3,7 +3,17 @@ import Foundation
 import Observability
 #if os(iOS)
 import ActivityKit
+import WidgetKit
 #endif
+
+/// Live Activity / Widget 更新的触发原因。
+/// 用于区分「周期性进度刷新」（可节流）与「显著状态变化」（切歌/播放暂停/seek，必须及时）。
+public enum PlaybackUpdateReason: Sendable, Equatable {
+    case periodic
+    case trackChanged
+    case playbackStateChanged
+    case seek
+}
 
 /// 灵动岛 / 锁屏实时活动（Live Activity）与「正在播放」小组件的统一数据源。
 ///
@@ -25,7 +35,7 @@ public final class LiveActivityManager {
     private static let appGroupIdentifier = "group.com.auralis.player"
     private static let snapshotRelativePath = "Auralis/playback-snapshot.json"
     /// ActivityKit 对更新频率有限额；5 秒内的重复更新直接跳过。
-    private static let activityUpdateInterval: TimeInterval = 5
+    nonisolated static let activityUpdateInterval: TimeInterval = 5
 
     #if os(iOS)
     private var activityHandle: LiveActivityHandle?
@@ -37,19 +47,34 @@ public final class LiveActivityManager {
     public init() {}
 
     /// 播放状态变化（切歌 / 播放 / 暂停 / 拖动）时调用。始终写小组件快照；
-    /// 活动按节流更新，首次请求。
-    public func updatePlayback(_ state: PlaybackActivityAttributes.ContentState) async {
-        writeSnapshot(state)
+    /// 活动按节流更新，首次请求。切歌/播放暂停/seek 等显著事件不节流。
+    public func updatePlayback(
+        _ state: PlaybackActivityAttributes.ContentState,
+        reason: PlaybackUpdateReason = .periodic
+    ) async {
+        let didWrite = writeSnapshot(state)
         #if os(iOS)
         if activityHandle == nil {
             await requestActivity(state)
             return
         }
-        guard Date().timeIntervalSince(lastActivityUpdate) >= Self.activityUpdateInterval else { return }
+        guard Self.shouldUpdateActivity(
+            reason: reason,
+            elapsedSinceLastUpdate: Date().timeIntervalSince(lastActivityUpdate)
+        ) else {
+            return
+        }
         let content = ActivityContent(state: state, staleDate: .now.addingTimeInterval(60))
         lastActivityUpdate = .now
         await activityHandle?.activity.update(content)
         #endif
+        // 显著状态变化且快照写入成功时，主动让小组件刷新（periodic 进度不刷，
+        // 避免把「延迟更新」换成高频 reloadTimelines 的性能问题）。
+        if Self.shouldReloadWidget(didWrite: didWrite, reason: reason) {
+            #if os(iOS)
+            WidgetCenter.shared.reloadTimelines(ofKind: AuralisNowPlayingWidgetKind.kind)
+            #endif
+        }
     }
 
     /// 停止 / 队列结束 / 移除服务器：结束活动并清空小组件快照。
@@ -77,17 +102,51 @@ public final class LiveActivityManager {
     }
     #endif
 
-    private func writeSnapshot(_ state: PlaybackActivityAttributes.ContentState) {
+    /// 节流判断：periodic 受 5 秒间隔限制；显著事件始终更新。
+    nonisolated static func shouldUpdateActivity(
+        reason: PlaybackUpdateReason,
+        elapsedSinceLastUpdate: TimeInterval
+    ) -> Bool {
+        switch reason {
+        case .periodic:
+            return elapsedSinceLastUpdate >= activityUpdateInterval
+        case .trackChanged, .playbackStateChanged, .seek:
+            return true
+        }
+    }
+
+    /// 小组件 reload 判断：快照写入成功且事件显著（切歌/播放暂停/seek）才刷新。
+    nonisolated static func shouldReloadWidget(
+        didWrite: Bool,
+        reason: PlaybackUpdateReason
+    ) -> Bool {
+        guard didWrite else { return false }
+        switch reason {
+        case .periodic:
+            return false
+        case .trackChanged, .playbackStateChanged, .seek:
+            return true
+        }
+    }
+
+    @discardableResult
+    private func writeSnapshot(_ state: PlaybackActivityAttributes.ContentState) -> Bool {
         #if os(iOS)
         guard let group = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
-        ) else { return }
+        ) else { return false }
         let dir = group.appendingPathComponent("Auralis", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("playback-snapshot.json")
-        if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: url, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
         }
+        #else
+        return false
         #endif
     }
 

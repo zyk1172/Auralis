@@ -178,6 +178,34 @@ struct NowPlayingView: View {
     @State private var queueEditMode = EditMode.inactive
 #endif
 
+    /// 跨服务器稳定的当前曲目身份：不同服务器可能复用相同 remote TrackID，
+    /// 切歌清 pendingSeek 时必须按 serverID + trackID 双键判断。
+    private var currentTrackIdentity: String {
+        "\(model.currentTrack.serverID.rawValue):\(model.currentTrack.id.rawValue)"
+    }
+
+    /// 拖动中的 UI 显示位置：pendingSeek 是 0...1 比例，换算成秒；
+    /// 未拖动时显示真实播放位置，保证松手前文字与滑块同步。
+    private var displayedPlaybackPosition: TimeInterval {
+        Self.displayedPlaybackPosition(
+            pendingSeek: pendingSeek,
+            actualPosition: playbackStore.position,
+            duration: model.effectivePlaybackDuration
+        )
+    }
+
+    /// 纯函数：供 UI 显示与回归测试共用。
+    static func displayedPlaybackPosition(
+        pendingSeek: Double?,
+        actualPosition: TimeInterval,
+        duration: TimeInterval
+    ) -> TimeInterval {
+        if let pendingSeek {
+            return min(max(pendingSeek, 0), 1) * duration
+        }
+        return actualPosition
+    }
+
     init(model: AuralisAppModel, theme: BuiltInTheme) {
         self.model = model
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
@@ -237,6 +265,10 @@ struct NowPlayingView: View {
             Button("歌曲鉴赏") { appreciateCurrentSong() }
             Button("歌曲信息") { showsTrackInformation = true }
             Button("取消", role: .cancel) {}
+        }
+        // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
+        .onChange(of: currentTrackIdentity) { _, _ in
+            pendingSeek = nil
         }
     }
 
@@ -402,11 +434,11 @@ struct NowPlayingView: View {
                     accessibilityStep: min(1, 5 / max(model.effectivePlaybackDuration, 1))
                 )
                 .accessibilityLabel("播放进度")
-                .accessibilityValue(Text("\(formatDuration(playbackStore.position)) / \(formatDuration(model.effectivePlaybackDuration))"))
+                .accessibilityValue(Text("\(formatDuration(displayedPlaybackPosition)) / \(formatDuration(model.effectivePlaybackDuration))"))
                 HStack {
-                    Text(formatDuration(playbackStore.position))
+                    Text(formatDuration(displayedPlaybackPosition))
                     Spacer()
-                    Text("-" + formatDuration(max(model.effectivePlaybackDuration - playbackStore.position, 0)))
+                    Text("-" + formatDuration(max(model.effectivePlaybackDuration - displayedPlaybackPosition, 0)))
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(theme.colorTokens.secondaryText.color)

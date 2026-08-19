@@ -80,7 +80,7 @@ struct NowPlayingWidgetView: View {
 
 struct AuralisNowPlayingWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "AuralisNowPlaying", provider: NowPlayingTimelineProvider()) { entry in
+        StaticConfiguration(kind: AuralisNowPlayingWidgetKind.kind, provider: NowPlayingTimelineProvider()) { entry in
             NowPlayingWidgetView(snapshot: entry.snapshot)
                 .containerBackground(.fill.tertiary, for: .widget)
         }

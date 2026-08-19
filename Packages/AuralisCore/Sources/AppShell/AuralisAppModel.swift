@@ -1203,7 +1203,7 @@ public final class AuralisAppModel: ObservableObject {
         )
         // 灵动岛 / 锁屏实时活动与「正在播放」小组件（P1-4）。
         let content = liveActivityContent()
-        Task { await liveActivityManager.updatePlayback(content) }
+        Task { await liveActivityManager.updatePlayback(content, reason: .trackChanged) }
         updateHandoffActivity()
     }
 
@@ -1232,7 +1232,7 @@ public final class AuralisAppModel: ObservableObject {
             Task { await liveActivityManager.endPlayback() }
         } else {
             let content = liveActivityContent()
-            Task { await liveActivityManager.updatePlayback(content) }
+            Task { await liveActivityManager.updatePlayback(content, reason: .playbackStateChanged) }
         }
     }
 
@@ -3068,6 +3068,8 @@ public final class AuralisAppModel: ObservableObject {
             guard queueIdentity(self.currentTrack) == identity else { return }
             await engine.seek(to: position)
             mediaIntegration.seekCompleted(position: position, isPlaying: playbackState == .playing, rate: playbackState == .playing ? playbackRate : 0)
+            let content = liveActivityContent()
+            await liveActivityManager.updatePlayback(content, reason: .seek)
         }
     }
 

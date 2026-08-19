@@ -99,8 +99,8 @@ struct MacExpandedPlayerView: View {
                     .padding(.leading, playerLeading)
                     .padding(.top, MacFullPlayerMetrics.topY(window: size))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .offset(y: isVisible ? 0 : 36)
-                    .scaleEffect(isVisible ? 1 : 0.97, anchor: .bottom)
+                    .offset(y: isVisible ? 0 : (reduceMotion ? 0 : 36))
+                    .scaleEffect(isVisible ? 1 : (reduceMotion ? 1 : 0.97), anchor: .bottom)
                     .opacity(isVisible ? 1 : 0)
 
                 if hasContext {
@@ -110,8 +110,8 @@ struct MacExpandedPlayerView: View {
                         .padding(.top, MacFullPlayerMetrics.contextTopY(window: size))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .transition(.opacity)
-                        .offset(y: isVisible ? 0 : 36)
-                        .scaleEffect(isVisible ? 1 : 0.97, anchor: .bottom)
+                        .offset(y: isVisible ? 0 : (reduceMotion ? 0 : 36))
+                        .scaleEffect(isVisible ? 1 : (reduceMotion ? 1 : 0.97), anchor: .bottom)
                         .opacity(isVisible ? 1 : 0)
                 }
 
@@ -126,7 +126,7 @@ struct MacExpandedPlayerView: View {
             .overlay(alignment: .bottomTrailing) {
                 bottomRightContextGlass.opacity(isVisible ? 1 : 0)
             }
-            .animation(.easeInOut(duration: 0.25), value: context)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: context)
             // 页面出现/消失动画完全由 MacMusicShell 的 playerOverlayVisible 驱动，
             // 本页不在 onAppear 里自行 withAnimation。
         }
