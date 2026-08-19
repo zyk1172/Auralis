@@ -1,86 +1,94 @@
 {
-  "sourceLanguage": "zh-Hans",
-  "strings": {
-    "请求失败": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请求失败"
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "…（共 \\(data.count) 字节）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "…（共 \\(data.count) 字节）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请求失败"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "…（共 \\(data.count) 字节）"
           }
         }
       }
     },
-    "<\\(data.count) 字节非文本内容>": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<\\(data.count) 字节非文本内容>"
+    "…（共 %lld 字节）" : {
+
+    },
+    "<\\(data.count) 字节非文本内容>" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<\\(data.count) 字节非文本内容>"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<\\(data.count) 字节非文本内容>"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<\\(data.count) 字节非文本内容>"
           }
         }
       }
     },
-    "…（共 \\(data.count) 字节）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "…（共 \\(data.count) 字节）"
+    "<%lld 字节非文本内容>" : {
+
+    },
+    "响应流失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "响应流失败"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "…（共 \\(data.count) 字节）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "响应流失败"
           }
         }
       }
     },
-    "响应流失败": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "响应流失败"
+    "未知错误" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知错误"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "响应流失败"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知错误"
           }
         }
       }
     },
-    "未知错误": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未知错误"
+    "请求失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求失败"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未知错误"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求失败"
           }
         }
       }
     }
   },
-  "version": "1.0"
+  "version" : "1.0"
 }
