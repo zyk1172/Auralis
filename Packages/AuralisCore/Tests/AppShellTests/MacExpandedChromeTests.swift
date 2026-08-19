@@ -14,9 +14,10 @@ import Testing
 /// - AppKit native title：本 Suite 验证。`titleVisibility` 在 normal 与 expanded
 ///   都保持 `.hidden`；`window.title` 允许保留语义标题 `Auralis`，不显示即可。
 ///
-/// 设计契约（RC Stabilization）：
-/// - expanded：原生 traffic lights 隐藏、titlebar 透明；
-/// - normal：原生 traffic lights 显示、titlebar 不透明；
+/// 设计契约：
+/// - expanded：titlebar 透明；系统交通灯（关闭/最小化/缩放）保持可见，
+///   不随 expanded 隐藏（HIG 禁止自绘/隐藏系统窗口控制按钮）；
+/// - normal：titlebar 不透明；
 /// - 两种模式 titleVisibility 都是 `.hidden`；
 /// - 不做轮询 / KVO / Timer / 修改 window.title。
 @Suite("Mac expanded window chrome")
@@ -55,7 +56,7 @@ struct MacExpandedChromeTests {
         }
     }
 
-    @Test("expanded：titleVisibility 仍 hidden、traffic lights 隐藏、titlebar 透明")
+    @Test("expanded：titleVisibility 仍 hidden、系统交通灯保持可见、titlebar 透明")
     @MainActor
     func expandedModeChrome() {
         let window = makeWindow()
@@ -64,9 +65,10 @@ struct MacExpandedChromeTests {
         controller.setExpanded(true)
         #expect(window.titleVisibility == .hidden)
         #expect(window.titlebarAppearsTransparent == true)
+        // 系统交通灯不随 expanded 隐藏（HIG：不使用自绘/隐藏替代系统窗口控制）。
         let trafficTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         for type in trafficTypes {
-            #expect(window.standardWindowButton(type)?.isHidden == true)
+            #expect(window.standardWindowButton(type)?.isHidden == false)
         }
     }
 

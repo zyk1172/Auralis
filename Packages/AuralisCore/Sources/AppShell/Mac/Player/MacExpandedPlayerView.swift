@@ -101,9 +101,6 @@ struct MacExpandedPlayerView: View {
                 // Glass Capsules（只对内容命中）
             }
             .overlay(alignment: .topLeading) {
-                topTrafficLights.opacity(isVisible ? 1 : 0)
-            }
-            .overlay(alignment: .topLeading) {
                 topLeftGlass.opacity(isVisible ? 1 : 0)
             }
             .overlay(alignment: .topTrailing) {
@@ -532,31 +529,9 @@ struct MacExpandedPlayerView: View {
 
     // MARK: - Glass Capsules（.overlay(alignment:) 定位，避免整屏透明容器吞点击）
 
-    /// Expanded Player 自己承载三个窗口控制点，和左右胶囊共用相同 38pt 高度与
-    /// 8pt 顶部基线；不再让 AppKit toolbar 在异步 layout 后把它们弹回旧位置。
-    private var topTrafficLights: some View {
-        HStack(spacing: 10) {
-            trafficLight(color: .red) { NSApp.keyWindow?.performClose(nil) }
-            trafficLight(color: .yellow) { NSApp.keyWindow?.miniaturize(nil) }
-            trafficLight(color: .green) { NSApp.keyWindow?.zoom(nil) }
-        }
-        .frame(height: MacUIVisualTokens.ExpandedPlayer.topLeftGlassHeight)
-        .padding(.leading, 16)
-        .padding(.top, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingT)
-        .ignoresSafeArea(edges: .top)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("窗口控制")
-    }
-
-    private func trafficLight(color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Circle()
-                .fill(color)
-                .frame(width: 12, height: 12)
-                .overlay(Circle().stroke(.black.opacity(0.18), lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-    }
+    /// 窗口控制（关闭 / 最小化 / 缩放）由系统 standard window buttons 提供，
+    /// 保留在 titlebar 默认左上角位置（见 MacWindowChromeController），
+    /// 本页不再自绘红黄绿交通灯，也不操作 NSApp.keyWindow。
 
     private var topLeftGlass: some View {
         MacGlassCapsule(colorScheme: theme.colorScheme) {

@@ -78,11 +78,17 @@ public struct AgentSession: Codable, Sendable, Identifiable {
 /// 会话持久化与查询。
 public actor SessionStore {
     private let fileURL: URL
+    /// 轮换备份：主文件损坏时回退（避免 decode 失败表现为“所有会话消失”）。
+    private let backupURL: URL
     private var cache: [UUID: AgentSession] = [:]
 
     public init(fileURL: URL) {
         self.fileURL = fileURL
-        self.cache = Self.load(from: fileURL) ?? [:]
+        let dir = fileURL.deletingLastPathComponent()
+        let base = fileURL.deletingPathExtension().lastPathComponent
+        let ext = fileURL.pathExtension
+        self.backupURL = dir.appendingPathComponent("\(base).backup.\(ext)")
+        self.cache = Self.load(from: fileURL, fallback: backupURL) ?? [:]
     }
 
     public var all: [AgentSession] {
@@ -97,7 +103,7 @@ public actor SessionStore {
     public func create(serverID: ServerID? = nil) -> AgentSession {
         let session = AgentSession(serverID: serverID)
         cache[session.id] = session
-        try? persist()
+        persistSafely(operation: "create")
         return session
     }
 
@@ -109,7 +115,7 @@ public actor SessionStore {
             session.title = Self.deriveTitle(from: firstUser)
         }
         cache[id] = session
-        try? persist()
+        persistSafely(operation: "append")
     }
 
     public func rename(_ id: UUID, to title: String) {
@@ -117,7 +123,7 @@ public actor SessionStore {
         session.title = title
         session.updatedAt = .now
         cache[id] = session
-        try? persist()
+        persistSafely(operation: "rename")
     }
 
     public func setPinned(_ id: UUID, _ pinned: Bool) {
@@ -125,7 +131,7 @@ public actor SessionStore {
         session.isPinned = pinned
         session.updatedAt = .now
         cache[id] = session
-        try? persist()
+        persistSafely(operation: "setPinned")
     }
 
     public func setArchived(_ id: UUID, _ archived: Bool) {
@@ -133,14 +139,14 @@ public actor SessionStore {
         session.isArchived = archived
         session.updatedAt = .now
         cache[id] = session
-        try? persist()
+        persistSafely(operation: "setArchived")
     }
 
     public func setSummary(_ id: UUID, _ summary: String) {
         guard var session = cache[id] else { return }
         session.summary = summary
         cache[id] = session
-        try? persist()
+        persistSafely(operation: "setSummary")
     }
 
     public func clearMessages(_ id: UUID) {
@@ -148,12 +154,12 @@ public actor SessionStore {
         session.messages.removeAll()
         session.updatedAt = .now
         cache[id] = session
-        try? persist()
+        persistSafely(operation: "clearMessages")
     }
 
     public func delete(_ id: UUID) {
         cache.removeValue(forKey: id)
-        try? persist()
+        persistSafely(operation: "delete")
     }
 
     public func search(_ query: String) -> [AgentSession] {
@@ -175,17 +181,43 @@ public actor SessionStore {
 
     // MARK: - Persistence
 
+    /// 原子持久化：主文件 + 轮换备份。
+    /// - 主文件用 `.atomic`（临时文件 + rename），进程中途被杀也不会留下截断 JSON；
+    /// - 主文件成功后把同一份数据写入备份文件（同样原子），load 时主文件损坏可回退备份。
     private func persist() throws {
         let list = Array(cache.values)
         let data = try JSONEncoder().encode(list)
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: fileURL)
+        try data.write(to: fileURL, options: .atomic)
+        try data.write(to: backupURL, options: .atomic)
     }
 
-    private static func load(from url: URL) -> [UUID: AgentSession]? {
+    /// 持久化失败不静默：DEBUG 下断言暴露问题；Release 下保持不崩溃（actor 内下次写入会重试）。
+    /// AgentKit 不依赖 Observability，避免为日志反向破坏包依赖方向。
+    private func persistSafely(operation: StaticString) {
+        do {
+            try persist()
+        } catch {
+            #if DEBUG
+            assertionFailure("AgentSession 持久化失败（\(operation)）: \(error)")
+            #else
+            _ = operation
+            #endif
+        }
+    }
+
+    /// 主文件优先，decode 失败回退备份；两者都失败才返回 nil（保持内存态为空）。
+    private static func load(from url: URL, fallback backupURL: URL) -> [UUID: AgentSession]? {
+        if let sessions = decode(from: url) { return sessions }
+        if let sessions = decode(from: backupURL) { return sessions }
+        return nil
+    }
+
+    private static func decode(from url: URL) -> [UUID: AgentSession]? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let list = try? JSONDecoder().decode([AgentSession].self, from: data)
-        return list.map { Dictionary(uniqueKeysWithValues: $0.map { ($0.id, $0) }) }
+        guard let list = try? JSONDecoder().decode([AgentSession].self, from: data) else { return nil }
+        // 用 uniquingKeysWith 兜底重复 id，避免 Dictionary(uniqueKeysWithValues:) 直接 fatalError
+        return Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private static func deriveTitle(from message: AgentChatMessage) -> String {

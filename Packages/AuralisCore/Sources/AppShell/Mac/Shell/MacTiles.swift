@@ -103,6 +103,11 @@ struct MacAlbumTile: View {
     var moreActions: [MacMenuAction] = []
 
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    /// 操作按钮可见条件：鼠标 hover 或键盘焦点（全键盘控制 / VoiceOver 可触达），
+    /// 避免「鼠标能看到播放/更多，键盘完全没有」。
+    private var showsActions: Bool { isHovering || isFocused }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -121,10 +126,12 @@ struct MacAlbumTile: View {
                     .contentShape(RoundedRectangle(cornerRadius: MacUIVisualTokens.Artwork.cornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .focused($isFocused)
                 .help("打开专辑")
                 .accessibilityLabel("打开专辑")
+                .accessibilityAction(named: Text("播放")) { onPlay?() }
 
-                if isHovering {
+                if showsActions {
                     HStack(spacing: 6) {
                         if let onPlay {
                             Button {
@@ -191,7 +198,24 @@ struct MacAlbumTile: View {
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.16), value: isHovering)
+        // 右键菜单提供与 hover「更多」等价的键盘/辅助功能路径。
+        .contextMenu {
+            if let onPlay {
+                Button("播放") { onPlay() }
+            }
+            if !moreActions.isEmpty {
+                Divider()
+                ForEach(moreActions) { action in
+                    Button(role: action.destructive ? .destructive : nil) {
+                        action.action()
+                    } label: {
+                        Label(action.title, systemImage: action.systemImage ?? "circle")
+                    }
+                    .disabled(action.disabled)
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: showsActions)
     }
 }
 
@@ -207,6 +231,10 @@ struct MacArtistTile: View {
     var onPlay: (() -> Void)? = nil
 
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    /// 操作按钮可见条件：鼠标 hover 或键盘焦点，避免「鼠标能看到播放，键盘没有」。
+    private var showsActions: Bool { isHovering || isFocused }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -219,10 +247,12 @@ struct MacArtistTile: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .focused($isFocused)
                 .help("打开艺术家")
                 .accessibilityLabel("打开艺术家")
+                .accessibilityAction(named: Text("随机播放")) { onPlay?() }
 
-                if isHovering, let onPlay {
+                if showsActions, let onPlay {
                     Button {
                         onPlay()
                     } label: {
@@ -262,7 +292,13 @@ struct MacArtistTile: View {
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.16), value: isHovering)
+        // 右键菜单提供键盘/辅助功能等价的播放入口。
+        .contextMenu {
+            if let onPlay {
+                Button("随机播放") { onPlay() }
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: showsActions)
     }
 
     @ViewBuilder
@@ -311,6 +347,10 @@ struct MacPlaylistTile: View {
     var moreActions: [MacMenuAction] = []
 
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    /// 操作按钮可见条件：鼠标 hover 或键盘焦点（全键盘控制 / VoiceOver 可触达）。
+    private var showsActions: Bool { isHovering || isFocused }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -322,10 +362,12 @@ struct MacPlaylistTile: View {
                         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .focused($isFocused)
                 .help("打开播放列表")
                 .accessibilityLabel("打开播放列表")
+                .accessibilityAction(named: Text("播放")) { onPlay?() }
 
-                if isHovering {
+                if showsActions {
                     HStack(spacing: 6) {
                         if let onPlay {
                             Button {
@@ -390,7 +432,24 @@ struct MacPlaylistTile: View {
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.16), value: isHovering)
+        // 右键菜单提供与 hover「更多」等价的键盘/辅助功能路径。
+        .contextMenu {
+            if let onPlay {
+                Button("播放") { onPlay() }
+            }
+            if !moreActions.isEmpty {
+                Divider()
+                ForEach(moreActions) { action in
+                    Button(role: action.destructive ? .destructive : nil) {
+                        action.action()
+                    } label: {
+                        Label(action.title, systemImage: action.systemImage ?? "circle")
+                    }
+                    .disabled(action.disabled)
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: showsActions)
     }
 }
 
@@ -405,6 +464,10 @@ struct MacTrackTile: View {
     var moreActions: [MacMenuAction] = []
 
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    /// 操作按钮可见条件：鼠标 hover 或键盘焦点，避免「鼠标能看到播放，键盘没有」。
+    private var showsActions: Bool { isHovering || isFocused }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -422,10 +485,12 @@ struct MacTrackTile: View {
                     .contentShape(RoundedRectangle(cornerRadius: MacUIVisualTokens.Artwork.cornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .focused($isFocused)
                 .help("播放")
                 .accessibilityLabel("播放")
+                .accessibilityAction(named: Text("播放")) { onPlay?() }
 
-                if isHovering, let onPlay {
+                if showsActions, let onPlay {
                     Button {
                         onPlay()
                     } label: {
@@ -466,7 +531,13 @@ struct MacTrackTile: View {
         }
         .frame(width: size, alignment: .leading)
         .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.16), value: isHovering)
+        // 右键菜单提供键盘/辅助功能等价的播放入口。
+        .contextMenu {
+            if let onPlay {
+                Button("播放") { onPlay() }
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: showsActions)
     }
 }
 

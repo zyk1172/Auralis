@@ -13,9 +13,12 @@ import AppKit
 ///   管理（品牌名 `Auralis`），本控制器不修改它。
 ///
 /// 本控制器只在 expanded / normal 之间切换：
-/// - expanded：原生 traffic lights 隐藏、titlebar 透明；
-/// - normal：原生 traffic lights 恢复、titlebar 不透明；
+/// - expanded：titlebar 透明（系统 traffic lights 保持在默认左上角，不隐藏）；
+/// - normal：titlebar 不透明；
 /// - 两种模式 titleVisibility 都是 .hidden。
+///
+/// 窗口控制按钮（关闭 / 最小化 / 缩放）始终使用系统 standard window buttons，
+/// 不做自绘替代，也不通过 NSApp.keyWindow 操作窗口（多窗口时 keyWindow 不可靠）。
 ///
 /// 幂等写入：仅在实际属性与目标不一致时才修改；不做轮询 / KVO / Timer，
 /// 也不修改 `window.title`，因此不存在「SwiftUI 写标题 → 我们再清掉」的竞争，
@@ -49,14 +52,8 @@ public final class MacWindowChromeController {
         if window.titleVisibility != .hidden {
             window.titleVisibility = .hidden
         }
-        let trafficTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-        for type in trafficTypes {
-            let button = window.standardWindowButton(type)
-            let hidden = isExpanded
-            if (button?.isHidden ?? false) != hidden {
-                button?.isHidden = hidden
-            }
-        }
+        // 系统 close / miniaturize / zoom 按钮始终保持可见（不随 expanded 隐藏），
+        // 避免自绘交通灯替代系统窗口控制（HIG 明确禁止自定义窗口控制按钮）。
         if window.titlebarAppearsTransparent != isExpanded {
             window.titlebarAppearsTransparent = isExpanded
         }

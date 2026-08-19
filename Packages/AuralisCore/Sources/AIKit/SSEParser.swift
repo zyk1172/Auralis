@@ -40,7 +40,7 @@ public struct SSEParser: Sendable {
             if line.hasPrefix(":") { continue }
             let pieces = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
             let field = String(pieces[0])
-            let value = pieces.count > 1 ? String(pieces[1]).trimmingCharacters(in: .whitespaces) : ""
+            let value = pieces.count > 1 ? Self.fieldValue(pieces[1]) : ""
             switch field {
             case "event": event = value
             case "id": id = value
@@ -50,5 +50,15 @@ public struct SSEParser: Sendable {
         }
         guard !dataLines.isEmpty else { return nil }
         return SSEMessage(event: event, id: id, data: dataLines.joined(separator: "\n"))
+    }
+
+    /// SSE 字段值（WHATWG）：冒号后如果紧跟一个空格，仅移除这一个分隔空格；
+    /// 其余前导空格与全部尾部空格都属于 payload，不得裁剪。
+    private static func fieldValue(_ raw: Substring) -> String {
+        var value = raw
+        if value.first == " " {
+            value.removeFirst()
+        }
+        return String(value)
     }
 }

@@ -22,11 +22,21 @@ public final class CrashLog {
     private var ringBuffer: [String] = []
     private let ringLimit = 200
 
+    // MARK: - Signal / Exception 专用静态状态（nonisolated，供非 MainActor 上下文使用）
+
+    /// 崩溃日志文件路径（exception handler 是非 MainActor 的 C 闭包，无法访问实例）。
+    private nonisolated(unsafe) static var crashLogPath: String?
+    /// 预打开的崩溃日志 fd：signal handler 内只能使用 POSIX write() 追加。
+    /// signal handler 运行在任意线程、任意 Swift runtime 状态下，绝不能触碰
+    /// Task / MainActor / Foundation 文件 API / JSONEncoder / 字符串拼接。
+    fileprivate nonisolated(unsafe) static var crashSignalFD: Int32 = -1
+
     private init() {
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
         logDirectory = caches.appendingPathComponent("CrashLogs", isDirectory: true)
         crashLogFile = logDirectory.appendingPathComponent("last_crash.log")
         try? fileManager.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        Self.crashLogPath = crashLogFile.path
     }
 
     // MARK: - Public API
@@ -101,10 +111,47 @@ public final class CrashLog {
         return result
     }
 
+    // MARK: - 线程安全同步追加（非 MainActor 路径）
+
+    /// 同步、线程安全地向崩溃日志文件追加一行。
+    /// 专供 NSSetUncaughtExceptionHandler 等非 MainActor 上下文使用；
+    /// 不依赖 Task / MainActor / 串行队列，调用方负责传已脱敏文本。
+    private nonisolated static func appendRawSync(_ text: String, to path: String) {
+        guard !text.isEmpty else { return }
+        let url = URL(fileURLWithPath: path)
+        let data = Data(text.utf8)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: path) {
+            if let fh = try? FileHandle(forWritingTo: url) {
+                fh.seekToEndOfFile()
+                fh.write(data)
+                try? fh.close()
+            }
+        } else {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    // MARK: - Handler 安装
+
     /// 安装信号和异常处理器，在崩溃时记录现场。
+    ///
+    /// 设计约束：
+    /// - Objective-C uncaught exception 运行在 ObjC 异常机制内（非异步信号上下文），
+    ///   允许保留较丰富信息，但绝不使用 Task / MainActor——写盘走同步 appendRawSync。
+    /// - POSIX signal（SIGSEGV / SIGBUS / SIGABRT 等）可能打断任意线程的任意代码，
+    ///   handler 内只允许 POSIX write() + 预定义字面量，见 writeSignalRecord(_:)。
     public func installHandlers() {
-        // 捕获 Swift致命错误（fatalError / assert / precondition 失败）
-        // 利用 NSSetUncaughtExceptionHandler 捕获 Objective-C 异常
+        Self.crashLogPath = crashLogFile.path
+
+        // 预打开崩溃日志 fd：signal handler 内只追加，不打开/关闭文件。
+        // O_CLOEXEC 防止 exec 后 fd 泄漏；O_APPEND 保证每次 write 原子追加到文件尾。
+        let fd = open(crashLogFile.path, O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0o644)
+        if fd >= 0 {
+            Self.crashSignalFD = fd
+        }
+
+        // 捕获 Swift 致命错误 / Objective-C 异常
         NSSetUncaughtExceptionHandler { exception in
             let reason = """
             [未捕获异常]
@@ -113,34 +160,43 @@ public final class CrashLog {
             调用栈:
             \(exception.callStackSymbols.joined(separator: "\n"))
             """
-            Task { @MainActor in
-                CrashLog.shared.log(reason)
-            }
+            guard let path = CrashLog.crashLogPath else { return }
+            CrashLog.appendRawSync(CrashLog.sanitize(reason) + "\n", to: path)
         }
 
-        // 捕获 Unix 信号（SIGABRT, SIGSEGV, SIGBUS, SIGTRAP, SIGILL 等）
+        // 捕获 Unix 信号（SIGABRT, SIGSEGV, SIGBUS, SIGTRAP, SIGILL 等）。
+        // handler 是 @convention(c) 闭包：不捕获上下文，不触碰 Swift runtime。
         let signals: [Int32] = [SIGABRT, SIGSEGV, SIGBUS, SIGTRAP, SIGILL, SIGFPE, SIGPIPE]
         for sig in signals {
             signal(sig) { s in
-                let name: String
-                switch s {
-                case SIGABRT: name = "SIGABRT"
-                case SIGSEGV: name = "SIGSEGV"
-                case SIGBUS:  name = "SIGBUS"
-                case SIGTRAP: name = "SIGTRAP"
-                case SIGILL:  name = "SIGILL"
-                case SIGFPE:  name = "SIGFPE"
-                case SIGPIPE: name = "SIGPIPE"
-                default:      name = "SIGNAL(\(s))"
-                }
-                let reason = "[信号崩溃] \(name) (signal \(s))"
-                Task { @MainActor in
-                    CrashLog.shared.log(reason)
-                }
-                // 恢复默认处理并重新发送信号，让系统完成崩溃流程
+                writeSignalRecord(s)
+                // 恢复默认处理并重新发送信号，让系统完成崩溃流程（产生系统 crash report）。
                 signal(s, SIG_DFL)
                 raise(s)
             }
         }
     }
+}
+
+/// 极简 signal-safe 记录：只用 POSIX write() + strlen() + 静态字面量，
+/// 不构造 String、不分配内存、不触碰任何 Swift runtime / Foundation / 并发原语。
+/// fd 在 installHandlers() 中预打开（O_APPEND），此处只追加。
+@inline(__always)
+private func writeSignalRecord(_ signalNumber: Int32) {
+    let fd = CrashLog.crashSignalFD
+    guard fd >= 0 else { return }
+    // StaticString 是编译期只读段字面量：不构造 String、不分配堆内存、
+    // 不触碰 Swift runtime，满足 signal handler 的 async-signal-safe 要求。
+    let literal: StaticString
+    switch signalNumber {
+    case SIGABRT: literal = "[signal] SIGABRT\n"
+    case SIGSEGV: literal = "[signal] SIGSEGV\n"
+    case SIGBUS:  literal = "[signal] SIGBUS\n"
+    case SIGTRAP: literal = "[signal] SIGTRAP\n"
+    case SIGILL:  literal = "[signal] SIGILL\n"
+    case SIGFPE:  literal = "[signal] SIGFPE\n"
+    case SIGPIPE: literal = "[signal] SIGPIPE\n"
+    default:      literal = "[signal] UNKNOWN\n"
+    }
+    _ = write(fd, literal.utf8Start, literal.utf8CodeUnitCount)
 }

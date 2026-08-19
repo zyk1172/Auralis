@@ -393,10 +393,12 @@ struct NowPlayingView: View {
                             pendingSeek = nil
                         }
                     },
-                    onValueChanged: { pendingSeek = $0 }
+                    onValueChanged: { pendingSeek = $0 },
+                    // VoiceOver 单次步进约 ±5 秒（0...1 fraction 空间）。
+                    accessibilityStep: min(1, 5 / max(model.effectivePlaybackDuration, 1))
                 )
                 .accessibilityLabel("播放进度")
-                .accessibilityValue(Text(formatDuration(playbackStore.position)))
+                .accessibilityValue(Text("\(formatDuration(playbackStore.position)) / \(formatDuration(model.effectivePlaybackDuration))"))
                 HStack {
                     Text(formatDuration(playbackStore.position))
                     Spacer()
@@ -510,9 +512,12 @@ struct NowPlayingView: View {
                 track: theme.colorTokens.separator.color.opacity(0.4),
                 thumb: Color.white,
                 onEditingChanged: { _ in },
-                onValueChanged: { model.setVolume(Float($0)) }
+                onValueChanged: { model.setVolume(Float($0)) },
+                // VoiceOver 单次步进 ±5%。
+                accessibilityStep: 0.05
             )
             .accessibilityLabel("音量")
+            .accessibilityValue(Text("\(Int(model.volume * 100))%"))
             Image(systemName: "speaker.wave.3.fill")
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
         }
@@ -1185,6 +1190,7 @@ private struct RoutePickerRepresentable: UIViewRepresentable {
 
 /// Apple Music 风格细滑杆：3pt 圆角轨道 + 高亮填充 + 小圆点滑块。
 /// 拖动时滑块放大并实时显示拖动值；松手后由 onEditingChanged(false) 决定提交时机。
+/// 提供 VoiceOver adjustable 步进：自绘控件必须支持系统 Slider 同等的上/下滑调整。
 private struct ThinSlider: View {
     let value: Double
     let accent: Color
@@ -1192,6 +1198,8 @@ private struct ThinSlider: View {
     let thumb: Color
     let onEditingChanged: (Bool) -> Void
     let onValueChanged: (Double) -> Void
+    /// VoiceOver 单次步进的 fraction（0...1）。进度条传入 5s/时长，音量传入 0.05。
+    let accessibilityStep: Double
 
     @State private var isDragging = false
     @State private var dragValue: Double = 0
@@ -1234,5 +1242,24 @@ private struct ThinSlider: View {
             )
         }
         .frame(height: 30)
+        .accessibilityElement(children: .ignore)
+        // VoiceOver：上/下滑调整，语义与系统 Slider 一致。
+        // 与拖动路径共用同一提交语义（onEditingChanged(true) → onValueChanged → onEditingChanged(false)），
+        // 进度条调用端会在 onEditingChanged(false) 时提交 pendingSeek，不会触发两套 seek。
+        .accessibilityAdjustableAction { direction in
+            let current = isDragging ? dragValue : min(max(value, 0), 1)
+            let next: Double
+            switch direction {
+            case .increment:
+                next = min(1, current + accessibilityStep)
+            case .decrement:
+                next = max(0, current - accessibilityStep)
+            @unknown default:
+                return
+            }
+            onEditingChanged(true)
+            onValueChanged(next)
+            onEditingChanged(false)
+        }
     }
 }

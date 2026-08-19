@@ -11,6 +11,19 @@ func splitSSEChunks() {
     #expect(second == [.init(event: "message", data: "{\"delta\":\"深夜\"}\nsecond-line")])
 }
 
+@Test("SSE data value keeps trailing space and only strips one leading separator space")
+func sseFieldValueSpacing() {
+    // 尾部空格属于 payload，必须保留
+    var trailing = SSEParser()
+    #expect(trailing.append(Data("data: hello \n\n".utf8)) == [.init(data: "hello ")])
+    // 冒号后只移除一个分隔空格，第二个空格属于 payload
+    var doubleLeading = SSEParser()
+    #expect(doubleLeading.append(Data("data:  hello\n\n".utf8)) == [.init(data: " hello")])
+    // 无前导空格时不裁剪
+    var plain = SSEParser()
+    #expect(plain.append(Data("data:hello\n\n".utf8)) == [.init(data: "hello")])
+}
+
 @Test("Mock provider stream completes and can be consumed asynchronously")
 func mockProviderStream() async throws {
     let provider = MockAIProvider()
