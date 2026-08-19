@@ -111,9 +111,10 @@ struct MacRightPanel: View {
     // MARK: - 队列
 
     private var currentIndex: Int? { queueStore.currentIndex }
-    private var upcoming: [Track] {
-        guard let index = queueStore.currentIndex else { return queueStore.tracks }
-        return Array(queueStore.tracks.dropFirst(index + 1))
+    /// R05：待播队列项（带独立 UUID 身份），重复歌曲可安全渲染与移除。
+    private var upcomingEntries: [QueueEntry] {
+        guard let index = queueStore.currentIndex else { return queueStore.entries }
+        return Array(queueStore.entries.dropFirst(index + 1))
     }
 
     private var queueContent: some View {
@@ -124,16 +125,17 @@ struct MacRightPanel: View {
                 }
             }
             Section {
-                if upcoming.isEmpty {
+                if upcomingEntries.isEmpty {
                     Text("没有待播放的歌曲。")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(Array(upcoming.enumerated()), id: \.element.macGlobalID) { offset, track in
+                    ForEach(upcomingEntries) { entry in
+                        let track = entry.track
                         queueRow(track, isCurrent: false)
                             .contextMenu {
                                 Button("立即播放") { model.selectAndPlay(track) }
-                                Button("从队列移除") { removeUpcoming(at: [offset]) }
+                                Button("从队列移除") { model.removeQueueEntry(id: entry.id) }
                             }
                     }
                     .onMove { source, destination in
@@ -147,7 +149,7 @@ struct MacRightPanel: View {
                 HStack {
                     Text("播放下一首")
                     Spacer()
-                    if !upcoming.isEmpty {
+                    if !upcomingEntries.isEmpty {
                         Button("清空") { model.clearUpcoming() }
                             .buttonStyle(.link)
                     }

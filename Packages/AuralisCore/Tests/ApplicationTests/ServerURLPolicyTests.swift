@@ -1,4 +1,5 @@
 import Application
+import Domain
 import Foundation
 import Testing
 
@@ -44,4 +45,33 @@ func rejectsEmbeddedCredentialsOnHTTPS() throws {
     #expect(throws: ServerConnectionError.embeddedCredentials) {
         try ServerURLPolicy.validate(url)
     }
+}
+
+// MARK: - R07：IPv6 私网/本机分类（NetworkHostClassifier）
+
+@Test("IPv6 ULA / link-local / loopback / IPv4-mapped 被判定为私网", arguments: [
+    "fc00::1",        // ULA fc00::/7
+    "fd12:3456::1",   // ULA fd00::/7
+    "fe80::1",        // link-local fe80::/10
+    "fe80::1%en0",    // link-local + zone identifier
+    "::1",            // IPv6 loopback
+    "::ffff:192.168.1.5", // IPv4-mapped 私网
+])
+func ipv6PrivateHostsAreClassifiedPrivate(host: String) {
+    #expect(NetworkHostClassifier.isPrivateOrLocal(host: host) == true, "\(host) 应判定为私网")
+}
+
+@Test("IPv6 公网地址被判定为非私网", arguments: [
+    "2001:db8::1",    // 文档用公网段
+    "2606:4700::1111", // Cloudflare 公网
+    "2a00:1450:4001::1", // 公网
+])
+func ipv6PublicHostsAreClassifiedPublic(host: String) {
+    #expect(NetworkHostClassifier.isPrivateOrLocal(host: host) == false, "\(host) 不应判定为私网")
+}
+
+@Test("HTTP + IPv6 私网地址通过 ServerURLPolicy 校验")
+func acceptsPrivateHTTPIPv6() throws {
+    let url = try #require(URL(string: "http://[fe80::1%en0]:4533"))
+    try ServerURLPolicy.validate(url)
 }

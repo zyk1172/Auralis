@@ -334,6 +334,10 @@ public struct Playlist: Codable, Hashable, Sendable, Identifiable {
     /// 歌单内容或元数据最后一次修改的时间。由 OpenSubsonic 的 `changed` 提供；
     /// 本地成功编辑后也会立即标记，用于下一次同步的 LWW（最新修改优先）合并。
     public var modifiedAt: Date?
+    /// OpenSubsonic `readonly=true`：服务器禁止客户端修改歌单（UI 应隐藏/禁用编辑操作）。
+    public var isReadOnly: Bool
+    /// OpenSubsonic `validUntil`（IS 扩展）：只读歌单的过期时间，nil 表示长期有效。
+    public var validUntil: Date?
 
     public init(
         id: PlaylistID,
@@ -341,7 +345,9 @@ public struct Playlist: Codable, Hashable, Sendable, Identifiable {
         name: String,
         trackIDs: [TrackID],
         comment: String? = nil,
-        modifiedAt: Date? = nil
+        modifiedAt: Date? = nil,
+        isReadOnly: Bool = false,
+        validUntil: Date? = nil
     ) {
         self.id = id
         self.serverID = serverID
@@ -349,6 +355,37 @@ public struct Playlist: Codable, Hashable, Sendable, Identifiable {
         self.trackIDs = trackIDs
         self.comment = comment
         self.modifiedAt = modifiedAt
+        self.isReadOnly = isReadOnly
+        self.validUntil = validUntil
+    }
+
+    // 自定义 Codable：旧缓存/备份没有 isReadOnly/validUntil 键，必须按缺失兼容解码。
+    private enum CodingKeys: String, CodingKey {
+        case id, serverID, name, trackIDs, comment, modifiedAt, isReadOnly, validUntil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(PlaylistID.self, forKey: .id)
+        serverID = try c.decode(ServerID.self, forKey: .serverID)
+        name = try c.decode(String.self, forKey: .name)
+        trackIDs = try c.decodeIfPresent([TrackID].self, forKey: .trackIDs) ?? []
+        comment = try c.decodeIfPresent(String.self, forKey: .comment)
+        modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt)
+        isReadOnly = try c.decodeIfPresent(Bool.self, forKey: .isReadOnly) ?? false
+        validUntil = try c.decodeIfPresent(Date.self, forKey: .validUntil)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(serverID, forKey: .serverID)
+        try c.encode(name, forKey: .name)
+        try c.encode(trackIDs, forKey: .trackIDs)
+        try c.encodeIfPresent(comment, forKey: .comment)
+        try c.encodeIfPresent(modifiedAt, forKey: .modifiedAt)
+        try c.encode(isReadOnly, forKey: .isReadOnly)
+        try c.encodeIfPresent(validUntil, forKey: .validUntil)
     }
 }
 

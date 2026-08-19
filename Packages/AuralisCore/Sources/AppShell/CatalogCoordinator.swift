@@ -201,7 +201,7 @@ public final class CatalogCoordinator: ObservableObject {
             var observedProbe: LibraryRevisionProbe?
             if mode == .incremental, skipIfUpToDate,
                let local = try? await store.trackCount(serverID: serverID),
-               let probe = await connector.libraryRevisionProbe() {
+               let probe = await connector.libraryRevisionProbe(serverID: serverID) {
                 observedProbe = probe
                 let stored = await store.remoteProbeState(for: serverID)
                 let countMatches = probe.songCount == local
@@ -240,7 +240,7 @@ public final class CatalogCoordinator: ObservableObject {
                 }
                 self.phase = .running(stage: stage, processed: 0)
             }
-            guard let synchronizer = await connector.makeSynchronizer(store: store) else {
+            guard let synchronizer = await connector.makeSynchronizer(serverID: serverID, store: store) else {
                 self.phase = .failed("未连接服务器，无法同步目录")
                 return
             }
@@ -260,7 +260,7 @@ public final class CatalogCoordinator: ObservableObject {
                 if let observedProbe {
                     finalProbe = observedProbe
                 } else {
-                    finalProbe = await connector.libraryRevisionProbe()
+                    finalProbe = await connector.libraryRevisionProbe(serverID: serverID)
                 }
                 if let finalProbe {
                     try? await store.recordRemoteProbe(
@@ -312,8 +312,9 @@ public final class CatalogCoordinator: ObservableObject {
 
     /// 按 ID 从服务器拉取单曲（含流地址）：Agent 播放本地目录尚未同步的歌曲时，
     /// 由 AuralisAgentBridge 走这条路径做「服务器曲目在线流播」。
-    public func serverTrack(id: TrackID) async -> Track? {
-        await connector.serverTrack(trackID: id)
+    /// 按 serverID 路由（R01）；失败返回 nil（Agent 侧统一按“不可用”处理）。
+    public func serverTrack(serverID: ServerID, id: TrackID) async -> Track? {
+        try? await connector.serverTrack(serverID: serverID, trackID: id)
     }
 
     // MARK: - Cleanup

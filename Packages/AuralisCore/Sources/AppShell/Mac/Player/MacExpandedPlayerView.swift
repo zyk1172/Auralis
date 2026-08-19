@@ -48,10 +48,11 @@ struct MacExpandedPlayerView: View {
     private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
     private var trackGlobalID: String { "\(track.serverID):\(track.id.rawValue)" }
     private var isPlaying: Bool { playbackStore.state == .playing }
-    /// 待播队列（当前曲目之后），由 queueStore 提供，随队列/当前曲目变化更新。
-    private var queueStoreUpcoming: [Track] {
-        guard let index = queueStore.currentIndex else { return queueStore.tracks }
-        return Array(queueStore.tracks.dropFirst(index + 1))
+    /// 待播队列（当前曲目之后的队列项），由 queueStore 提供，随队列/当前曲目变化更新。
+    /// R05：返回带独立 UUID 身份的 QueueEntry，重复歌曲可安全渲染与移除。
+    private var queueStoreUpcomingEntries: [QueueEntry] {
+        guard let index = queueStore.currentIndex else { return queueStore.entries }
+        return Array(queueStore.entries.dropFirst(index + 1))
     }
     /// 展开播放页只从 ThemeColors 取前景色。背景可以是浅色渐变、封面氛围图或深色
     /// 主题，但文字和按钮不能再假设它一定是黑底。
@@ -468,7 +469,7 @@ struct MacExpandedPlayerView: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(palette.primary)
                 Spacer()
-                if !queueStoreUpcoming.isEmpty {
+                if !queueStoreUpcomingEntries.isEmpty {
                     Button("清除") { model.clearUpcoming() }
                         .buttonStyle(.plain)
                         .foregroundStyle(palette.destructive)
@@ -476,7 +477,7 @@ struct MacExpandedPlayerView: View {
             }
             .padding(.bottom, 14)
             Divider().overlay(palette.separator)
-            if queueStoreUpcoming.isEmpty {
+            if queueStoreUpcomingEntries.isEmpty {
                 VStack {
                     Spacer()
                     Text("队列中无音乐。")
@@ -488,16 +489,14 @@ struct MacExpandedPlayerView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.queueRowSpacing) {
-                        ForEach(Array(queueStoreUpcoming.enumerated()), id: \.element.macGlobalID) { offset, queueTrack in
+                        ForEach(queueStoreUpcomingEntries) { entry in
+                            let queueTrack = entry.track
                             queueRow(queueTrack, isCurrent: false)
                                 .contextMenu {
                                     Button("立即播放") { model.selectAndPlay(queueTrack) }
-                                    Button("从队列移除") {
-                                        let real = (queueStore.currentIndex ?? -1) + 1 + offset
-                                        model.removeFromQueue(atOffsets: IndexSet([real]))
-                                    }
+                                    Button("从队列移除") { model.removeQueueEntry(id: entry.id) }
                                 }
-                    }
+                        }
                     }
                 }
             }

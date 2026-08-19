@@ -329,9 +329,10 @@ extension LocalCatalogStore {
     }
 
     public func tracksForAlbum(_ albumGID: GlobalID) throws -> [CatalogTrackSummary] {
+        // R03：用真实 album_gid 外键关联，同名专辑（不同艺术家）不再串歌。
         let rows = try db.query(
-            "SELECT global_id FROM tracks WHERE album_title = (SELECT name FROM albums WHERE global_id = ?) AND server_id = ?",
-            [.text(albumGID.description), .text(albumGID.serverID.rawValue)]
+            "SELECT global_id FROM tracks WHERE album_gid = ?",
+            [.text(albumGID.description)]
         )
         let ids = rows.compactMap { row -> GlobalID? in
             guard let idString = row["global_id"]?.string else { return nil }
@@ -341,9 +342,10 @@ extension LocalCatalogStore {
     }
 
     public func tracksForArtist(_ artistGID: GlobalID) throws -> [CatalogTrackSummary] {
+        // R03：用真实 artist_gid 外键关联。
         let rows = try db.query(
-            "SELECT global_id FROM tracks WHERE artist_name = (SELECT name FROM artists WHERE global_id = ?) AND server_id = ?",
-            [.text(artistGID.description), .text(artistGID.serverID.rawValue)]
+            "SELECT global_id FROM tracks WHERE artist_gid = ?",
+            [.text(artistGID.description)]
         )
         let ids = rows.compactMap { row -> GlobalID? in
             guard let idString = row["global_id"]?.string else { return nil }
@@ -644,7 +646,6 @@ extension LocalCatalogStore {
         for chunkStart in stride(from: 0, to: globalIDs.count, by: chunkSize) {
             let chunk = Array(globalIDs[chunkStart..<min(chunkStart + chunkSize, globalIDs.count)])
             var payloads: [GlobalID: (title: String, artistName: String)] = [:]
-            var serverTitlePairs: [(serverID: String, title: String)] = []
             let placeholders = chunk.map { _ in "?" }.joined(separator: ", ")
             let payloadRows = try db.query(
                 "SELECT global_id, payload FROM albums WHERE global_id IN (\(placeholders))",
@@ -656,34 +657,27 @@ extension LocalCatalogStore {
                       let payload = row["payload"]?.string,
                       let album = try? decode(Album.self, payload) else { continue }
                 payloads[gid] = (album.title, album.artistName)
-                serverTitlePairs.append((gid.serverID.rawValue, album.title))
             }
-            if !serverTitlePairs.isEmpty {
-                // OR 组合匹配 tracks.album_title + server_id，再按同一键 GROUP BY。
-                // 每对 2 个参数，chunk 200 → 400 参数，远低于 SQLite 变量上限。
-                let ors = serverTitlePairs.map { _ in "(album_title = ? AND server_id = ?)" }.joined(separator: " OR ")
-                var countParams: [SQLiteValue] = []
-                for pair in serverTitlePairs {
-                    countParams.append(.text(pair.title))
-                    countParams.append(.text(pair.serverID))
-                }
+            if !payloads.isEmpty {
+                // R03：songCount 用真实 album_gid 关联（新写入路径已保存实体外键），
+                // 同名专辑（不同艺术家）不再互相串歌。album_gid 为 NULL 的存量行不计入。
+                let gidPlaceholders = chunk.map { _ in "?" }.joined(separator: ", ")
                 let countRows = try db.query(
-                    "SELECT album_title, server_id, COUNT(*) AS c FROM tracks WHERE \(ors) GROUP BY album_title, server_id",
-                    countParams
+                    "SELECT album_gid, COUNT(*) AS c FROM tracks WHERE album_gid IN (\(gidPlaceholders)) GROUP BY album_gid",
+                    chunk.map { .text($0.description) }
                 )
                 var counts: [String: Int] = [:]
                 for row in countRows {
-                    guard let title = row["album_title"]?.string, let sid = row["server_id"]?.string else { continue }
-                    counts["\(sid)\u{0}\(title)"] = Int(row["c"]?.int ?? 0)
+                    guard let albumGID = row["album_gid"]?.string else { continue }
+                    counts[albumGID] = Int(row["c"]?.int ?? 0)
                 }
                 for gid in chunk {
                     guard let (title, artistName) = payloads[gid] else { continue }
-                    let countKey = "\(gid.serverID.rawValue)\u{0}\(title)"
                     summaries[gid] = CatalogAlbumSummary(
                         globalID: gid,
                         title: title,
                         artistName: artistName,
-                        songCount: counts[countKey] ?? 0
+                        songCount: counts[gid.description] ?? 0
                     )
                 }
             }
@@ -695,8 +689,8 @@ extension LocalCatalogStore {
         }
     }
 
-    /// 批处理：艺术家 payload 一次 IN 物化；albumCount 一次 GROUP BY（按既有语义
-    /// artist_name + server_id 匹配 albums），不再逐艺术家执行 COUNT 查询。
+    /// 批处理：艺术家 payload 一次 IN 物化；albumCount 一次 GROUP BY（用真实
+    /// albums.artist_gid 关联，R03），不再逐艺术家执行 COUNT 查询。
     private func fetchArtistSummaries(globalIDs: [GlobalID], serverID: ServerID? = nil) throws -> [CatalogArtistSummary] {
         guard !globalIDs.isEmpty else { return [] }
         let chunkSize = 200
@@ -704,7 +698,6 @@ extension LocalCatalogStore {
         for chunkStart in stride(from: 0, to: globalIDs.count, by: chunkSize) {
             let chunk = Array(globalIDs[chunkStart..<min(chunkStart + chunkSize, globalIDs.count)])
             var payloads: [GlobalID: String] = [:]
-            var serverNamePairs: [(serverID: String, name: String)] = []
             let placeholders = chunk.map { _ in "?" }.joined(separator: ", ")
             let payloadRows = try db.query(
                 "SELECT global_id, payload FROM artists WHERE global_id IN (\(placeholders))",
@@ -716,31 +709,24 @@ extension LocalCatalogStore {
                       let payload = row["payload"]?.string,
                       let artist = try? decode(Artist.self, payload) else { continue }
                 payloads[gid] = artist.name
-                serverNamePairs.append((gid.serverID.rawValue, artist.name))
             }
-            if !serverNamePairs.isEmpty {
-                let ors = serverNamePairs.map { _ in "(artist_name = ? AND server_id = ?)" }.joined(separator: " OR ")
-                var countParams: [SQLiteValue] = []
-                for pair in serverNamePairs {
-                    countParams.append(.text(pair.name))
-                    countParams.append(.text(pair.serverID))
-                }
+            if !payloads.isEmpty {
+                let gidPlaceholders = chunk.map { _ in "?" }.joined(separator: ", ")
                 let countRows = try db.query(
-                    "SELECT artist_name, server_id, COUNT(*) AS c FROM albums WHERE \(ors) GROUP BY artist_name, server_id",
-                    countParams
+                    "SELECT artist_gid, COUNT(*) AS c FROM albums WHERE artist_gid IN (\(gidPlaceholders)) GROUP BY artist_gid",
+                    chunk.map { .text($0.description) }
                 )
                 var counts: [String: Int] = [:]
                 for row in countRows {
-                    guard let name = row["artist_name"]?.string, let sid = row["server_id"]?.string else { continue }
-                    counts["\(sid)\u{0}\(name)"] = Int(row["c"]?.int ?? 0)
+                    guard let artistGID = row["artist_gid"]?.string else { continue }
+                    counts[artistGID] = Int(row["c"]?.int ?? 0)
                 }
                 for gid in chunk {
                     guard let name = payloads[gid] else { continue }
-                    let countKey = "\(gid.serverID.rawValue)\u{0}\(name)"
                     summaries[gid] = CatalogArtistSummary(
                         globalID: gid,
                         name: name,
-                        albumCount: counts[countKey] ?? 0
+                        albumCount: counts[gid.description] ?? 0
                     )
                 }
             }

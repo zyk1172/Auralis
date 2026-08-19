@@ -42,7 +42,7 @@ private actor ScrobbleRecordingConnector: ServerConnecting {
     ) async throws -> ServerConnectionResult { result }
     func restoreLastConnection() async throws -> ServerConnectionResult? { result }
 
-    func scrobble(trackID: TrackID, submission: Bool) async {
+    func scrobble(serverID: ServerID, trackID: TrackID, submission: Bool) async {
         _scrobbles.append((trackID, submission))
     }
 }
@@ -105,7 +105,7 @@ func selectAndPlayWithRealStreamURLDoesNotCrash() async throws {
 
 /// 回归测试：模拟用户「点击歌曲 + 加入队列」的真实操作流，确保播放队列（ForEach 的数据源）
 /// 永远不含重复 id。重复 id 会让 SwiftUI 的 ForEach / List 在渲染时 fatalError（EXC_BREAKPOINT）闪退。
-@Test("播放队列永远不会出现重复 id（点击歌曲 / 加入队列场景）")
+@Test("队列项身份（entry.id）永不重复——重复歌曲是独立队列项，ForEach 不崩溃（点击歌曲 / 加入队列场景）")
 @MainActor
 func queueNeverContainsDuplicateIDs() async throws {
     let t1 = makeTrack(id: "dup-1")
@@ -126,7 +126,10 @@ func queueNeverContainsDuplicateIDs() async throws {
         serverVersion: "1.0"
     )
     let defaults = UserDefaults(suiteName: "tap-dup-repro-\(UUID().uuidString)")!
+    // 本测试只验证队列项身份唯一，与真实播放引擎无关；用 InertPlaybackEngine
+    // 隔离 AVPlayer（进程级全局状态）在 Swift Testing 并行下的串扰。
     let model = AuralisAppModel(
+        engine: InertPlaybackEngine(),
         connector: ReproConnector(result: result),
         defaults: defaults,
         storeURL: reproTemporaryCatalogURL()
@@ -140,21 +143,23 @@ func queueNeverContainsDuplicateIDs() async throws {
 
     // 用户先点了一首歌
     model.selectAndPlay(t1)
-    // 然后又「加入队列」同一首（UI 里 LibraryView 直接 model.queue.append，不做去重）
+    // 然后又「加入队列」同一首（R05：同一首歌允许多次入队，每次独立队列项）
     model.queue.append(t1)
     // 再多「加入队列」几次，制造重复
     model.queue.append(t2)
     model.queue.append(t1)
 
-    let ids = model.queue.map { $0.id }
-    let uniqueIDs = Set(ids)
-    #expect(ids.count == uniqueIDs.count, "队列出现了重复 id，会导致 ForEach 渲染崩溃")
+    // 渲染身份是 QueueEntry.id（UUID），必须唯一——重复歌曲是独立队列项，
+    // 不会导致 ForEach 因重复 id 崩溃。
+    let entryIDs = model.queueEntries.map { $0.id }
+    let uniqueEntryIDs = Set(entryIDs)
+    #expect(entryIDs.count == uniqueEntryIDs.count, "队列项身份重复会导致 ForEach 渲染崩溃")
 
-    // 再点一首歌也不应崩溃，且队列依旧唯一
+    // 再点一首歌也不应崩溃，且队列项身份依旧唯一
     model.selectAndPlay(t2)
     for _ in 0..<100 { await Task.yield() }
-    let ids2 = model.queue.map { $0.id }
-    #expect(ids2.count == Set(ids2).count, "selectAndPlay 后队列出现了重复 id")
+    let entryIDs2 = model.queueEntries.map { $0.id }
+    #expect(entryIDs2.count == Set(entryIDs2).count, "selectAndPlay 后队列项身份重复")
     #expect(model.currentTrack.id == t2.id)
 }
 

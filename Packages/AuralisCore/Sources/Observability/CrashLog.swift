@@ -57,14 +57,19 @@ public final class CrashLog {
     /// signal handler 预打开的 fd（O_APPEND）仍指向该 inode，unlink 后
     /// 写入会落到一个用户再也找不到的孤儿 inode，导致「普通日志在新文件、
     /// signal 记录在旧文件」的分裂。
+    /// truncate 与 log() 的磁盘写入共用同一串行 logQueue（R10）：队列中已排队的
+    /// 写入先落盘、随后 truncate，保证 ordering，不会出现「清除后又看到清除前的日志」。
     public func clearCrashLog() {
         ringBuffer.removeAll()
-        guard let handle = try? FileHandle(forWritingTo: crashLogFile) else { return }
-        do {
-            try handle.truncate(atOffset: 0)
-            try handle.close()
-        } catch {
-            try? handle.close()
+        let fileURL = crashLogFile
+        Self.logQueue.async {
+            guard let handle = try? FileHandle(forWritingTo: fileURL) else { return }
+            do {
+                try handle.truncate(atOffset: 0)
+                try handle.close()
+            } catch {
+                try? handle.close()
+            }
         }
     }
 
@@ -154,6 +159,12 @@ public final class CrashLog {
     ///   handler 内只允许 POSIX write() + 预定义字面量，见 writeSignalRecord(_:)。
     public func installHandlers() {
         Self.crashLogPath = crashLogFile.path
+
+        // 幂等（R10）：重复调用先关闭已打开的 fd，避免 fd 泄漏。
+        if Self.crashSignalFD >= 0 {
+            close(Self.crashSignalFD)
+            Self.crashSignalFD = -1
+        }
 
         // 预打开崩溃日志 fd：signal handler 内只追加，不打开/关闭文件。
         // O_CLOEXEC 防止 exec 后 fd 泄漏；O_APPEND 保证每次 write 原子追加到文件尾。

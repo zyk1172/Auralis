@@ -271,18 +271,19 @@ public struct MacMiniPlayerView: View {
 
     /// 当前曲目开始的队列片段（当前曲目 + 后续，最多 20 首）。
     /// 绝不把上万首全库队列一次性渲染进 220×220 面板。
-    private var miniQueueSlice: [Track] {
-        let tracks = queueStore.tracks
-        guard let currentIndex = queueStore.currentIndex, tracks.indices.contains(currentIndex) else {
-            return Array(tracks.prefix(20))
+    /// R05：返回带独立 UUID 身份的 QueueEntry，重复歌曲可安全渲染。
+    private var miniQueueSlice: [QueueEntry] {
+        let entries = queueStore.entries
+        guard let currentIndex = queueStore.currentIndex, entries.indices.contains(currentIndex) else {
+            return Array(entries.prefix(20))
         }
-        return Array(tracks[currentIndex..<min(currentIndex + 20, tracks.count)])
+        return Array(entries[currentIndex..<min(currentIndex + 20, entries.count)])
     }
 
     @ViewBuilder
     private func queueContent(size: CGFloat) -> some View {
-        let tracks = miniQueueSlice
-        if tracks.isEmpty {
+        let entries = miniQueueSlice
+        if entries.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "music.note.list")
                     .font(.system(size: 20))
@@ -296,8 +297,8 @@ public struct MacMiniPlayerView: View {
         } else {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 6) {
-                    ForEach(Array(tracks.enumerated()), id: \.element.macGlobalID) { relativeIndex, queueTrack in
-                        miniQueueRow(queueTrack, relativeIndex: relativeIndex)
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { relativeIndex, entry in
+                        miniQueueRow(entry.track, relativeIndex: relativeIndex)
                     }
                 }
                 .padding(.horizontal, 10)

@@ -50,7 +50,7 @@ public final class AuralisAgentBridge: AgentBridge {
     /// 后直接流式播放，不要求先下载/同步。播放是服务器在线流媒体，本地目录只是离线缓存。
     public func playServerTrack(globalID: GlobalID) async -> Bool {
         guard let active = model.catalog.activeServerID, active == globalID.serverID else { return false }
-        guard let track = await coordinator.serverTrack(id: TrackID(rawValue: globalID.remoteID)) else { return false }
+        guard let track = await coordinator.serverTrack(serverID: globalID.serverID, id: TrackID(rawValue: globalID.remoteID)) else { return false }
         model.selectAndPlay(track)
         return true
     }
@@ -115,19 +115,13 @@ public final class AuralisAgentBridge: AgentBridge {
     public func previous() async { model.previous() }
 
     public func addToQueue(globalID: GlobalID) async {
-        guard let track = resolveTrack(globalID),
-              !model.queue.contains(where: { $0.id == track.id }) else { return }
+        // R05：允许重复歌曲（每次独立队列项）。
+        guard let track = resolveTrack(globalID) else { return }
         model.queue.append(track)
     }
 
     public func playNext(globalID: GlobalID) async {
-        guard let track = resolveTrack(globalID) else { return }
-        model.queue.removeAll { $0.id == track.id }
-        if let index = model.queue.firstIndex(where: { $0.id == model.currentTrack.id }) {
-            model.queue.insert(track, at: index + 1)
-        } else {
-            model.queue.insert(track, at: 0)
-        }
+        model.playNext(globalID: globalID)
     }
 
     public func replaceQueue(globalIDs: [GlobalID]) async {
@@ -138,18 +132,19 @@ public final class AuralisAgentBridge: AgentBridge {
     }
 
     public func removeFromQueue(at index: Int) async {
-        guard model.queue.indices.contains(index) else { return }
-        model.removeFromQueue(model.queue[index])
+        guard model.queueEntries.indices.contains(index) else { return }
+        let entryID = model.queueEntries[index].id
+        model.queueEntries.removeAll { $0.id == entryID }
     }
 
     public func reorderQueue(from: Int, to: Int) async {
-        guard model.queue.indices.contains(from), model.queue.indices.contains(to) else { return }
-        let track = model.queue.remove(at: from)
-        model.queue.insert(track, at: min(to, model.queue.count))
+        guard model.queueEntries.indices.contains(from), model.queueEntries.indices.contains(to) else { return }
+        let entry = model.queueEntries.remove(at: from)
+        model.queueEntries.insert(entry, at: min(to, model.queueEntries.count))
     }
 
     public func clearQueue() async {
-        for track in model.queue { model.removeFromQueue(track) }
+        model.queue = []
     }
 
     public func shuffleRemaining() async {

@@ -342,7 +342,8 @@ final class DownloadStore: ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let url = await connector.downloadURL(trackID: track.id)
+            // R01：下载地址按 track.serverID 路由，与当前浏览服务器无关。
+            let url = await connector.downloadURL(serverID: track.serverID, trackID: track.id)
             guard requestTokens[globalID] == token else { return }
             requestTokens[globalID] = nil
             guard let url else {

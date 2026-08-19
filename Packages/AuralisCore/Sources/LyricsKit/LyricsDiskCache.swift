@@ -17,8 +17,9 @@ public actor LyricsDiskCache {
     private let missesURL: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    /// "serverID:trackID" → 已确认无歌词（负缓存）。
-    private var misses: Set<String> = []
+    /// "serverID:trackID" → 标记为「确认无歌词」的时间（负缓存）。
+    /// 带时间戳：超限裁剪时按最旧优先（确定性 FIFO），而不是从无序 Set 随机裁掉刚插入的条目。
+    private var misses: [String: Date] = [:]
     private var didLoad = false
     /// 歌词缓存总字节预算：超过后按文件大小从大到小淘汰（P2-1，RC 边界策略）。
     private static let maxTotalBytes: Int64 = 64 * 1024 * 1024
@@ -58,7 +59,7 @@ public actor LyricsDiskCache {
     /// 该曲目是否已确认无歌词（避免重复请求）。
     public func isKnownMissing(serverID: ServerID, trackID: TrackID) -> Bool {
         loadMissesIfNeeded()
-        return misses.contains(Self.key(serverID, trackID))
+        return misses[Self.key(serverID, trackID)] != nil
     }
 
     /// 写入歌词。
@@ -80,14 +81,16 @@ public actor LyricsDiskCache {
         fileSizes[name] = newSize
         knownTotalBytes = (knownTotalBytes ?? 0) + newSize - oldSize
         loadMissesIfNeeded()
-        if misses.remove(Self.key(serverID, trackID)) != nil { persistMisses() }
+        if misses.removeValue(forKey: Self.key(serverID, trackID)) != nil { persistMisses() }
         evictIfNeeded()
     }
 
     /// 记录「服务器没有这首歌的歌词」。
     public func markMissing(serverID: ServerID, trackID: TrackID) {
         loadMissesIfNeeded()
-        guard misses.insert(Self.key(serverID, trackID)).inserted else { return }
+        let key = Self.key(serverID, trackID)
+        guard misses[key] == nil else { return }
+        misses[key] = .now
         pruneMissesIfNeeded()
         persistMisses()
     }
@@ -97,12 +100,14 @@ public actor LyricsDiskCache {
     /// legacy filenames can be identified without guessing or discarding data.
     public func migrateLegacyEntries(to serverID: ServerID) {
         loadMissesIfNeeded()
-        let legacyMisses = misses.filter { !$0.contains(":") }
+        let legacyMisses = misses.filter { !$0.key.contains(":") }
         if !legacyMisses.isEmpty {
-            for remoteID in legacyMisses where !remoteID.isEmpty {
-                misses.insert(Self.key(serverID, TrackID(rawValue: remoteID)))
+            for remoteID in legacyMisses.keys where !remoteID.isEmpty {
+                misses[Self.key(serverID, TrackID(rawValue: remoteID))] = .now
             }
-            misses.subtract(legacyMisses)
+            for key in legacyMisses.keys {
+                misses.removeValue(forKey: key)
+            }
             persistMisses()
         }
 
@@ -121,6 +126,40 @@ public actor LyricsDiskCache {
             }
         }
         // 迁移直接搬移/删除了文件，账本已失真：重置为未初始化，下次按需全量重建。
+        fileSizes = [:]
+        knownTotalBytes = nil
+    }
+
+    /// R09：把旧版有损文件名（safeEncode，非字母数字 → `_`，存在碰撞）迁移到
+    /// 无损 percent-encoding 文件名。旧文件名格式为 `\(serverID)_\(safeEncode(trackID)).json`：
+    /// serverID 是 `server-<hex>`（全字母数字，safeEncode 无损）可从文件名前缀还原；
+    /// trackID 从 payload 的 LyricsDocument 恢复。完全不携带 serverID 的更旧文件
+    /// 归属 `activeServerID`（与 migrateLegacyEntries 一致）。
+    public func migrateLegacyFilenames(to activeServerID: ServerID) {
+        let manager = FileManager.default
+        let entries = (try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for source in entries where source.pathExtension == "json" && source.lastPathComponent != "misses.json" {
+            let name = source.lastPathComponent
+            // 新格式文件名以 "serverID:" 开头（冒号保留），跳过。
+            if name.contains(":") { continue }
+            guard let data = try? Data(contentsOf: source),
+                  let document = try? decoder.decode(LyricsDocument.self, from: data)
+            else { continue }
+            let serverID: ServerID
+            if name.hasPrefix("server-"), let underscore = name.firstIndex(of: "_") {
+                serverID = ServerID(rawValue: String(name[name.startIndex..<underscore]))
+            } else {
+                serverID = activeServerID
+            }
+            let destination = directory.appendingPathComponent(Self.fileName(serverID: serverID, trackID: document.trackID))
+            if destination.lastPathComponent == name { continue }
+            if !manager.fileExists(atPath: destination.path) {
+                try? manager.moveItem(at: source, to: destination)
+            } else {
+                // 新名已存在（碰撞遗留的覆盖数据以新名为准），删除旧名。
+                try? manager.removeItem(at: source)
+            }
+        }
         fileSizes = [:]
         knownTotalBytes = nil
     }
@@ -175,12 +214,15 @@ public actor LyricsDiskCache {
         self.knownTotalBytes = total
     }
 
-    /// 负缓存条目超限时裁剪一半（简单有界策略；丢失的负缓存只意味着重新确认一次）。
+    /// 负缓存条目超限时裁剪一半（确定性 FIFO：按标记时间从最旧开始裁，
+    /// 不再从无序 Set 随机裁掉刚插入的条目）。丢失的负缓存只意味着重新确认一次。
     private func pruneMissesIfNeeded() {
         guard misses.count > Self.maxMissesCount else { return }
-        let overflow = misses.count - Self.maxMissesCount / 2
-        misses = Set(misses.prefix(Self.maxMissesCount / 2))
-        _ = overflow
+        let keepCount = Self.maxMissesCount / 2
+        let oldest = misses.sorted { $0.value < $1.value }
+        for pair in oldest.prefix(misses.count - keepCount) {
+            misses.removeValue(forKey: pair.key)
+        }
     }
 
     // MARK: - 统计与清理
@@ -203,17 +245,17 @@ public actor LyricsDiskCache {
         if let entries = try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
             for entry in entries { try? manager.removeItem(at: entry) }
         }
-        misses = []
+        misses = [:]
         didLoad = true
         fileSizes = [:]
         knownTotalBytes = 0
     }
 
     /// 按服务器清理该服务器的歌词文件与负缓存条目（删除服务器 / 清理本地数据用）。
-    /// 服务器前缀即 "serverID:"。
+    /// 服务器前缀即 "serverID:"（percent-encoding 保留该前缀，可按前缀匹配清理）。
     public func removeAll(forServer serverID: ServerID) {
         let manager = FileManager.default
-        let encodedPrefix = Self.safeEncode(serverID.rawValue + ":")
+        let encodedPrefix = serverID.rawValue + ":"
         if let entries = try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
             for entry in entries {
                 let name = entry.lastPathComponent
@@ -231,9 +273,11 @@ public actor LyricsDiskCache {
         }
         let prefix = serverID.rawValue + ":"
         loadMissesIfNeeded()
-        let stale = misses.filter { $0.hasPrefix(prefix) }
+        let stale = misses.filter { $0.key.hasPrefix(prefix) }
         if !stale.isEmpty {
-            misses.subtract(stale)
+            for key in stale.keys {
+                misses.removeValue(forKey: key)
+            }
             persistMisses()
         }
     }
@@ -243,12 +287,17 @@ public actor LyricsDiskCache {
     private func loadMissesIfNeeded() {
         guard !didLoad else { return }
         didLoad = true
-        guard let data = try? Data(contentsOf: missesURL),
-              let decoded = try? decoder.decode(Set<String>.self, from: data)
-        else { return }
-        // Keep legacy bare IDs dormant until the last active server is known;
-        // migration then assigns the only provenance older versions retained.
-        misses = decoded
+        guard let data = try? Data(contentsOf: missesURL) else { return }
+        // 新格式：[String: Date]（key → 标记时间）。兼容旧格式 Set<String>。
+        if let decoded = try? decoder.decode([String: Date].self, from: data) {
+            misses = decoded
+            return
+        }
+        if let legacy = try? decoder.decode(Set<String>.self, from: data) {
+            // Keep legacy bare IDs dormant until the last active server is known;
+            // migration then assigns the only provenance older versions retained.
+            misses = Dictionary(uniqueKeysWithValues: legacy.map { ($0, Date.now) })
+        }
     }
 
     private func persistMisses() {
@@ -257,8 +306,17 @@ public actor LyricsDiskCache {
     }
 
     /// 组合键含 ":" 与可能的路径字符，统一做安全化处理（非字母数字替换为 "_"）。
+    /// R09 起新写入使用无损 percent-encoding（fileName），本函数仅用于识别
+    /// 历史 safeEncode 文件名（迁移时判断旧格式）。
     private static func fileName(serverID: ServerID, trackID: TrackID) -> String {
-        "\(safeEncode(key(serverID, trackID))).json"
+        // R09：无损 percent-encoding——不同键绝不映射到同一文件名（safeEncode 会把
+        // a/b、a:b、a?b 都变成 a_b 导致互相覆盖）。保留字母数字与 -._~:，
+        // 服务器前缀 "serverID:" 仍可经前缀匹配用于按服务器清理。
+        let key = Self.key(serverID, trackID)
+        let allowed = CharacterSet.alphanumerics
+            .union(CharacterSet(charactersIn: "-._~:"))
+        let encoded = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+        return encoded + ".json"
     }
 
     private static func safeEncode(_ string: String) -> String {

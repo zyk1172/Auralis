@@ -1,4 +1,5 @@
 import Application
+import Domain
 import Foundation
 import ImagePipeline
 
@@ -32,6 +33,7 @@ actor ArtworkPipeline {
     }
 
     func load(
+        serverID: ServerID,
         remoteKey: String,
         cacheKey: String,
         fallbackCacheKey: String?,
@@ -62,7 +64,9 @@ actor ArtworkPipeline {
                 await limiter.release()
                 return nil
             }
+            // R01：封面按 serverID 路由，封面 key 跨服务器互不串扰。
             let data = await connector.artworkData(
+                serverID: serverID,
                 key: remoteKey,
                 targetPixelSize: max(1, targetPixelSize)
             )

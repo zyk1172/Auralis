@@ -21,7 +21,7 @@ private actor ArtworkCountingConnector: ServerConnecting {
 
     func restoreLastConnection() async throws -> ServerConnectionResult? { nil }
 
-    func artworkData(key: String, targetPixelSize: Int) async -> Data? {
+    func artworkData(serverID: ServerID, key: String, targetPixelSize: Int) async -> Data? {
         artworkCalls += 1
         try? await Task.sleep(for: .milliseconds(40))
         return data
@@ -94,12 +94,14 @@ func artworkPipelineCoalescesConcurrentRequests() async throws {
     let pipeline = ArtworkPipeline(connector: connector, diskCache: cache)
 
     async let first = pipeline.load(
+        serverID: "server",
         remoteKey: "cover-1",
         cacheKey: "server|cover-1@180",
         fallbackCacheKey: nil,
         targetPixelSize: 180
     )
     async let second = pipeline.load(
+        serverID: "server",
         remoteKey: "cover-1",
         cacheKey: "server|cover-1@180",
         fallbackCacheKey: nil,

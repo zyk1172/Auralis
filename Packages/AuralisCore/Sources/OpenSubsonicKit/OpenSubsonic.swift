@@ -272,26 +272,12 @@ extension OpenSubsonicClientError: LocalizedError {
     /// 给出「本地网络」权限与同一网络的排查指引；公共地址保持通用提示，避免把断网误判为权限问题。
     private static func localNetworkHint(code: Int, host: String?) -> String {
         let lanCodes: Set<Int> = [-1009, -1001, -1003, -1004, -1005]
-        guard lanCodes.contains(code), let host, Self.isPrivateOrLocal(host: host) else { return "" }
+        guard lanCodes.contains(code), let host, NetworkHostClassifier.isPrivateOrLocal(host: host) else { return "" }
         #if os(macOS)
         return "如果是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
         #else
         return "如果是局域网地址（\(host)），请检查 设置 → 隐私与安全 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
         #endif
-    }
-
-    /// 判断 host 是否为本机 / 局域网地址（与 Application 层 ServerURLPolicy 判定一致，
-    /// 但 OpenSubsonicKit 不依赖 Application，因此本地复刻一份最小实现）。
-    private static func isPrivateOrLocal(host: String) -> Bool {
-        let normalized = host.lowercased()
-        if normalized == "localhost" || normalized.hasSuffix(".local") || normalized == "::1" { return true }
-        let octets = normalized.split(separator: ".").compactMap { Int($0) }
-        guard octets.count == 4, octets.allSatisfy({ 0...255 ~= $0 }) else { return false }
-        if octets[0] == 10 || octets[0] == 127 { return true }
-        if octets[0] == 192 && octets[1] == 168 { return true }
-        if octets[0] == 172 && (16...31).contains(octets[1]) { return true }
-        if octets[0] == 169 && octets[1] == 254 { return true }
-        return false
     }
 }
 

@@ -109,8 +109,9 @@ struct SharedPlaybackCapabilityTests {
         model.playQueue([track("t1"), track("t2")])
         model.currentTrack = track("t2")
         model.playNext(globalID: local)
-        // 插入到当前歌曲之后。
-        #expect(model.queue.firstIndex { $0.id.rawValue == "t1" } == 1)
+        // playNext 插入新队列项到当前歌曲之后（R05 允许重复歌曲）：[t1, t2, t1]。
+        #expect(model.queue.count == 3)
+        #expect(model.queue[2].id.rawValue == "t1")
     }
 
     @Test("Siri 随机播放排除 disliked")

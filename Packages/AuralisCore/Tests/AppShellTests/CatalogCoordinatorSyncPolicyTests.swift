@@ -21,12 +21,12 @@ private actor SyncPolicyConnector: ServerConnecting {
         throw ServerConnectionError.unsupportedResponse
     }
 
-    func librarySongCount() async -> Int? {
+    func librarySongCount(serverID: ServerID) async -> Int? {
         countProbeCalls += 1
         return networkCount
     }
 
-    func libraryRevisionProbe() async -> LibraryRevisionProbe? {
+    func libraryRevisionProbe(serverID: ServerID) async -> LibraryRevisionProbe? {
         countProbeCalls += 1
         guard networkCount != nil || fingerprint != nil else { return nil }
         return LibraryRevisionProbe(
@@ -36,7 +36,7 @@ private actor SyncPolicyConnector: ServerConnecting {
         )
     }
 
-    func makeSynchronizer(store: LocalCatalogStore) async -> LibrarySynchronizer? {
+    func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) async -> LibrarySynchronizer? {
         synchronizerRequests += 1
         return nil
     }

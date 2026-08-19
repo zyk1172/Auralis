@@ -404,6 +404,7 @@ struct MacPlaylistTile: View {
                                     } label: {
                                         Label(action.title, systemImage: action.systemImage ?? "circle")
                                     }
+                                    .disabled(action.disabled)
                                 }
                             } label: {
                                 Image(systemName: "ellipsis")

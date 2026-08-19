@@ -148,22 +148,25 @@ struct OpenSubsonicClientTests {
             PlaylistID(rawValue: "pl-1"), PlaylistID(rawValue: "pl-2")
         ])
 
-        // 2) 命名规则：带歌单元数据但无曲目且名称像文件夹 → 过滤；
-        //    带曲目的 "Group Therapy"（整词 group 命中但 songCount>0）与
-        //    名称不含特征词的真实空歌单 "Chill" 保留。
+        // 2) 结构规则（R06）：服务器给真实歌单带必填元数据时，只有
+        //    songCount/created/changed 三者全缺的条目（伪歌单/分组）被过滤。
+        //    不再按名称猜测：真实空歌单命名为 "Work Folder"（有 created/changed）
+        //    与带曲目的 "Group Therapy"、真实空歌单 "Chill" 全部保留。
         MockURLProtocol.reset(stubs: [
             .response(data: ok(#""playlists":{"playlist":[{"id":"folder-2","name":"Work Folder","songCount":0,"duration":0,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"},{"id":"pl-3","name":"Group Therapy","songCount":2,"duration":600,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"},{"id":"pl-4","name":"Chill","songCount":0,"duration":0,"created":"2026-01-01T00:00:00Z","changed":"2026-01-02T00:00:00Z"}]}"#)),
         ])
         #expect(try await client.playlists().map(\.id) == [
-            PlaylistID(rawValue: "pl-3"), PlaylistID(rawValue: "pl-4")
+            PlaylistID(rawValue: "folder-2"), PlaylistID(rawValue: "pl-3"), PlaylistID(rawValue: "pl-4")
         ])
 
-        // 3) 极小众服务器只返回 id/name/comment：不适用结构规则，全部保留，
-        //    仅名称命中文件夹特征词的条目被命名规则过滤。
+        // 3) 极小众服务器只返回 id/name/comment：响应没有携带任何必填元数据，
+        //    结构规则不适用（无法区分伪歌单与真实歌单），全部保留、不做名称猜测。
         MockURLProtocol.reset(stubs: [
             .response(data: ok(#""playlists":{"playlist":[{"id":"min-1","name":"Minimal","comment":"c"},{"id":"min-2","name":"分组","comment":"folder"}]}"#)),
         ])
-        #expect(try await client.playlists().map(\.id) == [PlaylistID(rawValue: "min-1")])
+        #expect(try await client.playlists().map(\.id) == [
+            PlaylistID(rawValue: "min-1"), PlaylistID(rawValue: "min-2")
+        ])
 
         // 4) 名称像文件夹但确实带曲目 → 视为真实歌单，保留（命名规则不误伤）。
         MockURLProtocol.reset(stubs: [

@@ -486,7 +486,10 @@ public final class OpenSubsonicClient: OpenSubsonicServing, Sendable {
             )
         )
         guard let lyricsList = response.lyricsList else {
-            throw OpenSubsonicClientError.missingPayload("lyricsList")
+            // getLyricsBySongId 在服务器没有歌词时返回 {status:ok} 且无 lyricsList——
+            // 这是正常的“无歌词”响应，不是解析错误。视为空数组，由调用方
+            // （ProductionServerConnector.fetchLyrics）决定回退传统歌词或返回 nil。
+            return []
         }
         return (lyricsList.structuredLyrics ?? []).map { lyrics in
             LyricsDocument(

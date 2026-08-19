@@ -1,4 +1,5 @@
 import Application
+import Domain
 import Foundation
 import ImagePipeline
 import Observation
@@ -34,6 +35,8 @@ final class ArtworkStore {
 
     /// 仅服务器真正切换时变化；ArtworkView 将其纳入 task id，使可见单元自动重新取图。
     private(set) var namespace: String
+    /// 当前服务器 ID（封面网络回源按 serverID 路由，R01）。nil = 本地/未连接。
+    @ObservationIgnored private var currentServerID: ServerID?
 
     @ObservationIgnored private let thumbnails = NSCache<NSString, PlatformImage>()
     @ObservationIgnored private let fullSizeImages = NSCache<NSString, PlatformImage>()
@@ -118,6 +121,7 @@ final class ArtworkStore {
             targetPixelSize: Self.fallbackPixelSize
         )
         guard let payload = await pipeline.load(
+            serverID: currentServerID ?? ServerID(rawValue: "local"),
             remoteKey: remoteKey,
             cacheKey: key,
             fallbackCacheKey: fallbackKey,
@@ -151,6 +155,7 @@ final class ArtworkStore {
 
     /// 更新服务器命名空间。磁盘缓存按服务器隔离，切库只清理进程内图片与旧请求。
     func setServerID(_ serverID: String?) {
+        currentServerID = serverID.map(ServerID.init(rawValue:))
         let next = Self.normalizedNamespace(serverID)
         guard namespace != next else { return }
         namespace = next

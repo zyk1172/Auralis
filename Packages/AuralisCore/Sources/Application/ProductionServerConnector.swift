@@ -26,8 +26,16 @@ public actor ProductionServerConnector: ServerConnecting {
     private let sourceFactory: SourceFactory
     /// 歌单 / 流派的本地缓存，让冷启动无需等待网络。
     private let auxiliaryCache: LibraryAuxiliaryCache
-    /// 当前已认证的服务器客户端，供歌词、封面等按需请求复用。
-    private var activeClient: OpenSubsonicClient?
+    /// 按 ServerID 管理的已认证客户端：任何涉及远程实体的请求都从这里按
+    /// 显式 serverID 取客户端，绝不依赖“当前活跃服务器”（R01）。
+    /// `activeServerID` 只表示 UI 当前浏览的服务器，不能决定一首已存在 Track
+    /// 应该访问哪台服务器。
+    private var clients: [ServerID: OpenSubsonicClient] = [:]
+    /// UI 当前浏览 / 操作的服务器（不影响既有 Track 的请求路由）。
+    public private(set) var activeServerID: ServerID?
+    /// 端点探测代际计数：restoreConnection 启动的双地址探测完成后必须校验
+    /// generation 仍匹配，否则丢弃结果，避免旧探测把 activeServerID 改回去。
+    private var endpointResolutionGeneration: UInt64 = 0
     /// 流质量策略（Wi-Fi 原始 / 蜂窝转码、码率限制），构造流地址时生效。
     private let streamQuality: StreamQualityPolicy
 
@@ -73,6 +81,8 @@ public actor ProductionServerConnector: ServerConnecting {
             let serverID = Self.stableServerID(baseURL: normalizedURL, username: username)
             let credentialID = CredentialID(rawValue: "opensubsonic.\(serverID.rawValue)")
             let previousCredential = try await existingCredential(id: credentialID)
+            // R12：记录本次连接前该服务器是否已有持久化账户，用于失败补偿决策。
+            let accountExistedBefore = (try? await persistence.account(id: serverID)) != nil
 
             await progress(.storingCredential)
             try await credentialVault.store(input.password, for: credentialID)
@@ -147,7 +157,8 @@ public actor ProductionServerConnector: ServerConnecting {
                 )
 
                 // Catalog 保持纯元数据；真正播放/预载/重试时由 AppModel 按需解析单曲 URL。
-                activeClient = client
+                clients[serverID] = client
+                activeServerID = serverID
 
                 return ServerConnectionResult(
                     account: account,
@@ -162,6 +173,12 @@ public actor ProductionServerConnector: ServerConnecting {
                 )
             } catch {
                 await restoreCredential(previousCredential, id: credentialID)
+                // R12 补偿：若此前没有持久化账户，本次连接又未成功保存账号，
+                // 已同步进 SQLite 的目录可能成为无 account 的 orphan 数据——
+                // 清理该服务器本地数据，避免「凭据已回滚但目录残留」。
+                if !accountExistedBefore {
+                    try? await catalogStore.purgeServer(serverID)
+                }
                 // 保留原始错误描述，让用户看到具体原因而非笼统的"无法识别"
                 throw Self.preservedError(error)
             }
@@ -204,14 +221,20 @@ public actor ProductionServerConnector: ServerConnecting {
             )
             try await catalogStore.upsertServer(account)
             // 冷启动必须先展示本地快照，不能被内外网探测（内网最长 30 秒）阻塞。
-            // 先用内网客户端拼出本地目录；端点选择转到后台，完成后会替换 activeClient，
-            // 后续播放/下载自然使用当前网络可达的端点。
-            activeClient = restoreClient(for: account)
+            // 先用内网客户端拼出本地目录；端点选择转到后台，完成后按 serverID 更新
+            // clients 字典。代际校验保证：探测期间用户切到其他服务器/重新恢复时，
+            // 迟到的旧探测结果不会覆盖新状态。
+            if let client = restoreClient(for: account) {
+                clients[account.id] = client
+                activeServerID = account.id
+            }
             if account.externalBaseURL != nil {
+                let generation = endpointResolutionGeneration &+ 1
+                endpointResolutionGeneration = generation
                 Task {
-                    if let client = await self.resolvedClient(for: account) {
-                        self.activeClient = client
-                    }
+                    guard let client = await self.resolvedClient(for: account) else { return }
+                    guard self.endpointResolutionGeneration == generation else { return }
+                    self.clients[account.id] = client
                 }
             }
             let snapshot = try await canonicalSnapshot(serverID: account.id, account: account)
@@ -256,7 +279,8 @@ public actor ProductionServerConnector: ServerConnecting {
     public func resync(serverID: ServerID) async throws -> ServerConnectionResult? {
         guard let account = try await persistence.account(id: serverID) else { return nil }
         guard let client = await resolvedClient(for: account) else { return nil }
-        activeClient = client
+        clients[serverID] = client
+        activeServerID = serverID
         do {
             try Task.checkCancellation()
             let serverInfo = try await client.serverInfo()
@@ -316,9 +340,9 @@ public actor ProductionServerConnector: ServerConnecting {
 
     /// 后台增量刷新歌单与流派，并写入本地辅助缓存。
     /// 由 App 在冷启动「先显示本地缓存」之后调用；失败时返回 nil，界面保持缓存内容不变。
-    public func refreshAuxiliaryData() async -> AuxiliaryLibraryData? {
-        guard let client = activeClient else { return nil }
-        let serverID = client.configuration.serverID
+    /// 只刷新 `serverID` 对应服务器的辅助数据，绝不写进其他服务器的缓存命名空间。
+    public func refreshAuxiliaryData(serverID: ServerID) async -> AuxiliaryLibraryData? {
+        guard let client = clients[serverID] else { return nil }
         async let playlistsRequest = Self.optional { try await client.playlists() }
         async let genresRequest = Self.optional { try await client.genres() }
         async let starredRequest = Self.optional { try await client.starred() }
@@ -348,6 +372,7 @@ public actor ProductionServerConnector: ServerConnecting {
     }
 
     /// 按需拉取单曲歌词。服务器不支持结构化歌词或单曲无歌词时返回 nil。
+    /// 网络/认证等失败也折叠为 nil（便捷入口；需要区分失败与无歌词时用 fetchLyrics）。
     public func lyrics(for track: Track) async -> LyricsDocument? {
         try? await fetchLyrics(for: track)
     }
@@ -357,8 +382,9 @@ public actor ProductionServerConnector: ServerConnecting {
     /// - 服务器明确没有歌词：返回 nil（调用方标记无歌词状态）。
     /// - 结构化歌词（getLyricsBySongId）为空时，回退到传统 getLyrics(artist+title)，
     ///   兼容 Navidrome 等服务器只暴露纯文本歌词、不返回 structuredLyrics 的场景。
+    /// 请求始终路由到 `track.serverID` 对应的客户端（R01），与当前浏览服务器无关。
     public func fetchLyrics(for track: Track) async throws -> LyricsDocument? {
-        guard let client = activeClient else {
+        guard let client = clients[track.serverID] else {
             throw ServerConnectionError.serverUnavailable
         }
         let documents = try await client.structuredLyrics(trackID: track.id)
@@ -377,71 +403,74 @@ public actor ProductionServerConnector: ServerConnecting {
     /// 上报单曲已完成播放（scrobble submission=true），让服务器更新播放次数。
     /// Navidrome 只在 scrobble(submission=true) 时标记已播放，stream 不会计数。
     /// 未连接或上报失败时静默忽略（本地播放记录不受影响）。
-    public func scrobble(trackID: TrackID, submission: Bool) async {
-        guard let client = activeClient else { return }
+    public func scrobble(serverID: ServerID, trackID: TrackID, submission: Bool) async {
+        guard let client = clients[serverID] else { return }
         _ = try? await client.scrobble(trackIDs: [trackID], submission: submission)
     }
 
-    /// 按需拉取封面图片数据（getCoverArt）。
-    public func artworkData(key: String, targetPixelSize: Int) async -> Data? {
-        guard let client = activeClient else { return nil }
+    /// 按需拉取封面图片数据（getCoverArt）。按 serverID 路由，封面 key 跨服务器互不串扰。
+    public func artworkData(serverID: ServerID, key: String, targetPixelSize: Int) async -> Data? {
+        guard let client = clients[serverID] else { return nil }
         let size = min(max(targetPixelSize, 1), 4096)
         return try? await client.coverArt(id: key, size: size)
     }
 
-    /// 从服务器拉取流派列表（getGenres）。
-    public func genres() async -> [Genre] {
-        guard let client = activeClient else { return [] }
-        return (try? await client.genres()) ?? []
+    /// 从服务器拉取流派列表（getGenres）。失败时抛出，调用方决定是否降级为空。
+    public func genres(serverID: ServerID) async throws -> [Genre] {
+        guard let client = clients[serverID] else { throw ServerConnectionError.serverUnavailable }
+        return try await client.genres()
     }
 
     /// 按流派从服务器拉取歌曲：先按流派列专辑，再展开各专辑曲目并补全 stream URL。
-    public func tracks(byGenre name: String) async -> [Track] {
-        guard let client = activeClient, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        do {
-            let albums = try await client.albums(
-                type: .byGenre,
-                size: 40,
-                offset: 0,
-                fromYear: nil,
-                toYear: nil,
-                genre: name,
-                musicFolderID: nil
-            )
-            var collected: [Track] = []
-            var seen = Set<TrackID>()
-            for album in albums {
-                let detail = try? await client.album(id: album.id)
-                for var track in detail?.tracks ?? [] {
-                    track.streamURL = await Self.makeStreamURL(client: client, trackID: track.id.rawValue, quality: streamQuality)
-                    if seen.insert(track.id).inserted {
-                        collected.append(track)
-                    }
-                    if collected.count >= 200 { break }
+    public func tracks(byGenre name: String, serverID: ServerID) async throws -> [Track] {
+        guard let client = clients[serverID], !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ServerConnectionError.serverUnavailable
+        }
+        let albums = try await client.albums(
+            type: .byGenre,
+            size: 40,
+            offset: 0,
+            fromYear: nil,
+            toYear: nil,
+            genre: name,
+            musicFolderID: nil
+        )
+        var collected: [Track] = []
+        var seen = Set<TrackID>()
+        for album in albums {
+            let detail = try? await client.album(id: album.id)
+            for var track in detail?.tracks ?? [] {
+                track.streamURL = await Self.makeStreamURL(client: client, trackID: track.id.rawValue, quality: streamQuality)
+                if seen.insert(track.id).inserted {
+                    collected.append(track)
                 }
                 if collected.count >= 200 { break }
             }
-            return collected
-        } catch {
-            return []
+            if collected.count >= 200 { break }
         }
+        return collected
     }
 
     /// 重新获取单曲的带认证播放地址：调用 OpenSubsonic makeStreamURL 刷新（本地拼串，无网络往返）。
     /// 流地址过期（服务器重启 / token 失效）后，播放器用新地址重试。
-    /// 轻量获取服务器音乐库曲目总数：分页 getAlbumList2（500/页）求和 songCount。
-    /// 只拉专辑列表元数据，不逐张专辑拉取曲目，因此比全量同步快得多。
-    /// 服务器不返回 songCount（老版本 Subsonic）或总数异常时返回 nil，表示「无法判断，不跳过同步」。
-    public func librarySongCount() async -> Int? {
-        await libraryRevisionProbe()?.songCount
+    public func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL? {
+        guard let client = clients[serverID] else { return nil }
+        return await Self.makeStreamURL(client: client, trackID: trackID.rawValue, quality: streamQuality)
     }
 
     /// 探针分页上限（500/页 → 最多 20,000 张专辑）。达到上限仍未翻完时视为
     /// 「无法可靠判定」，返回 nil 走保守全量，而不是无限翻页。
     private static let maximumProbePages = 40
 
-    public func libraryRevisionProbe() async -> LibraryRevisionProbe? {
-        guard let client = activeClient else { return nil }
+    /// 轻量获取服务器音乐库曲目总数：分页 getAlbumList2（500/页）求和 songCount。
+    /// 只拉专辑列表元数据，不逐张专辑拉取曲目，因此比全量同步快得多。
+    /// 服务器不返回 songCount（老版本 Subsonic）或总数异常时返回 nil，表示「无法判断，不跳过同步」。
+    public func librarySongCount(serverID: ServerID) async -> Int? {
+        await libraryRevisionProbe(serverID: serverID)?.songCount
+    }
+
+    public func libraryRevisionProbe(serverID: ServerID) async -> LibraryRevisionProbe? {
+        guard let client = clients[serverID] else { return nil }
         var total = 0
         var offset = 0
         let pageSize = 500
@@ -497,64 +526,53 @@ public actor ProductionServerConnector: ServerConnecting {
         )
     }
 
-    public func refreshStreamURL(trackID: TrackID) async -> URL? {
-        guard let client = activeClient else { return nil }
-        return await Self.makeStreamURL(client: client, trackID: trackID.rawValue, quality: streamQuality)
-    }
-
     /// 带认证的下载地址（后台下载任务用），本地拼串无网络往返。
-    public func downloadURL(trackID: TrackID) async -> URL? {
-        guard let client = activeClient else { return nil }
+    public func downloadURL(serverID: ServerID, trackID: TrackID) async -> URL? {
+        guard let client = clients[serverID] else { return nil }
         return try? await client.makeDownloadURL(trackID: trackID.rawValue)
     }
 
     /// 按 ID 从服务器拉取单曲（getSong）并补流地址。
     /// 供 Agent「服务器曲目直播回退」使用：本地目录尚未同步到这首歌时，也能直接在线流播。
-    public func serverTrack(trackID: TrackID) async -> Track? {
-        guard let client = activeClient else { return nil }
-        do {
-            var track = try await client.song(id: trackID)
-            if track.streamURL == nil {
-                track.streamURL = await Self.makeStreamURL(client: client, trackID: track.id.rawValue, quality: streamQuality)
-            }
-            return track
-        } catch {
-            return nil
+    /// 失败时抛出（与「服务器确实没有该曲目」区分，R15）。
+    public func serverTrack(serverID: ServerID, trackID: TrackID) async throws -> Track? {
+        guard let client = clients[serverID] else { throw ServerConnectionError.serverUnavailable }
+        var track = try await client.song(id: trackID)
+        if track.streamURL == nil {
+            track.streamURL = await Self.makeStreamURL(client: client, trackID: track.id.rawValue, quality: streamQuality)
         }
+        return track
     }
 
     /// 服务器在线搜索歌曲（search3），返回带流地址的曲目。
-    public func serverSearch(query: String, limit: Int) async -> [Track] {
-        guard let client = activeClient,
+    /// 失败时抛出（与「无匹配结果」区分，R15）。
+    public func serverSearch(query: String, limit: Int, serverID: ServerID) async throws -> [Track] {
+        guard let client = clients[serverID],
               !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return [] }
-        do {
-            let result = try await client.search(query: query, songCount: min(max(limit, 1), 100))
-            var tracks = result.tracks
-            for index in tracks.indices {
-                tracks[index].streamURL = await Self.makeStreamURL(
-                    client: client, trackID: tracks[index].id.rawValue, quality: streamQuality
-                )
-            }
-            return tracks
-        } catch {
-            return []
+        else { throw ServerConnectionError.serverUnavailable }
+        let result = try await client.search(query: query, songCount: min(max(limit, 1), 100))
+        var tracks = result.tracks
+        for index in tracks.indices {
+            tracks[index].streamURL = await Self.makeStreamURL(
+                client: client, trackID: tracks[index].id.rawValue, quality: streamQuality
+            )
         }
+        return tracks
     }
 
     /// 下载单曲完整音频数据（download 端点），用于本地缓存播放。
-    public func downloadData(trackID: TrackID) async -> Data? {
-        guard let client = activeClient else { return nil }
+    public func downloadData(serverID: ServerID, trackID: TrackID) async -> Data? {
+        guard let client = clients[serverID] else { return nil }
         return try? await client.download(trackID: trackID)
     }
 
     /// 把单曲追加到服务器歌单（updatePlaylist 的 songIdToAdd）。
-    public func addToPlaylist(playlistID: PlaylistID, trackID: TrackID) async -> Bool {
-        guard let client = activeClient else { return false }
+    public func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool {
+        guard let client = clients[serverID] else { return false }
         do {
             try await client.updatePlaylist(id: playlistID, appendTrackIDs: [trackID])
             // 写操作成功后把服务器最新歌单列表落盘，冷启动即与服务器一致。
-            await refreshCachedPlaylists(serverID: client.configuration.serverID)
+            await refreshCachedPlaylists(serverID: serverID, client: client)
             return true
         } catch {
             return false
@@ -562,8 +580,8 @@ public actor ProductionServerConnector: ServerConnecting {
     }
 
     /// 同步收藏状态到服务器；失败静默（本地状态已生效，下次同步会对齐）。
-    public func setFavorite(trackID: TrackID, isFavorite: Bool) async {
-        guard let client = activeClient else { return }
+    public func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async {
+        guard let client = clients[serverID] else { return }
         do {
             if isFavorite {
                 try await client.star(.track(trackID))
@@ -576,7 +594,6 @@ public actor ProductionServerConnector: ServerConnecting {
             return
         }
         // 同步成功后即时更新本地缓存的收藏集合，冷启动即与服务器一致。
-        let serverID = client.configuration.serverID
         let cached = await auxiliaryCache.snapshot(serverID: serverID)
         var ids = Set(cached?.favoriteTrackIDs ?? [])
         if isFavorite {
@@ -587,11 +604,11 @@ public actor ProductionServerConnector: ServerConnecting {
         await auxiliaryCache.updateFavorites(Array(ids).sorted(), serverID: serverID)
     }
 
-    /// 用当前已认证服务器构建资料库同步器（本地目录写入）。
+    /// 用指定服务器构建资料库同步器（本地目录写入）。
     /// 与 connect()/resync() 使用同一个 bounded-concurrency source（sourceFactory 注入），
     /// 避免后台/增量同步退回旧版「逐专辑串行拉取」——几千张专辑会变成几千次串行 HTTP。
-    public func makeSynchronizer(store: LocalCatalogStore) -> LibrarySynchronizer? {
-        guard let client = activeClient else { return nil }
+    public func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) -> LibrarySynchronizer? {
+        guard let client = clients[serverID] else { return nil }
         let source = sourceFactory(client)
         return LibrarySynchronizer(source: source, store: store)
     }
@@ -641,6 +658,8 @@ public actor ProductionServerConnector: ServerConnecting {
         guard !displayName.isEmpty, !username.isEmpty else { return nil }
 
         let credentialID = CredentialID(rawValue: account.credentialReference ?? "opensubsonic.\(serverID.rawValue)")
+        // R12：记录旧密码，后续写入账户失败时补偿恢复。
+        let previousPassword = try? await credentialVault.retrieve(id: credentialID)
         if let password = update.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
             guard (try? await credentialVault.store(password, for: credentialID)) != nil else { return nil }
         }
@@ -652,8 +671,9 @@ public actor ProductionServerConnector: ServerConnecting {
         do {
             try await persistence.saveAccount(account)
             try await catalogStore.upsertServer(account)
-            if activeClient?.configuration.serverID == serverID {
-                activeClient = makeClient(
+            // 更新该服务器的内存客户端（若已建立），并保持 activeServerID 不变。
+            if clients[serverID] != nil {
+                clients[serverID] = makeClient(
                     baseURL: account.baseURL!,
                     serverID: serverID,
                     username: username,
@@ -663,6 +683,12 @@ public actor ProductionServerConnector: ServerConnecting {
             }
             return account
         } catch {
+            // R12 补偿：密码已覆盖但账户写入失败 → 恢复旧密码，避免凭据与账户不一致。
+            if let previousPassword {
+                try? await credentialVault.store(previousPassword, for: credentialID)
+            } else {
+                try? await credentialVault.delete(id: credentialID)
+            }
             return nil
         }
     }
@@ -707,57 +733,59 @@ public actor ProductionServerConnector: ServerConnecting {
 
     // MARK: - 歌单编辑
 
-    public func createPlaylist(name: String, trackIDs: [TrackID]) async -> Playlist? {
-        guard let client = activeClient else { return nil }
+    public func createPlaylist(serverID: ServerID, name: String, trackIDs: [TrackID]) async -> Playlist? {
+        guard let client = clients[serverID] else { return nil }
         guard let detail = try? await client.createPlaylist(name: name, trackIDs: trackIDs) else { return nil }
-        await refreshCachedPlaylists(serverID: client.configuration.serverID)
+        await refreshCachedPlaylists(serverID: serverID, client: client)
         return detail.playlist
     }
 
-    public func renamePlaylist(playlistID: PlaylistID, name: String) async -> Bool {
-        guard let client = activeClient else { return false }
+    public func renamePlaylist(serverID: ServerID, playlistID: PlaylistID, name: String) async -> Bool {
+        guard let client = clients[serverID] else { return false }
         do {
             try await client.updatePlaylist(id: playlistID, name: name)
-            await refreshCachedPlaylists(serverID: client.configuration.serverID)
+            await refreshCachedPlaylists(serverID: serverID, client: client)
             return true
         } catch {
             return false
         }
     }
 
-    public func removeFromPlaylist(playlistID: PlaylistID, indices: [Int]) async -> Bool {
-        guard let client = activeClient, !indices.isEmpty else { return false }
+    public func removeFromPlaylist(serverID: ServerID, playlistID: PlaylistID, indices: [Int]) async -> Bool {
+        guard let client = clients[serverID], !indices.isEmpty else { return false }
         do {
             // 服务器按下标删除，必须降序执行，否则先删的会让后面的下标错位
             try await client.updatePlaylist(id: playlistID, removeIndexes: indices.sorted(by: >))
-            await refreshCachedPlaylists(serverID: client.configuration.serverID)
+            await refreshCachedPlaylists(serverID: serverID, client: client)
             return true
         } catch {
             return false
         }
     }
 
-    /// 重排歌单：OpenSubsonic 无原生重排端点，用「清空后按新顺序追加」等价实现。
-    public func replacePlaylistTracks(playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool {
-        guard let client = activeClient else { return false }
+    /// 重排歌单：用**单次** updatePlaylist 请求完成「清空旧下标 + 追加新顺序」（R02）。
+    /// 不允许「先清空、再追加」的两步实现——第一步成功、第二步失败会把用户歌单
+    /// 变成空歌单。OpenSubsonic updatePlaylist 同请求同时支持 songIndexToRemove 与
+    /// songIdToAdd；Navidrome 等兼容实现均接受。
+    public func replacePlaylistTracks(serverID: ServerID, playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool {
+        guard let client = clients[serverID] else { return false }
         do {
             let detail = try await client.playlist(id: playlistID)
             let existingCount = detail.tracks.count
-            if existingCount > 0 {
-                try await client.updatePlaylist(id: playlistID, removeIndexes: Array((0..<existingCount).reversed()))
-            }
-            if !trackIDs.isEmpty {
-                try await client.updatePlaylist(id: playlistID, appendTrackIDs: trackIDs)
-            }
-            await refreshCachedPlaylists(serverID: client.configuration.serverID)
+            try await client.updatePlaylist(
+                id: playlistID,
+                appendTrackIDs: trackIDs,
+                removeIndexes: existingCount > 0 ? Array((0..<existingCount).reversed()) : []
+            )
+            await refreshCachedPlaylists(serverID: serverID, client: client)
             return true
         } catch {
             return false
         }
     }
 
-    public func deletePlaylist(playlistID: PlaylistID) async -> Bool {
-        guard let client = activeClient else { return false }
+    public func deletePlaylist(serverID: ServerID, playlistID: PlaylistID) async -> Bool {
+        guard let client = clients[serverID] else { return false }
         do {
             try await client.deletePlaylist(id: playlistID)
             await cacheDeletedPlaylist(playlistID, client: client)
@@ -791,35 +819,30 @@ public actor ProductionServerConnector: ServerConnecting {
         }
     }
 
-    /// 拉取歌单内的完整曲目列表（getPlaylist 单数端点）。
-    public func fetchPlaylistTracks(playlistID: PlaylistID) async -> [Track] {
-        guard let client = activeClient else { return [] }
-        do {
-            let detail = try await client.playlist(id: playlistID)
-            var tracks = detail.tracks
-            // 为歌单内的曲目也构造 stream URL
-            for index in tracks.indices {
-                tracks[index].streamURL = await Self.makeStreamURL(client: client, trackID: tracks[index].id.rawValue, quality: streamQuality)
-            }
-            // 把歌单最新曲目列表写回本地缓存，冷启动后详情可直接展示，与服务器一致。
-            let serverID = client.configuration.serverID
-            if let cached = await auxiliaryCache.snapshot(serverID: serverID) {
-                var playlists = cached.playlists
-                if let index = playlists.firstIndex(where: { $0.id == playlistID }) {
-                    playlists[index].trackIDs = tracks.map(\.id)
-                    await auxiliaryCache.updatePlaylists(playlists, serverID: serverID)
-                }
-            }
-            return tracks
-        } catch {
-            return []
+    /// 拉取歌单内的完整曲目列表（getPlaylist 单数端点）。失败时抛出（R15）。
+    public func fetchPlaylistTracks(serverID: ServerID, playlistID: PlaylistID) async throws -> [Track] {
+        guard let client = clients[serverID] else { throw ServerConnectionError.serverUnavailable }
+        let detail = try await client.playlist(id: playlistID)
+        var tracks = detail.tracks
+        // 为歌单内的曲目也构造 stream URL
+        for index in tracks.indices {
+            tracks[index].streamURL = await Self.makeStreamURL(client: client, trackID: tracks[index].id.rawValue, quality: streamQuality)
         }
+        // 把歌单最新曲目列表写回本地缓存，冷启动后详情可直接展示，与服务器一致。
+        if let cached = await auxiliaryCache.snapshot(serverID: serverID) {
+            var playlists = cached.playlists
+            if let index = playlists.firstIndex(where: { $0.id == playlistID }) {
+                playlists[index].trackIDs = tracks.map(\.id)
+                await auxiliaryCache.updatePlaylists(playlists, serverID: serverID)
+            }
+        }
+        return tracks
     }
 
     /// 从服务器拉取最新歌单列表并写入本地辅助缓存（歌单写操作成功后调用）。
     /// 失败时静默保留旧缓存，界面继续用现有数据。
-    private func refreshCachedPlaylists(serverID: ServerID) async {
-        guard let client = activeClient else { return }
+    /// 使用调用时捕获的 client（R01）：await 间隙切服不会把 B 的歌单写进 A 的缓存。
+    private func refreshCachedPlaylists(serverID: ServerID, client: OpenSubsonicClient) async {
         if let fresh = try? await client.playlists() {
             await auxiliaryCache.updatePlaylists(fresh, serverID: serverID)
         }
@@ -827,8 +850,8 @@ public actor ProductionServerConnector: ServerConnecting {
 
     // MARK: - 标注
 
-    public func setAlbumFavorite(albumID: AlbumID, isFavorite: Bool) async {
-        guard let client = activeClient else { return }
+    public func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async {
+        guard let client = clients[serverID] else { return }
         if isFavorite {
             try? await client.star(.album(albumID))
         } else {
@@ -836,8 +859,8 @@ public actor ProductionServerConnector: ServerConnecting {
         }
     }
 
-    public func setArtistFavorite(artistID: ArtistID, isFavorite: Bool) async {
-        guard let client = activeClient else { return }
+    public func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async {
+        guard let client = clients[serverID] else { return }
         if isFavorite {
             try? await client.star(.artist(artistID))
         } else {
@@ -845,15 +868,15 @@ public actor ProductionServerConnector: ServerConnecting {
         }
     }
 
-    public func setRating(trackID: TrackID, rating: Int) async {
-        guard let client = activeClient else { return }
+    public func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async {
+        guard let client = clients[serverID] else { return }
         try? await client.setRating(min(max(rating, 0), 5), trackID: trackID)
     }
 
     // MARK: - 服务器
 
-    public func ping() async -> Bool {
-        guard let client = activeClient else { return false }
+    public func ping(serverID: ServerID) async -> Bool {
+        guard let client = clients[serverID] else { return false }
         do {
             try await client.ping()
             return true
@@ -863,7 +886,8 @@ public actor ProductionServerConnector: ServerConnecting {
     }
 
     public func disconnect() async {
-        activeClient = nil
+        clients.removeAll()
+        activeServerID = nil
     }
 
     /// Reads the complete visible music library from SQLite. This is the only catalog snapshot
@@ -931,7 +955,10 @@ public actor ProductionServerConnector: ServerConnecting {
         try? await persistence.removeServer(serverID)
         try? await catalogStore.purgeServer(serverID)
         await auxiliaryCache.purge(serverID: serverID)
-        activeClient = nil
+        clients[serverID] = nil
+        if activeServerID == serverID {
+            activeServerID = nil
+        }
     }
 
     /// 用持久化的账户信息重建 API 客户端（凭据仍在系统 Keychain 中）。

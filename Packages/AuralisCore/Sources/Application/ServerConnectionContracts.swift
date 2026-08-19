@@ -157,78 +157,83 @@ public protocol ServerConnecting: Sendable {
     /// 用当前服务器凭据重新做一次全量同步并返回最新资料库（旧快照为空时自愈界面）。
     /// 默认退化为 restoreConnection（不联网）。
     func resync(serverID: ServerID) async throws -> ServerConnectionResult?
+
+    // MARK: 远程实体请求（所有方法显式携带 serverID / Track，禁止依赖“当前活跃服务器”）
+
     /// 按需从服务器拉取单曲歌词（结构化歌词优先，空时回退传统 getLyrics 纯文本）；
-    /// 未连接或服务器不支持时返回 nil。
+    /// 未连接或服务器不支持时返回 nil。`track` 自带 serverID。
     func lyrics(for track: Track) async -> LyricsDocument?
     /// 渐进缓存用：拉取歌词并区分「失败」与「服务器无歌词」。
     /// 返回 nil = 服务器确认没有歌词；抛出错误 = 网络/认证等失败（不是无歌词）。
     func fetchLyrics(for track: Track) async throws -> LyricsDocument?
     /// 上报单曲已完成播放（scrobble submission=true），让服务器更新播放次数。
     /// Navidrome 只在 scrobble(submission=true) 时标记已播放；未连接时静默忽略。
-    func scrobble(trackID: TrackID, submission: Bool) async
+    func scrobble(serverID: ServerID, trackID: TrackID, submission: Bool) async
     /// 按需从服务器拉取封面图片数据；未连接或失败时返回 nil。
-    func artworkData(key: String, targetPixelSize: Int) async -> Data?
-    /// 从服务器拉取流派列表（getGenres）；未连接或失败时返回空数组。
-    func genres() async -> [Genre]
+    func artworkData(serverID: ServerID, key: String, targetPixelSize: Int) async -> Data?
+    /// 从服务器拉取流派列表（getGenres）；失败时抛出，由调用方决定是否降级为空。
+    func genres(serverID: ServerID) async throws -> [Genre]
     /// 后台增量刷新歌单与流派并写入本地辅助缓存。
     /// 冷启动先用本地缓存出界面，随后调用这里对照服务器更新；离线时返回 nil、保留缓存。
-    func refreshAuxiliaryData() async -> AuxiliaryLibraryData?
+    func refreshAuxiliaryData(serverID: ServerID) async -> AuxiliaryLibraryData?
     /// 按流派从服务器拉取歌曲（getAlbumList2 type=byGenre 展开各专辑曲目）；
     /// Navidrome 等服务器 getGenres 常为空，但按流派列专辑可用，
-    /// 因此即便本地没有流派标签，进入某个流派也能拉到真实歌曲。未连接或失败时返回空。
-    func tracks(byGenre name: String) async -> [Track]
+    /// 因此即便本地没有流派标签，进入某个流派也能拉到真实歌曲。失败时抛出。
+    func tracks(byGenre name: String, serverID: ServerID) async throws -> [Track]
     /// 重新获取单曲的带认证播放地址（流地址过期 / 播放失败后刷新）。
     /// 返回的 URL 只用于 AVPlayer 内部播放，不得发送给大模型。
-    func refreshStreamURL(trackID: TrackID) async -> URL?
-    /// 在服务器上在线搜索歌曲（本地无结果时使用）；未连接或失败返回空数组。
-    func serverSearch(query: String, limit: Int) async -> [Track]
-    /// 按 ID 从服务器拉取单曲（getSong）并补流地址；本地目录未同步时用于在线流播。未连接或失败返回 nil。
-    func serverTrack(trackID: TrackID) async -> Track?
+    func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL?
+    /// 在服务器上在线搜索歌曲（本地无结果时使用）；失败时抛出（与“无结果”区分）。
+    func serverSearch(query: String, limit: Int, serverID: ServerID) async throws -> [Track]
+    /// 按 ID 从服务器拉取单曲（getSong）并补流地址；本地目录未同步时用于在线流播。
+    /// 失败时抛出（与“确实不存在”区分）。
+    func serverTrack(serverID: ServerID, trackID: TrackID) async throws -> Track?
     /// 轻量获取服务器音乐库的曲目总数（getAlbumList2 各专辑 songCount 求和）。
     /// 用于启动/回前台时与本地目录曲目数比对：一致则跳过整库拉取。未连接/不支持/失败返回 nil（= 不跳过）。
-    func librarySongCount() async -> Int?
+    func librarySongCount(serverID: ServerID) async -> Int?
     /// 轻量远端修订探针。countOnly 不能作为“无需同步”的充分条件。
-    func libraryRevisionProbe() async -> LibraryRevisionProbe?
+    func libraryRevisionProbe(serverID: ServerID) async -> LibraryRevisionProbe?
     /// 生成带认证的下载地址（供后台下载任务使用）；未连接或失败返回 nil。
-    func downloadURL(trackID: TrackID) async -> URL?
+    func downloadURL(serverID: ServerID, trackID: TrackID) async -> URL?
     /// 下载单曲完整音频数据（用于本地缓存）；未连接或失败时返回 nil。
-    func downloadData(trackID: TrackID) async -> Data?
+    func downloadData(serverID: ServerID, trackID: TrackID) async -> Data?
     /// 把单曲追加到服务器歌单；成功返回 true。
-    func addToPlaylist(playlistID: PlaylistID, trackID: TrackID) async -> Bool
+    func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool
     /// 同步单曲收藏状态到服务器（star/unstar）。
-    func setFavorite(trackID: TrackID, isFavorite: Bool) async
-    /// 用当前已认证服务器构建一个资料库同步器；未连接时返回 nil。
-    func makeSynchronizer(store: LocalCatalogStore) async -> LibrarySynchronizer?
+    func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async
+    /// 用指定服务器构建一个资料库同步器；未连接时返回 nil。
+    func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) async -> LibrarySynchronizer?
 
     // MARK: 歌单编辑（Agent 与 UI 共用）
 
     /// 新建歌单，成功返回服务器分配的歌单。
-    func createPlaylist(name: String, trackIDs: [TrackID]) async -> Playlist?
+    func createPlaylist(serverID: ServerID, name: String, trackIDs: [TrackID]) async -> Playlist?
     /// 重命名歌单。
-    func renamePlaylist(playlistID: PlaylistID, name: String) async -> Bool
+    func renamePlaylist(serverID: ServerID, playlistID: PlaylistID, name: String) async -> Bool
     /// 按下标移除歌单中的曲目。
-    func removeFromPlaylist(playlistID: PlaylistID, indices: [Int]) async -> Bool
-    /// 用给定顺序整体覆盖歌单曲目（用于重排）。
-    func replacePlaylistTracks(playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool
+    func removeFromPlaylist(serverID: ServerID, playlistID: PlaylistID, indices: [Int]) async -> Bool
+    /// 用给定顺序整体覆盖歌单曲目（用于重排）。实现必须为单次服务器请求，
+    /// 禁止「先清空再追加」的两步窗口（R02）。
+    func replacePlaylistTracks(serverID: ServerID, playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool
     /// 删除歌单。
-    func deletePlaylist(playlistID: PlaylistID) async -> Bool
-    /// 拉取歌单内的曲目（getPlaylist 单数端点，含完整 entry）。
-    func fetchPlaylistTracks(playlistID: PlaylistID) async -> [Track]
+    func deletePlaylist(serverID: ServerID, playlistID: PlaylistID) async -> Bool
+    /// 拉取歌单内的曲目（getPlaylist 单数端点，含完整 entry）；失败时抛出。
+    func fetchPlaylistTracks(serverID: ServerID, playlistID: PlaylistID) async throws -> [Track]
 
     // MARK: 标注
 
     /// 收藏 / 取消收藏专辑。
-    func setAlbumFavorite(albumID: AlbumID, isFavorite: Bool) async
+    func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async
     /// 收藏 / 取消收藏艺术家。
-    func setArtistFavorite(artistID: ArtistID, isFavorite: Bool) async
+    func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async
     /// 设置单曲评分（0 表示清除）。
-    func setRating(trackID: TrackID, rating: Int) async
+    func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async
 
     // MARK: 服务器
 
-    /// 对当前已连接服务器发一次心跳，验证连通性。
-    func ping() async -> Bool
-    /// 断开当前连接并清理内存中的客户端（不删除任何远端数据）。
+    /// 对指定服务器发一次心跳，验证连通性。
+    func ping(serverID: ServerID) async -> Bool
+    /// 断开所有连接并清理内存中的客户端（不删除任何远端数据）。
     func disconnect() async
     /// 删除本地保存的服务器凭据与持久化资料库（仅本地，远端不受影响）。
     func forgetServer(serverID: ServerID) async
@@ -264,24 +269,24 @@ public extension ServerConnecting {
     }
     func lyrics(for track: Track) async -> LyricsDocument? { nil }
     func fetchLyrics(for track: Track) async throws -> LyricsDocument? { nil }
-    func scrobble(trackID: TrackID, submission: Bool) async {}
-    func artworkData(key: String, targetPixelSize: Int) async -> Data? { nil }
-    func genres() async -> [Genre] { [] }
-    func refreshAuxiliaryData() async -> AuxiliaryLibraryData? { nil }
-    func tracks(byGenre name: String) async -> [Track] { [] }
-    func refreshStreamURL(trackID: TrackID) async -> URL? { nil }
-    func serverSearch(query: String, limit: Int) async -> [Track] { [] }
-    func serverTrack(trackID: TrackID) async -> Track? { nil }
-    func librarySongCount() async -> Int? { nil }
-    func libraryRevisionProbe() async -> LibraryRevisionProbe? {
-        guard let count = await librarySongCount() else { return nil }
+    func scrobble(serverID: ServerID, trackID: TrackID, submission: Bool) async {}
+    func artworkData(serverID: ServerID, key: String, targetPixelSize: Int) async -> Data? { nil }
+    func genres(serverID: ServerID) async throws -> [Genre] { [] }
+    func refreshAuxiliaryData(serverID: ServerID) async -> AuxiliaryLibraryData? { nil }
+    func tracks(byGenre name: String, serverID: ServerID) async throws -> [Track] { [] }
+    func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL? { nil }
+    func serverSearch(query: String, limit: Int, serverID: ServerID) async throws -> [Track] { [] }
+    func serverTrack(serverID: ServerID, trackID: TrackID) async throws -> Track? { nil }
+    func librarySongCount(serverID: ServerID) async -> Int? { nil }
+    func libraryRevisionProbe(serverID: ServerID) async -> LibraryRevisionProbe? {
+        guard let count = await librarySongCount(serverID: serverID) else { return nil }
         return LibraryRevisionProbe(kind: .countOnly, fingerprint: nil, songCount: count)
     }
-    func downloadURL(trackID: TrackID) async -> URL? { nil }
-    func downloadData(trackID: TrackID) async -> Data? { nil }
-    func addToPlaylist(playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }
-    func setFavorite(trackID: TrackID, isFavorite: Bool) async {}
-    func makeSynchronizer(store: LocalCatalogStore) async -> LibrarySynchronizer? { nil }
+    func downloadURL(serverID: ServerID, trackID: TrackID) async -> URL? { nil }
+    func downloadData(serverID: ServerID, trackID: TrackID) async -> Data? { nil }
+    func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }
+    func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async {}
+    func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) async -> LibrarySynchronizer? { nil }
     func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {
         throw ServerConnectionError.unsupportedResponse
     }
@@ -289,18 +294,18 @@ public extension ServerConnecting {
         throw ServerConnectionError.unsupportedResponse
     }
 
-    func createPlaylist(name: String, trackIDs: [TrackID]) async -> Playlist? { nil }
-    func renamePlaylist(playlistID: PlaylistID, name: String) async -> Bool { false }
-    func removeFromPlaylist(playlistID: PlaylistID, indices: [Int]) async -> Bool { false }
-    func replacePlaylistTracks(playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool { false }
-    func deletePlaylist(playlistID: PlaylistID) async -> Bool { false }
-    func fetchPlaylistTracks(playlistID: PlaylistID) async -> [Track] { [] }
+    func createPlaylist(serverID: ServerID, name: String, trackIDs: [TrackID]) async -> Playlist? { nil }
+    func renamePlaylist(serverID: ServerID, playlistID: PlaylistID, name: String) async -> Bool { false }
+    func removeFromPlaylist(serverID: ServerID, playlistID: PlaylistID, indices: [Int]) async -> Bool { false }
+    func replacePlaylistTracks(serverID: ServerID, playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool { false }
+    func deletePlaylist(serverID: ServerID, playlistID: PlaylistID) async -> Bool { false }
+    func fetchPlaylistTracks(serverID: ServerID, playlistID: PlaylistID) async throws -> [Track] { [] }
 
-    func setAlbumFavorite(albumID: AlbumID, isFavorite: Bool) async {}
-    func setArtistFavorite(artistID: ArtistID, isFavorite: Bool) async {}
-    func setRating(trackID: TrackID, rating: Int) async {}
+    func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async {}
+    func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async {}
+    func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async {}
 
-    func ping() async -> Bool { false }
+    func ping(serverID: ServerID) async -> Bool { false }
     func disconnect() async {}
     func forgetServer(serverID: ServerID) async {}
     func updateServerDisplayName(serverID: ServerID, displayName: String) async -> Bool { false }
@@ -377,22 +382,13 @@ public enum ServerURLPolicy {
            components.user != nil || components.password != nil {
             throw ServerConnectionError.embeddedCredentials
         }
-        if scheme == "http", !isPrivateOrLocal(host: host) {
+        if scheme == "http", !NetworkHostClassifier.isPrivateOrLocal(host: host) {
             throw ServerConnectionError.insecurePublicServer
         }
     }
 
     public static func isPrivateOrLocal(host: String) -> Bool {
-        let normalized = host.lowercased()
-        if normalized == "localhost" || normalized.hasSuffix(".local") { return true }
-        if normalized == "::1" { return true }
-        let octets = normalized.split(separator: ".").compactMap { Int($0) }
-        guard octets.count == 4, octets.allSatisfy({ 0...255 ~= $0 }) else { return false }
-        if octets[0] == 10 || octets[0] == 127 { return true }
-        if octets[0] == 192 && octets[1] == 168 { return true }
-        if octets[0] == 172 && (16...31).contains(octets[1]) { return true }
-        if octets[0] == 169 && octets[1] == 254 { return true }
-        return false
+        NetworkHostClassifier.isPrivateOrLocal(host: host)
     }
 }
 

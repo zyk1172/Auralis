@@ -12,7 +12,7 @@ import Testing
 struct DislikeBehaviorTests {
     private final class RecordingConnector: ServerConnecting, @unchecked Sendable {
         private(set) var favoriteCalls: [(TrackID, Bool)] = []
-        func setFavorite(trackID: TrackID, isFavorite: Bool) async {
+        func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async {
             favoriteCalls.append((trackID, isFavorite))
         }
         func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {

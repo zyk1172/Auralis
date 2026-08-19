@@ -1,7 +1,10 @@
 name: CI
 
 on:
-  # 仅手动触发：先让手动 CI 完整成功一次后再恢复自动触发（push/PR）。
+  # R08：恢复自动触发——push 到 main 与 PR 都跑，防止问题"修了又回来"。
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -32,6 +35,21 @@ jobs:
           xcodebuild -version
           swift --version
 
+      # R08：XcodeGen 生成结果一致性检查——project.yml 与 .xcodeproj 不得漂移。
+      - name: XcodeGen project consistency
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          cp Auralis.xcodeproj/project.pbxproj /tmp/project.pbxproj.before
+          xcodegen generate
+          if ! git diff --exit-code -- Auralis.xcodeproj/project.pbxproj >/dev/null 2>&1; then
+            echo "::error::project.yml 与 Auralis.xcodeproj 不一致。请在本地运行 'xcodegen generate' 并提交生成的工程文件。"
+            cp /tmp/project.pbxproj.before Auralis.xcodeproj/project.pbxproj
+            exit 1
+          fi
+          echo "XcodeGen 输出与已提交工程一致"
+
       - name: Swift 6 tests (AuralisCore)
         run: swift test --package-path Packages/AuralisCore
 
@@ -54,6 +72,18 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      # R08：iOS Simulator 上实际跑单元测试（不仅是 generic build），
+      # 捕捉只有模拟器运行时才暴露的问题。
+      - name: iOS Simulator tests (AuralisCore)
+        run: |
+          xcodebuild \
+            -project Auralis.xcodeproj \
+            -scheme Auralis \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO \
+            test
 
   # AVFoundation 真实播放边界测试需要能驱动 AVPlayer 的环境，
   # 与纯单元测试分开，避免不稳定环境阻塞主 CI。

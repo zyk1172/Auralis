@@ -14,7 +14,7 @@ private actor ColdRestoreURLConnector: ServerConnecting {
 
     func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult { result }
     func restoreLastConnection() async throws -> ServerConnectionResult? { result }
-    func refreshStreamURL(trackID: TrackID) async -> URL? {
+    func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL? {
         refreshCount += 1
         return URL(string: "https://music.example.test/stream/\(trackID.rawValue).flac")
     }

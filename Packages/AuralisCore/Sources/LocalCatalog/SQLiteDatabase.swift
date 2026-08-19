@@ -40,8 +40,14 @@ final class SQLiteDatabase: @unchecked Sendable {
         }
         var openedHandle: OpaquePointer?
         try StartupPerformanceTrace.measure(.sqliteOpen) {
-            guard sqlite3_open(url.path, &openedHandle) == SQLITE_OK, openedHandle != nil else {
-                throw LocalCatalogError.openFailed(url.path)
+            let result = sqlite3_open(url.path, &openedHandle)
+            // R11：sqlite3_open 失败时也可能返回一个需要 close 的 handle。
+            guard result == SQLITE_OK, openedHandle != nil else {
+                if let openedHandle {
+                    sqlite3_close_v2(openedHandle)
+                }
+                let message = openedHandle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+                throw LocalCatalogError.openFailed("\(url.path) · \(message)")
             }
         }
         guard let openedHandle else { throw LocalCatalogError.openFailed(url.path) }
@@ -49,14 +55,17 @@ final class SQLiteDatabase: @unchecked Sendable {
 
         // 分阶段诊断：每个 PRAGMA 失败时错误信息带阶段名（OPEN / WAL /
         // FOREIGN_KEYS / BUSY_TIMEOUT），便于定位正式库打不开的真实原因。
+        // R11：任一初始化步骤失败都显式 close，避免泄漏打开的连接。
         do {
             try exec("PRAGMA journal_mode = WAL;")
         } catch {
+            sqlite3_close_v2(openedHandle)
             throw LocalCatalogError.openFailed("\(url.path) · WAL · \(error)")
         }
         do {
             try exec("PRAGMA foreign_keys = ON;")
         } catch {
+            sqlite3_close_v2(openedHandle)
             throw LocalCatalogError.openFailed("\(url.path) · FOREIGN_KEYS · \(error)")
         }
         // App 与 Siri/小组件扩展共享同一 App Group 数据库：设置 busy_timeout，
@@ -64,6 +73,7 @@ final class SQLiteDatabase: @unchecked Sendable {
         do {
             try exec("PRAGMA busy_timeout = 5000;")
         } catch {
+            sqlite3_close_v2(openedHandle)
             throw LocalCatalogError.openFailed("\(url.path) · BUSY_TIMEOUT · \(error)")
         }
     }
@@ -85,7 +95,11 @@ final class SQLiteDatabase: @unchecked Sendable {
     }
 
     deinit {
-        sqlite3_close(handle)
+        // R11：sqlite3_close_v2 安全回收——存在未 finalize 的 statement 时
+        // 标记关闭、延迟释放，避免资源泄漏；返回值在此仅作诊断用途。
+        if let handle {
+            sqlite3_close_v2(handle)
+        }
     }
 
     func exec(_ sql: String) throws {
@@ -104,7 +118,9 @@ final class SQLiteDatabase: @unchecked Sendable {
         try bind(bindings, to: statement)
         let result = sqlite3_step(statement)
         guard result == SQLITE_DONE || result == SQLITE_ROW else {
-            throw LocalCatalogError.executeFailed("step failed (\(result)): \(sql.prefix(120))")
+            // R11：附带 sqlite3_errmsg，便于定位执行失败原因。
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            throw LocalCatalogError.executeFailed("step failed (\(result)): \(message) · SQL: \(sql.prefix(120))")
         }
     }
 
@@ -156,7 +172,9 @@ final class SQLiteDatabase: @unchecked Sendable {
     private func prepare(_ sql: String) throws -> OpaquePointer {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw LocalCatalogError.prepareFailed(sql.prefix(120).description)
+            // R11：附带 sqlite3_errmsg，便于定位具体 SQL 语法/绑定问题。
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            throw LocalCatalogError.prepareFailed("\(message) · SQL: \(sql.prefix(120))")
         }
         return statement
     }

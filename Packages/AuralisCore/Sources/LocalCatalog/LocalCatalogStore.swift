@@ -27,6 +27,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
         // 一次性、可版本化的 canonical migration（catalog_migrations 记录，后续启动 O(1) 跳过）。
         try StartupPerformanceTrace.measure(.sqliteMigrations) {
             try runAdditiveSchemaMigrations()
+            try runEntityRelationMigrations()
             try runCatalogMigrations()
         }
     }
@@ -53,6 +54,10 @@ public actor LocalCatalogStore: LibrarySyncStore {
     // MARK: - Schema
 
     nonisolated private func createSchema() throws {
+        // R03 实体关系索引（idx_tracks_album_gid 等）不放这里：旧磁盘库的
+        // tracks/albums 还没有 album_gid/artist_gid 列，批次内建索引会直接报
+        // “no such column: album_gid”。统一由 runEntityRelationMigrations()
+        // 在 addColumnIfMissing 补列之后创建（新库同样覆盖）。
         try db.exec("""
         CREATE TABLE IF NOT EXISTS servers (
             global_id TEXT PRIMARY KEY,
@@ -78,6 +83,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
             remote_id TEXT NOT NULL,
             name TEXT NOT NULL,
             artist_name TEXT NOT NULL,
+            artist_gid TEXT,
             payload TEXT NOT NULL,
             updated_at REAL NOT NULL
         );
@@ -88,6 +94,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
             title TEXT NOT NULL,
             artist_name TEXT NOT NULL,
             album_title TEXT NOT NULL,
+            album_gid TEXT,
+            artist_gid TEXT,
             duration REAL NOT NULL,
             payload TEXT NOT NULL,
             updated_at REAL NOT NULL
@@ -176,6 +184,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
             remote_id TEXT NOT NULL,
             name TEXT NOT NULL,
             artist_name TEXT NOT NULL,
+            artist_gid TEXT,
             payload TEXT NOT NULL,
             updated_at REAL NOT NULL,
             PRIMARY KEY (session_id, global_id)
@@ -188,6 +197,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
             title TEXT NOT NULL,
             artist_name TEXT NOT NULL,
             album_title TEXT NOT NULL,
+            album_gid TEXT,
+            artist_gid TEXT,
             duration REAL NOT NULL,
             payload TEXT NOT NULL,
             updated_at REAL NOT NULL,
@@ -346,6 +357,80 @@ public actor LocalCatalogStore: LibrarySyncStore {
         let columns = try db.query("PRAGMA table_info(\(table))")
         guard !columns.contains(where: { $0["name"]?.string == column }) else { return }
         try db.run("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
+    }
+
+    /// R03：实体关系迁移——tracks.album_gid / artist_gid、albums.artist_gid。
+    /// 新写入路径（stageTracks/stageAlbums）从今往后使用真正的实体 ID 作为外键；
+    /// 这里只为旧库补列并做一次存量回填（旧数据没有 ID 关联，只能按
+    /// server_id + 名称 + 艺术家名 匹配，同名专辑回填可能不精确——下一次全量
+    /// 同步会用真实 ID 覆盖）。
+    nonisolated private func runEntityRelationMigrations() throws {
+        let key = "catalog_entity_relations"
+        let targetVersion: Int64 = 1
+        let applied = try db.query(
+            "SELECT version FROM catalog_migrations WHERE key = ?",
+            [.text(key)]
+        ).first?["version"]?.int ?? 0
+        guard applied < targetVersion else { return }
+
+        try db.transaction {
+            try addColumnIfMissing(table: "tracks", column: "album_gid", definition: "TEXT")
+            try addColumnIfMissing(table: "tracks", column: "artist_gid", definition: "TEXT")
+            try addColumnIfMissing(table: "albums", column: "artist_gid", definition: "TEXT")
+            try addColumnIfMissing(table: "sync_staged_tracks", column: "album_gid", definition: "TEXT")
+            try addColumnIfMissing(table: "sync_staged_tracks", column: "artist_gid", definition: "TEXT")
+            try addColumnIfMissing(table: "sync_staged_albums", column: "artist_gid", definition: "TEXT")
+
+            // 存量回填：按 server_id + 名称（+ 艺术家名限定）关联，尽力而为。
+            try db.run(
+                """
+                UPDATE tracks
+                SET album_gid = (
+                    SELECT a.global_id FROM albums a
+                    WHERE a.server_id = tracks.server_id
+                      AND a.name = tracks.album_title
+                      AND a.artist_name = tracks.artist_name
+                    LIMIT 1
+                )
+                WHERE album_gid IS NULL
+                """
+            )
+            try db.run(
+                """
+                UPDATE tracks
+                SET artist_gid = (
+                    SELECT ar.global_id FROM artists ar
+                    WHERE ar.server_id = tracks.server_id
+                      AND ar.name = tracks.artist_name
+                    LIMIT 1
+                )
+                WHERE artist_gid IS NULL
+                """
+            )
+            try db.run(
+                """
+                UPDATE albums
+                SET artist_gid = (
+                    SELECT ar.global_id FROM artists ar
+                    WHERE ar.server_id = albums.server_id
+                      AND ar.name = albums.artist_name
+                    LIMIT 1
+                )
+                WHERE artist_gid IS NULL
+                """
+            )
+            try db.run("CREATE INDEX IF NOT EXISTS idx_tracks_album_gid ON tracks(album_gid)")
+            try db.run("CREATE INDEX IF NOT EXISTS idx_tracks_artist_gid ON tracks(artist_gid)")
+            try db.run("CREATE INDEX IF NOT EXISTS idx_albums_artist_gid ON albums(artist_gid)")
+
+            try db.run(
+                """
+                INSERT INTO catalog_migrations (key, version, applied_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET version = excluded.version, applied_at = excluded.applied_at
+                """,
+                [.text(key), .integer(targetVersion), .real(Date.now.timeIntervalSince1970)]
+            )
+        }
     }
 
     /// 在 UI 已恢复本地目录后执行的持久化时间策略完整性检查。
@@ -536,16 +621,17 @@ public actor LocalCatalogStore: LibrarySyncStore {
                     )
                 }
                 let gid = GlobalID(serverID: album.serverID, remoteID: album.id.rawValue)
+                let artistGID = GlobalID(serverID: album.serverID, remoteID: album.artistID.rawValue)
                 try db.run(
                     """
                     INSERT OR REPLACE INTO sync_staged_albums
-                    (session_id, global_id, server_id, remote_id, name, artist_name, payload, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (session_id, global_id, server_id, remote_id, name, artist_name, artist_gid, payload, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         .text(session.id.uuidString), .text(gid.description), .text(album.serverID.rawValue),
                         .text(album.id.rawValue), .text(album.title), .text(album.artistName),
-                        .text(try encode(album)), .real(Date().timeIntervalSince1970),
+                        .text(artistGID.description), .text(try encode(album)), .real(Date().timeIntervalSince1970),
                     ]
                 )
             }
@@ -565,16 +651,19 @@ public actor LocalCatalogStore: LibrarySyncStore {
                     )
                 }
                 let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+                let albumGID = GlobalID(serverID: track.serverID, remoteID: track.albumID.rawValue)
+                let artistGID = GlobalID(serverID: track.serverID, remoteID: track.artistID.rawValue)
                 try db.run(
                     """
                     INSERT OR REPLACE INTO sync_staged_tracks
-                    (session_id, global_id, server_id, remote_id, title, artist_name, album_title, duration, payload, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (session_id, global_id, server_id, remote_id, title, artist_name, album_title, album_gid, artist_gid, duration, payload, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         .text(session.id.uuidString), .text(gid.description), .text(track.serverID.rawValue),
                         .text(track.id.rawValue), .text(track.title), .text(track.artistName),
-                        .text(track.albumTitle), .real(track.duration), .text(try encode(track)),
+                        .text(track.albumTitle), .text(albumGID.description), .text(artistGID.description),
+                        .real(track.duration), .text(try encode(track)),
                         .real(Date().timeIntervalSince1970),
                     ]
                 )
@@ -642,8 +731,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
             try db.run(
                 """
                 INSERT OR REPLACE INTO albums
-                (global_id, server_id, remote_id, name, artist_name, payload, updated_at)
-                SELECT global_id, server_id, remote_id, name, artist_name, payload, updated_at
+                (global_id, server_id, remote_id, name, artist_name, artist_gid, payload, updated_at)
+                SELECT global_id, server_id, remote_id, name, artist_name, artist_gid, payload, updated_at
                 FROM sync_staged_albums WHERE session_id = ?
                 """,
                 [.text(sessionID)]
@@ -651,8 +740,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
             try db.run(
                 """
                 INSERT OR REPLACE INTO tracks
-                (global_id, server_id, remote_id, title, artist_name, album_title, duration, payload, updated_at)
-                SELECT global_id, server_id, remote_id, title, artist_name, album_title, duration, payload, updated_at
+                (global_id, server_id, remote_id, title, artist_name, album_title, album_gid, artist_gid, duration, payload, updated_at)
+                SELECT global_id, server_id, remote_id, title, artist_name, album_title, album_gid, artist_gid, duration, payload, updated_at
                 FROM sync_staged_tracks WHERE session_id = ?
                 """,
                 [.text(sessionID)]
@@ -756,35 +845,43 @@ public actor LocalCatalogStore: LibrarySyncStore {
 
     private func upsertAlbum(_ album: Album, session _: LibrarySyncSession) throws {
         let gid = GlobalID(serverID: album.serverID, remoteID: album.id.rawValue)
+        let artistGID = GlobalID(serverID: album.serverID, remoteID: album.artistID.rawValue)
         let payload = try encode(album)
         try db.run(
             """
-            INSERT INTO albums (global_id, server_id, remote_id, name, artist_name, payload, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO albums (global_id, server_id, remote_id, name, artist_name, artist_gid, payload, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(global_id) DO UPDATE SET
                 name = excluded.name, artist_name = excluded.artist_name,
+                artist_gid = excluded.artist_gid,
                 payload = excluded.payload, updated_at = excluded.updated_at
             """,
             [.text(gid.description), .text(album.serverID.rawValue), .text(album.id.rawValue),
-             .text(album.title), .text(album.artistName), .text(payload), .real(Date().timeIntervalSince1970)]
+             .text(album.title), .text(album.artistName), .text(artistGID.description),
+             .text(payload), .real(Date().timeIntervalSince1970)]
         )
         try upsertFTS(kind: "album", globalID: gid, text: "\(album.title) \(album.artistName)")
     }
 
     private func upsertTrack(_ track: Track, session _: LibrarySyncSession) throws {
         let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+        let albumGID = GlobalID(serverID: track.serverID, remoteID: track.albumID.rawValue)
+        let artistGID = GlobalID(serverID: track.serverID, remoteID: track.artistID.rawValue)
         let payload = try encode(track)
         try db.run(
             """
-            INSERT INTO tracks (global_id, server_id, remote_id, title, artist_name, album_title, duration, payload, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tracks (global_id, server_id, remote_id, title, artist_name, album_title, album_gid, artist_gid, duration, payload, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(global_id) DO UPDATE SET
                 title = excluded.title, artist_name = excluded.artist_name,
-                album_title = excluded.album_title, duration = excluded.duration,
+                album_title = excluded.album_title,
+                album_gid = excluded.album_gid, artist_gid = excluded.artist_gid,
+                duration = excluded.duration,
                 payload = excluded.payload, updated_at = excluded.updated_at
             """,
             [.text(gid.description), .text(track.serverID.rawValue), .text(track.id.rawValue),
              .text(track.title), .text(track.artistName), .text(track.albumTitle),
+             .text(albumGID.description), .text(artistGID.description),
              .real(track.duration), .text(payload), .real(Date().timeIntervalSince1970)]
         )
         try upsertFTS(kind: "track", globalID: gid, text: "\(track.title) \(track.artistName) \(track.albumTitle)")

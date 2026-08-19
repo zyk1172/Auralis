@@ -28,9 +28,9 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- MoviePilot 的外网部署可能仍使用 HTTP + 非标准端口；地址由用户在设置中明确配置。 -->
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
+		<!-- R13：只允许本地网络豁免（localhost / .local / 私有 IPv4/IPv6 地址由
+		     NSAllowsLocalNetworking 覆盖）。不再全局放行 NSAllowsArbitraryLoads——
+		     公网地址一律强制 HTTPS；公网 HTTP 部署（含 MoviePilot）不被允许。 -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>

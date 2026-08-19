@@ -32,7 +32,7 @@ private final class RecordingConnector: ServerConnecting, @unchecked Sendable {
 
     func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult { result }
 
-    func deletePlaylist(playlistID: PlaylistID) async -> Bool {
+    func deletePlaylist(serverID: ServerID, playlistID: PlaylistID) async -> Bool {
         deletedPlaylistIDs.append(playlistID)
         return true
     }

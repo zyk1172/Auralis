@@ -45,7 +45,7 @@ private actor CountingConnector: ServerConnecting {
     func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
         throw ServerConnectionError.unsupportedResponse
     }
-    func refreshStreamURL(trackID: TrackID) async -> URL? {
+    func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL? {
         refreshCount += 1
         return nil
     }

@@ -73,24 +73,33 @@ public final class AuralisAppModel: ObservableObject {
         get { playbackStore.position }
         set { playbackStore.position = newValue }
     }
-    /// 播放队列。SwiftUI 的 ForEach / List 要求元素 id 唯一，队列里出现重复 TrackID 时
-    /// 会在渲染期直接 fatalError（EXC_BREAKPOINT）→ 点击歌曲/打开播放队列即闪退。
-    /// 这里在每次写入时强制去重（保留首次出现的位置），从根源杜绝重复 id 进入界面。
-    /// 这样即便调用方（加入队列 / 下一首播放 / AI 代理 / 首页货架）忘记去重，也不会崩溃。
+    /// 播放队列（只读视图）。R05：队列项身份是 QueueEntry.id（UUID），歌曲身份
+    /// 与队列项身份分离——同一首歌允许出现多次。SwiftUI 渲染必须使用
+    /// `queueStore.entries`（entry.id 作身份），不能用这首歌的 TrackID。
     public var queue: [Track] {
         get { queueStore.tracks }
         set {
-            let unique = uniquedTracks(newValue)
-            guard queueStore.tracks != unique else { return }
-            // 不再 objectWillChange.send()：queue 变化只发布到 queueStore，
-            // 观察 AppModel 的普通播放器控件不会因上万首队列更新整体重算。
-            queueStore.replace(unique, currentTrackID: queueIdentity(currentTrack))
+            // 内容级防重（避免相同赋值反复重建 entry）：不再按歌曲去重。
+            guard queueStore.tracks != newValue else { return }
+            // 每首歌曲包成独立 QueueEntry（新 UUID），允许重复歌曲进入队列。
+            queueStore.replace(entries: newValue.map { QueueEntry(track: $0) }, currentTrackID: queueIdentity(currentTrack))
             // 队列变更：开启新一轮随机（避免旧轮次的“已播放”标记污染新队列）。
             shufflePlayedIDs.removeAll()
             // 队列是播放会话的一部分：变更即持久化（按服务器隔离），
             // 进程重启后可恢复上次的队列与当前曲目。
             // 用 debounce 调度（350ms 合并 + utility 后台），禁止在队列 setter
             // 里同步 JSON encode + UserDefaults 写大队列。
+            schedulePlaybackSessionPersistence()
+            schedulePreparedNext()
+        }
+    }
+    /// 队列项（带独立 UUID 身份）：SwiftUI ForEach / List 渲染用这里的 id。
+    public var queueEntries: [QueueEntry] {
+        get { queueStore.entries }
+        set {
+            guard queueStore.entries != newValue else { return }
+            queueStore.replace(entries: newValue, currentTrackID: queueIdentity(currentTrack))
+            shufflePlayedIDs.removeAll()
             schedulePlaybackSessionPersistence()
             schedulePreparedNext()
         }
@@ -457,7 +466,14 @@ public final class AuralisAppModel: ObservableObject {
     private var progressTimer: Timer?
     private var lyricsInFlight: Set<GlobalID> = []
     private var lyricsUnavailable: Set<GlobalID> = []
-    private var lyricsLoadTasks: [GlobalID: Task<LyricsDocument?, Never>] = [:]
+    /// R04：歌词加载结果三态，区分「成功 / 服务器确认无歌词 / 网络等失败」，
+    /// 避免临时网络错误被写成负缓存导致永久不再请求。
+    private enum LyricsLoadOutcome {
+        case loaded(LyricsDocument)
+        case notFound
+        case failed
+    }
+    private var lyricsLoadTasks: [GlobalID: Task<LyricsLoadOutcome, Never>] = [:]
     /// 当前播放任务，用于取消之前的播放操作（快速切歌时避免竞态条件）。
     private var playbackTask: Task<Void, Never>?
     /// Handoff 活动：把当前播放（歌曲/队列/进度）接力到其他 Apple 设备。
@@ -670,6 +686,8 @@ public final class AuralisAppModel: ObservableObject {
             if let serverID = catalog.activeServerID {
                 await cacheStore.migrateLegacyEntries(to: serverID)
                 await lyricsCache.migrateLegacyEntries(to: serverID)
+                // R09：旧版有损文件名（safeEncode 碰撞）迁移到无损 percent-encoding 文件名。
+                await lyricsCache.migrateLegacyFilenames(to: serverID)
             }
             await downloadStore.restoreCachedIDs()
         }
@@ -737,7 +755,7 @@ public final class AuralisAppModel: ObservableObject {
             stopForSleepTimer(reason: .userStopped)
             return true
         case .afterCurrentAlbum:
-            if let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }),
+            if let index = currentQueueIndex,
                queue.indices.contains(index + 1),
                queue[index + 1].albumID == currentTrack.albumID {
                 return false
@@ -1007,8 +1025,10 @@ public final class AuralisAppModel: ObservableObject {
             let tracks = tracks(for: Genre(name: name, songCount: 0))
             if tracks.isEmpty {
                 // 本地流派为空时按需从服务器拉取该流派歌曲。
-                let serverTracks = await connector.tracks(byGenre: name)
-                playTracks(serverTracks)
+                if let serverID = catalog.activeServerID,
+                   let serverTracks = try? await connector.tracks(byGenre: name, serverID: serverID) {
+                    playTracks(serverTracks)
+                }
             } else {
                 playTracks(tracks)
             }
@@ -1065,7 +1085,8 @@ public final class AuralisAppModel: ObservableObject {
             if !tracks.isEmpty { playTracks(tracks); return }
         }
         // 歌单详情尚未加载：拉取后播放。
-        let fetched = await connector.fetchPlaylistTracks(playlistID: playlist.id)
+        // fetchPlaylistTracks 已改为 throws：拉取失败按空处理（与下方两处调用一致），不打断自然语言播放。
+        let fetched = (try? await connector.fetchPlaylistTracks(serverID: playlist.serverID, playlistID: playlist.id)) ?? []
         playTracks(fetched)
     }
 
@@ -1143,7 +1164,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 切歌后同步 Now Playing 全量信息（含队列位置 / 总数，控制中心可显示）。
     private func syncNowPlayingTrack() {
-        let queueIndex = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) })
+        let queueIndex = currentQueueIndex
         mediaIntegration.trackChanged(
             currentTrack,
             position: playbackPosition,
@@ -1249,50 +1270,73 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 读取指定歌曲的歌词，供信息面板等非当前播放曲目使用；结果只属于传入的 GlobalID。
+    /// R04：网络/认证/解析失败绝不写入「无歌词」负缓存——只有服务器明确确认无歌词
+    /// 才标记 unavailable，避免 Wi-Fi 抖动一次就永久不再请求歌词。
     public func loadLyrics(for track: Track) async -> LyricsDocument? {
         let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
         if let lyrics = lyrics(for: track) { return lyrics }
         if lyricsUnavailable.contains(globalID) { return nil }
-        if let task = lyricsLoadTasks[globalID] { return await task.value }
+        if let task = lyricsLoadTasks[globalID] {
+            switch await task.value {
+            case let .loaded(lyrics): return lyrics
+            case .notFound, .failed: return nil
+            }
+        }
 
         lyricsInFlight.insert(globalID)
-        let task = Task<LyricsDocument?, Never> { [weak self, connector, lyricsCache] in
-            guard let self else { return nil }
+        let task = Task<LyricsLoadOutcome, Never> { [weak self, connector, lyricsCache] in
+            guard let self else { return .failed }
             if let cached = await lyricsCache.document(forServer: track.serverID, trackID: track.id) {
-                return cached
+                return .loaded(cached)
             }
             if await lyricsCache.isKnownMissing(serverID: track.serverID, trackID: track.id) {
-                return nil
+                return .notFound
             }
-            // 切服保护（P1-6）：歌词由活动连接器获取；等待期间服务器切换时，
+            // 切服保护（P1-6）：歌词由对应服务器的客户端获取；等待期间服务器切换时，
             // 旧任务不得把新服务器的歌词写入旧服务器的磁盘缓存键。
-            guard self.catalog.activeServerID == track.serverID else { return nil }
-            let document = await connector.lyrics(for: track)
-            guard self.catalog.activeServerID == track.serverID else { return nil }
+            guard self.catalog.activeServerID == track.serverID else { return .failed }
+            // R04：用 throwing fetchLyrics 区分「失败」与「服务器无歌词」。
+            let document: LyricsDocument?
+            do {
+                document = try await connector.fetchLyrics(for: track)
+            } catch is CancellationError {
+                return .failed
+            } catch {
+                AuralisLog.network.error("歌词拉取失败（不写负缓存）: \(error.localizedDescription)")
+                return .failed
+            }
+            guard self.catalog.activeServerID == track.serverID else { return .failed }
             if let document {
                 await lyricsCache.store(document, forServer: track.serverID, trackID: track.id)
+                return .loaded(document)
             } else {
+                // 只有这里（服务器明确返回无歌词）才写负缓存。
                 await lyricsCache.markMissing(serverID: track.serverID, trackID: track.id)
+                return .notFound
             }
-            return document
         }
         lyricsLoadTasks[globalID] = task
-        let document = await task.value
+        let outcome = await task.value
         lyricsLoadTasks[globalID] = nil
         lyricsInFlight.remove(globalID)
 
-        if let document {
+        switch outcome {
+        case let .loaded(document):
             // catalog 当前仅展示活动服务器；切服后的旧任务不能回写到新服务器的 TrackID 键。
             if catalog.activeServerID == track.serverID {
                 catalog.lyrics[track.id] = document
             }
-        } else {
+            return document
+        case .notFound:
             lyricsUnavailable.insert(globalID)
             Task.detached(priority: .utility) { [musicEnrichment] in
                 _ = await musicEnrichment.prefetchForMissingLyrics(track: track)
             }
+            return nil
+        case .failed:
+            // 失败不写 unavailable：保留「未知」状态，下次调用会重新请求。
+            return nil
         }
-        return document
     }
 
     /// Agent 歌词状态查询：区分“有歌词 / 已确认无歌词 / 尚未确认”，
@@ -1332,7 +1376,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 物理队列中是否存在相邻的下一首（不包含 shuffle / repeat 语义）。
     public var hasNext: Bool {
-        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return false }
+        guard let index = currentQueueIndex else { return false }
         return queue.indices.contains(index + 1)
     }
 
@@ -1363,7 +1407,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 物理队列中是否存在相邻的上一首（不包含 repeat 语义）。
     public var hasPrevious: Bool {
-        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return false }
+        guard let index = currentQueueIndex else { return false }
         return queue.indices.contains(index - 1)
     }
 
@@ -1434,21 +1478,20 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 把歌曲加入队列末尾（macOS 表格右键 / 双击等）。
+    /// R05：允许同一首歌加入多次（每次独立队列项）。
     public func addToQueue(globalID: GlobalID) {
-        guard let track = track(for: globalID),
-              !queue.contains(where: { queueIdentity($0) == queueIdentity(track) }) else { return }
-        queue.append(track)
+        guard let track = track(for: globalID) else { return }
+        queueStore.append([track], currentTrackID: queueIdentity(currentTrack))
+        schedulePlaybackSessionPersistence()
+        schedulePreparedNext()
     }
 
-    /// 下一首播放：插入到当前歌曲之后。
+    /// 下一首播放：插入到当前歌曲之后（新队列项；重复歌曲不被移除）。
     public func playNext(globalID: GlobalID) {
         guard let track = track(for: globalID) else { return }
-        queue.removeAll { queueIdentity($0) == queueIdentity(track) }
-        if let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) {
-            queue.insert(track, at: index + 1)
-        } else {
-            queue.insert(track, at: 0)
-        }
+        queueStore.playNext(track, currentTrackID: queueIdentity(currentTrack))
+        schedulePlaybackSessionPersistence()
+        schedulePreparedNext()
     }
 
     public func selectAndPlay(_ track: Track) {
@@ -1510,7 +1553,7 @@ public final class AuralisAppModel: ObservableObject {
 
                 // 尝试 1：刷新流地址后重播。
                 if self.catalog.activeServerID != nil,
-                   let freshURL = await self.connector.refreshStreamURL(trackID: track.id) {
+                   let freshURL = await self.connector.refreshStreamURL(serverID: track.serverID, trackID: track.id) {
                     playable.streamURL = freshURL
                     do {
                         try await self.engine.play(track: playable)
@@ -1527,7 +1570,7 @@ public final class AuralisAppModel: ObservableObject {
 
                 // 尝试 2：直接取服务器最新曲目（含新流地址）在线流播。
                 if !autoSucceeded, self.catalog.activeServerID != nil,
-                   let fresh = await self.connector.serverTrack(trackID: track.id) {
+                   let fresh = try? await self.connector.serverTrack(serverID: track.serverID, trackID: track.id) {
                     do {
                         try await self.engine.play(track: fresh)
                         self.playbackError = nil
@@ -1745,10 +1788,16 @@ public final class AuralisAppModel: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !isServerSearching else { return }
+        guard let serverID = catalog.activeServerID else { return }
         isServerSearching = true
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.serverSearchResults = await self.connector.serverSearch(query: trimmed, limit: 50)
+            // R15：网络失败与“无结果”区分——失败保留旧结果并复位标志，不伪装成空结果。
+            do {
+                self.serverSearchResults = try await self.connector.serverSearch(query: trimmed, limit: 50, serverID: serverID)
+            } catch {
+                self.serverSearchResults = []
+            }
             self.isServerSearching = false
         }
     }
@@ -1759,10 +1808,12 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 服务器在线搜索的可等待版本（Agent 工具用）：直接返回结果，不写 @Published 状态。
+    /// 失败返回空数组（Agent 侧统一按“无结果”处理，不抛给工具调用）。
     public func searchOnServerAwaiting(query: String, limit: Int) async -> [Track] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        return await connector.serverSearch(query: trimmed, limit: min(max(limit, 1), 100))
+        guard let serverID = catalog.activeServerID else { return [] }
+        return (try? await connector.serverSearch(query: trimmed, limit: min(max(limit, 1), 100), serverID: serverID)) ?? []
     }
 
     /// 记录一条搜索历史（去重、最近在前、最多 10 条）。
@@ -2019,9 +2070,10 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 进入「流派」页时若本地流派为空，重新向服务器拉取一次（getGenres）。
     public func refreshGenres() {
-        guard catalog.activeServerID != nil else { return }
+        guard let serverID = catalog.activeServerID else { return }
         Task { [weak self, connector] in
-            let serverGenres = await connector.genres()
+            // R15：失败不伪装成“无流派”，仅保留本地已有流派。
+            let serverGenres = (try? await connector.genres(serverID: serverID)) ?? []
             guard !serverGenres.isEmpty else { return }
             await MainActor.run { [weak self] in
                 self?.mergeServerGenres(serverGenres)
@@ -2032,11 +2084,12 @@ public final class AuralisAppModel: ObservableObject {
     /// 按流派从服务器加载歌曲（本地筛选为空时调用），结果写入 `genreTracks`。
     public func loadGenreTracks(_ genre: Genre) {
         guard loadingGenre?.name != genre.name else { return }
+        guard let serverID = catalog.activeServerID else { return }
         loadingGenre = genre
         genreTracks = nil
         Task { [weak self] in
             guard let self else { return }
-            let tracks = await connector.tracks(byGenre: genre.name)
+            let tracks = (try? await connector.tracks(byGenre: genre.name, serverID: serverID)) ?? []
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 if loadingGenre?.name == genre.name {
@@ -2083,7 +2136,7 @@ public final class AuralisAppModel: ObservableObject {
             return track.streamURL == nil ? nil : track
         }
         if catalog.activeServerID != nil,
-           let refreshedURL = await connector.refreshStreamURL(trackID: track.id) {
+           let refreshedURL = await connector.refreshStreamURL(serverID: track.serverID, trackID: track.id) {
             var playable = track
             playable.streamURL = refreshedURL
             return playable
@@ -2176,7 +2229,9 @@ public final class AuralisAppModel: ObservableObject {
     /// 把歌曲追加到服务器歌单，成功后同步更新本地歌单缓存。
     @discardableResult
     public func addToPlaylist(_ playlist: Playlist, track: Track) async -> Bool {
-        let succeeded = await connector.addToPlaylist(playlistID: playlist.id, trackID: track.id)
+        // R06：readonly 歌单禁止修改（服务器权威，UI 也应隐藏编辑入口）。
+        guard !playlist.isReadOnly else { return false }
+        let succeeded = await connector.addToPlaylist(serverID: playlist.serverID, playlistID: playlist.id, trackID: track.id)
         if succeeded,
            let index = catalog.playlists.firstIndex(where: { $0.id == playlist.id }),
            !catalog.playlists[index].trackIDs.contains(track.id) {
@@ -2195,16 +2250,15 @@ public final class AuralisAppModel: ObservableObject {
     public func createPlaylist(named name: String, trackIDs: [TrackID] = []) async -> Playlist? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard let playlist = await connector.createPlaylist(name: trimmed, trackIDs: trackIDs) else { return nil }
+        guard let serverID = catalog.activeServerID else { return nil }
+        guard let playlist = await connector.createPlaylist(serverID: serverID, name: trimmed, trackIDs: trackIDs) else { return nil }
         if let index = catalog.playlists.firstIndex(where: { $0.id == playlist.id }) {
             catalog.playlists[index] = playlist
         } else {
             catalog.playlists.append(playlist)
         }
         // 新歌单立即可见：写入 SQLite，后续「把歌曲加入这个歌单」才能解析到该歌单 ID。
-        if let serverID = catalog.activeServerID {
-            persistServerPlaylists(catalog.playlists, serverID: serverID)
-        }
+        persistServerPlaylists(catalog.playlists, serverID: serverID)
         return playlist
     }
 
@@ -2213,13 +2267,15 @@ public final class AuralisAppModel: ObservableObject {
     public func renamePlaylist(id: PlaylistID, to name: String) async -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        let succeeded = await connector.renamePlaylist(playlistID: id, name: trimmed)
+        guard let playlist = catalog.playlists.first(where: { $0.id == id }) else { return false }
+        // R06：readonly 歌单禁止修改。
+        guard !playlist.isReadOnly else { return false }
+        let serverID = playlist.serverID
+        let succeeded = await connector.renamePlaylist(serverID: serverID, playlistID: id, name: trimmed)
         if succeeded, let index = catalog.playlists.firstIndex(where: { $0.id == id }) {
             catalog.playlists[index].name = trimmed
             catalog.playlists[index].modifiedAt = Date()
-            if let serverID = catalog.activeServerID {
-                persistServerPlaylists(catalog.playlists, serverID: serverID)
-            }
+            persistServerPlaylists(catalog.playlists, serverID: serverID)
         }
         return succeeded
     }
@@ -2228,7 +2284,11 @@ public final class AuralisAppModel: ObservableObject {
     @discardableResult
     public func removeFromPlaylist(id: PlaylistID, atIndices indices: [Int]) async -> Bool {
         guard !indices.isEmpty else { return false }
-        let succeeded = await connector.removeFromPlaylist(playlistID: id, indices: indices)
+        guard let playlist = catalog.playlists.first(where: { $0.id == id }) else { return false }
+        // R06：readonly 歌单禁止修改。
+        guard !playlist.isReadOnly else { return false }
+        let serverID = playlist.serverID
+        let succeeded = await connector.removeFromPlaylist(serverID: serverID, playlistID: id, indices: indices)
         if succeeded {
             if let index = catalog.playlists.firstIndex(where: { $0.id == id }) {
                 for offset in Set(indices).sorted(by: >)
@@ -2251,21 +2311,22 @@ public final class AuralisAppModel: ObservableObject {
         return succeeded
     }
 
-    /// 调整歌单内曲目顺序（OpenSubsonic 无原子重排，走「整表替换」）。
+    /// 调整歌单内曲目顺序（R02：单请求整表替换，避免「清空→追加」的数据丢失窗口）。
     @discardableResult
     public func reorderPlaylist(id: PlaylistID, from: Int, to: Int) async -> Bool {
         guard let index = catalog.playlists.firstIndex(where: { $0.id == id }) else { return false }
+        // R06：readonly 歌单禁止修改。
+        guard !catalog.playlists[index].isReadOnly else { return false }
+        let serverID = catalog.playlists[index].serverID
         var ids = catalog.playlists[index].trackIDs
         guard ids.indices.contains(from) else { return false }
         let moved = ids.remove(at: from)
         ids.insert(moved, at: min(max(to, 0), ids.count))
-        let succeeded = await connector.replacePlaylistTracks(playlistID: id, trackIDs: ids)
+        let succeeded = await connector.replacePlaylistTracks(serverID: serverID, playlistID: id, trackIDs: ids)
         if succeeded {
             catalog.playlists[index].trackIDs = ids
             catalog.playlists[index].modifiedAt = Date()
-            if let serverID = catalog.activeServerID {
-                persistServerPlaylists(catalog.playlists, serverID: serverID)
-            }
+            persistServerPlaylists(catalog.playlists, serverID: serverID)
         }
         return succeeded
     }
@@ -2275,6 +2336,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 复制歌单（副本命名「原名 副本」），逐首添加到服务器，失败返回 nil。
     public func duplicatePlaylist(id: PlaylistID) async -> Playlist? {
         guard let source = catalog.playlists.first(where: { $0.id == id }) else { return nil }
+        // R06：readonly 歌单不可作为修改来源，但允许复制其内容为普通副本。
         guard let copy = await createPlaylist(named: "\(source.name) 副本") else { return nil }
         let ids = Set(source.trackIDs)
         for track in catalog.tracks where ids.contains(track.id) {
@@ -2285,7 +2347,17 @@ public final class AuralisAppModel: ObservableObject {
 
     public func deletePlaylist(id: PlaylistID) async -> Bool {
         playlistDeletionError = nil
-        let succeeded = await connector.deletePlaylist(playlistID: id)
+        guard let playlist = catalog.playlists.first(where: { $0.id == id }) else {
+            playlistDeletionError = "无法定位歌单所属服务器。"
+            return false
+        }
+        // R06：readonly 歌单禁止删除。
+        guard !playlist.isReadOnly else {
+            playlistDeletionError = "该歌单为只读歌单，无法删除。"
+            return false
+        }
+        let serverID = playlist.serverID
+        let succeeded = await connector.deletePlaylist(serverID: serverID, playlistID: id)
         guard succeeded else {
             playlistDeletionError = "服务器未确认删除。请检查网络与歌单权限后重试。"
             return false
@@ -2314,9 +2386,12 @@ public final class AuralisAppModel: ObservableObject {
         guard playlistTracks[playlistID] == nil,
               !loadingPlaylistIDs.contains(playlistID)
         else { return }
+        // 歌单 ID 跨服务器可能重复：优先用本地歌单记录的 serverID，回退当前浏览服务器。
+        let serverID = catalog.playlists.first(where: { $0.id == playlistID })?.serverID ?? catalog.activeServerID
+        guard let serverID else { return }
         loadingPlaylistIDs.insert(playlistID)
         Task {
-            let tracks = await connector.fetchPlaylistTracks(playlistID: playlistID)
+            let tracks = (try? await connector.fetchPlaylistTracks(serverID: serverID, playlistID: playlistID)) ?? []
             loadingPlaylistIDs.remove(playlistID)
             playlistTracks[playlistID] = tracks
             playlistIDsNeedingContentRefresh.remove(playlistID)
@@ -2325,9 +2400,7 @@ public final class AuralisAppModel: ObservableObject {
                !tracks.isEmpty {
                 catalog.playlists[index].trackIDs = tracks.map(\.id)
                 // 歌单详情拉取后写回 SQLite，让 Agent 的 getPlaylist / 播放歌单使用真实曲目顺序。
-                if let serverID = catalog.activeServerID {
-                    persistServerPlaylists(catalog.playlists, serverID: serverID)
-                }
+                persistServerPlaylists(catalog.playlists, serverID: serverID)
             }
         }
     }
@@ -2351,7 +2424,7 @@ public final class AuralisAppModel: ObservableObject {
         Task { @MainActor in
             defer { self.isCachingPlaylistContents = false }
             for playlist in pending {
-                let tracks = await self.connector.fetchPlaylistTracks(playlistID: playlist.id)
+                let tracks = (try? await self.connector.fetchPlaylistTracks(serverID: playlist.serverID, playlistID: playlist.id)) ?? []
                 self.playlistTracks[playlist.id] = tracks
                 if let index = self.catalog.playlists.firstIndex(where: { $0.id == playlist.id }) {
                     self.catalog.playlists[index].trackIDs = tracks.map(\.id)
@@ -2418,12 +2491,18 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     public func setAlbumFavorite(id: AlbumID, isFavorite: Bool) async {
-        await connector.setAlbumFavorite(albumID: id, isFavorite: isFavorite)
+        // AlbumID 跨服务器可能重复：优先用本地专辑记录的 serverID，回退当前浏览服务器。
+        let serverID = catalog.albums.first(where: { $0.id == id })?.serverID ?? catalog.activeServerID
+        guard let serverID else { return }
+        await connector.setAlbumFavorite(serverID: serverID, albumID: id, isFavorite: isFavorite)
     }
 
     /// 收藏 / 取消收藏艺术家。
     public func setArtistFavorite(id: ArtistID, isFavorite: Bool) async {
-        await connector.setArtistFavorite(artistID: id, isFavorite: isFavorite)
+        // ArtistID 跨服务器可能重复：优先用本地艺术家记录的 serverID，回退当前浏览服务器。
+        let serverID = catalog.artists.first(where: { $0.id == id })?.serverID ?? catalog.activeServerID
+        guard let serverID else { return }
+        await connector.setArtistFavorite(serverID: serverID, artistID: id, isFavorite: isFavorite)
     }
 
     /// 设置曲目评分，0 表示清除评分。
@@ -2438,14 +2517,15 @@ public final class AuralisAppModel: ObservableObject {
             catalog.tracks[index].rating = clamped == 0 ? nil : clamped
             if currentTrack.isSame(as: catalog.tracks[index]) { currentTrack = catalog.tracks[index] }
         }
-        await connector.setRating(trackID: TrackID(rawValue: globalID.remoteID), rating: clamped)
+        await connector.setRating(serverID: globalID.serverID, trackID: TrackID(rawValue: globalID.remoteID), rating: clamped)
     }
 
     // MARK: - Server lifecycle
 
     /// 探活当前服务器（用于设置页与 Agent 的连接自检）。
     public func testActiveServerConnection() async -> Bool {
-        await connector.ping()
+        guard let serverID = catalog.activeServerID else { return false }
+        return await connector.ping(serverID: serverID)
     }
 
     /// 切换活跃服务器：先记录目标服务器，再恢复其本地资料库（零网络出界面，
@@ -2706,7 +2786,8 @@ public final class AuralisAppModel: ObservableObject {
             playRandomFromQueue()
             return
         }
-        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return }
+        // R05：用队列项下标（currentQueueIndex）定位当前曲目，重复歌曲不串位。
+        guard let index = currentQueueIndex, queue.indices.contains(index) else { return }
         if queue.indices.contains(index + 1) {
             selectAndPlay(queue[index + 1])
         } else if repeatMode == .all, queue.count > 1, let first = queue.first {
@@ -2717,7 +2798,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 只随机尚未播放的剩余队列（当前曲目之后），保持已播放部分顺序不变。
     public func shuffleRemainingInQueue() {
-        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return }
+        guard let index = currentQueueIndex, queue.indices.contains(index) else { return }
         let tail = Array(queue.dropFirst(index + 1))
         guard tail.count > 1 else { return }
         queue = Array(queue.prefix(index + 1)) + tail.shuffled()
@@ -2783,7 +2864,7 @@ public final class AuralisAppModel: ObservableObject {
         favoritesRevision &+= 1
         if currentTrack.isSame(as: track) { currentTrack = updated }
         refreshHomeSnapshots()
-        await connector.setFavorite(trackID: updated.id, isFavorite: updated.isFavorite)
+        await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: updated.isFavorite)
     }
 
     /// 是否“不喜欢”：只影响自动推荐/发现；搜索、浏览与显式播放不受影响。
@@ -2863,7 +2944,7 @@ public final class AuralisAppModel: ObservableObject {
         }
         if currentTrack.isSame(as: track) { currentTrack = updated }
         refreshHomeSnapshots()
-        await connector.setFavorite(trackID: updated.id, isFavorite: false)
+        await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: false)
     }
 
     /// 跳到上一首；播放已超过 3 秒时先回到本曲开头（主流播放器的习惯行为）。
@@ -2873,7 +2954,7 @@ public final class AuralisAppModel: ObservableObject {
             seekToAbsolute(0)
             return
         }
-        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else {
+        guard let index = currentQueueIndex else {
             seekToAbsolute(0)
             return
         }
@@ -2917,38 +2998,33 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 清空待播队列：保留当前曲目，不删除队列里正在播放的歌曲。
     public func clearUpcoming() {
-        guard let index = currentQueueIndex, index + 1 < queue.count else { return }
-        queue.removeSubrange((index + 1)...)
+        guard let index = currentQueueIndex else { return }
+        queueStore.removeUpcoming(from: index, currentTrackID: queueIdentity(currentTrack))
+        schedulePlaybackSessionPersistence()
     }
 
     /// 拖动调整队列顺序：保持当前曲目位置，移动后持久化播放会话。
+    /// 按队列项 id 移动（R05），重复歌曲互不干扰。
     public func moveQueue(from source: IndexSet, to destination: Int) {
-        let moving = source.sorted().compactMap { queue.indices.contains($0) ? queue[$0] : nil }
-        guard !moving.isEmpty else { return }
-        let currentID = currentTrack.id
-        let movingIDs = Set(moving.map(\.id))
-        var newQueue = queue.filter { !movingIDs.contains($0.id) }
-        let insertion = min(max(0, destination - source.filter { $0 < destination }.count), newQueue.count)
-        newQueue.insert(contentsOf: moving, at: insertion)
-        queue = newQueue
-        // 保持当前曲目在队列中的位置指向不变。
-        _ = currentID
+        queueStore.move(from: source, to: destination, currentTrackID: queueIdentity(currentTrack))
+        schedulePlaybackSessionPersistence()
     }
 
     public func removeFromQueue(atOffsets offsets: IndexSet) {
-        let targets = offsets.compactMap { queue.indices.contains($0) ? queue[$0] : nil }
-        for track in targets { removeFromQueue(track) }
-    }
-
-    /// 从队列移除曲目。删除正在播放的曲目时自动切到下一首；
-    /// 队列清空后回到空闲状态。曲目仍保留在音乐库中。
-    public func removeFromQueue(_ track: Track) {
-        guard let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(track) }) else { return }
-        let wasCurrent = queueIdentity(track) == queueIdentity(currentTrack)
-        queue.remove(at: index)
-        guard wasCurrent else { return }
-
-        if let next = queue.indices.contains(index) ? queue[index] : queue.last {
+        // R05：按队列项 id 移除——重复歌曲只移除被滑动的具体那一项。
+        let entryIDs = offsets.compactMap { queueStore.entries.indices.contains($0) ? queueStore.entries[$0].id : nil }
+        var removedCurrent = false
+        for entryID in entryIDs {
+            if let entry = queueStore.entries.first(where: { $0.id == entryID }),
+               queueIdentity(entry.track) == queueIdentity(currentTrack) {
+                removedCurrent = true
+            }
+            queueStore.remove(entryID: entryID, currentTrackID: queueIdentity(currentTrack))
+        }
+        schedulePlaybackSessionPersistence()
+        guard removedCurrent else { return }
+        // 删除正在播放的曲目时自动切到下一首；队列清空后回到空闲状态。
+        if let next = queueStore.currentTrack {
             selectAndPlay(next)
         } else {
             playbackPosition = 0
@@ -2958,7 +3034,36 @@ public final class AuralisAppModel: ObservableObject {
                 syncProgressTimer()
                 // 队列清空、播放停止：清理系统 Now Playing 与灵动岛
                 mediaIntegration.stop()
-                }
+            }
+        }
+    }
+
+    /// 从队列移除曲目。删除正在播放的曲目时自动切到下一首；
+    /// 队列清空后回到空闲状态。曲目仍保留在音乐库中。
+    public func removeFromQueue(_ track: Track) {
+        guard let entry = queueStore.entries.first(where: { queueIdentity($0.track) == queueIdentity(track) }) else { return }
+        removeQueueEntry(id: entry.id)
+    }
+
+    /// 按队列项 id 移除（R05）：重复歌曲只移除指定那一项。
+    /// 删除正在播放的曲目时自动切到下一首；队列清空后回到空闲状态。
+    public func removeQueueEntry(id: UUID) {
+        let wasCurrent = queueStore.entries.first(where: { $0.id == id })
+            .map { queueIdentity($0.track) == queueIdentity(currentTrack) } ?? false
+        queueStore.remove(entryID: id, currentTrackID: queueIdentity(currentTrack))
+        schedulePlaybackSessionPersistence()
+        guard wasCurrent else { return }
+        if let next = queueStore.currentTrack {
+            selectAndPlay(next)
+        } else {
+            playbackPosition = 0
+            Task {
+                await engine.stop()
+                playbackState = await engine.state()
+                syncProgressTimer()
+                // 队列清空、播放停止：清理系统 Now Playing 与灵动岛
+                mediaIntegration.stop()
+            }
         }
     }
 
@@ -3111,7 +3216,7 @@ public final class AuralisAppModel: ObservableObject {
             let store = catalogCoordinator.store
             let globalID = GlobalID(serverID: finished.serverID, remoteID: finished.id.rawValue)
             Task {
-                await connector.scrobble(trackID: finished.id, submission: true)
+                await connector.scrobble(serverID: finished.serverID, trackID: finished.id, submission: true)
                 try? await store.markPlayCompleted(globalID)
             }
         }
@@ -3141,7 +3246,7 @@ public final class AuralisAppModel: ObservableObject {
 
     private func seamlessNextCandidate() -> Track? {
         guard !isShuffled, repeatMode != .one,
-              let index = queue.firstIndex(where: { queueIdentity($0) == queueIdentity(currentTrack) }) else { return nil }
+              let index = currentQueueIndex else { return nil }
         if sleepTimerMode == .afterCurrentTrack { return nil }
 
         let candidate: Track?
@@ -3792,8 +3897,9 @@ public final class AuralisAppModel: ObservableObject {
     /// 冷启动时界面已由本地缓存渲染，这里做「服务器权威回流」的增量刷新；
     /// 离线或请求失败时直接返回，界面保持本地缓存内容、不会闪成空白。
     public func refreshAuxiliaryDataInBackground() {
+        guard let serverID = catalog.activeServerID else { return }
         Task { [weak self, connector] in
-            guard let refreshed = await connector.refreshAuxiliaryData() else { return }
+            guard let refreshed = await connector.refreshAuxiliaryData(serverID: serverID) else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 mergeServerPlaylists(

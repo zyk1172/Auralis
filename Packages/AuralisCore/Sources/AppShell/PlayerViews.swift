@@ -684,7 +684,9 @@ struct NowPlayingView: View {
 
     private var queue: some View {
         List {
-            ForEach(queueStore.tracks) { track in
+            // R05：队列项身份 = entry.id（UUID），重复歌曲可安全渲染。
+            ForEach(queueStore.entries) { entry in
+                let track = entry.track
                 Button {
                     model.selectAndPlay(track)
                 } label: {
