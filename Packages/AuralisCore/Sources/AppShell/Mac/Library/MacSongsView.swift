@@ -63,7 +63,20 @@ struct MacSongsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageSearchHeader(text: $localSearch, prompt: "在歌曲中查找")
+            MacPageSearchHeader(text: $localSearch, prompt: "在歌曲中查找", accessory: {
+                // 显示选项：控制歌曲表格列（年份/流派/播放次数/添加日期）。
+                // 放在搜索栏同一层最右边；图标用 slider.horizontal.3 表达「调节显示项」。
+                Menu {
+                    Toggle("年份", isOn: $showYear)
+                    Toggle("流派", isOn: $showGenre)
+                    Toggle("播放次数", isOn: $showPlayCount)
+                    Toggle("添加日期", isOn: $showAddedDate)
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+            })
             Divider()
             MacSongTable(
                 tracks: filteredTracks,
@@ -83,27 +96,7 @@ struct MacSongsView: View {
         .onAppear { updateVisibleTracks() }
         .onChange(of: localSearch) { _, _ in updateVisibleTracks() }
         .onChange(of: model.catalogRevision) { _, _ in updateVisibleTracks() }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Menu {
-                    Toggle("年份", isOn: $showYear)
-                    Toggle("流派", isOn: $showGenre)
-                    Toggle("播放次数", isOn: $showPlayCount)
-                    Toggle("添加日期", isOn: $showAddedDate)
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help("显示选项")
-                .accessibilityLabel("显示选项")
-                Button {
-                    model.playShuffledQueue(filteredTracks.filter { !model.isDisliked($0) })
-                } label: {
-                    Image(systemName: "shuffle")
-                }
-                .help("随机播放")
-                .accessibilityLabel("随机播放")
-            }
-        }
+        // 顶部不留按钮：显示选项已移到搜索栏最右，随机播放按钮移除。
     }
 }
 #endif

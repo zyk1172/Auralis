@@ -50,15 +50,7 @@ struct MacV2CategoriesView: View {
             }
         }
         .navigationTitle("分类")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    Task { await load() }
-                } label: {
-                    Label("刷新", systemImage: "arrow.clockwise")
-                }
-            }
-        }
+        // 顶部不留按钮：刷新按钮移除（可切换分类重进刷新）。
         .task(id: model.catalog.activeServerID) { await load() }
     }
 
@@ -237,15 +229,7 @@ struct MacV2CategoryTracksView: View {
             }
         }
         .navigationTitle(category.macCategoryTitle)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    Task { await loadTracks() }
-                } label: {
-                    Label("刷新歌曲", systemImage: "arrow.clockwise")
-                }
-            }
-        }
+        // 顶部不留按钮：刷新歌曲按钮移除。
         .task(id: "\(category.id)|\(model.catalog.activeServerID?.rawValue ?? "")") { await loadTracks() }
     }
 

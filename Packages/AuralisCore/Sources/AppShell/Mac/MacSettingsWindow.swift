@@ -39,8 +39,16 @@ public struct MacSettingsWindow: View {
 
     // MARK: - 通用
 
+    @State private var isEditingHomeLayout = false
+
     private var general: some View {
         Form {
+            Section("首页") {
+                Button("编辑首页…") {
+                    isEditingHomeLayout = true
+                }
+                .help("调整 Mac 首页内容模块的显示与顺序（随机音乐 / 最近播放 / 很久没听 / 最近添加 / 收藏里随便听 / 从未播放 / 常听艺术家 / 常听专辑）。")
+            }
             Section("主题") {
                 ThemeChoiceGrid(themeStore: themeStore)
                 Text("已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。")
@@ -52,6 +60,9 @@ public struct MacSettingsWindow: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $isEditingHomeLayout) {
+            MacHomeLayoutEditor(model: model, theme: theme)
+        }
     }
 
     // MARK: - 服务器

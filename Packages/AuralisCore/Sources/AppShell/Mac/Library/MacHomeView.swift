@@ -15,7 +15,6 @@ struct MacHomeView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
-    @State private var isEditingLayout = false
 
     var body: some View {
         // GeometryReader 必须在 ScrollView 外层：放在可滚动内容中会收到不确定的高度提议，
@@ -33,18 +32,7 @@ struct MacHomeView: View {
                 .padding(.bottom, 24)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("编辑首页", systemImage: "slider.horizontal.3") {
-                    isEditingLayout = true
-                }
-            }
-        }
-        .sheet(isPresented: $isEditingLayout) {
-            // Mac 专用首页编辑器：只编辑内容模块（quickEntries 在 Mac 首页不显示），
-            // 固定 560×600，不再复用 iOS HomeLayoutEditView。
-            MacHomeLayoutEditor(model: model, theme: theme)
-        }
+        // 顶部不留按钮：编辑首页入口已移到「设置 → 通用」。
     }
 
     /// 首页货架标题（有序）。资料库入口（歌曲/专辑/艺术家/流派/下载/不喜欢/播放列表/收藏）

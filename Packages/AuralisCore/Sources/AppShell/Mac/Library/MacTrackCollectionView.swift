@@ -39,22 +39,7 @@ struct MacTrackCollectionView: View {
             }
         }
         .navigationTitle(title)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    model.playShuffledQueue(tracks)
-                } label: {
-                    Label("随机播放", systemImage: "shuffle")
-                }
-                .disabled(tracks.isEmpty)
-                Button {
-                    model.playQueue(tracks)
-                } label: {
-                    Label("播放", systemImage: "play.fill")
-                }
-                .disabled(tracks.isEmpty)
-            }
-        }
+        // 顶部不留按钮：随机播放 / 播放按钮移除。
     }
 }
 
@@ -87,16 +72,7 @@ struct MacDislikedView: View {
             }
         }
         .navigationTitle("不喜欢")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.playShuffledQueue(tracks)
-                } label: {
-                    Label("随机播放", systemImage: "shuffle")
-                }
-                .disabled(tracks.isEmpty)
-            }
-        }
+        // 顶部不留按钮：随机播放按钮移除。
     }
 }
 #endif

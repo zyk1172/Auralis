@@ -245,6 +245,10 @@ public struct MacMusicShell: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        // 顶部不留按钮：移除系统 Hide Sidebar 按钮。
+        // 菜单栏「显示」里的显示/隐藏侧边栏仍可用（AuralisMacApp CommandMenu），
+        // 侧边栏本身保留。
+        .toolbar(removing: .sidebarToggle)
     }
 
     private var playerDockReservedHeight: CGFloat {
