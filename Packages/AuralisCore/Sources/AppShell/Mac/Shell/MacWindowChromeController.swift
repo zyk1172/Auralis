@@ -20,11 +20,14 @@ import AppKit
 /// 窗口控制按钮（关闭 / 最小化 / 缩放）始终使用系统 standard window buttons，
 /// 不做自绘替代，也不通过 NSApp.keyWindow 操作窗口（多窗口时 keyWindow 不可靠）。
 ///
-/// Expanded 时对三个系统按钮做**整组位置校正**（layoutTrafficLights）：
-/// SwiftUI window toolbar 的布局会把 traffic lights 推到错误的垂直基线，
-/// 需要把它们作为一个整体平移回 normal 时记录的系统默认位置——
-/// 保持横向顺序与相对间距、只修垂直、不碰 × / 复制胶囊（SwiftUI 层）。
-/// 事件驱动（首次显示 / Expanded 切换 / resize / 全屏进出），不做轮询。
+/// 对三个系统按钮做**整组位置校正**（layoutTrafficLights）：
+/// macOS 默认的 traffic lights 位置视觉上过于靠近顶部边缘，且 SwiftUI window
+/// toolbar 布局还会把它们推到错误的垂直基线。因此无论 normal 还是 expanded，
+/// 都把 close / miniaturize / zoom 作为一个整体对齐到统一中心线
+/// （MacUIVisualTokens.WindowChrome.controlCenterFromTop = 28pt）——
+/// 保持横向顺序与相对间距、只修垂直。播放页左右胶囊（topLeft/RightGlass）也
+/// 微调到同一中心线，整条主窗口所有页面的顶部控件在一条水平线上。
+/// 事件驱动（首次显示 / 切换 / resize / 成为 key / 全屏进出），不做轮询。
 ///
 /// 幂等写入：仅在实际属性与目标不一致时才修改；不做轮询 / KVO / Timer，
 /// 也不修改 `window.title`，因此不存在「SwiftUI 写标题 → 我们再清掉」的竞争，
@@ -33,9 +36,6 @@ import AppKit
 public final class MacWindowChromeController {
     private weak var window: NSWindow?
     private var isExpanded = false
-    /// normal 状态下记录的系统默认垂直基线（close 按钮相对其 container 的 minY）。
-    /// Expanded 时三个按钮整体平移回该基线。
-    private var trafficLightBaselineY: CGFloat?
     /// 布局相关通知 observer（resize / 全屏进出），窗口切换时重建。
     private nonisolated(unsafe) var trafficLightObservers: [NSObjectProtocol] = []
     private nonisolated(unsafe) weak var observedWindow: NSWindow?
@@ -85,11 +85,11 @@ public final class MacWindowChromeController {
     // MARK: - Traffic lights 整组位置校正
 
     /// 把三个系统窗口按钮（close / miniaturize / zoom）作为**一组**校正：
-    /// - normal：记录系统默认垂直基线（以 close 按钮为准），不移动任何按钮；
-    /// - expanded：整组垂直平移回基线（只动 y，保持系统横向顺序、间距与靠左位置），
-    ///   视觉上与顶部控制栏正确基线对齐；
+    /// - 无论 normal / expanded，都把整组中心对齐到距 container 顶部 28pt 的
+    ///   统一中心线（与播放页左右胶囊的 28pt 中心线重合）；
+    /// - 只动 y，保持系统横向顺序、间距与靠左位置，不改尺寸；
     /// - 幂等：与目标差异超过容差才写入；三个按钮必须在同一 container 才操作。
-    /// internal：didResize / 全屏进出通知回调与回归测试共用同一入口。
+    /// internal：didResize / didBecomeKey / 全屏进出通知回调与回归测试共用同一入口。
     func layoutTrafficLights() {
         guard let window,
               let close = window.standardWindowButton(.closeButton),
@@ -100,20 +100,17 @@ public final class MacWindowChromeController {
               zoom.superview === container
         else { return }
 
-        if !isExpanded {
-            // 记录系统默认位置。未布局（frame 异常）时不记录，等下次布局后校正。
-            let minY = close.frame.minY
-            guard minY > 0, minY < 60 else { return }
-            if trafficLightBaselineY != minY {
-                trafficLightBaselineY = minY
-            }
-            return
+        let targetCenterFromTop = MacUIVisualTokens.WindowChrome.controlCenterFromTop
+        // AppKit 普通 NSView 坐标系从底部向上；container 是 flipped 时从顶部向下。
+        let targetCenterY: CGFloat
+        if container.isFlipped {
+            targetCenterY = targetCenterFromTop
+        } else {
+            targetCenterY = container.bounds.maxY - targetCenterFromTop
         }
-
-        // expanded：整组垂直平移回基线（水平保持系统当前布局）。
-        guard let baselineY = trafficLightBaselineY else { return }
-        let dy = baselineY - close.frame.minY
-        guard abs(dy) > 0.5 else { return }
+        let currentCenterY = close.frame.midY
+        let dy = targetCenterY - currentCenterY
+        guard abs(dy) > MacUIVisualTokens.WindowChrome.trafficLightVerticalTolerance else { return }
         for button in [close, mini, zoom] {
             var frame = button.frame
             frame.origin.y += dy
@@ -130,6 +127,7 @@ public final class MacWindowChromeController {
         let center = NotificationCenter.default
         let names: [Notification.Name] = [
             NSWindow.didResizeNotification,
+            NSWindow.didBecomeKeyNotification,
             NSWindow.didEnterFullScreenNotification,
             NSWindow.didExitFullScreenNotification,
         ]

@@ -10,6 +10,16 @@ import CoreGraphics
 /// 响应式算法（根据窗口宽度算列数 / 封面尺寸）仍由 MacArtworkGridMetrics /
 /// MacFullPlayerMetrics 负责，它们只引用这里的常量。
 enum MacUIVisualTokens {
+    // MARK: - Window Chrome
+
+    /// 主窗口所有页面统一的顶部控件中心线（从 titlebar/窗口顶部向下 28pt）。
+    /// 红黄绿系统按钮与播放页左右胶囊都对齐到这条线。
+    enum WindowChrome {
+        static let controlCenterFromTop: CGFloat = 28
+        /// traffic light 整组校正的容差（pt），差异小于该值不写入。
+        static let trafficLightVerticalTolerance: CGFloat = 0.5
+    }
+
     // MARK: - Sidebar
 
     enum Sidebar {
@@ -133,12 +143,12 @@ enum MacUIVisualTokens {
         /// 三色窗口按钮右侧的 Music.app close / mini 胶囊起点。
         static let topLeftGlassPaddingL: CGFloat = 100
         /// 胶囊保持 Music.app 的 titlebar 基线；系统 traffic lights 会下移至这条基线。
-        static let topLeftGlassPaddingT: CGFloat = 8
+        static let topLeftGlassPaddingT: CGFloat = 9
         static let topRightGlassHeight: CGFloat = 38
         static let topRightGlassPaddingH: CGFloat = 16
         static let topRightGlassPaddingR: CGFloat = 8
-        /// 与左侧胶囊处于同一条 titlebar 水平线。
-        static let topRightGlassPaddingT: CGFloat = 8
+        /// 与左侧胶囊处于同一条 titlebar 水平线（9 + 38/2 = 28pt 中心线）。
+        static let topRightGlassPaddingT: CGFloat = 9
         /// 124 + 12 + 17 + 32 = 185pt，与 Music.app 音量胶囊接近。
         static let topRightGlassWidth: CGFloat = 124
         static let topRightControlSpacing: CGFloat = 14
