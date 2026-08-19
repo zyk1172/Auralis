@@ -164,6 +164,7 @@ public struct MacSettingsWindow: View {
     @State private var isConfirmingIndexClear = false
     @State private var isClearingIndex = false
     /// 自定义 token 输入校验提示（提交时校验，输入过程不打扰）。
+    @State private var contextTokenError: String?
     @State private var outputTokenError: String?
 
     private let credentialVault = KeychainCredentialVault()
@@ -185,14 +186,18 @@ public struct MacSettingsWindow: View {
         )
     }
 
-    /// 自定义输入提交时校验并夹取到合法范围（512…1,000,000），提示可读原因。
-    /// 值写入 UserDefaults（AppStorage）→ AI 请求真正使用该 maxOutputTokens。
+    /// 自定义上下文窗口输入提交时校验并夹取到合法范围（下限 4096，不设上限）。
+    private func commitCustomContextTokens() {
+        let original = aiMaxContextTokens
+        contextTokenError = ContextTokenLimitPolicy.validationMessage(for: original)
+        aiMaxContextTokens = ContextTokenLimitPolicy.clamp(original)
+    }
+
+    /// 自定义输出上限输入提交时校验并夹取到合法范围（下限 512，不设上限）。
     private func commitCustomOutputTokens() {
-        let clamped = OutputTokenLimitPolicy.clamp(aiMaxOutputTokens)
-        if clamped != aiMaxOutputTokens {
-            aiMaxOutputTokens = clamped
-        }
-        outputTokenError = OutputTokenLimitPolicy.validationMessage(for: aiMaxOutputTokens)
+        let original = aiMaxOutputTokens
+        outputTokenError = OutputTokenLimitPolicy.validationMessage(for: original)
+        aiMaxOutputTokens = OutputTokenLimitPolicy.clamp(original)
     }
 
     private var ai: some View {
@@ -210,12 +215,30 @@ public struct MacSettingsWindow: View {
                 LabeledContent("API Key", value: hasAPIKey ? "已配置 · 存于系统 Keychain" : "未配置")
             }
             Section("高级设置") {
-                Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
-                    HStack {
-                        Text("上下文窗口")
-                        Spacer()
-                        Text("\(aiMaxContextTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
+                // 上下文窗口：可直接输入任意正整数（下至 4096，不设人为上限）。
+                LabeledContent("上下文窗口") {
+                    HStack(spacing: 6) {
+                        TextField(
+                            "Token 数量",
+                            value: Binding(
+                                get: { aiMaxContextTokens },
+                                set: { aiMaxContextTokens = $0 }
+                            ),
+                            format: .number
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                        .onSubmit { commitCustomContextTokens() }
+
+                        Text("token")
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
+                }
+
+                if let contextTokenError {
+                    Text(contextTokenError)
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.error.color)
                 }
                 // 单次输出上限：预设档位快捷选择 + 自定义任意正整数（不限制在预设档位）。
                 Picker("单次输出上限", selection: outputTokenMode) {
@@ -251,7 +274,7 @@ public struct MacSettingsWindow: View {
                             .foregroundStyle(theme.colorTokens.error.color)
                     }
                 }
-                Text("不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为；自定义档位可输入任意合理正整数（如 32768、65536、100000），实际是否生效取决于服务端上限。")
+                Text("上下文窗口和单次输出上限均直接使用这里填写的数值，不再由 Auralis 额外设置固定上限。默认仍为 256K / 16K；可按模型实际能力填写更大的数值。最终可用范围由所连接模型或 API 服务端决定。")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
@@ -502,31 +525,48 @@ public struct MacSettingsWindow: View {
     }
 }
 
-/// 单次输出上限的预设档位 / 自定义策略（纯逻辑，可单测）。
-/// 允许任意合理正整数（不限制在预设档位）；预设档位只是快捷选择。
+/// 上下文窗口的策略（纯逻辑，可单测）。
+/// 只保留下限 4096，不设置任何人为上限；用户可按模型能力填入任意正整数。
+enum ContextTokenLimitPolicy {
+    static let minValue = 4_096
+
+    static func clamp(_ value: Int) -> Int {
+        max(value, minValue)
+    }
+
+    static func validationMessage(for value: Int) -> String? {
+        guard value >= minValue else {
+            return "上下文窗口不能低于 \(minValue) token"
+        }
+        return nil
+    }
+}
+
+/// 单次输出上限的预设档位 / 自定义策略。
+/// 预设只是快捷入口，不构成人为上限。
 enum OutputTokenLimitPolicy {
-    /// 常见预设档位（供快捷选择；用户可随时切自定义输入任意值）。
-    static let presets: [Int] = [4_096, 8_192, 16_384, 32_768, 65_536, 100_000]
-    /// 合法范围下限（与 AIConnectionSettings 读取端 max(512, …) 一致）。
+    static let presets: [Int] = [
+        4_096,
+        8_192,
+        16_384,
+        32_768,
+        65_536,
+        100_000
+    ]
+
     static let minValue = 512
-    /// 合法范围上限（与上下文窗口 Stepper 上限一致）。
-    static let maxValue = 1_000_000
 
     static func containsPreset(_ value: Int) -> Bool {
         presets.contains(value)
     }
 
     static func clamp(_ value: Int) -> Int {
-        min(max(value, minValue), maxValue)
+        max(value, minValue)
     }
 
-    /// 合法性校验的可读提示；合法时返回 nil。
     static func validationMessage(for value: Int) -> String? {
-        if value < minValue {
-            return "请输入 \(minValue) 到 \(maxValue) 之间的整数"
-        }
-        if value > maxValue {
-            return "请输入 \(minValue) 到 \(maxValue) 之间的整数"
+        guard value >= minValue else {
+            return "单次输出不能低于 \(minValue) token"
         }
         return nil
     }

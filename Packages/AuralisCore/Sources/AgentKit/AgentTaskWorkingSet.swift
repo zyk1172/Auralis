@@ -34,7 +34,9 @@ public struct AgentToolTrace: Codable, Sendable {
 public struct AgentTaskWorkingSet: Sendable {
     /// V2 是可恢复的长任务：当前批身份与缩批状态只存活于当前任务，数据库仍是 pending 的事实来源。
     private struct RecommendationIndexV2RuntimeState: Sendable {
-        var preferredBatchSize: Int = RecommendationIndexV2BatchPolicy.recommendedLimit(maxOutputTokens: 16_000)
+        var preferredBatchSize: Int =
+            RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
+
         var lastBatchMode: String?
         var lastBatchIDs: [String] = []
         var malformedWriteAttempts = 0

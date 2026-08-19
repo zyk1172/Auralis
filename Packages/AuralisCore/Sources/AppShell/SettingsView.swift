@@ -222,128 +222,233 @@ struct ServerConnectionSheet: View {
     @State private var connectionTask: Task<Void, Never>?
     @State private var isTesting = false
     @State private var isRequestingLocalNetworkAuthorization = false
-    private enum TestResultDisplay {
-        case success(String)
-        case failure(String)
+    private enum TestResultStatus {
+        case success
+        case authFailed
+        case unreachable
     }
-    @State private var testResult: TestResultDisplay?
-#if DEBUG
-    @State private var probeResult: LocalNetworkProbeResult?
-    @State private var isProbing = false
-#endif
+    @State private var testStatus: TestResultStatus?
+
+    /// 底部操作栏「保存」可用性：核心字段填齐且没有正在进行的连接/测试。
+    private var canSave: Bool {
+        !model.serverConnectionState.isConnecting
+            && !isTesting
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+            && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !password.isEmpty
+    }
 
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
+        iOSBody
+        #endif
+    }
+
+    // MARK: - macOS：标准两列表单 Sheet
+
+    #if os(macOS)
+    private var macBody: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            formArea
+                .frame(maxHeight: .infinity, alignment: .top)
+            Divider()
+            bottomBar
+        }
+        .frame(minWidth: 540, idealWidth: 560, maxWidth: 600, minHeight: 400)
+        .interactiveDismissDisabled(model.serverConnectionState.isConnecting)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("添加服务器")
+                .font(.title2.bold())
+                .foregroundStyle(theme.colorTokens.primaryText.color)
+            Text("OpenSubsonic")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.top, 20)
+        .padding(.bottom, 14)
+    }
+
+    private var formArea: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow {
+                    fieldLabel("显示名称")
+                    TextField("输入显示名称", text: $displayName)
+                        .textFieldStyle(.roundedBorder)
+                        .textContentType(.organizationName)
+                        .frame(width: 320)
+                }
+                GridRow {
+                    fieldLabel("服务器地址")
+                    TextField("输入服务器地址", text: $serverURL)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .frame(width: 320)
+                }
+                GridRow {
+                    fieldLabel("用户名")
+                    TextField("输入用户名", text: $username)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .frame(width: 320)
+                }
+                GridRow {
+                    fieldLabel("密码")
+                    SecureField("输入密码", text: $password)
+                        .textFieldStyle(.roundedBorder)
+                        .textContentType(.password)
+                        .frame(width: 320)
+                }
+                GridRow {
+                    fieldLabel("外网地址")
+                    TextField("输入外网地址", text: $externalServerURL)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .frame(width: 320)
+                }
+            }
+
+            securityNotes
+
+            // 轻量错误/进度：只在确实需要时出现，不长期占位。
+            if let localValidationError, testStatus == nil {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(localValidationError)
+                }
+                .font(.footnote)
+                .foregroundStyle(theme.colorTokens.error.color)
+            }
+            if case let .connecting(stage) = model.serverConnectionState {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("正在\(stage.title)…").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if case let .failed(message) = model.serverConnectionState {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(message)
+                }
+                .font(.footnote)
+                .foregroundStyle(theme.colorTokens.error.color)
+                .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .foregroundStyle(theme.colorTokens.primaryText.color)
+            .frame(width: 92, alignment: .trailing)
+    }
+
+    private var securityNotes: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("凭据安全存储在系统 Keychain 中。", systemImage: "key")
+            Label("公网服务器建议使用 HTTPS。", systemImage: "lock")
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                Task { await runTest() }
+            } label: {
+                if isTesting || isRequestingLocalNetworkAuthorization {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(isRequestingLocalNetworkAuthorization ? "正在请求本地网络访问…" : "正在测试连接…")
+                    }
+                } else {
+                    Text("测试连接")
+                }
+            }
+            .disabled(isTesting || isRequestingLocalNetworkAuthorization || model.serverConnectionState.isConnecting)
+
+            if !isTesting, !isRequestingLocalNetworkAuthorization, let testStatus {
+                statusLabel(testStatus)
+            }
+
+            Spacer(minLength: 0)
+
+            Button("取消") { cancelOrStop() }
+                .disabled(model.serverConnectionState.isConnecting)
+            Button("保存") { connect() }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canSave)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+    }
+    #endif
+
+    // MARK: - iOS：保持系统 Form 结构
+
+    #if !os(macOS)
+    private var iOSBody: some View {
         NavigationStack {
             Form {
-                Section("OpenSubsonic 服务器") {
-                    TextField("显示名称", text: $displayName)
+                Section {
+                    TextField("显示名称", text: $displayName, prompt: Text("输入显示名称"))
                         .textContentType(.organizationName)
-                    TextField("内网服务器地址（如 http://192.168.2.240:3000）", text: $serverURL)
-#if os(iOS)
+                    TextField("服务器地址", text: $serverURL, prompt: Text("输入服务器地址"))
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
-#endif
                         .autocorrectionDisabled()
-                    TextField("外网服务器地址（可选）", text: $externalServerURL)
-#if os(iOS)
+                    TextField("用户名", text: $username, prompt: Text("输入用户名"))
                         .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-#endif
                         .autocorrectionDisabled()
-                    TextField("用户名", text: $username)
-#if os(iOS)
-                        .textInputAutocapitalization(.never)
-#endif
-                        .autocorrectionDisabled()
-                    SecureField("密码", text: $password)
+                    SecureField("输入密码", text: $password)
                         .textContentType(.password)
+                    TextField("外网地址（可选）", text: $externalServerURL, prompt: Text("输入外网地址"))
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
                 }
-                Section("连接测试") {
-                    Button {
-                        Task { await runTest() }
-                    } label: {
-                        if isTesting || isRequestingLocalNetworkAuthorization {
-                            HStack {
-                                ProgressView().controlSize(.small)
-                                Text(isRequestingLocalNetworkAuthorization ? "正在请求本地网络访问…" : "正在测试…")
-                            }
-                        } else {
-                            Label("测试连接", systemImage: "network")
-                        }
-                    }
-                    .disabled(isTesting || isRequestingLocalNetworkAuthorization || model.serverConnectionState.isConnecting)
-                    Text("内网与外网会同时探测；内网在 30 秒内可用时始终优先使用，确认不可用后才降级外网。首次连接局域网服务器时，Auralis 会自动请求「本地网络」授权。")
-                        .font(.caption2)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    if let testResult {
-                        switch testResult {
-                        case let .success(message):
-                            Label(message, systemImage: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(theme.colorTokens.success.color)
-                        case let .failure(message):
-                            VStack(alignment: .leading, spacing: 4) {
-                                Label("连接失败", systemImage: "xmark.octagon.fill")
-                                    .foregroundStyle(theme.colorTokens.error.color)
-                                Text(message)
-                                    .font(.caption)
-                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                                    .lineLimit(nil)
-                                    .textSelection(.enabled)
-                                if message.contains("本地网络") {
-                                    Button("打开本地网络设置") {
-                                        PlatformLocalNetworkSettings.open()
-                                    }
-                                    .font(.caption)
+                Section {
+                    HStack {
+                        Button {
+                            Task { await runTest() }
+                        } label: {
+                            if isTesting || isRequestingLocalNetworkAuthorization {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text(isRequestingLocalNetworkAuthorization ? "正在请求本地网络访问…" : "正在测试连接…")
                                 }
+                            } else {
+                                Text("测试连接")
                             }
+                        }
+                        .disabled(isTesting || isRequestingLocalNetworkAuthorization || model.serverConnectionState.isConnecting)
+                        if let testStatus {
+                            Spacer()
+                            statusLabel(testStatus)
                         }
                     }
                 }
                 Section("连接安全") {
-                    Label("凭据仅写入系统 Keychain", systemImage: "key.fill")
-                    Label("HTTP 仅允许本机或私有局域网", systemImage: "network")
-                    Text("公共服务器必须使用 HTTPS。Auralis 不会记录密码、认证 Token 或完整请求地址。")
-                        .font(.caption)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    Label("凭据安全存储在系统 Keychain 中。", systemImage: "key")
+                    Label("公网服务器建议使用 HTTPS。", systemImage: "lock")
                 }
-#if DEBUG
-                Section("本地网络探测（DEBUG）") {
-                    Button {
-                        Task { await runProbe() }
-                    } label: {
-                        if isProbing {
-                            HStack {
-                                ProgressView().controlSize(.small)
-                                Text("正在探测…")
-                            }
-                        } else {
-                            Label("NWConnection 探测", systemImage: "network")
-                        }
-                    }
-                    .disabled(isProbing)
-                    if let probeResult {
-                        LabeledContent("TCP 状态", value: probeResult.state.rawValue)
-                        LabeledContent("unsatisfiedReason", value: probeResult.unsatisfiedReason ?? "—")
-                        if probeResult.isLocalNetworkDenied {
-                            Label("Local Network Privacy: DENIED / BLOCKED", systemImage: "xmark.octagon.fill")
-                                .foregroundStyle(theme.colorTokens.error.color)
-                        } else if probeResult.state == .ready {
-                            Label("Local Network TCP: AVAILABLE", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(theme.colorTokens.success.color)
-                        }
-                        if let err = probeResult.errorDescription, !err.isEmpty {
-                            diagnosticLongValue("错误详情", err)
-                        }
-                        Text("探测时间 \(probeResult.timestamp.formatted(date: .omitted, time: .standard))")
-                            .font(.caption2)
-                            .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                }
-#endif
-                // 测试连接已在上方展示同一错误时，不重复占用一整段表单空间；
-                // 点击“保存”时仍在这里显示校验/授权失败原因。
-                if let localValidationError, case nil = testResult {
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                if let localValidationError, testStatus == nil {
                     Section("需要处理") {
                         Label(localValidationError, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(theme.colorTokens.error.color)
@@ -351,101 +456,64 @@ struct ServerConnectionSheet: View {
                 }
                 if case let .connecting(stage) = model.serverConnectionState {
                     Section("连接进度") {
-                        HStack {
-                            ProgressView()
-                            Text(stage.title)
-                        }
+                        HStack { ProgressView(); Text(stage.title) }
                     }
                 }
                 if case let .failed(message) = model.serverConnectionState {
                     Section("连接失败") {
-                        Text(message)
-                            .lineLimit(nil)
-                            .textSelection(.enabled)
-                        if message.contains("本地网络") {
-                            Button("打开本地网络设置") {
-                                PlatformLocalNetworkSettings.open()
-                            }
-                        }
-                        Button("复制错误详情") { PlatformPasteboard.copy(message) }
+                        Text(message).lineLimit(nil).textSelection(.enabled)
                     }
                 }
-                #if DEBUG
-                if let diag = model.connectionDiagnostics {
-                    Section("网络诊断（DEBUG）") {
-                        LabeledContent("App Bundle ID", value: AppDiagnostics.bundleID)
-                        LabeledContent("Target", value: AppDiagnostics.targetKind)
-                        LabeledContent("App Sandbox", value: AppDiagnostics.isAppSandboxEnabled ? "已启用" : "未启用")
-                        LabeledContent("network.client（出站连接）") {
-                            Text(AppDiagnostics.hasNetworkClientEntitlement ? "存在" : "未检测到（可用 codesign -d --entitlements 复核）")
-                                .textSelection(.enabled)
-                                .lineLimit(nil)
-                        }
-                        LabeledContent("NSLocalNetworkUsageDescription", value: (AppDiagnostics.localNetworkUsageDescription?.isEmpty == false) ? "已声明" : "缺失")
-                        LabeledContent("服务器 Host", value: diag.host ?? "—")
-                        LabeledContent("局域网地址", value: diag.isPrivateLAN ? "是" : "否")
-                        LabeledContent("协议", value: diag.scheme?.uppercased() ?? "—")
-                        LabeledContent("测试/连接请求已发出", value: diag.requestAttempted ? "是" : "否")
-                        if let domain = diag.nsErrorDomain {
-                            LabeledContent("NSError domain") {
-                                Text("\(domain)（code \(diag.nsErrorCode ?? -1)）")
-                                    .textSelection(.enabled)
-                                    .lineLimit(nil)
-                            }
-                        }
-                        if let desc = diag.nsErrorDescription, !desc.isEmpty {
-                            diagnosticLongValue("错误描述", desc)
-                        }
-                        if let failing = diag.failingURL, !failing.isEmpty {
-                            diagnosticLongValue("failingURL", failing)
-                        }
-                        if let underlying = diag.underlyingError, !underlying.isEmpty {
-                            diagnosticLongValue("underlyingError", underlying)
-                        }
-                        LabeledContent("映射结果") {
-                            Text(diag.mappedMessage)
-                                .textSelection(.enabled)
-                                .lineLimit(nil)
-                        }
-                        Text("诊断时间 \(diag.timestamp.formatted(date: .omitted, time: .standard))")
-                            .font(.caption2)
-                            .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                }
-                #endif
             }
             .navigationTitle("添加服务器")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(model.serverConnectionState.isConnecting ? "停止" : "取消") {
-                        connectionTask?.cancel()
-                        connectionTask = nil
-                        password = ""
-                        if !model.serverConnectionState.isConnecting { dismiss() }
-                    }
+                    Button(model.serverConnectionState.isConnecting ? "停止" : "取消") { cancelOrStop() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存", action: connect)
-                        .disabled(model.serverConnectionState.isConnecting)
-                }
-            }
-            .onChange(of: model.serverConnectionState) { _, state in
-                if case .connected = state {
-                    connectionTask = nil
-                    password = ""
-                    dismiss()
-                } else if case .failed = state {
-                    connectionTask = nil
+                    Button("保存") { connect() }
+                        .disabled(model.serverConnectionState.isConnecting || isTesting)
                 }
             }
         }
-#if os(macOS)
-        // macOS 的 sheet 按内容理想高度撑开：表单内容很高（错误提示 / 网络诊断区）时会超过
-        // 屏幕高度，底部被裁掉且 Form 不会滚动。这里给出有界高度（min/ideal/max），让 Form
-        // 在高度不足时内部滚动，长错误信息能完整滚动查看并选中复制。
-        .frame(minWidth: 460, idealWidth: 520, maxWidth: 600, minHeight: 520, idealHeight: 640, maxHeight: 700)
-#endif
         .interactiveDismissDisabled(model.serverConnectionState.isConnecting)
+    }
+    #endif
+
+    // MARK: - 共用：状态、校验与测试
+
+    @ViewBuilder
+    private func statusLabel(_ status: TestResultStatus) -> some View {
+        switch status {
+        case .success:
+            Label("连接成功", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(theme.colorTokens.success.color)
+        case .authFailed:
+            Label("用户名或密码错误", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(theme.colorTokens.error.color)
+        case .unreachable:
+            Label("无法连接服务器", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(theme.colorTokens.error.color)
+        }
+    }
+
+    /// 连接测试结果 → 一行状态：认证类错误单列，其余一律视为「无法连接服务器」。
+    private static func classifyFailure(_ message: String) -> TestResultStatus {
+        let lower = message.lowercased()
+        let authMarkers = ["用户名", "密码", "认证", "401"]
+        if authMarkers.contains(where: { lower.contains($0) }) { return .authFailed }
+        return .unreachable
+    }
+
+    private func cancelOrStop() {
+        if model.serverConnectionState.isConnecting {
+            connectionTask?.cancel()
+            connectionTask = nil
+        } else {
+            password = ""
+            dismiss()
+        }
     }
 
     private func connect() {
@@ -494,17 +562,17 @@ struct ServerConnectionSheet: View {
     /// 只做连接测试：不保存凭据、不同步、不关闭配置界面。
     private func runTest() async {
         isTesting = true
-        testResult = nil
+        testStatus = nil
         defer { isTesting = false }
         let rawURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: rawURL) else {
-            testResult = .failure(ServerConnectionError.invalidURL.localizedDescription)
+            testStatus = .unreachable
             return
         }
         do {
             try ServerURLPolicy.validate(url)
             guard await requestLocalNetworkAuthorizationIfNeeded(for: url) else {
-                testResult = .failure(localValidationError ?? "本地网络访问被系统拒绝。")
+                testStatus = .unreachable
                 return
             }
             let rawExternalURL = externalServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -525,11 +593,11 @@ struct ServerConnectionSheet: View {
                 password: password
             )
             switch await model.testServerConnectionWithInput(input) {
-            case let .success(message): testResult = .success(message)
-            case let .failure(message): testResult = .failure(message)
+            case .success: testStatus = .success
+            case let .failure(message): testStatus = Self.classifyFailure(message)
             }
         } catch {
-            testResult = .failure(ConnectionErrorDescription.describe(error))
+            testStatus = Self.classifyFailure(ConnectionErrorDescription.describe(error))
         }
     }
 
@@ -555,41 +623,6 @@ struct ServerConnectionSheet: View {
 #else
         return true
 #endif
-    }
-
-#if DEBUG
-    /// 用 NWConnection 对当前输入的服务器地址做 TCP 探测，观察本地网络隐私状态。
-    private func runProbe() async {
-        isProbing = true
-        defer { isProbing = false }
-        let rawURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: rawURL), let host = url.host, !host.isEmpty else {
-            probeResult = LocalNetworkProbeResult(
-                state: .failed,
-                unsatisfiedReason: nil,
-                errorDescription: "无法从服务器地址解析出 Host（示例：http://192.168.2.240:4533）",
-                timestamp: .now
-            )
-            return
-        }
-        let port = UInt16(url.port ?? (url.scheme == "https" ? 443 : 80))
-        probeResult = await LocalNetworkProbe.probe(host: host, port: port)
-    }
-#endif
-
-    /// 网络诊断区的「长文本字段」行：标签独占一行、值完整换行显示且可选中复制，
-    /// 避免 LabeledContent 的尾随值在 macOS 上被截断。
-    private func diagnosticLongValue(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(theme.colorTokens.secondaryText.color)
-            Text(value)
-                .font(.caption)
-                .foregroundStyle(theme.colorTokens.primaryText.color)
-                .textSelection(.enabled)
-                .lineLimit(nil)
-        }
     }
 }
 
@@ -875,18 +908,6 @@ private struct APIKeySheet: View {
         }
 #if os(macOS)
         .frame(minWidth: 420, minHeight: 320)
-#endif
-    }
-}
-
-
-private enum PlatformPasteboard {
-    static func copy(_ value: String) {
-#if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-#elseif os(iOS)
-        UIPasteboard.general.string = value
 #endif
     }
 }

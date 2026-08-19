@@ -233,6 +233,18 @@ public struct AgentRunner {
         privacy.allowsMetadata = context.allowsMetadata
         privacy.allowsLyrics = context.allowsLyrics
         privacy.allowsPlaybackHistory = context.allowsHistory
+
+        // 统一解析真正的 Provider 预算：Agent 不再自带第二套 256K/16K 硬限制，
+        // 输入/输出直接跟随 Provider capabilities（即用户在设置页填写的模型能力），
+        // 后续 request.maxTokens 与上下文裁剪都基于这两个已解析值。
+        let resolvedInputBudget = policy.budget.resolvedInputTokens(
+            capabilities: provider.capabilities
+        )
+
+        let resolvedOutputBudget = policy.budget.resolvedOutputTokens(
+            capabilities: provider.capabilities
+        )
+
         var conversation = AgentContextBuilder.build(
             systemPrompt: Self.systemPrompt(
                 context: context,
@@ -245,7 +257,8 @@ public struct AgentRunner {
             history: Self.convertHistory(history),
             permissions: privacy,
             capabilities: provider.capabilities,
-            inputBudget: policy.budget.maxInputTokens
+            inputBudget: resolvedInputBudget,
+            reservedOutputTokens: resolvedOutputBudget
         )
         conversation.append(AIMessage(role: .user, content: userText))
 
@@ -261,7 +274,7 @@ public struct AgentRunner {
         var ws = AgentTaskWorkingSet(
             targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
         )
-        ws.configureRecommendationIndexV2(maxOutputTokens: provider.capabilities.maxOutputTokens)
+        ws.configureRecommendationIndexV2(maxOutputTokens: resolvedOutputBudget)
 
         while true {
             if Task.isCancelled {
@@ -273,15 +286,19 @@ public struct AgentRunner {
                 return
             }
             // 上下文裁剪：防止无限增长导致 API 拒绝或 token 爆预算。
-            let reservedOutput = min(policy.budget.maxOutputTokens, provider.capabilities.maxOutputTokens)
+            // 输入与输出预算来自当前 Provider capabilities；
+            // Agent 不再额外写死 256K / 16K。
+            // ContextManager 只负责保证 input + reserved output + protocol reserve
+            // 不超过当前 Provider 声明的总上下文窗口。
+            let reservedOutput = resolvedOutputBudget
             let contextBudget = ContextManager.inputBudget(
                 capabilities: provider.capabilities,
-                requestedInputBudget: policy.budget.maxInputTokens,
+                requestedInputBudget: resolvedInputBudget,
                 reservedOutputTokens: reservedOutput
             )
             conversation = ContextManager.trimByTokens(conversation, maxTokens: contextBudget)
 
-            // 显式指定单次输出上限：当前模型使用 256K 上下文、16K 输出。
+            // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
             // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
             // 动态工具扩展：每轮重新展开工具集（只增不减），保证任务中途的新工具需求可达。
             let expanded = ToolSelector.select(for: accumulatedToolText, intent: intent, policy: policy, all: AgentToolRegistry.all)

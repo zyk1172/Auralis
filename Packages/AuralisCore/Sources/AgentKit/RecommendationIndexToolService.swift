@@ -50,7 +50,14 @@ enum RecommendationIndexToolService {
             return .ok(call, descriptor, "已读取 \(entries.count) 条 V2 索引记录", .text("以下是已完成的 V2 索引记录（含完整分类标签）：\n\(payload)"))
 
         case "library_index_v2_next_batch":
-            let requestedLimit = min(max(int(call, "limit") ?? RecommendationIndexV2BatchPolicy.recommendedLimit(maxOutputTokens: 16_000), 1), 100)
+            let requestedLimit = min(
+                max(
+                    int(call, "limit")
+                        ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch,
+                    1
+                ),
+                RecommendationIndexV2BatchPolicy.maximumTracksPerBatch
+            )
             let batch = try await catalog.nextRecommendationIndexV2Batch(serverID: serverID, limit: requestedLimit)
             guard !batch.tracks.isEmpty else {
                 return .ok(

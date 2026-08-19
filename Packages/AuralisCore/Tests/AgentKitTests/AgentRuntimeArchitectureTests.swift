@@ -47,7 +47,7 @@ struct AgentRuntimeArchitectureTests {
         let policy = AgentTaskPolicy.policy(for: .musicAppreciation)
         #expect(policy.authorizes(AgentToolRegistry.descriptor(for: "music_appreciate")!))
         #expect(policy.authorizes(AgentToolRegistry.descriptor(for: "queue_replace")!))
-        #expect(policy.budget.maxOutputTokens == 16_000)
+        #expect(policy.budget.maxOutputTokens == AgentTaskBudget.followProvider)
     }
 
     @Test func runtimeAllowsRegisteredToolForAnyPolicy() async throws {

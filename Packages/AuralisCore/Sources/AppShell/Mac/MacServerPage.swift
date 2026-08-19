@@ -33,7 +33,7 @@ struct MacServerPage: View {
         .task { await reloadServers() }
         .sheet(isPresented: $isAddingServer) {
             ServerConnectionSheet(model: model, theme: theme)
-                .frame(minWidth: 520, minHeight: 420)
+                .frame(minWidth: 540, minHeight: 400)
         }
         .alert("删除服务器？", isPresented: Binding(
             get: { serverToRemove != nil },

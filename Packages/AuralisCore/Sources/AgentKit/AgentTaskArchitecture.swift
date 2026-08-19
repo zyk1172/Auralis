@@ -52,24 +52,33 @@ public enum GrantedScope: String, Codable, CaseIterable, Sendable, Hashable {
 }
 
 public struct AgentTaskBudget: Codable, Equatable, Sendable {
-    /// 极端看门狗：任务总墙钟时间上限。正常用户任务很难触发（默认 60 分钟）。
+    /// 0 表示不额外限制，直接跟随当前 Provider / ModelCapabilities。
+    public static let followProvider = 0
+
+    /// 极端看门狗：任务总墙钟时间。
     public var wallClockSeconds: TimeInterval
-    /// 单次模型请求允许使用的输入上下文上限，不是多轮任务的累计用量。
+
+    /// 单次模型请求的输入限制。
+    /// 0 = 跟随 Provider。
     public var maxInputTokens: Int
-    /// 单次模型回复上限，不是多轮任务的累计用量。
+
+    /// 单次模型请求的输出限制。
+    /// 0 = 跟随 Provider。
     public var maxOutputTokens: Int
-    /// 极端看门狗：模型轮次上限（默认 1000）。正常任务不触发，仅在程序失控死循环时兜底。
+
+    /// 极端防失控模型轮次看门狗。
     public var maxModelRounds: Int
-    /// 诊断统计阈值（deprecated）：不再作为正常任务终止条件。
+
+    /// 仅诊断，不作为正常任务终止条件。
     public var maxNoProgressRounds: Int
-    /// 诊断统计阈值（deprecated）：不再作为正常任务终止条件。
+
+    /// 仅诊断，不作为正常任务终止条件。
     public var maxRepeatedToolPattern: Int
 
     public init(
         wallClockSeconds: TimeInterval = 60 * 60,
-        maxInputTokens: Int = 256_000,
-        maxOutputTokens: Int = 16_000,
-        // 紧急防失控：1000 轮模型请求，正常任务不可能撞到；触发即记录异常诊断。
+        maxInputTokens: Int = AgentTaskBudget.followProvider,
+        maxOutputTokens: Int = AgentTaskBudget.followProvider,
         maxModelRounds: Int = 1_000,
         maxNoProgressRounds: Int = 3,
         maxRepeatedToolPattern: Int = 4
@@ -80,6 +89,32 @@ public struct AgentTaskBudget: Codable, Equatable, Sendable {
         self.maxModelRounds = maxModelRounds
         self.maxNoProgressRounds = maxNoProgressRounds
         self.maxRepeatedToolPattern = maxRepeatedToolPattern
+    }
+
+    public func resolvedInputTokens(
+        capabilities: ModelCapabilities
+    ) -> Int {
+        guard maxInputTokens > 0 else {
+            return capabilities.maxContextTokens
+        }
+
+        return min(
+            maxInputTokens,
+            capabilities.maxContextTokens
+        )
+    }
+
+    public func resolvedOutputTokens(
+        capabilities: ModelCapabilities
+    ) -> Int {
+        guard maxOutputTokens > 0 else {
+            return capabilities.maxOutputTokens
+        }
+
+        return min(
+            maxOutputTokens,
+            capabilities.maxOutputTokens
+        )
     }
 }
 
@@ -427,12 +462,18 @@ public enum AgentTaskPolicyResolver {
         else { return base }
 
         var budget = base.budget
-        budget.wallClockSeconds = 6 * 60 * 60
-        // 完整索引仍使用相同的单次 256K 输入 / 16K 输出限制；长任务通过更多轮次
-        // 完成，不能伪造超过模型能力的单次 token 预算。
-        budget.maxInputTokens = 256_000
-        budget.maxOutputTokens = 16_000
-        budget.maxModelRounds = 1_024
+
+        // 全库索引属于可持续推进的长任务。
+        // 单次 token 完全跟随用户配置的 Provider，不再二次写死 256K / 16K。
+        budget.wallClockSeconds = 24 * 60 * 60
+        budget.maxInputTokens = AgentTaskBudget.followProvider
+        budget.maxOutputTokens = AgentTaskBudget.followProvider
+
+        // 这里只是极端防死循环看门狗。
+        // 10,000+ 首库即使缩到最小 8 首 / batch 也不能正常撞到这里。
+        budget.maxModelRounds = 10_000
+
+        // 仅诊断，不作为正常终止条件。
         budget.maxNoProgressRounds = 3
         return AgentTaskPolicy(
             intent: intent,

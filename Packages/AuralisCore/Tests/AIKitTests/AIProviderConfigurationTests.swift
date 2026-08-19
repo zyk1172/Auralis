@@ -73,3 +73,40 @@ func rejectsHeaderInjection() {
         _ = try AIProviderHeaders(["X-Test": .literal("fixture\r\nInjected: value")])
     }
 }
+
+@Test("ModelCapabilities 不再把输出限制为上下文的一半")
+func modelCapabilitiesPreserveConfiguredOutputLimit() {
+    let capabilities = ModelCapabilities(
+        maxContextTokens: 128_000,
+        maxOutputTokens: 100_000,
+        supportsToolCalling: true
+    )
+
+    #expect(
+        capabilities.maxContextTokens
+            == 128_000
+    )
+
+    #expect(
+        capabilities.maxOutputTokens
+            == 100_000
+    )
+}
+
+@Test("ModelCapabilities 支持百万级自定义上下文")
+func modelCapabilitiesPreserveLargeContextLimit() {
+    let capabilities = ModelCapabilities(
+        maxContextTokens: 2_000_000,
+        maxOutputTokens: 200_000
+    )
+
+    #expect(
+        capabilities.maxContextTokens
+            == 2_000_000
+    )
+
+    #expect(
+        capabilities.maxOutputTokens
+            == 200_000
+    )
+}

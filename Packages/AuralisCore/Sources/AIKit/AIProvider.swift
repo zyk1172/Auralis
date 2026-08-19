@@ -29,7 +29,9 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         supportsJSONSchema: Bool = false
     ) {
         self.maxContextTokens = max(4_096, maxContextTokens)
-        self.maxOutputTokens = max(512, min(maxOutputTokens, self.maxContextTokens / 2))
+        // 不再把输出硬性限制为「上下文的一半」：上下文与输出各自按用户配置取值，
+        // 由服务端 / Provider 实际能力决定，Auralis 不自设比例限制。
+        self.maxOutputTokens = max(512, maxOutputTokens)
         self.supportsToolCalling = supportsToolCalling
         self.supportsStreaming = supportsStreaming
         self.supportsJSONMode = supportsJSONMode

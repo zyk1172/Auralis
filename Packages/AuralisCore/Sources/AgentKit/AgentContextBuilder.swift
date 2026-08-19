@@ -33,7 +33,8 @@ public enum AgentContextBuilder {
         recentToolTranscript: [AIMessage] = [],
         permissions: AIPrivacyPermissions,
         capabilities: ModelCapabilities,
-        inputBudget: Int
+        inputBudget: Int,
+        reservedOutputTokens: Int? = nil
     ) -> [AIMessage] {
         var system = systemPrompt
         system += "\n\n当前任务：\(task.intent.rawValue)；目标：\(task.goal)"
@@ -56,11 +57,17 @@ public enum AgentContextBuilder {
         messages.append(contentsOf: history.filter { $0.role != .system })
         messages.append(contentsOf: legalToolTranscript(recentToolTranscript))
 
-        let reservedOutput = min(capabilities.maxOutputTokens, auralisDefaultMaxOutputTokens)
+        let requestedInputBudget = inputBudget > 0
+            ? inputBudget
+            : capabilities.maxContextTokens
+
+        let resolvedReservedOutputTokens =
+            reservedOutputTokens ?? capabilities.maxOutputTokens
+
         let budget = ContextManager.inputBudget(
             capabilities: capabilities,
-            requestedInputBudget: inputBudget,
-            reservedOutputTokens: reservedOutput
+            requestedInputBudget: requestedInputBudget,
+            reservedOutputTokens: resolvedReservedOutputTokens
         )
         return ContextManager.trimByTokens(messages, maxTokens: budget)
     }
