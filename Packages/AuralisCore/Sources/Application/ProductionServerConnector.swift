@@ -84,7 +84,9 @@ public actor ProductionServerConnector: ServerConnecting {
             // R12：记录本次连接前该服务器是否已有持久化账户，用于失败补偿决策——
             // 覆盖已有账户时失败，需要把 Persistence/SQLite 里的旧账户也恢复回去，
             // 不能只回滚 Keychain 密码（否则出现「新 username/URL + 旧密码」）。
-            let previousAccount = try? await persistence.account(id: serverID)
+            // 严格 throwing：账户读取失败（而非「不存在」）时中止连接，
+            // 避免失败补偿把「读取异常」误判为「从未有过账户」而 purge 数据。
+            let previousAccount = try await persistence.account(id: serverID)
 
             await progress(.storingCredential)
             try await credentialVault.store(input.password, for: credentialID)
@@ -1172,6 +1174,11 @@ public actor ProductionServerConnector: ServerConnecting {
     /// 按逆序恢复（catalog → persistence → credential），保证失败后不会留下
     /// 「Persistence 已是新 username/URL、Keychain 却恢复旧密码」的跨存储不一致。
     ///
+    /// **前置快照必须严格 throwing**（R12 收尾）：previousPassword 用 existingCredential
+    /// 区分「确实没有旧密码」与「Keychain 读取失败」，previousAccount 用 try await 读取。
+    /// 快照读取失败时**禁止开始 mutation**——否则 rollback 会把「读取失败」误判为
+    /// 「本来就没有」，错误地 delete 掉原本存在的正确凭据 / purge 掉服务器记录。
+    ///
     /// 不实现真正数据库两阶段提交，但补偿路径完整：恢复动作本身失败时只记录日志，
     /// 不再向上抛（尽力恢复，避免掩盖原始错误）。
     private func withAccountMutationRollback<T>(
@@ -1179,8 +1186,8 @@ public actor ProductionServerConnector: ServerConnecting {
         credentialID: CredentialID,
         _ mutate: () async throws -> T
     ) async throws -> T {
-        let previousAccount = try? await persistence.account(id: serverID)
-        let previousPassword = try? await credentialVault.retrieve(id: credentialID)
+        let previousAccount = try await persistence.account(id: serverID)
+        let previousPassword = try await existingCredential(id: credentialID)
         do {
             return try await mutate()
         } catch {

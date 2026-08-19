@@ -122,4 +122,77 @@ struct PlaybackQueuePresentationStoreTests {
         #expect(store.currentEntryID == currentID)
         #expect(store.currentIndex == 2)
     }
+
+    // MARK: - R05 尾项：追加不漂移 + 保存/恢复 occurrence
+
+    @Test("R05：队列 [A,B,A,C] 当前第二个 A，追加 D（Agent appendToQueue 直调）后 currentIndex 仍为 2")
+    func appendWhileOnSecondDuplicateKeepsIndex() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("A"), track("B"), track("A"), track("C")], currentTrackID: gid("A"))
+        _ = store.play(entryID: store.entries[2].id)
+        #expect(store.currentIndex == 2)
+
+        // AppModel.appendToQueue 的等价直调：queueStore.append，不重建 entry UUID。
+        store.append([track("D")], currentTrackID: gid("A"))
+
+        #expect(store.currentIndex == 2, "追加不得把当前项漂回第一个 A")
+        #expect(store.currentEntryID == store.entries[2].id)
+        let next = store.advanceForward()
+        #expect(next?.id.rawValue == "C", "追加后下一首仍是 C")
+    }
+
+    @Test("R05：保存 currentQueueIndex → 重建队列恢复（等价重启/Handoff）→ 定位第二个 A → next 到 C")
+    func restoreBySavedIndexKeepsOccurrence() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("A"), track("B"), track("A"), track("C")], currentTrackID: gid("A"))
+        _ = store.play(entryID: store.entries[2].id)
+        let savedIndex = store.currentIndex
+        #expect(savedIndex == 2)
+
+        // 模拟恢复：快照只存 trackIDs（无 UUID），重建全新 entry 队列。
+        let restored = store.entries.map(\.track)
+        store.replace(entries: restored.map { QueueEntry(track: $0) }, currentTrackID: gid("A"))
+        // 此时 updateCurrentIndex 会匹配第一个 A（index 0）——必须用 savedIndex 覆盖。
+        #expect(store.currentIndex == 0, "重建后默认回退到第一个 A")
+
+        // 恢复代码：queueStore.play(entryID: entries[savedIndex].id) 精确定位。
+        guard let savedIndex, store.entries.indices.contains(savedIndex) else {
+            Issue.record("savedIndex 越界")
+            return
+        }
+        let entry = store.entries[savedIndex]
+        _ = store.play(entryID: entry.id)
+        #expect(store.currentIndex == 2, "按保存下标恢复，指向第二个 A")
+
+        // AppModel.currentTrack setter 的 updateCurrentIndex 不得覆盖已定位的下标。
+        store.updateCurrentIndex(currentTrackID: gid("A"))
+        #expect(store.currentIndex == 2)
+
+        let next = store.advanceForward()
+        #expect(next?.id.rawValue == "C", "恢复后 next() 必须走到 C，而不是 B")
+    }
+
+    @Test("R05：恢复时 savedIndex 优先于 currentTrackID 匹配（重复歌曲不漂回第一个）")
+    func restorePrefersSavedIndexOverTrackIDMatch() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("A"), track("B"), track("A"), track("C")], currentTrackID: gid("A"))
+        _ = store.play(entryID: store.entries[2].id)
+        let savedIndex = store.currentIndex
+
+        // 模拟 Handoff 恢复：新设备重建队列 + currentTrackID=A 同时存在。
+        let restored = store.entries.map(\.track)
+        store.replace(entries: restored.map { QueueEntry(track: $0) }, currentTrackID: gid("A"))
+        guard let savedIndex, store.entries.indices.contains(savedIndex) else {
+            Issue.record("savedIndex 越界")
+            return
+        }
+        _ = store.play(entryID: store.entries[savedIndex].id)
+        #expect(store.currentIndex == 2)
+
+        // Handoff 的 currentTrack setter 路径（updateCurrentIndex）不得回退。
+        store.updateCurrentIndex(currentTrackID: gid("A"))
+        #expect(store.currentIndex == 2)
+        let next = store.advanceForward()
+        #expect(next?.id.rawValue == "C")
+    }
 }

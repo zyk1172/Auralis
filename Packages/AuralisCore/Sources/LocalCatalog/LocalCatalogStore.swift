@@ -360,95 +360,62 @@ public actor LocalCatalogStore: LibrarySyncStore {
     }
 
     /// R03：实体关系迁移——tracks.album_gid / artist_gid、albums.artist_gid。
-    /// 新写入路径（stageTracks/stageAlbums）从今往后使用真正的实体 ID 作为外键；
-    /// 这里只为旧库补列并做一次存量回填。回填**优先从 payload 精确回填**：
-    /// tracks/albums 的 payload 是完整 Track/Album JSON，其中保留服务器真实
-    /// albumID/artistID——直接用它构造 GlobalID，不再按「名称 + 艺术家名」猜测，
-    /// 同艺术家同名专辑（同 AlbumID 与不同 AlbumID 混存）不会绑定到错误实体。
-    /// decode 失败或 ID 为空的旧行才回退到名称匹配。
+    ///
+    /// 两阶段版本化：
+    /// - v1：补列 + 按「server_id + 名称 + 艺术家名」猜测回填（旧库首次迁移）。
+    /// - v2：payload authoritative repair——tracks/albums 的 payload 是完整
+    ///   Track/Album JSON，其中保留服务器真实 albumID/artistID。只要 decode 成功，
+    ///   就用真实 ID **强制覆盖** gid（包括 v1 已按名称猜测填过的错误值），
+    ///   同艺术家同名专辑不会绑定到错误实体；decode 失败的行保留 v1 结果。
+    ///
+    /// 为什么 v2 必须独立升级：第二轮（7e3e06b6）的 v1 已把 version 写成 1，
+    /// 老用户数据库 applied == 1，若不升版本号，新回填逻辑永远不会执行。
     nonisolated private func runEntityRelationMigrations() throws {
         let key = "catalog_entity_relations"
-        let targetVersion: Int64 = 1
         let applied = try db.query(
             "SELECT version FROM catalog_migrations WHERE key = ?",
             [.text(key)]
         ).first?["version"]?.int ?? 0
-        guard applied < targetVersion else { return }
 
-        try db.transaction {
-            try addColumnIfMissing(table: "tracks", column: "album_gid", definition: "TEXT")
-            try addColumnIfMissing(table: "tracks", column: "artist_gid", definition: "TEXT")
-            try addColumnIfMissing(table: "albums", column: "artist_gid", definition: "TEXT")
-            try addColumnIfMissing(table: "sync_staged_tracks", column: "album_gid", definition: "TEXT")
-            try addColumnIfMissing(table: "sync_staged_tracks", column: "artist_gid", definition: "TEXT")
-            try addColumnIfMissing(table: "sync_staged_albums", column: "artist_gid", definition: "TEXT")
+        if applied < 1 {
+            try db.transaction {
+                try addColumnIfMissing(table: "tracks", column: "album_gid", definition: "TEXT")
+                try addColumnIfMissing(table: "tracks", column: "artist_gid", definition: "TEXT")
+                try addColumnIfMissing(table: "albums", column: "artist_gid", definition: "TEXT")
+                try addColumnIfMissing(table: "sync_staged_tracks", column: "album_gid", definition: "TEXT")
+                try addColumnIfMissing(table: "sync_staged_tracks", column: "artist_gid", definition: "TEXT")
+                try addColumnIfMissing(table: "sync_staged_albums", column: "artist_gid", definition: "TEXT")
 
-            // 1) 精确回填：从 payload 解码真实实体 ID（R03）。
-            try backfillTrackAlbumGIDsFromPayload()
-            try backfillTrackArtistGIDsFromPayload()
-            try backfillAlbumArtistGIDsFromPayload()
+                // v1 名称猜测兜底：只填 NULL 行（此时 payload 精确回填尚未存在）。
+                try nameBasedAlbumGIDBackfill()
+                try nameBasedTrackArtistGIDBackfill()
+                try nameBasedAlbumArtistGIDBackfill()
+                try createEntityRelationIndexes()
+                try recordMigrationVersion(key, 1)
+            }
+        }
 
-            // 2) 兜底：仍为 NULL 的行（payload 解码失败 / 旧格式无 ID）按
-            //    server_id + 名称（+ 艺术家名限定）关联，尽力而为。
-            try db.run(
-                """
-                UPDATE tracks
-                SET album_gid = (
-                    SELECT a.global_id FROM albums a
-                    WHERE a.server_id = tracks.server_id
-                      AND a.name = tracks.album_title
-                      AND a.artist_name = tracks.artist_name
-                    LIMIT 1
-                )
-                WHERE album_gid IS NULL
-                """
-            )
-            try db.run(
-                """
-                UPDATE tracks
-                SET artist_gid = (
-                    SELECT ar.global_id FROM artists ar
-                    WHERE ar.server_id = tracks.server_id
-                      AND ar.name = tracks.artist_name
-                    LIMIT 1
-                )
-                WHERE artist_gid IS NULL
-                """
-            )
-            try db.run(
-                """
-                UPDATE albums
-                SET artist_gid = (
-                    SELECT ar.global_id FROM artists ar
-                    WHERE ar.server_id = albums.server_id
-                      AND ar.name = albums.artist_name
-                    LIMIT 1
-                )
-                WHERE artist_gid IS NULL
-                """
-            )
-            try db.run("CREATE INDEX IF NOT EXISTS idx_tracks_album_gid ON tracks(album_gid)")
-            try db.run("CREATE INDEX IF NOT EXISTS idx_tracks_artist_gid ON tracks(artist_gid)")
-            try db.run("CREATE INDEX IF NOT EXISTS idx_albums_artist_gid ON albums(artist_gid)")
-
-            try db.run(
-                """
-                INSERT INTO catalog_migrations (key, version, applied_at) VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET version = excluded.version, applied_at = excluded.applied_at
-                """,
-                [.text(key), .integer(targetVersion), .real(Date.now.timeIntervalSince1970)]
-            )
+        if applied < 2 {
+            // v2：payload authoritative repair——decode 成功即强制覆盖（含错误绑定）。
+            try db.transaction {
+                try backfillTrackAlbumGIDsFromPayload()
+                try backfillTrackArtistGIDsFromPayload()
+                try backfillAlbumArtistGIDsFromPayload()
+                try createEntityRelationIndexes()
+                try recordMigrationVersion(key, 2)
+            }
         }
     }
 
-    // MARK: - R03 payload 精确回填
+    // MARK: - R03 payload authoritative repair（v2）
 
-    /// 从 tracks.payload（完整 Track JSON）中的真实 albumID 回填 album_gid。
+    /// 从 tracks.payload（完整 Track JSON）中的真实 albumID **强制覆盖** album_gid。
+    /// 不限定 NULL：v1 名称猜测可能已填错，必须用真实 ID 修正。
     /// 用局部 JSONDecoder（而非 actor 隔离的 decoder），保证 nonisolated 迁移
     /// 事务内可调用；一次性迁移，构造开销可接受。
     nonisolated private func backfillTrackAlbumGIDsFromPayload() throws {
         let rows = try db.query(
-            "SELECT global_id, server_id, payload FROM tracks WHERE album_gid IS NULL"
+            "SELECT global_id, server_id, payload FROM tracks"
         )
         let decoder = JSONDecoder()
         for row in rows {
@@ -467,10 +434,10 @@ public actor LocalCatalogStore: LibrarySyncStore {
         }
     }
 
-    /// 从 tracks.payload 中的真实 artistID 回填 artist_gid。
+    /// 从 tracks.payload 中的真实 artistID **强制覆盖** artist_gid。
     nonisolated private func backfillTrackArtistGIDsFromPayload() throws {
         let rows = try db.query(
-            "SELECT global_id, server_id, payload FROM tracks WHERE artist_gid IS NULL"
+            "SELECT global_id, server_id, payload FROM tracks"
         )
         let decoder = JSONDecoder()
         for row in rows {
@@ -489,10 +456,10 @@ public actor LocalCatalogStore: LibrarySyncStore {
         }
     }
 
-    /// 从 albums.payload（完整 Album JSON）中的真实 artistID 回填 albums.artist_gid。
+    /// 从 albums.payload（完整 Album JSON）中的真实 artistID **强制覆盖** albums.artist_gid。
     nonisolated private func backfillAlbumArtistGIDsFromPayload() throws {
         let rows = try db.query(
-            "SELECT global_id, server_id, payload FROM albums WHERE artist_gid IS NULL"
+            "SELECT global_id, server_id, payload FROM albums"
         )
         let decoder = JSONDecoder()
         for row in rows {
@@ -509,6 +476,70 @@ public actor LocalCatalogStore: LibrarySyncStore {
                 [.text(artistGID.description), .text(gidRaw)]
             )
         }
+    }
+
+    // MARK: - R03 v1 名称猜测兜底
+
+    nonisolated private func nameBasedAlbumGIDBackfill() throws {
+        try db.run(
+            """
+            UPDATE tracks
+            SET album_gid = (
+                SELECT a.global_id FROM albums a
+                WHERE a.server_id = tracks.server_id
+                  AND a.name = tracks.album_title
+                  AND a.artist_name = tracks.artist_name
+                LIMIT 1
+            )
+            WHERE album_gid IS NULL
+            """
+        )
+    }
+
+    nonisolated private func nameBasedTrackArtistGIDBackfill() throws {
+        try db.run(
+            """
+            UPDATE tracks
+            SET artist_gid = (
+                SELECT ar.global_id FROM artists ar
+                WHERE ar.server_id = tracks.server_id
+                  AND ar.name = tracks.artist_name
+                LIMIT 1
+            )
+            WHERE artist_gid IS NULL
+            """
+        )
+    }
+
+    nonisolated private func nameBasedAlbumArtistGIDBackfill() throws {
+        try db.run(
+            """
+            UPDATE albums
+            SET artist_gid = (
+                SELECT ar.global_id FROM artists ar
+                WHERE ar.server_id = albums.server_id
+                  AND ar.name = albums.artist_name
+                LIMIT 1
+            )
+            WHERE artist_gid IS NULL
+            """
+        )
+    }
+
+    nonisolated private func createEntityRelationIndexes() throws {
+        try db.run("CREATE INDEX IF NOT EXISTS idx_tracks_album_gid ON tracks(album_gid)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_tracks_artist_gid ON tracks(artist_gid)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_albums_artist_gid ON albums(artist_gid)")
+    }
+
+    nonisolated private func recordMigrationVersion(_ key: String, _ version: Int64) throws {
+        try db.run(
+            """
+            INSERT INTO catalog_migrations (key, version, applied_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET version = excluded.version, applied_at = excluded.applied_at
+            """,
+            [.text(key), .integer(version), .real(Date.now.timeIntervalSince1970)]
+        )
     }
 
     /// 在 UI 已恢复本地目录后执行的持久化时间策略完整性检查。

@@ -115,9 +115,11 @@ public final class AuralisAgentBridge: AgentBridge {
     public func previous() async { model.previous() }
 
     public func addToQueue(globalID: GlobalID) async {
-        // R05：允许重复歌曲（每次独立队列项）。
+        // R05：允许重复歌曲（每次独立队列项）；走 queueStore.append 直调，
+        // 不触发 queue [Track] setter 重建 entry UUID——重复队列中当前项
+        // （如 [A,B,A,C] 的第二个 A）不会因追加 D 而漂回第一个 A。
         guard let track = resolveTrack(globalID) else { return }
-        model.queue.append(track)
+        model.appendToQueue(track)
     }
 
     public func playNext(globalID: GlobalID) async {

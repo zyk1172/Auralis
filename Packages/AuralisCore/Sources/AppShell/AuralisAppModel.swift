@@ -327,16 +327,27 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 播放会话持久化快照（按服务器隔离，存 UserDefaults）：当前曲目、队列、进度。
     /// 故意不保存「正在播放」标记——进程重启后恢复为暂停，由用户点击播放继续。
+    /// R05：额外保存 currentQueueIndex——重复歌曲 [A, B, A, C] 当前播第二个 A 时，
+    /// 只存 currentTrackID 无法区分是 index 0 还是 index 2 的 A；恢复时用下标精确定位
+    /// 队列项，重启/Handoff 后不丢失 occurrence。
     private struct PlaybackSessionSnapshot: Codable, Sendable, Equatable {
         var currentTrackID: String?
         var queueTrackIDs: [String]
         var position: TimeInterval
+        var currentQueueIndex: Int?
         var updatedAt: Date
 
-        init(currentTrackID: String?, queueTrackIDs: [String], position: TimeInterval, updatedAt: Date = .now) {
+        init(
+            currentTrackID: String?,
+            queueTrackIDs: [String],
+            position: TimeInterval,
+            currentQueueIndex: Int? = nil,
+            updatedAt: Date = .now
+        ) {
             self.currentTrackID = currentTrackID
             self.queueTrackIDs = queueTrackIDs
             self.position = position
+            self.currentQueueIndex = currentQueueIndex
             self.updatedAt = updatedAt
         }
     }
@@ -1153,11 +1164,14 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 当前曲目的封面数据（用于 Now Playing），未加载时为 nil。
+    /// R01：按 currentTrack.serverID 取封面——播 A 浏览 B 时，Now Playing 必须拿 A
+    /// 的封面（缓存键落在 A 命名空间），不能因为浏览服务器是 B 而串用 B 的同名封面。
     private func currentArtworkData() -> Data? {
         guard let key = currentTrack.artworkKey else { return nil }
+        let serverID = currentTrack.serverID
         // Now Playing 只需要一张中等尺寸封面
         for size in [620, 284, 264, 96] {
-            if let image = artworkStore.image(forKey: artworkCacheKey(key, size)) {
+            if let image = artworkStore.image(remoteKey: key, targetPixelSize: size, serverID: serverID) {
                 #if os(macOS)
                 if let tiff = image.tiffRepresentation,
                    let rep = NSBitmapImageRep(data: tiff),
@@ -1232,6 +1246,8 @@ public final class AuralisAppModel: ObservableObject {
             "currentTrackID": currentTrack.id.rawValue,
             "queueTrackIDs": queue.map(\.id.rawValue),
             "position": playbackPosition,
+            // R05：记录当前队列项下标，接收端恢复重复歌曲时不丢失 occurrence。
+            "currentQueueIndex": queueStore.currentIndex as Any,
         ]
         activity.becomeCurrent()
     }
@@ -1256,7 +1272,15 @@ public final class AuralisAppModel: ObservableObject {
         }
         guard !restoredQueue.isEmpty else { return }
         queue = restoredQueue
-        if let currentRaw = info["currentTrackID"] as? String, let current = trackByID[currentRaw] {
+        // R05：优先用 Handoff 携带的下标定位队列项（重复歌曲 [A,B,A] 恢复后仍指
+        // 第二个 A）；无下标或越界时回退按 currentTrackID 匹配第一个。
+        let restoredIndex = info["currentQueueIndex"] as? Int
+        if let restoredIndex,
+           queueStore.entries.indices.contains(restoredIndex) {
+            let entry = queueStore.entries[restoredIndex]
+            _ = queueStore.play(entryID: entry.id)
+            currentTrack = entry.track
+        } else if let currentRaw = info["currentTrackID"] as? String, let current = trackByID[currentRaw] {
             if !queue.contains(where: { queueIdentity($0) == queueIdentity(current) }) { queue.insert(current, at: 0) }
             currentTrack = current
         } else {
@@ -1492,6 +1516,15 @@ public final class AuralisAppModel: ObservableObject {
     /// R05：允许同一首歌加入多次（每次独立队列项）。
     public func addToQueue(globalID: GlobalID) {
         guard let track = track(for: globalID) else { return }
+        queueStore.append([track], currentTrackID: queueIdentity(currentTrack))
+        schedulePlaybackSessionPersistence()
+        schedulePreparedNext()
+    }
+
+    /// R05：追加单曲到队尾——queueStore.append 直调，**不重建 entry UUID**。
+    /// 队列 [A, B, A, C] 当前播第二个 A 时，Agent/UI 追加 D，currentEntryID
+    /// 不会被 queue setter 的 firstIndex 匹配漂回第一个 A；下一首仍是 C。
+    public func appendToQueue(_ track: Track) {
         queueStore.append([track], currentTrackID: queueIdentity(currentTrack))
         schedulePlaybackSessionPersistence()
         schedulePreparedNext()
@@ -1950,7 +1983,9 @@ public final class AuralisAppModel: ObservableObject {
         let snapshot = PlaybackSessionSnapshot(
             currentTrackID: currentTrack.id.rawValue == "placeholder" ? nil : currentTrack.id.rawValue,
             queueTrackIDs: queue.map(\.id.rawValue),
-            position: playbackPosition
+            position: playbackPosition,
+            // R05：记录当前队列项下标，重复歌曲恢复时不丢失 occurrence。
+            currentQueueIndex: queueStore.currentIndex
         )
         let defaults = self.defaults
         let key = Self.playbackSessionKey(serverID)
@@ -1990,8 +2025,18 @@ public final class AuralisAppModel: ObservableObject {
             current = restoredQueue[0]
         }
         queue = restoredQueue
-        if !queue.contains(where: { queueIdentity($0) == queueIdentity(current) }) { queue.insert(current, at: 0) }
-        currentTrack = current
+        // R05：优先用保存的下标精确定位队列项——重复歌曲 [A, B, A, C] 保存时当前
+        // 是 index 2 的 A，恢复后必须仍是第二个 A，next() 才正确走到 C。
+        // 旧快照没有 currentQueueIndex 时回退按 currentTrackID 匹配第一个。
+        if let savedIndex = snapshot.currentQueueIndex,
+           queueStore.entries.indices.contains(savedIndex) {
+            let entry = queueStore.entries[savedIndex]
+            _ = queueStore.play(entryID: entry.id)
+            currentTrack = entry.track
+        } else {
+            if !queue.contains(where: { queueIdentity($0) == queueIdentity(current) }) { queue.insert(current, at: 0) }
+            currentTrack = current
+        }
         // 不按 metadata 时长截断保存位置：metadata 可能比真实音频短，
         // 截断会把“已听到 243s”的会话退回 240s。真实时长由引擎解析后校正。
         playbackPosition = max(snapshot.position, 0)
@@ -2680,8 +2725,10 @@ public final class AuralisAppModel: ObservableObject {
     // MARK: - Artwork
 
     /// 已缓存的封面图；未加载时返回 nil，视图应展示占位封面并调用 loadArtwork。
-    public func artworkImage(key: String?, targetPixelSize: Int) -> PlatformImage? {
-        artworkStore.image(remoteKey: key, targetPixelSize: targetPixelSize)
+    /// R01：播放器/当前曲目场景必须显式传 serverID（currentTrack.serverID）——
+    /// 浏览型调用（专辑页等）不传，按当前浏览服务器兜底。
+    public func artworkImage(key: String?, targetPixelSize: Int, serverID: ServerID? = nil) -> PlatformImage? {
+        artworkStore.image(remoteKey: key, targetPixelSize: targetPixelSize, serverID: serverID)
     }
 
     /// 兼容非 SwiftUI 调用者；磁盘、网络、请求去重与后台解码均由独立管线负责。
@@ -2689,12 +2736,6 @@ public final class AuralisAppModel: ObservableObject {
         Task { [artworkStore] in
             _ = await artworkStore.load(remoteKey: key, targetPixelSize: targetPixelSize)
         }
-    }
-
-    /// 封面缓存键：**必须包含服务器 ID**，否则两台服务器相同 ID 的封面会在
-    /// 磁盘缓存里互相覆盖（P0-4）。内存与磁盘共用同一键，天然按服务器隔离。
-    func artworkCacheKey(_ key: String, _ targetPixelSize: Int) -> String {
-        artworkStore.cacheKey(key, targetPixelSize: targetPixelSize)
     }
 
     public func togglePlayback() {

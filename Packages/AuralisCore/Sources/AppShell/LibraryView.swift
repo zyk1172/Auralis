@@ -96,9 +96,9 @@ struct LibraryView: View {
                             Button("立即播放") { model.selectAndPlay(track) }
                             Button("下一首播放") { insertNext(track) }
                             Button("加入队列") {
-                                if !model.queue.contains(where: { $0.id == track.id }) {
-                                    model.queue.append(track)
-                                }
+                                // R05：queueStore.append 直调，不重建 entry UUID——
+                                // 重复队列中当前项不会因追加而漂回第一个匹配。
+                                model.appendToQueue(track)
                             }
                             Button("添加到歌单") { playlistTarget = track }
                             Divider()
@@ -616,11 +616,10 @@ struct LibraryView: View {
     }
 
     private func insertNext(_ track: Track) {
-        guard let currentIndex = model.queue.firstIndex(where: { $0.id == model.currentTrack.id }) else {
-            model.queue.insert(track, at: 0)
-            return
-        }
-        model.queue.insert(track, at: min(currentIndex + 1, model.queue.count))
+        // R05：playNext 语义 = 插到当前队列项之后（currentIndex nil 时插队首）。
+        // 走 queueStore.playNext 直调，不触发 [Track] setter 重建 entry UUID，
+        // 也不用 firstIndex(TrackID) 找当前项（重复歌曲会找错位置）。
+        model.playNext(globalID: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue))
     }
 }
 

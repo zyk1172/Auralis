@@ -30,7 +30,13 @@ private actor ArtworkCountingConnector: ServerConnecting {
     func callCount() -> Int { artworkCalls }
 }
 
-private func artworkTestData(width: Int = 1_024, height: Int = 640) throws -> Data {
+private func artworkTestData(
+    width: Int = 1_024,
+    height: Int = 640,
+    red: CGFloat = 0.2,
+    green: CGFloat = 0.45,
+    blue: CGFloat = 0.8
+) throws -> Data {
     let colorSpace = CGColorSpaceCreateDeviceRGB()
     guard let context = CGContext(
         data: nil,
@@ -43,7 +49,7 @@ private func artworkTestData(width: Int = 1_024, height: Int = 640) throws -> Da
     ) else {
         throw ArtworkTestError.cannotCreateImage
     }
-    context.setFillColor(CGColor(red: 0.2, green: 0.45, blue: 0.8, alpha: 1))
+    context.setFillColor(CGColor(red: red, green: green, blue: blue, alpha: 1))
     context.fill(CGRect(x: 0, y: 0, width: width, height: height))
     guard let image = context.makeImage() else { throw ArtworkTestError.cannotCreateImage }
 
@@ -233,4 +239,73 @@ func artworkStoreSeparatesExplicitServerIDCacheKeys() {
     #expect(keyB == "server-b|cover@128")
     #expect(keyBrowse == keyB, "浏览型封面兜底 = 当前浏览服务器")
     #expect(keyA != keyB, "播放 A 的封面缓存不得落在 B 的命名空间")
+}
+
+// MARK: - R01 Now Playing 跨服封面（播 A 浏览 B，同 coverKey 不同图片）
+
+/// 按服务器返回不同图片的 connector：server-a 红色、server-b 蓝色。
+private actor ArtworkServerSpecificConnector: ServerConnecting {
+    private let dataByServer: [String: Data]
+    private var requestedServerIDs: [String] = []
+
+    init(dataByServer: [String: Data]) {
+        self.dataByServer = dataByServer
+    }
+
+    func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
+        throw ServerConnectionError.serverUnavailable
+    }
+
+    func restoreLastConnection() async throws -> ServerConnectionResult? { nil }
+
+    func artworkData(serverID: ServerID, key: String, targetPixelSize: Int) async -> Data? {
+        requestedServerIDs.append("\(serverID.rawValue)|\(key)")
+        try? await Task.sleep(for: .milliseconds(10))
+        return dataByServer[serverID.rawValue]
+    }
+
+    func serverIDs() -> [String] { requestedServerIDs }
+}
+
+@Test("R01：播 A 浏览 B、同 coverKey 不同图片——按 serverID 取回 A 图，不串用 B 的缓存")
+@MainActor
+func nowPlayingArtworkFollowsTrackServerNotBrowseServer() async throws {
+    let redData = try artworkTestData(red: 0.85, green: 0.1, blue: 0.1)
+    let blueData = try artworkTestData(red: 0.1, green: 0.2, blue: 0.85)
+    let connector = ArtworkServerSpecificConnector(dataByServer: [
+        "server-a": redData,
+        "server-b": blueData,
+    ])
+    let cache = temporaryArtworkCache()
+    // 当前浏览服务器是 B；播放的是 A 的歌曲。
+    let store = ArtworkStore(
+        connector: connector,
+        diskCache: cache,
+        initialServerID: "server-b"
+    )
+
+    // 1) 播放器封面（显式 server-a）：网络回源必须到 A，且写进 A 的缓存键。
+    let aImage = await store.load(remoteKey: "same", targetPixelSize: 128, serverID: ServerID(rawValue: "server-a"))
+    #expect(aImage != nil)
+    let routed = await connector.serverIDs()
+    #expect(routed == ["server-a|same"], "封面回源必须走歌曲真实服务器 A")
+
+    let aDisk = await cache.data(for: "server-a|same@128")
+    let bDiskBeforeA = await cache.data(for: "server-b|same@128")
+    #expect(aDisk != nil)
+    #expect(bDiskBeforeA == nil, "A 的封面不得写进 B 的缓存键")
+
+    // 2) 浏览 B 时同 key 兜底加载 → 落在 B 键，且与 A 图片数据不同。
+    _ = await store.load(remoteKey: "same", targetPixelSize: 128)
+    let bDisk = await cache.data(for: "server-b|same@128")
+    #expect(bDisk != nil)
+    #expect(bDisk != aDisk, "A/B 同 coverKey 但图片不同，必须各自落键")
+
+    // 3) Now Playing 场景：播 A 浏览 B，显式 serverID 必须命中 A 的图。
+    let fetchedA = store.image(remoteKey: "same", targetPixelSize: 128, serverID: ServerID(rawValue: "server-a"))
+    let fetchedBrowse = store.image(remoteKey: "same", targetPixelSize: 128)
+    #expect(fetchedA != nil)
+    #expect(fetchedBrowse != nil)
+    // 两次 fetch 来自不同缓存键（不同图片），对象不同——不发生串用。
+    #expect(!(fetchedA === fetchedBrowse))
 }

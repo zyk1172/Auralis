@@ -118,7 +118,9 @@ struct MacExpandedPlayerView: View {
         // MacMusicShell 的 MacWindowAttacher(isExpanded:) 唯一写入（P2-1），
         // 展开页不再持有第二个 chrome writer。
         .task(id: trackGlobalID) {
-            ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720)
+            // R01：当前曲目封面必须按 currentTrack.serverID 取（播 A 浏览 B 时
+            // ambience 背景仍是 A 的封面），不能回落到浏览服务器的同名封面。
+            ambienceImage = model.artworkImage(key: track.artworkKey, targetPixelSize: 720, serverID: track.serverID)
             lyricsState = .loading
         }
         // 歌词属于右侧按需 context。只看封面或队列时不竞争磁盘/网络；切到歌词
