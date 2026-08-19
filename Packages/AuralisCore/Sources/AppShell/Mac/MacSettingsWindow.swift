@@ -163,8 +163,37 @@ public struct MacSettingsWindow: View {
     @State private var indexTransferMessage: String?
     @State private var isConfirmingIndexClear = false
     @State private var isClearingIndex = false
+    /// 自定义 token 输入校验提示（提交时校验，输入过程不打扰）。
+    @State private var outputTokenError: String?
 
     private let credentialVault = KeychainCredentialVault()
+
+    /// 单次输出上限输入模式：当前值命中预设档位 → 预设；否则 → 自定义（值即事实）。
+    /// 切回预设档位时给一个默认档位，避免 Picker 无选中。
+    private var outputTokenMode: Binding<OutputTokenMode> {
+        Binding(
+            get: {
+                OutputTokenLimitPolicy.containsPreset(aiMaxOutputTokens) ? .preset : .custom
+            },
+            set: { mode in
+                if mode == .preset,
+                   !OutputTokenLimitPolicy.containsPreset(aiMaxOutputTokens),
+                   let first = OutputTokenLimitPolicy.presets.first {
+                    aiMaxOutputTokens = first
+                }
+            }
+        )
+    }
+
+    /// 自定义输入提交时校验并夹取到合法范围（512…1,000,000），提示可读原因。
+    /// 值写入 UserDefaults（AppStorage）→ AI 请求真正使用该 maxOutputTokens。
+    private func commitCustomOutputTokens() {
+        let clamped = OutputTokenLimitPolicy.clamp(aiMaxOutputTokens)
+        if clamped != aiMaxOutputTokens {
+            aiMaxOutputTokens = clamped
+        }
+        outputTokenError = OutputTokenLimitPolicy.validationMessage(for: aiMaxOutputTokens)
+    }
 
     private var ai: some View {
         Form {
@@ -188,14 +217,41 @@ public struct MacSettingsWindow: View {
                         Text("\(aiMaxContextTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
                 }
-                Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
+                // 单次输出上限：预设档位快捷选择 + 自定义任意正整数（不限制在预设档位）。
+                Picker("单次输出上限", selection: outputTokenMode) {
+                    Text("预设档位").tag(OutputTokenMode.preset)
+                    Text("自定义").tag(OutputTokenMode.custom)
+                }
+                .pickerStyle(.segmented)
+                if outputTokenMode.wrappedValue == .preset {
+                    Picker("档位", selection: $aiMaxOutputTokens) {
+                        ForEach(OutputTokenLimitPolicy.presets, id: \.self) { value in
+                            Text("\(value) token").tag(value)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                } else {
                     HStack {
-                        Text("单次输出上限")
-                        Spacer()
-                        Text("\(aiMaxOutputTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
+                        TextField(
+                            "Token 数量",
+                            value: Binding(
+                                get: { aiMaxOutputTokens },
+                                set: { aiMaxOutputTokens = $0 }
+                            ),
+                            format: .number
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                        .onSubmit { commitCustomOutputTokens() }
+                        Text("token").foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                    if let outputTokenError {
+                        Text(outputTokenError)
+                            .font(.caption)
+                            .foregroundStyle(theme.colorTokens.error.color)
                     }
                 }
-                Text("不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。")
+                Text("不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为；自定义档位可输入任意合理正整数（如 32768、65536、100000），实际是否生效取决于服务端上限。")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
@@ -444,6 +500,43 @@ public struct MacSettingsWindow: View {
         }
         .formStyle(.grouped)
     }
+}
+
+/// 单次输出上限的预设档位 / 自定义策略（纯逻辑，可单测）。
+/// 允许任意合理正整数（不限制在预设档位）；预设档位只是快捷选择。
+enum OutputTokenLimitPolicy {
+    /// 常见预设档位（供快捷选择；用户可随时切自定义输入任意值）。
+    static let presets: [Int] = [4_096, 8_192, 16_384, 32_768, 65_536, 100_000]
+    /// 合法范围下限（与 AIConnectionSettings 读取端 max(512, …) 一致）。
+    static let minValue = 512
+    /// 合法范围上限（与上下文窗口 Stepper 上限一致）。
+    static let maxValue = 1_000_000
+
+    static func containsPreset(_ value: Int) -> Bool {
+        presets.contains(value)
+    }
+
+    static func clamp(_ value: Int) -> Int {
+        min(max(value, minValue), maxValue)
+    }
+
+    /// 合法性校验的可读提示；合法时返回 nil。
+    static func validationMessage(for value: Int) -> String? {
+        if value < minValue {
+            return "请输入 \(minValue) 到 \(maxValue) 之间的整数"
+        }
+        if value > maxValue {
+            return "请输入 \(minValue) 到 \(maxValue) 之间的整数"
+        }
+        return nil
+    }
+}
+
+/// 单次输出上限的输入模式。
+enum OutputTokenMode: String, CaseIterable, Identifiable {
+    case preset
+    case custom
+    var id: String { rawValue }
 }
 
 #endif

@@ -130,5 +130,73 @@ struct MacExpandedChromeTests {
         }
         #expect(window.titleVisibility == .hidden)
     }
+
+    // MARK: - traffic lights 整组位置校正（回归：Expanded 时垂直基线跑偏）
+
+    private func trafficButtons(_ window: NSWindow) -> [NSButton] {
+        [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap {
+            window.standardWindowButton($0) as NSButton?
+        }
+    }
+
+    @Test("normal 记录系统默认基线；expanded 时整组垂直平移回基线，横向顺序与间距不变")
+    @MainActor
+    func expandedAlignsTrafficLightsAsGroup() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        controller.setExpanded(false)
+
+        let buttons = trafficButtons(window)
+        #expect(buttons.count == 3)
+        guard let close = window.standardWindowButton(.closeButton) else {
+            Issue.record("缺少 close 按钮")
+            return
+        }
+        // normal：记录系统默认垂直基线（frame 需已完成布局）。
+        let baselineY = close.frame.minY
+        #expect(baselineY > 0, "系统默认基线应已记录")
+
+        // 模拟 SwiftUI toolbar 布局把三个按钮整体下推 10pt（整组偏移，相对间距不变）。
+        for button in buttons {
+            button.frame.origin.y += 10
+        }
+        let shiftedY = close.frame.minY
+        #expect(abs(shiftedY - baselineY) > 0.5, "前置条件：按钮已被推偏")
+
+        // expanded：应整组平移回基线。
+        controller.setExpanded(true)
+        #expect(abs(close.frame.minY - baselineY) < 1, "expanded 后整组回到正确垂直基线")
+
+        // 横向顺序保持（组内相对距离不变）。
+        let after = buttons.map { $0.frame.minX }
+        #expect(after[1] - after[0] > 0, "横向顺序保持")
+        #expect(after[2] - after[1] > 0, "横向顺序保持")
+    }
+
+    @Test("expanded 状态被再次推偏（模拟 resize 重排）后校正回基线，不漂移")
+    @MainActor
+    func expandedTrafficLightsRecoverAfterLayoutShift() {
+        let window = makeWindow()
+        let controller = MacWindowChromeController()
+        controller.attach(window)
+        controller.setExpanded(false)
+        guard let close = window.standardWindowButton(.closeButton) else {
+            Issue.record("缺少 close 按钮")
+            return
+        }
+        let baselineY = close.frame.minY
+
+        controller.setExpanded(true)
+        // 模拟 resize/重排后系统把按钮再次推到错误位置。
+        for button in trafficButtons(window) {
+            button.frame.origin.y += 12
+        }
+        #expect(abs(close.frame.minY - baselineY) > 0.5)
+
+        // 布局事件触发校正（与 didResize / 全屏进出通知同一入口）。
+        controller.layoutTrafficLights()
+        #expect(abs(close.frame.minY - baselineY) < 1, "resize 后校正回基线，不漂移")
+    }
 }
 #endif
