@@ -48,6 +48,22 @@ struct MacExpandedPlayerView: View {
     private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
     private var trackGlobalID: String { "\(track.serverID):\(track.id.rawValue)" }
     private var isPlaying: Bool { playbackStore.state == .playing }
+    // MARK: - 进度条 scrub 状态（回归修复：拖动中滑块与时间文字必须一致）
+    /// 用户是否正在拖动进度条。拖动中滑块与时间文字显示 scrubValue，
+    /// 不跟随实际播放 position；松手后 seek 一次。
+    @State private var isScrubbing = false
+    /// 拖动中 NSSlider 上报的当前值（秒）。
+    @State private var scrubValue: Double = 0
+    /// 开始拖动时的歌曲时长快照（拖动中切歌场景自洽）。
+    @State private var scrubDuration: Double = 0
+    /// 进度条显示值：拖动中 = scrubValue，否则 = 实际播放位置。
+    private var displayedProgress: Double {
+        isScrubbing ? scrubValue : playbackStore.position
+    }
+    /// 剩余时间显示：拖动中用 scrubDuration 快照，否则用实时 duration。
+    private var displayedRemaining: Double {
+        isScrubbing ? max(0, scrubDuration - scrubValue) : max(0, duration - playbackStore.position)
+    }
     /// 待播队列（当前曲目之后的队列项），由 queueStore 提供，随队列/当前曲目变化更新。
     /// R05：返回带独立 UUID 身份的 QueueEntry，重复歌曲可安全渲染与移除。
     private var queueStoreUpcomingEntries: [QueueEntry] {
@@ -284,24 +300,42 @@ struct MacExpandedPlayerView: View {
     private func progressView(width: CGFloat) -> some View {
         VStack(spacing: 4) {
             MacPlaybackSlider(
-                value: playbackStore.position,
+                // 拖动中显示 scrubValue（不跳回实际 position），时间文字同步显示拖动位置。
+                value: displayedProgress,
                 minValue: 0,
                 maxValue: duration,
                 isEnabled: model.hasCurrentTrack,
-                onCommit: { model.seek(toProgress: min(1, max(0, $0 / duration))) }
+                onScrubStart: {
+                    scrubDuration = duration
+                    isScrubbing = true
+                },
+                onScrubChange: { scrubValue = $0 },
+                onCommit: { value in
+                    isScrubbing = false
+                    model.seek(toProgress: min(1, max(0, value / duration)))
+                }
             )
+            // 切歌重建 NSSlider 与 Coordinator：不继承上一首歌的滑块内部状态，
+            // onCommit 闭包也随重建捕获新 duration（回归修复）。
+            .id(trackGlobalID)
             .controlSize(.small)
             .tint(palette.accent)
             .accessibilityLabel("播放进度")
             HStack {
-                Text(MacFormat.time(playbackStore.position))
+                Text(MacFormat.time(displayedProgress))
                 Spacer()
-                Text("-" + MacFormat.time(max(0, duration - playbackStore.position)))
+                Text("-" + MacFormat.time(displayedRemaining))
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(palette.secondary)
         }
         .frame(width: width)
+        // 切歌瞬间若正在拖动：强制结束 scrub（.id 重建只重置控件，@State 需显式清）。
+        .onChange(of: trackGlobalID) {
+            isScrubbing = false
+            scrubValue = 0
+            scrubDuration = duration
+        }
     }
 
     private func transport(width: CGFloat) -> some View {
