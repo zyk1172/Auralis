@@ -82,7 +82,17 @@ public final class AuralisAppModel: ObservableObject {
             // 内容级防重（避免相同赋值反复重建 entry）：不再按歌曲去重。
             guard queueStore.tracks != newValue else { return }
             // 每首歌曲包成独立 QueueEntry（新 UUID），允许重复歌曲进入队列。
-            queueStore.replace(entries: newValue.map { QueueEntry(track: $0) }, currentTrackID: queueIdentity(currentTrack))
+            // R05：若当前曲目在新队列中，保留其 entry UUID——否则 setter 重建
+            // entry 会让 currentEntryID 失效、回退到 firstIndex 匹配，导致
+            // [A, B, A] 播放第二个 A 时下标漂移到第一个 A。
+            let currentEntryID = queueStore.currentEntryID
+            var rebuilt = newValue.map { QueueEntry(track: $0) }
+            if let currentEntryID,
+               let currentEntry = queueStore.entries.first(where: { $0.id == currentEntryID }),
+               let newIndex = rebuilt.firstIndex(where: { queueIdentity($0.track) == queueIdentity(currentEntry.track) }) {
+                rebuilt[newIndex] = QueueEntry(id: currentEntryID, track: newValue[newIndex])
+            }
+            queueStore.replace(entries: rebuilt, currentTrackID: queueIdentity(currentTrack))
             // 队列变更：开启新一轮随机（避免旧轮次的“已播放”标记污染新队列）。
             shufflePlayedIDs.removeAll()
             // 队列是播放会话的一部分：变更即持久化（按服务器隔离），
@@ -1182,13 +1192,15 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 构建 Live Activity 展示内容（不含凭据/地址/路径）。
+    /// R01：serverID 必须是「当前播放歌曲」的服务器，而不是当前浏览服务器——
+    /// 播放 A 的歌、浏览 B 时，锁屏控件点封面要能回到 A。
     private func liveActivityContent() -> PlaybackActivityAttributes.ContentState {
         PlaybackActivityAttributes.ContentState(
             title: currentTrack.id.rawValue == "placeholder" ? "" : currentTrack.title,
             artist: currentTrack.artistName,
             album: currentTrack.albumTitle,
             artworkKey: currentTrack.artworkKey,
-            serverID: catalog.activeServerID?.rawValue,
+            serverID: currentTrack.serverID.rawValue,
             trackID: currentTrack.id.rawValue,
             duration: effectivePlaybackDuration,
             position: playbackPosition,
@@ -1209,14 +1221,14 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 更新 Handoff 活动：把当前播放接力到其他设备（不自动出声，由接收端用户点击播放）。
+    /// R01：serverID 记录「当前播放歌曲」的服务器，接收端据此在对应服务器曲库中恢复。
     private func updateHandoffActivity() {
-        guard let serverID = catalog.activeServerID,
-              currentTrack.id.rawValue != "placeholder",
+        guard currentTrack.id.rawValue != "placeholder",
               let activity = handoffActivity
         else { return }
         activity.title = "\(currentTrack.title) · \(currentTrack.artistName)"
         activity.userInfo = [
-            "serverID": serverID.rawValue,
+            "serverID": currentTrack.serverID.rawValue,
             "currentTrackID": currentTrack.id.rawValue,
             "queueTrackIDs": queue.map(\.id.rawValue),
             "position": playbackPosition,
@@ -1233,10 +1245,11 @@ public final class AuralisAppModel: ObservableObject {
         else { return }
         let trackByID = Dictionary(uniqueKeysWithValues: catalog.tracks.map { ($0.id.rawValue, $0) })
         var restoredQueue: [Track] = []
-        var seen = Set<GlobalID>()
+        // R05：Handoff 队列不去重——源设备 [A, B, A] 跨设备后必须仍是 [A, B, A]，
+        // 重复歌曲是队列的合法状态（每次都是独立队列项）。
         if let ids = info["queueTrackIDs"] as? [String] {
             for id in ids {
-                if let track = trackByID[id], seen.insert(queueIdentity(track)).inserted {
+                if let track = trackByID[id] {
                     restoredQueue.append(track)
                 }
             }
@@ -1284,17 +1297,16 @@ public final class AuralisAppModel: ObservableObject {
         }
 
         lyricsInFlight.insert(globalID)
-        let task = Task<LyricsLoadOutcome, Never> { [weak self, connector, lyricsCache] in
-            guard let self else { return .failed }
+        let task = Task<LyricsLoadOutcome, Never> { [connector, lyricsCache] in
             if let cached = await lyricsCache.document(forServer: track.serverID, trackID: track.id) {
                 return .loaded(cached)
             }
             if await lyricsCache.isKnownMissing(serverID: track.serverID, trackID: track.id) {
                 return .notFound
             }
-            // 切服保护（P1-6）：歌词由对应服务器的客户端获取；等待期间服务器切换时，
-            // 旧任务不得把新服务器的歌词写入旧服务器的磁盘缓存键。
-            guard self.catalog.activeServerID == track.serverID else { return .failed }
+            // R01：歌词按 track.serverID 路由（fetchLyrics 内部用 clients[track.serverID]），
+            // 与当前浏览服务器无关——播放 A 的歌、切到 B 浏览时，A 的歌词照常加载。
+            // 磁盘缓存键也按 track.serverID 隔离，旧任务不会污染新服务器的键。
             // R04：用 throwing fetchLyrics 区分「失败」与「服务器无歌词」。
             let document: LyricsDocument?
             do {
@@ -1305,7 +1317,6 @@ public final class AuralisAppModel: ObservableObject {
                 AuralisLog.network.error("歌词拉取失败（不写负缓存）: \(error.localizedDescription)")
                 return .failed
             }
-            guard self.catalog.activeServerID == track.serverID else { return .failed }
             if let document {
                 await lyricsCache.store(document, forServer: track.serverID, trackID: track.id)
                 return .loaded(document)
@@ -1965,9 +1976,10 @@ public final class AuralisAppModel: ObservableObject {
         else { return false }
         let trackByID = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id.rawValue, $0) })
         var restoredQueue: [Track] = []
-        var seen = Set<GlobalID>()
+        // R05：会话恢复不去重——保存时队列可能含重复歌曲（每次独立队列项），
+        // 恢复后必须保持原样 [A, B, A]，不能折叠成 [A, B]。
         for id in snapshot.queueTrackIDs {
-            guard let track = trackByID[id], seen.insert(queueIdentity(track)).inserted else { continue }
+            guard let track = trackByID[id] else { continue }
             restoredQueue.append(track)
         }
         guard !restoredQueue.isEmpty else { return false }
@@ -2786,22 +2798,30 @@ public final class AuralisAppModel: ObservableObject {
             playRandomFromQueue()
             return
         }
-        // R05：用队列项下标（currentQueueIndex）定位当前曲目，重复歌曲不串位。
-        guard let index = currentQueueIndex, queue.indices.contains(index) else { return }
-        if queue.indices.contains(index + 1) {
-            selectAndPlay(queue[index + 1])
-        } else if repeatMode == .all, queue.count > 1, let first = queue.first {
-            // 列表循环：到队尾绕回第一首
-            selectAndPlay(first)
+        // R05：队列推进用 queueStore.advanceForward()——currentIndex 是权威状态，
+        // 绝不从歌曲 TrackID 反推：重复歌曲不会回退到第一个匹配，
+        // 例如 [A, B, A, C] 播放第二个 A 时，next() 正确走到 C。
+        if let next = queueStore.advanceForward() {
+            selectAndPlay(next)
+        } else if repeatMode == .all, queue.count > 1, let firstEntry = queueStore.entries.first {
+            // 列表循环：到队尾绕回第一首（用队首 entry 定位，保持 index 语义）。
+            _ = queueStore.play(entryID: firstEntry.id)
+            selectAndPlay(firstEntry.track)
         }
     }
 
     /// 只随机尚未播放的剩余队列（当前曲目之后），保持已播放部分顺序不变。
+    /// R05：在 entry 层面 shuffle（保留 UUID）——当前项身份不因重建而丢失，
+    /// 重复歌曲播放第二个 A 时 currentIndex 不会漂移到第一个 A。
     public func shuffleRemainingInQueue() {
         guard let index = currentQueueIndex, queue.indices.contains(index) else { return }
-        let tail = Array(queue.dropFirst(index + 1))
-        guard tail.count > 1 else { return }
-        queue = Array(queue.prefix(index + 1)) + tail.shuffled()
+        let tailCount = queue.count - (index + 1)
+        guard tailCount > 1 else { return }
+        let entries = queueStore.entries
+        let head = Array(entries.prefix(index + 1))
+        let tail = Array(entries.suffix(tailCount)).shuffled()
+        queueStore.replace(entries: head + tail, currentTrackID: queueIdentity(currentTrack))
+        schedulePlaybackSessionPersistence()
     }
 
     /// 把当前播放队列保存为服务器歌单；失败返回 false。
@@ -2954,15 +2974,17 @@ public final class AuralisAppModel: ObservableObject {
             seekToAbsolute(0)
             return
         }
-        guard let index = currentQueueIndex else {
+        guard currentQueueIndex != nil else {
             seekToAbsolute(0)
             return
         }
-        if queue.indices.contains(index - 1) {
-            selectAndPlay(queue[index - 1])
-        } else if repeatMode == .all, let last = queue.last {
+        // R05：队列回退用 queueStore.advanceBackward()，重复歌曲不串位。
+        if let previous = queueStore.advanceBackward() {
+            selectAndPlay(previous)
+        } else if repeatMode == .all, let lastEntry = queueStore.entries.last {
             // 列表循环：队首回绕到队尾最后一首，而不是停在原曲（P2-10）。
-            selectAndPlay(last)
+            _ = queueStore.play(entryID: lastEntry.id)
+            selectAndPlay(lastEntry.track)
         } else {
             // 没有上一首：回到本曲开头，真实 seek 引擎（P2-10）。
             seekToAbsolute(0)
@@ -3065,6 +3087,13 @@ public final class AuralisAppModel: ObservableObject {
                 mediaIntegration.stop()
             }
         }
+    }
+
+    /// 播放队列中的指定项（用户点击队列 UI）。R05：以队列项 UUID 定位——
+    /// 重复歌曲点击第二个 A 就播第二个 A，不会误播第一个匹配项。
+    public func playQueueEntry(id: UUID) {
+        guard let track = queueStore.play(entryID: id) else { return }
+        selectAndPlay(track)
     }
 
     // MARK: - Progress timer

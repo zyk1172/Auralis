@@ -109,6 +109,7 @@ struct MacFloatingPlayerBar: View {
                     artworkKey: model.currentTrack.artworkKey,
                     colors: theme.colorTokens,
                     size: MacUIVisualTokens.FloatingPlayer.assistantOrbSize,
+                    serverID: model.currentTrack.serverID,
                     cornerRadius: MacUIVisualTokens.FloatingPlayer.assistantOrbSize / 2
                 )
                 .clipShape(Circle())
@@ -202,6 +203,7 @@ struct MacFloatingPlayerBar: View {
                     artworkKey: model.currentTrack.artworkKey,
                     colors: theme.colorTokens,
                     size: MacUIVisualTokens.FloatingPlayer.artworkSize,
+                    serverID: model.currentTrack.serverID,
                     cornerRadius: MacUIVisualTokens.FloatingPlayer.artworkCornerRadius
                 )
                 .accessibilityHidden(true)

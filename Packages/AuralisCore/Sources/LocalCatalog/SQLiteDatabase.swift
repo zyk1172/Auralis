@@ -42,11 +42,12 @@ final class SQLiteDatabase: @unchecked Sendable {
         try StartupPerformanceTrace.measure(.sqliteOpen) {
             let result = sqlite3_open(url.path, &openedHandle)
             // R11：sqlite3_open 失败时也可能返回一个需要 close 的 handle。
+            // 必须先取 sqlite3_errmsg 再 close——close 后 handle 失效，errmsg 不可用。
             guard result == SQLITE_OK, openedHandle != nil else {
+                let message = openedHandle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
                 if let openedHandle {
                     sqlite3_close_v2(openedHandle)
                 }
-                let message = openedHandle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
                 throw LocalCatalogError.openFailed("\(url.path) · \(message)")
             }
         }
@@ -134,7 +135,9 @@ final class SQLiteDatabase: @unchecked Sendable {
             let result = sqlite3_step(statement)
             if result == SQLITE_DONE { break }
             guard result == SQLITE_ROW else {
-                throw LocalCatalogError.executeFailed("query failed (\(result)): \(sql.prefix(120))")
+                // R11：附带 sqlite3_errmsg，便于定位查询执行失败原因（如 SQLITE_BUSY）。
+                let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+                throw LocalCatalogError.executeFailed("query failed (\(result)): \(message) · SQL: \(sql.prefix(120))")
             }
             var row: [String: SQLiteValue] = [:]
             let columnCount = sqlite3_column_count(statement)

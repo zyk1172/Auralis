@@ -125,6 +125,7 @@ public struct MacMiniPlayerView: View {
             artworkKey: model.currentTrack.artworkKey,
             colors: theme.colorTokens,
             size: size,
+            serverID: model.currentTrack.serverID,
             cornerRadius: MacUIVisualTokens.MiniPlayer.artworkCornerRadius
         )
         .accessibilityLabel("封面")
@@ -298,7 +299,7 @@ public struct MacMiniPlayerView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 6) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { relativeIndex, entry in
-                        miniQueueRow(entry.track, relativeIndex: relativeIndex)
+                        miniQueueRow(entry.track, relativeIndex: relativeIndex, entryID: entry.id)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -308,10 +309,11 @@ public struct MacMiniPlayerView: View {
         }
     }
 
-    private func miniQueueRow(_ queueTrack: Track, relativeIndex: Int) -> some View {
+    private func miniQueueRow(_ queueTrack: Track, relativeIndex: Int, entryID: UUID) -> some View {
         let isCurrent = queueTrack.macGlobalID == model.currentTrack.macGlobalID
         return Button {
-            model.selectAndPlay(queueTrack)
+            // R05：按队列项 UUID 播放——重复歌曲点第二个 A 就播第二个 A。
+            model.playQueueEntry(id: entryID)
         } label: {
             HStack(spacing: 8) {
                 if isCurrent {

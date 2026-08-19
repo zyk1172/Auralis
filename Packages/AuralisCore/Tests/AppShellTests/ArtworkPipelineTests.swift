@@ -164,3 +164,73 @@ func artworkStoreSeparatesServers() async throws {
     #expect(second == "server-b|shared-cover@128")
     #expect(first != second)
 }
+
+// MARK: - R01 跨服务器封面路由
+
+private actor ArtworkRoutingConnector: ServerConnecting {
+    private let data: Data
+    private var requestedServerIDs: [String] = []
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
+        throw ServerConnectionError.serverUnavailable
+    }
+
+    func restoreLastConnection() async throws -> ServerConnectionResult? { nil }
+
+    func artworkData(serverID: ServerID, key: String, targetPixelSize: Int) async -> Data? {
+        requestedServerIDs.append(serverID.rawValue)
+        try? await Task.sleep(for: .milliseconds(10))
+        return data
+    }
+
+    func serverIDs() -> [String] { requestedServerIDs }
+}
+
+@Test("R01：显式 serverID 覆盖全局浏览服务器——播 A 浏览 B 时封面仍从 A 回源")
+@MainActor
+func artworkStoreRoutesExplicitServerID() async throws {
+    let connector = ArtworkRoutingConnector(data: try artworkTestData())
+    let store = ArtworkStore(
+        connector: connector,
+        diskCache: temporaryArtworkCache(),
+        initialServerID: "server-b"
+    )
+    // 播放器封面显式传 server-a；当前浏览服务器是 server-b（initialServerID）。
+    let image = await store.load(
+        remoteKey: "cover",
+        targetPixelSize: 128,
+        serverID: ServerID(rawValue: "server-a")
+    )
+    #expect(image != nil)
+    let routed = await connector.serverIDs()
+    #expect(routed == ["server-a"], "网络回源必须走歌曲真实服务器，而不是浏览服务器")
+}
+
+@Test("R01：显式 serverID 的缓存键按请求服务器隔离，不落在浏览服务器命名空间")
+@MainActor
+func artworkStoreSeparatesExplicitServerIDCacheKeys() {
+    let store = ArtworkStore(
+        connector: ArtworkCountingConnector(data: try! artworkTestData()),
+        diskCache: temporaryArtworkCache(),
+        initialServerID: "server-b"
+    )
+    let keyA = store.requestIdentifier(
+        remoteKey: "cover",
+        targetPixelSize: 128,
+        serverID: ServerID(rawValue: "server-a")
+    )
+    let keyB = store.requestIdentifier(
+        remoteKey: "cover",
+        targetPixelSize: 128,
+        serverID: ServerID(rawValue: "server-b")
+    )
+    let keyBrowse = store.requestIdentifier(remoteKey: "cover", targetPixelSize: 128)
+    #expect(keyA == "server-a|cover@128")
+    #expect(keyB == "server-b|cover@128")
+    #expect(keyBrowse == keyB, "浏览型封面兜底 = 当前浏览服务器")
+    #expect(keyA != keyB, "播放 A 的封面缓存不得落在 B 的命名空间")
+}

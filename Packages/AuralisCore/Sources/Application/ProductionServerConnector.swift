@@ -81,8 +81,10 @@ public actor ProductionServerConnector: ServerConnecting {
             let serverID = Self.stableServerID(baseURL: normalizedURL, username: username)
             let credentialID = CredentialID(rawValue: "opensubsonic.\(serverID.rawValue)")
             let previousCredential = try await existingCredential(id: credentialID)
-            // R12：记录本次连接前该服务器是否已有持久化账户，用于失败补偿决策。
-            let accountExistedBefore = (try? await persistence.account(id: serverID)) != nil
+            // R12：记录本次连接前该服务器是否已有持久化账户，用于失败补偿决策——
+            // 覆盖已有账户时失败，需要把 Persistence/SQLite 里的旧账户也恢复回去，
+            // 不能只回滚 Keychain 密码（否则出现「新 username/URL + 旧密码」）。
+            let previousAccount = try? await persistence.account(id: serverID)
 
             await progress(.storingCredential)
             try await credentialVault.store(input.password, for: credentialID)
@@ -173,10 +175,15 @@ public actor ProductionServerConnector: ServerConnecting {
                 )
             } catch {
                 await restoreCredential(previousCredential, id: credentialID)
-                // R12 补偿：若此前没有持久化账户，本次连接又未成功保存账号，
-                // 已同步进 SQLite 的目录可能成为无 account 的 orphan 数据——
-                // 清理该服务器本地数据，避免「凭据已回滚但目录残留」。
-                if !accountExistedBefore {
+                if let previousAccount {
+                    // R12 补偿：本次连接覆盖了已有账户；失败后恢复 Persistence 与
+                    // SQLite 中的旧账户记录，避免「凭据已回滚、账户却已是新配置」。
+                    try? await catalogStore.upsertServer(previousAccount)
+                    try? await persistence.saveAccount(previousAccount)
+                } else {
+                    // R12 补偿：若此前没有持久化账户，本次连接又未成功保存账号，
+                    // 已同步进 SQLite 的目录可能成为无 account 的 orphan 数据——
+                    // 清理该服务器本地数据，避免「凭据已回滚但目录残留」。
                     try? await catalogStore.purgeServer(serverID)
                 }
                 // 保留原始错误描述，让用户看到具体原因而非笼统的"无法识别"
@@ -393,11 +400,12 @@ public actor ProductionServerConnector: ServerConnecting {
             ?? documents.first(where: { !$0.lines.isEmpty }) {
             return best
         }
-        // 回退：主端点已确认无结构化歌词；传统接口失败按「无歌词」处理（不抛错、不标记失败）。
+        // 回退：主端点已确认无结构化歌词。传统接口的网络/认证/解析失败必须上抛（R04），
+        // 让调用方区分「服务器明确无歌词」与「请求失败」，避免断网时误写负缓存。
         let title = track.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let artist = track.artistName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, !artist.isEmpty else { return nil }
-        return try? await client.traditionalLyrics(artist: artist, title: title, trackID: track.id)
+        return try await client.traditionalLyrics(artist: artist, title: title, trackID: track.id)
     }
 
     /// 上报单曲已完成播放（scrobble submission=true），让服务器更新播放次数。
@@ -619,9 +627,13 @@ public actor ProductionServerConnector: ServerConnecting {
         guard !trimmed.isEmpty else { return false }
         guard var account = try? await persistence.account(id: serverID) else { return false }
         account.displayName = trimmed
+        let credentialID = CredentialID(rawValue: account.credentialReference ?? "opensubsonic.\(serverID.rawValue)")
         do {
-            try await persistence.saveAccount(account)
-            try await catalogStore.upsertServer(account)
+            // R12：persistence 与 catalog 任一步失败都逆序恢复，不留下半写状态。
+            try await withAccountMutationRollback(serverID: serverID, credentialID: credentialID) {
+                try await persistence.saveAccount(account)
+                try await catalogStore.upsertServer(account)
+            }
             return true
         } catch {
             return false
@@ -631,9 +643,13 @@ public actor ProductionServerConnector: ServerConnecting {
     public func updateServerExternalBaseURL(serverID: ServerID, externalBaseURL: URL?) async -> Bool {
         guard var account = try? await persistence.account(id: serverID) else { return false }
         account.externalBaseURL = externalBaseURL.map(Self.normalizedBaseURL)
+        let credentialID = CredentialID(rawValue: account.credentialReference ?? "opensubsonic.\(serverID.rawValue)")
         do {
-            try await persistence.saveAccount(account)
-            try await catalogStore.upsertServer(account)
+            // R12：persistence 与 catalog 任一步失败都逆序恢复，不留下半写状态。
+            try await withAccountMutationRollback(serverID: serverID, credentialID: credentialID) {
+                try await persistence.saveAccount(account)
+                try await catalogStore.upsertServer(account)
+            }
             return true
         } catch {
             return false
@@ -658,37 +674,38 @@ public actor ProductionServerConnector: ServerConnecting {
         guard !displayName.isEmpty, !username.isEmpty else { return nil }
 
         let credentialID = CredentialID(rawValue: account.credentialReference ?? "opensubsonic.\(serverID.rawValue)")
-        // R12：记录旧密码，后续写入账户失败时补偿恢复。
-        let previousPassword = try? await credentialVault.retrieve(id: credentialID)
-        if let password = update.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
-            guard (try? await credentialVault.store(password, for: credentialID)) != nil else { return nil }
-        }
+        let newPassword = update.password?.trimmingCharacters(in: .whitespacesAndNewlines)
         account.displayName = displayName
         account.baseURL = Self.normalizedBaseURL(update.baseURL)
         account.externalBaseURL = update.externalBaseURL.map(Self.normalizedBaseURL)
         account.username = username
         account.credentialReference = credentialID.rawValue
+
         do {
-            try await persistence.saveAccount(account)
-            try await catalogStore.upsertServer(account)
-            // 更新该服务器的内存客户端（若已建立），并保持 activeServerID 不变。
-            if clients[serverID] != nil {
-                clients[serverID] = makeClient(
-                    baseURL: account.baseURL!,
-                    serverID: serverID,
-                    username: username,
-                    credentialID: credentialID,
-                    vault: credentialVault
-                )
+            // R12：整个变更（密码 → persistence → catalog）包进补偿辅助——
+            // saveAccount 成功、upsertServer 失败时，按逆序恢复 Persistence 旧账户
+            // 与 Keychain 旧密码，杜绝「新 username/URL + 旧密码」跨存储不一致。
+            return try await withAccountMutationRollback(serverID: serverID, credentialID: credentialID) {
+                if let newPassword, !newPassword.isEmpty {
+                    guard (try await credentialVault.store(newPassword, for: credentialID)) != nil else {
+                        throw AccountMutationError.credentialStoreFailed
+                    }
+                }
+                try await persistence.saveAccount(account)
+                try await catalogStore.upsertServer(account)
+                // 更新该服务器的内存客户端（若已建立），并保持 activeServerID 不变。
+                if clients[serverID] != nil {
+                    clients[serverID] = makeClient(
+                        baseURL: account.baseURL!,
+                        serverID: serverID,
+                        username: username,
+                        credentialID: credentialID,
+                        vault: credentialVault
+                    )
+                }
+                return account
             }
-            return account
         } catch {
-            // R12 补偿：密码已覆盖但账户写入失败 → 恢复旧密码，避免凭据与账户不一致。
-            if let previousPassword {
-                try? await credentialVault.store(previousPassword, for: credentialID)
-            } else {
-                try? await credentialVault.delete(id: credentialID)
-            }
             return nil
         }
     }
@@ -724,11 +741,19 @@ public actor ProductionServerConnector: ServerConnecting {
     /// 备份恢复：把服务器账号与登录凭据写回本地（不联网、不触发资料同步）。
     /// 凭据写入 Keychain，账号写入持久化快照；SQLite 目录由 AppModel 另行登记。
     public func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {
-        if let secret, !secret.isEmpty, let reference = account.credentialReference {
-            try await credentialVault.store(secret, for: CredentialID(rawValue: reference))
+        // R12：credential → persistence → catalog 三存储写入包进补偿辅助——
+        // 任一步失败都按逆序恢复，备份恢复不留下半写状态（例如凭据已写、
+        // 账户未写导致登录信息与目录登记不一致）。
+        let credentialID = CredentialID(
+            rawValue: account.credentialReference ?? "opensubsonic.\(account.id.rawValue)"
+        )
+        try await withAccountMutationRollback(serverID: account.id, credentialID: credentialID) {
+            if let secret, !secret.isEmpty, let reference = account.credentialReference {
+                try await credentialVault.store(secret, for: CredentialID(rawValue: reference))
+            }
+            try await persistence.saveAccount(account)
+            try await catalogStore.upsertServer(account)
         }
-        try await persistence.saveAccount(account)
-        try await catalogStore.upsertServer(account)
     }
 
     // MARK: - 歌单编辑
@@ -1138,6 +1163,48 @@ public actor ProductionServerConnector: ServerConnecting {
         } else {
             try? await credentialVault.delete(id: id)
         }
+    }
+
+    /// 账户变更补偿辅助（R12）。
+    ///
+    /// 调用前记录 previous account（Persistence）与 previous credential（Keychain）；
+    /// mutate 闭包内按「credential → persistence → catalog」顺序写入。任一步抛错时
+    /// 按逆序恢复（catalog → persistence → credential），保证失败后不会留下
+    /// 「Persistence 已是新 username/URL、Keychain 却恢复旧密码」的跨存储不一致。
+    ///
+    /// 不实现真正数据库两阶段提交，但补偿路径完整：恢复动作本身失败时只记录日志，
+    /// 不再向上抛（尽力恢复，避免掩盖原始错误）。
+    private func withAccountMutationRollback<T>(
+        serverID: ServerID,
+        credentialID: CredentialID,
+        _ mutate: () async throws -> T
+    ) async throws -> T {
+        let previousAccount = try? await persistence.account(id: serverID)
+        let previousPassword = try? await credentialVault.retrieve(id: credentialID)
+        do {
+            return try await mutate()
+        } catch {
+            // 逆序恢复：catalog → persistence → Keychain。
+            if let previousAccount {
+                try? await catalogStore.upsertServer(previousAccount)
+                try? await persistence.saveAccount(previousAccount)
+            } else {
+                // 此前无账户记录：本次是新增服务器，清除可能残留的 catalog server 行，
+                // 避免「凭据已回滚、SQLite 却登记了无 account 的 orphan server」。
+                try? await catalogStore.purgeServer(serverID)
+            }
+            if let previousPassword {
+                try? await credentialVault.store(previousPassword, for: credentialID)
+            } else {
+                try? await credentialVault.delete(id: credentialID)
+            }
+            throw error
+        }
+    }
+
+    /// 账户变更辅助内部错误（R12）。
+    private enum AccountMutationError: Error {
+        case credentialStoreFailed
     }
 
     private func validate(_ input: ServerConnectionInput) throws {

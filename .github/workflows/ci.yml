@@ -72,18 +72,11 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             build
-
-      # R08：iOS Simulator 上实际跑单元测试（不仅是 generic build），
-      # 捕捉只有模拟器运行时才暴露的问题。
-      - name: iOS Simulator tests (AuralisCore)
-        run: |
-          xcodebuild \
-            -project Auralis.xcodeproj \
-            -scheme Auralis \
-            -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
-            CODE_SIGNING_ALLOWED=NO \
-            test
+      # R08：不再保留「iOS Simulator tests」步骤——Auralis scheme 的 Testables 为空
+      # （AuralisCore 是 SPM 包，模块未暴露为 Xcode product，无法直接挂进 app scheme），
+      # 该步骤实际零测试。AuralisCore 全部单元测试已由上方 `swift test`（macOS）真实覆盖；
+      # iOS 侧由 generic build 保证编译正确。若未来需要模拟器测试，先给 Package.swift
+      # 补模块 products + 建 iOS unit-test target 再恢复此步骤。
 
   # AVFoundation 真实播放边界测试需要能驱动 AVPlayer 的环境，
   # 与纯单元测试分开，避免不稳定环境阻塞主 CI。

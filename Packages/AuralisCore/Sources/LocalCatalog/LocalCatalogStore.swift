@@ -361,9 +361,11 @@ public actor LocalCatalogStore: LibrarySyncStore {
 
     /// R03：实体关系迁移——tracks.album_gid / artist_gid、albums.artist_gid。
     /// 新写入路径（stageTracks/stageAlbums）从今往后使用真正的实体 ID 作为外键；
-    /// 这里只为旧库补列并做一次存量回填（旧数据没有 ID 关联，只能按
-    /// server_id + 名称 + 艺术家名 匹配，同名专辑回填可能不精确——下一次全量
-    /// 同步会用真实 ID 覆盖）。
+    /// 这里只为旧库补列并做一次存量回填。回填**优先从 payload 精确回填**：
+    /// tracks/albums 的 payload 是完整 Track/Album JSON，其中保留服务器真实
+    /// albumID/artistID——直接用它构造 GlobalID，不再按「名称 + 艺术家名」猜测，
+    /// 同艺术家同名专辑（同 AlbumID 与不同 AlbumID 混存）不会绑定到错误实体。
+    /// decode 失败或 ID 为空的旧行才回退到名称匹配。
     nonisolated private func runEntityRelationMigrations() throws {
         let key = "catalog_entity_relations"
         let targetVersion: Int64 = 1
@@ -381,7 +383,13 @@ public actor LocalCatalogStore: LibrarySyncStore {
             try addColumnIfMissing(table: "sync_staged_tracks", column: "artist_gid", definition: "TEXT")
             try addColumnIfMissing(table: "sync_staged_albums", column: "artist_gid", definition: "TEXT")
 
-            // 存量回填：按 server_id + 名称（+ 艺术家名限定）关联，尽力而为。
+            // 1) 精确回填：从 payload 解码真实实体 ID（R03）。
+            try backfillTrackAlbumGIDsFromPayload()
+            try backfillTrackArtistGIDsFromPayload()
+            try backfillAlbumArtistGIDsFromPayload()
+
+            // 2) 兜底：仍为 NULL 的行（payload 解码失败 / 旧格式无 ID）按
+            //    server_id + 名称（+ 艺术家名限定）关联，尽力而为。
             try db.run(
                 """
                 UPDATE tracks
@@ -429,6 +437,76 @@ public actor LocalCatalogStore: LibrarySyncStore {
                 ON CONFLICT(key) DO UPDATE SET version = excluded.version, applied_at = excluded.applied_at
                 """,
                 [.text(key), .integer(targetVersion), .real(Date.now.timeIntervalSince1970)]
+            )
+        }
+    }
+
+    // MARK: - R03 payload 精确回填
+
+    /// 从 tracks.payload（完整 Track JSON）中的真实 albumID 回填 album_gid。
+    /// 用局部 JSONDecoder（而非 actor 隔离的 decoder），保证 nonisolated 迁移
+    /// 事务内可调用；一次性迁移，构造开销可接受。
+    nonisolated private func backfillTrackAlbumGIDsFromPayload() throws {
+        let rows = try db.query(
+            "SELECT global_id, server_id, payload FROM tracks WHERE album_gid IS NULL"
+        )
+        let decoder = JSONDecoder()
+        for row in rows {
+            guard let gidRaw = row["global_id"]?.string,
+                  let serverRaw = row["server_id"]?.string,
+                  let payload = row["payload"]?.string,
+                  let data = payload.data(using: .utf8),
+                  let track = try? decoder.decode(Track.self, from: data),
+                  !track.albumID.rawValue.isEmpty
+            else { continue }
+            let albumGID = GlobalID(serverID: ServerID(rawValue: serverRaw), remoteID: track.albumID.rawValue)
+            try db.run(
+                "UPDATE tracks SET album_gid = ? WHERE global_id = ?",
+                [.text(albumGID.description), .text(gidRaw)]
+            )
+        }
+    }
+
+    /// 从 tracks.payload 中的真实 artistID 回填 artist_gid。
+    nonisolated private func backfillTrackArtistGIDsFromPayload() throws {
+        let rows = try db.query(
+            "SELECT global_id, server_id, payload FROM tracks WHERE artist_gid IS NULL"
+        )
+        let decoder = JSONDecoder()
+        for row in rows {
+            guard let gidRaw = row["global_id"]?.string,
+                  let serverRaw = row["server_id"]?.string,
+                  let payload = row["payload"]?.string,
+                  let data = payload.data(using: .utf8),
+                  let track = try? decoder.decode(Track.self, from: data),
+                  !track.artistID.rawValue.isEmpty
+            else { continue }
+            let artistGID = GlobalID(serverID: ServerID(rawValue: serverRaw), remoteID: track.artistID.rawValue)
+            try db.run(
+                "UPDATE tracks SET artist_gid = ? WHERE global_id = ?",
+                [.text(artistGID.description), .text(gidRaw)]
+            )
+        }
+    }
+
+    /// 从 albums.payload（完整 Album JSON）中的真实 artistID 回填 albums.artist_gid。
+    nonisolated private func backfillAlbumArtistGIDsFromPayload() throws {
+        let rows = try db.query(
+            "SELECT global_id, server_id, payload FROM albums WHERE artist_gid IS NULL"
+        )
+        let decoder = JSONDecoder()
+        for row in rows {
+            guard let gidRaw = row["global_id"]?.string,
+                  let serverRaw = row["server_id"]?.string,
+                  let payload = row["payload"]?.string,
+                  let data = payload.data(using: .utf8),
+                  let album = try? decoder.decode(Album.self, from: data),
+                  !album.artistID.rawValue.isEmpty
+            else { continue }
+            let artistGID = GlobalID(serverID: ServerID(rawValue: serverRaw), remoteID: album.artistID.rawValue)
+            try db.run(
+                "UPDATE albums SET artist_gid = ? WHERE global_id = ?",
+                [.text(artistGID.description), .text(gidRaw)]
             )
         }
     }

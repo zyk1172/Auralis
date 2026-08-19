@@ -35,7 +35,10 @@ final class ArtworkStore {
 
     /// 仅服务器真正切换时变化；ArtworkView 将其纳入 task id，使可见单元自动重新取图。
     private(set) var namespace: String
-    /// 当前服务器 ID（封面网络回源按 serverID 路由，R01）。nil = 本地/未连接。
+    /// 当前浏览服务器 ID（封面网络回源兜底，R01）。nil = 本地/未连接。
+    /// 注意：这只是「未显式指定 serverID 的请求」的兜底——播放器封面等跨服务器场景
+    /// 必须显式传 track.serverID，绝不能依赖这个全局值（播放 A、浏览 B 时
+    /// 仍要把 A 的 artworkKey 发往 A）。
     @ObservationIgnored private var currentServerID: ServerID?
 
     @ObservationIgnored private let thumbnails = NSCache<NSString, PlatformImage>()
@@ -55,6 +58,9 @@ final class ArtworkStore {
         decoder: ArtworkImageDecoder = ArtworkImageDecoder()
     ) {
         self.namespace = Self.normalizedNamespace(initialServerID)
+        // R01：currentServerID 与 namespace 同步初始化——无显式 serverID 的兜底请求
+        // 从创建起就按正确服务器路由，不必等第一次 setServerID。
+        self.currentServerID = initialServerID.map(ServerID.init(rawValue:))
         self.configuration = configuration
         self.pipeline = ArtworkPipeline(
             connector: connector,
@@ -76,15 +82,15 @@ final class ArtworkStore {
 
     func cacheKey(_ remoteKey: String, targetPixelSize: Int) -> String {
         Self.cacheKey(
-            namespace: namespace,
+            namespace: Self.normalizedNamespace(currentServerID?.rawValue),
             remoteKey: remoteKey,
             targetPixelSize: targetPixelSize
         )
     }
 
-    func requestIdentifier(remoteKey: String?, targetPixelSize: Int) -> String? {
+    func requestIdentifier(remoteKey: String?, targetPixelSize: Int, serverID: ServerID? = nil) -> String? {
         guard let remoteKey, !remoteKey.isEmpty else { return nil }
-        return cacheKey(remoteKey, targetPixelSize: targetPixelSize)
+        return cacheKey(remoteKey, targetPixelSize: targetPixelSize, serverID: serverID)
     }
 
     func image(forKey key: String) -> PlatformImage? {
@@ -92,9 +98,9 @@ final class ArtworkStore {
         return thumbnails.object(forKey: objectKey) ?? fullSizeImages.object(forKey: objectKey)
     }
 
-    func image(remoteKey: String?, targetPixelSize: Int) -> PlatformImage? {
+    func image(remoteKey: String?, targetPixelSize: Int, serverID: ServerID? = nil) -> PlatformImage? {
         guard let remoteKey, !remoteKey.isEmpty else { return nil }
-        return image(forKey: cacheKey(remoteKey, targetPixelSize: targetPixelSize))
+        return image(forKey: cacheKey(remoteKey, targetPixelSize: targetPixelSize, serverID: serverID))
     }
 
     func isUnavailable(_ key: String) -> Bool {
@@ -102,13 +108,16 @@ final class ArtworkStore {
     }
 
     /// 返回内存命中，或异步经过磁盘/网络与 ImageIO 下采样后的最终图片。
-    func load(remoteKey: String?, targetPixelSize: Int) async -> PlatformImage? {
+    /// - Parameter serverID: 封面所属服务器的显式 ID（R01）。播放器封面必须传
+    ///   `currentTrack.serverID`——正在播放 A、浏览 B 时，A 的封面仍要从 A 回源，
+    ///   且缓存键落在 A 的命名空间，不污染 B。nil 时回退当前浏览服务器。
+    func load(remoteKey: String?, targetPixelSize: Int, serverID: ServerID? = nil) async -> PlatformImage? {
         guard let remoteKey, !remoteKey.isEmpty else { return nil }
         let target = min(max(1, targetPixelSize), 4_096)
-        let requestNamespace = namespace
+        let requestServerID = effectiveServerID(serverID)
         let requestGeneration = generation
         let key = Self.cacheKey(
-            namespace: requestNamespace,
+            namespace: requestServerID.rawValue,
             remoteKey: remoteKey,
             targetPixelSize: target
         )
@@ -116,24 +125,28 @@ final class ArtworkStore {
         guard !isUnavailable(key) else { return nil }
 
         let fallbackKey = Self.cacheKey(
-            namespace: requestNamespace,
+            namespace: requestServerID.rawValue,
             remoteKey: remoteKey,
             targetPixelSize: Self.fallbackPixelSize
         )
         guard let payload = await pipeline.load(
-            serverID: currentServerID ?? ServerID(rawValue: "local"),
+            serverID: requestServerID,
             remoteKey: remoteKey,
             cacheKey: key,
             fallbackCacheKey: fallbackKey,
             targetPixelSize: target
         ) else {
-            guard requestNamespace == namespace, requestGeneration == generation else { return nil }
+            guard requestServerID == effectiveServerID(serverID),
+                  requestGeneration == generation
+            else { return nil }
             markUnavailable(key)
             return nil
         }
 
-        // 切库期间完成的旧请求不得污染新服务器内存缓存。
-        guard requestNamespace == namespace,
+        // 请求期间来源服务器或缓存代际变化时，旧请求不得污染新服务器内存缓存。
+        // 显式 serverID（播放器封面）不受浏览服务器切换影响；兜底请求（浏览型）
+        // 在切服后丢弃，与旧行为一致。
+        guard requestServerID == effectiveServerID(serverID),
               requestGeneration == generation,
               !Task.isCancelled
         else { return nil }
@@ -183,6 +196,21 @@ final class ArtworkStore {
     }
 
     // MARK: - Private
+
+    /// 封面请求的来源服务器：显式传入优先（R01——播放器封面必须按歌曲真实服务器
+    /// 路由，与当前浏览服务器无关）；否则回退当前浏览服务器；都没有视为本地。
+    private func effectiveServerID(_ explicit: ServerID?) -> ServerID {
+        explicit ?? currentServerID ?? ServerID(rawValue: "local")
+    }
+
+    /// 按请求来源服务器计算缓存键；磁盘缓存按服务器隔离，跨服务器同名 key 不串扰。
+    private func cacheKey(_ remoteKey: String, targetPixelSize: Int, serverID: ServerID?) -> String {
+        Self.cacheKey(
+            namespace: effectiveServerID(serverID).rawValue,
+            remoteKey: remoteKey,
+            targetPixelSize: targetPixelSize
+        )
+    }
 
     private func setImage(
         _ image: PlatformImage,

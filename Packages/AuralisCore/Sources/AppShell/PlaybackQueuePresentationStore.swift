@@ -17,6 +17,11 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
     @Published public var entries: [QueueEntry] = []
     /// 当前曲目在队列中的下标（O(1) 维护，由 AppModel 在队列/当前曲目变化时更新）。
     @Published public var currentIndex: Int?
+    /// 当前队列项身份（R05）：currentIndex 的权威来源。队列推进（next / previous /
+    /// 自动 advance）与显式播放队列项都直接设置它，**绝不从歌曲 TrackID 反推**——
+    /// 否则 [A, B, A] 中播放第二个 A 时，currentIndex 会回退到第一个 A，
+    /// 导致下一首/Upcoming/删除后续/shuffle 全部围绕错误下标计算。
+    @Published public private(set) var currentEntryID: UUID?
 
     /// 队列修订号（O(1)），供需要 diff / 持久化判断的场景使用。
     public private(set) var revision: UInt64 = 0
@@ -92,18 +97,59 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
         updateCurrentIndex(currentTrackID: currentTrackID)
     }
 
-    /// 当前曲目变化时更新下标（按 GlobalID 匹配歌曲；重复歌曲取第一个匹配）。
+    // MARK: - 当前项定位（R05：index-based）
+
+    /// 播放队列中的指定项（用户点击队列、列表循环绕回等）。
+    /// 以队列项 UUID 定位；找不到返回 nil（调用方自行处理）。
+    @discardableResult
+    public func play(entryID: UUID) -> Track? {
+        guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return nil }
+        setCurrent(entryID: entryID, index: index)
+        return entries[index].track
+    }
+
+    /// 队列推进到下一首（next / 自动 advance）。返回新队列项曲目；
+    /// 物理越界返回 nil（循环绕回由调用方处理）。
+    public func advanceForward() -> Track? {
+        guard let currentIndex, entries.indices.contains(currentIndex + 1) else { return nil }
+        let index = currentIndex + 1
+        setCurrent(entryID: entries[index].id, index: index)
+        return entries[index].track
+    }
+
+    /// 队列回退到上一首（previous）。物理越界返回 nil。
+    public func advanceBackward() -> Track? {
+        guard let currentIndex, entries.indices.contains(currentIndex - 1) else { return nil }
+        let index = currentIndex - 1
+        setCurrent(entryID: entries[index].id, index: index)
+        return entries[index].track
+    }
+
+    /// 当前曲目变化时维护下标（R05）：
+    /// - `currentEntryID` 仍指向 entries 中同一首歌（next/advance 已显式推进）→ 保持不变；
+    /// - `currentEntryID` 失效或指向不同歌曲（外部直接换歌 / 队列被整体替换）→
+    ///   回退按 GlobalID 匹配第一个（显式点歌的合理语义）；
+    /// - 匹配不到 → 置空。
     public func updateCurrentIndex(currentTrackID: GlobalID?) {
-        let newIndex: Int?
-        if let currentTrackID, let idx = entries.firstIndex(where: {
-            GlobalID(serverID: $0.track.serverID, remoteID: $0.track.id.rawValue) == currentTrackID
-        }) {
-            newIndex = idx
+        if let currentEntryID,
+           let idx = entries.firstIndex(where: { $0.id == currentEntryID }),
+           let currentTrackID,
+           GlobalID(serverID: entries[idx].track.serverID, remoteID: entries[idx].track.id.rawValue) == currentTrackID {
+            setCurrent(entryID: currentEntryID, index: idx)
+            return
+        }
+        if let currentTrackID,
+           let idx = entries.firstIndex(where: {
+               GlobalID(serverID: $0.track.serverID, remoteID: $0.track.id.rawValue) == currentTrackID
+           }) {
+            setCurrent(entryID: entries[idx].id, index: idx)
         } else {
-            newIndex = nil
+            setCurrent(entryID: nil, index: nil)
         }
-        if currentIndex != newIndex {
-            currentIndex = newIndex
-        }
+    }
+
+    private func setCurrent(entryID: UUID?, index: Int?) {
+        if currentEntryID != entryID { currentEntryID = entryID }
+        if currentIndex != index { currentIndex = index }
     }
 }

@@ -193,6 +193,7 @@ struct MacExpandedPlayerView: View {
                 artworkKey: track.artworkKey,
                 colors: theme.colorTokens,
                 size: artworkSize,
+                serverID: track.serverID,
                 cornerRadius: MacUIVisualTokens.ExpandedPlayer.artworkCornerRadius
             )
             // frame 始终是播放态的最大尺寸：暂停只改变视觉层，标题/进度/控制
@@ -491,9 +492,9 @@ struct MacExpandedPlayerView: View {
                     VStack(alignment: .leading, spacing: MacUIVisualTokens.ExpandedPlayer.queueRowSpacing) {
                         ForEach(queueStoreUpcomingEntries) { entry in
                             let queueTrack = entry.track
-                            queueRow(queueTrack, isCurrent: false)
+                            queueRow(queueTrack, isCurrent: false, entryID: entry.id)
                                 .contextMenu {
-                                    Button("立即播放") { model.selectAndPlay(queueTrack) }
+                                    Button("立即播放") { model.playQueueEntry(id: entry.id) }
                                     Button("从队列移除") { model.removeQueueEntry(id: entry.id) }
                                 }
                         }
@@ -504,7 +505,7 @@ struct MacExpandedPlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func queueRow(_ queueTrack: Track, isCurrent: Bool) -> some View {
+    private func queueRow(_ queueTrack: Track, isCurrent: Bool, entryID: UUID) -> some View {
         HStack(spacing: 10) {
             ArtworkView(title: queueTrack.albumTitle, artworkKey: queueTrack.artworkKey, colors: theme.colorTokens, size: 42, cornerRadius: 4)
                 .accessibilityHidden(true)
@@ -522,7 +523,8 @@ struct MacExpandedPlayerView: View {
         }
         .padding(.vertical, 4)
         .onTapGesture(count: 2) {
-            model.selectAndPlay(queueTrack)
+            // R05：按队列项 UUID 播放——重复歌曲点第二个 A 就播第二个 A。
+            model.playQueueEntry(id: entryID)
         }
     }
 

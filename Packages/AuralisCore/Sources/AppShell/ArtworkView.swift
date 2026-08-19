@@ -1,4 +1,5 @@
 import DesignSystem
+import Domain
 import SwiftUI
 import ThemeEngine
 #if os(macOS)
@@ -50,6 +51,9 @@ struct ArtworkView: View {
     let artworkKey: String?
     let colors: ThemeColors
     let size: CGFloat
+    /// 封面所属服务器（R01）：播放器封面显式传 `currentTrack.serverID`，保证
+    /// 播放 A、浏览 B 时 A 的封面仍从 A 回源。nil = 当前浏览服务器（浏览型封面）。
+    var serverID: ServerID?
     var cornerRadius: CGFloat = AuralisRadius.artwork
     var placeholderStyle: ArtworkPlaceholderStyle = .platformDefault
 
@@ -73,7 +77,7 @@ struct ArtworkView: View {
     }
 
     private var requestIdentifier: String? {
-        artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
+        artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize, serverID: serverID)
     }
 
     var body: some View {
@@ -100,11 +104,12 @@ struct ArtworkView: View {
                 #endif
                 return
             }
-            image = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
+            image = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize, serverID: serverID)
             if image == nil {
                 image = await artworkStore.load(
                     remoteKey: artworkKey,
-                    targetPixelSize: pixelSize
+                    targetPixelSize: pixelSize,
+                    serverID: serverID
                 )
             }
         }

@@ -1,4 +1,5 @@
 import DesignSystem
+import Domain
 import SwiftUI
 import ThemeEngine
 
@@ -123,6 +124,9 @@ struct NowPlayingArtworkGlowView: View {
     let artworkKey: String?
     let colors: ThemeColors
     let size: CGFloat
+    /// 封面所属服务器（R01）：播放器封面显式传 `currentTrack.serverID`，跨服务器
+    /// 播放时仍从歌曲真实服务器回源。nil = 当前浏览服务器。
+    var serverID: ServerID?
     /// 页面允许的最大 Glow 画布。默认无限制（1.5× 封面），紧凑布局由调用方传入
     /// 实际可用高度，避免光效把页面边缘裁成方框，同时不改变封面布局足迹。
     var maxCanvasSize: CGFloat = .greatestFiniteMagnitude
@@ -154,7 +158,7 @@ struct NowPlayingArtworkGlowView: View {
     }
 
     private var requestIdentifier: String? {
-        artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize)
+        artworkStore?.requestIdentifier(remoteKey: artworkKey, targetPixelSize: pixelSize, serverID: serverID)
     }
 
     private var animates: Bool { isPlaying && !reduceMotion }
@@ -194,11 +198,12 @@ struct NowPlayingArtworkGlowView: View {
                 #endif
                 return
             }
-            artworkImage = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize)
+            artworkImage = artworkStore.image(remoteKey: artworkKey, targetPixelSize: pixelSize, serverID: serverID)
             if artworkImage == nil {
                 artworkImage = await artworkStore.load(
                     remoteKey: artworkKey,
-                    targetPixelSize: pixelSize
+                    targetPixelSize: pixelSize,
+                    serverID: serverID
                 )
             }
         }

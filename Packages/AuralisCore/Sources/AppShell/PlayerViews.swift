@@ -29,6 +29,7 @@ struct MiniPlayerContent: View {
                 artworkKey: model.currentTrack.artworkKey,
                 colors: theme.colorTokens,
                 size: coverSize,
+                serverID: model.currentTrack.serverID,
                 cornerRadius: 8
             )
             .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1)
@@ -132,6 +133,7 @@ struct CompactMiniPlayerContent: View {
                 artworkKey: model.currentTrack.artworkKey,
                 colors: theme.colorTokens,
                 size: 36,
+                serverID: model.currentTrack.serverID,
                 cornerRadius: 8
             )
 
@@ -328,6 +330,7 @@ struct NowPlayingView: View {
                     artworkKey: model.currentTrack.artworkKey,
                     colors: theme.colorTokens,
                     size: side,
+                    serverID: model.currentTrack.serverID,
                     maxCanvasSize: glowCanvasSize
                 )
                 // 封面本体只保留轻微中性黑色阴影负责层级；彩色环境光全部由
@@ -336,7 +339,8 @@ struct NowPlayingView: View {
                     title: model.currentTrack.albumTitle,
                     artworkKey: model.currentTrack.artworkKey,
                     colors: theme.colorTokens,
-                    size: side
+                    size: side,
+                    serverID: model.currentTrack.serverID
                 )
                 .shadow(color: Color.black.opacity(0.22), radius: 12, x: 0, y: 2)
             }
@@ -688,7 +692,8 @@ struct NowPlayingView: View {
             ForEach(queueStore.entries) { entry in
                 let track = entry.track
                 Button {
-                    model.selectAndPlay(track)
+                    // R05：按队列项 UUID 播放——重复歌曲点第二个 A 就播第二个 A。
+                    model.playQueueEntry(id: entry.id)
                 } label: {
                     TrackRow(track: track, isCurrent: track.isSame(as: model.currentTrack), theme: theme)
                         .contentShape(Rectangle())

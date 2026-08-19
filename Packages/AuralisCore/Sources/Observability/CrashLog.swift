@@ -59,10 +59,12 @@ public final class CrashLog {
     /// signal 记录在旧文件」的分裂。
     /// truncate 与 log() 的磁盘写入共用同一串行 logQueue（R10）：队列中已排队的
     /// 写入先落盘、随后 truncate，保证 ordering，不会出现「清除后又看到清除前的日志」。
+    /// truncate 用同步执行（而非 async）：clear 是低频用户操作，必须保证返回时
+    /// 磁盘文件已清空，否则 recent() 在 ringBuffer 为空时会立即回退读到刚清掉前的旧内容。
     public func clearCrashLog() {
         ringBuffer.removeAll()
         let fileURL = crashLogFile
-        Self.logQueue.async {
+        Self.logQueue.sync {
             guard let handle = try? FileHandle(forWritingTo: fileURL) else { return }
             do {
                 try handle.truncate(atOffset: 0)
