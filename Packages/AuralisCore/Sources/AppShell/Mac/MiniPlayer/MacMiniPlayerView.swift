@@ -1,9 +1,12 @@
 #if os(macOS)
+import Domain
+import LocalCatalog
 import SwiftUI
 import ThemeEngine
 
 /// 独立 MiniPlayer 窗口（Window → 迷你播放器）。
-/// 完整模式：封面 + 标题/艺术家 + 进度 + 两排控制（含音量±）；
+/// 完整模式：顶部三态内容面板（封面 / 歌词 / 队列）+ 标题/艺术家 + 进度 +
+/// 两排控制（歌词、队列、切换小号、返回主窗口）；
 /// Compact（隐藏封面）独立布局，不再复用完整模式 UI，保证 140pt 高度不裁切。
 public struct MacMiniPlayerView: View {
     @ObservedObject var model: AuralisAppModel
@@ -11,16 +14,30 @@ public struct MacMiniPlayerView: View {
     @AppStorage("auralis.miniplayer.hideArtwork") private var hideArtwork = false
 
     @ObservedObject private var playbackStore: PlaybackStore
+    @ObservedObject private var queueStore: PlaybackQueuePresentationStore
     @State private var isVolumePopoverPresented = false
+
+    /// 大号 Mini Player 顶部内容面板的三态：封面 / 歌词 / 队列。
+    /// 切换只发生在面板内部（固定 220×220），不改变窗口尺寸。
+    private enum MacMiniPlayerContentMode: Equatable {
+        case artwork
+        case lyrics
+        case queue
+    }
+
+    @State private var contentMode: MacMiniPlayerContentMode = .artwork
+    @State private var lyricsState: MacLyricsPresentationState = .loading
 
     public init(model: AuralisAppModel, themeStore: ThemeStore) {
         self.model = model
         self.theme = themeStore.current
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self._queueStore = ObservedObject(wrappedValue: model.queueStore)
     }
 
     private var hasTrack: Bool { model.hasCurrentTrack }
     private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
+    private var trackGlobalID: String { "\(model.currentTrack.serverID):\(model.currentTrack.id.rawValue)" }
 
     public var body: some View {
         Group {
@@ -34,19 +51,11 @@ public struct MacMiniPlayerView: View {
         .background(MacMiniWindowAttacher(coordinator: .shared))
     }
 
-    // MARK: - 完整模式（封面 + 信息 + 进度 + 两排控制）
+    // MARK: - 完整模式（三态内容面板 + 信息 + 进度 + 两排控制）
 
     private var artworkPlayer: some View {
         VStack(spacing: MacUIVisualTokens.MiniPlayer.contentSpacing) {
-            ArtworkView(
-                title: model.currentTrack.albumTitle,
-                artworkKey: model.currentTrack.artworkKey,
-                colors: theme.colorTokens,
-                size: MacUIVisualTokens.MiniPlayer.artworkSize,
-                cornerRadius: MacUIVisualTokens.MiniPlayer.artworkCornerRadius
-            )
-            .frame(width: MacUIVisualTokens.MiniPlayer.artworkSize, height: MacUIVisualTokens.MiniPlayer.artworkSize)
-            .accessibilityLabel("封面")
+            miniHeroContent(size: MacUIVisualTokens.MiniPlayer.artworkSize)
 
             infoBlock
 
@@ -64,9 +73,9 @@ public struct MacMiniPlayerView: View {
                     favoriteButton
                 }
                 HStack {
-                    volumeDownButton
+                    lyricsButton
                     Spacer()
-                    volumeUpButton
+                    queueButton
                     Spacer()
                     artworkToggleButton
                     Spacer()
@@ -77,6 +86,267 @@ public struct MacMiniPlayerView: View {
         }
         .padding(16)
         .frame(width: MacUIVisualTokens.MiniPlayer.windowWidth, height: MacUIVisualTokens.MiniPlayer.windowHeight)
+        // 歌词只在用户切到歌词模式后才读取（缓存或服务器）；切歌或切回封面/队列时
+        // task id 变化自动取消旧请求，旧歌曲的异步结果不会覆盖新歌状态。
+        .task(id: "\(trackGlobalID)|\(contentMode)") {
+            guard contentMode == .lyrics else { return }
+            await loadLyricsForMiniPlayer()
+        }
+    }
+
+    // MARK: - 顶部三态内容面板
+
+    /// 大封面区域统一外壳：三种模式共用完全相同的 frame 与圆角，切换只在面板内部
+    /// 发生，不会引起窗口、歌名、进度条或按钮布局跳动。
+    @ViewBuilder
+    private func miniHeroContent(size: CGFloat) -> some View {
+        Group {
+            switch contentMode {
+            case .artwork:
+                artworkContent(size: size)
+            case .lyrics:
+                lyricsContent(size: size)
+            case .queue:
+                queueContent(size: size)
+            }
+        }
+        .frame(width: size, height: size)
+        // 歌词 / 队列使用与 Mini Player 协调的 surface 底色；封面模式时被图片覆盖。
+        .background(theme.colorTokens.surface.color.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: MacUIVisualTokens.MiniPlayer.artworkCornerRadius, style: .continuous))
+        .animation(.easeInOut(duration: 0.20), value: contentMode)
+    }
+
+    /// 封面模式：直接复用原有大号封面实现（artworkKey / ArtworkStore / ImagePipeline
+    /// / 圆角 / 比例完全不变，只是提取为独立子视图）。
+    private func artworkContent(size: CGFloat) -> some View {
+        ArtworkView(
+            title: model.currentTrack.albumTitle,
+            artworkKey: model.currentTrack.artworkKey,
+            colors: theme.colorTokens,
+            size: size,
+            cornerRadius: MacUIVisualTokens.MiniPlayer.artworkCornerRadius
+        )
+        .accessibilityLabel("封面")
+        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+    }
+
+    // MARK: - 歌词模式
+
+    @ViewBuilder
+    private func lyricsContent(size: CGFloat) -> some View {
+        Group {
+            switch lyricsState {
+            case .loading:
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(theme.colorTokens.accent.color)
+                    Text("正在加载歌词…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case let .available(lyrics) where !lyrics.lines.isEmpty:
+                if lyrics.isSynced && lyrics.lines.contains(where: { $0.startTime != nil }) {
+                    syncedLyricsView(lyrics, size: size)
+                } else {
+                    plainLyricsView(lyrics)
+                }
+            case .available:
+                emptyLyricsView
+            case .unavailable:
+                emptyLyricsView
+            case .error:
+                VStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                    Text("歌词加载失败")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+    }
+
+    private var emptyLyricsView: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "text.quote")
+                .font(.system(size: 20))
+                .foregroundStyle(.secondary)
+            Text("暂无歌词")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 同步歌词：当前行垂直居中且最醒目，上下行作为上下文，随播放进度自动滚动。
+    /// 滚动只在「当前行下标真正变化」时触发一次——position 每秒更新几十次，
+    /// 但 ScrollView 只跨句时滚动，避免每帧 scrollTo。
+    private func syncedLyricsView(_ lyrics: LyricsDocument, size: CGFloat) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 14) {
+                    // 顶部/底部留出半屏空间，保证首行和末行也能滚动到垂直居中。
+                    Color.clear.frame(height: max(12, size / 2 - 18))
+                    ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
+                        let isCurrent = activeLyricIndex == index
+                        Text(line.text)
+                            .font(.system(size: isCurrent ? 19 : 15, weight: isCurrent ? .semibold : .regular))
+                            .foregroundStyle(isCurrent ? theme.colorTokens.primaryText.color : theme.colorTokens.secondaryText.color)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .opacity(isCurrent ? 1 : 0.55)
+                            .id(index)
+                    }
+                    Color.clear.frame(height: max(12, size / 2 - 18))
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+            }
+            .onChange(of: activeLyricIndex) { _, index in
+                guard let index else { return }
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    proxy.scrollTo(index, anchor: .center)
+                }
+            }
+        }
+    }
+
+    /// 纯文本歌词（无逐行时间戳）：不伪造同步，静态居中文本，由用户手动滚动。
+    private func plainLyricsView(_ lyrics: LyricsDocument) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 10) {
+                ForEach(lyrics.lines) { line in
+                    Text(line.text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    /// 同步歌词的当前行：遍历时间戳，position 落在哪个区间就是哪一行。
+    private var activeLyricIndex: Int? {
+        guard case let .available(lyrics) = lyricsState else { return nil }
+        guard lyrics.isSynced, lyrics.lines.contains(where: { $0.startTime != nil }) else { return nil }
+        let position = playbackStore.position
+        var index: Int?
+        for (i, line) in lyrics.lines.enumerated() {
+            if let start = line.startTime, start <= position + 0.15 { index = i }
+        }
+        return index
+    }
+
+    /// 歌词加载只在 contentMode == .lyrics 时触发；切歌后旧任务被 .task(id:) 取消，
+    /// 这里再用 trackGlobalID + contentMode 双保险，防止旧歌曲异步结果覆盖新歌状态。
+    private func loadLyricsForMiniPlayer() async {
+        let requestedTrackID = trackGlobalID
+        lyricsState = .loading
+        let lyrics = await model.loadLyrics(for: model.currentTrack)
+        guard requestedTrackID == trackGlobalID, contentMode == .lyrics else { return }
+        if let lyrics, !lyrics.lines.isEmpty {
+            lyricsState = .available(lyrics)
+        } else {
+            lyricsState = .unavailable
+        }
+    }
+
+    // MARK: - 队列模式
+
+    /// 当前曲目开始的队列片段（当前曲目 + 后续，最多 20 首）。
+    /// 绝不把上万首全库队列一次性渲染进 220×220 面板。
+    private var miniQueueSlice: [Track] {
+        let tracks = queueStore.tracks
+        guard let currentIndex = queueStore.currentIndex, tracks.indices.contains(currentIndex) else {
+            return Array(tracks.prefix(20))
+        }
+        return Array(tracks[currentIndex..<min(currentIndex + 20, tracks.count)])
+    }
+
+    @ViewBuilder
+    private func queueContent(size: CGFloat) -> some View {
+        let tracks = miniQueueSlice
+        if tracks.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "music.note.list")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.secondary)
+                Text("队列为空")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.opacity.combined(with: .scale(scale: 0.985)))
+        } else {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 6) {
+                    ForEach(Array(tracks.enumerated()), id: \.element.macGlobalID) { relativeIndex, queueTrack in
+                        miniQueueRow(queueTrack, relativeIndex: relativeIndex)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.985)))
+        }
+    }
+
+    private func miniQueueRow(_ queueTrack: Track, relativeIndex: Int) -> some View {
+        let isCurrent = queueTrack.macGlobalID == model.currentTrack.macGlobalID
+        return Button {
+            model.selectAndPlay(queueTrack)
+        } label: {
+            HStack(spacing: 8) {
+                if isCurrent {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                        .frame(width: 16)
+                } else {
+                    Text("\(relativeIndex + 1)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(queueTrack.title)
+                        .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
+                        .foregroundStyle(theme.colorTokens.primaryText.color)
+                        .lineLimit(1)
+                    Text(queueTrack.artistName)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isCurrent ? theme.colorTokens.accent.color.opacity(0.10) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("播放《\(queueTrack.title)》，艺术家 \(queueTrack.artistName)")
+    }
+
+    // MARK: - 模式切换
+
+    private func toggleContentMode(_ target: MacMiniPlayerContentMode) {
+        withAnimation(.easeInOut(duration: 0.20)) {
+            contentMode = contentMode == target ? .artwork : target
+        }
     }
 
     // MARK: - Compact 模式（独立布局，不裁切）
@@ -211,28 +481,32 @@ public struct MacMiniPlayerView: View {
         }
     }
 
-    private var volumeDownButton: some View {
+    /// 大号 Mini 第二排：歌词按钮。点击在 歌词 ↔ 封面 之间切换。
+    private var lyricsButton: some View {
         Button {
-            model.setVolume(max(0, model.volume - 0.05))
+            toggleContentMode(.lyrics)
         } label: {
-            Image(systemName: "speaker.slash")
+            Image(systemName: contentMode == .lyrics ? "quote.bubble.fill" : "quote.bubble")
+                .foregroundStyle(contentMode == .lyrics ? theme.colorTokens.accent.color : Color.secondary)
         }
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
-        .help("音量 -")
-        .accessibilityLabel("音量减小")
+        .help("歌词")
+        .accessibilityLabel("歌词")
     }
 
-    private var volumeUpButton: some View {
+    /// 大号 Mini 第二排：队列按钮。点击在 队列 ↔ 封面 之间切换。
+    private var queueButton: some View {
         Button {
-            model.setVolume(min(1, model.volume + 0.05))
+            toggleContentMode(.queue)
         } label: {
-            Image(systemName: "speaker.wave.2")
+            Image(systemName: "music.note.list")
+                .foregroundStyle(contentMode == .queue ? theme.colorTokens.accent.color : Color.secondary)
         }
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
-        .help("音量 +")
-        .accessibilityLabel("音量增加")
+        .help("队列")
+        .accessibilityLabel("队列")
     }
 
     private var artworkToggleButton: some View {
