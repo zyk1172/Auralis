@@ -64,6 +64,8 @@ targets:
           - AuralisMac.entitlements
       - path: Apps/Shared
       - path: Apps/iOS/Resources
+        excludes:
+          - Localizable.xcstrings
     dependencies:
       - package: AuralisCore
         product: AppShell
