@@ -167,7 +167,7 @@ final class HomeStore: ObservableObject {
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published var catalog: LibraryCatalog {
-        didSet { rebuildDerivedIndexes() }
+        didSet { scheduleDerivedIndexRebuild() }
     }
     /// 浏览页、歌单和上下文菜单均以 GlobalID 解析歌曲，避免 M×N 扫描与跨服务器同 ID 串库。
     private(set) var trackByGlobalID: [GlobalID: Track] = [:]
@@ -184,9 +184,14 @@ final class LibraryStore: ObservableObject {
     @Published var genreTracks: [Track]?
     @Published var loadingGenre: Genre?
 
+    /// catalog 每次变更递增；后台索引构建完成后用它校验结果是否已过期。
+    private var catalogRevision: UInt64 = 0
+    private var indexBuildTask: Task<Void, Never>?
+
     init(catalog: LibraryCatalog) {
         self.catalog = catalog
-        rebuildDerivedIndexes()
+        // init 时同步构建（生产环境初始为空，开销可忽略；测试需要一致状态）。
+        apply(Self.buildIndexes(catalog: catalog))
     }
 
     func track(for globalID: GlobalID) -> Track? { trackByGlobalID[globalID] }
@@ -209,36 +214,63 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - 索引构建（仅 catalog didSet / init 时重建一次）
 
+    /// catalog 变更后，把 O(N) 的派生索引构建挪到后台执行，避免 1 万+ 首曲目
+    /// 在 MainActor 上同步扫描导致点击资料库歌曲时的约 300ms 卡顿。
+    /// 结果通过 catalogRevision 校验，若期间 catalog 再次变更则丢弃本次结果。
+    private func scheduleDerivedIndexRebuild() {
+        catalogRevision &+= 1
+        let revision = catalogRevision
+        let snapshot = catalog
+        indexBuildTask?.cancel()
+        indexBuildTask = Task { [weak self] in
+            let indexes = await Task.detached(priority: .userInitiated) {
+                Self.buildIndexes(catalog: snapshot)
+            }.value
+            guard let self, !Task.isCancelled, self.catalogRevision == revision else { return }
+            self.apply(indexes)
+        }
+    }
+
+    private func apply(_ indexes: DerivedIndexes) {
+        trackByGlobalID = indexes.trackByGlobalID
+        tracksByArtist = indexes.tracksByArtist
+        tracksByAlbum = indexes.tracksByAlbum
+        albumsByArtist = indexes.albumsByArtist
+        objectWillChange.send()
+    }
+
+    private struct DerivedIndexes: Sendable {
+        var trackByGlobalID: [GlobalID: Track] = [:]
+        var tracksByArtist: [GlobalID: [Track]] = [:]
+        var tracksByAlbum: [GlobalID: [Track]] = [:]
+        var albumsByArtist: [GlobalID: [Album]] = [:]
+    }
+
     /// 一趟循环同时构建 Track 相关的三张索引（trackByGlobalID / tracksByArtist /
     /// tracksByAlbum），避免对 25,000 首曲目做三趟全量遍历；专辑再单独一趟。
     /// 同 GlobalID 重复条目合并（保留首次出现），避免 ForEach 重复身份崩溃。
-    private func rebuildDerivedIndexes() {
-        var byGlobalID: [GlobalID: Track] = [:]
-        var byArtist: [GlobalID: [Track]] = [:]
-        var byAlbum: [GlobalID: [Track]] = [:]
+    /// - Note: `nonisolated` 纯函数，可在后台任务中执行，不占用 MainActor。
+    private nonisolated static func buildIndexes(catalog: LibraryCatalog) -> DerivedIndexes {
+        var result = DerivedIndexes()
         var seenTrack = Set<GlobalID>()
         for track in catalog.tracks {
             let trackGID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
             guard seenTrack.insert(trackGID).inserted else { continue }
-            byGlobalID[trackGID] = track
+            result.trackByGlobalID[trackGID] = track
             let artistGID = GlobalID(serverID: track.serverID, remoteID: track.artistID.rawValue)
-            byArtist[artistGID, default: []].append(track)
+            result.tracksByArtist[artistGID, default: []].append(track)
             let albumGID = GlobalID(serverID: track.serverID, remoteID: track.albumID.rawValue)
-            byAlbum[albumGID, default: []].append(track)
+            result.tracksByAlbum[albumGID, default: []].append(track)
         }
-        trackByGlobalID = byGlobalID
-        tracksByArtist = byArtist
-        tracksByAlbum = byAlbum
 
-        var albumsByArtistValue: [GlobalID: [Album]] = [:]
         var seenAlbum = Set<GlobalID>()
         for album in catalog.albums {
             let albumGID = GlobalID(serverID: album.serverID, remoteID: album.id.rawValue)
             guard seenAlbum.insert(albumGID).inserted else { continue }
             let artistGID = GlobalID(serverID: album.serverID, remoteID: album.artistID.rawValue)
-            albumsByArtistValue[artistGID, default: []].append(album)
+            result.albumsByArtist[artistGID, default: []].append(album)
         }
-        albumsByArtist = albumsByArtistValue
+        return result
     }
 }
 

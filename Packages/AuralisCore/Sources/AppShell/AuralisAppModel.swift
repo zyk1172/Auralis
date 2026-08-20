@@ -36,6 +36,30 @@ public final class AuralisAppModel: ObservableObject {
     let downloadStore: DownloadStore
     private let liveActivityManager = LiveActivityManager.shared
     private var childStoreSubscriptions: Set<AnyCancellable> = []
+
+    /// 子 Store 可能在一次逻辑更新中连续发布多次（例如 HomeStore.apply 依次写 12 个 @Published）。
+    /// 兼容旧的全局 model 观察方式，但必须：
+    ///
+    /// 1. 延迟到当前 SwiftUI 更新事务结束以后；
+    /// 2. 同一个 RunLoop 中合并为一次全局 invalidation。
+    ///
+    /// 否则 HomeStore.apply 等批量更新会在 SwiftUI body/update
+    /// 尚未结束时同步触发 AuralisAppModel.objectWillChange，
+    /// 导致：
+    /// "Publishing changes from within view updates is not allowed"
+    private var childStoreInvalidationScheduled = false
+
+    private func scheduleChildStoreInvalidation() {
+        guard !childStoreInvalidationScheduled else { return }
+        childStoreInvalidationScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.childStoreInvalidationScheduled = false
+                self.objectWillChange.send()
+            }
+        }
+    }
     public var currentTrack: Track {
         get { playbackStore.currentTrack }
         set {
@@ -669,17 +693,17 @@ public final class AuralisAppModel: ObservableObject {
         // 兼容现有观察模型的视图：领域 Store 在变更前转发一次全局失效通知。
         // 新视图可以直接观察具体 Store，逐步缩小重绘范围；这里不复制任何状态。
         homeStore.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in self?.scheduleChildStoreInvalidation() }
             .store(in: &childStoreSubscriptions)
         libraryStore.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in self?.scheduleChildStoreInvalidation() }
             .store(in: &childStoreSubscriptions)
         serverStore.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _ in self?.scheduleChildStoreInvalidation() }
             .store(in: &childStoreSubscriptions)
         downloadStore.objectWillChange
             .sink { [weak self] _ in
-                self?.objectWillChange.send()
+                self?.scheduleChildStoreInvalidation()
             }
             .store(in: &childStoreSubscriptions)
 

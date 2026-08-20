@@ -1,921 +1,924 @@
 {
-  "sourceLanguage": "zh-Hans",
-  "strings": {
-    "，请检查网络连接": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "，请检查网络连接"
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "，请检查网络连接" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "，请检查网络连接"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "，请检查网络连接"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "，请检查网络连接"
           }
         }
       }
     },
-    "。若是局域网地址（\\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "。若是局域网地址（\\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
+    "。若是局域网地址（\\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "。若是局域网地址（\\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "。若是局域网地址（\\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "。若是局域网地址（\\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
           }
         }
       }
     },
-    "。若是局域网地址（\\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "。若是局域网地址（\\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
+    "。若是局域网地址（\\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "。若是局域网地址（\\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "。若是局域网地址（\\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "。若是局域网地址（\\(host)），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
           }
         }
       }
     },
-    "。若是局域网地址（%@），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "。若是局域网地址（%@），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
+    "。若是局域网地址（%@），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。" : {
+
+    },
+    "。若是局域网地址（%@），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "。若是局域网地址（%@），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "。若是局域网地址（%@），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "。若是局域网地址（%@），请检查 设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
           }
         }
       }
     },
-    "\\(message)（请核对「音乐下载」设置里的 Token）": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(message)（请核对「音乐下载」设置里的 Token）"
+    "\\(message)（请核对「音乐下载」设置里的 Token）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "\\(message)（请核对「音乐下载」设置里的 Token）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(message)（请核对「音乐下载」设置里的 Token）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "\\(message)（请核对「音乐下载」设置里的 Token）"
           }
         }
       }
     },
-    "%@（请核对「音乐下载」设置里的 Token）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@（请核对「音乐下载」设置里的 Token）"
+    "%@（请核对「音乐下载」设置里的 Token）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（请核对「音乐下载」设置里的 Token）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@（请核对「音乐下载」设置里的 Token）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（请核对「音乐下载」设置里的 Token）"
           }
         }
       }
     },
-    "HTTPS 连接失败（证书不受信任或被安全策略拦截）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "HTTPS 连接失败（证书不受信任或被安全策略拦截）"
+    "HTTPS 连接失败（证书不受信任或被安全策略拦截）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTPS 连接失败（证书不受信任或被安全策略拦截）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "HTTPS 连接失败（证书不受信任或被安全策略拦截）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTPS 连接失败（证书不受信任或被安全策略拦截）"
           }
         }
       }
     },
-    "保存资料库": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存资料库"
+    "保存资料库" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存资料库"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存资料库"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存资料库"
           }
         }
       }
     },
-    "保护凭据": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保护凭据"
+    "保护凭据" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保护凭据"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保护凭据"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保护凭据"
           }
         }
       }
     },
-    "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。"
+    "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公共网络服务器必须使用 HTTPS；HTTP 仅允许本机或私有局域网地址。"
           }
         }
       }
     },
-    "响应解析失败：\\(message)": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "响应解析失败：\\(message)"
+    "响应解析失败：\\(message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "响应解析失败：\\(message)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "响应解析失败：\\(message)"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "响应解析失败：\\(message)"
           }
         }
       }
     },
-    "响应解析失败：%@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "响应解析失败：%@"
+    "响应解析失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "响应解析失败：%@"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "响应解析失败：%@"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "响应解析失败：%@"
           }
         }
       }
     },
-    "找不到主机，请检查服务器地址（IP / 主机名 / .local）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "找不到主机，请检查服务器地址（IP / 主机名 / .local）"
+    "找不到主机，请检查服务器地址（IP / 主机名 / .local）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到主机，请检查服务器地址（IP / 主机名 / .local）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "找不到主机，请检查服务器地址（IP / 主机名 / .local）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到主机，请检查服务器地址（IP / 主机名 / .local）"
           }
         }
       }
     },
-    "插件返回失败": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "插件返回失败"
+    "插件返回失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "插件返回失败"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "插件返回失败"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "插件返回失败"
           }
         }
       }
     },
-    "无法安全保存音乐库，请检查可用空间后重试。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法安全保存音乐库，请检查可用空间后重试。"
+    "无法安全保存音乐库，请检查可用空间后重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法安全保存音乐库，请检查可用空间后重试。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法安全保存音乐库，请检查可用空间后重试。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法安全保存音乐库，请检查可用空间后重试。"
           }
         }
       }
     },
-    "无法访问服务器，请检查地址、网络和服务状态。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法访问服务器，请检查地址、网络和服务状态。"
+    "无法访问服务器，请检查地址、网络和服务状态。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问服务器，请检查地址、网络和服务状态。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法访问服务器，请检查地址、网络和服务状态。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问服务器，请检查地址、网络和服务状态。"
           }
         }
       }
     },
-    "无法访问系统 Keychain，请解锁设备后重试。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法访问系统 Keychain，请解锁设备后重试。"
+    "无法访问系统 Keychain，请解锁设备后重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问系统 Keychain，请解锁设备后重试。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法访问系统 Keychain，请解锁设备后重试。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问系统 Keychain，请解锁设备后重试。"
           }
         }
       }
     },
-    "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。"
+    "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问系统 Keychain（可能被锁定或签名受限）。请解锁 Mac 后重试；测试连接使用内存凭据，不受影响。"
           }
         }
       }
     },
-    "无法连接到服务器（服务器可能未启动或拒绝连接）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法连接到服务器（服务器可能未启动或拒绝连接）"
+    "无法连接到服务器（服务器可能未启动或拒绝连接）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接到服务器（服务器可能未启动或拒绝连接）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法连接到服务器（服务器可能未启动或拒绝连接）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接到服务器（服务器可能未启动或拒绝连接）"
           }
         }
       }
     },
-    "服务器不支持该功能：\\(name)（API 版本可能不兼容）": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器不支持该功能：\\(name)（API 版本可能不兼容）"
+    "服务器不支持该功能：\\(name)（API 版本可能不兼容）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器不支持该功能：\\(name)（API 版本可能不兼容）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器不支持该功能：\\(name)（API 版本可能不兼容）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器不支持该功能：\\(name)（API 版本可能不兼容）"
           }
         }
       }
     },
-    "服务器不支持该功能：%@（API 版本可能不兼容）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器不支持该功能：%@（API 版本可能不兼容）"
+    "服务器不支持该功能：%@（API 版本可能不兼容）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器不支持该功能：%@（API 版本可能不兼容）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器不支持该功能：%@（API 版本可能不兼容）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器不支持该功能：%@（API 版本可能不兼容）"
           }
         }
       }
     },
-    "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。"
+    "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址不能内嵌用户名或密码（如 user:pass@host）。请把用户名与密码填写在对应输入框。"
           }
         }
       }
     },
-    "服务器地址无效，请包含 http:// 或 https://。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器地址无效，请包含 http:// 或 https://。"
+    "服务器地址无效，请包含 http:// 或 https://。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址无效，请包含 http:// 或 https://。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器地址无效，请包含 http:// 或 https://。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址无效，请包含 http:// 或 https://。"
           }
         }
       }
     },
-    "服务器地址格式错误": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器地址格式错误"
+    "服务器地址格式错误" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址格式错误"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器地址格式错误"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址格式错误"
           }
         }
       }
     },
-    "服务器返回 HTTP \\(status)": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回 HTTP \\(status)"
+    "服务器返回 HTTP \\(status)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回 HTTP \\(status)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回 HTTP \\(status)"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回 HTTP \\(status)"
           }
         }
       }
     },
-    "服务器返回 HTTP %lld": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回 HTTP %lld"
+    "服务器返回 HTTP %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回 HTTP %lld"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回 HTTP %lld"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回 HTTP %lld"
           }
         }
       }
     },
-    "服务器返回了无法识别的 OpenSubsonic 响应。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回了无法识别的 OpenSubsonic 响应。"
+    "服务器返回了无法识别的 OpenSubsonic 响应。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回了无法识别的 OpenSubsonic 响应。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回了无法识别的 OpenSubsonic 响应。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回了无法识别的 OpenSubsonic 响应。"
           }
         }
       }
     },
-    "服务器返回的不是有效的 OpenSubsonic 响应": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回的不是有效的 OpenSubsonic 响应"
+    "服务器返回的不是有效的 OpenSubsonic 响应" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回的不是有效的 OpenSubsonic 响应"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回的不是有效的 OpenSubsonic 响应"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回的不是有效的 OpenSubsonic 响应"
           }
         }
       }
     },
-    "服务器返回错误（代码 \\(code)）：\\(message)": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回错误（代码 \\(code)）：\\(message)"
+    "服务器返回错误（代码 \\(code)）：\\(message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回错误（代码 \\(code)）：\\(message)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回错误（代码 \\(code)）：\\(message)"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回错误（代码 \\(code)）：\\(message)"
           }
         }
       }
     },
-    "服务器返回错误（代码 \\(serverError.code)）：\\(serverError.message)": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回错误（代码 \\(serverError.code)）：\\(serverError.message)"
+    "服务器返回错误（代码 \\(serverError.code)）：\\(serverError.message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回错误（代码 \\(serverError.code)）：\\(serverError.message)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回错误（代码 \\(serverError.code)）：\\(serverError.message)"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回错误（代码 \\(serverError.code)）：\\(serverError.message)"
           }
         }
       }
     },
-    "服务器返回错误（代码 %lld）：%@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server error (code %lld): %@"
+    "服务器返回错误（代码 %lld）：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server error (code %lld): %@"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "伺服器返回錯誤（代碼 %lld）：%@"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回错误（代码 %lld）：%@"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器返回错误（代码 %lld）：%@"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器返回錯誤（代碼 %lld）：%@"
           }
         }
       }
     },
-    "服务器连接成功，但当前账户没有可见歌曲。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器连接成功，但当前账户没有可见歌曲。"
+    "服务器连接成功，但当前账户没有可见歌曲。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器连接成功，但当前账户没有可见歌曲。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "服务器连接成功，但当前账户没有可见歌曲。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器连接成功，但当前账户没有可见歌曲。"
           }
         }
       }
     },
-    "检查地址": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查地址"
+    "检查地址" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查地址"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查地址"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查地址"
           }
         }
       }
     },
-    "检测能力": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检测能力"
+    "检测能力" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检测能力"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检测能力"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检测能力"
           }
         }
       }
     },
-    "系统 Keychain 写入失败（状态 \\(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "系统 Keychain 写入失败（状态 \\(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
+    "系统 Keychain 写入失败（状态 \\(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统 Keychain 写入失败（状态 \\(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "系统 Keychain 写入失败（状态 \\(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统 Keychain 写入失败（状态 \\(status)）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
           }
         }
       }
     },
-    "系统 Keychain 写入失败（状态 %d）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "系统 Keychain 写入失败（状态 %d）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
+    "系统 Keychain 写入失败（状态 %d）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统 Keychain 写入失败（状态 %d）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "系统 Keychain 写入失败（状态 %d）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统 Keychain 写入失败（状态 %d）。请解锁 Mac 后重试；凭据不会被保存到不安全位置。"
           }
         }
       }
     },
-    "网络不可用": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络不可用"
+    "网络不可用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络不可用"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络不可用"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络不可用"
           }
         }
       }
     },
-    "网络请求失败：\\(message)": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络请求失败：\\(message)"
+    "网络请求失败：\\(message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络请求失败：\\(message)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络请求失败：\\(message)"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络请求失败：\\(message)"
           }
         }
       }
     },
-    "网络请求失败：%@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络请求失败：%@"
+    "网络请求失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络请求失败：%@"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络请求失败：%@"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络请求失败：%@"
           }
         }
       }
     },
-    "网络连接中断": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络连接中断"
+    "网络连接中断" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络连接中断"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络连接中断"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络连接中断"
           }
         }
       }
     },
-    "网络错误（\\(code)）": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络错误（\\(code)）"
+    "网络错误（\\(code)）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络错误（\\(code)）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络错误（\\(code)）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络错误（\\(code)）"
           }
         }
       }
     },
-    "网络错误（%lld）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络错误（%lld）"
+    "网络错误（%lld）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络错误（%lld）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "网络错误（%lld）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络错误（%lld）"
           }
         }
       }
     },
-    "认证失败，请检查用户名和凭据。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "认证失败，请检查用户名和凭据。"
+    "认证失败，请检查用户名和凭据。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "认证失败，请检查用户名和凭据。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "认证失败，请检查用户名和凭据。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "认证失败，请检查用户名和凭据。"
           }
         }
       }
     },
-    "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）"
+    "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该地址被 App Transport Security 拦截（局域网 HTTP 请确认已允许本地网络）"
           }
         }
       }
     },
-    "请求参数无效：\\(name)": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请求参数无效：\\(name)"
+    "请求参数无效：\\(name)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求参数无效：\\(name)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请求参数无效：\\(name)"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求参数无效：\\(name)"
           }
         }
       }
     },
-    "请求参数无效：%@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请求参数无效：%@"
+    "请求参数无效：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求参数无效：%@"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请求参数无效：%@"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求参数无效：%@"
           }
         }
       }
     },
-    "请输入密码或 API Key。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请输入密码或 API Key。"
+    "请输入密码或 API Key。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入密码或 API Key。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请输入密码或 API Key。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入密码或 API Key。"
           }
         }
       }
     },
-    "请输入服务器名称。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请输入服务器名称。"
+    "请输入服务器名称。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入服务器名称。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请输入服务器名称。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入服务器名称。"
           }
         }
       }
     },
-    "请输入用户名。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请输入用户名。"
+    "请输入用户名。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入用户名。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请输入用户名。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入用户名。"
           }
         }
       }
     },
-    "读取音乐库": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "读取音乐库"
+    "读取音乐库" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取音乐库"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "读取音乐库"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取音乐库"
           }
         }
       }
     },
-    "连接已取消，未完成的资料不会覆盖本地音乐库。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接已取消，未完成的资料不会覆盖本地音乐库。"
+    "连接已取消，未完成的资料不会覆盖本地音乐库。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接已取消，未完成的资料不会覆盖本地音乐库。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接已取消，未完成的资料不会覆盖本地音乐库。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接已取消，未完成的资料不会覆盖本地音乐库。"
           }
         }
       }
     },
-    "连接未完成。请重试；如问题持续，请检查服务器兼容性。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接未完成。请重试；如问题持续，请检查服务器兼容性。"
+    "连接未完成。请重试；如问题持续，请检查服务器兼容性。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接未完成。请重试；如问题持续，请检查服务器兼容性。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接未完成。请重试；如问题持续，请检查服务器兼容性。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接未完成。请重试；如问题持续，请检查服务器兼容性。"
           }
         }
       }
     },
-    "连接超时，请检查服务器地址与网络": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接超时，请检查服务器地址与网络"
+    "连接超时，请检查服务器地址与网络" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接超时，请检查服务器地址与网络"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接超时，请检查服务器地址与网络"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接超时，请检查服务器地址与网络"
           }
         }
       }
     },
-    "连接配置无效：\\(reason)": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接配置无效：\\(reason)"
+    "连接配置无效：\\(reason)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接配置无效：\\(reason)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接配置无效：\\(reason)"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接配置无效：\\(reason)"
           }
         }
       }
     },
-    "连接配置无效：%@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接配置无效：%@"
+    "连接配置无效：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接配置无效：%@"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接配置无效：%@"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接配置无效：%@"
           }
         }
       }
     },
-    "验证服务器": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "验证服务器"
+    "验证服务器" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "验证服务器"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "验证服务器"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "验证服务器"
           }
         }
       }
     }
   },
-  "version": "1.0"
+  "version" : "1.0"
 }

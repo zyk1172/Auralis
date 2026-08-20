@@ -40,12 +40,19 @@ public actor LocalCatalogStore: LibrarySyncStore {
         appGroupIdentifier: String = "group.com.auralis.player"
     ) -> URL {
         let base: URL
+        #if os(macOS)
+        // macOS 只有一个主 App（没有 Intents / Live Activity 扩展），不需要 App Group：
+        // 直接使用沙盒内的 Application Support，避免依赖付费开发者账号注册 group identifier。
+        base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        #else
         if let group = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
             base = group
         } else {
             base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
                 ?? fileManager.temporaryDirectory
         }
+        #endif
         let directory = base.appendingPathComponent("Auralis", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("catalog.sqlite")

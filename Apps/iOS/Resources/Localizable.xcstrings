@@ -172,7 +172,7 @@
       }
     },
     "下载" : {
-      "extractionState" : "stale",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
