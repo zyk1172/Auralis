@@ -70,42 +70,6 @@ struct MacSongTable: View {
     @State private var orderedTrackContext: [Track] = []
     /// 避免等价排序重复重建 context（基础上下文）的标记。
     @State private var lastContextRevision: UInt64 = 0
-    @ObservedObject private var playbackStore: PlaybackStore
-
-    init(
-        tracks: [Track],
-        selection: Binding<Set<GlobalID>>,
-        model: AuralisAppModel,
-        theme: BuiltInTheme,
-        onNavigate: @escaping (MacNavigationTarget) -> Void = { _ in },
-        contentRevision: UInt64 = 0,
-        numberText: @escaping (Track) -> String? = { _ in nil },
-        showAlbumColumn: Bool = true,
-        showYearColumn: Bool = true,
-        showGenreColumn: Bool = true,
-        showPlayCountColumn: Bool = false,
-        showAddedDateColumn: Bool = false,
-        showArtwork: Bool = true,
-        showIndexColumn: Bool = false,
-        rowHeight: CGFloat = 40
-    ) {
-        self.tracks = tracks
-        self._selection = selection
-        self.model = model
-        self.theme = theme
-        self.onNavigate = onNavigate
-        self.contentRevision = contentRevision
-        self.numberText = numberText
-        self.showAlbumColumn = showAlbumColumn
-        self.showYearColumn = showYearColumn
-        self.showGenreColumn = showGenreColumn
-        self.showPlayCountColumn = showPlayCountColumn
-        self.showAddedDateColumn = showAddedDateColumn
-        self.showArtwork = showArtwork
-        self.showIndexColumn = showIndexColumn
-        self.rowHeight = rowHeight
-        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
-    }
 
     private var rowsRevision: MacSongRowsRevision {
         .init(
@@ -237,40 +201,7 @@ struct MacSongTable: View {
 
     @ViewBuilder
     private func titleCell(_ row: MacSongRow) -> some View {
-        HStack(spacing: 10) {
-            if showArtwork {
-                ArtworkView(
-                    title: row.track.title,
-                    artworkKey: row.track.artworkKey,
-                    colors: theme.colorTokens,
-                    size: 34,
-                    cornerRadius: 4
-                )
-                .accessibilityHidden(true)
-            }
-            HStack(spacing: 6) {
-                if isCurrent(row.track) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.caption)
-                        .foregroundStyle(theme.colorTokens.accent.color)
-                        .accessibilityLabel(String(localized: "正在播放", bundle: .module))
-                }
-                Text(row.track.title)
-                    .font(.system(size: 13, weight: isCurrent(row.track) ? .semibold : .regular))
-                    .foregroundStyle(isCurrent(row.track) ? theme.colorTokens.accent.color : Color.primary)
-                    .lineLimit(1)
-                if model.isDownloaded(row.track) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel(String(localized: "已下载", bundle: .module))
-                }
-            }
-        }
-    }
-
-    private func isCurrent(_ track: Track) -> Bool {
-        playbackStore.currentTrack.serverID == track.serverID && playbackStore.currentTrack.id == track.id
+        MacSongTitleCell(track: row.track, model: model, theme: theme, showArtwork: showArtwork)
     }
 
     private func rebuildRows() {
@@ -284,6 +215,57 @@ struct MacSongTable: View {
         }
         orderedRows = baseRows.sorted(using: sortOrder)
         orderedTrackContext = orderedRows.map(\.track)
+    }
+}
+
+/// 标题 Cell：仅此子视图观察 PlaybackStore，避免 currentTrack 一变就让整个 10000 行 Table body 重新求值。
+private struct MacSongTitleCell: View {
+    let track: Track
+    let model: AuralisAppModel
+    let theme: BuiltInTheme
+    let showArtwork: Bool
+    @ObservedObject private var playbackStore: PlaybackStore
+    init(track: Track, model: AuralisAppModel, theme: BuiltInTheme, showArtwork: Bool) {
+        self.track = track
+        self.model = model
+        self.theme = theme
+        self.showArtwork = showArtwork
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+    }
+    private var isCurrent: Bool {
+        playbackStore.currentTrack.serverID == track.serverID && playbackStore.currentTrack.id == track.id
+    }
+    var body: some View {
+        HStack(spacing: 10) {
+            if showArtwork {
+                ArtworkView(
+                    title: track.title,
+                    artworkKey: track.artworkKey,
+                    colors: theme.colorTokens,
+                    size: 34,
+                    cornerRadius: 4
+                )
+                .accessibilityHidden(true)
+            }
+            HStack(spacing: 6) {
+                if isCurrent {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                        .accessibilityLabel(String(localized: "正在播放", bundle: .module))
+                }
+                Text(track.title)
+                    .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
+                    .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.primary)
+                    .lineLimit(1)
+                if model.isDownloaded(track) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(String(localized: "已下载", bundle: .module))
+                }
+            }
+        }
     }
 }
 #endif

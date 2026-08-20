@@ -104,7 +104,46 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         playGeneration += 1
         let generation = playGeneration
         pauseRequestedDuringPreparing = false
-        stopAll()
+        // 复用 AVQueuePlayer：保留单一长期存在的 player，避免每次切歌销毁重建 CoreAudio 链路。
+        // 仅清理旧 item/观察者，不销毁 player 本体。
+        let stopStart = ContinuousClock.now
+        let reusedPlayer = avPlayer
+        if reusedPlayer != nil {
+            // 轻量重置：保留 player 对象，清理旧状态
+            failureReported = false
+            cancelStallTimeout()
+            cancelBoundaryFallback()
+            boundaryCoordinator.reset()
+            clearPreparedItemFailureObserver()
+            resetDurationObservation()
+            currentItemObservation?.invalidate()
+            currentItemObservation = nil
+            endObservedItem = nil
+            if let endObserver {
+                NotificationCenter.default.removeObserver(endObserver)
+                self.endObserver = nil
+            }
+            if let failedToPlayObserver {
+                NotificationCenter.default.removeObserver(failedToPlayObserver)
+                self.failedToPlayObserver = nil
+            }
+            if let stalledObserver {
+                NotificationCenter.default.removeObserver(stalledObserver)
+                self.stalledObserver = nil
+            }
+            itemStatusObservation?.invalidate()
+            itemStatusObservation = nil
+            timeControlObservation?.invalidate()
+            timeControlObservation = nil
+            reusedPlayer?.pause()
+            reusedPlayer?.removeAllItems()
+            preparedItem = nil
+            preparedTrack = nil
+        } else {
+            stopAll()
+        }
+        let stopMs = durationMs(stopStart.duration(to: .now))
+        AuralisLog.playback.debug("ENGINE_STOP_OLD_PLAYER_MS duration_ms=\(stopMs, privacy: .public) reused=\(reusedPlayer != nil, privacy: .public)")
 
         currentTrack = track
         playbackState = .preparing
@@ -120,9 +159,25 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
         // 只记录脱敏后的地址（去掉查询串，查询串含认证参数）。
         CrashLog.shared.log("创建 AVPlayerItem，URL: \(Self.redactedURL(streamURL))")
+        let itemStart = ContinuousClock.now
         let item = AVPlayerItem(url: streamURL)
-        let player = AVQueuePlayer(items: [item])
-        player.automaticallyWaitsToMinimizeStalling = true
+        let itemMs = durationMs(itemStart.duration(to: .now))
+        AuralisLog.playback.debug("ENGINE_CREATE_ITEM_MS duration_ms=\(itemMs, privacy: .public)")
+        let player: AVQueuePlayer
+        let playerStart = ContinuousClock.now
+        if let existing = reusedPlayer {
+            player = existing
+            player.automaticallyWaitsToMinimizeStalling = true
+            if player.canInsert(item, after: nil) {
+                player.insert(item, after: nil)
+            }
+        } else {
+            player = AVQueuePlayer(items: [item])
+            player.automaticallyWaitsToMinimizeStalling = true
+            self.avPlayer = player
+        }
+        let playerMs = durationMs(playerStart.duration(to: .now))
+        AuralisLog.playback.debug("ENGINE_CREATE_PLAYER_MS duration_ms=\(playerMs, privacy: .public) reused=\(reusedPlayer != nil, privacy: .public)")
 
         // 快速切歌 / 任务取消：本代际已被更新的 play() 取代或被取消时直接放弃，
         // 不再把 avPlayer/观察者交给引擎，避免旧曲目 AVPlayer 覆盖新曲目（P1-7）。
@@ -143,8 +198,11 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observeDuration(for: item)
 
         CrashLog.shared.log("调用 player.play()")
+        let playStart = ContinuousClock.now
         player.play()
-        // 新建 AVPlayer 后立即应用保存的播放速度（setRate 可能发生在播放器创建前）。
+        let playMs = durationMs(playStart.duration(to: .now))
+        AuralisLog.playback.debug("ENGINE_START_PLAY_MS duration_ms=\(playMs, privacy: .public)")
+        // 新建或复用 AVPlayer 后立即应用保存的播放速度（setRate 可能发生在播放器创建前）。
         if playbackRate != 1.0 {
             player.rate = playbackRate
         }
@@ -604,6 +662,11 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         let scheme = components.scheme ?? "https"
         let path = components.path.isEmpty ? "" : components.path
         return "\(scheme)://<host>\(path)"
+    }
+
+    private func durationMs(_ duration: Duration) -> Double {
+        let c = duration.components
+        return Double(c.seconds) * 1_000 + Double(c.attoseconds) / 1_000_000_000_000_000
     }
 
     // MARK: - Session
