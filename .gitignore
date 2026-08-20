@@ -1,5 +1,14 @@
 .build/
 Packages/AuralisCore/.build/
+
+# Xcode / local build products
+build/
+Build/
+DerivedData/
+.derivedData/
+*.dSYM
+*.dSYM.zip
+
 *.xcuserstate
 xcuserdata/
 .DS_Store

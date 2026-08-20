@@ -151,6 +151,7 @@ public struct MacSettingsWindow: View {
     @AppStorage(ExternalMusicPreferences.Keys.critiqueBrainz) private var critiqueBrainzEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.listenBrainz) private var listenBrainzEnabled = true
     @State private var hasAPIKey = false
+    @State private var isConfiguringAPIKey = false
     @State private var indexStatus: RecommendationIndexV2Status?
     @State private var isLoadingIndexStatus = false
     @State private var isClearingExternalMusicCache = false
@@ -212,7 +213,21 @@ public struct MacSettingsWindow: View {
                 TextField("Base URL", text: $aiBaseURL)
                 TextField(String(localized: "API 路径", bundle: .module), text: $aiAPIPath)
                 TextField(String(localized: "模型", bundle: .module), text: $aiModel)
-                LabeledContent("API Key", value: hasAPIKey ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module) : String(localized: "未配置", bundle: .module))
+                HStack {
+                    LabeledContent("API Key", value: hasAPIKey ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module) : String(localized: "未配置", bundle: .module))
+                    Spacer()
+                    Button(hasAPIKey ? String(localized: "更新 API Key", bundle: .module) : String(localized: "配置 API Key", bundle: .module)) {
+                        isConfiguringAPIKey = true
+                    }
+                    if hasAPIKey {
+                        Button(String(localized: "删除", bundle: .module), role: .destructive) {
+                            Task {
+                                try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
+                                hasAPIKey = false
+                            }
+                        }
+                    }
+                }
             }
             Section(String(localized: "高级设置", bundle: .module)) {
                 // 上下文窗口：可直接输入任意正整数（下至 4096，不设人为上限）。
@@ -355,6 +370,16 @@ public struct MacSettingsWindow: View {
             MoviePilotSettingsSection()
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $isConfiguringAPIKey) {
+            APIKeySheet(
+                theme: theme,
+                hasExistingKey: hasAPIKey,
+                onSave: { key in
+                    try await credentialVault.store(key, for: AIConnectionSettings.credentialID)
+                    hasAPIKey = true
+                }
+            )
+        }
         .fileExporter(
             isPresented: $isExportingIndex,
             document: indexExportFile,

@@ -891,7 +891,7 @@ struct APIKeyPage: View {
 }
 
 /// macOS 的 API Key 弹窗包装。
-private struct APIKeySheet: View {
+struct APIKeySheet: View {
     let theme: BuiltInTheme
     let hasExistingKey: Bool
     let onSave: (String) async throws -> Void
