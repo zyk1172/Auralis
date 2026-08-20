@@ -65,6 +65,11 @@ struct MacSongTable: View {
     ]
     @State private var baseRows: [MacSongRow] = []
     @State private var orderedRows: [MacSongRow] = []
+    /// 排序后可见行的 Track 快照：仅在 rows 重建/排序变化时同步更新一次。
+    /// 双击播放直接用它，**不再在每次点击事件里 map 整张表**。
+    @State private var orderedTrackContext: [Track] = []
+    /// 避免等价排序重复重建 context（基础上下文）的标记。
+    @State private var lastContextRevision: UInt64 = 0
 
     private var rowsRevision: MacSongRowsRevision {
         .init(
@@ -86,25 +91,25 @@ struct MacSongTable: View {
                 }
                 .width(min: 32, ideal: 40, max: 48)
             }
-            TableColumn("标题", value: \.title) { row in
+            TableColumn(String(localized: "标题", bundle: .module), value: \.title) { row in
                 titleCell(row)
             }
             .width(min: 180, ideal: 260)
-            TableColumn("艺术家", value: \.artistName) { row in
+            TableColumn(String(localized: "艺术家", bundle: .module), value: \.artistName) { row in
                 Text(row.track.artistName)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .width(min: 140, ideal: 200)
             if showAlbumColumn {
-                TableColumn("专辑", value: \.albumTitle) { row in
+                TableColumn(String(localized: "专辑", bundle: .module), value: \.albumTitle) { row in
                     Text(row.track.albumTitle)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 .width(min: 140, ideal: 200)
             }
-            TableColumn("时长", value: \.duration) { row in
+            TableColumn(String(localized: "时长", bundle: .module), value: \.duration) { row in
                 Text(MacFormat.time(row.track.duration))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -112,14 +117,14 @@ struct MacSongTable: View {
             }
             .width(min: 56, ideal: 64, max: 80)
             if showYearColumn {
-                TableColumn("年份", value: \.year) { row in
+                TableColumn(String(localized: "年份", bundle: .module), value: \.year) { row in
                     Text(row.track.year.map(String.init) ?? "—")
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 48, ideal: 60, max: 76)
             }
             if showGenreColumn {
-                TableColumn("流派", value: \.genre) { row in
+                TableColumn(String(localized: "流派", bundle: .module), value: \.genre) { row in
                     Text(row.track.genres.first ?? "—")
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -127,7 +132,7 @@ struct MacSongTable: View {
                 .width(min: 100, ideal: 140)
             }
             if showPlayCountColumn {
-                TableColumn("播放次数", value: \.playCount) { row in
+                TableColumn(String(localized: "播放次数", bundle: .module), value: \.playCount) { row in
                     Text(row.playCount > 0 ? "\(row.playCount)" : "—")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -135,13 +140,13 @@ struct MacSongTable: View {
                 .width(min: 56, ideal: 64, max: 80)
             }
             if showAddedDateColumn {
-                TableColumn("添加日期", value: \.addedDateSort) { row in
+                TableColumn(String(localized: "添加日期", bundle: .module), value: \.addedDateSort) { row in
                     Text(row.addedDateText)
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 90, ideal: 110, max: 130)
             }
-            TableColumn("收藏") { row in
+            TableColumn(String(localized: "收藏", bundle: .module)) { row in
                 Button {
                     model.toggleFavorite(row.track)
                 } label: {
@@ -149,7 +154,7 @@ struct MacSongTable: View {
                         .foregroundStyle(row.track.isFavorite ? theme.colorTokens.accent.color : Color.secondary.opacity(0.4))
                 }
                 .buttonStyle(.plain)
-                .help(row.track.isFavorite ? "取消收藏" : "收藏")
+                .help(row.track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
                 .accessibilityLabel(row.track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -160,7 +165,7 @@ struct MacSongTable: View {
             if ids.count == 1, let gid = ids.first, let track = model.track(for: gid) {
                 macTrackMenuContent(track: track, model: model, onNavigate: onNavigate)
             } else if !ids.isEmpty {
-                Button("播放所选 \(ids.count) 首") {
+                Button(L10n.playSelected(ids.count)) {
                     let chosen = ids.compactMap { model.track(for: $0) }
                     model.playQueue(chosen)
                 }
@@ -179,7 +184,8 @@ struct MacSongTable: View {
             if let gid = ids.first, let track = model.track(for: gid) {
                 // 双击/回车播放时把整张表（当前排序后的可见行）写入队列，
                 // 与 iOS 列表点击同一机制：播放该首并自动续播表中其余歌曲。
-                let context = orderedRows.isEmpty ? tracks : orderedRows.map(\.track)
+                // 直接使用已缓存的 Track 上下文，避免在点击事件里 map 整张表。
+                let context = orderedTrackContext.isEmpty ? tracks : orderedTrackContext
                 model.playTrack(track, in: context)
             }
         }
@@ -189,6 +195,7 @@ struct MacSongTable: View {
         .task(id: rowsRevision) { rebuildRows() }
         .onChange(of: sortOrder) { _, _ in
             orderedRows = baseRows.sorted(using: sortOrder)
+            orderedTrackContext = orderedRows.map(\.track)
         }
     }
 
@@ -240,6 +247,7 @@ struct MacSongTable: View {
             )
         }
         orderedRows = baseRows.sorted(using: sortOrder)
+        orderedTrackContext = orderedRows.map(\.track)
     }
 }
 #endif

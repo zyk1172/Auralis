@@ -196,3 +196,130 @@ struct PlaybackQueuePresentationStoreTests {
         #expect(next?.id.rawValue == "C")
     }
 }
+
+// MARK: - P0：后台预构建队列 + persistence ID 一致性
+
+extension PlaybackQueuePresentationStoreTests {
+    @Test("prepare：10000 首去重后 entries/persistenceIDs 一致，selected index/entryID 正确")
+    func prepareLargeQueueIsConsistent() {
+        var tracks: [Track] = []
+        tracks.reserveCapacity(10_000)
+        for i in 0..<10_000 {
+            tracks.append(track("T\(i)"))
+        }
+        let selected = gid("T5000")
+        let prepared = PlaybackQueuePresentationStore.prepare(tracks: tracks, selectedTrackID: selected)
+
+        #expect(prepared.entries.count == 10_000)
+        #expect(prepared.persistenceTrackIDs.count == prepared.entries.count)
+        #expect(prepared.currentIndex == 5000)
+        #expect(prepared.currentEntryID == prepared.entries[5000].id)
+        #expect(prepared.persistenceTrackIDs[5000] == "T5000")
+    }
+
+    @Test("prepare：去重（输入含重复），selected 定位第一个出现")
+    func prepareDeduplicatesAndFindsFirst() {
+        // [A, B, A, C] → 去重后 [A, B, C]；selected A 定位到 index 0。
+        let prepared = PlaybackQueuePresentationStore.prepare(
+            tracks: [track("A"), track("B"), track("A"), track("C")],
+            selectedTrackID: gid("A")
+        )
+        #expect(prepared.entries.map(\.track.id.rawValue) == ["A", "B", "C"])
+        #expect(prepared.persistenceTrackIDs == ["A", "B", "C"])
+        #expect(prepared.currentIndex == 0)
+        #expect(prepared.currentEntryID == prepared.entries[0].id)
+    }
+
+    @Test("prepare：selected 不存在时 currentIndex nil")
+    func prepareSelectedMissing() {
+        let prepared = PlaybackQueuePresentationStore.prepare(
+            tracks: [track("A"), track("B")],
+            selectedTrackID: gid("Z")
+        )
+        #expect(prepared.currentIndex == nil)
+        #expect(prepared.currentEntryID == nil)
+    }
+
+    @Test("installPreparedQueue：MainActor 仅安装，persistenceIDs 对齐，不额外扫描")
+    func installPreparedQueueInstallsOnly() {
+        let store = PlaybackQueuePresentationStore()
+        let prepared = PlaybackQueuePresentationStore.prepare(
+            tracks: [track("A"), track("B"), track("C")],
+            selectedTrackID: gid("B")
+        )
+        store.installPreparedQueue(prepared)
+
+        #expect(store.entries.count == 3)
+        #expect(store.currentIndex == 1)
+        #expect(store.currentEntryID == store.entries[1].id)
+        #expect(store.persistenceTrackIDs == ["A", "B", "C"])
+        #expect(store.persistenceTrackIDs.count == store.entries.count)
+    }
+
+    @Test("persistenceTrackIDs：replace/append/playNext/remove/removeUpcoming/move 全程与 entries 对齐")
+    func persistenceIDsStayInSync() {
+        let store = PlaybackQueuePresentationStore()
+
+        // replace
+        store.replace([track("A"), track("B"), track("C")], currentTrackID: gid("A"))
+        assertPersistenceTracks(store, expected: ["A", "B", "C"])
+
+        // append
+        store.append([track("D")], currentTrackID: gid("A"))
+        assertPersistenceTracks(store, expected: ["A", "B", "C", "D"])
+
+        // playNext（插到当前 A 之后 → index1）
+        store.playNext(track("X"), currentTrackID: gid("A"))
+        assertPersistenceTracks(store, expected: ["A", "X", "B", "C", "D"])
+
+        // remove（移除 B）
+        if let bEntry = store.entries.first(where: { $0.track.id.rawValue == "B" }) {
+            _ = store.remove(entryID: bEntry.id, currentTrackID: gid("A"))
+        }
+        assertPersistenceTracks(store, expected: ["A", "X", "C", "D"])
+
+        // removeUpcoming（当前 A 之后全清）
+        guard let idx = store.currentIndex else {
+            Issue.record("no current index"); return
+        }
+        store.removeUpcoming(from: idx, currentTrackID: gid("A"))
+        assertPersistenceTracks(store, expected: ["A"])
+
+        // move（从 A 之后 [A,B] → 把 D 移到 index1）
+        store.append([track("B"), track("D")], currentTrackID: gid("A"))
+        assertPersistenceTracks(store, expected: ["A", "B", "D"])
+        let dIndex = store.entries.firstIndex { $0.track.id.rawValue == "D" } ?? 0
+        store.move(from: IndexSet(integer: dIndex), to: 1, currentTrackID: gid("A"))
+        assertPersistenceTracks(store, expected: ["A", "D", "B"])
+    }
+
+    @Test("insertAtFront：当前歌曲直接落队首并定位 index 0，不动全队列")
+    func insertAtFrontPlacesCurrentAtFront() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("B"), track("C")], currentTrackID: gid("B"))
+        #expect(store.currentIndex == 0)
+
+        // 播放更早的歌 X（不在队列）→ 落队首，成为 currentIndex 0。
+        store.insertAtFront(track("X"), currentTrackID: gid("X"))
+        #expect(store.entries.map(\.track.id.rawValue) == ["X", "B", "C"])
+        #expect(store.currentIndex == 0)
+        #expect(store.currentEntryID == store.entries[0].id)
+        assertPersistenceTracks(store, expected: ["X", "B", "C"])
+    }
+
+    @Test("entries(after:) 返回 ArraySlice 且不复制全队列")
+    func entriesAfterReturnsSlice() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("A"), track("B"), track("C")], currentTrackID: gid("B"))
+        let slice = store.entries(after: store.currentIndex)
+        #expect(Array(slice.map(\.track.id.rawValue)) == ["C"])
+        // nil current → 全部
+        let all = store.entries(after: nil)
+        #expect(all.count == 3)
+    }
+
+    private func assertPersistenceTracks(_ store: PlaybackQueuePresentationStore, expected: [String]) {
+        #expect(store.persistenceTrackIDs == expected, "persistenceTrackIDs mismatch: \(store.persistenceTrackIDs)")
+        #expect(store.persistenceTrackIDs.count == store.entries.count, "count drift")
+    }
+}

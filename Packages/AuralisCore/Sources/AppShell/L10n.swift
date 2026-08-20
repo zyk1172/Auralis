@@ -27,4 +27,10 @@ enum L10n {
         let format = String(localized: "%lld plays", bundle: .module)
         return String.localizedStringWithFormat(format, count)
     }
+
+    /// 播放所选歌曲数（复数）。英文支持 1/other，繁中不区分。
+    static func playSelected(_ count: Int) -> String {
+        let format = String(localized: "play_selected_%lld", bundle: .module)
+        return String.localizedStringWithFormat(format, count)
+    }
 }

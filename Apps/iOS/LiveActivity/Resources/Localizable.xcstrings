@@ -1,74 +1,74 @@
 {
-  "sourceLanguage" : "zh-Hans",
-  "strings" : {
-    "打开 Auralis 开始播放后，这里会显示当前歌曲。" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Auralis and start playback to see the current song here."
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "打开 Auralis 开始播放后，这里会显示当前歌曲。": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Auralis and start playback to see the current song here."
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打開 Auralis 開始播放後，這裡會顯示目前歌曲。"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打開 Auralis 開始播放後，這里會顯示當前歌曲。"
           }
         }
       }
     },
-    "显示当前播放的歌曲、艺术家与进度" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shows the currently playing song, artist, and progress"
+    "显示当前播放的歌曲、艺术家与进度": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows the currently playing song, artist, and progress"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "顯示目前播放的歌曲、藝人與進度"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "顯示當前播放的歌曲、藝術家與進度"
           }
         }
       }
     },
-    "暂无播放" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nothing Playing"
+    "暂无播放": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing Playing"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暫無播放"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暫無播放"
           }
         }
       }
     },
-    "正在播放" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Now Playing"
+    "正在播放": {
+      "extractionState": "stale",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Now Playing"
           }
         },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在播放"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在播放"
           }
         }
       }
     }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }

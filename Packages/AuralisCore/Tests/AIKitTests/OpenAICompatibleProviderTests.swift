@@ -175,7 +175,8 @@ struct OpenAICompatibleProviderTests {
         let long = String(repeating: "A", count: 500)
         let preview = OpenAICompatibleProvider.bodyPreview(Data(long.utf8), limit: 240)
         #expect(preview.hasPrefix("AAA"))
-        #expect(preview.contains("共 500 字节"))
+        // 截断提示必须包含真实字节数（不依赖具体语言文案）。
+        #expect(preview.contains("500"))
     }
 
     // MARK: - 原生 Tool Calling

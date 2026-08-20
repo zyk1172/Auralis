@@ -76,7 +76,7 @@ struct MacRightPanel: View {
                                     .id(index)
                                     .accessibilityElement(children: .ignore)
                                     .accessibilityLabel(line.text)
-                                    .accessibilityValue(isCurrent ? "当前歌词" : "")
+                                    .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
                             }
                         }
                         .padding(.horizontal, 20)
@@ -112,9 +112,9 @@ struct MacRightPanel: View {
 
     private var currentIndex: Int? { queueStore.currentIndex }
     /// R05：待播队列项（带独立 UUID 身份），重复歌曲可安全渲染与移除。
-    private var upcomingEntries: [QueueEntry] {
-        guard let index = queueStore.currentIndex else { return queueStore.entries }
-        return Array(queueStore.entries.dropFirst(index + 1))
+    /// 返回 `ArraySlice`，**不复制**——队列上万首时避免 `Array(dropFirst)` 全量拷贝。
+    private var upcomingEntries: ArraySlice<QueueEntry> {
+        queueStore.entries(after: queueStore.currentIndex)
     }
 
     private var queueContent: some View {

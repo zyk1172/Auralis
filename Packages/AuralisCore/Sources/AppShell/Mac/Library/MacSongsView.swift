@@ -63,14 +63,14 @@ struct MacSongsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageSearchHeader(text: $localSearch, prompt: "在歌曲中查找", accessory: {
+            MacPageSearchHeader(text: $localSearch, prompt: String(localized: "在歌曲中查找", bundle: .module), accessory: {
                 // 显示选项：控制歌曲表格列（年份/流派/播放次数/添加日期）。
                 // 放在搜索栏同一层最右边；图标用 slider.horizontal.3 表达「调节显示项」。
                 Menu {
-                    Toggle("年份", isOn: $showYear)
-                    Toggle("流派", isOn: $showGenre)
-                    Toggle("播放次数", isOn: $showPlayCount)
-                    Toggle("添加日期", isOn: $showAddedDate)
+                    Toggle(String(localized: "年份", bundle: .module), isOn: $showYear)
+                    Toggle(String(localized: "流派", bundle: .module), isOn: $showGenre)
+                    Toggle(String(localized: "播放次数", bundle: .module), isOn: $showPlayCount)
+                    Toggle(String(localized: "添加日期", bundle: .module), isOn: $showAddedDate)
                 } label: {
                     Image(systemName: "slider.horizontal.3")
                         .frame(width: 22, height: 22)

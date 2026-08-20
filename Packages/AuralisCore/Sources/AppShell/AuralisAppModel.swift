@@ -803,8 +803,8 @@ public final class AuralisAppModel: ObservableObject {
             return true
         case .afterCurrentAlbum:
             if let index = currentQueueIndex,
-               queue.indices.contains(index + 1),
-               queue[index + 1].albumID == currentTrack.albumID {
+               let next = queueStore.track(at: index + 1),
+               next.albumID == currentTrack.albumID {
                 return false
             }
             stopForSleepTimer(reason: .queueEnded)
@@ -976,15 +976,18 @@ public final class AuralisAppModel: ObservableObject {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = query.lowercased()
         if query.isEmpty { return .playMusic }
-        if lower.contains(String(localized: "暂停", bundle: .module)) { return .control(.pause) }
-        if lower.contains(String(localized: "继续", bundle: .module)) { return .control(.resume) }
-        if lower.contains(String(localized: "上一首", bundle: .module)) || lower.contains(String(localized: "上首", bundle: .module)) { return .control(.previous) }
-        if lower.contains(String(localized: "下一首", bundle: .module)) || lower.contains(String(localized: "下首", bundle: .module)) { return .control(.next) }
-        if lower.contains(String(localized: "切换随机", bundle: .module)) || (lower.contains(String(localized: "随机", bundle: .module)) && lower.contains(String(localized: "播放", bundle: .module))) { return .control(.toggleShuffle) }
-        if lower.contains(String(localized: "切换循环", bundle: .module)) || (lower.contains(String(localized: "循环", bundle: .module)) && lower.contains(String(localized: "播放", bundle: .module))) { return .control(.toggleRepeat) }
-        if lower.contains(String(localized: "收藏", bundle: .module)) { return .playFavorites }
-        if lower.contains(String(localized: "最近", bundle: .module)) || lower.contains(String(localized: "听过", bundle: .module)) { return .playRecent }
-        if lower.contains(String(localized: "随机", bundle: .module)) { return .playRandom }
+        // 以下关键词是「代理内部固定的语音/命令匹配令牌」（中文源语言），用于把用户/语音原文
+        // 映射到意图，不属于用户可见 UI 文案，不随界面语言翻译——否则英文环境下 Siri 匹配会失效。
+        // i18n:ignore - 以下为 Siri/语音命令内部匹配令牌（中文源语言），不随界面语言翻译
+        if lower.contains("暂停") { return .control(.pause) }
+        if lower.contains("继续") { return .control(.resume) }
+        if lower.contains("上一首") || lower.contains("上首") { return .control(.previous) }
+        if lower.contains("下一首") || lower.contains("下首") { return .control(.next) }
+        if lower.contains("切换随机") || (lower.contains("随机") && lower.contains("播放")) { return .control(.toggleShuffle) }
+        if lower.contains("切换循环") || (lower.contains("循环") && lower.contains("播放")) { return .control(.toggleRepeat) }
+        if lower.contains("收藏") { return .playFavorites }
+        if lower.contains("最近") || lower.contains("听过") { return .playRecent }
+        if lower.contains("随机") { return .playRandom }
         if lower.contains("流派") || lower.contains("风格") {
             let name = Self.extractName(query, markers: ["播放", "流派", "风格", "的", "音乐", "歌"])
             return .playGenre(name.isEmpty ? query : name)
@@ -1036,7 +1039,7 @@ public final class AuralisAppModel: ObservableObject {
             if playbackState == .playing { return }
             if currentTrack.id.rawValue != "placeholder" {
                 togglePlayback()
-            } else if let first = queue.first ?? autoCandidate(catalog.tracks).first {
+            } else if let first = queueStore.firstTrack ?? autoCandidate(catalog.tracks).first {
                 selectAndPlay(first)
             }
         case let .control(action):
@@ -1221,7 +1224,7 @@ public final class AuralisAppModel: ObservableObject {
             isPlaying: playbackState == .playing,
             artworkData: currentArtworkData(),
             queueIndex: queueIndex,
-            queueCount: queue.count,
+            queueCount: queueStore.count,
             rate: playbackState == .playing ? playbackRate : 0,
             duration: effectivePlaybackDuration
         )
@@ -1270,7 +1273,7 @@ public final class AuralisAppModel: ObservableObject {
         activity.userInfo = [
             "serverID": currentTrack.serverID.rawValue,
             "currentTrackID": currentTrack.id.rawValue,
-            "queueTrackIDs": queue.map(\.id.rawValue),
+            "queueTrackIDs": queueStore.persistenceTrackIDs,
             "position": playbackPosition,
             // R05：记录当前队列项下标，接收端恢复重复歌曲时不丢失 occurrence。
             "currentQueueIndex": queueStore.currentIndex as Any,
@@ -1444,7 +1447,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 物理队列中是否存在相邻的下一首（不包含 shuffle / repeat 语义）。
     public var hasNext: Bool {
         guard let index = currentQueueIndex else { return false }
-        return queue.indices.contains(index + 1)
+        return queueStore.track(at: index + 1) != nil
     }
 
     /// 用户当前是否可以执行“下一首”动作。
@@ -1456,12 +1459,12 @@ public final class AuralisAppModel: ObservableObject {
             // 随机模式下以“本轮随机候选池”为准（物理相邻项不代表随机可继续）：
             // 随机 + 不循环：本轮随机已播完则不能再“下一首”；
             // 随机 + 列表循环：可以继续随机。
-            guard queue.count > 1 else { return false }
+            guard queueStore.count > 1 else { return false }
             if repeatMode == .off, shuffleRemainingPool.isEmpty { return false }
             return true
         }
         if hasNext { return true }
-        if repeatMode == .all && queue.count > 1 { return true }
+        if repeatMode == .all && queueStore.count > 1 { return true }
         return false
     }
 
@@ -1477,7 +1480,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 物理队列中是否存在相邻的上一首（不包含 repeat 语义）。
     public var hasPrevious: Bool {
         guard let index = currentQueueIndex else { return false }
-        return queue.indices.contains(index - 1)
+        return queueStore.track(at: index - 1) != nil
     }
 
     /// 用户当前是否可以执行“上一首”动作：只要有正在播放的曲目，
@@ -1504,20 +1507,37 @@ public final class AuralisAppModel: ObservableObject {
         }
         let expectedID = queueIdentity(track)
         AuralisLog.playback.debug("PLAY_REQUEST_RECEIVED contextCount=\(context.count, privacy: .public)")
-        // 1) 第一优先级：立即开始播放当前歌曲。
+        // 1) 第一优先级：立即开始播放当前歌曲（UI 立即切换，engine 不等待大队列）。
+        #if DEBUG
+        let selectStarted = ContinuousClock.now
+        #endif
         selectAndPlay(track)
-        // 2) 后台整理大队列（去重），完成后校验身份再替换。
-        let snapshot = context
+        #if DEBUG
+        let selectMs = durationMs(selectStarted.duration(to: .now))
+        AuralisLog.playback.debug("PLAY_SELECT_DISPATCHED id=\(expectedID.description, privacy: .public) duration_ms=\(selectMs, privacy: .public)")
+        #endif
+        // 2) 后台一次性构建整个队列（去重 + QueueEntry + selected index + persistence IDs），
+        //    MainActor 不再做 map / firstIndex / 生成 UUID / 构建 ID。
+        let contextSnapshot = context
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let startedAt = ContinuousClock.now
+            let prepareStarted = ContinuousClock.now
             let prepared = await Task.detached(priority: .userInitiated) {
-                CatalogEntityUniquing.uniquedTracks(snapshot)
+                PlaybackQueuePresentationStore.prepare(
+                    tracks: contextSnapshot,
+                    selectedTrackID: expectedID
+                )
             }.value
+            let prepareMs = durationMs(prepareStarted.duration(to: .now))
+            AuralisLog.playback.debug("PLAY_CONTEXT_PREPARED count=\(prepared.entries.count, privacy: .public) duration_ms=\(prepareMs, privacy: .public)")
+            // 快速连点 A→B→C：旧请求完成后若当前歌曲已变，丢弃，禁止旧队列覆盖新歌。
             guard queueIdentity(self.currentTrack) == expectedID else { return }
-            let elapsedMs = startedAt.duration(to: .now)
-            AuralisLog.playback.debug("QUEUE_CONTEXT_READY count=\(prepared.count, privacy: .public) durationMs=\(elapsedMs, privacy: .public)")
-            self.queue = prepared
+            let installStarted = ContinuousClock.now
+            self.queueStore.installPreparedQueue(prepared)
+            let installMs = durationMs(installStarted.duration(to: .now))
+            AuralisLog.playback.debug("QUEUE_INSTALL_FINISHED count=\(prepared.entries.count, privacy: .public) revision=\(self.queueStore.revision, privacy: .public) duration_ms=\(installMs, privacy: .public)")
+            self.schedulePlaybackSessionPersistence()
+            self.schedulePreparedNext()
         }
     }
 
@@ -1544,6 +1564,12 @@ public final class AuralisAppModel: ObservableObject {
 
     private func queueIdentity(_ track: Track) -> GlobalID {
         GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+    }
+
+    /// ContinuousClock 耗时 → 毫秒（Double）。日志统一 `duration_ms=` 而非秒。
+    private func durationMs(_ duration: Duration) -> Double {
+        let c = duration.components
+        return Double(c.seconds) * 1_000 + Double(c.attoseconds) / 1_000_000_000_000_000
     }
 
     /// 把歌曲加入队列末尾（macOS 表格右键 / 双击等）。
@@ -1584,7 +1610,12 @@ public final class AuralisAppModel: ObservableObject {
             shufflePlayedEntryIDs.insert(entryID)
         }
         playbackPosition = 0
-        if !queue.contains(where: { queueIdentity($0) == queueIdentity(track) }) { queue.insert(track, at: 0) }
+        // 当前歌曲立即落进队列（避免旧逻辑的 queue getter 完整 map + contains）。
+        // insertAtFront 直接操作 entries，不再通过 queue getter/setter。
+        let trackGID = queueIdentity(track)
+        if !queueStore.contains(globalID: trackGID) {
+            queueStore.insertAtFront(track, currentTrackID: trackGID)
+        }
         // 播放时自动缓存：当前歌曲的歌词 + 专辑封面（loadArtwork 在 UI 请求时落盘），
         // 并预缓存队列接下来几首的封面缩略图与歌词（写磁盘，不占内存）。
         loadLyricsIfNeeded(for: track)
@@ -1608,8 +1639,8 @@ public final class AuralisAppModel: ObservableObject {
 
             // 已下载文件 → 现有 URL → 按需刷新，所有播放入口共用同一解析规则。
             guard var playable = await self.resolvePlayableTrack(track) else {
-                self.playbackError = .engineFailure("无法取得可播放地址")
-                self.playbackState = .failed(.engineFailure("无法取得可播放地址"))
+                self.playbackError = .engineFailure(String(localized: "无法取得可播放地址", bundle: .module))
+                self.playbackState = .failed(.engineFailure(String(localized: "无法取得可播放地址", bundle: .module)))
                 self.syncProgressTimer()
                 return
             }
@@ -1838,7 +1869,7 @@ public final class AuralisAppModel: ObservableObject {
         guard currentTrack.id.rawValue != "placeholder" else { return }
         Task { @MainActor in
             guard let track = await self.resolvePlayableTrack(self.currentTrack, forceRefresh: true) else {
-                self.playbackError = .engineFailure("无法取得可播放地址")
+                self.playbackError = .engineFailure(String(localized: "无法取得可播放地址", bundle: .module))
                 return
             }
             self.selectAndPlay(track)
@@ -2019,11 +2050,14 @@ public final class AuralisAppModel: ObservableObject {
         guard let serverID = catalog.activeServerID else { return }
         let snapshot = PlaybackSessionSnapshot(
             currentTrackID: currentTrack.id.rawValue == "placeholder" ? nil : currentTrack.id.rawValue,
-            queueTrackIDs: queue.map(\.id.rawValue),
+            queueTrackIDs: queueStore.persistenceTrackIDs,
             position: playbackPosition,
             // R05：记录当前队列项下标，重复歌曲恢复时不丢失 occurrence。
             currentQueueIndex: queueStore.currentIndex
         )
+        let qCount = queueStore.count
+        let qRevision = queueStore.revision
+        AuralisLog.playback.debug("SESSION_SNAPSHOT_SCHEDULED queue_count=\(qCount, privacy: .public) revision=\(qRevision, privacy: .public) reuse_persistence_ids=true")
         let defaults = self.defaults
         let key = Self.playbackSessionKey(serverID)
         playbackSessionPersistenceTask = Task { @MainActor in
@@ -2450,18 +2484,18 @@ public final class AuralisAppModel: ObservableObject {
     public func deletePlaylist(id: PlaylistID) async -> Bool {
         playlistDeletionError = nil
         guard let playlist = catalog.playlists.first(where: { $0.id == id }) else {
-            playlistDeletionError = "无法定位歌单所属服务器。"
+            playlistDeletionError = String(localized: "无法定位歌单所属服务器。", bundle: .module)
             return false
         }
         // R06：readonly 歌单禁止删除。
         guard !playlist.isReadOnly else {
-            playlistDeletionError = "该歌单为只读歌单，无法删除。"
+            playlistDeletionError = String(localized: "该歌单为只读歌单，无法删除。", bundle: .module)
             return false
         }
         let serverID = playlist.serverID
         let succeeded = await connector.deletePlaylist(serverID: serverID, playlistID: id)
         guard succeeded else {
-            playlistDeletionError = "服务器未确认删除。请检查网络与歌单权限后重试。"
+            playlistDeletionError = String(localized: "服务器未确认删除。请检查网络与歌单权限后重试。", bundle: .module)
             return false
         }
         deletedPlaylistIDs.insert(id)
@@ -2800,7 +2834,7 @@ public final class AuralisAppModel: ObservableObject {
                         if self.playbackState == .idle {
                             // 进程重启恢复后引擎没有加载曲目：直接从头播放并 seek 到保存的进度。
                             guard let playable = await self.resolvePlayableTrack(self.currentTrack) else {
-                                throw PlaybackError.engineFailure("无法取得可播放地址")
+                                throw PlaybackError.engineFailure(String(localized: "无法取得可播放地址", bundle: .module))
                             }
                             try await self.engine.play(track: playable)
                             if self.playbackPosition > 0 {
@@ -2889,7 +2923,7 @@ public final class AuralisAppModel: ObservableObject {
         // 例如 [A, B, A, C] 播放第二个 A 时，next() 正确走到 C。
         if let next = queueStore.advanceForward() {
             selectAndPlay(next)
-        } else if repeatMode == .all, queue.count > 1, let firstEntry = queueStore.entries.first {
+        } else if repeatMode == .all, queueStore.count > 1, let firstEntry = queueStore.entries.first {
             // 列表循环：到队尾绕回第一首（用队首 entry 定位，保持 index 语义）。
             _ = queueStore.play(entryID: firstEntry.id)
             selectAndPlay(firstEntry.track)
@@ -2900,8 +2934,8 @@ public final class AuralisAppModel: ObservableObject {
     /// R05：在 entry 层面 shuffle（保留 UUID）——当前项身份不因重建而丢失，
     /// 重复歌曲播放第二个 A 时 currentIndex 不会漂移到第一个 A。
     public func shuffleRemainingInQueue() {
-        guard let index = currentQueueIndex, queue.indices.contains(index) else { return }
-        let tailCount = queue.count - (index + 1)
+        guard let index = currentQueueIndex, queueStore.entries.indices.contains(index) else { return }
+        let tailCount = queueStore.count - (index + 1)
         guard tailCount > 1 else { return }
         let entries = queueStore.entries
         let head = Array(entries.prefix(index + 1))
@@ -2912,7 +2946,7 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 把当前播放队列保存为服务器歌单；失败返回 false。
     public func saveQueueAsPlaylist(named name: String) async -> Bool {
-        guard !queue.isEmpty, let playlist = await createPlaylist(named: name) else { return false }
+        guard !queueStore.isEmpty, let playlist = await createPlaylist(named: name) else { return false }
         for track in queue {
             _ = await addToPlaylist(playlist, track: track)
         }
@@ -3104,10 +3138,9 @@ public final class AuralisAppModel: ObservableObject {
         queueStore.currentIndex
     }
 
-    /// 待播队列：当前曲目之后的部分。
+    /// 待播队列：当前曲目之后的部分。只映射 upcoming 切片，不复制完整队列。
     public var upcomingTracks: [Track] {
-        guard let index = currentQueueIndex else { return queue }
-        return Array(queue.dropFirst(index + 1))
+        queueStore.entries(after: currentQueueIndex).map(\.track)
     }
 
     /// 清空待播队列：保留当前曲目，不删除队列里正在播放的歌曲。
@@ -3258,16 +3291,16 @@ public final class AuralisAppModel: ObservableObject {
             selectAndPlay(currentTrack)
         case .all:
             if isShuffled {
-                if !playRandomFromQueue(), queue.count == 1 {
+                if !playRandomFromQueue(), queueStore.count == 1 {
                     // 单曲队列 + 随机：与 .one 一致，循环播放当前曲目。
                     selectAndPlay(currentTrack)
                 }
             } else if hasNext {
                 next()
-            } else if queue.count == 1 {
+            } else if queueStore.count == 1 {
                 // 单曲队列：与 .one 一致，循环播放当前曲目（F15）。
                 selectAndPlay(currentTrack)
-            } else if let first = queue.first {
+            } else if let first = queueStore.firstTrack {
                 selectAndPlay(first)
             } else {
                 pauseAtQueueEnd()
@@ -3304,7 +3337,7 @@ public final class AuralisAppModel: ObservableObject {
         }
 
         guard seamlessNextCandidate().map(queueIdentity) == queueIdentity(prepared),
-              let canonical = queue.first(where: { queueIdentity($0) == queueIdentity(prepared) }) else {
+              let canonical = queueStore.entries.first(where: { queueIdentity($0.track) == queueIdentity(prepared) })?.track else {
             // Queue changed at the boundary after preparation. Stop the stale
             // transition and let the current queue policy choose deterministically.
             if let expected = seamlessNextCandidate() {
@@ -3371,16 +3404,16 @@ public final class AuralisAppModel: ObservableObject {
         if sleepTimerMode == .afterCurrentTrack { return nil }
 
         let candidate: Track?
-        if queue.indices.contains(index + 1) {
-            candidate = queue[index + 1]
+        if let next = queueStore.track(at: index + 1) {
+            candidate = next
         } else if repeatMode == .all {
-            candidate = queue.first
+            candidate = queueStore.firstTrack
         } else {
             candidate = nil
         }
         guard let candidate else { return nil }
         if sleepTimerMode == .afterCurrentAlbum, candidate.albumID != currentTrack.albumID { return nil }
-        if sleepTimerMode == .afterCurrentQueue, !queue.indices.contains(index + 1) { return nil }
+        if sleepTimerMode == .afterCurrentQueue, queueStore.track(at: index + 1) == nil { return nil }
         return candidate
     }
 
@@ -3409,8 +3442,8 @@ public final class AuralisAppModel: ObservableObject {
         guard attempts < Self.maxStreamRetryAttempts else {
             streamRetryAttempts[gid] = 0
             lastStopReason = .streamExpired
-            playbackError = .engineFailure("流地址失效，已重试仍无法播放")
-            playbackState = .failed(.engineFailure("流地址失效，已重试仍无法播放"))
+            playbackError = .engineFailure(String(localized: "流地址失效，已重试仍无法播放", bundle: .module))
+            playbackState = .failed(.engineFailure(String(localized: "流地址失效，已重试仍无法播放", bundle: .module)))
             syncProgressTimer()
             // 统一用 canGoNext（含列表循环绕回、shuffle 剩余候选），而不是物理队列 hasNext：
             // repeat all 队尾可绕回；repeat off 队尾停止；不产生 fail→repeat→fail 自旋。

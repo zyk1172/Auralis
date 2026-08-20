@@ -47,7 +47,7 @@ public struct MacSettingsWindow: View {
                 Button(String(localized: "编辑首页…", bundle: .module)) {
                     isEditingHomeLayout = true
                 }
-                .help("调整 Mac 首页内容模块的显示与顺序（随机音乐 / 最近播放 / 很久没听 / 最近添加 / 收藏里随便听 / 从未播放 / 常听艺术家 / 常听专辑）。")
+                .help(String(localized: "调整 Mac 首页内容模块的显示与顺序（随机音乐 / 最近播放 / 很久没听 / 最近添加 / 收藏里随便听 / 从未播放 / 常听艺术家 / 常听专辑）。", bundle: .module))
             }
             Section(String(localized: "主题", bundle: .module)) {
                 ThemeChoiceGrid(themeStore: themeStore)
@@ -78,20 +78,20 @@ public struct MacSettingsWindow: View {
     private var libraryPlayback: some View {
         Form {
             Section(String(localized: "资料库统计", bundle: .module)) {
-                LabeledContent("歌曲", value: "\(model.catalog.tracks.count) 首")
-                LabeledContent("专辑", value: "\(model.catalog.albums.count) 张")
-                LabeledContent("艺术家", value: "\(model.catalog.artists.count) 位")
-                LabeledContent("歌单", value: "\(model.catalog.playlists.count) 个")
+                LabeledContent(String(localized: "歌曲", bundle: .module), value: L10n.songs(model.catalog.tracks.count))
+                LabeledContent(String(localized: "专辑", bundle: .module), value: L10n.albums(model.catalog.albums.count))
+                LabeledContent(String(localized: "艺术家", bundle: .module), value: L10n.artists(model.catalog.artists.count))
+                LabeledContent(String(localized: "歌单", bundle: .module), value: "\(model.catalog.playlists.count)")
             }
             CatalogSyncSection(model: model, theme: theme)
             Section(String(localized: "网络音质", bundle: .module)) {
-                Toggle("Wi-Fi 优先原始音质", isOn: $highQualityWiFi)
+                Toggle(String(localized: "Wi-Fi 优先原始音质", bundle: .module), isOn: $highQualityWiFi)
                 Text(String(localized: "开启后 Wi-Fi / 有线网络下优先使用服务器原始质量；关闭则限制码率（MP3 320kbps）以节省带宽。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
             Section("ReplayGain") {
-                Picker("模式", selection: Binding(
+                Picker(String(localized: "模式", bundle: .module), selection: Binding(
                     get: { model.replayGainSettings.mode },
                     set: { model.setReplayGainMode($0) }
                 )) {
@@ -113,10 +113,10 @@ public struct MacSettingsWindow: View {
                 } maximumValueLabel: {
                     Text("+12")
                 }
-                Text("前级：\(model.replayGainSettings.preampDB, specifier: "%+.1f") dB")
+                Text("\(String(localized: "前级", bundle: .module))：\(model.replayGainSettings.preampDB, specifier: "%+.1f") dB")
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
-                Toggle("峰值保护", isOn: Binding(
+                Toggle(String(localized: "峰值保护", bundle: .module), isOn: Binding(
                     get: { model.replayGainSettings.peakProtection },
                     set: { model.setReplayGainPeakProtection($0) }
                 ))
@@ -125,7 +125,7 @@ public struct MacSettingsWindow: View {
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
             Section(String(localized: "离线下载", bundle: .module)) {
-                LabeledContent("已离线", value: "\(model.catalog.downloads.count) 首")
+                LabeledContent(String(localized: "已离线", bundle: .module), value: L10n.songs(model.catalog.downloads.count))
                 Text(String(localized: "用户主动下载的离线音乐与临时播放缓存分开存储；清理临时缓存不会删除已下载的音乐。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -203,23 +203,23 @@ public struct MacSettingsWindow: View {
     private var ai: some View {
         Form {
             Section(String(localized: "AI 与隐私", bundle: .module)) {
-                Toggle("启用 AI 功能", isOn: $aiEnabled)
-                Toggle("允许发送歌曲元数据", isOn: $allowsMetadata)
-                Toggle("允许发送歌词", isOn: $allowsLyrics)
-                Toggle("允许发送播放历史摘要", isOn: $allowsHistory)
+                Toggle(String(localized: "启用 AI 功能", bundle: .module), isOn: $aiEnabled)
+                Toggle(String(localized: "允许发送歌曲元数据", bundle: .module), isOn: $allowsMetadata)
+                Toggle(String(localized: "允许发送歌词", bundle: .module), isOn: $allowsLyrics)
+                Toggle(String(localized: "允许发送播放历史摘要", bundle: .module), isOn: $allowsHistory)
             }
             Section(String(localized: "OpenAI 兼容接口", bundle: .module)) {
                 TextField("Base URL", text: $aiBaseURL)
-                TextField("API 路径", text: $aiAPIPath)
-                TextField("模型", text: $aiModel)
-                LabeledContent("API Key", value: hasAPIKey ? "已配置 · 存于系统 Keychain" : "未配置")
+                TextField(String(localized: "API 路径", bundle: .module), text: $aiAPIPath)
+                TextField(String(localized: "模型", bundle: .module), text: $aiModel)
+                LabeledContent("API Key", value: hasAPIKey ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module) : String(localized: "未配置", bundle: .module))
             }
             Section(String(localized: "高级设置", bundle: .module)) {
                 // 上下文窗口：可直接输入任意正整数（下至 4096，不设人为上限）。
-                LabeledContent("上下文窗口") {
+                LabeledContent(String(localized: "上下文窗口", bundle: .module)) {
                     HStack(spacing: 6) {
                         TextField(
-                            "Token 数量",
+                            String(localized: "Token 数量", bundle: .module),
                             value: Binding(
                                 get: { aiMaxContextTokens },
                                 set: { aiMaxContextTokens = $0 }
@@ -241,13 +241,13 @@ public struct MacSettingsWindow: View {
                         .foregroundStyle(theme.colorTokens.error.color)
                 }
                 // 单次输出上限：预设档位快捷选择 + 自定义任意正整数（不限制在预设档位）。
-                Picker("单次输出上限", selection: outputTokenMode) {
+                Picker(String(localized: "单次输出上限", bundle: .module), selection: outputTokenMode) {
                     Text(String(localized: "预设档位", bundle: .module)).tag(OutputTokenMode.preset)
                     Text(String(localized: "自定义", bundle: .module)).tag(OutputTokenMode.custom)
                 }
                 .pickerStyle(.segmented)
                 if outputTokenMode.wrappedValue == .preset {
-                    Picker("档位", selection: $aiMaxOutputTokens) {
+                    Picker(String(localized: "档位", bundle: .module), selection: $aiMaxOutputTokens) {
                         ForEach(OutputTokenLimitPolicy.presets, id: \.self) { value in
                             Text("\(value) token").tag(value)
                         }
@@ -256,7 +256,7 @@ public struct MacSettingsWindow: View {
                 } else {
                     HStack {
                         TextField(
-                            "Token 数量",
+                            String(localized: "Token 数量", bundle: .module),
                             value: Binding(
                                 get: { aiMaxOutputTokens },
                                 set: { aiMaxOutputTokens = $0 }
@@ -279,7 +279,7 @@ public struct MacSettingsWindow: View {
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
             Section(String(localized: "公开音乐数据", bundle: .module)) {
-                Toggle("启用公开音乐数据", isOn: $externalMusicEnabled)
+                Toggle(String(localized: "启用公开音乐数据", bundle: .module), isOn: $externalMusicEnabled)
                 Toggle("MusicBrainz", isOn: $musicBrainzEnabled)
                     .disabled(!externalMusicEnabled)
                 Toggle("CritiqueBrainz", isOn: $critiqueBrainzEnabled)
@@ -315,12 +315,12 @@ public struct MacSettingsWindow: View {
                 if isLoadingIndexStatus && indexStatus == nil {
                     HStack { ProgressView().controlSize(.small); Text(String(localized: "正在读取索引状态…", bundle: .module)) }
                 } else if let status = indexStatus {
-                    LabeledContent("已分类", value: "\(status.indexedTracks) / \(status.totalTracks) 首")
-                    LabeledContent("待处理", value: "\(status.pendingTracks) 首")
+                    LabeledContent(String(localized: "已分类", bundle: .module), value: "\(status.indexedTracks) / \(status.totalTracks)")
+                    LabeledContent(String(localized: "待处理", bundle: .module), value: "\(status.pendingTracks)")
                     ProgressView(value: Double(status.indexedTracks), total: Double(max(status.totalTracks, 1)))
                         .tint(theme.colorTokens.accent.color)
-                    LabeledContent("规则版本", value: status.rulesVersion)
-                    LabeledContent("索引格式", value: "V2 包 v\(LocalCatalogStore.recommendationIndexV2PackageFormatVersion)")
+                    LabeledContent(String(localized: "规则版本", bundle: .module), value: status.rulesVersion)
+                    LabeledContent(String(localized: "索引格式", bundle: .module), value: "V2 包 v\(LocalCatalogStore.recommendationIndexV2PackageFormatVersion)")
                     HStack {
                         Button(status.pendingTracks == 0 ? String(localized: "检查并更新索引", bundle: .module) : String(localized: "开始/继续全量索引", bundle: .module)) {
                             model.startOrContinueRecommendationIndexV2()
@@ -362,7 +362,7 @@ public struct MacSettingsWindow: View {
             defaultFilename: defaultIndexExportFilename
         ) { result in
             if case let .failure(error) = result {
-                indexTransferMessage = "导出失败：\(error.localizedDescription)"
+                indexTransferMessage = String(localized: "导出失败：\(error.localizedDescription)", bundle: .module)
             }
         }
         .fileImporter(
@@ -373,7 +373,7 @@ public struct MacSettingsWindow: View {
             case let .success(url):
                 Task { await importIndex(from: url) }
             case let .failure(error):
-                indexTransferMessage = "导入失败：\(error.localizedDescription)"
+                indexTransferMessage = String(localized: "导入失败：\(error.localizedDescription)", bundle: .module)
             }
         }
         .task {
@@ -394,7 +394,7 @@ public struct MacSettingsWindow: View {
     private var defaultIndexExportFilename: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return "Auralis-推荐索引-V2-\(formatter.string(from: Date()))"
+        return "Auralis-\(String(localized: "推荐索引 V2", bundle: .module))-\(formatter.string(from: Date()))"
     }
 
     private func refreshIndexStatus() async {
@@ -415,10 +415,10 @@ public struct MacSettingsWindow: View {
         do {
             try await model.catalogCoordinator.store.clearRecommendationIndexV2(serverID: serverID)
             guard model.catalog.activeServerID == serverID else { return }
-            indexTransferMessage = "当前服务器的推荐索引 V2 已清空，可重新开始索引。"
+            indexTransferMessage = String(localized: "当前服务器的推荐索引 V2 已清空，可重新开始索引。", bundle: .module)
             await refreshIndexStatus()
         } catch {
-            indexTransferMessage = "清空索引失败：\(error.localizedDescription)"
+            indexTransferMessage = String(localized: "清空索引失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -428,9 +428,9 @@ public struct MacSettingsWindow: View {
         defer { isClearingExternalMusicCache = false }
         do {
             try await model.agentCoordinator.clearExternalMusicDataCache()
-            externalMusicMessage = "公开音乐数据缓存已清除（保留已核验的音乐身份）。"
+            externalMusicMessage = String(localized: "公开音乐数据缓存已清除（保留已核验的音乐身份）。", bundle: .module)
         } catch {
-            externalMusicMessage = "清除失败：\(error.localizedDescription)"
+            externalMusicMessage = String(localized: "清除失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -440,9 +440,9 @@ public struct MacSettingsWindow: View {
         defer { isResettingExternalIdentity = false }
         do {
             try await model.agentCoordinator.resetExternalMusicIdentity()
-            externalMusicMessage = "音乐身份匹配已重置；下次打开歌曲信息/鉴赏时将重新识别 MBID。"
+            externalMusicMessage = String(localized: "音乐身份匹配已重置；下次打开歌曲信息/鉴赏时将重新识别 MBID。", bundle: .module)
         } catch {
-            externalMusicMessage = "重置失败：\(error.localizedDescription)"
+            externalMusicMessage = String(localized: "重置失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -459,7 +459,7 @@ public struct MacSettingsWindow: View {
             indexExportFile = RecommendationIndexV2IndexFile(data: data)
             isExportingIndex = true
         } catch {
-            indexTransferMessage = "导出失败：\(error.localizedDescription)"
+            indexTransferMessage = String(localized: "导出失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -480,10 +480,10 @@ public struct MacSettingsWindow: View {
                 data: data,
                 serverID: serverID
             )
-            indexTransferMessage = "成功导入 \(stats.imported) 首；已存在 \(stats.alreadyExists) 首；歌曲已变化 \(stats.metadataChanged) 首；当前音乐库不存在 \(stats.notFound) 首；格式错误 \(stats.malformed) 首。"
+            indexTransferMessage = String(localized: "成功导入 \(stats.imported) 首；已存在 \(stats.alreadyExists) 首；歌曲已变化 \(stats.metadataChanged) 首；当前音乐库不存在 \(stats.notFound) 首；格式错误 \(stats.malformed) 首。", bundle: .module)
             await refreshIndexStatus()
         } catch {
-            indexTransferMessage = "导入失败：\(error.localizedDescription)"
+            indexTransferMessage = String(localized: "导入失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -494,16 +494,16 @@ public struct MacSettingsWindow: View {
     private var system: some View {
         Form {
             Section(String(localized: "系统集成", bundle: .module)) {
-                LabeledContent("Siri 媒体播放", value: "已启用（AppIntents）")
-                LabeledContent("快捷指令", value: "已启用")
-                LabeledContent("后台播放", value: "已启用")
+                LabeledContent(String(localized: "Siri 媒体播放", bundle: .module), value: String(localized: "已启用（AppIntents）", bundle: .module))
+                LabeledContent(String(localized: "快捷指令", bundle: .module), value: String(localized: "已启用", bundle: .module))
+                LabeledContent(String(localized: "后台播放", bundle: .module), value: String(localized: "已启用", bundle: .module))
             }
             Text(String(localized: "Siri 与快捷指令只使用本地资料库的名称与标识进行匹配，不会暴露服务器地址、账号或令牌。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             SettingsBackupSection(model: model, themeStore: themeStore, theme: theme)
             Section(String(localized: "调试", bundle: .module)) {
-                Toggle("启用崩溃日志", isOn: $crashLogEnabled)
+                Toggle(String(localized: "启用崩溃日志", bundle: .module), isOn: $crashLogEnabled)
             }
         }
         .formStyle(.grouped)
@@ -514,8 +514,8 @@ public struct MacSettingsWindow: View {
     private var about: some View {
         Form {
             Section {
-                LabeledContent("版本", value: AppVersionInfo.display)
-                LabeledContent("构建", value: "原生 macOS")
+                LabeledContent(String(localized: "版本", bundle: .module), value: AppVersionInfo.display)
+                LabeledContent(String(localized: "构建", bundle: .module), value: String(localized: "原生 macOS", bundle: .module))
                 Text(String(localized: "Auralis · 私人音乐服务器播放器（OpenSubsonic / Navidrome）", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -536,7 +536,7 @@ enum ContextTokenLimitPolicy {
 
     static func validationMessage(for value: Int) -> String? {
         guard value >= minValue else {
-            return "上下文窗口不能低于 \(minValue) token"
+            return String(localized: "上下文窗口不能低于 \(minValue) token", bundle: .module)
         }
         return nil
     }
@@ -566,7 +566,7 @@ enum OutputTokenLimitPolicy {
 
     static func validationMessage(for value: Int) -> String? {
         guard value >= minValue else {
-            return "单次输出不能低于 \(minValue) token"
+            return String(localized: "单次输出不能低于 \(minValue) token", bundle: .module)
         }
         return nil
     }

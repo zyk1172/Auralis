@@ -66,9 +66,9 @@ struct MacExpandedPlayerView: View {
     }
     /// 待播队列（当前曲目之后的队列项），由 queueStore 提供，随队列/当前曲目变化更新。
     /// R05：返回带独立 UUID 身份的 QueueEntry，重复歌曲可安全渲染与移除。
-    private var queueStoreUpcomingEntries: [QueueEntry] {
-        guard let index = queueStore.currentIndex else { return queueStore.entries }
-        return Array(queueStore.entries.dropFirst(index + 1))
+    /// 返回 `ArraySlice`，**不复制**——队列上万首时避免 `Array(dropFirst)` 全量拷贝。
+    private var queueStoreUpcomingEntries: ArraySlice<QueueEntry> {
+        queueStore.entries(after: queueStore.currentIndex)
     }
     /// 展开播放页只从 ThemeColors 取前景色。背景可以是浅色渐变、封面氛围图或深色
     /// 主题，但文字和按钮不能再假设它一定是黑底。
@@ -264,7 +264,7 @@ struct MacExpandedPlayerView: View {
                     .foregroundStyle(track.isFavorite ? palette.accent : palette.control)
             }
             .buttonStyle(.plain)
-            .help(track.isFavorite ? "取消收藏" : "收藏")
+            .help(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
             .accessibilityLabel(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
             Menu {
                 if model.hasCurrentTrack {
@@ -292,7 +292,7 @@ struct MacExpandedPlayerView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("更多")
+            .help(String(localized: "更多", bundle: .module))
             .accessibilityLabel(String(localized: "更多", bundle: .module))
         }
     }
@@ -392,7 +392,7 @@ struct MacExpandedPlayerView: View {
                     .foregroundStyle(model.repeatMode != .off ? palette.accent : palette.control)
             }
             .buttonStyle(.plain)
-            .help("循环模式")
+            .help(String(localized: "循环模式", bundle: .module))
             .accessibilityLabel(String(localized: "循环模式", bundle: .module))
         }
         .frame(width: width)
@@ -445,7 +445,7 @@ struct MacExpandedPlayerView: View {
                                         }
                                     }
                                     .id(index)
-                                    .accessibilityValue(isCurrent ? "当前歌词" : "")
+                                    .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
                             }
                         }
                         .padding(.vertical, 18)
@@ -579,7 +579,7 @@ struct MacExpandedPlayerView: View {
                         .foregroundStyle(palette.control)
                 }
                 .buttonStyle(.plain)
-                .help("收起播放器")
+                .help(String(localized: "收起播放器", bundle: .module))
                 .accessibilityLabel(String(localized: "收起播放器", bundle: .module))
                 Button(action: onOpenMiniPlayer) {
                     Image(systemName: "rectangle.on.rectangle")
@@ -587,7 +587,7 @@ struct MacExpandedPlayerView: View {
                         .foregroundStyle(palette.control)
                 }
                 .buttonStyle(.plain)
-                .help("切换迷你播放器")
+                .help(String(localized: "切换迷你播放器", bundle: .module))
                 .accessibilityLabel(String(localized: "切换迷你播放器", bundle: .module))
             }
             .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topLeftGlassPaddingH)
@@ -634,7 +634,7 @@ struct MacExpandedPlayerView: View {
                         .foregroundStyle(context == .lyrics ? palette.accent : palette.control)
                 }
                 .buttonStyle(.plain)
-                .help("歌词")
+                .help(String(localized: "歌词", bundle: .module))
                 .accessibilityLabel(String(localized: "歌词", bundle: .module))
                 Button {
                     MacUITrace.action("toggleQueue", "from=\(String(describing: context))")
@@ -645,7 +645,7 @@ struct MacExpandedPlayerView: View {
                         .foregroundStyle(context == .queue ? palette.accent : palette.control)
                 }
                 .buttonStyle(.plain)
-                .help("队列")
+                .help(String(localized: "队列", bundle: .module))
                 .accessibilityLabel(String(localized: "队列", bundle: .module))
             }
             .padding(.horizontal, MacUIVisualTokens.ExpandedPlayer.topRightGlassPaddingH)

@@ -21,10 +21,22 @@
       "comment" : "Bundle display name",
       "extractionState" : "extracted_with_value",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis"
+          }
+        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
             "value" : "Auralis"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CFBundleDisplayName"
           }
         }
       }
@@ -33,10 +45,22 @@
       "comment" : "Bundle name",
       "extractionState" : "extracted_with_value",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis"
+          }
+        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
             "value" : "Auralis"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CFBundleName"
           }
         }
       }
@@ -45,10 +69,22 @@
       "comment" : "Copyright (human-readable)",
       "extractionState" : "extracted_with_value",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copyright © 2026 Auralis."
+          }
+        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
             "value" : "Copyright © 2026 Auralis."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NSHumanReadableCopyright"
           }
         }
       }
@@ -66,7 +102,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "允许连接您局域网中的个人音乐服务器，以浏览和播放音乐。"
+            "value" : "Auralis 需要连接您选择的私人音乐服务器，以同步资料库和播放音乐。"
           }
         },
         "zh-Hant" : {

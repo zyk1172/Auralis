@@ -149,7 +149,6 @@
 			children = (
 				69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */,
 				755404A1DB56C96714E863E6 /* MacShortcuts.swift */,
-				6084C2012EDBB49265A85CF4 /* Resources */,
 			);
 			path = macOS;
 			sourceTree = "<group>";
@@ -175,13 +174,6 @@
 			children = (
 				277C164815EFE9449940797F /* InfoPlist.xcstrings */,
 				37512AECC1D8665440BBB4DB /* Localizable.xcstrings */,
-			);
-			path = Resources;
-			sourceTree = "<group>";
-		};
-		6084C2012EDBB49265A85CF4 /* Resources */ = {
-			isa = PBXGroup;
-			children = (
 			);
 			path = Resources;
 			sourceTree = "<group>";
