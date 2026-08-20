@@ -455,12 +455,7 @@ private struct MorphingBottomDock: View {
                     if accessory == .player {
                         ZStack {
                             MorphingGlassCapsule { Color.clear }
-                                .frame(width: fullWidth, height: bottomBarHeight)
-                                .scaleEffect(
-                                    x: fullWidth > 0 ? max(playerWidth, bottomBarHeight) / fullWidth : 1,
-                                    y: 1,
-                                    anchor: .center
-                                )
+                                .frame(width: max(playerWidth, bottomBarHeight), height: bottomBarHeight)
                             MiniPlayerContent(
                                 model: model,
                                 theme: theme,
@@ -600,17 +595,17 @@ private struct MorphingGlassCapsule<Content: View>: View {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.background, in: Capsule(style: .continuous))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 0.5)
+                    )
+                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
             } else {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .glassEffect(.regular, in: Capsule(style: .continuous))
+                    .glassEffect(.regular.interactive(), in: Capsule(style: .continuous))
             }
         }
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color.white.opacity(reduceTransparency ? 0.14 : 0.08), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(reduceTransparency ? 0.05 : 0.14), radius: reduceTransparency ? 4 : 12, x: 0, y: reduceTransparency ? 2 : 6)
     }
 }
 
@@ -715,19 +710,16 @@ private struct CircularDockButton<Label: View>: View {
             if reduceTransparency {
                 button
                     .background(.background, in: Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.14), lineWidth: 0.5)
+                    )
+                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
             } else {
                 button
-                    .glassEffect(.regular, in: Circle())
+                    .glassEffect(.regular.interactive(), in: Circle())
             }
         }
-        .overlay(
-            Circle()
-                .stroke(Color.white.opacity(reduceTransparency ? 0.14 : 0.08), lineWidth: 0.5)
-        )
-        .shadow(
-            color: Color.black.opacity(reduceTransparency ? 0.05 : 0.14),
-            radius: reduceTransparency ? 4 : 12, x: 0, y: reduceTransparency ? 2 : 6
-        )
     }
 
     private var button: some View {
@@ -787,8 +779,7 @@ struct DockAssistantInputBar: View {
 
 /// 公共液态玻璃外壳：统一负责背景材质、玻璃折射、圆角、边缘高光与阴影。
 /// 迷你播放条与主菜单栏都通过它绘制外轮廓，保证尺寸与材质完全一致。
-/// 材质使用系统原生液态玻璃（glassEffect），边缘仅保留极细的高光描边，
-/// 不再用不透明白色粗描边，整体更接近苹果标准工具栏质感。
+/// 正常模式由系统 glassEffect 自带边缘与阴影；Reduce Transparency 时改为实色背景 + 细描边。
 struct BottomGlassBarShell<Content: View>: View {
     @ViewBuilder let content: Content
     @Environment(\.auralisReduceTransparency) private var reduceTransparency
@@ -798,19 +789,16 @@ struct BottomGlassBarShell<Content: View>: View {
             if reduceTransparency {
                 framedContent
                     .background(.background, in: Capsule(style: .continuous))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 0.5)
+                    )
+                    .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
             } else {
                 framedContent
-                    .glassEffect(.regular, in: Capsule(style: .continuous))
+                    .glassEffect(.regular.interactive(), in: Capsule(style: .continuous))
             }
         }
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color.white.opacity(reduceTransparency ? 0.14 : 0.08), lineWidth: 0.5)
-        )
-        .shadow(
-            color: Color.black.opacity(reduceTransparency ? 0.05 : 0.14),
-            radius: reduceTransparency ? 4 : 12, x: 0, y: reduceTransparency ? 2 : 6
-        )
     }
 
     private var framedContent: some View {
