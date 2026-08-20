@@ -64,10 +64,15 @@ public final class AuralisAppModel: ObservableObject {
         get { playbackStore.currentTrack }
         set {
             guard playbackStore.currentTrack != newValue else { return }
-            objectWillChange.send()
             playbackStore.currentTrack = newValue
             queueStore.updateCurrentIndex(currentTrackID: queueIdentity(newValue))
         }
+    }
+    /// 仅在需要「切换当前曲目但不马上在旧队列里定位」时使用（上下文播放的 deferred 路径）。
+    /// 旧队列 10000 首扫描由新队列安装统一处理，避免双击时的 O(N) 扫描与 O(N) 队首插入。
+    private func setCurrentTrackWithoutQueueUpdate(_ track: Track) {
+        guard playbackStore.currentTrack != track else { return }
+        playbackStore.currentTrack = track
     }
     /// AI 助手输入框的草稿文本。提升到模型层是为了让底部 Dock（iOS）
     /// 与助手页面（macOS）共用同一份输入，避免嵌套 safeAreaInset 造成的布局重叠。
@@ -86,7 +91,6 @@ public final class AuralisAppModel: ObservableObject {
         get { playbackStore.state }
         set {
             guard playbackStore.state != newValue else { return }
-            objectWillChange.send()
             playbackStore.state = newValue
         }
     }
@@ -170,7 +174,11 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var catalogRevision: UInt64 = 0
     /// 当前 item 的真实时长（秒），由引擎按需回报；目录元数据时长可能不准，
     /// 播放页进度条、控制中心与 Live Activity 以此为准（真机反馈：进度条到头仍在播）。
-    @Published public private(set) var actualDuration: TimeInterval?
+    /// 真实时长由 PlaybackStore 持有，避免全局 AppModel 的额外 invalidate。
+    public var actualDuration: TimeInterval? {
+        get { playbackStore.actualDuration }
+        set { playbackStore.actualDuration = newValue }
+    }
     /// apply() 排队的后台派生任务（首页货架 / 随机音乐 / library-added 对齐）。
     /// 生产首帧不等待它；测试通过 `awaitPendingApplyDerivations()` 确定性等待。
     private var pendingApplyDerivations: Task<Void, Never>?
@@ -1195,24 +1203,12 @@ public final class AuralisAppModel: ObservableObject {
     /// 当前曲目的封面数据（用于 Now Playing），未加载时为 nil。
     /// R01：按 currentTrack.serverID 取封面——播 A 浏览 B 时，Now Playing 必须拿 A
     /// 的封面（缓存键落在 A 命名空间），不能因为浏览服务器是 B 而串用 B 的同名封面。
+    /// 已改为直接复用管线返回的原始 encodedData（JPEG/PNG），避免在双击热路径上
+    /// 同步执行 NSImage → TIFF → PNG 的编解码；未命中则返回 nil，待
+    /// artworkStore.onArtworkLoaded 异步补齐。
     private func currentArtworkData() -> Data? {
         guard let key = currentTrack.artworkKey else { return nil }
-        let serverID = currentTrack.serverID
-        // Now Playing 只需要一张中等尺寸封面
-        for size in [620, 284, 264, 96] {
-            if let image = artworkStore.image(remoteKey: key, targetPixelSize: size, serverID: serverID) {
-                #if os(macOS)
-                if let tiff = image.tiffRepresentation,
-                   let rep = NSBitmapImageRep(data: tiff),
-                   let png = rep.representation(using: .png, properties: [:]) {
-                    return png
-                }
-                #else
-                if let png = image.pngData() { return png }
-                #endif
-            }
-        }
-        return nil
+        return artworkStore.encodedData(remoteKey: key, serverID: currentTrack.serverID)
     }
 
     /// 切歌后同步 Now Playing 全量信息（含队列位置 / 总数，控制中心可显示）。
@@ -1511,13 +1507,13 @@ public final class AuralisAppModel: ObservableObject {
         #if DEBUG
         let selectStarted = ContinuousClock.now
         #endif
-        selectAndPlay(track)
+        selectAndPlay(track, reconcileQueue: false)
         #if DEBUG
         let selectMs = durationMs(selectStarted.duration(to: .now))
         AuralisLog.playback.debug("PLAY_SELECT_DISPATCHED id=\(expectedID.description, privacy: .public) duration_ms=\(selectMs, privacy: .public)")
         #endif
-        // 2) 后台一次性构建整个队列（去重 + QueueEntry + selected index + persistence IDs），
-        //    MainActor 不再做 map / firstIndex / 生成 UUID / 构建 ID。
+        // 2) 后台一次性构建整个队列（去重 + QueueEntry + selected index + persistence IDs + 索引字典），
+        //    MainActor 只安装结果，不再做 map / firstIndex / 生成 UUID / 构建 ID。
         let contextSnapshot = context
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1599,35 +1595,45 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     public func selectAndPlay(_ track: Track) {
+        selectAndPlay(track, reconcileQueue: true)
+    }
+
+    private func selectAndPlay(_ track: Track, reconcileQueue: Bool) {
         CrashLog.shared.log("selectAndPlay 开始: \(track.title) (id=\(track.id.rawValue))")
         actualDuration = nil
         streamRetryAttempts.removeValue(forKey: queueIdentity(track))
         playbackHistoryStore.resetSelection()
-        currentTrack = track
+        if reconcileQueue {
+            currentTrack = track
+        } else {
+            // 上下文播放的 deferred 路径：新队列即将后台构建并整体安装，
+            // 不在此扫描旧队列的 10000 首定位/插入，避免双击的 O(N) 热路径。
+            setCurrentTrackWithoutQueueUpdate(track)
+        }
         // 随机模式下记录“本轮已播放”：保证随机 + 不循环时每首只播一次，播完即停。
         // R05：按队列项 UUID 记录——重复歌曲是两个独立 occurrence，播过 A₁ 不误伤 A₂。
-        if isShuffled, let entryID = queueStore.currentEntryID {
+        // deferred 路径下当前 entry 尚未安装，暂缓记录。
+        if reconcileQueue, isShuffled, let entryID = queueStore.currentEntryID {
             shufflePlayedEntryIDs.insert(entryID)
         }
         playbackPosition = 0
-        // 当前歌曲立即落进队列（避免旧逻辑的 queue getter 完整 map + contains）。
-        // insertAtFront 直接操作 entries，不再通过 queue getter/setter。
-        let trackGID = queueIdentity(track)
-        if !queueStore.contains(globalID: trackGID) {
-            queueStore.insertAtFront(track, currentTrackID: trackGID)
+        if reconcileQueue {
+            // 当前歌曲立即落进队列（避免旧逻辑的 queue getter 完整 map + contains）。
+            // deferred 路径下新队列即将整体安装，不扫描/插入旧队列。
+            let trackGID = queueIdentity(track)
+            if !queueStore.contains(globalID: trackGID) {
+                queueStore.insertAtFront(track, currentTrackID: trackGID)
+            }
         }
         // 播放时自动缓存：当前歌曲的歌词 + 专辑封面（loadArtwork 在 UI 请求时落盘），
         // 并预缓存队列接下来几首的封面缩略图与歌词（写磁盘，不占内存）。
         loadLyricsIfNeeded(for: track)
 
         // ── 关键安全守卫 ──
-        // 手势回调在 com.apple.uikit.eventdispatch 队列上执行（非 Thread 1 主线程）。
-        // AVPlayer / MPNowPlayingInfoCenter / FIGApplicationStateMonitor 等 Apple 内部框架
-        // 会通过 _dispatch_assert_queue_fail 断言自己必须在主线程上运行。
-        // 若直接在 Task {} 里调用 engine.play() / syncNowPlayingTrack()，
-        // 继承的 @MainActor 仍可能落在 eventdispatch 队列上 → EXC_BREAKPOINT 崩溃。
-        // 因此把所有媒体操作 DispatchQueue.main.async 到下一轮 RunLoop，
-        // 确保它们在 Thread 1 上执行。
+        // 手势回调可能在 com.apple.uikit.eventdispatch 队列上执行。
+        // AVPlayer / MPNowPlayingInfoCenter 等框架断言必须在主线程运行，
+        // 因此后续媒体操作通过 Task { @MainActor in } 显式跳回主线程
+        // （历史注释中的 DispatchQueue.main.async 现已由 Task @MainActor 替代）。
         //
         // 快速切歌时取消之前的播放任务，避免多个 engine.play() 并发导致竞态条件和卡死。
         playbackTask?.cancel()

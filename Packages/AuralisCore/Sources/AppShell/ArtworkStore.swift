@@ -44,6 +44,7 @@ final class ArtworkStore {
     @ObservationIgnored private let thumbnails = NSCache<NSString, PlatformImage>()
     @ObservationIgnored private let fullSizeImages = NSCache<NSString, PlatformImage>()
     @ObservationIgnored private let unavailable = NSCache<NSString, NSNumber>()
+    @ObservationIgnored private let encodedDataCache = NSCache<NSString, NSData>()
     @ObservationIgnored private let pipeline: ArtworkPipeline
     @ObservationIgnored private let configuration: MemoryConfiguration
     @ObservationIgnored private var generation = 0
@@ -76,6 +77,9 @@ final class ArtworkStore {
         fullSizeImages.countLimit = max(1, configuration.fullSizeCountLimit)
         unavailable.name = "Auralis.Artwork.Unavailable"
         unavailable.countLimit = max(1, configuration.unavailableCountLimit)
+        encodedDataCache.name = "Auralis.Artwork.EncodedData"
+        encodedDataCache.totalCostLimit = max(1, configuration.thumbnailCostLimit)
+        encodedDataCache.countLimit = max(1, configuration.thumbnailCountLimit * 2)
 
         installMemoryPressureHandling()
     }
@@ -105,6 +109,14 @@ final class ArtworkStore {
 
     func isUnavailable(_ key: String) -> Bool {
         unavailable.object(forKey: key as NSString) != nil
+    }
+
+    /// Now Playing 等需要原始 encodedData 的场景：直接复用管线返回的 JPEG/PNG 字节，
+    /// 避免在 MainActor 上做 NSImage → TIFF → PNG 的同步重编码。
+    func encodedData(remoteKey: String?, serverID: ServerID? = nil) -> Data? {
+        guard let remoteKey, !remoteKey.isEmpty else { return nil }
+        let key = Self.encodedCacheKey(namespace: effectiveServerID(serverID).rawValue, remoteKey: remoteKey)
+        return encodedDataCache.object(forKey: key as NSString) as Data?
     }
 
     /// 返回内存命中，或异步经过磁盘/网络与 ImageIO 下采样后的最终图片。
@@ -164,6 +176,8 @@ final class ArtworkStore {
         }
         let image = Self.platformImage(from: payload.decoded)
         setImage(image, forKey: key, targetPixelSize: target, cost: payload.decoded.memoryCost)
+        let encodedKey = Self.encodedCacheKey(namespace: requestServerID.rawValue, remoteKey: remoteKey)
+        encodedDataCache.setObject(payload.encodedData as NSData, forKey: encodedKey as NSString, cost: payload.encodedData.count)
         onArtworkLoaded?(remoteKey, payload.encodedData)
         return image
     }
@@ -198,6 +212,7 @@ final class ArtworkStore {
         thumbnails.removeAllObjects()
         fullSizeImages.removeAllObjects()
         unavailable.removeAllObjects()
+        encodedDataCache.removeAllObjects()
         Task { await pipeline.cancelAll() }
     }
 
@@ -210,6 +225,7 @@ final class ArtworkStore {
     func handleMemoryPressure() {
         thumbnails.removeAllObjects()
         fullSizeImages.removeAllObjects()
+        encodedDataCache.removeAllObjects()
     }
 
     // MARK: - Private
@@ -259,6 +275,10 @@ final class ArtworkStore {
         targetPixelSize: Int
     ) -> String {
         "\(namespace)|\(remoteKey)@\(min(max(1, targetPixelSize), 4_096))"
+    }
+
+    private static func encodedCacheKey(namespace: String, remoteKey: String) -> String {
+        "\(namespace)|\(remoteKey)"
     }
 
     private static func pixelSize(fromCacheKey key: String) -> Int? {

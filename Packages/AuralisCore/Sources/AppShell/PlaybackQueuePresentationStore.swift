@@ -39,6 +39,11 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
     /// 播放会话持久化直接读取，禁止再 `entries.map(\.track.id.rawValue)`。
     public private(set) var persistenceTrackIDs: [String] = []
 
+    /// O(1) 定位用索引：entryID → index / GlobalID 首次出现 → index。
+    /// 后台构建，MainActor 仅赋值；增量变更后重建。
+    private var indexByEntryID: [UUID: Int] = [:]
+    private var firstIndexByGlobalID: [GlobalID: Int] = [:]
+
     public init() {}
 
     // MARK: - O(1) / 轻量访问（禁止在播放热路径使用 `tracks`）
@@ -61,9 +66,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
     /// 按 GlobalID 判断队列是否包含某首歌（O(N)，但只比较 entry，不复制 Track）。
     /// 不得先 `entries.map(\.track)` 再 contains。
     public func contains(globalID: GlobalID) -> Bool {
-        entries.contains {
-            GlobalID(serverID: $0.track.serverID, remoteID: $0.track.id.rawValue) == globalID
-        }
+        firstIndexByGlobalID[globalID] != nil
     }
 
     /// 当前曲目之后（含无当前项时的全部）的队列项切片——返回 `ArraySlice`，
@@ -109,17 +112,23 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
         public let currentIndex: Int?
         public let currentEntryID: UUID?
         public let persistenceTrackIDs: [String]
+        public let indexByEntryID: [UUID: Int]
+        public let firstIndexByGlobalID: [GlobalID: Int]
 
         public init(
             entries: [QueueEntry],
             currentIndex: Int?,
             currentEntryID: UUID?,
-            persistenceTrackIDs: [String]
+            persistenceTrackIDs: [String],
+            indexByEntryID: [UUID: Int],
+            firstIndexByGlobalID: [GlobalID: Int]
         ) {
             self.entries = entries
             self.currentIndex = currentIndex
             self.currentEntryID = currentEntryID
             self.persistenceTrackIDs = persistenceTrackIDs
+            self.indexByEntryID = indexByEntryID
+            self.firstIndexByGlobalID = firstIndexByGlobalID
         }
     }
 
@@ -140,6 +149,10 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
 
         var seen = Set<GlobalID>()
         var selectedIndex: Int?
+        var indexByEntryID: [UUID: Int] = [:]
+        indexByEntryID.reserveCapacity(tracks.count)
+        var firstIndexByGlobalID: [GlobalID: Int] = [:]
+        firstIndexByGlobalID.reserveCapacity(tracks.count)
 
         for track in tracks {
             let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
@@ -149,6 +162,10 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
             let entry = QueueEntry(track: track)
             entries.append(entry)
             persistenceTrackIDs.append(track.id.rawValue)
+            indexByEntryID[entry.id] = index
+            if firstIndexByGlobalID[gid] == nil {
+                firstIndexByGlobalID[gid] = index
+            }
 
             if selectedIndex == nil, gid == selectedTrackID {
                 selectedIndex = index
@@ -163,7 +180,9 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
             entries: entries,
             currentIndex: selectedIndex,
             currentEntryID: entryID,
-            persistenceTrackIDs: persistenceTrackIDs
+            persistenceTrackIDs: persistenceTrackIDs,
+            indexByEntryID: indexByEntryID,
+            firstIndexByGlobalID: firstIndexByGlobalID
         )
     }
 
@@ -173,6 +192,8 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
         mutate {
             entries = prepared.entries
             persistenceTrackIDs = prepared.persistenceTrackIDs
+            indexByEntryID = prepared.indexByEntryID
+            firstIndexByGlobalID = prepared.firstIndexByGlobalID
             currentIndex = prepared.currentIndex
             currentEntryID = prepared.currentEntryID
             revision &+= 1
@@ -195,6 +216,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
                 persistenceTrackIDs = newEntries.map { $0.track.id.rawValue }
                 revision &+= 1
             }
+            rebuildIndexesImpl()
             updateCurrentIndexImpl(currentTrackID: currentTrackID)
         }
     }
@@ -206,6 +228,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
             entries.append(contentsOf: newTracks.map { QueueEntry(track: $0) })
             persistenceTrackIDs.append(contentsOf: newTracks.map { $0.id.rawValue })
             revision &+= 1
+            rebuildIndexesImpl()
             updateCurrentIndexImpl(currentTrackID: currentTrackID)
         }
     }
@@ -218,6 +241,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
             entries.insert(entry, at: insertion)
             persistenceTrackIDs.insert(track.id.rawValue, at: insertion)
             revision &+= 1
+            rebuildIndexesImpl()
             updateCurrentIndexImpl(currentTrackID: currentTrackID)
         }
     }
@@ -230,6 +254,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
             entries.insert(entry, at: 0)
             persistenceTrackIDs.insert(track.id.rawValue, at: 0)
             revision &+= 1
+            rebuildIndexesImpl()
             let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
             if currentTrackID == gid {
                 currentIndex = 0
@@ -243,11 +268,12 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
     /// 按队列项 id 移除（重复歌曲只移除指定那一项）。
     @discardableResult
     public func remove(entryID: UUID, currentTrackID: GlobalID?) -> Bool {
-        guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return false }
+        guard let index = indexByEntryID[entryID], entries.indices.contains(index), entries[index].id == entryID else { return false }
         mutate {
             entries.remove(at: index)
             persistenceTrackIDs.remove(at: index)
             revision &+= 1
+            rebuildIndexesImpl()
             updateCurrentIndexImpl(currentTrackID: currentTrackID)
         }
         return true
@@ -260,6 +286,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
             entries.removeSubrange((index + 1)...)
             persistenceTrackIDs.removeSubrange((index + 1)...)
             revision &+= 1
+            rebuildIndexesImpl()
             updateCurrentIndexImpl(currentTrackID: currentTrackID)
         }
     }
@@ -280,6 +307,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
             entries.insert(contentsOf: moving, at: insertion)
             persistenceTrackIDs.insert(contentsOf: movingTrackIDs, at: insertion)
             revision &+= 1
+            rebuildIndexesImpl()
             updateCurrentIndexImpl(currentTrackID: currentTrackID)
         }
     }
@@ -290,7 +318,7 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
     /// 以队列项 UUID 定位；找不到返回 nil（调用方自行处理）。
     @discardableResult
     public func play(entryID: UUID) -> Track? {
-        guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return nil }
+        guard let index = indexByEntryID[entryID], entries.indices.contains(index), entries[index].id == entryID else { return nil }
         mutate { setCurrentImpl(entryID: entryID, index: index) }
         return entries[index].track
     }
@@ -321,18 +349,32 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
         mutate { updateCurrentIndexImpl(currentTrackID: currentTrackID) }
     }
 
+    private func rebuildIndexesImpl() {
+        indexByEntryID.removeAll(keepingCapacity: true)
+        firstIndexByGlobalID.removeAll(keepingCapacity: true)
+        indexByEntryID.reserveCapacity(entries.count)
+        firstIndexByGlobalID.reserveCapacity(entries.count)
+        for (idx, entry) in entries.enumerated() {
+            indexByEntryID[entry.id] = idx
+            let gid = GlobalID(serverID: entry.track.serverID, remoteID: entry.track.id.rawValue)
+            if firstIndexByGlobalID[gid] == nil {
+                firstIndexByGlobalID[gid] = idx
+            }
+        }
+    }
+
     private func updateCurrentIndexImpl(currentTrackID: GlobalID?) {
         if let currentEntryID,
-           let idx = entries.firstIndex(where: { $0.id == currentEntryID }),
+           let idx = indexByEntryID[currentEntryID],
+           entries.indices.contains(idx),
            let currentTrackID,
            GlobalID(serverID: entries[idx].track.serverID, remoteID: entries[idx].track.id.rawValue) == currentTrackID {
             setCurrentImpl(entryID: currentEntryID, index: idx)
             return
         }
         if let currentTrackID,
-           let idx = entries.firstIndex(where: {
-               GlobalID(serverID: $0.track.serverID, remoteID: $0.track.id.rawValue) == currentTrackID
-           }) {
+           let idx = firstIndexByGlobalID[currentTrackID],
+           entries.indices.contains(idx) {
             setCurrentImpl(entryID: entries[idx].id, index: idx)
         } else {
             setCurrentImpl(entryID: nil, index: nil)

@@ -70,6 +70,42 @@ struct MacSongTable: View {
     @State private var orderedTrackContext: [Track] = []
     /// 避免等价排序重复重建 context（基础上下文）的标记。
     @State private var lastContextRevision: UInt64 = 0
+    @ObservedObject private var playbackStore: PlaybackStore
+
+    init(
+        tracks: [Track],
+        selection: Binding<Set<GlobalID>>,
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        onNavigate: @escaping (MacNavigationTarget) -> Void = { _ in },
+        contentRevision: UInt64 = 0,
+        numberText: @escaping (Track) -> String? = { _ in nil },
+        showAlbumColumn: Bool = true,
+        showYearColumn: Bool = true,
+        showGenreColumn: Bool = true,
+        showPlayCountColumn: Bool = false,
+        showAddedDateColumn: Bool = false,
+        showArtwork: Bool = true,
+        showIndexColumn: Bool = false,
+        rowHeight: CGFloat = 40
+    ) {
+        self.tracks = tracks
+        self._selection = selection
+        self.model = model
+        self.theme = theme
+        self.onNavigate = onNavigate
+        self.contentRevision = contentRevision
+        self.numberText = numberText
+        self.showAlbumColumn = showAlbumColumn
+        self.showYearColumn = showYearColumn
+        self.showGenreColumn = showGenreColumn
+        self.showPlayCountColumn = showPlayCountColumn
+        self.showAddedDateColumn = showAddedDateColumn
+        self.showArtwork = showArtwork
+        self.showIndexColumn = showIndexColumn
+        self.rowHeight = rowHeight
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+    }
 
     private var rowsRevision: MacSongRowsRevision {
         .init(
@@ -234,7 +270,7 @@ struct MacSongTable: View {
     }
 
     private func isCurrent(_ track: Track) -> Bool {
-        model.currentTrack.serverID == track.serverID && model.currentTrack.id == track.id
+        playbackStore.currentTrack.serverID == track.serverID && playbackStore.currentTrack.id == track.id
     }
 
     private func rebuildRows() {

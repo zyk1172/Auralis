@@ -21,10 +21,33 @@ struct MacDetailTrackRow: View {
     /// 为空时退化为只播放当前这首。
     var contextTracks: [Track] = []
 
+    @ObservedObject private var playbackStore: PlaybackStore
+
+    init(
+        track: Track,
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        number: Int? = nil,
+        showArtist: Bool = false,
+        showAlbum: Bool = false,
+        onNavigate: @escaping (MacNavigationTarget) -> Void = { _ in },
+        contextTracks: [Track] = []
+    ) {
+        self.track = track
+        self._model = ObservedObject(wrappedValue: model)
+        self.theme = theme
+        self.number = number
+        self.showArtist = showArtist
+        self.showAlbum = showAlbum
+        self.onNavigate = onNavigate
+        self.contextTracks = contextTracks
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+    }
+
     @State private var isHovering = false
 
     private var isCurrent: Bool {
-        model.currentTrack.serverID == track.serverID && model.currentTrack.id == track.id
+        playbackStore.currentTrack.serverID == track.serverID && playbackStore.currentTrack.id == track.id
     }
 
     var body: some View {
