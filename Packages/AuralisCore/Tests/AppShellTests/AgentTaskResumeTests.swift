@@ -21,4 +21,7 @@ func recommendationIndexResumeCandidateIsScoped() {
     #expect(store.recommendationIndexResumeCandidate(conversationID: conversationID, requestText: "继续")?.id == record.id)
     #expect(store.recommendationIndexResumeCandidate(conversationID: UUID(), requestText: "继续") == nil)
     #expect(store.recommendationIndexResumeCandidate(conversationID: conversationID, requestText: "你好") == nil)
+
+    store.update(record.id, status: .failed)
+    #expect(store.recommendationIndexResumeCandidate(conversationID: conversationID, requestText: "继续")?.id == record.id)
 }

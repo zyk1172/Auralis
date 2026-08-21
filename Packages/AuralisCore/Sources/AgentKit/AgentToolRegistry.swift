@@ -690,7 +690,12 @@ public enum AgentToolRegistry {
             guard let systemService else {
                 return ToolResult(call: call, permission: descriptor.permission, success: false, summary: "系统服务不可用：当前设备未提供该系统能力。")
             }
-            return await SystemToolExecutor.execute(call, descriptor: descriptor, systemService: systemService)
+            return await SystemToolExecutor.execute(
+                call,
+                descriptor: descriptor,
+                systemService: systemService,
+                allowsLyrics: allowsLyrics
+            )
         }
         return await AgentToolkit.executeRegistered(
             call,

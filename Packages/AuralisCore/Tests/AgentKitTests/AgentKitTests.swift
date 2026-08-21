@@ -1147,6 +1147,9 @@ func toolSelectorExposesAppDeviceStatsAndMaintenanceTools() {
     let maintenanceTools = Set(ToolSelector.select(for: "查找重复歌曲和封面问题", all: AgentToolRegistry.all).map(\.name))
     #expect(maintenanceTools.contains("library_find_duplicates"))
     #expect(maintenanceTools.contains("library_find_broken_artwork"))
+
+    let recentTools = Set(ToolSelector.select(for: "最近添加了什么歌", all: AgentToolRegistry.all).map(\.name))
+    #expect(recentTools.contains("library_get_recently_added"))
 }
 
 @Test("ToolSelector never exceeds a bounded tool set")

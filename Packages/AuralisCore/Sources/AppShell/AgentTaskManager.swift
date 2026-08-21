@@ -104,7 +104,7 @@ public final class AgentTaskStore {
         guard ["继续", "继续吧", "接着来", "继续处理", "继续构建"].contains(normalized) else { return nil }
         return records.values
             .filter { record in
-                record.status == .interrupted
+                (record.status == .interrupted || record.status == .failed)
                     && record.conversationID == conversationID
                     && record.intent == .libraryManagement
                     && Self.isRecommendationIndexGoal(record.goal)

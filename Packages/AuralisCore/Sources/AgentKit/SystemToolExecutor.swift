@@ -57,7 +57,8 @@ public struct SystemToolExecutor {
     public static func execute(
         _ call: ToolCall,
         descriptor: ToolDescriptor,
-        systemService: any AgentSystemService
+        systemService: any AgentSystemService,
+        allowsLyrics: Bool = false
     ) async -> ToolResult {
         do {
             switch call.name {
@@ -193,6 +194,10 @@ public struct SystemToolExecutor {
                 let result = await systemService.lyrics(for: TrackID(rawValue: gid.remoteID))
                 let text: String
                 if result.hasLyrics {
+                    guard allowsLyrics else {
+                        text = "有歌词，但正文已按隐私设置隐藏。"
+                        return .ok(call, descriptor, text, .text(text))
+                    }
                     let header = "有歌词（\(result.isSynced ? "逐行" : "纯文本") · \(result.lineCount) 行\(result.language.map { " · \($0)" } ?? "")）"
                     let body = result.plainText ?? result.lines.joined(separator: "\n")
                     text = body.isEmpty ? header : "\(header)\n歌词正文：\n\(body)"

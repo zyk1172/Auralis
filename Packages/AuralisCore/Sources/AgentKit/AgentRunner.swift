@@ -265,6 +265,12 @@ public struct AgentRunner {
                 + ContextManager.estimatedTokens(toolDefinitions)
         )
         conversation.append(AIMessage(role: .user, content: userText))
+        if initialTaskState != nil, policy.completion == .indexPendingCountIsZero {
+            conversation.append(AIMessage(
+                role: .user,
+                content: "系统恢复要求：这是一个已保存的推荐索引任务。请先调用 library_index_v2_status 读取当前待处理数量，再从 pending 批次继续；不要重复已完成动作。"
+            ))
+        }
 
         var toolStepCount = 0
         var completionRepairAttempts = 0

@@ -1,5 +1,7 @@
 import AgentKit
 import AIKit
+import Domain
+import LocalCatalog
 import Testing
 
 private let testConfirmation = PendingConfirmation(
@@ -63,6 +65,25 @@ func modelHistoryUsesFullConversationByDefault() {
     }
 
     #expect(AgentHistoryPolicy.modelMessages(from: history).count == 45)
+}
+
+@Test("歌曲卡片历史保留 GlobalID 与艺术家专辑信息")
+func modelHistoryPreservesTrackIdentity() {
+    let card = TrackCard(
+        globalID: GlobalID(serverID: "srv", remoteID: "track-42"),
+        title: "天亮以前说再见",
+        artistName: "林俊杰",
+        albumTitle: "新地球",
+        duration: 240,
+        isFavorite: false
+    )
+    let projected = AgentHistoryPolicy.modelMessages(from: [
+        AgentChatMessage(role: .assistant, messages: [.trackCards([card])])
+    ])
+    #expect(projected.count == 1)
+    #expect(projected[0].content.contains("srv:track-42"))
+    #expect(projected[0].content.contains("林俊杰"))
+    #expect(projected[0].content.contains("新地球"))
 }
 
 @Test("连续两次继续仍回溯到最初的完整任务")

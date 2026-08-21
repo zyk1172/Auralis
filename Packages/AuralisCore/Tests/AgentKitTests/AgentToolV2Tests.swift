@@ -24,7 +24,9 @@ private final class StubSystemService: AgentSystemService, @unchecked Sendable {
     func networkStatus() async -> AgentNetworkStatus { AgentNetworkStatus(networkType: "wifi", isOffline: false, isServerReachable: true, isConstrained: false) }
     func audioRoute() async -> AgentAudioRoute { AgentAudioRoute(outputName: "耳机", outputType: "headphones") }
     func storageStatus() async -> AgentStorageStatus { AgentStorageStatus(offlineAudioBytes: 0, offlineAudioCount: 3, freeBytes: 1024 * 1024 * 1024) }
-    func lyrics(for trackID: TrackID) async -> AgentLyricsResult { AgentLyricsResult(hasLyrics: true, isSynced: true, lineCount: 40) }
+    func lyrics(for trackID: TrackID) async -> AgentLyricsResult {
+        AgentLyricsResult(hasLyrics: true, isSynced: true, lineCount: 1, plainText: "绝密歌词正文")
+    }
     func downloadOffline(trackID: TrackID) async -> Bool { true }
     func cacheStatus() async -> AgentCacheStatus { AgentCacheStatus(offlineAudioBytes: 1024 * 1024, offlineAudioCount: 3) }
     func nowPlayingStatus() async -> AgentNowPlayingStatus { AgentNowPlayingStatus(title: "A", artist: "B", consistentWithApp: true) }
@@ -406,6 +408,37 @@ func v2AppContext() async throws {
     )
     #expect(result.success)
     #expect(result.summary.contains("Test Server"))
+}
+
+@Test("lyrics_get 在系统工具层遵守正文隐私开关")
+func v2LyricsPrivacyGate() async throws {
+    let store = try makeV2Store()
+    let bridge = MockAgentBridge(activeServerID: "s")
+    let system = StubSystemService()
+    let call = ToolCall(name: "lyrics_get", arguments: ["trackID": "srv:t1"])
+
+    let hidden = await AgentToolkit.executeV2(
+        call,
+        bridge: bridge,
+        catalog: store,
+        serverID: ServerID(rawValue: "s"),
+        systemService: system,
+        allowsLyrics: false
+    )
+    #expect(hidden.success)
+    #expect(hidden.summary.contains("按隐私设置隐藏"))
+    #expect(!hidden.summary.contains("绝密歌词正文"))
+
+    let visible = await AgentToolkit.executeV2(
+        call,
+        bridge: bridge,
+        catalog: store,
+        serverID: ServerID(rawValue: "s"),
+        systemService: system,
+        allowsLyrics: true
+    )
+    #expect(visible.success)
+    #expect(visible.summary.contains("绝密歌词正文"))
 }
 
 @Test("v2 server_test_connection reports real result")

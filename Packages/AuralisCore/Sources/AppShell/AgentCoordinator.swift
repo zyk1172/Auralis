@@ -496,6 +496,29 @@ public final class AgentCoordinator: ObservableObject {
                 budget: resolvedPolicy.budget
             )
             let taskID = taskRecord.id
+            let taskPolicy: AgentTaskPolicy
+            if let resumeRecord,
+               let savedIntent = resumeRecord.intent,
+               let savedGoal = resumeRecord.goal {
+                let reconstructed = AgentTaskPolicyResolver.resolve(
+                    text: savedGoal,
+                    explicitIntent: savedIntent
+                )
+                // 恢复时复用任务记录中的预算，不能因为当前输入只是“继续”而
+                // 退回普通会话预算。
+                taskPolicy = AgentTaskPolicy(
+                    intent: reconstructed.intent,
+                    scopes: reconstructed.scopes,
+                    allowedToolGroups: reconstructed.allowedToolGroups,
+                    allowedPermissions: reconstructed.allowedPermissions,
+                    requiresConfirmationForDestructive: reconstructed.requiresConfirmationForDestructive,
+                    maxRisk: reconstructed.maxRisk,
+                    completion: reconstructed.completion,
+                    budget: resumeRecord.budget ?? reconstructed.budget
+                )
+            } else {
+                taskPolicy = resolvedPolicy
+            }
             let initialTaskState: AgentTaskState? = resumeRecord.flatMap { record in
                 guard let intent = record.intent, let goal = record.goal else { return nil }
                 var state = AgentTaskState(
@@ -505,6 +528,9 @@ public final class AgentCoordinator: ObservableObject {
                     startedAt: record.createdAt
                 )
                 state.completedActions = record.completedActions ?? []
+                state.pendingActions = [
+                    "这是一个已恢复的推荐索引任务。请先调用 library_index_v2_status 读取当前待处理数量，再从当前 pending 批次继续；不要重复已完成动作。"
+                ]
                 state.status = .running
                 state.updatedAt = .now
                 return state
@@ -549,7 +575,7 @@ public final class AgentCoordinator: ObservableObject {
                 taskID: taskID,
                 userText: trimmed,
                 explicitIntent: explicitIntent,
-                policy: resolvedPolicy,
+                policy: taskPolicy,
                 provider: resolvedProvider,
                 model: modelName,
                 bridge: bridge,

@@ -79,6 +79,7 @@ public enum ToolSelector {
 
     static let statsNames: [String] = [
         "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution",
+        "library_get_recently_added", "library_get_most_played",
         "stats_get_listening_summary",
     ]
 
@@ -213,7 +214,7 @@ public enum ToolSelector {
         if containsAny(lower, ["页面", "打开", "功能", "能力", "后台", "siri", "快捷指令", "网络", "存储", "空间", "音频输出", "耳机", "设备", "app"]) {
             names += appDeviceNames
         }
-        if containsAny(lower, ["统计", "收听", "听了", "最常听", "热门", "格式", "缓存占用", "存储分布", "分布"]) {
+        if containsAny(lower, ["统计", "收听", "听了", "最常听", "热门", "最近添加", "最近加入", "新添加", "新加入", "格式", "缓存占用", "存储分布", "分布"]) {
             names += statsNames
         }
         if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error", "重复", "元数据", "封面", "损坏", "缓存", "陈旧缓存", "不可播放"]) {
