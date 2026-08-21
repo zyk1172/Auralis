@@ -169,9 +169,6 @@ public final class AgentCoordinator: ObservableObject {
         // App 重启：把上次仍在运行的任务标记为 interrupted，不自动重放已完成的写操作。
         taskStore.markInterruptedOnLaunch()
         await migrateLegacyDislikedIfNeeded()
-        #if os(macOS)
-        await migrateLegacySessionsIfNeeded()
-        #endif
         await reloadAll()
         if activeSessionID == nil {
             if let latest = sessions.first {
@@ -181,27 +178,6 @@ public final class AgentCoordinator: ObservableObject {
             }
         }
     }
-
-    /// 旧会话迁移（macOS）：历史版本曾在「沙盒容器」与「非沙盒
-    /// ~/Library/Application Support/Auralis」两个位置交替存放会话数据，
-    /// 切换构建/安装方式后，另一位置的旧会话会「消失」。启动时把旧位置的
-    /// 会话按 id 去重合并进当前存储（幂等，不删除任何已有数据）。
-    /// 沙盒内运行时读不到非沙盒路径，迁移会自然跳过（无副作用）。
-    #if os(macOS)
-    public func migrateLegacySessionsIfNeeded() async {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let nonSandboxDir = home
-            .appendingPathComponent("Library/Application Support/Auralis", isDirectory: true)
-        let sandboxDir = home.appendingPathComponent(
-            "Library/Containers/com.auralis.player.macos/Data/Library/Application Support/Auralis",
-            isDirectory: true
-        )
-        let current = Self.defaultDirectory().standardizedFileURL
-        let legacy = current == sandboxDir.standardizedFileURL ? nonSandboxDir : sandboxDir
-        guard legacy.standardizedFileURL != current else { return }
-        await sessionStore.importLegacySessions(from: legacy)
-    }
-    #endif
 
     private func reloadAll() async {
         let all = await sessionStore.all
@@ -500,12 +476,7 @@ public final class AgentCoordinator: ObservableObject {
             }
             // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
             let history = await self.sessionStore.session(sessionID)?.messages ?? []
-            let historyText = history.flatMap(\.messages).compactMap { item -> String? in
-                switch item {
-                case let .text(value), let .streaming(value), let .error(value): value
-                default: nil
-                }
-            }.joined(separator: " ")
+            let historyText = AgentHistoryPolicy.latestUserText(in: history)
             let resolvedPolicy = AgentTaskPolicyResolver.resolve(
                 text: trimmed,
                 historyText: historyText,

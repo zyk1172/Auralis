@@ -400,7 +400,7 @@ public enum AgentFailureClassifier {
         if error is AgentRunnerError { return .timeout }
         if let provider = error as? AIProviderError {
             switch provider {
-            case .missingCredential, .invalidEndpoint, .insecureEndpoint:
+            case .missingCredential, .invalidEndpoint, .unsupportedEndpointProtocol, .insecureEndpoint:
                 return .invalidConfiguration
             case .outputTruncated:
                 // 由 V2 Runtime 缩批恢复；不能触发同一超大请求的通用网络重试。
@@ -709,12 +709,7 @@ public actor AgentRuntime {
         progress: @escaping @Sendable (AgentRunner.AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
-        let historyText = history.flatMap(\.messages).compactMap { item -> String? in
-            switch item {
-            case let .text(value), let .streaming(value), let .error(value): value
-            default: nil
-            }
-        }.joined(separator: " ")
+        let historyText = AgentHistoryPolicy.latestUserText(in: history)
         // AppShell 已经为任务记录解析过策略时必须复用同一份值，避免持久化预算/意图
         // 与真正运行的策略因历史上下文不同而分叉。独立调用者仍可省略并在此解析。
         let policy = explicitPolicy ?? AgentTaskPolicyResolver.resolve(

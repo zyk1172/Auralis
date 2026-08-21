@@ -6,9 +6,10 @@ import SecurityKit
 /// AI 接口协议：把 `apiPath` 从「用户手填字符串」正式类型化。
 /// 底层仍保存完整 `apiPath`（UserDefaults key 不变，备份/历史配置不受影响），
 /// 这里只负责设置页的选择与展示。
-enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
+enum AIEndpointMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     case chatCompletions
     case responses
+    case anthropicMessages
     case custom
 
     var id: String { rawValue }
@@ -19,6 +20,8 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
             return String(localized: "OpenAI 兼容", bundle: .module)
         case .responses:
             return String(localized: "OpenAI 原生", bundle: .module)
+        case .anthropicMessages:
+            return String(localized: "Anthropic", bundle: .module)
         case .custom:
             return String(localized: "自定义", bundle: .module)
         }
@@ -30,6 +33,8 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
             return "Chat Completions"
         case .responses:
             return "Responses API"
+        case .anthropicMessages:
+            return String(localized: "Messages API（暂不支持）", bundle: .module)
         case .custom:
             return String(localized: "自定义 API 路径", bundle: .module)
         }
@@ -42,6 +47,8 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
             return "chat/completions"
         case .responses:
             return "responses"
+        case .anthropicMessages:
+            return "messages"
         case .custom:
             return nil
         }
@@ -65,9 +72,87 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Sendable {
              "v1/responses":
             return .responses
 
+        case "/v1/messages",
+             "v1/messages",
+             "/messages",
+             "messages":
+            return .anthropicMessages
+
         default:
+            if normalized.hasSuffix("/messages"), normalized.contains("/v1/") {
+                return .anthropicMessages
+            }
             return .custom
         }
+    }
+
+    /// OpenCode Zen / Go 的模型协议不是统一的：同一个 Base URL 下，模型可能分别要求
+    /// Responses、Chat Completions 或 Anthropic Messages。这里只对官方明确列出的
+    /// OpenCode 路径做自动建议；其它中转服务保留用户选择，不把模型名猜测成协议。
+    static func recommended(baseURL: String, model: String) -> Self? {
+        let rawURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawURL.isEmpty else { return nil }
+        let url = if let url = URL(string: rawURL), url.host != nil {
+            url
+        } else {
+            URL(string: "https://\(rawURL)")
+        }
+        guard let url, let host = url.host?.lowercased(),
+              host == "opencode.ai" || host.hasSuffix(".opencode.ai") else {
+            return nil
+        }
+
+        let path = url.path.lowercased()
+        let modelID = model
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(separator: "/")
+            .last
+            .map(String.init) ?? ""
+        guard !modelID.isEmpty else { return nil }
+
+        // Muse Spark 在 OpenCode 的当前 Responses 路径上运行；同时覆盖用户此前
+        // 保存过的 contributor 变体，避免旧 Mac 配置继续用 chat/completions。
+        if modelID.contains("muse-spark") {
+            return .responses
+        }
+
+        let isGo = path.contains("/zen/go")
+        let isZen = !isGo && path.contains("/zen")
+        guard isGo || isZen else { return nil }
+
+        if isGo {
+            if modelID.hasPrefix("qwen") || modelID.hasPrefix("minimax") {
+                return .anthropicMessages
+            }
+            if modelID == "gpt-5.6-luna" {
+                return .responses
+            }
+        } else {
+            if modelID.hasPrefix("qwen") || modelID.hasPrefix("claude") {
+                return .anthropicMessages
+            }
+            if modelID.hasPrefix("gpt-5.6-")
+                || modelID == "grok-4.6"
+                || modelID == "grok-4.5"
+                || modelID.hasPrefix("grok-build") {
+                return .responses
+            }
+        }
+
+        let chatPrefixes = ["grok", "glm", "kimi", "deepseek", "mimo", "hy3", "minimax"]
+        if chatPrefixes.contains(where: { modelID.hasPrefix($0) }) {
+            return .chatCompletions
+        }
+        return nil
+    }
+
+    var supportsToolCalling: Bool {
+        self != .anthropicMessages
+    }
+
+    var isSupported: Bool {
+        self != .anthropicMessages
     }
 }
 
@@ -77,6 +162,7 @@ struct AIConnectionSettings: Sendable {
     var baseURL: String
     var apiPath: String
     var model: String
+    var endpointMode: AIEndpointMode
     /// 模型上下文窗口（token）。不再假设所有 OpenAI 兼容模型都是 256K。
     var maxContextTokens: Int
     /// 单次回复输出上限（token）。
@@ -88,6 +174,7 @@ struct AIConnectionSettings: Sendable {
         static let baseURL = "auralis.ai.baseURL"
         static let apiPath = "auralis.ai.apiPath"
         static let model = "auralis.ai.model"
+        static let endpointMode = "auralis.ai.endpointMode"
         static let maxContextTokens = "auralis.ai.maxContextTokens"
         static let maxOutputTokens = "auralis.ai.maxOutputTokens"
     }
@@ -102,6 +189,9 @@ struct AIConnectionSettings: Sendable {
         baseURL = defaults.string(forKey: Keys.baseURL) ?? Self.defaultBaseURL
         apiPath = defaults.string(forKey: Keys.apiPath) ?? Self.defaultAPIPath
         model = defaults.string(forKey: Keys.model) ?? Self.defaultModel
+        endpointMode = AIEndpointMode(
+            rawValue: defaults.string(forKey: Keys.endpointMode) ?? ""
+        ) ?? AIEndpointMode.infer(from: apiPath)
         if defaults.object(forKey: Keys.maxContextTokens) != nil {
             maxContextTokens = max(4_096, defaults.integer(forKey: Keys.maxContextTokens))
         } else {
@@ -144,8 +234,34 @@ struct AIConnectionSettings: Sendable {
     /// Key 缺失时 Provider 仍会在请求阶段报 `AIProviderError.missingCredential`。
     var isComplete: Bool {
         normalizedBaseURL() != nil
-            && !apiPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !effectiveAPIPath.isEmpty
             && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && effectiveEndpointMode.isSupported
+    }
+
+    /// OpenCode 等模型网关的最终协议建议。自定义模式永远尊重用户输入；标准模式
+    /// 在已知 Provider + Model 时自动纠正旧的错误路径。
+    var recommendedEndpointMode: AIEndpointMode? {
+        AIEndpointMode.recommended(baseURL: baseURL, model: model)
+    }
+
+    var effectiveEndpointMode: AIEndpointMode {
+        if endpointMode == .custom {
+            let inferred = AIEndpointMode.infer(from: apiPath)
+            return inferred == .anthropicMessages ? .anthropicMessages : .custom
+        }
+        return recommendedEndpointMode ?? endpointMode
+    }
+
+    var effectiveAPIPath: String {
+        if endpointMode != .custom, let recommendedPath = effectiveEndpointMode.apiPath {
+            return recommendedPath
+        }
+        return apiPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var endpointSummary: String {
+        "\(effectiveEndpointMode.title) · \(effectiveAPIPath)"
     }
 
     /// 校验未通过时的可读原因，便于设置页给出明确提示。
@@ -153,11 +269,14 @@ struct AIConnectionSettings: Sendable {
         if normalizedBaseURL() == nil {
             return String(localized: "Base URL 需要是合法地址，例如 https://api.deepseek.com 或 http://localhost:11434。", bundle: .module)
         }
-        if apiPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if effectiveAPIPath.isEmpty {
             return String(localized: "请填写 API 路径（如 /v1/chat/completions 或 /v1/responses）。", bundle: .module)
         }
         if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return String(localized: "请填写模型名称（如 gpt-4o-mini、deepseek-chat）。", bundle: .module)
+        }
+        if !effectiveEndpointMode.isSupported {
+            return String(localized: "当前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支持该协议。请换用 Chat/Responses 模型，或选择自定义兼容端点。", bundle: .module)
         }
         return nil
     }
@@ -173,12 +292,12 @@ struct AIConnectionSettings: Sendable {
             configuration: AIProviderConfiguration(
             name: String(localized: "OpenAI 兼容接口", bundle: .module),
                 baseURL: url,
-                apiPath: apiPath.trimmingCharacters(in: .whitespacesAndNewlines),
+                apiPath: effectiveAPIPath,
                 credentialID: Self.credentialID,
                 model: model.trimmingCharacters(in: .whitespacesAndNewlines),
                 maxTokens: maxOutputTokens,
                 maxContextTokens: maxContextTokens,
-                supportsToolCalling: true
+                supportsToolCalling: effectiveEndpointMode.supportsToolCalling
             ),
             credentialVault: credentialVault,
             session: session

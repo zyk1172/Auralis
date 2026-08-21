@@ -55,6 +55,21 @@ struct OpenAICompatibleProviderTests {
         #expect(OpenAICompatibleProvider.isRetryable(AIProviderError.transport("connection reset")) == true)
     }
 
+    @Test func messagesProtocolIsDetectedAndNotSent() async {
+        #expect(OpenAICompatibleProvider.usesAnthropicMessagesAPI(apiPath: "/v1/messages"))
+        let provider = makeProvider(baseURL: "https://example.com", apiPath: "/v1/messages")
+        #expect(provider.supportsToolCalling == false)
+        #expect(provider.capabilities.supportsToolCalling == false)
+        do {
+            _ = try await provider.testConnection()
+            Issue.record("Messages 协议尚未实现时不应发起请求")
+        } catch let error as AIProviderError {
+            #expect(error == .unsupportedEndpointProtocol("/v1/messages"))
+        } catch {
+            Issue.record("错误类型不符：\(error)")
+        }
+    }
+
     /// 偶发空响应 / 截断 JSON 属于网关抖动，必须可重试，
     /// 否则会出现「测试点好几次才成功」这类现象。
     @Test func retryableAllowsTransientParseFailures() {

@@ -162,21 +162,6 @@ public actor SessionStore {
         persistSafely(operation: "delete")
     }
 
-    /// 从旧版数据目录导入会话：按 id 去重合并进当前缓存，绝不删除任何已有数据。
-    /// 用于解决沙盒/非沙盒构建切换后「旧位置的会话不可见」的问题（主文件损坏时回退备份）。
-    public func importLegacySessions(from legacyDirectory: URL) {
-        let primary = legacyDirectory.appendingPathComponent("agent-sessions.json")
-        let backup = legacyDirectory.appendingPathComponent("agent-sessions.backup.json")
-        let imported: [AgentSession] = (Self.decode(from: primary) ?? Self.decode(from: backup) ?? [:]).values.map { $0 }
-        guard !imported.isEmpty else { return }
-        var changed = false
-        for session in imported where cache[session.id] == nil {
-            cache[session.id] = session
-            changed = true
-        }
-        if changed { persistSafely(operation: "importLegacySessions") }
-    }
-
     public func search(_ query: String) -> [AgentSession] {
         let q = query.lowercased()
         return all.filter { session in
