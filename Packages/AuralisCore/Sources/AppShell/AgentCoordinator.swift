@@ -42,7 +42,7 @@ public struct AIPrivacyConsentRequest: Sendable, Identifiable {
 /// AI 助手的运行时协调器：会话管理、消息流、确认流程、操作日志与偏好。
 ///
 /// 边界约定：
-/// - 只把用户输入与工具「结果摘要」发给模型，永不发送完整音乐目录或任何凭据。
+/// - 把完整会话与工具「结果摘要」发给模型，永不发送完整音乐目录或任何凭据。
 /// - AI 已发起的工具调用直接执行；调用记录仍会保留在本地操作日志中。
 /// - 隐私：三个隐私开关真实生效（元数据 / 播放历史 / 歌词）；首次外发前需用户确认。
 /// - 模型不可用时自动降级到本地规则模式，搜索/播放/收藏等仍然可用。
@@ -99,7 +99,7 @@ public final class AgentCoordinator: ObservableObject {
     }
     private var streamingStates: [UUID: AgentStreamingState] = [:]
 
-    /// 单次请求带给模型的总上下文上限（256K，超出时裁剪历史并预留输出）。
+    /// 单次请求带给模型的总上下文上限（256K，超出时仅在发送前裁剪，不删除会话历史）。
     public static let tokenBudget = ContextManager.maxContextTokens
     /// 首次外发确认的持久化标记键（UserDefaults，默认 false）。
     public static let consentGivenDefaultsKey = "auralis.ai.consentGiven"
@@ -476,7 +476,10 @@ public final class AgentCoordinator: ObservableObject {
             }
             // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
             let history = await self.sessionStore.session(sessionID)?.messages ?? []
-            let historyText = AgentHistoryPolicy.latestUserText(in: history)
+            // “继续”可能连续出现多次（尤其是上一轮被 429/工具错误打断后）。
+            // 只取最近一条完整任务指令，避免第二次“继续”把索引/批处理意图
+            // 降级成 conversation，进而让索引工具从动态 schema 中消失。
+            let historyText = AgentHistoryPolicy.relevantHistoryText(for: trimmed, in: history)
             let resolvedPolicy = AgentTaskPolicyResolver.resolve(
                 text: trimmed,
                 historyText: historyText,
@@ -708,14 +711,12 @@ public final class AgentCoordinator: ObservableObject {
            let index = messages.lastIndex(where: { $0.id == streamingID }) {
             messages[index] = message
             await sessionStore.append(message, to: sessionID)
-            await trimHistoryIfNeeded(sessionID: sessionID)
             return
         }
         if isActiveSession {
             messages.append(message)
         }
         await sessionStore.append(message, to: sessionID)
-        await trimHistoryIfNeeded(sessionID: sessionID)
     }
 
     /// 若消息是流式增量消息，返回其增量文本；否则返回 nil。
@@ -736,19 +737,6 @@ public final class AgentCoordinator: ObservableObject {
             if case let .streaming(text) = item { pieces.append(text) }
         }
         return pieces.joined()
-    }
-
-    /// token 预算保护：会话过长时保留最近的消息，避免请求被服务端拒绝。
-    private func trimHistoryIfNeeded(sessionID: UUID) async {
-        guard let session = await sessionStore.session(sessionID),
-              session.tokenEstimate > Self.tokenBudget,
-              session.messages.count > 12
-        else { return }
-        let kept = Array(session.messages.suffix(12))
-        await sessionStore.clearMessages(sessionID)
-        for message in kept { await sessionStore.append(message, to: sessionID) }
-        // 只有被裁剪的会话正是当前活动会话时，才更新屏幕上的 messages。
-        if activeSessionID == sessionID { messages = kept }
     }
 
     private func record(_ record: AgentActionRecord) async {

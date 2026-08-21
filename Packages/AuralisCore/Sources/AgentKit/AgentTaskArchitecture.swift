@@ -431,7 +431,21 @@ public enum AgentFailureClassifier {
 }
 
 public enum AgentIntentClassifier {
-    public static func classify(_ text: String) -> AgentTaskIntent {
+    public static func classify(_ text: String, historyText: String = "") -> AgentTaskIntent {
+        let directIntent = classifyDirect(text)
+        guard !historyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              directIntent == .conversation,
+              isContinuation(text)
+        else { return directIntent }
+
+        // “继续”本身没有业务语义；只有在它是短后续指令时，才继承最近一条
+        // 完整任务的意图。这样“继续构建索引”不会因为上一轮报错后再次输入
+        // “继续”而退回 conversation，索引工具也会重新进入 schema。
+        let historyIntent = classifyDirect(historyText)
+        return historyIntent == .conversation ? directIntent : historyIntent
+    }
+
+    private static func classifyDirect(_ text: String) -> AgentTaskIntent {
         let value = text.lowercased()
         func has(_ words: [String]) -> Bool { words.contains { value.contains($0) } }
         // “推荐索引”是资料库维护任务，不是普通音乐推荐；优先于 discovery 关键词。
@@ -450,6 +464,14 @@ public enum AgentIntentClassifier {
         if has(["找歌", "搜索", "查找", "哪首", "哪个专辑", "谁唱的"]) { return .librarySearch }
         return .conversation
     }
+
+    private static func isContinuation(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
+        return ["继续", "继续吧", "第一个", "第一个吧", "就这个", "就它"].contains(normalized)
+    }
 }
 
 /// 将文字入口或 UI 显式入口解析为单次任务策略。业务识别只发生在任务创建时，
@@ -460,7 +482,7 @@ public enum AgentTaskPolicyResolver {
         historyText: String = "",
         explicitIntent: AgentTaskIntent? = nil
     ) -> AgentTaskPolicy {
-        let intent = explicitIntent ?? AgentIntentClassifier.classify(text)
+        let intent = explicitIntent ?? AgentIntentClassifier.classify(text, historyText: historyText)
         let base = AgentTaskPolicy.policy(for: intent)
         guard intent == .libraryManagement,
               RecommendationIndexTaskRules.requiresCompleteBuild(text: text, historyText: historyText)

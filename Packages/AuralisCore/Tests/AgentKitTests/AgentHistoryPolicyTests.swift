@@ -23,8 +23,8 @@ func taskPolicyUsesOnlyLatestUserMessage() {
     #expect(AgentHistoryPolicy.latestUserText(in: history) == "播放一些歌曲")
 }
 
-@Test("错误、进度、确认和流式半成品不会进入模型历史")
-func modelHistoryDropsRuntimeOnlyMessages() {
+@Test("完整会话消息会进入模型历史")
+func modelHistoryKeepsConversationMessages() {
     let history = [
         AgentChatMessage(role: .user, messages: [.text("播放一些歌曲")]),
         AgentChatMessage(role: .assistant, messages: [.error("不要继续推荐索引")]),
@@ -34,12 +34,16 @@ func modelHistoryDropsRuntimeOnlyMessages() {
     ]
 
     let projected = AgentHistoryPolicy.modelMessages(from: history)
-    #expect(projected.count == 1)
-    #expect(projected.first?.role == .user)
-    #expect(projected.first?.content == "播放一些歌曲")
+    #expect(projected.count == 5)
+    #expect(projected[0].role == .user)
+    #expect(projected[0].content == "播放一些歌曲")
+    #expect(projected[1].role == .assistant)
+    #expect(projected[1].content.contains("错误：不要继续推荐索引"))
+    #expect(projected[2].content.contains("执行进度：library_index_v2_status"))
+    #expect(projected[4].content.contains("半成品"))
 }
 
-@Test("新寒暄不继承旧索引任务，明确短后续才继承相邻用户意图")
+@Test("任务策略与模型历史彼此独立")
 func newInputHistoryBoundary() {
     let history = [
         AgentChatMessage(role: .user, messages: [.text("继续构建推荐索引 V2")]),
@@ -48,6 +52,34 @@ func newInputHistoryBoundary() {
 
     #expect(AgentHistoryPolicy.relevantHistoryText(for: "你好", in: history).isEmpty)
     #expect(AgentHistoryPolicy.relevantHistoryText(for: "继续", in: history) == "继续构建推荐索引 V2")
-    #expect(AgentHistoryPolicy.modelMessages(from: history, for: "你好").isEmpty)
+    #expect(AgentHistoryPolicy.modelMessages(from: history, for: "你好").count == 2)
     #expect(AgentHistoryPolicy.modelMessages(from: history, for: "继续").count == 2)
+}
+
+@Test("模型历史默认不受旧的 40 条消息上限限制")
+func modelHistoryUsesFullConversationByDefault() {
+    let history = (0..<45).map { index in
+        AgentChatMessage(
+            role: index.isMultiple(of: 2) ? .user : .assistant,
+            messages: [.text("消息 \(index)")]
+        )
+    }
+
+    #expect(AgentHistoryPolicy.modelMessages(from: history).count == 45)
+}
+
+@Test("连续两次继续仍回溯到最初的完整任务")
+func repeatedContinuationKeepsSubstantiveTask() {
+    let history = [
+        AgentChatMessage(role: .user, messages: [.text("开始并一次性完成推荐索引 V2")]),
+        AgentChatMessage(role: .assistant, messages: [.error("HTTP 429：请求过于频繁")]),
+        AgentChatMessage(role: .user, messages: [.text("继续")]),
+        AgentChatMessage(role: .assistant, messages: [.error("索引工具暂时不可用")]),
+        AgentChatMessage(role: .user, messages: [.text("继续")]),
+    ]
+
+    #expect(
+        AgentHistoryPolicy.relevantHistoryText(for: "继续", in: history)
+            == "开始并一次性完成推荐索引 V2"
+    )
 }

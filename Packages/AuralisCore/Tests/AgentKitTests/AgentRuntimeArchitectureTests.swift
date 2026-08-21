@@ -307,6 +307,26 @@ struct AgentRuntimeArchitectureTests {
         #expect(policy.completion == .indexPendingCountIsZero)
     }
 
+    @Test func continuationAfterErrorRestoresIndexPolicyAndTools() {
+        let policy = AgentTaskPolicyResolver.resolve(
+            text: "继续",
+            historyText: "开始并一次性完成推荐索引 V2"
+        )
+        #expect(policy.intent == .libraryManagement)
+        #expect(policy.completion == .indexPendingCountIsZero)
+
+        let selected = ToolSelector.select(
+            for: "继续",
+            intent: policy.intent,
+            policy: policy,
+            all: AgentToolRegistry.all
+        )
+        let names = Set(selected.map(\.name))
+        #expect(names.contains("library_index_v2_status"))
+        #expect(names.contains("library_index_v2_next_batch"))
+        #expect(names.contains("library_index_v2_write_batch"))
+    }
+
     @Test func indexStatusQuestionDoesNotStartFullBuild() {
         let policy = AgentTaskPolicyResolver.resolve(text: "查看推荐索引 V2 状态")
         #expect(policy.completion == .successfulToolResult)

@@ -1751,9 +1751,9 @@ public struct AgentRunner {
         return lines.joined(separator: "\n")
     }
 
-    /// 把会话历史转成模型可用的消息列表。只保留最近若干轮以控制 token 预算，
-    /// 由 AgentHistoryPolicy 统一跳过错误、进度、确认和流式半成品，
-    /// 把卡片还原成可读的文本，让上下文连贯且不泄露内部细节。
+    /// 把完整会话历史转成模型可用的消息列表。历史不再按固定轮数截断，
+    /// 错误、进度、确认和流式内容以可读摘要保留；最终 token 级裁剪统一由
+    /// ContextManager 在发送前按 Provider 的真实上下文窗口执行。
     private static func convertHistory(_ history: [AgentChatMessage], currentUserText: String) -> [AIMessage] {
         AgentHistoryPolicy.modelMessages(from: history, for: currentUserText)
     }

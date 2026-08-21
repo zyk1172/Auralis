@@ -3,8 +3,9 @@ import Foundation
 
 /// Agent 会话历史的单一投影策略。
 ///
-/// UI 展示需要保留错误、进度和确认消息，但这些消息不是用户意图，也不是模型事实。
-/// 它们不能重新进入下一轮模型上下文，更不能参与下一条任务的 Intent 判定。
+/// UI 展示的完整会话历史同时服务于模型上下文与任务恢复。
+/// 任务意图判定仍使用单独的“最近完整指令”投影；模型则尽可能看到完整对话，
+/// 最终是否因模型窗口过小而裁剪由 ContextManager 在发送前统一决定。
 public enum AgentHistoryPolicy {
     /// TaskPolicy 只继承最后一条用户消息；不会扫描助手回答、错误或更早任务。
     public static func latestUserText(in history: [AgentChatMessage]) -> String {
@@ -17,6 +18,26 @@ public enum AgentHistoryPolicy {
         .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 返回最近一条完整的用户任务指令。
+    ///
+    /// 连续点击“继续”时，`latestUserText` 只能得到上一条“继续”，下一轮就会
+    /// 丢掉最初的任务意图（例如“构建推荐索引 V2”），导致动态工具列表退回普通
+    /// 会话。错误、进度和确认消息本来就不是用户消息，因此这里只需跳过寒暄与短
+    /// 后续指令，回溯到最近一条可用于恢复任务的完整指令。
+    public static func latestSubstantiveUserText(in history: [AgentChatMessage]) -> String {
+        for message in history.reversed() where message.role == .user {
+            let text = message.messages.compactMap { item in
+                if case let .text(value) = item { return value }
+                return nil
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, !isShortFollowUp(text), !isGreeting(text) else { continue }
+            return text
+        }
+        return ""
+    }
+
     /// 只让明确的短后续指令继承上一任务的用户意图。
     /// 新的完整请求和寒暄不会把上一轮（尤其是索引/批处理）带入任务策略，
     /// 避免“你好”被旧任务的 historyText 重新解释成“继续构建”。
@@ -25,34 +46,27 @@ public enum AgentHistoryPolicy {
         in history: [AgentChatMessage]
     ) -> String {
         guard isShortFollowUp(currentUserText) else { return "" }
-        return latestUserText(in: history)
+        return latestSubstantiveUserText(in: history)
     }
 
-    /// 把可作为上下文的最终消息转换为 AIMessage。
-    /// `.error`、`.toolProgress`、`.confirmation`、`.streaming` 只属于 UI 运行轨迹，
-    /// 绝不回灌模型；卡片和操作预览保留为有限的结构化摘要。
+    /// 把完整会话转换为 AIMessage。`limit` 仅保留给显式调用方；默认不按消息条数截断。
     public static func modelMessages(
         from history: [AgentChatMessage],
-        limit: Int = 40
+        limit: Int = .max
     ) -> [AIMessage] {
         modelMessages(from: history, for: nil, limit: limit)
     }
 
-    /// 为当前输入构造会话上下文：短后续指令只取相邻的有限历史，纯寒暄不带旧任务。
-    /// 其余完整请求沿用原有投影，以保留正常对话的连续性。
+    /// 为当前输入构造完整会话上下文。无论当前输入是寒暄、短后续还是新任务，
+    /// 都不再按消息类型或最近轮数主动丢弃历史；真正超出模型窗口时由发送层裁剪。
     public static func modelMessages(
         from history: [AgentChatMessage],
         for currentUserText: String?,
-        limit: Int = 40
+        limit: Int = .max
     ) -> [AIMessage] {
-        if let currentUserText {
-            if isGreeting(currentUserText) { return [] }
-            let source = isShortFollowUp(currentUserText)
-                ? Array(history.suffix(min(max(limit, 0), 12)))
-                : Array(history.suffix(max(limit, 0)))
-            return project(source)
-        }
-        return project(Array(history.suffix(max(limit, 0))))
+        _ = currentUserText
+        let source = limit == .max ? history : Array(history.suffix(max(limit, 0)))
+        return project(source)
     }
 
     private static func project(_ history: [AgentChatMessage]) -> [AIMessage] {
@@ -71,8 +85,15 @@ public enum AgentHistoryPolicy {
                     content += "（歌单提案「\(name)」，\(tracks.count) 首）\n"
                 case let .actionPreview(title, detail):
                     content += "（操作预览：\(title)；\(detail)）\n"
-                case .toolProgress, .error, .confirmation, .streaming:
-                    continue
+                case let .toolProgress(step):
+                    content += "（执行进度：\(step)）\n"
+                case let .error(text):
+                    content += "（错误：\(text)）\n"
+                case let .confirmation(confirmation):
+                    // 只带确认的可读摘要，不把原始参数重新送入模型。
+                    content += "（确认请求：\(confirmation.title)；\(confirmation.detail)；工具：\(confirmation.toolName)）\n"
+                case let .streaming(text):
+                    content += "（生成中的内容：\(text)）\n"
                 }
             }
             let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
