@@ -15,6 +15,7 @@
 		2544A1BCC7704C45B9D03714 /* AuralisLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9AA2EE3ADE81172BD503209A /* AuralisLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		372595B4DCABCC5433A1EB38 /* AppShell in Frameworks */ = {isa = PBXBuildFile; productRef = B3FB2EFF6815905FFD2AB2AB /* AppShell */; };
 		40DCC1B683418F858916EBFC /* AppShell in Frameworks */ = {isa = PBXBuildFile; productRef = F0CB3446F841735CD171E2E4 /* AppShell */; };
+		41568158D6954901640B611C /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 0F3B336A165A6967093C37D1 /* Localizable.xcstrings */; };
 		4F49C08B054362B0D38EC070 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 46DE39CB6A88819B40895136 /* AppIcon.icon */; };
 		6847613C1701033C047819AC /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 277C164815EFE9449940797F /* InfoPlist.xcstrings */; };
 		6A5E78298A041E838463DBC8 /* AuralisMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */; };
@@ -66,6 +67,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0F3B336A165A6967093C37D1 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		1C17241D49F118BD819B4F7A /* AuralisApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuralisApp.swift; sourceTree = "<group>"; };
 		277C164815EFE9449940797F /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 		37512AECC1D8665440BBB4DB /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
@@ -144,6 +146,7 @@
 				46DE39CB6A88819B40895136 /* AppIcon.icon */,
 				483C81986AF30F3B1A051853 /* Assets.xcassets */,
 				6C361144E585E27577F3148B /* AssistantAppIntent.swift */,
+				167E4B79CF30EB109768F038 /* Resources */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -163,6 +166,14 @@
 				7B87C44172F90CDF28E3168B /* AuralisCore */,
 			);
 			path = Packages;
+			sourceTree = "<group>";
+		};
+		167E4B79CF30EB109768F038 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				0F3B336A165A6967093C37D1 /* Localizable.xcstrings */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		1E387AF3DA0ECA329EF64C05 /* Resources */ = {
@@ -401,6 +412,7 @@
 				4F49C08B054362B0D38EC070 /* AppIcon.icon in Resources */,
 				1CCC7D2F778ECB1009DB59A9 /* Assets.xcassets in Resources */,
 				6847613C1701033C047819AC /* InfoPlist.xcstrings in Resources */,
+				41568158D6954901640B611C /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

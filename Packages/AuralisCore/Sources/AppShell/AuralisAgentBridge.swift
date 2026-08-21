@@ -189,7 +189,7 @@ public final class AuralisAgentBridge: AgentBridge {
 
     public func duplicatePlaylist(playlistGID: GlobalID) async {
         guard let source = model.catalog.playlists.first(where: { $0.id.rawValue == playlistGID.remoteID }) else { return }
-        guard let copy = await model.createPlaylist(named: "\(source.name) 副本") else { return }
+        guard let copy = await model.createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return }
         let ids = Set(source.trackIDs)
         for track in model.catalog.tracks where ids.contains(track.id) {
             await model.addToPlaylist(copy, track: track)

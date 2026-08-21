@@ -96,7 +96,7 @@ struct MacFloatingPlayerBar: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("展开播放器")
+        .help(String(localized: "展开播放器", bundle: .module))
         .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
     }
 
@@ -116,7 +116,7 @@ struct MacFloatingPlayerBar: View {
                 .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
-            .help("展开播放器")
+            .help(String(localized: "展开播放器", bundle: .module))
             .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
         }
         .frame(
@@ -137,7 +137,7 @@ struct MacFloatingPlayerBar: View {
                     .foregroundStyle(model.isShuffled ? MacMediaAccent.color : Color.secondary)
             }
             .buttonStyle(.plain)
-            .help(model.isShuffled ? "关闭随机播放" : "随机播放")
+            .help(model.isShuffled ? String(localized: "关闭随机播放", bundle: .module) : String(localized: "随机播放", bundle: .module))
             .accessibilityLabel(String(localized: "随机播放", bundle: .module))
 
             Button {
@@ -147,7 +147,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!model.canGoPrevious)
-            .help("上一首")
+            .help(String(localized: "上一首", bundle: .module))
             .accessibilityLabel(String(localized: "上一首", bundle: .module))
 
             Button {
@@ -158,7 +158,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasTrack)
-            .help("播放 / 暂停")
+            .help(String(localized: "播放 / 暂停", bundle: .module))
             .accessibilityLabel(String(localized: "播放 / 暂停", bundle: .module))
 
             Button {
@@ -168,7 +168,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!model.canGoNext)
-            .help("下一首")
+            .help(String(localized: "下一首", bundle: .module))
             .accessibilityLabel(String(localized: "下一首", bundle: .module))
 
             Button {
@@ -187,9 +187,9 @@ struct MacFloatingPlayerBar: View {
 
     private var repeatHelp: String {
         switch model.repeatMode {
-        case .one: "单曲循环"
-        case .all: "列表循环"
-        case .off: "不循环"
+        case .one: String(localized: "单曲循环", bundle: .module)
+        case .all: String(localized: "列表循环", bundle: .module)
+        case .off: String(localized: "不循环", bundle: .module)
         }
     }
 
@@ -210,7 +210,7 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasTrack)
-            .help("展开播放器")
+            .help(String(localized: "展开播放器", bundle: .module))
             .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
             .contextMenu {
                 Button(String(localized: "展开播放器", bundle: .module)) { onOpenFullPlayer() }
@@ -234,7 +234,7 @@ struct MacFloatingPlayerBar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!hasTrack)
-                .help("展开播放器")
+                .help(String(localized: "展开播放器", bundle: .module))
                 .accessibilityLabel(String(localized: "展开播放器", bundle: .module))
 
                 MacPlaybackSlider(
@@ -263,21 +263,21 @@ struct MacFloatingPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasTrack)
-            .help(model.currentTrack.isFavorite ? "取消收藏" : "收藏")
+            .help(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
             .accessibilityLabel(model.currentTrack.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
 
             Button(action: onToggleLyrics) {
                 Image(systemName: "quote.bubble")
             }
             .buttonStyle(.plain)
-            .help("歌词")
+            .help(String(localized: "歌词", bundle: .module))
             .accessibilityLabel(String(localized: "歌词", bundle: .module))
 
             Button(action: onToggleQueue) {
                 Image(systemName: "list.bullet")
             }
             .buttonStyle(.plain)
-            .help("队列")
+            .help(String(localized: "队列", bundle: .module))
             .accessibilityLabel(String(localized: "队列", bundle: .module))
 
             Button {
@@ -286,7 +286,7 @@ struct MacFloatingPlayerBar: View {
                 Image(systemName: model.volume < 0.02 ? "speaker.slash" : "speaker.wave.2")
             }
             .buttonStyle(.plain)
-            .help("音量")
+            .help(String(localized: "音量", bundle: .module))
             .accessibilityLabel(String(localized: "音量", bundle: .module))
             .popover(isPresented: $isVolumePopoverPresented, arrowEdge: .bottom) {
                 VStack(spacing: MacUIVisualTokens.FloatingPlayer.volumePopoverContentSpacing) {
@@ -319,7 +319,7 @@ struct MacFloatingPlayerBar: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("更多")
+            .help(String(localized: "更多", bundle: .module))
             .accessibilityLabel(String(localized: "更多", bundle: .module))
             .disabled(!hasTrack)
         }

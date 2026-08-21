@@ -19,15 +19,15 @@ struct AgentMemorySettingsSnapshotTests {
 
         #expect(snapshot.memoryCount == 2)
         #expect(snapshot.skillCount == 1)
-        #expect(snapshot.memorySummary == "2 条 · 5 字符")
-        #expect(snapshot.skillSummary == "1 个文件 · 11 字符")
+        #expect(["2 条 · 5 字符", "Entries: 2 · Characters: 5", "2 條 · 5 字元"].contains(snapshot.memorySummary))
+        #expect(["1 个文件 · 11 字符", "Files: 1 · Characters: 11", "1 個檔案 · 11 字元"].contains(snapshot.skillSummary))
     }
 
     @Test("空分区摘要保持简洁")
     func emptySummaries() {
         let snapshot = AgentMemorySettingsSnapshot(memories: [], skills: [])
-        #expect(snapshot.memorySummary == "空")
-        #expect(snapshot.skillSummary == "空")
+        #expect(["空", "Empty"].contains(snapshot.memorySummary))
+        #expect(["空", "Empty"].contains(snapshot.skillSummary))
     }
 
     @Test("条目预览折叠空白并限制长度")

@@ -704,7 +704,7 @@ public final class AuralisAppModel: ObservableObject {
         let initialTrack = catalog.tracks.first ?? Track(
             id: "placeholder", serverID: "local",
             albumID: "placeholder", artistID: "placeholder",
-            title: "请先连接服务器", artistName: "", albumTitle: "", duration: 0
+            title: String(localized: "请先连接服务器", bundle: .module), artistName: "", albumTitle: "", duration: 0
         )
         self.playbackStore = PlaybackStore(currentTrack: initialTrack)
         self.homeStore = HomeStore(defaults: defaults)
@@ -769,7 +769,7 @@ public final class AuralisAppModel: ObservableObject {
         // 安装崩溃日志处理器（仅首次）
         CrashLog.shared.installHandlers()
         let activity = NSUserActivity(activityType: Self.handoffActivityType)
-        activity.title = "Auralis 播放"
+        activity.title = String(localized: "Auralis 播放", bundle: .module)
         activity.isEligibleForHandoff = true
         activity.isEligibleForSearch = false
         activity.requiredUserInfoKeys = ["serverID", "currentTrackID", "queueTrackIDs", "position"]
@@ -2675,7 +2675,7 @@ public final class AuralisAppModel: ObservableObject {
     public func duplicatePlaylist(id: PlaylistID) async -> Playlist? {
         guard let source = catalog.playlists.first(where: { $0.id == id }) else { return nil }
         // R06：readonly 歌单不可作为修改来源，但允许复制其内容为普通副本。
-        guard let copy = await createPlaylist(named: "\(source.name) 副本") else { return nil }
+        guard let copy = await createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return nil }
         let ids = Set(source.trackIDs)
         for track in catalog.tracks where ids.contains(track.id) {
             _ = await addToPlaylist(copy, track: track)
@@ -2978,7 +2978,7 @@ public final class AuralisAppModel: ObservableObject {
         currentTrack = Track(
             id: "placeholder", serverID: "local",
             albumID: "placeholder", artistID: "placeholder",
-            title: "请先连接服务器", artistName: "", albumTitle: "", duration: 0
+            title: String(localized: "请先连接服务器", bundle: .module), artistName: "", albumTitle: "", duration: 0
         )
         serverConnectionState = .idle
         attemptedRestore = false
@@ -3802,7 +3802,7 @@ public final class AuralisAppModel: ObservableObject {
             }
             guard !result.tracks.isEmpty else { throw ServerConnectionError.emptyLibrary }
             apply(result)
-            recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: nil, message: "连接成功", requestAttempted: true)
+            recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: nil, message: String(localized: "连接成功", bundle: .module), requestAttempted: true)
         } catch is CancellationError {
             serverConnectionState = .failed(ServerConnectionError.cancelled.localizedDescription)
         } catch {
@@ -3833,11 +3833,11 @@ public final class AuralisAppModel: ObservableObject {
             }
             let result = try await connector.testConnection(input)
             var parts: [String] = []
-            parts.append("服务器可连接")
-            if let type = result.serverType { parts.append("软件：\(type)") }
-            if let version = result.serverVersion { parts.append("版本：\(version)") }
-            if let api = result.apiVersion { parts.append("协议：\(api)") }
-            parts.append("认证成功（\(result.username ?? "当前用户")）")
+                parts.append(String(localized: "服务器可连接", bundle: .module))
+                if let type = result.serverType { parts.append(String(localized: "软件：\(type)", bundle: .module)) }
+                if let version = result.serverVersion { parts.append(String(localized: "版本：\(version)", bundle: .module)) }
+                if let api = result.apiVersion { parts.append(String(localized: "协议：\(api)", bundle: .module)) }
+                parts.append(String(localized: "认证成功（\(result.username ?? String(localized: "当前用户", bundle: .module))）", bundle: .module))
             let message = parts.joined(separator: " · ")
             recordConnectionDiagnostics(host: input.baseURL.host, url: input.baseURL, error: nil, message: message, requestAttempted: true)
             return .success(message)
@@ -4054,7 +4054,7 @@ public final class AuralisAppModel: ObservableObject {
                 currentTrack = Track(
                     id: "placeholder", serverID: result.account.id,
                     albumID: "placeholder", artistID: "placeholder",
-                    title: "请先连接服务器", artistName: "", albumTitle: "", duration: 0
+                    title: String(localized: "请先连接服务器", bundle: .module), artistName: "", albumTitle: "", duration: 0
                 )
             }
             handoffActivity?.invalidate()

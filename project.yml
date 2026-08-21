@@ -35,6 +35,8 @@ targets:
           - Intents
           - LiveActivity
       - path: Apps/Shared
+        excludes:
+          - Resources/Localizable.xcstrings
     dependencies:
       - package: AuralisCore
         product: AppShell

@@ -1,0 +1,90 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "下载失败，请重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Download failed. Try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "下載失敗，請重試" } }
+      }
+    },
+    "下载中断，请重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Download interrupted. Try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "下載中斷，請重試" } }
+      }
+    },
+    "下载请求失败（HTTP %lld）" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Download request failed (HTTP %lld)." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "下載要求失敗（HTTP %lld）。" } }
+      }
+    },
+    "下载超时，请重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Download timed out. Try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "下載逾時，請重試" } }
+      }
+    },
+    "上次下载未完成，请重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The previous download did not finish. Try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "上次下載未完成，請重試" } }
+      }
+    },
+    "无法保存到本地，请检查磁盘空间后重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not save locally. Check disk space and try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法儲存到本機，請檢查磁碟空間後重試" } }
+      }
+    },
+    "无法恢复已下载文件，请检查磁盘空间后重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not restore the downloaded file. Check disk space and try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法還原已下載檔案，請檢查磁碟空間後重試" } }
+      }
+    },
+    "无法暂存下载文件，请检查磁盘空间后重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not stage the download. Check disk space and try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法暫存下載檔案，請檢查磁碟空間後重試" } }
+      }
+    },
+    "服务器上已找不到这首歌曲" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This song could not be found on the server." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "伺服器上找不到這首歌曲" } }
+      }
+    },
+    "服务器返回了空文件，请重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The server returned an empty file. Try again." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "伺服器返回空檔案，請重試" } }
+      }
+    },
+    "服务器返回的不是音频文件" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The server did not return an audio file." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "伺服器返回的不是音訊檔案" } }
+      }
+    },
+    "登录已失效，请重新连接服务器" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Your login has expired. Reconnect to the server." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "登入已失效，請重新連線伺服器" } }
+      }
+    },
+    "网络不可用，联网后可重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Network unavailable. Try again when you are online." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "網路無法使用，連線後可重試" } }
+      }
+    },
+    "音乐服务器暂时不可用，请稍后重试" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The music server is temporarily unavailable. Try again later." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "音樂伺服器暫時無法使用，請稍後重試" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

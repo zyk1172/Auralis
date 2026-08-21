@@ -46,7 +46,7 @@ public enum LocalNetworkProbe {
             return LocalNetworkProbeResult(
                 state: .failed,
                 unsatisfiedReason: nil,
-                errorDescription: "端口非法：\(port)",
+                errorDescription: String(localized: "端口非法：\(port)", bundle: .module),
                 timestamp: .now
             )
         }
@@ -131,7 +131,7 @@ private final class ProbeBox: @unchecked Sendable {
             self.finish(LocalNetworkProbeResult(
                 state: .timedOut,
                 unsatisfiedReason: reason,
-                errorDescription: waitingError ?? "探测超时（\(Int(interval))s）",
+                errorDescription: waitingError ?? String(localized: "探测超时（\(Int(interval))s）", bundle: .module),
                 timestamp: .now
             ))
             // 结束 continuation 还不等于结束 NWConnection。旧实现超时后连接仍可能

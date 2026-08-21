@@ -171,7 +171,7 @@ struct AIConnectionSettings: Sendable {
         else { return nil }
         return OpenAICompatibleProvider(
             configuration: AIProviderConfiguration(
-                name: "OpenAI 兼容接口",
+            name: String(localized: "OpenAI 兼容接口", bundle: .module),
                 baseURL: url,
                 apiPath: apiPath.trimmingCharacters(in: .whitespacesAndNewlines),
                 credentialID: Self.credentialID,

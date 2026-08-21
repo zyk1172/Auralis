@@ -33,7 +33,7 @@ struct MacSearchView: View {
         VStack(spacing: 0) {
             MacPageSearchHeader(
                 text: $query,
-                prompt: "搜索",
+                prompt: String(localized: "搜索", bundle: .module),
                 onSubmit: {
                     let trimmed = trimmedQuery
                     if !trimmed.isEmpty { model.recordSearch(trimmed) }
@@ -58,8 +58,11 @@ struct MacSearchView: View {
                 case .results:
                     resultsContent
                 case .empty:
-                    ContentUnavailableView("未找到结果", systemImage: "magnifyingglass",
-                                           description: Text("没有找到与「\(trimmedQuery)」匹配的内容。"))
+                    ContentUnavailableView(
+                        String(localized: "未找到结果", bundle: .module),
+                        systemImage: "magnifyingglass",
+                        description: Text(String(localized: "没有找到与「\(trimmedQuery)」匹配的内容。", bundle: .module))
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
@@ -82,7 +85,7 @@ struct MacSearchView: View {
             VStack(alignment: .leading, spacing: 26) {
                 if !model.recentSearches.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionTitle("最近搜索")
+                        sectionTitle(String(localized: "最近搜索", bundle: .module))
                         HStack(spacing: 8) {
                             ForEach(model.recentSearches.prefix(8), id: \.self) { term in
                                 Button(term) { query = term }
@@ -106,7 +109,7 @@ struct MacSearchView: View {
                 }
                 if !recentArtists.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionTitle("最近播放的艺术家")
+                        sectionTitle(String(localized: "最近播放的艺术家", bundle: .module))
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 240), spacing: 16)], alignment: .leading) {
                             ForEach(recentArtists, id: \.self) { artist in
                                 Button {
@@ -125,7 +128,7 @@ struct MacSearchView: View {
                 }
                 if !model.catalog.playlists.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionTitle("常用歌单")
+                        sectionTitle(String(localized: "常用歌单", bundle: .module))
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 240), spacing: 16)], alignment: .leading) {
                             ForEach(model.catalog.playlists.prefix(6)) { playlist in
                                 Button {
@@ -191,7 +194,7 @@ struct MacSearchView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 if !tracks.isEmpty {
-                    sectionTitle("歌曲（\(tracks.count)）")
+                    sectionTitle(String(localized: "歌曲（\(tracks.count)）", bundle: .module))
                     VStack(spacing: 0) {
                         ForEach(tracks.prefix(20)) { summary in
                             resultSongRow(summary)
@@ -200,7 +203,7 @@ struct MacSearchView: View {
                     }
                 }
                 if !albums.isEmpty {
-                    sectionTitle("专辑（\(albums.count)）")
+                    sectionTitle(String(localized: "专辑（\(albums.count)）", bundle: .module))
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 20)], alignment: .leading) {
                         ForEach(albums.prefix(12)) { summary in
                             albumResultTile(summary)
@@ -208,7 +211,7 @@ struct MacSearchView: View {
                     }
                 }
                 if !artists.isEmpty {
-                    sectionTitle("艺术家（\(artists.count)）")
+                    sectionTitle(String(localized: "艺术家（\(artists.count)）", bundle: .module))
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 220), spacing: 16)], alignment: .leading) {
                         ForEach(artists.prefix(12)) { summary in
                             artistResultRow(summary)
@@ -216,7 +219,7 @@ struct MacSearchView: View {
                     }
                 }
                 if !playlists.isEmpty {
-                    sectionTitle("歌单（\(playlists.count)）")
+                    sectionTitle(String(localized: "歌单（\(playlists.count)）", bundle: .module))
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 240), spacing: 16)], alignment: .leading) {
                         ForEach(playlists.prefix(8)) { playlist in
                             Button {
@@ -308,7 +311,9 @@ struct MacSearchView: View {
                     ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: theme.colorTokens, size: 44, cornerRadius: 22)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(artist.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        Text("\(artist.albumCount) 张专辑").font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text(String(localized: "\(artist.albumCount) 张专辑", bundle: .module))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
                 }

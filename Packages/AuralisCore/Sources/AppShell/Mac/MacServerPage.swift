@@ -116,21 +116,21 @@ struct MacServerPage: View {
                 .foregroundStyle(theme.colorTokens.primaryText.color)
             switch model.serverConnectionState {
             case .idle:
-                LabeledContent("当前资料库", value: "未连接服务器")
-                LabeledContent("状态", value: "尚未添加服务器")
+                LabeledContent(String(localized: "当前资料库", bundle: .module), value: String(localized: "未连接服务器", bundle: .module))
+                LabeledContent(String(localized: "状态", bundle: .module), value: String(localized: "尚未添加服务器", bundle: .module))
             case let .connecting(stage):
                 HStack { ProgressView().controlSize(.small); Text(stage.title) }
             case let .connected(account, serverType, serverVersion, trackCount):
-                LabeledContent("服务器名称", value: account.displayName)
+                LabeledContent(String(localized: "服务器名称", bundle: .module), value: account.displayName)
                 if let url = account.baseURL {
-                    LabeledContent("地址", value: Self.maskedURL(url))
+                    LabeledContent(String(localized: "地址", bundle: .module), value: Self.maskedURL(url))
                 }
-                LabeledContent("状态", value: "在线")
-                if let serverType { LabeledContent("服务器类型", value: serverType) }
-                if let serverVersion { LabeledContent("版本 / API", value: serverVersion) }
-                LabeledContent("已同步", value: "\(trackCount) 首歌曲")
+                LabeledContent(String(localized: "状态", bundle: .module), value: String(localized: "在线", bundle: .module))
+                if let serverType { LabeledContent(String(localized: "服务器类型", bundle: .module), value: serverType) }
+                if let serverVersion { LabeledContent(String(localized: "版本 / API", bundle: .module), value: serverVersion) }
+                LabeledContent(String(localized: "已同步", bundle: .module), value: String(localized: "\(trackCount) 首歌曲", bundle: .module))
             case let .failed(message):
-                LabeledContent("状态", value: "连接失败")
+                LabeledContent(String(localized: "状态", bundle: .module), value: String(localized: "连接失败", bundle: .module))
                 Text(message).font(.caption)
                     .foregroundStyle(theme.colorTokens.error.color)
             }

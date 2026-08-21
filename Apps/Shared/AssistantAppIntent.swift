@@ -20,7 +20,7 @@ struct AuralisAskAssistantIntent: AppIntent {
         let reply = await AuralisAppModel.shared.askAssistant(query)
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         // 统一返回带语音播报的结果：无回复时用默认提示，避免 opaque 类型不一致。
-        let dialog = trimmed.isEmpty ? "已处理" : trimmed
+        let dialog = trimmed.isEmpty ? String(localized: "已处理") : trimmed
         return .result(dialog: "\(dialog)")
     }
 }

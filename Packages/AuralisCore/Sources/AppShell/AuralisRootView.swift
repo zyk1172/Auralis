@@ -241,7 +241,7 @@ private struct IOSMusicShell: View {
                 case .networkUnavailable:
                     Text(String(localized: "网络不可用，请检查网络连接", bundle: .module))
                 case .unsupportedFormat(let format):
-                    Text("不支持的音频格式：\(format)")
+                    Text(String(localized: "不支持的音频格式：\(format)", bundle: .module))
                 case .authorizationFailed:
                     Text(String(localized: "授权失败，请检查登录状态", bundle: .module))
                 case .engineFailure(let message):
@@ -749,7 +749,7 @@ struct DockAssistantInputBar: View {
                 Image(systemName: "sparkles")
                     .foregroundStyle(theme.colorTokens.accent.color)
                     .frame(width: 22, height: 22)
-                TextField("描述你想听的音乐，或让我帮你操作", text: $model.assistantDraft)
+                TextField(String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module), text: $model.assistantDraft)
                     .textFieldStyle(.plain)
                     .focused(focus)
                     .onSubmit { model.sendAssistantMessage(); focus.wrappedValue = false }
@@ -994,9 +994,9 @@ struct BrowseDetailSheet: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .nameAscending: "名称（A 到 Z）"
-            case .nameDescending: "名称（Z 到 A）"
-            case .recentlyModified: "最近修改"
+            case .nameAscending: String(localized: "名称（A 到 Z）", bundle: .module)
+            case .nameDescending: String(localized: "名称（Z 到 A）", bundle: .module)
+            case .recentlyModified: String(localized: "最近修改", bundle: .module)
             }
         }
     }
@@ -1078,42 +1078,42 @@ struct BrowseDetailSheet: View {
         case let .album(album): album.title
         case let .artist(artist): artist.name
         case let .playlist(playlist): playlist.name
-        case .playlists: "歌单"
-        case .favorites: "收藏"
-        case .mostPlayed: "最常听"
+        case .playlists: String(localized: "歌单", bundle: .module)
+        case .favorites: String(localized: "收藏", bundle: .module)
+        case .mostPlayed: String(localized: "最常听", bundle: .module)
         case let .genre(genre): GenreLocalization.displayName(for: genre.name)
         case let .recommendationCategory(category): categoryDisplayName(category)
-        case .random: "随机音乐"
-        case .recentlyPlayed: "最近播放"
-        case .recentlyAdded: "最近添加"
-        case .longUnplayed: "很久没听"
-        case .neverPlayed: "从未播放"
-        case .favoriteRandom: "收藏里随便听"
-        case .topArtists: "常听艺术家"
-        case .topAlbums: "常听专辑"
-        case .downloads: "下载"
+        case .random: String(localized: "随机音乐", bundle: .module)
+        case .recentlyPlayed: String(localized: "最近播放", bundle: .module)
+        case .recentlyAdded: String(localized: "最近添加", bundle: .module)
+        case .longUnplayed: String(localized: "很久没听", bundle: .module)
+        case .neverPlayed: String(localized: "从未播放", bundle: .module)
+        case .favoriteRandom: String(localized: "收藏里随便听", bundle: .module)
+        case .topArtists: String(localized: "常听艺术家", bundle: .module)
+        case .topAlbums: String(localized: "常听专辑", bundle: .module)
+        case .downloads: String(localized: "下载", bundle: .module)
         }
     }
 
     private var subtitle: String {
         switch destination {
-        case let .album(album): "\(album.artistName) · \(tracks.count) 首"
-        case .artist: "\(tracks.count) 首歌曲"
-        case let .playlist(playlist): playlist.comment ?? "\(tracks.count) 首歌曲"
-        case .playlists: "\(model.catalog.playlists.count) 个歌单"
-        case .favorites: "\(tracks.count) 首喜爱的歌曲"
-        case .mostPlayed: "按你的播放次数排序"
-        case let .genre(genre): "\(tracks.count) 首 · 按流派「\(GenreLocalization.displayName(for: genre.name))」筛选"
-        case let .recommendationCategory(category): "\(tracks.count) 首 · 按分类「\(categoryDisplayName(category))」筛选"
-        case .random: "点右上角「换一批」可重新随机"
-        case .recentlyPlayed: "\(tracks.count) 首 · 最近播放过的歌曲"
-        case .recentlyAdded: "\(tracks.count) 首 · 最近同步进来的歌曲"
-        case .longUnplayed: "\(tracks.count) 首 · 播放过但最近没听的歌曲"
-        case .neverPlayed: "\(tracks.count) 首 · 还没播放过的歌曲"
-        case .favoriteRandom: "点右上角「换一批」可重新随机"
-        case .topArtists: "按真实播放次数统计的艺术家"
-        case .topAlbums: "按真实播放次数统计的专辑"
-        case .downloads: "\(tracks.count) 首 · 已下载到本地的歌曲"
+        case let .album(album): String(localized: "\(album.artistName) · \(tracks.count) 首", bundle: .module)
+        case .artist: String(localized: "\(tracks.count) 首歌曲", bundle: .module)
+        case let .playlist(playlist): playlist.comment ?? String(localized: "\(tracks.count) 首歌曲", bundle: .module)
+        case .playlists: String(localized: "\(model.catalog.playlists.count) 个歌单", bundle: .module)
+        case .favorites: String(localized: "\(tracks.count) 首喜爱的歌曲", bundle: .module)
+        case .mostPlayed: String(localized: "按你的播放次数排序", bundle: .module)
+        case let .genre(genre): String(localized: "\(tracks.count) 首 · 按流派「\(GenreLocalization.displayName(for: genre.name))」筛选", bundle: .module)
+        case let .recommendationCategory(category): String(localized: "\(tracks.count) 首 · 按分类「\(categoryDisplayName(category))」筛选", bundle: .module)
+        case .random: String(localized: "点右上角「换一批」可重新随机", bundle: .module)
+        case .recentlyPlayed: String(localized: "\(tracks.count) 首 · 最近播放过的歌曲", bundle: .module)
+        case .recentlyAdded: String(localized: "\(tracks.count) 首 · 最近同步进来的歌曲", bundle: .module)
+        case .longUnplayed: String(localized: "\(tracks.count) 首 · 播放过但最近没听的歌曲", bundle: .module)
+        case .neverPlayed: String(localized: "\(tracks.count) 首 · 还没播放过的歌曲", bundle: .module)
+        case .favoriteRandom: String(localized: "点右上角「换一批」可重新随机", bundle: .module)
+        case .topArtists: String(localized: "按真实播放次数统计的艺术家", bundle: .module)
+        case .topAlbums: String(localized: "按真实播放次数统计的专辑", bundle: .module)
+        case .downloads: String(localized: "\(tracks.count) 首 · 已下载到本地的歌曲", bundle: .module)
         }
     }
 
@@ -1128,15 +1128,15 @@ struct BrowseDetailSheet: View {
     private func categoryDisplayName(_ category: RecommendationIndexV2Category) -> String {
         let dimension: String
         switch category.dimension {
-        case "mood": dimension = "情绪"
-        case "scene": dimension = "场景"
-        case "vocal": dimension = "人声"
-        case "texture": dimension = "质感"
-        case "style": dimension = "风格"
-        case "energy": dimension = "能量"
-        case "tempo": dimension = "速度"
-        case "acousticness": dimension = "原声感"
-        case "danceability": dimension = "舞动性"
+        case "mood": dimension = String(localized: "情绪", bundle: .module)
+        case "scene": dimension = String(localized: "场景", bundle: .module)
+        case "vocal": dimension = String(localized: "人声", bundle: .module)
+        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "style": dimension = String(localized: "风格", bundle: .module)
+        case "energy": dimension = String(localized: "能量", bundle: .module)
+        case "tempo": dimension = String(localized: "速度", bundle: .module)
+        case "acousticness": dimension = String(localized: "原声感", bundle: .module)
+        case "danceability": dimension = String(localized: "舞动性", bundle: .module)
         default: dimension = category.dimension
         }
         let value = ["energy": 10, "tempo": 5, "acousticness": 5, "danceability": 5][category.dimension]
@@ -1170,7 +1170,7 @@ struct BrowseDetailSheet: View {
             }
         }
         .confirmationDialog(
-            "下载 \(tracks.count) 首歌曲？",
+            String(localized: "下载 \(tracks.count) 首歌曲？", bundle: .module),
             isPresented: $isConfirmingDownload,
             titleVisibility: .visible
         ) {
@@ -1179,10 +1179,10 @@ struct BrowseDetailSheet: View {
             }
             Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text("预计约 \(estimatedSizeMB(tracks.count)) MB，下载到本地后可离线播放。已下载的歌曲会自动跳过。")
+            Text(String(localized: "预计约 \(estimatedSizeMB(tracks.count)) MB，下载到本地后可离线播放。已下载的歌曲会自动跳过。", bundle: .module))
         }
         .confirmationDialog(
-            "删除选中的 \(selectedPlaylistIDs.count) 个歌单？",
+            String(localized: "删除选中的 \(selectedPlaylistIDs.count) 个歌单？", bundle: .module),
             isPresented: $confirmsBatchPlaylistDeletion,
             titleVisibility: .visible
         ) {
@@ -1263,7 +1263,7 @@ struct BrowseDetailSheet: View {
                 } label: {
                     Label(String(localized: "批量删除", bundle: .module), systemImage: "checkmark.circle")
                 }
-                Menu("排序") {
+                Menu(String(localized: "排序", bundle: .module)) {
                     ForEach(PlaylistSortOrder.allCases) { order in
                         Button {
                             playlistSortOrder = order
@@ -1305,7 +1305,7 @@ struct BrowseDetailSheet: View {
                 )
                 categoryTracks = tracks
             } catch {
-                categoryLoadError = "读取分类歌曲失败：\(error.localizedDescription)"
+            categoryLoadError = String(localized: "读取分类歌曲失败：\(error.localizedDescription)", bundle: .module)
             }
         }
     }
@@ -1322,30 +1322,32 @@ struct BrowseDetailSheet: View {
             if let categoryLoadError {
                 AuralisEmptyState(
                     icon: "exclamationmark.triangle",
-                    title: "读取分类失败",
+                    title: String(localized: "读取分类失败", bundle: .module),
                     message: categoryLoadError,
                     colors: theme.colorTokens
                 )
             } else if categoryTracks == nil {
-                ProgressView("正在读取分类歌曲…")
+                ProgressView { Text(String(localized: "正在读取分类歌曲…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if tracks.isEmpty {
                 AuralisEmptyState(
                     icon: "music.note",
-                    title: "暂无歌曲",
-                    message: "这个分类里暂时没有歌曲。",
+                    title: String(localized: "暂无歌曲", bundle: .module),
+                    message: String(localized: "这个分类里暂时没有歌曲。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
                 trackList
             }
         } else if isGenreLoading {
-            ProgressView("正在从服务器加载「\(currentGenreName)」歌曲…")
+            ProgressView {
+                Text(String(localized: "正在从服务器加载「\(currentGenreName)」歌曲…", bundle: .module))
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if tracks.isEmpty {
             AuralisEmptyState(
                 icon: "music.note",
-                title: "暂无歌曲",
+                title: String(localized: "暂无歌曲", bundle: .module),
                 message: emptyMessage,
                 colors: theme.colorTokens
             )
@@ -1372,15 +1374,15 @@ struct BrowseDetailSheet: View {
 
     private var emptyMessage: String {
         switch destination {
-        case .favorites: "在播放页或歌曲菜单中点心形收藏后，会出现在这里。"
-        case .mostPlayed: "播放过的歌曲会按次数统计在这里。"
-        case .longUnplayed: "播放过的歌曲会先出现在「最近播放」，过一段时间没听就会回到这里。"
-        case .neverPlayed: "还没有播放记录时，这里暂时为空。"
-        case .favoriteRandom: "收藏里的歌曲会随机出现在这里。"
-        case .downloads: "下载到本地的歌曲会出现在这里。"
-        case .topArtists: "播放过的歌曲会按艺术家统计在这里。"
-        case .topAlbums: "播放过的歌曲会按专辑统计在这里。"
-        default: "这个清单里暂时没有歌曲。"
+        case .favorites: String(localized: "在播放页或歌曲菜单中点心形收藏后，会出现在这里。", bundle: .module)
+        case .mostPlayed: String(localized: "播放过的歌曲会按次数统计在这里。", bundle: .module)
+        case .longUnplayed: String(localized: "播放过的歌曲会先出现在「最近播放」，过一段时间没听就会回到这里。", bundle: .module)
+        case .neverPlayed: String(localized: "还没有播放记录时，这里暂时为空。", bundle: .module)
+        case .favoriteRandom: String(localized: "收藏里的歌曲会随机出现在这里。", bundle: .module)
+        case .downloads: String(localized: "下载到本地的歌曲会出现在这里。", bundle: .module)
+        case .topArtists: String(localized: "播放过的歌曲会按艺术家统计在这里。", bundle: .module)
+        case .topAlbums: String(localized: "播放过的歌曲会按专辑统计在这里。", bundle: .module)
+        default: String(localized: "这个清单里暂时没有歌曲。", bundle: .module)
         }
     }
 
@@ -1468,7 +1470,8 @@ struct BrowseDetailSheet: View {
         }
         .listStyle(.plain)
         .confirmationDialog(
-            playlistPendingDeletion.map { "删除歌单「\($0.name)」？" } ?? "删除歌单？",
+            playlistPendingDeletion.map { String(localized: "删除歌单「\($0.name)」？", bundle: .module) }
+                ?? String(localized: "删除歌单？", bundle: .module),
             isPresented: Binding(
                 get: { playlistPendingDeletion != nil },
                 set: { if !$0 { playlistPendingDeletion = nil } }
@@ -1485,7 +1488,7 @@ struct BrowseDetailSheet: View {
             Text(String(localized: "该歌单会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。", bundle: .module))
         }
         .alert(
-            "无法删除歌单",
+            String(localized: "无法删除歌单", bundle: .module),
             isPresented: Binding(
                 get: { model.playlistDeletionError != nil },
                 set: { if !$0 { model.clearPlaylistDeletionError() } }
@@ -1564,7 +1567,7 @@ struct BrowseDetailSheet: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(artist.name)
                             .foregroundStyle(theme.colorTokens.primaryText.color)
-                        Text("\(model.homeTopArtistPlayCounts[artist.id] ?? 0) 次播放")
+                        Text(String(localized: "\(model.homeTopArtistPlayCounts[artist.id] ?? 0) 次播放", bundle: .module))
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
@@ -1598,7 +1601,7 @@ struct BrowseDetailSheet: View {
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                             .lineLimit(1)
-                        Text("\(model.homeTopAlbumPlayCounts[album.id] ?? 0) 次播放")
+                        Text(String(localized: "\(model.homeTopAlbumPlayCounts[album.id] ?? 0) 次播放", bundle: .module))
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
@@ -1648,12 +1651,12 @@ private struct PlaylistTracksView: View {
     var body: some View {
         Group {
             if isLoading && tracks.isEmpty {
-                ProgressView("正在加载歌单…")
+                ProgressView { Text(String(localized: "正在加载歌单…", bundle: .module)) }
             } else if tracks.isEmpty {
                 AuralisEmptyState(
                     icon: "music.note.list",
-                    title: "歌单暂无歌曲",
-                    message: "服务器上这个歌单里还没有添加歌曲。",
+                    title: String(localized: "歌单暂无歌曲", bundle: .module),
+                    message: String(localized: "服务器上这个歌单里还没有添加歌曲。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -1710,7 +1713,7 @@ private struct PlaylistTracksView: View {
             }
         }
         .alert(String(localized: "重命名歌单", bundle: .module), isPresented: $isRenaming) {
-            TextField("歌单名称", text: $renameText)
+            TextField(String(localized: "歌单名称", bundle: .module), text: $renameText)
             Button(String(localized: "保存", bundle: .module)) {
                 let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !name.isEmpty {
@@ -1721,7 +1724,11 @@ private struct PlaylistTracksView: View {
         } message: {
             Text(String(localized: "修改将同步到服务器。", bundle: .module))
         }
-        .confirmationDialog("删除歌单「\(playlist.name)」？", isPresented: $isDeleting, titleVisibility: .visible) {
+        .confirmationDialog(
+            String(localized: "删除歌单「\(playlist.name)」？", bundle: .module),
+            isPresented: $isDeleting,
+            titleVisibility: .visible
+        ) {
             Button(String(localized: "删除", bundle: .module), role: .destructive) {
                 Task {
                     _ = await model.deletePlaylist(id: playlist.id)

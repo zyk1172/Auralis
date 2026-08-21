@@ -22,7 +22,7 @@ struct MacPlaylistView: View {
                 hero
                 Divider()
                 if tracks.isEmpty {
-                    ContentUnavailableView("歌单为空", systemImage: "music.note.list",
+                    ContentUnavailableView(String(localized: "歌单为空", bundle: .module), systemImage: "music.note.list",
                                            description: Text(String(localized: "这个歌单还没有歌曲。", bundle: .module)))
                 } else {
                     MacDetailTrackList(
@@ -39,7 +39,11 @@ struct MacPlaylistView: View {
             .padding(.bottom, 24)
         }
         .navigationTitle(playlist.name)
-        .confirmationDialog("删除歌单「\(playlist.name)」？", isPresented: $isConfirmingDelete, titleVisibility: .visible) {
+        .confirmationDialog(
+            String(localized: "删除歌单「\(playlist.name)」？", bundle: .module),
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
             Button(String(localized: "删除歌单", bundle: .module), role: .destructive) {
                 Task { _ = await model.deletePlaylist(id: playlist.id) }
             }
@@ -67,7 +71,7 @@ struct MacPlaylistView: View {
                         .foregroundStyle(.secondary)
                 }
                 if !tracks.isEmpty {
-                    Text("\(tracks.count) 首 · \(MacFormat.durationSum(tracks))")
+                    Text(String(localized: "\(tracks.count) 首 · \(MacFormat.durationSum(tracks))", bundle: .module))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -101,7 +105,7 @@ struct MacPlaylistView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    .help("更多操作")
+                    .help(String(localized: "更多操作", bundle: .module))
                 }
             }
             Spacer()

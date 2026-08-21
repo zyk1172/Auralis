@@ -28,8 +28,8 @@ struct MacMusicDownloadsView: View {
     var body: some View {
         VStack(spacing: 0) {
             MacPageHeader(
-                title: "下载",
-                subtitle: "\(tracks.count) 首离线音乐 · \(DownloadManagementView.byteText(model.downloadedAudioBytes))"
+                title: String(localized: "下载", bundle: .module),
+                subtitle: String(localized: "\(tracks.count) 首离线音乐 · \(DownloadManagementView.byteText(model.downloadedAudioBytes))", bundle: .module)
             ) {
                 if !tracks.isEmpty {
                     MacPrimaryButton(title: String(localized: "随机播放", bundle: .module), systemImage: "shuffle") {
@@ -91,7 +91,7 @@ struct MacMusicDownloadsView: View {
 
             if tracks.isEmpty, activeTracks.isEmpty, failedTracks.isEmpty {
                 ContentUnavailableView(
-                    "暂无下载",
+                    String(localized: "暂无下载", bundle: .module),
                     systemImage: "arrow.down.circle",
                     description: Text(String(localized: "在歌曲、专辑或播放列表菜单中选择“下载”，即可离线播放。", bundle: .module))
                 )
@@ -112,7 +112,7 @@ struct MacMusicDownloadsView: View {
         }
         .navigationTitle(String(localized: "下载", bundle: .module))
         .confirmationDialog(
-            "删除全部本地音乐？",
+            String(localized: "删除全部本地音乐？", bundle: .module),
             isPresented: $confirmsRemoveAll,
             titleVisibility: .visible
         ) {
@@ -124,7 +124,7 @@ struct MacMusicDownloadsView: View {
             Text(String(localized: "只删除这台 Mac 上的离线文件，不会删除音乐服务器上的歌曲。", bundle: .module))
         }
         .confirmationDialog(
-            "删除所选的 \(selectedDownloadedTracks.count) 首本地音乐？",
+            String(localized: "删除所选的 \(selectedDownloadedTracks.count) 首本地音乐？", bundle: .module),
             isPresented: $confirmsRemoveSelected,
             titleVisibility: .visible
         ) {

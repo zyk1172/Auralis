@@ -137,7 +137,7 @@ struct MacAlbumTile: View {
                 }
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
-                .help("打开专辑")
+                .help(String(localized: "打开专辑", bundle: .module))
                 .accessibilityLabel(String(localized: "打开专辑", bundle: .module))
                 .accessibilityAction(named: Text(String(localized: "播放", bundle: .module))) { onPlay?() }
 
@@ -154,7 +154,7 @@ struct MacAlbumTile: View {
                             }
                             .buttonStyle(.plain)
                             .focused($focusedControl, equals: .play)
-                            .help("播放")
+                            .help(String(localized: "播放", bundle: .module))
                             .accessibilityLabel(String(localized: "播放", bundle: .module))
                         }
                         if !moreActions.isEmpty {
@@ -177,7 +177,7 @@ struct MacAlbumTile: View {
                             .menuIndicator(.hidden)
                             .fixedSize()
                             .focused($focusedControl, equals: .more)
-                            .help("更多操作")
+                            .help(String(localized: "更多操作", bundle: .module))
                             .accessibilityLabel(String(localized: "更多操作", bundle: .module))
                         }
                     }
@@ -205,7 +205,7 @@ struct MacAlbumTile: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("打开专辑")
+            .help(String(localized: "打开专辑", bundle: .module))
             .accessibilityLabel(String(localized: "打开专辑", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
@@ -260,7 +260,7 @@ struct MacArtistTile: View {
                 }
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
-                .help("打开艺术家")
+                .help(String(localized: "打开艺术家", bundle: .module))
                 .accessibilityLabel(String(localized: "打开艺术家", bundle: .module))
                 .accessibilityAction(named: Text(String(localized: "随机播放", bundle: .module))) { onPlay?() }
 
@@ -276,7 +276,7 @@ struct MacArtistTile: View {
                     .buttonStyle(.plain)
                     .focused($focusedControl, equals: .play)
                     .padding(8)
-                    .help("随机播放")
+                    .help(String(localized: "随机播放", bundle: .module))
                     .accessibilityLabel(String(localized: "随机播放", bundle: .module))
                     .transition(.opacity)
                 }
@@ -290,7 +290,7 @@ struct MacArtistTile: View {
                         .lineLimit(1)
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
-                    Text("\(artist.albumCount) 张专辑")
+                    Text(String(localized: "\(artist.albumCount) 张专辑", bundle: .module))
                         .font(.system(size: 12))
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
@@ -300,7 +300,7 @@ struct MacArtistTile: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("打开艺术家")
+            .help(String(localized: "打开艺术家", bundle: .module))
             .accessibilityLabel(String(localized: "打开艺术家", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
@@ -376,7 +376,7 @@ struct MacPlaylistTile: View {
                 }
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
-                .help("打开播放列表")
+                .help(String(localized: "打开播放列表", bundle: .module))
                 .accessibilityLabel(String(localized: "打开播放列表", bundle: .module))
                 .accessibilityAction(named: Text(String(localized: "播放", bundle: .module))) { onPlay?() }
 
@@ -393,7 +393,7 @@ struct MacPlaylistTile: View {
                             }
                             .buttonStyle(.plain)
                             .focused($focusedControl, equals: .play)
-                            .help("播放")
+                            .help(String(localized: "播放", bundle: .module))
                             .accessibilityLabel(String(localized: "播放", bundle: .module))
                         }
                         if !moreActions.isEmpty {
@@ -416,7 +416,7 @@ struct MacPlaylistTile: View {
                             .menuIndicator(.hidden)
                             .fixedSize()
                             .focused($focusedControl, equals: .more)
-                            .help("更多操作")
+                            .help(String(localized: "更多操作", bundle: .module))
                             .accessibilityLabel(String(localized: "更多操作", bundle: .module))
                         }
                     }
@@ -433,7 +433,7 @@ struct MacPlaylistTile: View {
                         .lineLimit(1)
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
-                    Text("\(data.trackCount) 首")
+                    Text(String(localized: "\(data.trackCount) 首", bundle: .module))
                         .font(.system(size: 12))
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
@@ -443,7 +443,7 @@ struct MacPlaylistTile: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("打开播放列表")
+            .help(String(localized: "打开播放列表", bundle: .module))
             .accessibilityLabel(String(localized: "打开播放列表", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
@@ -502,7 +502,7 @@ struct MacTrackTile: View {
                 }
                 .buttonStyle(.plain)
                 .focused($focusedControl, equals: .primary)
-                .help("播放")
+                .help(String(localized: "播放", bundle: .module))
                 .accessibilityLabel(String(localized: "播放", bundle: .module))
                 .accessibilityAction(named: Text(String(localized: "播放", bundle: .module))) { onPlay?() }
 
@@ -518,7 +518,7 @@ struct MacTrackTile: View {
                     .buttonStyle(.plain)
                     .focused($focusedControl, equals: .play)
                     .padding(8)
-                    .help("播放")
+                    .help(String(localized: "播放", bundle: .module))
                     .accessibilityLabel(String(localized: "播放", bundle: .module))
                     .transition(.opacity)
                 }
@@ -543,7 +543,7 @@ struct MacTrackTile: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("播放")
+            .help(String(localized: "播放", bundle: .module))
             .accessibilityLabel(String(localized: "播放", bundle: .module))
         }
         .frame(width: size, alignment: .leading)
@@ -573,7 +573,7 @@ struct MacMenuAction: Identifiable {
 /// Section 头：左标题 + 右「查看全部」。
 struct MacSectionHeader: View {
     let title: String
-    var actionTitle: String? = "查看全部"
+    var actionTitle: String? = String(localized: "查看全部", bundle: .module)
     var onAction: (() -> Void)? = nil
 
     var body: some View {

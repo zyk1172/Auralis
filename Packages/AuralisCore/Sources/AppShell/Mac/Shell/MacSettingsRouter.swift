@@ -14,12 +14,12 @@ public enum MacSettingsCategory: String, CaseIterable, Identifiable {
 
     public var title: String {
         switch self {
-        case .general: "通用"
-        case .server: "服务器"
-        case .libraryPlayback: "资料库与播放"
-        case .ai: "AI 与公开数据"
-        case .system: "系统"
-        case .about: "关于"
+        case .general: String(localized: "通用", bundle: .module)
+        case .server: String(localized: "服务器", bundle: .module)
+        case .libraryPlayback: String(localized: "资料库与播放", bundle: .module)
+        case .ai: String(localized: "AI 与公开数据", bundle: .module)
+        case .system: String(localized: "系统", bundle: .module)
+        case .about: String(localized: "关于", bundle: .module)
         }
     }
 

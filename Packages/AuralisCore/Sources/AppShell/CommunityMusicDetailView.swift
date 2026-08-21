@@ -46,10 +46,10 @@ struct CommunityMusicDetailView: View {
         if let detail = result.evidence?.musicBrainz {
             Section(String(localized: "评分", bundle: .module)) {
                 if let rating = detail.rating {
-                    detailRow("平均评分", String(format: "%.1f / 5", rating))
+                    detailRow(String(localized: "平均评分", bundle: .module), String(format: "%.1f / 5", rating))
                 }
                 if let votes = detail.votesCount {
-                    detailRow("评分票数", "\(votes)")
+                    detailRow(String(localized: "评分票数", bundle: .module), "\(votes)")
                 }
             }
             Section(String(localized: "身份", bundle: .module)) {
@@ -60,12 +60,12 @@ struct CommunityMusicDetailView: View {
                 if let isrc = detail.isrc, !isrc.isEmpty { detailRow("ISRC", isrc) }
             }
             Section(String(localized: "录音信息", bundle: .module)) {
-                if let title = detail.title { detailRow("标题", title) }
-                if let credit = detail.artistCredit, !credit.isEmpty { detailRow("艺术家", credit) }
-                if let date = detail.releaseDate, !date.isEmpty { detailRow("发行日期", date) }
-                if let type = detail.releaseType, !type.isEmpty { detailRow("发行类型", type) }
-                if !detail.genres.isEmpty { detailRow("流派", detail.genres.joined(separator: "、")) }
-                if !detail.tags.isEmpty { detailRow("标签", detail.tags.prefix(20).joined(separator: "、")) }
+                if let title = detail.title { detailRow(String(localized: "标题", bundle: .module), title) }
+                if let credit = detail.artistCredit, !credit.isEmpty { detailRow(String(localized: "艺术家", bundle: .module), credit) }
+                if let date = detail.releaseDate, !date.isEmpty { detailRow(String(localized: "发行日期", bundle: .module), date) }
+                if let type = detail.releaseType, !type.isEmpty { detailRow(String(localized: "发行类型", bundle: .module), type) }
+                if !detail.genres.isEmpty { detailRow(String(localized: "流派", bundle: .module), detail.genres.joined(separator: "、")) }
+                if !detail.tags.isEmpty { detailRow(String(localized: "标签", bundle: .module), detail.tags.prefix(20).joined(separator: "、")) }
             }
         } else if let metric = result.metrics.value(for: .musicBrainz) {
             switch metric.status {
@@ -89,10 +89,17 @@ struct CommunityMusicDetailView: View {
         if let metric, metric.status == .available {
             Section(String(localized: "聚合", bundle: .module)) {
                 if let rating = metric.rating, let count = metric.ratingCount {
-                    detailRow("平均评分", String(format: "%.1f / 5（%d 次评分）", rating, count))
+                    detailRow(
+                        String(localized: "平均评分", bundle: .module),
+                        String.localizedStringWithFormat(
+                            String(localized: "%.1f / 5（%d 次评分）", bundle: .module),
+                            rating,
+                            count
+                        )
+                    )
                 }
                 if let reviews = metric.reviewCount {
-                    detailRow("评论数", "\(reviews)")
+                    detailRow(String(localized: "评论数", bundle: .module), "\(reviews)")
                 }
             }
         }
@@ -137,7 +144,7 @@ struct CommunityMusicDetailView: View {
                             .font(.caption2)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                         if let urlString = review.sourceURL, let url = URL(string: urlString) {
-                            Link("查看原始来源", destination: url)
+                            Link(String(localized: "查看原始来源", bundle: .module), destination: url)
                                 .font(.caption)
                         }
                     }
@@ -155,8 +162,8 @@ struct CommunityMusicDetailView: View {
 
     private func sourceLine(_ review: CommunityMusicReview) -> String {
         var parts: [String] = []
-        if let source = review.sourceName, !source.isEmpty { parts.append("来源：\(source)") }
-        if let license = review.licenseID, !license.isEmpty { parts.append("许可：\(license)") }
+        if let source = review.sourceName, !source.isEmpty { parts.append(String(localized: "来源：\(source)", bundle: .module)) }
+        if let license = review.licenseID, !license.isEmpty { parts.append(String(localized: "许可：\(license)", bundle: .module)) }
         return parts.joined(separator: " · ")
     }
 
@@ -169,14 +176,14 @@ struct CommunityMusicDetailView: View {
             case .available:
                 Section(String(localized: "收听统计", bundle: .module)) {
                     if let listens = metric.listenCount {
-                        detailRow("总收听次数", formattedCount(listens))
+                        detailRow(String(localized: "总收听次数", bundle: .module), formattedCount(listens))
                     }
                     if let listeners = metric.listenerCount {
-                        detailRow("独立听众数", formattedCount(listeners))
+                        detailRow(String(localized: "独立听众数", bundle: .module), formattedCount(listeners))
                     }
                     if let listens = metric.listenCount, let listeners = metric.listenerCount, listeners > 0 {
                         // 本地计算，名称必须明确是“平均每位听众播放次数”，不是热爱指数/忠诚度。
-                        detailRow("平均每位听众播放次数", String(format: "%.1f", Double(listens) / Double(listeners)))
+                        detailRow(String(localized: "平均每位听众播放次数", bundle: .module), String(format: "%.1f", Double(listens) / Double(listeners)))
                     }
                 }
                 Section {

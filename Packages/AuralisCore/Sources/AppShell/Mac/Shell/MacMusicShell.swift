@@ -373,13 +373,13 @@ public struct MacMusicShell: View {
             }
         case .recentlyPlayed:
             MacTrackCollectionView(
-                title: "最近播放", tracks: model.recentlyPlayedTracks,
+                title: String(localized: "最近播放", bundle: .module), tracks: model.recentlyPlayedTracks,
                 model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate,
                 contentRevision: model.recentlyPlayedRevision
             )
         case .recentlyAdded:
             MacTrackCollectionView(
-                title: "最近添加", tracks: model.recentlyAddedTracks,
+                title: String(localized: "最近添加", bundle: .module), tracks: model.recentlyAddedTracks,
                 model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate
             )
         case .songs:
@@ -392,7 +392,7 @@ public struct MacMusicShell: View {
             MacGenresView(model: model, theme: theme, onNavigate: navigate)
         case .favorites:
             MacTrackCollectionView(
-                title: "收藏歌曲", tracks: model.favoriteTracks,
+                title: String(localized: "收藏歌曲", bundle: .module), tracks: model.favoriteTracks,
                 model: model, theme: theme, selection: $selectedTracks, onNavigate: navigate,
                 contentRevision: model.favoritesRevision
             )
@@ -407,7 +407,7 @@ public struct MacMusicShell: View {
         case .assistant:
             AssistantView(model: model, theme: theme)
         case nil:
-            ContentUnavailableView("选择一个项目", systemImage: "music.note.list",
+            ContentUnavailableView(String(localized: "选择一个项目", bundle: .module), systemImage: "music.note.list",
                                    description: Text(String(localized: "从左侧选择资料库或工具开始", bundle: .module)))
         }
     }
@@ -534,7 +534,7 @@ public struct MacMusicShell: View {
                 Text(model.playbackError?.localizedDescription ?? String(localized: "未知错误", bundle: .module))
             }
             .alert(String(localized: "新建播放列表", bundle: .module), isPresented: $isCreatingPlaylist) {
-                TextField("播放列表名称", text: $newPlaylistName)
+                TextField(String(localized: "播放列表名称", bundle: .module), text: $newPlaylistName)
                 Button(String(localized: "创建", bundle: .module)) {
                     let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
                     newPlaylistName = ""

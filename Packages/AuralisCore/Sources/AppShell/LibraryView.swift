@@ -27,7 +27,7 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("资料类型", selection: $scope) {
+            Picker(String(localized: "资料类型", bundle: .module), selection: $scope) {
                 ForEach(LibraryScope.allCases) { item in Text(item.title).tag(item) }
             }
             .pickerStyle(.segmented)
@@ -78,8 +78,8 @@ struct LibraryView: View {
             if model.catalog.tracks.isEmpty {
                 AuralisEmptyState(
                     icon: "music.note",
-                    title: "资料库还没有歌曲",
-                    message: "连接服务器并同步后，这里会列出全部歌曲；也可以从「首页」先随机播放几首。",
+                    title: String(localized: "资料库还没有歌曲", bundle: .module),
+                    message: String(localized: "连接服务器并同步后，这里会列出全部歌曲；也可以从「首页」先随机播放几首。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -124,8 +124,8 @@ struct LibraryView: View {
             if model.catalog.albums.isEmpty {
                 AuralisEmptyState(
                     icon: "square.stack",
-                    title: "还没有专辑",
-                    message: "当前资料库暂无专辑，可能需要同步或扫描音乐库。",
+                    title: String(localized: "还没有专辑", bundle: .module),
+                    message: String(localized: "当前资料库暂无专辑，可能需要同步或扫描音乐库。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -174,8 +174,8 @@ struct LibraryView: View {
             if model.catalog.artists.isEmpty {
                 AuralisEmptyState(
                     icon: "person.2",
-                    title: "还没有艺术家",
-                    message: "当前资料库暂无艺术家，可能需要同步或扫描音乐库。",
+                    title: String(localized: "还没有艺术家", bundle: .module),
+                    message: String(localized: "当前资料库暂无艺术家，可能需要同步或扫描音乐库。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -187,7 +187,9 @@ struct LibraryView: View {
                             ArtworkView(title: artist.name, artworkKey: artist.artworkKey, colors: theme.colorTokens, size: 48, cornerRadius: 24)
                             VStack(alignment: .leading) {
                                 Text(artist.name).font(.headline)
-                                Text("\(artist.albumCount) 张专辑").font(.caption).foregroundStyle(theme.colorTokens.secondaryText.color)
+                                Text(String(localized: "\(artist.albumCount) 张专辑", bundle: .module))
+                                    .font(.caption)
+                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
                             }
                             Spacer(minLength: 0)
                         }
@@ -221,8 +223,8 @@ struct LibraryView: View {
             if genres.isEmpty {
                 AuralisEmptyState(
                     icon: "music.quarternote.3",
-                    title: "还没有流派",
-                    message: "服务器返回的流派（来自音乐文件内嵌标签）会显示在这里；连接并同步后即可按流派浏览。",
+                    title: String(localized: "还没有流派", bundle: .module),
+                    message: String(localized: "服务器返回的流派（来自音乐文件内嵌标签）会显示在这里；连接并同步后即可按流派浏览。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -249,7 +251,7 @@ struct LibraryView: View {
                                         .font(.headline)
                                         .lineLimit(1)
                                         .foregroundStyle(theme.colorTokens.primaryText.color)
-                                    Text("\(item.count) 首")
+                                    Text(String(localized: "\(item.count) 首", bundle: .module))
                                         .font(.caption)
                                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                                 }
@@ -284,20 +286,20 @@ struct LibraryView: View {
     private var recommendationCategoryList: some View {
         Group {
             if isLoadingRecommendationCategories && recommendationCategories.isEmpty {
-                ProgressView("正在读取本地分类…")
+                ProgressView { Text(String(localized: "正在读取本地分类…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let recommendationCategoryError {
                 AuralisEmptyState(
                     icon: "exclamationmark.triangle",
-                    title: "读取分类失败",
+                    title: String(localized: "读取分类失败", bundle: .module),
                     message: recommendationCategoryError,
                     colors: theme.colorTokens
                 )
             } else if recommendationCategories.isEmpty {
                 AuralisEmptyState(
                     icon: "square.grid.2x2",
-                    title: "还没有分类",
-                    message: "AI 推荐索引完成分类后，情绪、场景、人声、质感、风格和听感维度会显示在这里。",
+                    title: String(localized: "还没有分类", bundle: .module),
+                    message: String(localized: "AI 推荐索引完成分类后，情绪、场景、人声、质感、风格和听感维度会显示在这里。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -324,7 +326,7 @@ struct LibraryView: View {
                                         .font(.headline)
                                         .lineLimit(1)
                                         .foregroundStyle(theme.colorTokens.primaryText.color)
-                                    Text("\(category.trackCount) 首")
+                                    Text(String(localized: "\(category.trackCount) 首", bundle: .module))
                                         .font(.caption)
                                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                                 }
@@ -350,7 +352,7 @@ struct LibraryView: View {
                                 Image(systemName: "magnifyingglass")
                                     .font(.caption)
                                     .foregroundStyle(theme.colorTokens.secondaryText.color)
-                                TextField("搜索标签", text: $aiTagSearch)
+                                TextField(String(localized: "搜索标签", bundle: .module), text: $aiTagSearch)
                                     .textFieldStyle(.plain)
                                     .font(.caption)
                                     .onSubmit { Task { await loadAITags(reset: true) } }
@@ -386,7 +388,7 @@ struct LibraryView: View {
                                             .font(.headline)
                                             .lineLimit(1)
                                             .foregroundStyle(theme.colorTokens.primaryText.color)
-                                        Text("\(category.trackCount) 首")
+                                        Text(String(localized: "\(category.trackCount) 首", bundle: .module))
                                             .font(.caption)
                                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                                     }
@@ -444,7 +446,7 @@ struct LibraryView: View {
             )
         } catch {
             recommendationCategories = []
-            recommendationCategoryError = "读取分类失败：\(error.localizedDescription)"
+            recommendationCategoryError = String(localized: "读取分类失败：\(error.localizedDescription)", bundle: .module)
         }
         isLoadingRecommendationCategories = false
         await loadAITags(reset: true)
@@ -488,16 +490,16 @@ struct LibraryView: View {
     private static func categoryTitle(_ category: RecommendationIndexV2Category) -> String {
         let dimension: String
         switch category.dimension {
-        case "mood": dimension = "情绪"
-        case "scene": dimension = "场景"
-        case "vocal": dimension = "人声"
-        case "texture": dimension = "质感"
-        case "style": dimension = "风格"
-        case "energy": dimension = "能量"
-        case "tempo": dimension = "速度"
-        case "acousticness": dimension = "原声感"
-        case "danceability": dimension = "舞动性"
-        case "tag": dimension = "AI 标签"
+        case "mood": dimension = String(localized: "情绪", bundle: .module)
+        case "scene": dimension = String(localized: "场景", bundle: .module)
+        case "vocal": dimension = String(localized: "人声", bundle: .module)
+        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "style": dimension = String(localized: "风格", bundle: .module)
+        case "energy": dimension = String(localized: "能量", bundle: .module)
+        case "tempo": dimension = String(localized: "速度", bundle: .module)
+        case "acousticness": dimension = String(localized: "原声感", bundle: .module)
+        case "danceability": dimension = String(localized: "舞动性", bundle: .module)
+        case "tag": dimension = String(localized: "AI 标签", bundle: .module)
         default: dimension = category.dimension
         }
         let suffix: String
@@ -538,8 +540,8 @@ struct LibraryView: View {
             if model.catalog.playlists.isEmpty {
                 AuralisEmptyState(
                     icon: "music.note.list",
-                    title: "还没有歌单",
-                    message: "在服务器上创建歌单后，这里会列出所有歌单。",
+                    title: String(localized: "还没有歌单", bundle: .module),
+                    message: String(localized: "在服务器上创建歌单后，这里会列出所有歌单。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -589,8 +591,8 @@ struct LibraryView: View {
             if model.favoriteTracks.isEmpty {
                 AuralisEmptyState(
                     icon: "heart",
-                    title: "还没有收藏",
-                    message: "在播放页或歌曲菜单中点心形收藏后，会出现在这里。",
+                    title: String(localized: "还没有收藏", bundle: .module),
+                    message: String(localized: "在播放页或歌曲菜单中点心形收藏后，会出现在这里。", bundle: .module),
                     colors: theme.colorTokens
                 )
             } else {
@@ -652,7 +654,7 @@ struct TrackRow: View {
                 Text(track.title)
                     .font(.body.weight(isCurrent ? .semibold : .regular))
                     .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : theme.colorTokens.primaryText.color)
-                Text("\(track.artistName) · \(track.albumTitle)")
+                Text(String(localized: "\(track.artistName) · \(track.albumTitle)", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
                     .lineLimit(1)

@@ -34,8 +34,10 @@ struct SettingsView: View {
                     ServerSettingsPage(model: model, theme: theme)
                 } label: {
                     SettingsCategoryRow(
-                        title: "服务器",
-                        subtitle: model.catalog.isConnected ? "已连接 · \(model.catalog.tracks.count) 首歌曲" : "连接音乐服务器与下载服务",
+                        title: String(localized: "服务器", bundle: .module),
+                        subtitle: model.catalog.isConnected
+                            ? String(localized: "已连接 · \(model.catalog.tracks.count) 首歌曲", bundle: .module)
+                            : String(localized: "连接音乐服务器与下载服务", bundle: .module),
                         icon: "server.rack"
                     )
                 }
@@ -44,19 +46,29 @@ struct SettingsView: View {
                 } label: {
                     SettingsCategoryRow(
                         title: "Agent",
-                        subtitle: aiEnabled ? "大模型、推荐索引与隐私" : "已关闭",
+                        subtitle: aiEnabled
+                            ? String(localized: "大模型、推荐索引与隐私", bundle: .module)
+                            : String(localized: "已关闭", bundle: .module),
                         icon: "sparkles"
                     )
                 }
                 NavigationLink {
                     PlaybackSettingsPage(model: model, theme: theme)
                 } label: {
-                    SettingsCategoryRow(title: "播放与音质", subtitle: "网络音质与迷你播放条", icon: "speaker.wave.2")
+                    SettingsCategoryRow(
+                        title: String(localized: "播放与音质", bundle: .module),
+                        subtitle: String(localized: "网络音质与迷你播放条", bundle: .module),
+                        icon: "speaker.wave.2"
+                    )
                 }
                 NavigationLink {
                     DataSettingsPage(model: model, themeStore: themeStore, theme: theme)
                 } label: {
-                    SettingsCategoryRow(title: "数据与备份", subtitle: "本地缓存与配置备份", icon: "externaldrive")
+                    SettingsCategoryRow(
+                        title: String(localized: "数据与备份", bundle: .module),
+                        subtitle: String(localized: "本地缓存与配置备份", bundle: .module),
+                        icon: "externaldrive"
+                    )
                 }
             }
             Section(String(localized: "外观", bundle: .module)) {
@@ -64,8 +76,8 @@ struct SettingsView: View {
                     isEditingHomeLayout = true
                 } label: {
                     SettingsCategoryRow(
-                        title: "首页布局",
-                        subtitle: "模块显示与排序",
+                        title: String(localized: "首页布局", bundle: .module),
+                        subtitle: String(localized: "模块显示与排序", bundle: .module),
                         icon: "slider.horizontal.3"
                     )
                 }
@@ -73,11 +85,11 @@ struct SettingsView: View {
                 NavigationLink {
                     ThemeSettingsPage(themeStore: themeStore)
                 } label: {
-                    SettingsCategoryRow(title: "主题", subtitle: theme.name, icon: "paintpalette")
+                    SettingsCategoryRow(title: String(localized: "主题", bundle: .module), subtitle: theme.name, icon: "paintpalette")
                 }
             }
             Section(String(localized: "关于", bundle: .module)) {
-                LabeledContent("版本", value: AppVersionInfo.display)
+                LabeledContent(String(localized: "版本", bundle: .module), value: AppVersionInfo.display)
             }
         }
         .scrollContentBackground(.hidden)
@@ -127,14 +139,14 @@ struct ServerEditSheet: View {
         NavigationStack {
             Form {
                 Section(String(localized: "服务器信息", bundle: .module)) {
-                    TextField("显示名称", text: $displayName)
-                    TextField("内网服务器地址", text: $internalURL)
+                    TextField(String(localized: "显示名称", bundle: .module), text: $displayName)
+                    TextField(String(localized: "内网服务器地址", bundle: .module), text: $internalURL)
                         .autocorrectionDisabled()
-                    TextField("外网服务器地址（可选）", text: $externalURL)
+                    TextField(String(localized: "外网服务器地址（可选）", bundle: .module), text: $externalURL)
                         .autocorrectionDisabled()
-                    TextField("用户名", text: $username)
+                    TextField(String(localized: "用户名", bundle: .module), text: $username)
                         .autocorrectionDisabled()
-                    SecureField("新密码（留空则不修改）", text: $password)
+                    SecureField(String(localized: "新密码（留空则不修改）", bundle: .module), text: $password)
                 }
                 Section {
                     Text(String(localized: "内网和外网会同时探测。内网在 30 秒内可达时优先使用；只有内网确认不可达时才使用外网。", bundle: .module))
@@ -201,7 +213,7 @@ struct ServerEditSheet: View {
             password: password.isEmpty ? nil : password
         )
         guard await model.updateServerConfiguration(serverID: server.id, update: update) else {
-            errorMessage = "无法保存服务器设置，请检查名称、用户名和系统 Keychain。"
+            errorMessage = String(localized: "无法保存服务器设置，请检查名称、用户名和系统 Keychain。", bundle: .module)
             return
         }
         await onSaved()
@@ -283,35 +295,35 @@ struct ServerConnectionSheet: View {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
                 GridRow {
                     fieldLabel(String(localized: "显示名称", bundle: .module))
-                    TextField("输入显示名称", text: $displayName)
+                    TextField(String(localized: "输入显示名称", bundle: .module), text: $displayName)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.organizationName)
                         .frame(width: 320)
                 }
                 GridRow {
                     fieldLabel(String(localized: "服务器地址", bundle: .module))
-                    TextField("输入服务器地址", text: $serverURL)
+                    TextField(String(localized: "输入服务器地址", bundle: .module), text: $serverURL)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .frame(width: 320)
                 }
                 GridRow {
                     fieldLabel(String(localized: "用户名", bundle: .module))
-                    TextField("输入用户名", text: $username)
+                    TextField(String(localized: "输入用户名", bundle: .module), text: $username)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .frame(width: 320)
                 }
                 GridRow {
                     fieldLabel(String(localized: "密码", bundle: .module))
-                    SecureField("输入密码", text: $password)
+                    SecureField(String(localized: "输入密码", bundle: .module), text: $password)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.password)
                         .frame(width: 320)
                 }
                 GridRow {
                     fieldLabel(String(localized: "外网地址", bundle: .module))
-                    TextField("输入外网地址", text: $externalServerURL)
+                    TextField(String(localized: "输入外网地址", bundle: .module), text: $externalServerURL)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .frame(width: 320)
@@ -332,7 +344,9 @@ struct ServerConnectionSheet: View {
             if case let .connecting(stage) = model.serverConnectionState {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("正在\(stage.title)…").font(.footnote).foregroundStyle(.secondary)
+                    Text(String(localized: "正在\(stage.title)…", bundle: .module))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
             if case let .failed(message) = model.serverConnectionState {
@@ -414,7 +428,7 @@ struct ServerConnectionSheet: View {
                     TextField(String(localized: "用户名", bundle: .module), text: $username, prompt: Text(String(localized: "输入用户名", bundle: .module)))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    SecureField("输入密码", text: $password)
+                    SecureField(String(localized: "输入密码", bundle: .module), text: $password)
                         .textContentType(.password)
                     TextField(String(localized: "外网地址（可选）", bundle: .module), text: $externalServerURL, prompt: Text(String(localized: "输入外网地址", bundle: .module)))
                         .textInputAutocapitalization(.never)
@@ -618,7 +632,7 @@ struct ServerConnectionSheet: View {
         let result = await LocalNetworkProbe.probe(host: host, port: port, timeout: 15)
         guard result.isLocalNetworkDenied else { return true }
 
-        localValidationError = "本地网络访问已被 macOS 拒绝。Auralis 会在首次连接时自动申请；若此前点过“不允许”，系统不会再次弹窗。请在“系统设置 → 隐私与安全性 → 本地网络”中打开“Auralis”后重试。"
+        localValidationError = String(localized: "本地网络访问已被 macOS 拒绝。Auralis 会在首次连接时自动申请；若此前点过“不允许”，系统不会再次弹窗。请在“系统设置 → 隐私与安全性 → 本地网络”中打开“Auralis”后重试。", bundle: .module)
         return false
 #else
         return true
@@ -646,13 +660,13 @@ struct AIProviderSettingsPage: View {
     var body: some View {
         Form {
             Section(String(localized: "接口地址", bundle: .module)) {
-                TextField("Base URL", text: $aiBaseURL, prompt: Text(AIConnectionSettings.defaultBaseURL))
+                TextField(String(localized: "Base URL", bundle: .module), text: $aiBaseURL, prompt: Text(AIConnectionSettings.defaultBaseURL))
 #if os(iOS)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
 #endif
                     .autocorrectionDisabled()
-                Picker("接口协议", selection: $endpointMode) {
+                Picker(String(localized: "接口协议", bundle: .module), selection: $endpointMode) {
                     ForEach(AIEndpointMode.allCases) { mode in
                         VStack(alignment: .leading) {
                             Text(mode.title)
@@ -685,10 +699,19 @@ struct AIProviderSettingsPage: View {
                     .autocorrectionDisabled()
             }
             Section("API Key") {
-                LabeledContent("状态", value: hasAPIKey ? "已配置 · 存于系统 Keychain" : "未配置")
+                LabeledContent(
+                    String(localized: "状态", bundle: .module),
+                    value: hasAPIKey
+                        ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module)
+                        : String(localized: "未配置", bundle: .module)
+                )
                 HStack {
                     #if os(iOS)
-                    NavigationLink(hasAPIKey ? "更新 API Key" : "配置 API Key") {
+                    NavigationLink(
+                        hasAPIKey
+                            ? String(localized: "更新 API Key", bundle: .module)
+                            : String(localized: "配置 API Key", bundle: .module)
+                    ) {
                         APIKeyPage(theme: theme, hasExistingKey: hasAPIKey) { key in
                             try await credentialVault.store(key, for: AIConnectionSettings.credentialID)
                             hasAPIKey = true
@@ -757,12 +780,12 @@ struct AIProviderSettingsPage: View {
                 }
             }
             Section {
-                Text("""
+                Text(String(localized: """
 支持 OpenAI Chat Completions、OpenAI Responses API，
 以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio
 和兼容 OpenAI 协议的中转服务。
 API Key 仅保存于系统 Keychain。
-""")
+""", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
@@ -790,7 +813,7 @@ API Key 仅保存于系统 Keychain。
 
     private func testAIConnection() {
         guard let provider = AIConnectionSettings().makeProvider(credentialVault: credentialVault) else {
-            connectionTestResult = .failure("Base URL 或模型未填写完整。")
+            connectionTestResult = .failure(String(localized: "Base URL 或模型未填写完整。", bundle: .module))
             return
         }
         isTestingConnection = true
@@ -798,7 +821,7 @@ API Key 仅保存于系统 Keychain。
         Task {
             do {
                 let result = try await provider.testConnection()
-                connectionTestResult = .success("连接成功 · \(result.model) · 延迟 \(String(format: "%.1f", result.latency)) 秒")
+                connectionTestResult = .success(String(localized: "连接成功 · \(result.model) · 延迟 \(String(format: "%.1f", result.latency)) 秒", bundle: .module))
             } catch {
                 connectionTestResult = .failure(error.localizedDescription)
             }
@@ -842,8 +865,8 @@ struct APIKeyPage: View {
 
     var body: some View {
         Form {
-            Section("AI Provider API Key") {
-                SecureField("sk-...", text: $apiKey)
+            Section(String(localized: "AI Provider API Key", bundle: .module)) {
+                SecureField(String(localized: "sk-...", bundle: .module), text: $apiKey)
 #if os(iOS)
                     .textInputAutocapitalization(.never)
 #endif
@@ -884,7 +907,7 @@ struct APIKeyPage: View {
                 dismiss()
             } catch {
                 isSaving = false
-                saveError = "写入 Keychain 失败，请检查系统钥匙串访问权限。"
+                saveError = String(localized: "写入 Keychain 失败，请检查系统钥匙串访问权限。", bundle: .module)
             }
         }
     }

@@ -99,7 +99,7 @@ struct MacDetailTrackRow: View {
                     .foregroundStyle(track.isFavorite ? theme.colorTokens.accent.color : Color.secondary.opacity(0.55))
             }
             .buttonStyle(.plain)
-            .help(track.isFavorite ? "取消收藏" : "收藏")
+            .help(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
             .accessibilityLabel(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
             .frame(width: 22)
 
@@ -122,7 +122,7 @@ struct MacDetailTrackRow: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .opacity(isHovering ? 1 : 0.4)
-                .help("更多操作")
+                .help(String(localized: "更多操作", bundle: .module))
                 .accessibilityLabel(String(localized: "更多操作", bundle: .module))
             }
         }
@@ -137,7 +137,7 @@ struct MacDetailTrackRow: View {
             model.playTrack(track, in: contextTracks)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(track.title)，\(track.artistName)，\(MacFormat.time(track.duration))")
+        .accessibilityLabel(String(localized: "\(track.title)，\(track.artistName)，\(MacFormat.time(track.duration))", bundle: .module))
     }
 
     @ViewBuilder
@@ -152,7 +152,7 @@ struct MacDetailTrackRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("播放")
+            .help(String(localized: "播放", bundle: .module))
             .accessibilityLabel(String(localized: "播放", bundle: .module))
         } else if let number {
             Text("\(number)")
@@ -170,15 +170,15 @@ struct MacDetailTrackRow: View {
         let isDisliked = model.isDisliked(track)
         let isDownloaded = model.isDownloaded(track)
         return [
-            MacMenuAction(title: "下一首播放", systemImage: "text.badge.plus") { model.playNext(globalID: gid) },
-            MacMenuAction(title: "加入队列", systemImage: "text.badge.plus") { model.addToQueue(globalID: gid) },
-            MacMenuAction(title: isDisliked ? "取消不喜欢" : "不喜欢", systemImage: "heart.slash") {
+            MacMenuAction(title: String(localized: "下一首播放", bundle: .module), systemImage: "text.badge.plus") { model.playNext(globalID: gid) },
+            MacMenuAction(title: String(localized: "加入队列", bundle: .module), systemImage: "text.badge.plus") { model.addToQueue(globalID: gid) },
+            MacMenuAction(title: isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module), systemImage: "heart.slash") {
                 model.setDisliked(track, value: !isDisliked, source: "user")
             },
-            MacMenuAction(title: isDownloaded ? "删除下载" : "下载", systemImage: "arrow.down.circle") {
+            MacMenuAction(title: isDownloaded ? String(localized: "删除下载", bundle: .module) : String(localized: "下载", bundle: .module), systemImage: "arrow.down.circle") {
                 if isDownloaded { model.removeDownload(track) } else { model.download(track) }
             },
-            MacMenuAction(title: "歌曲信息", systemImage: "info.circle") {
+            MacMenuAction(title: String(localized: "歌曲信息", bundle: .module), systemImage: "info.circle") {
                 NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: track)
             }
         ]

@@ -175,7 +175,11 @@ public final class CatalogCoordinator: ObservableObject {
         guard syncTask == nil else { return }
         syncingServerID = serverID
         phase = .running(
-            stage: mode == .full ? "首次全量同步" : (skipIfUpToDate ? "检查本地目录是否最新" : "增量同步"),
+            stage: mode == .full
+                ? String(localized: "首次全量同步", bundle: .module)
+                : (skipIfUpToDate
+                    ? String(localized: "检查本地目录是否最新", bundle: .module)
+                    : String(localized: "增量同步", bundle: .module)),
             processed: 0
         )
         let syncStartedAt = ContinuousClock.now
@@ -228,20 +232,20 @@ public final class CatalogCoordinator: ObservableObject {
                 effectiveMode = .full
                 let stage: String
                 if !countMatches {
-                    stage = "检测到曲目数量变化，完整更新"
+                    stage = String(localized: "检测到曲目数量变化，完整更新", bundle: .module)
                 } else if probe.kind == .countOnly {
-                    stage = "服务器仅提供数量，执行完整校验"
+                    stage = String(localized: "服务器仅提供数量，执行完整校验", bundle: .module)
                 } else if stored.fingerprint == nil {
-                    stage = "建立服务器修订基线，完整校验"
+                    stage = String(localized: "建立服务器修订基线，完整校验", bundle: .module)
                 } else if !fingerprintMatches {
-                    stage = "检测到资料库内容变化，完整更新"
+                    stage = String(localized: "检测到资料库内容变化，完整更新", bundle: .module)
                 } else {
-                    stage = "定期完整校验单曲元数据"
+                    stage = String(localized: "定期完整校验单曲元数据", bundle: .module)
                 }
                 self.phase = .running(stage: stage, processed: 0)
             }
             guard let synchronizer = await connector.makeSynchronizer(serverID: serverID, store: store) else {
-                self.phase = .failed("未连接服务器，无法同步目录")
+                self.phase = .failed(String(localized: "未连接服务器，无法同步目录", bundle: .module))
                 return
             }
             self.synchronizer = synchronizer
@@ -334,33 +338,44 @@ public final class CatalogCoordinator: ObservableObject {
     // MARK: - Helpers
 
     private static func stageTitle(_ stage: LibrarySyncProgress.Stage, section: LibrarySyncSection?) -> String {
-        let sectionTitle: String
-        switch section {
-        case .artists: sectionTitle = "艺术家"
-        case .albums: sectionTitle = "专辑"
-        case .tracks: sectionTitle = "单曲"
-        case .none: sectionTitle = ""
-        }
         switch stage {
         case .beginning: return String(localized: "准备同步", bundle: .module)
-        case .fetching: return sectionTitle.isEmpty ? String(localized: "拉取数据", bundle: .module) : "拉取\(sectionTitle)"
-        case .persisting: return sectionTitle.isEmpty ? String(localized: "写入本地", bundle: .module) : "写入\(sectionTitle)"
-        case .completedSection: return sectionTitle.isEmpty ? String(localized: "分段完成", bundle: .module) : "\(sectionTitle)完成"
+        case .fetching:
+            switch section {
+            case .artists: return String(localized: "拉取艺术家", bundle: .module)
+            case .albums: return String(localized: "拉取专辑", bundle: .module)
+            case .tracks: return String(localized: "拉取单曲", bundle: .module)
+            case .none: return String(localized: "拉取数据", bundle: .module)
+            }
+        case .persisting:
+            switch section {
+            case .artists: return String(localized: "写入艺术家", bundle: .module)
+            case .albums: return String(localized: "写入专辑", bundle: .module)
+            case .tracks: return String(localized: "写入单曲", bundle: .module)
+            case .none: return String(localized: "写入本地", bundle: .module)
+            }
+        case .completedSection:
+            switch section {
+            case .artists: return String(localized: "艺术家完成", bundle: .module)
+            case .albums: return String(localized: "专辑完成", bundle: .module)
+            case .tracks: return String(localized: "单曲完成", bundle: .module)
+            case .none: return String(localized: "分段完成", bundle: .module)
+            }
         case .completed: return String(localized: "同步完成", bundle: .module)
         }
     }
 
     private static func describe(_ error: LibrarySyncError) -> String {
         switch error {
-        case let .alreadyRunning(id): "服务器 \(id.rawValue) 正在同步中"
-        case let .invalidPageSize(size): "分页大小非法：\(size)"
+        case let .alreadyRunning(id): String(localized: "服务器 \(id.rawValue) 正在同步中", bundle: .module)
+        case let .invalidPageSize(size): String(localized: "分页大小非法：\(size)", bundle: .module)
         case let .invalidRecordServer(section, recordID, expected, actual):
-            "\(section.rawValue) 记录 \(recordID) 服务器不匹配（期望 \(expected.rawValue)，实际 \(actual.rawValue)）"
-        case let .duplicateRecord(section, recordID): "\(section.rawValue) 出现重复记录：\(recordID)"
-        case let .continuationLoop(section, _): "\(section.rawValue) 分页出现循环，已中止"
-        case let .pageLimitExceeded(section, maximum): "\(section.rawValue) 超过最大分页数 \(maximum)"
-        case let .unknownSession(id): "同步会话不存在：\(id.uuidString)"
-        case .sessionMismatch: "同步会话不一致，请重试"
+            String(localized: "\(section.rawValue) 记录 \(recordID) 服务器不匹配（期望 \(expected.rawValue)，实际 \(actual.rawValue)）", bundle: .module)
+        case let .duplicateRecord(section, recordID): String(localized: "\(section.rawValue) 出现重复记录：\(recordID)", bundle: .module)
+        case let .continuationLoop(section, _): String(localized: "\(section.rawValue) 分页出现循环，已中止", bundle: .module)
+        case let .pageLimitExceeded(section, maximum): String(localized: "\(section.rawValue) 超过最大分页数 \(maximum)", bundle: .module)
+        case let .unknownSession(id): String(localized: "同步会话不存在：\(id.uuidString)", bundle: .module)
+        case .sessionMismatch: String(localized: "同步会话不一致，请重试", bundle: .module)
         }
     }
 }

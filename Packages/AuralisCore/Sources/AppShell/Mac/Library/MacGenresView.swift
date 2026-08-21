@@ -21,7 +21,7 @@ struct MacGenresView: View {
                         .frame(width: 24)
                     Text(genre.name)
                     Spacer()
-                    Text("\(genre.songCount) 首")
+                    Text(String(localized: "\(genre.songCount) 首", bundle: .module))
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())

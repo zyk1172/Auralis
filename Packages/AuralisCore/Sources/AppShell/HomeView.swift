@@ -356,10 +356,10 @@ struct HomeView: View {
 
     private var librarySummary: some View {
         HStack(spacing: AuralisSpacing.small) {
-            stat("\(model.catalog.artists.count)", "艺术家")
-            stat("\(model.catalog.albums.count)", "专辑")
-            stat("\(model.catalog.tracks.count)", "歌曲")
-            stat("\(model.catalog.playlists.count)", "歌单")
+            stat("\(model.catalog.artists.count)", String(localized: "艺术家", bundle: .module))
+            stat("\(model.catalog.albums.count)", String(localized: "专辑", bundle: .module))
+            stat("\(model.catalog.tracks.count)", String(localized: "歌曲", bundle: .module))
+            stat("\(model.catalog.playlists.count)", String(localized: "歌单", bundle: .module))
         }
     }
 

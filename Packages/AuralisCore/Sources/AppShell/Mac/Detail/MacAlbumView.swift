@@ -109,7 +109,7 @@ struct MacAlbumView: View {
         if let year = album.year { parts.append(String(year)) }
         if let genre = album.genre, !genre.isEmpty { parts.append(genre) }
         if !tracks.isEmpty {
-            parts.append("\(tracks.count) 首")
+            parts.append(String(localized: "\(tracks.count) 首", bundle: .module))
             parts.append(MacFormat.durationSum(tracks))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -138,7 +138,7 @@ struct MacAlbumView: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.bordered)
-            .help(model.isAlbumFavorite(album) ? "取消收藏专辑" : "收藏专辑")
+                    .help(model.isAlbumFavorite(album) ? String(localized: "取消收藏专辑", bundle: .module) : String(localized: "收藏专辑", bundle: .module))
             .accessibilityLabel(model.isAlbumFavorite(album) ? String(localized: "取消收藏专辑", bundle: .module) : String(localized: "收藏专辑", bundle: .module))
             Menu {
                 Button(String(localized: "随机播放专辑", bundle: .module)) { model.playShuffledQueue(tracks) }
@@ -161,7 +161,7 @@ struct MacAlbumView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("更多操作")
+            .help(String(localized: "更多操作", bundle: .module))
         }
     }
 
@@ -171,7 +171,7 @@ struct MacAlbumView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(discGroups, id: \.disc) { group in
                 if discGroups.count > 1 {
-                    Text("Disc \(group.disc)")
+                    Text(String(localized: "Disc \(group.disc)", bundle: .module))
                         .font(.system(size: 15, weight: .semibold))
                         .padding(.top, 8)
                 }
@@ -191,7 +191,7 @@ struct MacAlbumView: View {
     private var footer: some View {
         HStack(spacing: 18) {
             if !tracks.isEmpty {
-                Text("\(album.year.map(String.init) ?? "—") · \(tracks.count) 首 · \(MacFormat.durationSum(tracks))")
+                Text(String(localized: "\(album.year.map(String.init) ?? "—") · \(tracks.count) 首 · \(MacFormat.durationSum(tracks))", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

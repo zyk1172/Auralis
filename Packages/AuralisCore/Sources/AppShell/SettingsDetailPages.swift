@@ -53,7 +53,7 @@ struct ThemeSettingsPage: View {
     private var theme: BuiltInTheme { themeStore.current }
 
     var body: some View {
-        SettingsDetailForm(title: "主题", theme: theme) {
+        SettingsDetailForm(title: String(localized: "主题", bundle: .module), theme: theme) {
             Section(String(localized: "主题外观", bundle: .module)) {
                 ThemeChoiceGrid(themeStore: themeStore)
                 Text(String(localized: "已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。", bundle: .module))
@@ -74,13 +74,13 @@ struct PlaybackSettingsPage: View {
     @AppStorage("auralis.audio.cellularTranscoding") private var cellularTranscoding = true
 
     var body: some View {
-        SettingsDetailForm(title: "播放与音质", theme: theme) {
+        SettingsDetailForm(title: String(localized: "播放与音质", bundle: .module), theme: theme) {
             Section(String(localized: "网络音质", bundle: .module)) {
-                Toggle("Wi-Fi 优先原始音质", isOn: $highQualityWiFi)
-                Toggle("蜂窝网络允许转码", isOn: $cellularTranscoding)
+                Toggle(String(localized: "Wi-Fi 优先原始音质", bundle: .module), isOn: $highQualityWiFi)
+                Toggle(String(localized: "蜂窝网络允许转码", bundle: .module), isOn: $cellularTranscoding)
             }
-            Section("ReplayGain") {
-                Picker("模式", selection: Binding(
+            Section(String(localized: "ReplayGain", bundle: .module)) {
+                Picker(String(localized: "模式", bundle: .module), selection: Binding(
                     get: { model.replayGainSettings.mode },
                     set: { model.setReplayGainMode($0) }
                 )) {
@@ -102,10 +102,10 @@ struct PlaybackSettingsPage: View {
                 } maximumValueLabel: {
                     Text("+12")
                 }
-                Text("前级：\(model.replayGainSettings.preampDB, specifier: "%+.1f") dB")
+                Text(String(localized: "前级：\(model.replayGainSettings.preampDB, specifier: "%+.1f") dB", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Toggle("峰值保护", isOn: Binding(
+                Toggle(String(localized: "峰值保护", bundle: .module), isOn: Binding(
                     get: { model.replayGainSettings.peakProtection },
                     set: { model.setReplayGainPeakProtection($0) }
                 ))
@@ -123,7 +123,7 @@ struct DataSettingsPage: View {
     let theme: BuiltInTheme
 
     var body: some View {
-        SettingsDetailForm(title: "数据与备份", theme: theme) {
+        SettingsDetailForm(title: String(localized: "数据与备份", bundle: .module), theme: theme) {
             CacheManagementSection(model: model, theme: theme)
             SettingsBackupSection(
                 model: model,
@@ -167,11 +167,16 @@ struct AgentSettingsPage: View {
     var body: some View {
         SettingsDetailForm(title: "Agent", theme: theme) {
             Section(String(localized: "大模型", bundle: .module)) {
-                LabeledContent("接口协议", value: AIEndpointMode.infer(from: aiAPIPath).title)
-                LabeledContent("Base URL", value: aiBaseURL)
-                LabeledContent("模型", value: aiModel)
-                LabeledContent("API Key", value: hasAPIKey ? "已配置" : "未配置")
-                NavigationLink("配置大模型…") {
+                LabeledContent(String(localized: "接口协议", bundle: .module), value: AIEndpointMode.infer(from: aiAPIPath).title)
+                LabeledContent(String(localized: "Base URL", bundle: .module), value: aiBaseURL)
+                LabeledContent(String(localized: "模型", bundle: .module), value: aiModel)
+                LabeledContent(
+                    "API Key",
+                    value: hasAPIKey
+                        ? String(localized: "已配置", bundle: .module)
+                        : String(localized: "未配置", bundle: .module)
+                )
+                NavigationLink(String(localized: "配置大模型…", bundle: .module)) {
                     AIProviderSettingsPage(theme: theme, hasAPIKey: $hasAPIKey)
                 }
             }
@@ -179,17 +184,19 @@ struct AgentSettingsPage: View {
                 if isLoadingIndexStatus && indexStatus == nil {
                     HStack { ProgressView(); Text(String(localized: "正在读取索引状态…", bundle: .module)) }
                 } else if let status = indexStatus {
-                    LabeledContent("已分类", value: "\(status.indexedTracks) / \(status.totalTracks) 首")
-                    LabeledContent("待处理", value: "\(status.pendingTracks) 首")
+                    LabeledContent(String(localized: "已分类", bundle: .module), value: String(localized: "\(status.indexedTracks) / \(status.totalTracks) 首", bundle: .module))
+                    LabeledContent(String(localized: "待处理", bundle: .module), value: String(localized: "\(status.pendingTracks) 首", bundle: .module))
                     ProgressView(value: Double(status.indexedTracks), total: Double(max(status.totalTracks, 1)))
                         .tint(theme.colorTokens.accent.color)
-                    LabeledContent("规则版本", value: status.rulesVersion)
-                    LabeledContent("索引格式", value: "V2 包 v\(LocalCatalogStore.recommendationIndexV2PackageFormatVersion)")
+                    LabeledContent(String(localized: "规则版本", bundle: .module), value: status.rulesVersion)
+                    LabeledContent(String(localized: "索引格式", bundle: .module), value: String(localized: "V2 包 v\(LocalCatalogStore.recommendationIndexV2PackageFormatVersion)", bundle: .module))
                     Button {
                         model.startOrContinueRecommendationIndexV2()
                     } label: {
                         Label(
-                            status.pendingTracks == 0 ? "检查并更新索引" : "开始/继续全量索引",
+                            status.pendingTracks == 0
+                                ? String(localized: "检查并更新索引", bundle: .module)
+                                : String(localized: "开始/继续全量索引", bundle: .module),
                             systemImage: "sparkles.rectangle.stack"
                         )
                     }
@@ -227,31 +234,31 @@ struct AgentSettingsPage: View {
                 }
             }
             Section(String(localized: "助手偏好", bundle: .module)) {
-                Picker("推荐场景", selection: sceneBinding) {
+                Picker(String(localized: "推荐场景", bundle: .module), selection: sceneBinding) {
                     Text(String(localized: "无偏好", bundle: .module)).tag("")
                     Text(String(localized: "深夜", bundle: .module)).tag(String(localized: "深夜", bundle: .module))
                     Text(String(localized: "通勤", bundle: .module)).tag(String(localized: "通勤", bundle: .module))
                     Text(String(localized: "学习", bundle: .module)).tag(String(localized: "学习", bundle: .module))
                     Text(String(localized: "运动", bundle: .module)).tag(String(localized: "运动", bundle: .module))
                 }
-                Picker("重复容忍度", selection: repeatBinding) {
+                Picker(String(localized: "重复容忍度", bundle: .module), selection: repeatBinding) {
                     Text(String(localized: "允许少量重复", bundle: .module)).tag("allow")
                     Text(String(localized: "尽量不重复", bundle: .module)).tag("avoid")
                 }
             }
             Section(String(localized: "AI 与隐私", bundle: .module)) {
-                Toggle("启用 AI 功能", isOn: $aiEnabled)
-                Toggle("允许发送歌曲元数据", isOn: $allowsMetadata)
-                Toggle("允许发送歌词", isOn: $allowsLyrics)
-                Toggle("允许发送播放历史摘要", isOn: $allowsHistory)
+                Toggle(String(localized: "启用 AI 功能", bundle: .module), isOn: $aiEnabled)
+                Toggle(String(localized: "允许发送歌曲元数据", bundle: .module), isOn: $allowsMetadata)
+                Toggle(String(localized: "允许发送歌词", bundle: .module), isOn: $allowsLyrics)
+                Toggle(String(localized: "允许发送播放历史摘要", bundle: .module), isOn: $allowsHistory)
             }
             Section(String(localized: "公开音乐数据", bundle: .module)) {
-                Toggle("启用公开音乐数据", isOn: $externalMusicEnabled)
-                Toggle("MusicBrainz", isOn: $musicBrainzEnabled)
+                Toggle(String(localized: "启用公开音乐数据", bundle: .module), isOn: $externalMusicEnabled)
+                Toggle(String(localized: "MusicBrainz", bundle: .module), isOn: $musicBrainzEnabled)
                     .disabled(!externalMusicEnabled)
-                Toggle("CritiqueBrainz", isOn: $critiqueBrainzEnabled)
+                Toggle(String(localized: "CritiqueBrainz", bundle: .module), isOn: $critiqueBrainzEnabled)
                     .disabled(!externalMusicEnabled)
-                Toggle("ListenBrainz", isOn: $listenBrainzEnabled)
+                Toggle(String(localized: "ListenBrainz", bundle: .module), isOn: $listenBrainzEnabled)
                     .disabled(!externalMusicEnabled)
                 Text(String(localized: "仅在打开歌曲信息、歌曲鉴赏等需要公开音乐资料的功能时按需查询。不会上传音频文件、歌词、播放地址、NAS 密码或完整音乐库。查询结果默认缓存 14 天。", bundle: .module))
                     .font(.caption)
@@ -285,7 +292,7 @@ struct AgentSettingsPage: View {
             defaultFilename: defaultIndexExportFilename
         ) { result in
             if case let .failure(error) = result {
-                indexTransferMessage = "导出失败：\(error.localizedDescription)"
+                indexTransferMessage = String(localized: "导出失败：\(error.localizedDescription)", bundle: .module)
             }
         }
         .fileImporter(
@@ -296,7 +303,7 @@ struct AgentSettingsPage: View {
             case let .success(url):
                 Task { await importIndex(from: url) }
             case let .failure(error):
-                indexTransferMessage = "导入失败：\(error.localizedDescription)"
+                indexTransferMessage = String(localized: "导入失败：\(error.localizedDescription)", bundle: .module)
             }
         }
         .task {
@@ -317,7 +324,7 @@ struct AgentSettingsPage: View {
     private var defaultIndexExportFilename: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return "Auralis-推荐索引-V2-\(formatter.string(from: Date()))"
+        return String(localized: "Auralis-推荐索引-V2-\(formatter.string(from: Date()))", bundle: .module)
     }
 
     private var sceneBinding: Binding<String> {
@@ -352,10 +359,10 @@ struct AgentSettingsPage: View {
         do {
             try await model.catalogCoordinator.store.clearRecommendationIndexV2(serverID: serverID)
             guard model.catalog.activeServerID == serverID else { return }
-            indexTransferMessage = "当前服务器的推荐索引 V2 已清空，可重新开始索引。"
+            indexTransferMessage = String(localized: "当前服务器的推荐索引 V2 已清空，可重新开始索引。", bundle: .module)
             await refreshIndexStatus()
         } catch {
-            indexTransferMessage = "清空索引失败：\(error.localizedDescription)"
+            indexTransferMessage = String(localized: "清空索引失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -365,9 +372,9 @@ struct AgentSettingsPage: View {
         defer { isClearingExternalMusicCache = false }
         do {
             try await model.agentCoordinator.clearExternalMusicDataCache()
-            externalMusicCacheMessage = "公开音乐数据缓存已清除（保留已核验的音乐身份）。"
+            externalMusicCacheMessage = String(localized: "公开音乐数据缓存已清除（保留已核验的音乐身份）。", bundle: .module)
         } catch {
-            externalMusicCacheMessage = "清除失败：\(error.localizedDescription)"
+            externalMusicCacheMessage = String(localized: "清除失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -377,9 +384,9 @@ struct AgentSettingsPage: View {
         defer { isResettingExternalIdentity = false }
         do {
             try await model.agentCoordinator.resetExternalMusicIdentity()
-            externalMusicCacheMessage = "音乐身份匹配已重置；下次打开歌曲信息/鉴赏时将重新识别 MBID。"
+            externalMusicCacheMessage = String(localized: "音乐身份匹配已重置；下次打开歌曲信息/鉴赏时将重新识别 MBID。", bundle: .module)
         } catch {
-            externalMusicCacheMessage = "重置失败：\(error.localizedDescription)"
+            externalMusicCacheMessage = String(localized: "重置失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -396,7 +403,7 @@ struct AgentSettingsPage: View {
             indexExportFile = RecommendationIndexV2IndexFile(data: data)
             isExportingIndex = true
         } catch {
-            indexTransferMessage = "导出失败：\(error.localizedDescription)"
+            indexTransferMessage = String(localized: "导出失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 
@@ -417,10 +424,10 @@ struct AgentSettingsPage: View {
                 data: data,
                 serverID: serverID
             )
-            indexTransferMessage = "成功导入 \(stats.imported) 首；已存在 \(stats.alreadyExists) 首；歌曲已变化 \(stats.metadataChanged) 首；当前音乐库不存在 \(stats.notFound) 首；格式错误 \(stats.malformed) 首。"
+            indexTransferMessage = String(localized: "成功导入 \(stats.imported) 首；已存在 \(stats.alreadyExists) 首；歌曲已变化 \(stats.metadataChanged) 首；当前音乐库不存在 \(stats.notFound) 首；格式错误 \(stats.malformed) 首。", bundle: .module)
             await refreshIndexStatus()
         } catch {
-            indexTransferMessage = "导入失败：\(error.localizedDescription)"
+            indexTransferMessage = String(localized: "导入失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 }
@@ -436,7 +443,7 @@ struct ServerSettingsPage: View {
     @State private var serverToEdit: ServerAccount?
 
     var body: some View {
-        SettingsDetailForm(title: "服务器", theme: theme) {
+        SettingsDetailForm(title: String(localized: "服务器", bundle: .module), theme: theme) {
             Section(String(localized: "当前服务器", bundle: .module)) {
                 if model.catalogFallbackUsed {
                     Label {
@@ -453,7 +460,7 @@ struct ServerSettingsPage: View {
                     Button(String(localized: "测试连接", bundle: .module)) { Task { pingResult = await model.testActiveServerConnection() } }
                     if let pingResult {
                         Label(
-                            pingResult ? "服务器可达" : "服务器无响应",
+                pingResult ? String(localized: "服务器可达", bundle: .module) : String(localized: "服务器无响应", bundle: .module),
                             systemImage: pingResult ? "checkmark.circle.fill" : "xmark.octagon.fill"
                         )
                         .font(.caption)
@@ -477,7 +484,7 @@ struct ServerSettingsPage: View {
             ServerEditSheet(model: model, theme: theme, server: server) { await reloadServers() }
         }
         .confirmationDialog(
-            serverToSwitch.map { "切换到「\($0.displayName)」？" } ?? "切换服务器？",
+            serverToSwitch.map { String(localized: "切换到「\($0.displayName)」？", bundle: .module) } ?? String(localized: "切换服务器？", bundle: .module),
             isPresented: Binding(get: { serverToSwitch != nil }, set: { if !$0 { serverToSwitch = nil } }),
             titleVisibility: .visible
         ) {
@@ -512,12 +519,12 @@ struct ServerSettingsPage: View {
     private var serverSummary: some View {
         switch model.serverConnectionState {
         case .idle:
-            LabeledContent("状态", value: "未连接")
+            LabeledContent(String(localized: "状态", bundle: .module), value: String(localized: "未连接", bundle: .module))
         case let .connecting(stage):
             HStack { ProgressView(); Text(stage.title) }
         case let .connected(account, _, _, trackCount):
-            LabeledContent("资料库", value: account.displayName)
-            LabeledContent("已同步", value: "\(trackCount) 首歌曲")
+            LabeledContent(String(localized: "资料库", bundle: .module), value: account.displayName)
+            LabeledContent(String(localized: "已同步", bundle: .module), value: String(localized: "\(trackCount) 首歌曲", bundle: .module))
         case let .failed(message):
             Label(String(localized: "连接失败", bundle: .module), systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.colorTokens.error.color)

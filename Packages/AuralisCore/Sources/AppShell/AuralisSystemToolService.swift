@@ -118,7 +118,7 @@ public final class AuralisSystemToolService: AgentSystemService {
             latencyMs: ok ? latency : nil,
             serverType: model.serverConnectionState.serverType,
             serverVersion: nil,
-            error: ok ? nil : "服务器不可达或认证失败"
+            error: ok ? nil : String(localized: "服务器不可达或认证失败", bundle: .module)
         )
     }
 
@@ -181,7 +181,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         let output = session.currentRoute.outputs.first
-        let name = output?.portName ?? "未知"
+        let name = output?.portName ?? String(localized: "未知", bundle: .module)
         let type: String
         switch output?.portType {
         case .builtInSpeaker: type = "speaker"
@@ -403,18 +403,18 @@ public final class AuralisSystemToolService: AgentSystemService {
         let playback = await playbackDiagnostics()
         let errors = await recentErrors(limit: 5)
         var lines: [String] = []
-        lines.append("Auralis 诊断报告（脱敏）")
-        lines.append("页面：\(context.page) · 服务器：\(context.serverName ?? "未连接") · 网络：\(network.networkType)\(network.isOffline ? "（离线）" : "")")
-        lines.append("播放：\(playback.state) · 歌曲：\(playback.currentTrackTitle ?? "无") · 来源：\(playback.mediaSource)")
-        lines.append("最近停止原因：\(playback.lastStopReason ?? "未知") · 音频会话：\(playback.audioSessionActive ? "激活" : "未激活") · 队列：\(playback.queueValid ? "有效" : "无效")")
-        lines.append("进度：\(Int(playback.position))/\(Int(playback.duration)) 秒 · 错误：\(playback.lastError ?? "无")")
+        lines.append(String(localized: "Auralis 诊断报告（脱敏）", bundle: .module))
+        lines.append(String(localized: "页面：\(context.page) · 服务器：\(context.serverName ?? String(localized: "未连接", bundle: .module)) · 网络：\(network.networkType)\(network.isOffline ? String(localized: "（离线）", bundle: .module) : "")", bundle: .module))
+        lines.append(String(localized: "播放：\(playback.state) · 歌曲：\(playback.currentTrackTitle ?? String(localized: "无", bundle: .module)) · 来源：\(playback.mediaSource)", bundle: .module))
+        lines.append(String(localized: "最近停止原因：\(playback.lastStopReason ?? String(localized: "未知", bundle: .module)) · 音频会话：\(playback.audioSessionActive ? String(localized: "激活", bundle: .module) : String(localized: "未激活", bundle: .module)) · 队列：\(playback.queueValid ? String(localized: "有效", bundle: .module) : String(localized: "无效", bundle: .module))", bundle: .module))
+        lines.append(String(localized: "进度：\(Int(playback.position))/\(Int(playback.duration)) 秒 · 错误：\(playback.lastError ?? String(localized: "无", bundle: .module))", bundle: .module))
         if !errors.isEmpty {
-            lines.append("最近错误（脱敏）：")
+            lines.append(String(localized: "最近错误（脱敏）：", bundle: .module))
             for entry in errors.prefix(5) {
                 lines.append("- \(entry.timestamp.formatted(date: .omitted, time: .shortened)) [\(entry.category)] \(entry.message)")
             }
         }
-        lines.append("—— 报告不含密码、Token、完整服务器地址与聊天内容。")
+        lines.append(String(localized: "—— 报告不含密码、Token、完整服务器地址与聊天内容。", bundle: .module))
         return lines.joined(separator: "\n")
     }
 
@@ -722,7 +722,7 @@ public final class AuralisSystemToolService: AgentSystemService {
             return AgentMusicHistoryMutation(
                 configured: true,
                 success: true,
-                message: result.message ?? "已移除该条下载历史"
+                message: result.message ?? String(localized: "已移除该条下载历史", bundle: .module)
             )
         } catch {
             return AgentMusicHistoryMutation(configured: true, message: error.localizedDescription)
@@ -738,7 +738,7 @@ public final class AuralisSystemToolService: AgentSystemService {
             return AgentMusicHistoryMutation(
                 configured: true,
                 success: true,
-                message: result.message ?? "下载历史已清理",
+                message: result.message ?? String(localized: "下载历史已清理", bundle: .module),
                 before: result.before,
                 after: result.after
             )
@@ -768,7 +768,7 @@ public final class AuralisSystemToolService: AgentSystemService {
             index: item.index ?? 0,
             ref: item.ref,
             siteName: item.siteName,
-            title: item.title ?? "未知资源",
+            title: item.title ?? String(localized: "未知资源", bundle: .module),
             music: item.music,
             confidence: item.confidence,
             audioFormat: item.audioFormat,
@@ -844,7 +844,7 @@ public final class AuralisSystemToolService: AgentSystemService {
     private static func playbackErrorText(_ error: PlaybackError) -> String {
         switch error {
         case .networkUnavailable: return String(localized: "网络不可用", bundle: .module)
-        case let .unsupportedFormat(format): return "不支持的格式：\(format)"
+        case let .unsupportedFormat(format): return String(localized: "不支持的格式：\(format)", bundle: .module)
         case .authorizationFailed: return String(localized: "认证失败", bundle: .module)
         case let .engineFailure(message): return message
         }

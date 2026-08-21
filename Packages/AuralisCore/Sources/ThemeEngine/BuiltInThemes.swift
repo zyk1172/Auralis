@@ -90,8 +90,8 @@ public enum BuiltInThemes {
     ) -> BuiltInTheme {
         BuiltInTheme(
             id: id,
-            name: name,
-            summary: summary,
+            name: String(localized: String.LocalizationValue(name), bundle: .module),
+            summary: String(localized: String.LocalizationValue(summary), bundle: .module),
             colorScheme: scheme,
             colorTokens: colors,
             typography: .init(displayWeight: .bold, bodyWeight: .regular, usesMonospacedMetrics: visualizer == .vuMeter),

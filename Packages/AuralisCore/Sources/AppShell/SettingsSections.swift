@@ -26,15 +26,19 @@ struct CatalogSyncSection: View {
             phaseRow
             if let status = currentStatus {
                 LabeledContent(
-                    "上次同步",
-                    value: status.lastCompletedAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "从未同步"
+                    String(localized: "上次同步", bundle: .module),
+                    value: status.lastCompletedAt.map { $0.formatted(date: .abbreviated, time: .shortened) }
+                        ?? String(localized: "从未同步", bundle: .module)
                 )
                 if status.isStale {
                     Label(String(localized: "目录可能已过期，建议刷新", bundle: .module), systemImage: "clock.badge.exclamationmark")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.warning.color)
                 }
-                LabeledContent("上次处理", value: "\(status.lastProcessedCount) 条记录")
+                LabeledContent(
+                    String(localized: "上次处理", bundle: .module),
+                    value: String(localized: "\(status.lastProcessedCount) 条记录", bundle: .module)
+                )
             }
 
             HStack {
@@ -83,7 +87,12 @@ struct CatalogSyncSection: View {
     private var phaseRow: some View {
         switch coordinator.phase {
         case .idle:
-            LabeledContent("状态", value: model.catalog.isConnected ? "空闲" : "未连接服务器")
+            LabeledContent(
+                String(localized: "状态", bundle: .module),
+                value: model.catalog.isConnected
+                    ? String(localized: "空闲", bundle: .module)
+                    : String(localized: "未连接服务器", bundle: .module)
+            )
         case let .running(stage, processed):
             HStack {
                 ProgressView().controlSize(.small)
@@ -95,12 +104,15 @@ struct CatalogSyncSection: View {
             }
         case let .succeeded(tracks, at):
             Label(
-                "同步完成 · \(tracks) 首 · \(at.formatted(date: .omitted, time: .shortened))",
+                String(localized: "同步完成 · \(tracks) 首 · \(at.formatted(date: .omitted, time: .shortened))", bundle: .module),
                 systemImage: "checkmark.circle.fill"
             )
             .foregroundStyle(theme.colorTokens.success.color)
         case let .upToDate(tracks):
-            Label("目录已是最新 · \(tracks) 首（已用本地缓存，无需拉取）", systemImage: "checkmark.circle")
+            Label(
+                String(localized: "目录已是最新 · \(tracks) 首（已用本地缓存，无需拉取）", bundle: .module),
+                systemImage: "checkmark.circle"
+            )
                 .foregroundStyle(theme.colorTokens.success.color)
         case let .failed(message):
             VStack(alignment: .leading, spacing: 2) {
@@ -137,23 +149,26 @@ struct CacheManagementSection: View {
 
     var body: some View {
         Section(String(localized: "本地缓存", bundle: .module)) {
-            LabeledContent("临时音频缓存", value: "\(usage.audioCount) 首 · \(Self.format(usage.audioBytes))")
-            LabeledContent("元数据目录", value: Self.format(usage.catalogBytes))
+            LabeledContent(
+                String(localized: "临时音频缓存", bundle: .module),
+                value: String(localized: "\(usage.audioCount) 首 · \(Self.format(usage.audioBytes))", bundle: .module)
+            )
+            LabeledContent(String(localized: "元数据目录", bundle: .module), value: Self.format(usage.catalogBytes))
             Text(String(localized: "App 只在本机持久化音乐库元数据（歌曲、专辑、艺术家、流派、歌单、收藏与播放记录）。封面与歌词按需从服务器加载，不主动缓存；离线下载的歌曲仍会占用临时音频缓存。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: AuralisSpacing.small) {
-                    cacheAction("清理历史封面", symbol: "photo.on.rectangle") { confirmClearArtwork = true }
-                    cacheAction("清理历史歌词", symbol: "text.quote") { run { await model.clearLyricsCache() } }
-                    cacheAction("清理临时音频", symbol: "waveform.slash") { confirmClearAudio = true }
+                    cacheAction(String(localized: "清理历史封面", bundle: .module), symbol: "photo.on.rectangle") { confirmClearArtwork = true }
+                    cacheAction(String(localized: "清理历史歌词", bundle: .module), symbol: "text.quote") { run { await model.clearLyricsCache() } }
+                    cacheAction(String(localized: "清理临时音频", bundle: .module), symbol: "waveform.slash") { confirmClearAudio = true }
                 }
                 VStack(alignment: .leading, spacing: AuralisSpacing.small) {
                     HStack(spacing: AuralisSpacing.small) {
-                        cacheAction("清理历史封面", symbol: "photo.on.rectangle") { confirmClearArtwork = true }
-                        cacheAction("清理历史歌词", symbol: "text.quote") { run { await model.clearLyricsCache() } }
+                        cacheAction(String(localized: "清理历史封面", bundle: .module), symbol: "photo.on.rectangle") { confirmClearArtwork = true }
+                        cacheAction(String(localized: "清理历史歌词", bundle: .module), symbol: "text.quote") { run { await model.clearLyricsCache() } }
                     }
-                    cacheAction("清理临时音频", symbol: "waveform.slash") { confirmClearAudio = true }
+                    cacheAction(String(localized: "清理临时音频", bundle: .module), symbol: "waveform.slash") { confirmClearAudio = true }
                 }
             }
             .disabled(isWorking)
@@ -223,11 +238,11 @@ struct AgentMemorySettingsSnapshot: Equatable {
     }
 
     var memorySummary: String {
-        memoryCount == 0 ? "空" : "\(memoryCount) 条 · \(memoryCharacterCount) 字符"
+            memoryCount == 0 ? String(localized: "空", bundle: .module) : String(localized: "\(memoryCount) 条 · \(memoryCharacterCount) 字符", bundle: .module)
     }
 
     var skillSummary: String {
-        skillCount == 0 ? "空" : "\(skillCount) 个文件 · \(skillCharacterCount) 字符"
+            skillCount == 0 ? String(localized: "空", bundle: .module) : String(localized: "\(skillCount) 个文件 · \(skillCharacterCount) 字符", bundle: .module)
     }
 
     static func preview(_ value: String, limit: Int = 52) -> String {
@@ -272,8 +287,8 @@ struct AgentMemoryManagementSection: View {
 
         var title: String {
             switch self {
-            case let .memory(key): "删除记忆“\(key)”？"
-            case let .skill(name): "删除技能“\(name)”？"
+        case let .memory(key): String(localized: "删除记忆“\(key)”？", bundle: .module)
+        case let .skill(name): String(localized: "删除技能“\(name)”？", bundle: .module)
             }
         }
     }
@@ -298,7 +313,7 @@ struct AgentMemoryManagementSection: View {
             Text(String(localized: "清空后小猫将不再记得这些信息。技能文件不会被删除。", bundle: .module))
         }
         .confirmationDialog(
-            removalTarget?.title ?? "删除这项内容？",
+        removalTarget?.title ?? String(localized: "删除这项内容？", bundle: .module),
             isPresented: removalConfirmationBinding,
             titleVisibility: .visible
         ) {
@@ -324,7 +339,7 @@ struct AgentMemoryManagementSection: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         HStack {
-                            Text("更新于 \(memory.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                            Text(String(localized: "更新于 \(memory.updatedAt.formatted(date: .abbreviated, time: .shortened))", bundle: .module))
                                 .font(.caption2)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                             Spacer()
@@ -348,7 +363,7 @@ struct AgentMemoryManagementSection: View {
             }
         } label: {
             collectionLabel(
-                title: "长期记忆文件",
+                title: String(localized: "长期记忆文件", bundle: .module),
                 systemImage: "brain.head.profile",
                 summary: snapshot.memorySummary
             )
@@ -370,7 +385,7 @@ struct AgentMemoryManagementSection: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         HStack {
-                            Text("修改于 \(skill.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                            Text(String(localized: "修改于 \(skill.createdAt.formatted(date: .abbreviated, time: .shortened))", bundle: .module))
                                 .font(.caption2)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                             Spacer()
@@ -392,7 +407,7 @@ struct AgentMemoryManagementSection: View {
             }
         } label: {
             collectionLabel(
-                title: "技能文件",
+                title: String(localized: "技能文件", bundle: .module),
                 systemImage: "folder",
                 summary: snapshot.skillSummary
             )

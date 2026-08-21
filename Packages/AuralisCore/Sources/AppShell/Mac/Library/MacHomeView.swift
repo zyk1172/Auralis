@@ -135,7 +135,7 @@ struct MacHomeView: View {
         case .longUnplayed:
             trackShelf(module.title, tracks: deduped(model.homeLongUnplayedTracks), metrics: metrics)
         case .favoriteRandom:
-            trackShelf(module.title, tracks: deduped(model.homeFavoriteRandomTracks), metrics: metrics, actionTitle: "换一批") {
+            trackShelf(module.title, tracks: deduped(model.homeFavoriteRandomTracks), metrics: metrics, actionTitle: String(localized: "换一批", bundle: .module)) {
                 model.regenerateFavoriteRandomMusic()
             }
         case .neverPlayed:
@@ -233,7 +233,7 @@ struct MacHomeView: View {
         if !items.isEmpty {
             let size = min(210, metrics.itemWidth)
             VStack(alignment: .leading, spacing: 12) {
-                MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : "查看全部") {
+                MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : String(localized: "查看全部", bundle: .module)) {
                     if let seeAll { onNavigate(.sidebar(seeAll)) }
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -261,7 +261,7 @@ struct MacHomeView: View {
         if !items.isEmpty {
             let size = min(170, metrics.itemWidth)
             VStack(alignment: .leading, spacing: 12) {
-                MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : "查看全部") {
+                MacSectionHeader(title: title, actionTitle: seeAll == nil ? nil : String(localized: "查看全部", bundle: .module)) {
                     if let seeAll { onNavigate(.sidebar(seeAll)) }
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -293,14 +293,14 @@ struct MacHomeView: View {
         let isDisliked = model.isDisliked(track)
         let isDownloaded = model.isDownloaded(track)
         return [
-            MacMenuAction(title: "下一首播放", systemImage: "text.badge.plus") { model.playNext(globalID: gid) },
-            MacMenuAction(title: "加入队列", systemImage: "text.badge.plus") { model.addToQueue(globalID: gid) },
-            MacMenuAction(title: isFavorite ? "取消收藏" : "收藏", systemImage: "heart") { model.toggleFavorite(track) },
-            MacMenuAction(title: isDisliked ? "取消不喜欢" : "不喜欢", systemImage: "heart.slash") { model.setDisliked(track, value: !isDisliked, source: "user") },
-            MacMenuAction(title: isDownloaded ? "删除下载" : "下载", systemImage: "arrow.down.circle") {
+            MacMenuAction(title: String(localized: "下一首播放", bundle: .module), systemImage: "text.badge.plus") { model.playNext(globalID: gid) },
+            MacMenuAction(title: String(localized: "加入队列", bundle: .module), systemImage: "text.badge.plus") { model.addToQueue(globalID: gid) },
+            MacMenuAction(title: isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module), systemImage: "heart") { model.toggleFavorite(track) },
+            MacMenuAction(title: isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module), systemImage: "heart.slash") { model.setDisliked(track, value: !isDisliked, source: "user") },
+            MacMenuAction(title: isDownloaded ? String(localized: "删除下载", bundle: .module) : String(localized: "下载", bundle: .module), systemImage: "arrow.down.circle") {
                 if isDownloaded { model.removeDownload(track) } else { model.download(track) }
             },
-            MacMenuAction(title: "歌曲信息", systemImage: "info.circle") {
+            MacMenuAction(title: String(localized: "歌曲信息", bundle: .module), systemImage: "info.circle") {
                 NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: track)
             }
         ]
@@ -309,8 +309,8 @@ struct MacHomeView: View {
     private func albumMoreActions(_ album: Album) -> [MacMenuAction] {
         let isFavorite = model.isAlbumFavorite(album)
         return [
-            MacMenuAction(title: isFavorite ? "取消收藏专辑" : "收藏专辑", systemImage: "heart") { model.toggleAlbumFavorite(album) },
-            MacMenuAction(title: "随机播放专辑", systemImage: "shuffle") { model.playShuffledQueue(MacLibraryQuery.albumTracks(album, model: model)) }
+            MacMenuAction(title: isFavorite ? String(localized: "取消收藏专辑", bundle: .module) : String(localized: "收藏专辑", bundle: .module), systemImage: "heart") { model.toggleAlbumFavorite(album) },
+            MacMenuAction(title: String(localized: "随机播放专辑", bundle: .module), systemImage: "shuffle") { model.playShuffledQueue(MacLibraryQuery.albumTracks(album, model: model)) }
         ]
     }
 }

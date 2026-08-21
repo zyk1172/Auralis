@@ -1,120 +1,513 @@
 {
-  "sourceLanguage": "zh-Hans",
-  "strings": {
-    "…（共 \\(data.count) 字节）": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "… (\\(data.count) bytes total)"
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "…（共 \\(data.count) 字节）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "… (\\(data.count) bytes total)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "…（共 \\(data.count) 字節）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "…（共 \\(data.count) 字節）"
           }
         }
       }
     },
-    "…（共 %lld 字节）": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "… (%lld bytes total)"
+    "…（共 %lld 字节）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "… (%lld bytes total)"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "…（共 %lld 字節）"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "…（共 %lld 字節）"
           }
         }
       }
     },
-    "<\\(data.count) 字节非文本内容>": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<\\(data.count) bytes of non-text content>"
+    "<\\(data.count) 字节非文本内容>" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<\\(data.count) bytes of non-text content>"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<\\(data.count) 字節非文本內容>"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<\\(data.count) 字節非文本內容>"
           }
         }
       }
     },
-    "<%lld 字节非文本内容>": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<%lld bytes of non-text content>"
+    "<%lld 字节非文本内容>" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<%lld bytes of non-text content>"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<%lld 字節非文本內容>"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "<%lld 字節非文本內容>"
           }
         }
       }
     },
-    "响应流失败": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stream Error"
+    "响应流失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stream Error"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "響應流失败"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "響應流失敗"
           }
         }
       }
     },
-    "未知错误": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unknown Error"
+    "尚未配置 API Key，请先在设置中填写。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No API key is configured. Enter one in Settings first."
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未知錯誤"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未設定 API Key，請先在設定中填寫。"
           }
         }
       }
     },
-    "请求失败": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Request Failed"
+    "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This endpoint uses insecure HTTP and is not local or on a private LAN. The API key would be sent in plaintext. Use HTTPS."
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "請求失败"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "介面使用不安全的 HTTP 明文傳輸，且目標不在本機／區域網路內（API Key 會以明文傳送）。請改用 HTTPS 位址。"
+          }
+        }
+      }
+    },
+    "接口地址无效，请检查 Base URL 与 API 路径。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The endpoint is invalid. Check the Base URL and API path."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "介面位址無效，請檢查 Base URL 與 API 路徑。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP \\(status)：API Key 无效或权限不足，请检查设置中的 Key。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP \\(status): the API key is invalid or lacks permission. Check the key in Settings."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP \\(status)：API Key 無效或權限不足，請檢查設定中的 Key。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP \\(status)：接口路径错误，请检查 Base URL 是否已包含 /v1 等路径前缀。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP \\(status): the endpoint path is incorrect. Check whether the Base URL already includes a path prefix such as /v1."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP \\(status)：介面路徑錯誤，請檢查 Base URL 是否已包含 /v1 等路徑前綴。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP \\(status)：服务端或中转网关暂不可用（可能过载或维护中）。已自动重试仍失败，请稍后重试；若持续出现，请检查该 Base URL 对应服务的状态。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP \\(status): the server or gateway is temporarily unavailable. Automatic retries still failed; try again later. If it continues, check the service status for this Base URL."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP \\(status)：伺服器或中轉閘道暫時無法使用（可能過載或維護中）。自動重試仍失敗，請稍後重試；若持續發生，請檢查此 Base URL 對應服務的狀態。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP \\(status)。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP \\(status)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP \\(status)。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP %lld：API Key 无效或权限不足，请检查设置中的 Key。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP %lld: the API key is invalid or lacks permission. Check the key in Settings."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP %lld：API Key 無效或權限不足，請檢查設定中的 Key。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP %lld：接口路径错误，请检查 Base URL 是否已包含 /v1 等路径前缀。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP %lld: the endpoint path is incorrect. Check whether the Base URL already includes a path prefix such as /v1."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP %lld：介面路徑錯誤，請檢查 Base URL 是否已包含 /v1 等路徑前綴。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP %lld：服务端或中转网关暂不可用（可能过载或维护中）。已自动重试仍失败，请稍后重试；若持续出现，请检查该 Base URL 对应服务的状态。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP %lld: the server or gateway is temporarily unavailable. Automatic retries still failed; try again later. If it continues, check the service status for this Base URL."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP %lld：伺服器或中轉閘道暫時無法使用（可能過載或維護中）。自動重試仍失敗，請稍後重試；若持續發生，請檢查此 Base URL 對應服務的狀態。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP %lld。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP %lld."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP %lld。"
+          }
+        }
+      }
+    },
+    "服务返回 HTTP 429：请求过于频繁被限流，已自动重试仍失败，请稍后重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned HTTP 429: too many requests. Automatic retries still failed; try again later."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回 HTTP 429：要求過於頻繁而受到限流，自動重試仍失敗，請稍後重試。"
+          }
+        }
+      }
+    },
+    "服务返回了空响应体" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned an empty response body."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回空的回應內容"
+          }
+        }
+      }
+    },
+    "服务返回错误：\\(detail)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned an error: \\(detail)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回錯誤：\\(detail)"
+          }
+        }
+      }
+    },
+    "服务返回错误：\\(message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned an error: \\(message)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回錯誤：\\(message)"
+          }
+        }
+      }
+    },
+    "服务返回错误：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service returned an error: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務返回錯誤：%@"
+          }
+        }
+      }
+    },
+    "未知错误" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown Error"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知錯誤"
+          }
+        }
+      }
+    },
+    "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The model reached its output limit, so structured tool arguments may be incomplete. Reduce the batch and try again."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型輸出達到長度上限，結構化工具參數可能未完成。請縮小目前批次後重試。"
+          }
+        }
+      }
+    },
+    "用一句话确认连接正常。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm that the connection works in one sentence."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請用一句話確認連線正常。"
+          }
+        }
+      }
+    },
+    "网络请求失败：\\(message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network request failed: \\(message)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路要求失敗：\\(message)"
+          }
+        }
+      }
+    },
+    "网络请求失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network request failed: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路要求失敗：%@"
+          }
+        }
+      }
+    },
+    "请求失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request Failed"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請求失敗"
+          }
+        }
+      }
+    },
+    "返回内容无法解析，该服务可能不兼容 OpenAI Chat Completions 格式：\\(detail)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The response could not be parsed. This service may not support the OpenAI Chat Completions format: \\(detail)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法解析返回內容，此服務可能不相容 OpenAI Chat Completions 格式：\\(detail)"
+          }
+        }
+      }
+    },
+    "返回内容无法解析，该服务可能不兼容 OpenAI Chat Completions 格式：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The response could not be parsed. This service may not support the OpenAI Chat Completions format: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法解析返回內容，此服務可能不相容 OpenAI Chat Completions 格式：%@"
+          }
+        }
+      }
+    },
+    "返回内容无法解析（已自动重试仍失败）：\\(detail)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The response could not be parsed after automatic retries: \\(detail)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法解析返回內容（自動重試仍失敗）：\\(detail)"
+          }
+        }
+      }
+    },
+    "返回内容无法解析（已自动重试仍失败）：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The response could not be parsed after automatic retries: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法解析返回內容（自動重試仍失敗）：%@"
           }
         }
       }
     }
   },
-  "version": "1.0"
+  "version" : "1.0"
 }

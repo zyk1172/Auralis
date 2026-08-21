@@ -79,7 +79,7 @@ struct AssistantView: View {
             get: { renamingSession != nil },
             set: { if !$0 { renamingSession = nil } }
         )) {
-            TextField("会话名称", text: $renameText)
+            TextField(String(localized: "会话名称", bundle: .module), text: $renameText)
             Button(String(localized: "保存", bundle: .module)) {
                 if let session = renamingSession {
                     Task { await agent.rename(session.id, to: renameText) }
@@ -102,7 +102,7 @@ struct AssistantView: View {
         } message: {
             Text(String(localized: "会话及其消息会从本机删除，不影响音乐库与服务器数据。", bundle: .module))
         }
-        .alert("删除 \(selectedSessionIDs.count) 个会话？", isPresented: $confirmBatchDelete) {
+        .alert(String(localized: "删除 \(selectedSessionIDs.count) 个会话？", bundle: .module), isPresented: $confirmBatchDelete) {
             Button(String(localized: "删除", bundle: .module), role: .destructive) {
                 let ids = Array(selectedSessionIDs)
                 selectedSessionIDs.removeAll()
@@ -114,7 +114,7 @@ struct AssistantView: View {
         }
         // 首次外发确认（B5）：consentGiven 未写入且本次请求要发往真实 Provider 时弹出。
         .alert(
-            Text(agent.pendingConsent.map { "允许发送以下内容到「\($0.modelName)」？" } ?? String(localized: "首次外发确认", bundle: .module)),
+            Text(agent.pendingConsent.map { String(localized: "允许发送以下内容到「\($0.modelName)」？", bundle: .module) } ?? String(localized: "首次外发确认", bundle: .module)),
             isPresented: Binding(
                 get: { agent.pendingConsent != nil },
                 set: { if !$0 { agent.denyConsent() } }
@@ -162,7 +162,7 @@ struct AssistantView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(HapticBorderedButtonStyle())
-                .help("新建会话")
+                .help(String(localized: "新建会话", bundle: .module))
                 sessionSettingsMenu
             }
             .padding(.horizontal, AuralisSpacing.medium)
@@ -171,7 +171,7 @@ struct AssistantView: View {
             HStack(spacing: AuralisSpacing.xSmall) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
-                TextField("搜索会话", text: $agent.sessionQuery)
+                TextField(String(localized: "搜索会话", bundle: .module), text: $agent.sessionQuery)
                     .textFieldStyle(.plain)
             }
             .padding(AuralisSpacing.small)
@@ -226,7 +226,10 @@ struct AssistantView: View {
             Button {
                 showsActionLog = true
             } label: {
-                Label("操作记录（\(agent.actionRecords.count)）", systemImage: "list.bullet.rectangle")
+                Label(
+                    String(localized: "操作记录（\(agent.actionRecords.count)）", bundle: .module),
+                    systemImage: "list.bullet.rectangle"
+                )
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -251,7 +254,7 @@ struct AssistantView: View {
                         .font(.subheadline)
                         .lineLimit(1)
                         .foregroundStyle(theme.colorTokens.primaryText.color)
-                    Text(session.summary ?? "\(session.messages.count) 条消息")
+                    Text(session.summary ?? String(localized: "\(session.messages.count) 条消息", bundle: .module))
                         .font(.caption2)
                         .lineLimit(1)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -309,7 +312,7 @@ struct AssistantView: View {
                         .font(.subheadline)
                         .lineLimit(1)
                         .foregroundStyle(theme.colorTokens.primaryText.color)
-                    Text(session.summary ?? "\(session.messages.count) 条消息")
+                    Text(session.summary ?? String(localized: "\(session.messages.count) 条消息", bundle: .module))
                         .font(.caption2)
                         .lineLimit(1)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -452,7 +455,7 @@ struct AssistantView: View {
             assistantHeaderIconButton(
                 symbol: "magnifyingglass",
                 accessibilityLabel: String(localized: "搜索音乐库", bundle: .module),
-                help: "搜索音乐库（兜底）"
+                help: String(localized: "搜索音乐库（兜底）", bundle: .module)
             ) {
                 showsLibrarySearch = true
             }
@@ -465,7 +468,7 @@ struct AssistantView: View {
     /// 新建会话仅保留在会话页顶部；进入批量管理后，全选收纳到同一管理按钮中。
     private var sessionSettingsMenu: some View {
         Menu {
-            Toggle("显示已归档", isOn: $agent.showArchivedSessions)
+            Toggle(String(localized: "显示已归档", bundle: .module), isOn: $agent.showArchivedSessions)
             Divider()
             if isBatchManaging {
                 Button(selectedSessionIDs.count == agent.sessions.count && !agent.sessions.isEmpty ? String(localized: "取消全选", bundle: .module) : String(localized: "全选", bundle: .module)) {
@@ -489,7 +492,7 @@ struct AssistantView: View {
                 .frame(width: 52, height: 52)
         }
         .buttonStyle(HapticBorderedButtonStyle())
-        .help("会话设置")
+        .help(String(localized: "会话设置", bundle: .module))
         .accessibilityLabel(String(localized: "会话设置", bundle: .module))
     }
 
@@ -497,7 +500,7 @@ struct AssistantView: View {
         assistantHeaderIconButton(
             symbol: "sidebar.leading",
             accessibilityLabel: String(localized: "会话列表", bundle: .module),
-            help: "会话列表"
+            help: String(localized: "会话列表", bundle: .module)
         ) {
             // iPhone / iPad 统一：会话列表始终以 sheet 呈现。
             showsSessionListSheet = true
@@ -662,7 +665,10 @@ struct AssistantView: View {
                 .foregroundStyle(theme.colorTokens.error.color)
 
         case let .confirmation(pending):
-            Label("等待确认：\(pending.title)", systemImage: "questionmark.circle")
+            Label(
+                String(localized: "等待确认：\(pending.title)", bundle: .module),
+                systemImage: "questionmark.circle"
+            )
                 .font(.caption)
                 .foregroundStyle(theme.colorTokens.warning.color)
         }
@@ -678,7 +684,7 @@ struct AssistantView: View {
                 Image(systemName: "sparkles")
                     .foregroundStyle(theme.colorTokens.accent.color)
                     .frame(width: 22, height: 22)
-                TextField("描述你想听的音乐，或让我帮你操作", text: $model.assistantDraft)
+                TextField(String(localized: "描述你想听的音乐，或让我帮你操作", bundle: .module), text: $model.assistantDraft)
                     .textFieldStyle(.roundedBorder)
                     .focused($assistantInputFocused)
                     .onSubmit { model.sendAssistantMessage(); assistantInputFocused = false }
@@ -702,9 +708,9 @@ struct AssistantView: View {
 
     private func permissionLabel(_ permission: ToolPermission) -> String {
         switch permission {
-        case .readOnly: "只读操作"
-        case .reversible: "可撤销操作"
-        case .destructive: "破坏性操作（不可自动恢复）"
+        case .readOnly: String(localized: "只读操作", bundle: .module)
+        case .reversible: String(localized: "可撤销操作", bundle: .module)
+        case .destructive: String(localized: "破坏性操作（不可自动恢复）", bundle: .module)
         }
     }
 }
@@ -904,7 +910,7 @@ private struct TrackCardRow: View {
                         .foregroundStyle(theme.colorTokens.accent.color)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .help("播放")
+                .help(String(localized: "播放", bundle: .module))
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(card.title)
@@ -927,7 +933,7 @@ private struct TrackCardRow: View {
                         .foregroundStyle(card.isFavorite ? theme.colorTokens.error.color : theme.colorTokens.secondaryText.color)
                 }
                 .buttonStyle(HapticPlainButtonStyle())
-                .help(card.isFavorite ? "取消喜爱" : "喜爱")
+                .help(card.isFavorite ? String(localized: "取消喜爱", bundle: .module) : String(localized: "喜爱", bundle: .module))
 
                 Menu {
                     Button(String(localized: "加入队列", bundle: .module)) { agent.queue(card: card) }

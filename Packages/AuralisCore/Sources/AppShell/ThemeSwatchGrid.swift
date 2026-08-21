@@ -75,7 +75,7 @@ struct ThemeChoiceGrid: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(candidate.name)，\(candidate.summary)，\(candidate.colorScheme == .dark ? String(localized: "深色", bundle: .module) : String(localized: "浅色", bundle: .module))")
-        .accessibilityValue(isSelected ? "已选择" : "未选择")
+        .accessibilityValue(isSelected ? String(localized: "已选择", bundle: .module) : String(localized: "未选择", bundle: .module))
     }
 
     private func colorDot(_ color: Color) -> some View {
@@ -94,14 +94,14 @@ struct ThemeSwatchGrid: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AuralisSpacing.small) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: AuralisSpacing.small), count: 4), spacing: AuralisSpacing.small) {
-                swatch(colors.background.color, label: "背景")
-                swatch(colors.elevated.color, label: "浮层")
-                swatch(colors.surface.color, label: "表面")
-                swatch(colors.accent.color, label: "强调")
-                swatch(colors.accentSecondary.color, label: "辅强调")
-                swatch(colors.success.color, label: "成功")
-                swatch(colors.warning.color, label: "警告")
-                swatch(colors.error.color, label: "错误")
+                swatch(colors.background.color, label: String(localized: "背景", bundle: .module))
+                swatch(colors.elevated.color, label: String(localized: "浮层", bundle: .module))
+                swatch(colors.surface.color, label: String(localized: "表面", bundle: .module))
+                swatch(colors.accent.color, label: String(localized: "强调", bundle: .module))
+                swatch(colors.accentSecondary.color, label: String(localized: "辅强调", bundle: .module))
+                swatch(colors.success.color, label: String(localized: "成功", bundle: .module))
+                swatch(colors.warning.color, label: String(localized: "警告", bundle: .module))
+                swatch(colors.error.color, label: String(localized: "错误", bundle: .module))
             }
             Text(name)
                 .font(.caption)

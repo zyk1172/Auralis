@@ -29,7 +29,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "。若是區域網路地址（\\(host)），請檢查 系統設定 → 隱私與安全性 → 本地網路 是否允許「Auralis」訪問本地網路，併確認 Mac 與伺服器在同一網路。"
+            "value": "。若是區域網路位址（\\(host)），請檢查 系統設定 → 隱私與安全性 → 本機網路 是否允許「Auralis」存取本機網路，並確認 Mac 與伺服器在同一網路。"
           }
         }
       }
@@ -46,7 +46,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "。若是區域網路地址（\\(host)），請檢查 設定 → 隱私與安全性 → 本地網路 是否允許「Auralis」訪問本地網路，併確認裝置與伺服器在同一網路。"
+            "value": "。若是區域網路位址（\\(host)），請檢查 設定 → 隱私與安全性 → 本機網路 是否允許「Auralis」存取本機網路，並確認裝置與伺服器在同一網路。"
           }
         }
       }
@@ -62,7 +62,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "。若是區域網路地址（%@），請檢查 系統設定 → 隱私與安全性 → 本地網路 是否允許「Auralis」訪問本地網路，併確認 Mac 與伺服器在同一網路。"
+            "value": "。若是區域網路位址（%@），請檢查 系統設定 → 隱私與安全性 → 本機網路 是否允許「Auralis」存取本機網路，並確認 Mac 與伺服器在同一網路。"
           }
         }
       }
@@ -78,7 +78,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "。若是區域網路地址（%@），請檢查 設定 → 隱私與安全性 → 本地網路 是否允許「Auralis」訪問本地網路，併確認裝置與伺服器在同一網路。"
+            "value": "。若是區域網路位址（%@），請檢查 設定 → 隱私與安全性 → 本機網路 是否允許「Auralis」存取本機網路，並確認裝置與伺服器在同一網路。"
           }
         }
       }
@@ -95,7 +95,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "\\(message)（請核对「音樂下載」設定裡的 Token）"
+            "value": "\\(message)（請核對「音樂下載」設定裡的 Token）"
           }
         }
       }
@@ -111,7 +111,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@（請核对「音樂下載」設定裡的 Token）"
+            "value": "%@（請核對「音樂下載」設定裡的 Token）"
           }
         }
       }
@@ -127,7 +127,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "HTTPS 連線失敗（證書不受信任或被安全策略拦截）"
+            "value": "HTTPS 連線失敗（證書不受信任或被安全策略攔截）"
           }
         }
       }
@@ -175,7 +175,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "公共網路伺服器必須使用 HTTPS；HTTP 僅允許本機或私有區域網路地址。"
+            "value": "公共網路伺服器必須使用 HTTPS；HTTP 僅允許本機或私有區域網路位址。"
           }
         }
       }
@@ -224,7 +224,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "找不到主機，請檢查伺服器地址（IP / 主機名 / .local）"
+            "value": "找不到主機，請檢查伺服器位址（IP / 主機名 / .local）"
           }
         }
       }
@@ -240,7 +240,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "插件返回失败"
+            "value": "外掛返回失敗"
           }
         }
       }
@@ -272,7 +272,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "無法訪問伺服器，請檢查地址、網路和服務狀態。"
+            "value": "無法連線伺服器，請檢查位址、網路和服務狀態。"
           }
         }
       }
@@ -288,7 +288,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "無法訪問系統 Keychain，請解鎖裝置後重試。"
+            "value": "無法存取系統 Keychain，請解鎖裝置後重試。"
           }
         }
       }
@@ -304,7 +304,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "無法訪問系統 Keychain（可能被鎖定或簽名受限）。請解鎖 Mac 後重試；測試連線使用內存憑證，不受影響。"
+            "value": "無法存取系統 Keychain（可能被鎖定或簽名受限）。請解鎖 Mac 後重試；測試連線使用內存憑證，不受影響。"
           }
         }
       }
@@ -337,7 +337,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "服务器不支持该功能：\\(name)（API 版本可能不兼容）"
+            "value": "伺服器不支持該功能：\\(name)（API 版本可能不相容）"
           }
         }
       }
@@ -353,7 +353,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "服务器不支持该功能：%@（API 版本可能不兼容）"
+            "value": "伺服器不支持該功能：%@（API 版本可能不相容）"
           }
         }
       }
@@ -369,7 +369,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "伺服器地址不能內嵌用戶名或密碼（如 user:pass@host）。請把用戶名與密碼填寫在对應輸入框。"
+            "value": "伺服器位址不能內嵌使用者名稱或密碼（如 user:pass@host）。請把使用者名稱與密碼填寫在對應輸入框。"
           }
         }
       }
@@ -385,7 +385,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "伺服器地址無效，請包含 http:// 或 https://。"
+            "value": "伺服器位址無效，請包含 http:// 或 https://。"
           }
         }
       }
@@ -401,7 +401,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "伺服器地址格式錯誤"
+            "value": "伺服器位址格式錯誤"
           }
         }
       }
@@ -418,7 +418,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "服务器返回 HTTP \\(status)"
+            "value": "伺服器返回 HTTP \\(status)"
           }
         }
       }
@@ -434,7 +434,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "服务器返回 HTTP %lld"
+            "value": "伺服器返回 HTTP %lld"
           }
         }
       }
@@ -538,7 +538,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "伺服器連線成功，但當前帳戶沒有可見歌曲。"
+            "value": "伺服器連線成功，但目前帳戶沒有可見歌曲。"
           }
         }
       }
@@ -554,7 +554,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "檢查地址"
+            "value": "檢查位址"
           }
         }
       }
@@ -587,7 +587,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "系統 Keychain 寫入失败（狀態 \\(status)）。請解鎖 Mac 後重試；憑證不會被儲存到不安全位置。"
+            "value": "系統 Keychain 寫入失敗（狀態 \\(status)）。請解鎖 Mac 後重試；憑證不會被儲存到不安全位置。"
           }
         }
       }
@@ -603,7 +603,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "系統 Keychain 寫入失败（狀態 %d）。請解鎖 Mac 後重試；憑證不會被儲存到不安全位置。"
+            "value": "系統 Keychain 寫入失敗（狀態 %d）。請解鎖 Mac 後重試；憑證不會被儲存到不安全位置。"
           }
         }
       }
@@ -717,7 +717,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "驗證失敗，請檢查用戶名和憑證。"
+            "value": "驗證失敗，請檢查使用者名稱和憑證。"
           }
         }
       }
@@ -733,7 +733,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "該地址被 App Transport Security 拦截（區域網路 HTTP 請確認已允許本地網路）"
+            "value": "該位址被 App Transport Security 攔截（區域網路 HTTP 請確認已允許本機網路）"
           }
         }
       }
@@ -814,7 +814,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "請輸入用戶名。"
+            "value": "請輸入使用者名稱。"
           }
         }
       }
@@ -846,7 +846,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "連線已取消，未完成的資料不會覆蓋本地音樂庫。"
+            "value": "連線已取消，未完成的資料不會覆蓋本機音樂庫。"
           }
         }
       }
@@ -862,7 +862,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "連線未完成。請重試；如問題持續，請檢查伺服器兼容性。"
+            "value": "連線未完成。請重試；如問題持續，請檢查伺服器相容性。"
           }
         }
       }
@@ -878,7 +878,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "連線超時，請檢查伺服器地址與網路"
+            "value": "連線超時，請檢查伺服器位址與網路"
           }
         }
       }

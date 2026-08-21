@@ -26,7 +26,7 @@ func macTrackMenuContent(
 
         Divider()
 
-        Menu("添加到歌单") {
+        Menu(String(localized: "添加到歌单", bundle: .module)) {
             if playlists.isEmpty {
                 Text(String(localized: "暂无歌单", bundle: .module))
             }

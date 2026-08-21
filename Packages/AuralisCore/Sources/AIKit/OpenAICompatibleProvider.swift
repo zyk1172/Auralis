@@ -40,32 +40,32 @@ extension AIProviderError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .missingCredential:
-            "尚未配置 API Key，请先在设置中填写。"
+            String(localized: "尚未配置 API Key，请先在设置中填写。", bundle: .module)
         case .invalidEndpoint:
-            "接口地址无效，请检查 Base URL 与 API 路径。"
+            String(localized: "接口地址无效，请检查 Base URL 与 API 路径。", bundle: .module)
         case .insecureEndpoint:
-            "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。"
+            String(localized: "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。", bundle: .module)
         case .outputTruncated:
-            "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。"
+            String(localized: "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。", bundle: .module)
         case let .transport(message):
-            "网络请求失败：\(message)"
+            String(localized: "网络请求失败：\(message)", bundle: .module)
         case let .httpStatus(status):
             switch status {
             case 401, 403:
-                "服务返回 HTTP \(status)：API Key 无效或权限不足，请检查设置中的 Key。"
+                String(localized: "服务返回 HTTP \(status)：API Key 无效或权限不足，请检查设置中的 Key。", bundle: .module)
             case 404:
-                "服务返回 HTTP \(status)：接口路径错误，请检查 Base URL 是否已包含 /v1 等路径前缀。"
+                String(localized: "服务返回 HTTP \(status)：接口路径错误，请检查 Base URL 是否已包含 /v1 等路径前缀。", bundle: .module)
             case 429:
-                "服务返回 HTTP 429：请求过于频繁被限流，已自动重试仍失败，请稍后重试。"
+                String(localized: "服务返回 HTTP 429：请求过于频繁被限流，已自动重试仍失败，请稍后重试。", bundle: .module)
             case 500...599:
-                "服务返回 HTTP \(status)：服务端或中转网关暂不可用（可能过载或维护中）。已自动重试仍失败，请稍后重试；若持续出现，请检查该 Base URL 对应服务的状态。"
+                String(localized: "服务返回 HTTP \(status)：服务端或中转网关暂不可用（可能过载或维护中）。已自动重试仍失败，请稍后重试；若持续出现，请检查该 Base URL 对应服务的状态。", bundle: .module)
             default:
-                "服务返回 HTTP \(status)。"
+                String(localized: "服务返回 HTTP \(status)。", bundle: .module)
             }
         case let .malformedResponse(detail, retryable):
             retryable
-                ? "返回内容无法解析（已自动重试仍失败）：\(detail)"
-                : "返回内容无法解析，该服务可能不兼容 OpenAI Chat Completions 格式：\(detail)"
+                ? String(localized: "返回内容无法解析（已自动重试仍失败）：\(detail)", bundle: .module)
+                : String(localized: "返回内容无法解析，该服务可能不兼容 OpenAI Chat Completions 格式：\(detail)", bundle: .module)
         }
     }
 }
@@ -109,7 +109,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         let response = try await complete(
             AICompletionRequest(
                 model: configuration.model,
-                messages: [AIMessage(role: .user, content: "用一句话确认连接正常。")],
+                messages: [AIMessage(role: .user, content: String(localized: "用一句话确认连接正常。", bundle: .module))],
                 temperature: 0,
                 maxTokens: 32
             )
@@ -324,7 +324,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 return
                             case let .failed(detail):
                                 throw AIProviderError.malformedResponse(
-                                    detail: "服务返回错误：\(detail)",
+                                    detail: String(localized: "服务返回错误：\(detail)", bundle: .module),
                                     retryable: false
                                 )
                             case .ignore:
@@ -357,7 +357,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                             return
                         case let .failed(detail):
                             throw AIProviderError.malformedResponse(
-                                detail: "服务返回错误：\(detail)",
+                                detail: String(localized: "服务返回错误：\(detail)", bundle: .module),
                                 retryable: false
                             )
                         case .ignore:
@@ -763,7 +763,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 5. 其余（HTML 错误页、截断 JSON）→ 附响应体前 240 字节，便于定位。
     static func parseCompletion(data: Data, fallbackModel: String) throws -> AICompletionResponse {
         guard !data.isEmpty else {
-            throw AIProviderError.malformedResponse(detail: "服务返回了空响应体", retryable: true)
+            throw AIProviderError.malformedResponse(detail: String(localized: "服务返回了空响应体", bundle: .module), retryable: true)
         }
 
         let jsonObject = try? JSONSerialization.jsonObject(with: data)
@@ -783,7 +783,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
             if let message = errorMessage(from: object) {
                 // 网关把错误塞进 200 响应体：这是服务端的确定性回答，重试无益。
-                throw AIProviderError.malformedResponse(detail: "服务返回错误：\(message)", retryable: false)
+                throw AIProviderError.malformedResponse(detail: String(localized: "服务返回错误：\(message)", bundle: .module), retryable: false)
             }
         }
 
@@ -947,7 +947,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 5. 其余（HTML 错误页、截断 JSON）→ 附响应体前 240 字节，便于定位。
     static func parseResponsesCompletion(data: Data, fallbackModel: String) throws -> AICompletionResponse {
         guard !data.isEmpty else {
-            throw AIProviderError.malformedResponse(detail: "服务返回了空响应体", retryable: true)
+            throw AIProviderError.malformedResponse(detail: String(localized: "服务返回了空响应体", bundle: .module), retryable: true)
         }
 
         let jsonObject = try? JSONSerialization.jsonObject(with: data)
@@ -967,7 +967,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
             if let message = errorMessage(from: object) {
                 // 网关把错误塞进 200 响应体：这是服务端的确定性回答，重试无益。
-                throw AIProviderError.malformedResponse(detail: "服务返回错误：\(message)", retryable: false)
+                throw AIProviderError.malformedResponse(detail: String(localized: "服务返回错误：\(message)", bundle: .module), retryable: false)
             }
         }
 

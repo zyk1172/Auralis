@@ -64,7 +64,7 @@ struct MacSidebar: View {
             if isHoveringLibrary || isEditingLibrary {
                 Button(String(localized: "编辑", bundle: .module)) { isEditingLibrary = true }
                     .buttonStyle(.link)
-                    .help("显示或隐藏资料库项目、拖动排序")
+                    .help(String(localized: "显示或隐藏资料库项目、拖动排序", bundle: .module))
                     .accessibilityLabel(String(localized: "编辑资料库", bundle: .module))
                     // Section header 不是稳定 popover 锚点。把 popover 直接挂在按钮上，
                     // 使这个编辑入口在资料库页面与所有窗口尺寸下都可点开。

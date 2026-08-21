@@ -55,7 +55,7 @@ struct HomeLayoutEditView: View {
                 contentModules = model.homeLayout.contentModules
             }
             .confirmationDialog(
-                "恢复默认布局？",
+                String(localized: "恢复默认布局？", bundle: .module),
                 isPresented: $isConfirmingReset,
                 titleVisibility: .visible
             ) {

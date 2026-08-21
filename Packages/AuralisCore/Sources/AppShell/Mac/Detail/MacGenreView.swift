@@ -65,7 +65,7 @@ struct MacGenreView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(genre.name)
                     .font(.system(size: 30, weight: .bold, design: .default))
-                Text("\(tracks.count) 首歌曲 · \(albums.count) 张专辑")
+                Text(String(localized: "\(tracks.count) 首歌曲 · \(albums.count) 张专辑", bundle: .module))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
@@ -92,7 +92,7 @@ struct MacGenreView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    .help("更多操作")
+                    .help(String(localized: "更多操作", bundle: .module))
                 }
             }
             Spacer()

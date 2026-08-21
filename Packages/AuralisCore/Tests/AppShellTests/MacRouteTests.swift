@@ -37,7 +37,7 @@ struct MacRouteTests {
         let all = MacSidebarDestination.allCases
         #expect(Set(all.map(\.id)).count == all.count)
         #expect(MacSidebarDestination.home.id == "home")
-        #expect(MacSidebarDestination.songs.title == "歌曲")
+        #expect(["歌曲", "Songs"].contains(MacSidebarDestination.songs.title))
     }
 
     @MainActor

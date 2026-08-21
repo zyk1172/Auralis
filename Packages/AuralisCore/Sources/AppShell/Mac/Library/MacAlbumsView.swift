@@ -20,9 +20,9 @@ struct MacAlbumsView: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .title: "标题"
-            case .artist: "艺术家"
-            case .year: "年份"
+            case .title: String(localized: "标题", bundle: .module)
+            case .artist: String(localized: "艺术家", bundle: .module)
+            case .year: String(localized: "年份", bundle: .module)
             }
         }
     }
@@ -58,9 +58,9 @@ struct MacAlbumsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageSearchHeader(text: $localSearch, prompt: "在专辑中查找", accessory: {
+            MacPageSearchHeader(text: $localSearch, prompt: String(localized: "在专辑中查找", bundle: .module), accessory: {
                 Menu {
-                    Picker("排序方式", selection: $sortOrder) {
+                    Picker(String(localized: "排序方式", bundle: .module), selection: $sortOrder) {
                         ForEach(AlbumSort.allCases) { option in
                             Text(option.title).tag(option)
                         }
@@ -100,8 +100,8 @@ struct MacAlbumsView: View {
     private func albumMoreActions(_ album: Album) -> [MacMenuAction] {
         let isFavorite = model.isAlbumFavorite(album)
         return [
-            MacMenuAction(title: isFavorite ? "取消收藏专辑" : "收藏专辑", systemImage: "heart") { model.toggleAlbumFavorite(album) },
-            MacMenuAction(title: "随机播放专辑", systemImage: "shuffle") { model.playShuffledQueue(MacLibraryQuery.albumTracks(album, model: model)) }
+            MacMenuAction(title: isFavorite ? String(localized: "取消收藏专辑", bundle: .module) : String(localized: "收藏专辑", bundle: .module), systemImage: "heart") { model.toggleAlbumFavorite(album) },
+            MacMenuAction(title: String(localized: "随机播放专辑", bundle: .module), systemImage: "shuffle") { model.playShuffledQueue(MacLibraryQuery.albumTracks(album, model: model)) }
         ]
     }
 }

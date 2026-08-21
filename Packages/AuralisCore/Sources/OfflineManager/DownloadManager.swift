@@ -465,7 +465,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             finishFailure(
                 id: id,
                 taskIdentifier: downloadTask.taskIdentifier,
-                failure: DownloadFailureInfo(kind: .invalidResponse, message: "服务器返回了空文件，请重试")
+                failure: DownloadFailureInfo(kind: .invalidResponse, message: String(localized: "服务器返回了空文件，请重试", bundle: .module))
             )
             resumeNextTasks()
             return
@@ -477,7 +477,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             finishFailure(
                 id: id,
                 taskIdentifier: downloadTask.taskIdentifier,
-                failure: DownloadFailureInfo(kind: .storage, message: "无法暂存下载文件，请检查磁盘空间后重试")
+                failure: DownloadFailureInfo(kind: .storage, message: String(localized: "无法暂存下载文件，请检查磁盘空间后重试", bundle: .module))
             )
             resumeNextTasks()
             return
@@ -508,7 +508,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
                 self.finishFailure(
                     id: id,
                     taskIdentifier: taskIdentifier,
-                    failure: DownloadFailureInfo(kind: .storage, message: "无法保存到本地，请检查磁盘空间后重试")
+                    failure: DownloadFailureInfo(kind: .storage, message: String(localized: "无法保存到本地，请检查磁盘空间后重试", bundle: .module))
                 )
             }
             self.finishPendingCacheMove()
@@ -692,7 +692,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
                     self.finishFailure(
                         id: id,
                         taskIdentifier: taskIdentifier,
-                        failure: DownloadFailureInfo(kind: .storage, message: "无法恢复已下载文件，请检查磁盘空间后重试")
+                        failure: DownloadFailureInfo(kind: .storage, message: String(localized: "无法恢复已下载文件，请检查磁盘空间后重试", bundle: .module))
                     )
                 }
                 self.finishPendingCacheMove()
@@ -753,7 +753,7 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
                 infos[id] = DownloadTaskInfo(
                     trackID: metadata.trackID,
                     status: .failed,
-                    failure: DownloadFailureInfo(kind: .interrupted, message: "上次下载未完成，请重试")
+                    failure: DownloadFailureInfo(kind: .interrupted, message: String(localized: "上次下载未完成，请重试", bundle: .module))
                 )
                 if let info = infos[id] {
                     metadataStore.saveFailure(id: id, info: info, codec: metadata.codec)
@@ -876,26 +876,32 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             case 200 ..< 300:
                 break
             case 401, 403:
-                return DownloadFailureInfo(kind: .authentication, message: "登录已失效，请重新连接服务器")
+                return DownloadFailureInfo(kind: .authentication, message: String(localized: "登录已失效，请重新连接服务器", bundle: .module))
             case 404, 410:
-                return DownloadFailureInfo(kind: .unavailable, message: "服务器上已找不到这首歌曲")
+                return DownloadFailureInfo(kind: .unavailable, message: String(localized: "服务器上已找不到这首歌曲", bundle: .module))
             case 500 ..< 600:
-                return DownloadFailureInfo(kind: .unavailable, message: "音乐服务器暂时不可用，请稍后重试")
+                return DownloadFailureInfo(kind: .unavailable, message: String(localized: "音乐服务器暂时不可用，请稍后重试", bundle: .module))
             default:
-                return DownloadFailureInfo(kind: .invalidResponse, message: "下载请求失败（HTTP \(statusCode)）")
+                return DownloadFailureInfo(
+                    kind: .invalidResponse,
+                    message: String.localizedStringWithFormat(
+                        String(localized: "下载请求失败（HTTP %lld）", bundle: .module),
+                        statusCode
+                    )
+                )
             }
         }
 
         let contentType = mimeType?.lowercased() ?? ""
         if contentType.contains("json") || contentType.contains("html") || contentType.contains("xml") {
-            return DownloadFailureInfo(kind: .invalidResponse, message: "服务器返回的不是音频文件")
+            return DownloadFailureInfo(kind: .invalidResponse, message: String(localized: "服务器返回的不是音频文件", bundle: .module))
         }
         return nil
     }
 
     private static func failureInfo(for error: Error?) -> DownloadFailureInfo {
         guard let error else {
-            return DownloadFailureInfo(kind: .unknown, message: "下载失败，请重试")
+            return DownloadFailureInfo(kind: .unknown, message: String(localized: "下载失败，请重试", bundle: .module))
         }
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain {
@@ -903,16 +909,16 @@ public final class DownloadManager: NSObject, URLSessionDownloadDelegate, @unche
             switch code {
             case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost,
                  .dnsLookupFailed, .internationalRoamingOff, .dataNotAllowed:
-                return DownloadFailureInfo(kind: .networkUnavailable, message: "网络不可用，联网后可重试")
+                return DownloadFailureInfo(kind: .networkUnavailable, message: String(localized: "网络不可用，联网后可重试", bundle: .module))
             case .timedOut:
-                return DownloadFailureInfo(kind: .timedOut, message: "下载超时，请重试")
+                return DownloadFailureInfo(kind: .timedOut, message: String(localized: "下载超时，请重试", bundle: .module))
             case .userAuthenticationRequired, .userCancelledAuthentication:
-                return DownloadFailureInfo(kind: .authentication, message: "登录已失效，请重新连接服务器")
+                return DownloadFailureInfo(kind: .authentication, message: String(localized: "登录已失效，请重新连接服务器", bundle: .module))
             default:
                 break
             }
         }
-        return DownloadFailureInfo(kind: .unknown, message: "下载中断，请重试")
+        return DownloadFailureInfo(kind: .unknown, message: String(localized: "下载中断，请重试", bundle: .module))
     }
 
     private func finishPendingCacheMove() {

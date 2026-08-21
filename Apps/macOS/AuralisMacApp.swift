@@ -1,3 +1,4 @@
+import Foundation
 import AppShell
 import SwiftUI
 import ThemeEngine
@@ -24,64 +25,64 @@ struct AuralisMacApp: App {
         .defaultSize(width: 1280, height: 820)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("新建播放列表") { post(MacCommand.newPlaylist) }
+                Button(String(localized: "新建播放列表")) { post(MacCommand.newPlaylist) }
                     .keyboardShortcut("n", modifiers: .command)
             }
-            CommandMenu("播放") {
+            CommandMenu(String(localized: "播放")) {
                 // Space 播放/暂停唯一入口在 MacMusicShell 的 .onKeyPress(.space)。
-                Button("播放 / 暂停") { post(MacCommand.togglePlay) }
+                Button(String(localized: "播放 / 暂停")) { post(MacCommand.togglePlay) }
                 // 对齐 Apple Music：上一首/下一首使用 plain ← / →（由 Shell onKeyPress 处理），
                 // 菜单里不再注册 Command-←/→，避免与系统/Apple Music 语义冲突。
-                Button("上一首") { post(MacCommand.previous) }
-                Button("下一首") { post(MacCommand.next) }
+                Button(String(localized: "上一首")) { post(MacCommand.previous) }
+                Button(String(localized: "下一首")) { post(MacCommand.next) }
                 Divider()
-                Button("随机播放") { post(MacCommand.toggleShuffle) }
-                Button("循环模式") { post(MacCommand.cycleRepeat) }
+                Button(String(localized: "随机播放")) { post(MacCommand.toggleShuffle) }
+                Button(String(localized: "循环模式")) { post(MacCommand.cycleRepeat) }
                 Divider()
-                Button("音量提高") { adjustVolume(+0.05) }
+                Button(String(localized: "音量提高")) { adjustVolume(+0.05) }
                     .keyboardShortcut(.upArrow, modifiers: .command)
-                Button("音量降低") { adjustVolume(-0.05) }
+                Button(String(localized: "音量降低")) { adjustVolume(-0.05) }
                     .keyboardShortcut(.downArrow, modifiers: .command)
             }
-            CommandMenu("歌曲") {
-                Button("收藏当前歌曲") {
+            CommandMenu(String(localized: "歌曲")) {
+                Button(String(localized: "收藏当前歌曲")) {
                     let model = AuralisAppModel.shared
                     guard model.hasCurrentTrack else { return }
                     model.toggleFavorite(model.currentTrack)
                 }
-                Button("不喜欢当前歌曲") {
+                Button(String(localized: "不喜欢当前歌曲")) {
                     let model = AuralisAppModel.shared
                     guard model.hasCurrentTrack else { return }
                     let track = model.currentTrack
                     model.setDisliked(track, value: !model.isDisliked(track), source: "menu")
                 }
-                Button("当前歌曲信息") {
+                Button(String(localized: "当前歌曲信息")) {
                     let model = AuralisAppModel.shared
                     guard model.hasCurrentTrack else { return }
                     NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
                 }
                 .keyboardShortcut("i", modifiers: .command)
             }
-            CommandMenu("显示") {
-                Button("显示或隐藏侧边栏") { post(MacCommand.toggleSidebar) }
+            CommandMenu(String(localized: "显示")) {
+                Button(String(localized: "显示或隐藏侧边栏")) { post(MacCommand.toggleSidebar) }
                     .keyboardShortcut("s", modifiers: [.command, .control])
-                Button("歌词") { post(MacCommand.toggleLyrics) }
+                Button(String(localized: "歌词")) { post(MacCommand.toggleLyrics) }
                     .keyboardShortcut("l", modifiers: [.command, .option])
-                Button("队列") { post(MacCommand.toggleQueue) }
+                Button(String(localized: "队列")) { post(MacCommand.toggleQueue) }
                     .keyboardShortcut("u", modifiers: [.command, .option])
-                Button("正在播放") { post(MacCommand.revealNowPlaying) }
+                Button(String(localized: "正在播放")) { post(MacCommand.revealNowPlaying) }
                     .keyboardShortcut("l", modifiers: .command)
-                Button("搜索") { post(MacCommand.search) }
+                Button(String(localized: "搜索")) { post(MacCommand.search) }
                     .keyboardShortcut("f", modifiers: .command)
             }
-            CommandMenu("播放器") {
-                Button("迷你播放器") { post(MacCommand.showMiniPlayer) }
+            CommandMenu(String(localized: "播放器")) {
+                Button(String(localized: "迷你播放器")) { post(MacCommand.showMiniPlayer) }
                     .keyboardShortcut("m", modifiers: [.command, .option])
-                Button("全屏播放") { post(MacCommand.showFullScreenPlayer) }
+                Button(String(localized: "全屏播放")) { post(MacCommand.showFullScreenPlayer) }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
             }
         }
-        Window("迷你播放器", id: MacWindowID.miniPlayer) {
+        Window(String(localized: "迷你播放器"), id: MacWindowID.miniPlayer) {
             MacMiniPlayerWindow(themeStore: themeStore)
         }
         .windowResizability(.contentSize)

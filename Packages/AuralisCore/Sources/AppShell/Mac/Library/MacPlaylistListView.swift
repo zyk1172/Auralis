@@ -37,7 +37,7 @@ struct MacPlaylistListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageSearchHeader(text: $localSearch, prompt: "在播放列表中查找")
+            MacPageSearchHeader(text: $localSearch, prompt: String(localized: "在播放列表中查找", bundle: .module))
             Divider()
             GeometryReader { geo in
                 if visiblePlaylists.isEmpty {

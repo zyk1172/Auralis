@@ -74,7 +74,7 @@ struct MacHomeLayoutEditor: View {
             }
             .buttonStyle(.borderless)
             .disabled(index == 0)
-            .help("上移")
+            .help(String(localized: "上移", bundle: .module))
             Button {
                 move(index, by: 1)
             } label: {
@@ -82,7 +82,7 @@ struct MacHomeLayoutEditor: View {
             }
             .buttonStyle(.borderless)
             .disabled(index == contentModules.count - 1)
-            .help("下移")
+            .help(String(localized: "下移", bundle: .module))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)

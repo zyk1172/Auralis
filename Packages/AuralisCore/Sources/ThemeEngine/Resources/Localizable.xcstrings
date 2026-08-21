@@ -1,0 +1,102 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "极光玻璃" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Aurora Glass" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "極光玻璃" } }
+    } },
+    "青绿极光、柔和景深与玻璃层次" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Teal aurora, soft depth, and layered glass." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "青綠極光、柔和景深與玻璃層次" } }
+    } },
+    "午夜 OLED" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Midnight OLED" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "午夜 OLED" } }
+    } },
+    "纯黑、省电、干净且克制" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Pure black, power-efficient, clean, and restrained." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "純黑、省電、乾淨且克制" } }
+    } },
+    "模拟 Hi-Fi" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Analog Hi-Fi" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "類比 Hi-Fi" } }
+    } },
+    "胡桃木色、框装封面与暖色氛围" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Walnut tones, framed artwork, and a warm atmosphere." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "胡桃木色、框裝封面與暖色氛圍" } }
+    } },
+    "极简纸张" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Minimal Paper" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "極簡紙張" } }
+    } },
+    "暖白纸面、墨色排版与低动态" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Warm paper, ink-like typography, and low motion." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暖白紙面、墨色排版與低動態" } }
+    } },
+    "霓虹都市" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Neon City" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "霓虹都市" } }
+    } },
+    "洋红与靛蓝交错的夜间霓虹" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Magenta and indigo crossing through the night." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "洋紅與靛藍交錯的夜間霓虹" } }
+    } },
+    "禅意自然" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Zen Nature" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "禪意自然" } }
+    } },
+    "鼠尾草绿、自然纸感与慢节奏" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Sage green, natural paper texture, and a slow tempo." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "鼠尾草綠、自然紙感與慢節奏" } }
+    } },
+    "云村红" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Cloud Village Red" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "雲村紅" } }
+    } },
+    "明亮中性色与标志性音乐红" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Bright neutrals with a signature music red." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "明亮中性色與標誌性音樂紅" } }
+    } },
+    "黑胶之夜" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Vinyl Night" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "黑膠之夜" } }
+    } },
+    "炭黑唱片、酒红点缀与沉稳氛围" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Charcoal records, wine-red accents, and a calm atmosphere." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "炭黑唱片、酒紅點綴與沈穩氛圍" } }
+    } },
+    "蜜桃粉雾" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Peach Mist" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "蜜桃粉霧" } }
+    } },
+    "轻盈粉雾、柔光玻璃与舒缓色调" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Light pink mist, soft glass, and soothing tones." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "輕盈粉霧、柔光玻璃與舒緩色調" } }
+    } },
+    "日光唱片室" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Solar Studio" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "日光唱片室" } }
+    } },
+    "奶油日光、框装唱片与暖调纸感" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Creamy sunlight, framed records, and warm paper tones." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "奶油日光、框裝唱片與暖調紙感" } }
+    } },
+    "冰川透镜" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Polar Frost" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "冰川透鏡" } }
+    } },
+    "冰蓝透明层、锐利封面与冷调玻璃" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Icy blue transparency, crisp artwork, and cool glass." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "冰藍透明層、銳利封面與冷調玻璃" } }
+    } },
+    "森林终端" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Forest Terminal" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "森林終端" } }
+    } },
+    "深绿单色界面与实体面板" : { "localizations" : {
+      "en" : { "stringUnit" : { "state" : "translated", "value" : "Deep green monochrome UI with solid panels." } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "深綠單色介面與實體面板" } }
+    } }
+  },
+  "version" : "1.0"
+}

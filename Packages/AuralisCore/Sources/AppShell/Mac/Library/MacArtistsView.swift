@@ -57,7 +57,7 @@ struct MacArtistsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPageSearchHeader(text: $localSearch, prompt: "在艺术家中查找")
+            MacPageSearchHeader(text: $localSearch, prompt: String(localized: "在艺术家中查找", bundle: .module))
             Divider()
             HSplitView {
                 List(selection: $selectedArtistID) {
@@ -87,7 +87,7 @@ struct MacArtistsView: View {
                 if let artist = selectedArtist {
                     MacArtistView(artist: artist, model: model, theme: theme, selection: $selection, onNavigate: onNavigate)
                 } else {
-                    ContentUnavailableView("选择一个艺术家", systemImage: "person.2",
+                    ContentUnavailableView(String(localized: "选择一个艺术家", bundle: .module), systemImage: "person.2",
                                            description: Text(String(localized: "从左侧选择艺术家查看详情。", bundle: .module)))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }

@@ -57,7 +57,7 @@ struct DownloadManagementView: View {
             }
 
             if !downloadedTracks.isEmpty {
-                Section("已下载 · \(downloadedTracks.count) 首") {
+                Section(String(localized: "已下载 · \(downloadedTracks.count) 首", bundle: .module)) {
                     ForEach(downloadedTracks) { track in
                         Button {
                             model.queue = model.uniquedTracks(downloadedTracks)
@@ -100,7 +100,7 @@ struct DownloadManagementView: View {
             if activeTracks.isEmpty, failedTracks.isEmpty, downloadedTracks.isEmpty {
                 Section {
                     ContentUnavailableView(
-                        "暂无下载",
+                        String(localized: "暂无下载", bundle: .module),
                         systemImage: "arrow.down.circle",
                         description: Text(String(localized: "在歌曲、专辑或歌单菜单中选择“下载到本地”，即可离线播放。", bundle: .module))
                     )
@@ -114,7 +114,7 @@ struct DownloadManagementView: View {
         .listStyle(.insetGrouped)
         #endif
         .confirmationDialog(
-            "删除全部本地音乐？",
+            String(localized: "删除全部本地音乐？", bundle: .module),
             isPresented: $confirmsRemoveAll,
             titleVisibility: .visible
         ) {
@@ -136,7 +136,7 @@ struct DownloadManagementView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(String(localized: "离线音乐", bundle: .module))
                         .font(.headline)
-                    Text("\(downloadedTracks.count) 首 · \(Self.byteText(model.downloadedAudioBytes))")
+                    Text(String(localized: "\(downloadedTracks.count) 首 · \(Self.byteText(model.downloadedAudioBytes))", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
@@ -216,8 +216,12 @@ struct DownloadActivityRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(isFailed ? theme.colorTokens.accent.color : .secondary)
-            .help(isFailed ? "重试" : "取消下载")
-            .accessibilityLabel(isFailed ? String(localized: "重试下载《\(track.title)》", bundle: .module) : "取消下载《\(track.title)》")
+            .help(isFailed ? String(localized: "重试", bundle: .module) : String(localized: "取消下载", bundle: .module))
+            .accessibilityLabel(
+                isFailed
+                    ? String(localized: "重试下载《\(track.title)》", bundle: .module)
+                    : String(localized: "取消下载《\(track.title)》", bundle: .module)
+            )
         }
         .padding(.vertical, 3)
     }

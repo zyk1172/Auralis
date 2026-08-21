@@ -84,7 +84,7 @@ struct SettingsBackupSection: View {
                 isImportPasswordSheetPresented = true
             case let .failure(error):
                 restoreMessage = nil
-                restoreError = "无法读取备份文件：\(error.localizedDescription)"
+                restoreError = String(localized: "无法读取备份文件：\(error.localizedDescription)", bundle: .module)
             }
         }
         .sheet(isPresented: $isImportPasswordSheetPresented) {
@@ -128,7 +128,7 @@ struct SettingsBackupSection: View {
                     }
                 } else {
                     Section(String(localized: "导出备份", bundle: .module)) {
-                        SecureField("备份密码（至少 8 位，建议混合大小写与数字）", text: $exportPassword)
+                        SecureField(String(localized: "备份密码（至少 8 位，建议混合大小写与数字）", bundle: .module), text: $exportPassword)
                         Text(String(localized: "恢复时需要同一密码。密码不会被保存。", bundle: .module))
                             .font(.caption)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -171,8 +171,9 @@ struct SettingsBackupSection: View {
             let servers = try await model.catalogCoordinator.store.listServers()
             let backup = try await Self.makeBackupPayload(servers: servers)
             let data = try service.encrypt(backup, password: exportPassword)
+            let filename = String(localized: "Auralis设置备份-\(Self.dateStamp()).auralisbackup", bundle: .module)
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("Auralis设置备份-\(Self.dateStamp()).auralisbackup")
+                .appendingPathComponent(filename)
             try data.write(to: url, options: .atomic)
             generatedBackupURL = url
         } catch {
@@ -186,9 +187,9 @@ struct SettingsBackupSection: View {
         NavigationStack {
             Form {
                 Section(String(localized: "恢复备份", bundle: .module)) {
-                    SecureField("备份密码", text: $importPassword)
+                    SecureField(String(localized: "备份密码", bundle: .module), text: $importPassword)
                     if let url = importFileURL {
-                        LabeledContent("备份文件", value: url.lastPathComponent)
+                        LabeledContent(String(localized: "备份文件", bundle: .module), value: url.lastPathComponent)
                     }
                     Text(String(localized: "将恢复：App 设置、音乐服务器、大模型与音乐下载配置。不会覆盖或删除本地数据库、歌曲、歌单、收藏、播放记录、缓存或下载文件。", bundle: .module))
                         .font(.caption)
@@ -253,7 +254,7 @@ struct SettingsBackupSection: View {
             let data = try Data(contentsOf: url)
             let backup = try service.decrypt(data, password: importPassword)
             try await Self.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
-            restoreMessage = "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。"
+        restoreMessage = String(localized: "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。", bundle: .module)
         } catch {
             restoreError = error.localizedDescription
         }
@@ -378,7 +379,7 @@ struct BackupExportPage: View {
                 }
             } else {
                 Section(String(localized: "导出备份", bundle: .module)) {
-                    SecureField("备份密码（至少 8 位，建议混合大小写与数字）", text: $exportPassword)
+                    SecureField(String(localized: "备份密码（至少 8 位，建议混合大小写与数字）", bundle: .module), text: $exportPassword)
                     Text(String(localized: "恢复时需要同一密码。密码不会被保存。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -416,8 +417,9 @@ struct BackupExportPage: View {
             let servers = try await model.catalogCoordinator.store.listServers()
             let backup = try await SettingsBackupSection.makeBackupPayload(servers: servers)
             let data = try service.encrypt(backup, password: exportPassword)
+            let filename = String(localized: "Auralis设置备份-\(SettingsBackupSection.dateStamp()).auralisbackup", bundle: .module)
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("Auralis设置备份-\(SettingsBackupSection.dateStamp()).auralisbackup")
+                .appendingPathComponent(filename)
             try data.write(to: url, options: .atomic)
             generatedBackupURL = url
         } catch {
@@ -451,13 +453,16 @@ struct BackupImportPage: View {
                     isFilePickerPresented = true
                 } label: {
                     if let url = importFileURL {
-                        Label("已选择：\(url.lastPathComponent)", systemImage: "doc.fill")
+                        Label(
+                            String(localized: "已选择：\(url.lastPathComponent)", bundle: .module),
+                            systemImage: "doc.fill"
+                        )
                     } else {
                         Label(String(localized: "选择备份文件…", bundle: .module), systemImage: "folder")
                     }
                 }
                 if importFileURL != nil {
-                    SecureField("备份密码", text: $importPassword)
+                    SecureField(String(localized: "备份密码", bundle: .module), text: $importPassword)
                     Text(String(localized: "将恢复：服务器信息、大模型配置与其他设置。不会覆盖或删除歌曲、歌单、收藏与播放记录。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -503,7 +508,7 @@ struct BackupImportPage: View {
                 restoreError = nil
                 restoreMessage = nil
             case let .failure(error):
-                restoreError = "无法读取备份文件：\(error.localizedDescription)"
+                restoreError = String(localized: "无法读取备份文件：\(error.localizedDescription)", bundle: .module)
             }
         }
     }
@@ -522,7 +527,7 @@ struct BackupImportPage: View {
             let data = try Data(contentsOf: url)
             let backup = try service.decrypt(data, password: importPassword)
             try await SettingsBackupSection.applyBackup(backup, model: model, themeStore: themeStore, vault: credentialVault)
-            restoreMessage = "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。"
+        restoreMessage = String(localized: "恢复完成。服务器不会自动同步，请在「服务器」中手动连接。", bundle: .module)
         } catch {
             restoreError = error.localizedDescription
         }

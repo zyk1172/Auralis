@@ -51,15 +51,15 @@ struct MacTrackInfoSheet: View {
 
     private var detailsPane: some View {
         Form {
-            infoRow("标题", track.title)
-            infoRow("艺术家", track.artistName)
-            infoRow("专辑", track.albumTitle)
-            infoRow("年份", track.year.map(String.init) ?? "—")
-            infoRow("流派", track.genres.first ?? "—")
-            if let trackNumber = track.trackNumber { infoRow("曲目", String(trackNumber)) }
-            if let disc = track.discNumber { infoRow("碟", String(disc)) }
-            if let rating = track.rating { infoRow("评分", "\(rating) / 5") }
-            infoRow("时长", MacFormat.time(track.duration))
+            infoRow(String(localized: "标题", bundle: .module), track.title)
+            infoRow(String(localized: "艺术家", bundle: .module), track.artistName)
+            infoRow(String(localized: "专辑", bundle: .module), track.albumTitle)
+            infoRow(String(localized: "年份", bundle: .module), track.year.map(String.init) ?? "—")
+            infoRow(String(localized: "流派", bundle: .module), track.genres.first ?? "—")
+            if let trackNumber = track.trackNumber { infoRow(String(localized: "曲目", bundle: .module), String(trackNumber)) }
+            if let disc = track.discNumber { infoRow(String(localized: "碟", bundle: .module), String(disc)) }
+            if let rating = track.rating { infoRow(String(localized: "评分", bundle: .module), "\(rating) / 5") }
+            infoRow(String(localized: "时长", bundle: .module), MacFormat.time(track.duration))
         }
         .formStyle(.grouped)
     }
@@ -88,7 +88,7 @@ struct MacTrackInfoSheet: View {
     private var lyricsPane: some View {
         Group {
             if isLoadingLyrics {
-                ProgressView("正在加载歌词…")
+                ProgressView { Text(String(localized: "正在加载歌词…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let lyrics, !lyrics.lines.isEmpty {
                 ScrollView {
@@ -102,7 +102,7 @@ struct MacTrackInfoSheet: View {
                     .padding(18)
                 }
             } else {
-                ContentUnavailableView("暂无歌词", systemImage: "quote.bubble")
+                ContentUnavailableView(String(localized: "暂无歌词", bundle: .module), systemImage: "quote.bubble")
             }
         }
     }
@@ -111,12 +111,12 @@ struct MacTrackInfoSheet: View {
 
     private var filePane: some View {
         Form {
-            if let codec = track.effectiveCodec { infoRow("格式", codec.uppercased()) }
-            if let bitrate = track.sourceInfo.bitRate { infoRow("码率", "\(bitrate) kbps") }
-            if let sampleRate = track.sourceInfo.sampleRate { infoRow("采样率", "\(sampleRate) Hz") }
-            if let bitDepth = track.sourceInfo.bitDepth { infoRow("位深", "\(bitDepth)-bit") }
-            if let channels = track.sourceInfo.channelCount { infoRow("声道", "\(channels)") }
-            infoRow("时长", MacFormat.time(track.duration))
+            if let codec = track.effectiveCodec { infoRow(String(localized: "格式", bundle: .module), codec.uppercased()) }
+            if let bitrate = track.sourceInfo.bitRate { infoRow(String(localized: "码率", bundle: .module), "\(bitrate) kbps") }
+            if let sampleRate = track.sourceInfo.sampleRate { infoRow(String(localized: "采样率", bundle: .module), "\(sampleRate) Hz") }
+            if let bitDepth = track.sourceInfo.bitDepth { infoRow(String(localized: "位深", bundle: .module), "\(bitDepth)-bit") }
+            if let channels = track.sourceInfo.channelCount { infoRow(String(localized: "声道", bundle: .module), "\(channels)") }
+            infoRow(String(localized: "时长", bundle: .module), MacFormat.time(track.duration))
             Text(String(localized: "不显示服务器凭据、令牌或私有 URL 参数。", bundle: .module))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -203,14 +203,14 @@ struct MacTrackInfoSheet: View {
         case .critiqueBrainz:
             var parts: [String] = []
             if let rating = metric.rating, let count = metric.ratingCount {
-                parts.append(String(format: "%.1f / 5 · %d 次评分", rating, count))
+                parts.append(String(format: String(localized: "%.1f / 5 · %d 次评分", bundle: .module), rating, count))
             }
-            if let reviews = metric.reviewCount { parts.append("\(reviews) 篇评论") }
+        if let reviews = metric.reviewCount { parts.append(String(localized: "\(reviews) 篇评论", bundle: .module)) }
             return parts.isEmpty ? String(localized: "有评论数据", bundle: .module) : parts.joined(separator: " · ")
         case .listenBrainz:
             var parts: [String] = []
-            if let listens = metric.listenCount { parts.append("\(listens) 次收听") }
-            if let listeners = metric.listenerCount { parts.append("\(listeners) 位听众") }
+        if let listens = metric.listenCount { parts.append(String(localized: "\(listens) 次收听", bundle: .module)) }
+        if let listeners = metric.listenerCount { parts.append(String(localized: "\(listeners) 位听众", bundle: .module)) }
             return parts.isEmpty ? String(localized: "有收听数据", bundle: .module) : parts.joined(separator: " · ")
         }
     }

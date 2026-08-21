@@ -221,27 +221,27 @@ extension OpenSubsonicClientError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidBaseURL:
-            return "The OpenSubsonic server URL is invalid."
+            return String(localized: "OpenSubsonic 服务器 URL 无效。", bundle: .module)
         case let .invalidConfiguration(reason):
-            return "The OpenSubsonic configuration is invalid: \(reason)"
+            return String(localized: "OpenSubsonic 配置无效：\(reason)", bundle: .module)
         case let .invalidParameter(name):
-            return "The OpenSubsonic parameter is invalid: \(name)"
+            return String(localized: "OpenSubsonic 参数无效：\(name)", bundle: .module)
         case let .unsupportedCapability(name):
-            return "The server does not advertise the required capability: \(name)"
+            return String(localized: "服务器未声明所需功能：\(name)", bundle: .module)
         case let .server(code, message):
-            return "OpenSubsonic server error \(code): \(message)"
+            return String(localized: "OpenSubsonic 服务器错误 \(code)：\(message)", bundle: .module)
         case let .serverFailure(error):
-            return "OpenSubsonic server error \(error.code): \(error.message)"
+            return String(localized: "OpenSubsonic 服务器错误 \(error.code)：\(error.message)", bundle: .module)
         case let .httpStatus(status):
-            return "The OpenSubsonic server returned HTTP \(status)."
+            return String(localized: "OpenSubsonic 服务器返回 HTTP \(status)。", bundle: .module)
         case let .transport(code, host):
             // LocalizedError 兜底文案：某些非服务器表单会直接展示 error.localizedDescription。
             // 服务器添加/连接表单统一走 Application 层 ConnectionErrorDescription，文案以那边为准。
             return Self.transportErrorDescription(code: code, host: host)
         case let .malformedResponse(detail):
-            return "服务器返回的内容无法解析：\(detail)"
+            return String(localized: "服务器返回的内容无法解析：\(detail)", bundle: .module)
         case let .missingPayload(name):
-            return "The OpenSubsonic response did not contain \(name)."
+            return String(localized: "OpenSubsonic 响应缺少 \(name)。", bundle: .module)
         }
     }
 
@@ -249,21 +249,21 @@ extension OpenSubsonicClientError: LocalizedError {
     /// 无法连接 / 网络中断 / 网络不可用），并在目标是局域网地址时补充
     /// 「本地网络」权限与同一网络的排查指引（macOS / iOS 文案各自适配系统设置路径）。
     private static func transportErrorDescription(code: Int, host: String?) -> String {
-        let hostText = host.map { "（\($0)）" } ?? ""
+        let hostText = host.map { String(localized: "（\($0)）", bundle: .module) } ?? ""
         let prefix: String
         switch code {
         case -1009:
-            prefix = "网络无法连接（错误 -1009）\(hostText)。请检查网络连接。"
+            prefix = String(localized: "网络无法连接（错误 -1009）\(hostText)。请检查网络连接。", bundle: .module)
         case -1001:
-            prefix = "连接超时（错误 -1001）\(hostText)。请检查服务器地址与网络。"
+            prefix = String(localized: "连接超时（错误 -1001）\(hostText)。请检查服务器地址与网络。", bundle: .module)
         case -1003:
-            prefix = "找不到主机（错误 -1003）\(hostText)。请检查服务器地址（IP / 主机名 / .local）。"
+            prefix = String(localized: "找不到主机（错误 -1003）\(hostText)。请检查服务器地址（IP / 主机名 / .local）。", bundle: .module)
         case -1004:
-            prefix = "无法连接到服务器（错误 -1004）\(hostText)。服务器可能未启动或拒绝连接。"
+            prefix = String(localized: "无法连接到服务器（错误 -1004）\(hostText)。服务器可能未启动或拒绝连接。", bundle: .module)
         case -1005:
-            prefix = "网络连接中断（错误 -1005）\(hostText)。"
+            prefix = String(localized: "网络连接中断（错误 -1005）\(hostText)。", bundle: .module)
         default:
-            prefix = "网络请求失败（错误 \(code)）\(hostText)。请检查地址和网络。"
+            prefix = String(localized: "网络请求失败（错误 \(code)）\(hostText)。请检查地址和网络。", bundle: .module)
         }
         return prefix + Self.localNetworkHint(code: code, host: host)
     }
@@ -274,9 +274,9 @@ extension OpenSubsonicClientError: LocalizedError {
         let lanCodes: Set<Int> = [-1009, -1001, -1003, -1004, -1005]
         guard lanCodes.contains(code), let host, NetworkHostClassifier.isPrivateOrLocal(host: host) else { return "" }
         #if os(macOS)
-        return "如果是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。"
+        return String(localized: "如果是局域网地址（\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。", bundle: .module)
         #else
-        return "如果是局域网地址（\(host)），请检查 设置 → 隐私与安全 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。"
+        return String(localized: "如果是局域网地址（\(host)），请检查 设置 → 隐私与安全 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。", bundle: .module)
         #endif
     }
 }

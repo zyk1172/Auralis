@@ -12,7 +12,7 @@ import SwiftUI
 /// 不注册任何系统搜索候选，从而彻底避开崩溃路径。页面内「本地搜索」语义不变。
 struct MacLocalSearchField: View {
     @Binding var text: String
-    var prompt: String = "搜索"
+    var prompt: String = String(localized: "搜索", bundle: .module)
     var onSubmit: () -> Void = {}
     /// 可选外部 FocusState：⌘F 等场景由父视图持有并主动聚焦。
     var focus: FocusState<Bool>.Binding? = nil
@@ -35,7 +35,7 @@ struct MacLocalSearchField: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("清除")
+                .help(String(localized: "清除", bundle: .module))
                 .accessibilityLabel(String(localized: "清除搜索", bundle: .module))
             }
         }

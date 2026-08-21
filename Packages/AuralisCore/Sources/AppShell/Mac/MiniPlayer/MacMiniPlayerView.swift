@@ -474,7 +474,7 @@ public struct MacMiniPlayerView: View {
         }
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
-        .help("音量")
+        .help(String(localized: "音量", bundle: .module))
         .accessibilityLabel(String(localized: "音量", bundle: .module))
         .popover(isPresented: $isVolumePopoverPresented, arrowEdge: .bottom) {
             Slider(
@@ -501,7 +501,7 @@ public struct MacMiniPlayerView: View {
         }
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
-        .help("歌词")
+        .help(String(localized: "歌词", bundle: .module))
         .accessibilityLabel(String(localized: "歌词", bundle: .module))
     }
 
@@ -515,7 +515,7 @@ public struct MacMiniPlayerView: View {
         }
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
-        .help("队列")
+        .help(String(localized: "队列", bundle: .module))
         .accessibilityLabel(String(localized: "队列", bundle: .module))
     }
 
@@ -527,7 +527,7 @@ public struct MacMiniPlayerView: View {
         }
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
-        .help(hideArtwork ? "显示封面" : "隐藏封面")
+        .help(hideArtwork ? String(localized: "显示封面", bundle: .module) : String(localized: "隐藏封面", bundle: .module))
         .accessibilityLabel(hideArtwork ? String(localized: "显示封面", bundle: .module) : String(localized: "隐藏封面", bundle: .module))
     }
 
@@ -539,7 +539,7 @@ public struct MacMiniPlayerView: View {
         }
         .buttonStyle(.plain)
         .frame(width: 32, height: 28)
-        .help("返回正在播放")
+        .help(String(localized: "返回正在播放", bundle: .module))
         .accessibilityLabel(String(localized: "返回正在播放", bundle: .module))
     }
 }

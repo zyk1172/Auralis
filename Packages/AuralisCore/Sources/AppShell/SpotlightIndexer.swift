@@ -42,7 +42,7 @@ public enum SpotlightIndexer {
             let attribute = CSSearchableItemAttributeSet(contentType: .item)
             attribute.title = album.title
             attribute.artist = album.artistName
-            attribute.contentDescription = "专辑 · \(album.artistName)"
+        attribute.contentDescription = String(localized: "专辑 · \(album.artistName)", bundle: .module)
             attribute.keywords = [album.title, album.artistName]
             items.append(CSSearchableItem(
                 uniqueIdentifier: "auralis://album/\(album.serverID.rawValue):\(album.id.rawValue)",
@@ -53,7 +53,7 @@ public enum SpotlightIndexer {
         for artist in artists {
             let attribute = CSSearchableItemAttributeSet(contentType: .item)
             attribute.title = artist.name
-            attribute.contentDescription = "艺术家 · \(artist.albumCount) 张专辑"
+        attribute.contentDescription = String(localized: "艺术家 · \(artist.albumCount) 张专辑", bundle: .module)
             attribute.keywords = [artist.name]
             items.append(CSSearchableItem(
                 uniqueIdentifier: "auralis://artist/\(artist.serverID.rawValue):\(artist.id.rawValue)",
@@ -64,7 +64,7 @@ public enum SpotlightIndexer {
         for playlist in playlists {
             let attribute = CSSearchableItemAttributeSet(contentType: .item)
             attribute.title = playlist.name
-            attribute.contentDescription = "歌单 · \(playlist.trackIDs.count) 首"
+        attribute.contentDescription = String(localized: "歌单 · \(playlist.trackIDs.count) 首", bundle: .module)
             attribute.keywords = [playlist.name]
             items.append(CSSearchableItem(
                 uniqueIdentifier: "auralis://playlist/\(playlist.serverID.rawValue):\(playlist.id.rawValue)",

@@ -44,7 +44,7 @@ struct MacHitTestingTests {
         let router = MacSettingsRouter()
         router.selection = .server
         #expect(router.selection == .server)
-        #expect(router.selection.title == "服务器")
+        #expect(["服务器", "伺服器", "Server"].contains(router.selection.title))
     }
 
     // MARK: - 9) 搜索未解析实体不可播放

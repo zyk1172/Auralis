@@ -13,7 +13,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "打開 Auralis 開始播放後，這里會顯示當前歌曲。"
+            "value": "打開 Auralis 開始播放後，這裡會顯示目前歌曲。"
           }
         }
       }
@@ -30,7 +30,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "顯示當前播放的歌曲、藝術家與進度"
+            "value": "顯示目前播放的歌曲、藝術家與進度"
           }
         }
       }

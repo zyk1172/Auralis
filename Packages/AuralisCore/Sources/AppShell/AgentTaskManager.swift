@@ -39,7 +39,7 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
         conversationID: UUID?,
         createdAt: Date = .now,
         status: AgentTaskStatus = .running,
-        currentStep: String = "正在理解请求",
+        currentStep: String? = nil,
         toolSteps: Int = 0,
         inputTokens: Int = 0,
         outputTokens: Int = 0,
@@ -55,7 +55,7 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
         self.conversationID = conversationID
         self.createdAt = createdAt
         self.status = status
-        self.currentStep = currentStep
+        self.currentStep = currentStep ?? String(localized: "正在理解请求", bundle: .module)
         self.toolSteps = toolSteps
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
@@ -130,7 +130,7 @@ public final class AgentTaskStore {
         for (id, var record) in records {
             if record.status == .running || record.status == .waitingForTool || record.status == .waitingForModel {
                 record.status = .interrupted
-                record.errorSummary = "App 在任务运行中被关闭，已标记为中断。"
+        record.errorSummary = String(localized: "App 在任务运行中被关闭，已标记为中断。", bundle: .module)
                 record.updatedAt = .now
                 records[id] = record
                 changed = true

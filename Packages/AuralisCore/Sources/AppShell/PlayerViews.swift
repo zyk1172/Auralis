@@ -18,7 +18,7 @@ struct MiniPlayerContent: View {
 
     private var coverSize: CGFloat { min(42, max(36, height - 14)) }
     private var displayTitle: String {
-        model.currentTrack.id.rawValue == "placeholder" ? "音乐正在赶来喵" : model.currentTrack.title
+        model.currentTrack.id.rawValue == "placeholder" ? String(localized: "音乐正在赶来喵", bundle: .module) : model.currentTrack.title
     }
 
     var body: some View {
@@ -82,11 +82,11 @@ struct MiniPlayerContent: View {
     private var accessibilityPlaybackLabel: String {
         let state: String
         switch model.playbackState {
-        case .playing: state = "播放中"
-        case .paused: state = "已暂停"
-        default: state = "未播放"
+        case .playing: state = String(localized: "播放中", bundle: .module)
+        case .paused: state = String(localized: "已暂停", bundle: .module)
+        default: state = String(localized: "未播放", bundle: .module)
         }
-        return "\(model.currentTrack.title)，\(model.currentTrack.artistName)，\(state)"
+        return String(localized: "\(model.currentTrack.title)，\(model.currentTrack.artistName)，\(state)", bundle: .module)
     }
 
     private var normalizedSkipControlsVisibility: CGFloat {
@@ -123,7 +123,7 @@ struct CompactMiniPlayerContent: View {
     let theme: BuiltInTheme
 
     private var title: String {
-        model.currentTrack.id.rawValue == "placeholder" ? "音乐正在赶来喵" : model.currentTrack.title
+        model.currentTrack.id.rawValue == "placeholder" ? String(localized: "音乐正在赶来喵", bundle: .module) : model.currentTrack.title
     }
 
     var body: some View {
@@ -223,7 +223,7 @@ struct NowPlayingView: View {
             .ignoresSafeArea()
             VStack(spacing: AuralisSpacing.large) {
                 header
-                Picker("播放页面", selection: $page) {
+                Picker(String(localized: "播放页面", bundle: .module), selection: $page) {
                     ForEach(NowPlayingPage.allCases) { page in Text(page.title).tag(page) }
                 }
                 .pickerStyle(.segmented)
@@ -249,7 +249,10 @@ struct NowPlayingView: View {
             Button(String(localized: "添加到歌单", bundle: .module)) { isPlaylistSheetPresented = true }
             if model.isDownloading(model.currentTrack) {
                 let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
-                Button("取消下载（\(Int(progress * 100))%）", role: .destructive) {
+                Button(
+                    String(localized: "取消下载（\(Int(progress * 100))%）", bundle: .module),
+                    role: .destructive
+                ) {
                     model.cancelDownload(model.currentTrack)
                 }
             } else if model.isDownloaded(model.currentTrack) {
@@ -480,7 +483,7 @@ struct NowPlayingView: View {
         .contentShape(Rectangle())
         .accessibilityLabel(isDisliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module))
         .accessibilityHint(String(localized: "不喜欢的歌曲不会再出现在自动推荐中。", bundle: .module))
-        .accessibilityValue(isDisliked ? "已标记不喜欢" : "未标记不喜欢")
+        .accessibilityValue(isDisliked ? String(localized: "已标记不喜欢", bundle: .module) : String(localized: "未标记不喜欢", bundle: .module))
     }
 
     private func transportControls(playButtonSize: CGFloat) -> some View {
@@ -584,7 +587,7 @@ struct NowPlayingView: View {
             return model.currentTrack.effectiveCodec?.uppercased() ?? String(localized: "未知", bundle: .module)
         }
         let info = model.currentTrack.sourceInfo
-        let sampleRate = info.sampleRate.map { "\($0 / 1_000) kHz" } ?? "采样率未知"
+        let sampleRate = info.sampleRate.map { "\($0 / 1_000) kHz" } ?? String(localized: "采样率未知", bundle: .module)
         if let bitDepth = info.bitDepth { return "\(bitDepth)-bit · \(sampleRate)" }
         return sampleRate
     }
@@ -600,11 +603,11 @@ struct NowPlayingView: View {
     private var nowPlayingAccessibilityLabel: String {
         let state: String
         switch model.playbackState {
-        case .playing: state = "播放中"
-        case .paused: state = "已暂停"
-        default: state = "未播放"
+        case .playing: state = String(localized: "播放中", bundle: .module)
+        case .paused: state = String(localized: "已暂停", bundle: .module)
+        default: state = String(localized: "未播放", bundle: .module)
         }
-        return "\(model.currentTrack.title)，\(model.currentTrack.artistName)，专辑 \(model.currentTrack.albumTitle)，\(state)"
+        return String(localized: "\(model.currentTrack.title)，\(model.currentTrack.artistName)，专辑 \(model.currentTrack.albumTitle)，\(state)", bundle: .module)
     }
 
     private var currentAlbum: Album? {
@@ -702,7 +705,12 @@ struct NowPlayingView: View {
                                 .id(index)
                         }
                     } else {
-                        AuralisEmptyState(icon: "quote.bubble", title: "暂无歌词", message: "服务器没有返回歌词，稍后可从本地文件或 MusicBrainz 候选补全。", colors: theme.colorTokens)
+                        AuralisEmptyState(
+                            icon: "quote.bubble",
+                            title: String(localized: "暂无歌词", bundle: .module),
+                            message: String(localized: "服务器没有返回歌词，稍后可从本地文件或 MusicBrainz 候选补全。", bundle: .module),
+                            colors: theme.colorTokens
+                        )
                     }
                 }
                 .frame(maxWidth: 600, alignment: .center)
@@ -953,31 +961,31 @@ private struct TrackInformationSheet: View {
         NavigationStack {
             List {
                 Section(String(localized: "基本信息", bundle: .module)) {
-                    infoRow("歌曲", track.title)
-                    infoRow("艺术家", track.artistName)
-                    infoRow("专辑", track.albumTitle)
-                    infoRow("时长", formatDuration(track.duration))
-                    infoRow("年份", track.year.map(String.init) ?? "未知")
-                    infoRow("流派", track.genres.isEmpty ? "未知" : track.genres.joined(separator: "、"))
-                    infoRow("语言", track.language ?? "未知")
+                    infoRow(String(localized: "歌曲", bundle: .module), track.title)
+                    infoRow(String(localized: "艺术家", bundle: .module), track.artistName)
+                    infoRow(String(localized: "专辑", bundle: .module), track.albumTitle)
+                    infoRow(String(localized: "时长", bundle: .module), formatDuration(track.duration))
+                    infoRow(String(localized: "年份", bundle: .module), track.year.map(String.init) ?? String(localized: "未知", bundle: .module))
+                    infoRow(String(localized: "流派", bundle: .module), track.genres.isEmpty ? String(localized: "未知", bundle: .module) : track.genres.joined(separator: "、"))
+                    infoRow(String(localized: "语言", bundle: .module), track.language ?? String(localized: "未知", bundle: .module))
                 }
                 Section(String(localized: "曲目位置", bundle: .module)) {
-                    infoRow("碟片", track.discNumber.map(String.init) ?? "未知")
-                    infoRow("曲目", track.trackNumber.map(String.init) ?? "未知")
+                    infoRow(String(localized: "碟片", bundle: .module), track.discNumber.map(String.init) ?? String(localized: "未知", bundle: .module))
+                    infoRow(String(localized: "曲目", bundle: .module), track.trackNumber.map(String.init) ?? String(localized: "未知", bundle: .module))
                 }
                 Section(String(localized: "音频质量", bundle: .module)) {
-                    infoRow("格式", track.effectiveCodec?.uppercased() ?? "未知")
-                    infoRow("采样率", track.sourceInfo.sampleRate.map { "\($0) Hz" } ?? "未知")
-                    infoRow("位深", track.sourceInfo.bitDepth.map { "\($0) bit" } ?? "未知")
-                    infoRow("码率", track.sourceInfo.bitRate.map { "\($0) kbps" } ?? "未知")
-                    infoRow("声道", track.sourceInfo.channelCount.map { "\($0)" } ?? "未知")
+                    infoRow(String(localized: "格式", bundle: .module), track.effectiveCodec?.uppercased() ?? String(localized: "未知", bundle: .module))
+                    infoRow(String(localized: "采样率", bundle: .module), track.sourceInfo.sampleRate.map { "\($0) Hz" } ?? String(localized: "未知", bundle: .module))
+                    infoRow(String(localized: "位深", bundle: .module), track.sourceInfo.bitDepth.map { "\($0) bit" } ?? String(localized: "未知", bundle: .module))
+                    infoRow(String(localized: "码率", bundle: .module), track.sourceInfo.bitRate.map { "\($0) kbps" } ?? String(localized: "未知", bundle: .module))
+                    infoRow(String(localized: "声道", bundle: .module), track.sourceInfo.channelCount.map { "\($0)" } ?? String(localized: "未知", bundle: .module))
                 }
                 Section(String(localized: "状态", bundle: .module)) {
-                    infoRow("收藏", track.isFavorite ? "已收藏" : "未收藏")
-                    infoRow("评分", track.rating.map { "\($0)/5" } ?? "未评分")
-                    infoRow("播放次数", "\(model.playCounts[track.id] ?? 0) 次")
-                    infoRow("本地下载", model.isDownloaded(track) ? "已下载" : "未下载")
-                    infoRow("歌词", model.currentLyrics == nil ? "无" : "已获取")
+                    infoRow(String(localized: "收藏", bundle: .module), track.isFavorite ? String(localized: "已收藏", bundle: .module) : String(localized: "未收藏", bundle: .module))
+                    infoRow(String(localized: "评分", bundle: .module), track.rating.map { "\($0)/5" } ?? String(localized: "未评分", bundle: .module))
+                    infoRow(String(localized: "播放次数", bundle: .module), String(localized: "\(model.playCounts[track.id] ?? 0) 次", bundle: .module))
+                    infoRow(String(localized: "本地下载", bundle: .module), model.isDownloaded(track) ? String(localized: "已下载", bundle: .module) : String(localized: "未下载", bundle: .module))
+                    infoRow(String(localized: "歌词", bundle: .module), model.currentLyrics == nil ? String(localized: "无", bundle: .module) : String(localized: "已获取", bundle: .module))
                 }
                 Section(String(localized: "大众评价", bundle: .module)) {
                     switch externalMusicViewState {
@@ -1096,14 +1104,14 @@ private struct TrackInformationSheet: View {
             case .critiqueBrainz:
                 var parts: [String] = []
                 if let rating = metric.rating, let count = metric.ratingCount {
-                    parts.append(String(format: "%.1f / 5 · %d 次评分", rating, count))
+                    parts.append(String(format: String(localized: "%.1f / 5 · %d 次评分", bundle: .module), rating, count))
                 }
-                if let reviews = metric.reviewCount { parts.append("\(reviews) 篇评论") }
+                if let reviews = metric.reviewCount { parts.append(String(localized: "\(reviews) 篇评论", bundle: .module)) }
                 return parts.isEmpty ? String(localized: "有评论数据", bundle: .module) : parts.joined(separator: " · ")
             case .listenBrainz:
                 var parts: [String] = []
-                if let listens = metric.listenCount { parts.append("\(listens) 次收听") }
-                if let listeners = metric.listenerCount { parts.append("\(listeners) 位听众") }
+                if let listens = metric.listenCount { parts.append(String(localized: "\(listens) 次收听", bundle: .module)) }
+                if let listeners = metric.listenerCount { parts.append(String(localized: "\(listeners) 位听众", bundle: .module)) }
                 return parts.isEmpty ? String(localized: "有收听数据", bundle: .module) : parts.joined(separator: " · ")
             }
         case .noData, .notSupported:
@@ -1144,8 +1152,8 @@ struct AddToPlaylistSheet: View {
                 if model.catalog.playlists.isEmpty {
                     AuralisEmptyState(
                         icon: "music.note.list",
-                        title: "还没有歌单",
-                        message: "在服务器上创建歌单后，这里会列出所有可选歌单。",
+                        title: String(localized: "还没有歌单", bundle: .module),
+                        message: String(localized: "在服务器上创建歌单后，这里会列出所有可选歌单。", bundle: .module),
                         colors: theme.colorTokens
                     )
                 } else {

@@ -75,20 +75,20 @@ enum MacSidebarDestination: String, Hashable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .search: "搜索"
-        case .home: "首页"
-        case .recentlyPlayed: "最近播放"
-        case .recentlyAdded: "最近添加"
-        case .songs: "歌曲"
-        case .albums: "专辑"
-        case .artists: "艺术家"
-        case .genres: "流派"
-        case .favorites: "收藏歌曲"
-        case .disliked: "不喜欢"
-        case .downloads: "下载"
-        case .playlists: "播放列表"
-        case .categories: "分类"
-        case .assistant: "AI 助手"
+        case .search: String(localized: "搜索", bundle: .module)
+        case .home: String(localized: "首页", bundle: .module)
+        case .recentlyPlayed: String(localized: "最近播放", bundle: .module)
+        case .recentlyAdded: String(localized: "最近添加", bundle: .module)
+        case .songs: String(localized: "歌曲", bundle: .module)
+        case .albums: String(localized: "专辑", bundle: .module)
+        case .artists: String(localized: "艺术家", bundle: .module)
+        case .genres: String(localized: "流派", bundle: .module)
+        case .favorites: String(localized: "收藏歌曲", bundle: .module)
+        case .disliked: String(localized: "不喜欢", bundle: .module)
+        case .downloads: String(localized: "下载", bundle: .module)
+        case .playlists: String(localized: "播放列表", bundle: .module)
+        case .categories: String(localized: "分类", bundle: .module)
+        case .assistant: String(localized: "AI 助手", bundle: .module)
         }
     }
 

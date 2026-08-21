@@ -104,7 +104,7 @@ public final class AgentCoordinator: ObservableObject {
     /// 首次外发确认的持久化标记键（UserDefaults，默认 false）。
     public static let consentGivenDefaultsKey = "auralis.ai.consentGiven"
     /// 设置接口的展示名（与 AIConnectionSettings.makeProvider 的配置名保持一致）。
-    private static let providerDisplayName = "OpenAI 兼容接口"
+    private static let providerDisplayName = String(localized: "OpenAI 兼容接口", bundle: .module)
 
     public init(
         model: AuralisAppModel,
@@ -540,7 +540,7 @@ public final class AgentCoordinator: ObservableObject {
                         sessionID: sessionID,
                         runID: runID
                     )
-                    taskStore.update(taskID, status: .cancelled, error: "用户未授权首次外发请求。")
+                    taskStore.update(taskID, status: .cancelled, error: String(localized: "用户未授权首次外发请求。", bundle: .module))
                     if self.currentRunID == runID { self.currentRunID = nil }
                     self.runTask = nil
                     await MainActor.run { [weak self] in self?.isRunning = false }
@@ -678,7 +678,7 @@ public final class AgentCoordinator: ObservableObject {
         resolveConsent(.deny)
         isRunning = false
         if let taskID = activeTask?.id {
-            taskStore.update(taskID, status: .cancelled, error: "用户取消。")
+            taskStore.update(taskID, status: .cancelled, error: String(localized: "用户取消。", bundle: .module))
             activeTask = nil
         }
     }
@@ -795,20 +795,20 @@ public final class AgentCoordinator: ObservableObject {
     ) -> AIPrivacyConsentRequest {
         var fields: [String] = []
         if permissions.allowsMetadata {
-            fields.append("歌曲元数据（当前播放曲目）")
+            fields.append(String(localized: "歌曲元数据（当前播放曲目）", bundle: .module))
         }
         if permissions.allowsPlaybackHistory {
-            fields.append("最近播放历史（最近 5 首）")
+            fields.append(String(localized: "最近播放历史（最近 5 首）", bundle: .module))
         }
         if permissions.allowsLyrics {
-            fields.append("歌词（查询到时）")
+            fields.append(String(localized: "歌词（查询到时）", bundle: .module))
         }
-        fields.append("服务器名称与资料库统计（运行基础信息）")
+        fields.append(String(localized: "服务器名称与资料库统计（运行基础信息）", bundle: .module))
         return AIPrivacyConsentRequest(
             providerName: providerName,
             modelName: modelName,
             fields: fields,
-            purpose: "处理你的音乐请求（搜索、播放、推荐、收藏等）"
+            purpose: String(localized: "处理你的音乐请求（搜索、播放、推荐、收藏等）", bundle: .module)
         )
     }
 
@@ -849,12 +849,12 @@ public final class AgentCoordinator: ObservableObject {
     /// 未授权首次外发时的本地提示（不发起任何网络请求）。
     private static func consentDeniedText(_ request: AIPrivacyConsentRequest) -> String {
         let fieldsText = request.fields.map { "· \($0)" }.joined(separator: "\n")
-        return """
+        return String(localized: """
         为保护隐私，本次请求未发送到模型。首次外发需要确认：确认后将把以下内容发送到「\(request.providerName)」（模型：\(request.modelName)）：
         \(fieldsText)
         用途：\(request.purpose)
         请在弹窗中选择「允许一次」或「允许并记住」，或到「设置 → OpenAI 兼容接口」查看隐私选项。
-        """
+        """, bundle: .module)
     }
 
     // MARK: - Action log

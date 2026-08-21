@@ -106,7 +106,7 @@ struct MacArtistView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(artist.name)
                     .font(.system(size: 30, weight: .bold, design: .default))
-                Text("\(artistAlbums.count) 张专辑 · \(artistTracks.count) 首歌曲")
+                Text(String(localized: "\(artistAlbums.count) 张专辑 · \(artistTracks.count) 首歌曲", bundle: .module))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
@@ -131,7 +131,7 @@ struct MacArtistView: View {
                             .frame(width: 28, height: 28)
                     }
                     .buttonStyle(.bordered)
-                    .help(model.isArtistFavorite(artist) ? "取消收藏艺术家" : "收藏艺术家")
+                    .help(model.isArtistFavorite(artist) ? String(localized: "取消收藏艺术家", bundle: .module) : String(localized: "收藏艺术家", bundle: .module))
                     .accessibilityLabel(model.isArtistFavorite(artist) ? String(localized: "取消收藏艺术家", bundle: .module) : String(localized: "收藏艺术家", bundle: .module))
                     Menu {
                         Button(String(localized: "下载全部", bundle: .module)) { model.downloadAll(artistTracks) }
@@ -143,7 +143,7 @@ struct MacArtistView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    .help("更多操作")
+                    .help(String(localized: "更多操作", bundle: .module))
                 }
             }
             Spacer()

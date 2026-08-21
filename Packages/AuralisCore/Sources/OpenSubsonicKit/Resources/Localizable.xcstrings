@@ -1,0 +1,584 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "（\\($0)）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(\\($0))"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（\\($0)）"
+          }
+        }
+      }
+    },
+    "（\\(host)）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(\\(host))"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（\\(host)）"
+          }
+        }
+      }
+    },
+    "（%@）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(%@)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（%@）"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 参数无效：\\(name)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid OpenSubsonic parameter: \\(name)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 參數無效：\\(name)"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 参数无效：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid OpenSubsonic parameter: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 參數無效：%@"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 响应缺少 \\(name)。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The OpenSubsonic response did not contain \\(name)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 響應缺少 \\(name)。"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 响应缺少 %@。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The OpenSubsonic response did not contain %@."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 響應缺少 %@。"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 服务器 URL 无效。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid OpenSubsonic server URL."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 伺服器 URL 無效。"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 服务器返回 HTTP \\(status)。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The OpenSubsonic server returned HTTP \\(status)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 伺服器返回 HTTP \\(status)。"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 服务器返回 HTTP %lld。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The OpenSubsonic server returned HTTP %lld."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 伺服器返回 HTTP %lld。"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 服务器错误 \\(code)：\\(message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic server error \\(code): \\(message)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 伺服器錯誤 \\(code)：\\(message)"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 服务器错误 \\(error.code)：\\(error.message)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic server error \\(error.code): \\(error.message)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 伺服器錯誤 \\(error.code)：\\(error.message)"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 服务器错误 %lld：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic server error %lld: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 伺服器錯誤 %lld：%@"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 配置无效：\\(reason)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid OpenSubsonic configuration: \\(reason)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 設定無效：\\(reason)"
+          }
+        }
+      }
+    },
+    "OpenSubsonic 配置无效：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid OpenSubsonic configuration: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenSubsonic 設定無效：%@"
+          }
+        }
+      }
+    },
+    "如果是局域网地址（\\(host)），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If this is a LAN address (\\(host)), make sure Auralis can access the local network in System Settings → Privacy & Security → Local Network, and that your Mac and server are on the same network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若為區域網路位址（\\(host)），請在「系統設定 → 隱私權與安全性 → 本機網路」允許 Auralis 存取本機網路，並確認 Mac 與伺服器位於同一網路。"
+          }
+        }
+      }
+    },
+    "如果是局域网地址（\\(host)），请检查 设置 → 隐私与安全 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If this is a LAN address (\\(host)), make sure Auralis can access the local network in Settings → Privacy & Security → Local Network, and that your device and server are on the same network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若為區域網路位址（\\(host)），請在「設定 → 隱私權與安全性 → 本機網路」允許 Auralis 存取本機網路，並確認裝置與伺服器位於同一網路。"
+          }
+        }
+      }
+    },
+    "如果是局域网地址（%@），请检查 系统设置 → 隐私与安全性 → 本地网络 是否允许「Auralis」访问本地网络，并确认 Mac 与服务器在同一网络。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If this is a LAN address (%@), make sure Auralis can access the local network in System Settings → Privacy & Security → Local Network, and that your Mac and server are on the same network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若為區域網路位址（%@），請在「系統設定 → 隱私權與安全性 → 本機網路」允許 Auralis 存取本機網路，並確認 Mac 與伺服器位於同一網路。"
+          }
+        }
+      }
+    },
+    "如果是局域网地址（%@），请检查 设置 → 隐私与安全 → 本地网络 是否允许「Auralis」访问本地网络，并确认设备与服务器在同一网络。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If this is a LAN address (%@), make sure Auralis can access the local network in Settings → Privacy & Security → Local Network, and that your device and server are on the same network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若為區域網路位址（%@），請在「設定 → 隱私權與安全性 → 本機網路」允許 Auralis 存取本機網路，並確認裝置與伺服器位於同一網路。"
+          }
+        }
+      }
+    },
+    "找不到主机（错误 -1003）\\(hostText)。请检查服务器地址（IP / 主机名 / .local）。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host not found (error -1003)\\(hostText). Check the server address (IP / hostname / .local)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到主機（錯誤 -1003）\\(hostText)。請檢查伺服器位址（IP／主機名稱／.local）。"
+          }
+        }
+      }
+    },
+    "找不到主机（错误 -1003）%@。请检查服务器地址（IP / 主机名 / .local）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host not found (error -1003)%@. Check the server address (IP / hostname / .local)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到主機（錯誤 -1003）%@。請檢查伺服器位址（IP／主機名稱／.local）。"
+          }
+        }
+      }
+    },
+    "无法连接到服务器（错误 -1004）\\(hostText)。服务器可能未启动或拒绝连接。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not connect to the server (error -1004)\\(hostText). It may be offline or refusing connections."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法連線到伺服器（錯誤 -1004）\\(hostText)。伺服器可能尚未啟動或拒絕連線。"
+          }
+        }
+      }
+    },
+    "无法连接到服务器（错误 -1004）%@。服务器可能未启动或拒绝连接。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not connect to the server (error -1004)%@. It may be offline or refusing connections."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法連線到伺服器（錯誤 -1004）%@。伺服器可能尚未啟動或拒絕連線。"
+          }
+        }
+      }
+    },
+    "服务器未声明所需功能：\\(name)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server did not advertise the required capability: \\(name)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器未宣告所需功能：\\(name)"
+          }
+        }
+      }
+    },
+    "服务器未声明所需功能：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server did not advertise the required capability: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器未宣告所需功能：%@"
+          }
+        }
+      }
+    },
+    "服务器返回的内容无法解析：\\(detail)" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not parse the server response: \\(detail)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法解析伺服器返回的內容：\\(detail)"
+          }
+        }
+      }
+    },
+    "服务器返回的内容无法解析：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not parse the server response: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法解析伺服器返回的內容：%@"
+          }
+        }
+      }
+    },
+    "网络无法连接（错误 -1009）\\(hostText)。请检查网络连接。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network is unavailable (error -1009)\\(hostText). Check your network connection."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路無法連線（錯誤 -1009）\\(hostText)。請檢查網路連線。"
+          }
+        }
+      }
+    },
+    "网络无法连接（错误 -1009）%@。请检查网络连接。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network is unavailable (error -1009)%@. Check your network connection."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路無法連線（錯誤 -1009）%@。請檢查網路連線。"
+          }
+        }
+      }
+    },
+    "网络请求失败（错误 \\(code)）\\(hostText)。请检查地址和网络。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network request failed (error \\(code))\\(hostText). Check the address and network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路要求失敗（錯誤 \\(code)）\\(hostText)。請檢查位址與網路。"
+          }
+        }
+      }
+    },
+    "网络请求失败（错误 %lld）%@。请检查地址和网络。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network request failed (error %lld)%@. Check the address and network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路要求失敗（錯誤 %lld）%@。請檢查位址與網路。"
+          }
+        }
+      }
+    },
+    "网络连接中断（错误 -1005）\\(hostText)。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network connection interrupted (error -1005)\\(hostText)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路連線中斷（錯誤 -1005）\\(hostText)。"
+          }
+        }
+      }
+    },
+    "网络连接中断（错误 -1005）%@。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network connection interrupted (error -1005)%@."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路連線中斷（錯誤 -1005）%@。"
+          }
+        }
+      }
+    },
+    "连接超时（错误 -1001）\\(hostText)。请检查服务器地址与网络。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection timed out (error -1001)\\(hostText). Check the server address and network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線逾時（錯誤 -1001）\\(hostText)。請檢查伺服器位址與網路。"
+          }
+        }
+      }
+    },
+    "连接超时（错误 -1001）%@。请检查服务器地址与网络。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection timed out (error -1001)%@. Check the server address and network."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線逾時（錯誤 -1001）%@。請檢查伺服器位址與網路。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

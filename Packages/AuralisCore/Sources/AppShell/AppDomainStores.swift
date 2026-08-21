@@ -381,7 +381,7 @@ final class DownloadStore: ObservableObject {
             guard let url else {
                 let failure = DownloadFailureInfo(
                     kind: .networkUnavailable,
-                    message: "无法获取下载地址，请确认音乐服务器已连接后重试"
+                    message: String(localized: "无法获取下载地址，请确认音乐服务器已连接后重试", bundle: .module)
                 )
                 records[globalID] = DownloadTaskInfo(trackID: track.id, status: .failed, failure: failure)
                 downloadingTrackIDs.remove(globalID)
@@ -393,7 +393,7 @@ final class DownloadStore: ObservableObject {
             if let activeServerID = serverIDProvider(), activeServerID != track.serverID {
                 let failure = DownloadFailureInfo(
                     kind: .interrupted,
-                    message: "服务器已切换，本次下载已取消"
+                    message: String(localized: "服务器已切换，本次下载已取消", bundle: .module)
                 )
                 records[globalID] = DownloadTaskInfo(trackID: track.id, status: .failed, failure: failure)
                 downloadingTrackIDs.remove(globalID)
@@ -434,7 +434,7 @@ final class DownloadStore: ObservableObject {
             records[globalID] = nil
             lastOperationError = nil
         } catch {
-            lastOperationError = "无法删除本地文件，请稍后重试"
+            lastOperationError = String(localized: "无法删除本地文件，请稍后重试", bundle: .module)
         }
     }
 
@@ -451,7 +451,7 @@ final class DownloadStore: ObservableObject {
             lastOperationError = nil
         } catch {
             await restoreCachedIDs()
-            lastOperationError = "部分下载文件无法删除，请关闭正在使用这些文件的播放器后重试"
+            lastOperationError = String(localized: "部分下载文件无法删除，请关闭正在使用这些文件的播放器后重试", bundle: .module)
         }
     }
 

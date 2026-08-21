@@ -115,7 +115,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "Auralis 不宣稱 bit-perfect。無法從當前鏈路讀取的參數明確顯示為“未知”。"
+            "value": "Auralis 不宣稱 bit-perfect。無法從目前鏈路讀取的參數明確顯示為“未知”。"
           }
         }
       }
@@ -234,7 +234,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "從伺服器增量同步本地音樂庫"
+            "value": "從伺服器增量同步本機音樂庫"
           }
         }
       }
@@ -336,7 +336,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "偏好只儲存在本機，用於本地排序與提示詞；不會上傳，也不會包含伺服器資訊。"
+            "value": "偏好只儲存在本機，用於本機排序與提示詞；不會上傳，也不會包含伺服器資訊。"
           }
         }
       }
@@ -438,7 +438,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "中繼資料寫入需要預覽、備份和回滾機製，将在後續階段实現。當前僅展示原始值與 AI 建議。"
+            "value": "中繼資料寫入需要預覽、備份和復原機制，將在後續階段實作。目前僅顯示原始值與 AI 建議。"
           }
         }
       }
@@ -574,7 +574,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "憑證只儲存在系統 Keychain，不會寫入日誌、不會發送給大模型。"
+            "value": "憑證只儲存在系統 Keychain，不會寫入日誌、不會發送給大型語言模型。"
           }
         }
       }
@@ -591,7 +591,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "憑證只儲存在系統 Keychain，不會寫入日誌、不會發送給大模型。移除伺服器只清理本機數據，NAS 上的音樂不受影響。"
+            "value": "憑證只儲存在系統 Keychain，不會寫入日誌、不會發送給大型語言模型。移除伺服器只清理本機資料，NAS 上的音樂不受影響。"
           }
         }
       }
@@ -1050,7 +1050,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "當前佇列結束後停止"
+            "value": "目前佇列結束後停止"
           }
         }
       }
@@ -1543,7 +1543,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "伺服器未傳回歌詞，稍後可從本地檔案或 MusicBrainz 候選項目補全。"
+            "value": "伺服器未傳回歌詞，稍後可從本機檔案或 MusicBrainz 候選項目補全。"
           }
         }
       }
@@ -1628,7 +1628,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "本地沒有符合的結果"
+            "value": "本機沒有符合的結果"
           }
         }
       }
@@ -1662,7 +1662,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "查看歌詞"
+            "value": "檢視歌詞"
           }
         }
       }
@@ -2138,7 +2138,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "驗證可能已失效，請重新登錄"
+            "value": "驗證可能已失效，請重新登入"
           }
         }
       }
@@ -2155,7 +2155,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "讓 AI 助手播放音樂、管理歌單、推薦歌曲或回答音樂庫問題"
+            "value": "讓 AI 助理播放音樂、管理歌單、推薦歌曲或回答音樂庫問題"
           }
         }
       }
@@ -2376,7 +2376,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "重新登錄"
+            "value": "重新登入"
           }
         }
       }
@@ -2547,6 +2547,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "預設不傳送檔案路徑、NAS 位址、使用者名稱、伺服器權杖、裝置識別碼或完整記錄檔。"
+          }
+        }
+      }
+    },
+    "上一首": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous Track"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一首"
+          }
+        }
+      }
+    },
+    "下一首": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Track"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下一首"
           }
         }
       }

@@ -25,11 +25,11 @@ struct MacV2CategoriesView: View {
     var body: some View {
         Group {
             if isLoading && categories.isEmpty {
-                ProgressView("正在读取本地分类…")
+                ProgressView { Text(String(localized: "正在读取本地分类…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if categories.isEmpty && aiTags.isEmpty {
                 ContentUnavailableView(
-                    "还没有分类",
+                    String(localized: "还没有分类", bundle: .module),
                     systemImage: "square.grid.2x2",
                     description: Text(String(localized: "在设置 → AI 与公开数据中完成推荐索引 V2 后，这里会按歌曲数量展示分类。", bundle: .module))
                 )
@@ -73,7 +73,7 @@ struct MacV2CategoriesView: View {
                     .font(.headline)
                     .lineLimit(1)
                     .foregroundStyle(.primary)
-                Text("\(category.trackCount) 首歌曲")
+                Text(String(localized: "\(category.trackCount) 首歌曲", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -95,7 +95,7 @@ struct MacV2CategoriesView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("搜索标签", text: $tagQuery)
+                        TextField(String(localized: "搜索标签", bundle: .module), text: $tagQuery)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { Task { await loadTagPage(reset: true) } }
                     Button {
@@ -103,7 +103,7 @@ struct MacV2CategoriesView: View {
                     } label: {
                         Label(String(localized: "搜索", bundle: .module), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                     }
-                    .help("搜索标签")
+                    .help(String(localized: "搜索标签", bundle: .module))
                 }
                 .frame(maxWidth: 260)
             }
@@ -200,12 +200,12 @@ struct MacV2CategoryTracksView: View {
     var body: some View {
         Group {
             if isLoading {
-                ProgressView("正在载入歌曲…")
+                ProgressView { Text(String(localized: "正在载入歌曲…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let loadError {
                 VStack(spacing: 12) {
                     ContentUnavailableView(
-                        "无法载入该分类",
+                        String(localized: "无法载入该分类", bundle: .module),
                         systemImage: "exclamationmark.triangle",
                         description: Text(loadError)
                     )
@@ -214,7 +214,7 @@ struct MacV2CategoryTracksView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if tracks.isEmpty {
-                ContentUnavailableView("这个分类目前没有歌曲", systemImage: "music.note")
+                ContentUnavailableView(String(localized: "这个分类目前没有歌曲", bundle: .module), systemImage: "music.note")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 MacSongTable(
@@ -274,16 +274,16 @@ extension RecommendationIndexV2Category {
     var macCategoryTitle: String {
         let dimension: String
         switch self.dimension {
-        case "mood": dimension = "情绪"
-        case "scene": dimension = "场景"
-        case "vocal": dimension = "人声"
-        case "texture": dimension = "质感"
-        case "style": dimension = "风格"
-        case "energy": dimension = "能量"
-        case "tempo": dimension = "速度"
-        case "acousticness": dimension = "原声感"
-        case "danceability": dimension = "舞动性"
-        case "tag": dimension = "AI 标签"
+        case "mood": dimension = String(localized: "情绪", bundle: .module)
+        case "scene": dimension = String(localized: "场景", bundle: .module)
+        case "vocal": dimension = String(localized: "人声", bundle: .module)
+        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "style": dimension = String(localized: "风格", bundle: .module)
+        case "energy": dimension = String(localized: "能量", bundle: .module)
+        case "tempo": dimension = String(localized: "速度", bundle: .module)
+        case "acousticness": dimension = String(localized: "原声感", bundle: .module)
+        case "danceability": dimension = String(localized: "舞动性", bundle: .module)
+        case "tag": dimension = String(localized: "AI 标签", bundle: .module)
         default: dimension = self.dimension
         }
         let suffix: String
@@ -292,7 +292,7 @@ extension RecommendationIndexV2Category {
         case "tempo", "acousticness", "danceability": suffix = "\(value)/5"
         default: suffix = value
         }
-        return "\(dimension) · \(suffix)"
+        return String(localized: "\(dimension) · \(suffix)", bundle: .module)
     }
 
     var macCategorySymbol: String {

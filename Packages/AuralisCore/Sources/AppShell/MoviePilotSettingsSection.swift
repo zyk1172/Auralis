@@ -13,19 +13,19 @@ struct MoviePilotSettingsSection: View {
 
     var body: some View {
         Section {
-            TextField("内网服务器地址（如 http://192.168.1.10:3000）", text: $baseURL)
+            TextField(String(localized: "内网服务器地址（如 http://192.168.1.10:3000）", bundle: .module), text: $baseURL)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
                 .onChange(of: baseURL) { testResult = nil }
-            TextField("外网服务器地址（可选）", text: $externalBaseURL)
+            TextField(String(localized: "外网服务器地址（可选）", bundle: .module), text: $externalBaseURL)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
                 .onChange(of: externalBaseURL) { testResult = nil }
-            SecureField("调用 Token（插件的 X-Music-Token）", text: $token)
+            SecureField(String(localized: "调用 Token（插件的 X-Music-Token）", bundle: .module), text: $token)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
@@ -85,7 +85,7 @@ struct MoviePilotSettingsSection: View {
         defer { isTesting = false }
         let settings = MoviePilotSettings()
         guard let url = settings.normalizedURL else {
-            testResult = "请先填写合法的服务器地址"
+            testResult = String(localized: "请先填写合法的服务器地址", bundle: .module)
             return
         }
         var storedToken: String?
@@ -99,7 +99,7 @@ struct MoviePilotSettingsSection: View {
         } else if let parsed = settings.normalizedExternalURL {
             externalURL = parsed
         } else {
-            testResult = "外网服务器地址无效"
+            testResult = String(localized: "外网服务器地址无效", bundle: .module)
             return
         }
         let connection = MoviePilotConnection(baseURL: url, externalBaseURL: externalURL, token: storedToken)
@@ -108,14 +108,18 @@ struct MoviePilotSettingsSection: View {
             let data = try await MoviePilotClient().test(connection)
             let checks = (data.checks ?? []).map { check in
                 let ok = check.ok == true
-                let name = check.name ?? "检查项"
+                let name = check.name ?? String(localized: "检查项", bundle: .module)
                 let detail = check.detail ?? ""
                 return "\(ok ? "✅" : "❌") \(name)\(detail.isEmpty ? "" : "：\(detail)")"
             }
-            let summary = data.summary ?? (checks.contains(where: { !$0.hasPrefix("✅") }) ? "部分未通过" : "全部通过")
+            let summary = data.summary ?? (
+                checks.contains(where: { !$0.hasPrefix("✅") })
+                    ? String(localized: "部分未通过", bundle: .module)
+                    : String(localized: "全部通过", bundle: .module)
+            )
             testResult = ([summary] + checks).joined(separator: "\n")
         } catch {
-            testResult = "连接失败：\(error.localizedDescription)"
+            testResult = String(localized: "连接失败：\(error.localizedDescription)", bundle: .module)
         }
     }
 }

@@ -75,7 +75,7 @@ struct SearchView: View {
         HStack(spacing: AuralisSpacing.small) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
-            TextField("歌曲、专辑、艺术家或歌单", text: $query)
+            TextField(String(localized: "歌曲、专辑、艺术家或歌单", bundle: .module), text: $query)
                 .textFieldStyle(.plain)
                 .submitLabel(.search)
                 .onSubmit {
@@ -110,15 +110,15 @@ struct SearchView: View {
             recentSearches
         } else if results.isEmpty {
             if model.isServerSearching {
-                ProgressView("正在服务器搜索…")
+                ProgressView { Text(String(localized: "正在服务器搜索…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.serverSearchResults.isEmpty {
                 VStack(spacing: AuralisSpacing.medium) {
                     AuralisEmptyState(
                         icon: "music.note.list",
-                        title: "本地没有匹配结果",
-                        message: "本地持久化资料库中没有同时匹配歌曲、专辑、艺术家或歌单的内容。可以尝试在服务器上在线搜索。",
-                        actionTitle: "清除搜索",
+                        title: String(localized: "本地没有匹配结果", bundle: .module),
+                        message: String(localized: "本地持久化资料库中没有同时匹配歌曲、专辑、艺术家或歌单的内容。可以尝试在服务器上在线搜索。", bundle: .module),
+                        actionTitle: String(localized: "清除搜索", bundle: .module),
                         colors: theme.colorTokens
                     ) { query = "" }
                     Button {
@@ -143,8 +143,8 @@ struct SearchView: View {
         if model.recentSearches.isEmpty {
             AuralisEmptyState(
                 icon: "magnifyingglass",
-                title: "搜索你的音乐库",
-                message: "输入歌曲、专辑、艺术家或歌单名称，Auralis 会在本地持久化资料库中匹配（离线可用）。",
+                title: String(localized: "搜索你的音乐库", bundle: .module),
+                message: String(localized: "输入歌曲、专辑、艺术家或歌单名称，Auralis 会在本地持久化资料库中匹配（离线可用）。", bundle: .module),
                 colors: theme.colorTokens
             )
         } else {
