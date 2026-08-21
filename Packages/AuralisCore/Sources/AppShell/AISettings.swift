@@ -184,6 +184,7 @@ struct AIConnectionSettings: Sendable {
     static let defaultModel = "gpt-4o-mini"
     static let defaultMaxContextTokens = auralisDefaultMaxContextTokens
     static let defaultMaxOutputTokens = auralisDefaultMaxOutputTokens
+    static let defaultTimeout = auralisDefaultRequestTimeout
 
     init(defaults: UserDefaults = .standard) {
         baseURL = defaults.string(forKey: Keys.baseURL) ?? Self.defaultBaseURL
@@ -297,6 +298,7 @@ struct AIConnectionSettings: Sendable {
                 model: model.trimmingCharacters(in: .whitespacesAndNewlines),
                 maxTokens: maxOutputTokens,
                 maxContextTokens: maxContextTokens,
+                timeout: Self.defaultTimeout,
                 supportsToolCalling: effectiveEndpointMode.supportsToolCalling
             ),
             credentialVault: credentialVault,

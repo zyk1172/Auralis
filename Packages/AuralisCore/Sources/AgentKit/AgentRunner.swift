@@ -265,6 +265,10 @@ public struct AgentRunner {
         var toolStepCount = 0
         var nativeMode = provider.supportsToolCalling
         var completionRepairAttempts = 0
+        // 某些中转模型在收到 tool 结果后会先返回 reasoning_content，或直接结束
+        // SSE 而不带 content/tool_calls。空响应不能立刻判定任务失败，给兼容回退与
+        // 明确的继续指令留出几轮机会；任何真实工具调用/可见文本都会清零计数。
+        var emptyModelResponseAttempts = 0
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
@@ -334,7 +338,7 @@ public struct AgentRunner {
             )
             let outcome: StreamOutcome
             do {
-                outcome = try await streamWithRetry(provider: provider, request: request, timeout: requestTimeout) { delta in
+                outcome = try await streamWithFallback(provider: provider, request: request, timeout: requestTimeout) { delta in
                     await Self.emitStreamingDelta(delta, emit: emit)
                 }
             } catch is CancellationError {
@@ -361,11 +365,13 @@ public struct AgentRunner {
                         model: model,
                         messages: conversation,
                         temperature: 0.3,
-                        maxTokens: reservedOutput,
+                        // 被网关以 400/422 拒绝时，先收敛到跨模型更稳妥的输出上限。
+                        // 这只影响兼容回退请求，不覆盖用户已保存的模型能力配置。
+                        maxTokens: min(reservedOutput, auralisDefaultMaxOutputTokens),
                         tools: nil
                     )
                     do {
-                        outcome = try await streamWithRetry(provider: provider, request: fallbackRequest, timeout: requestTimeout) { delta in
+                        outcome = try await streamWithFallback(provider: provider, request: fallbackRequest, timeout: requestTimeout) { delta in
                             await Self.emitStreamingDelta(delta, emit: emit)
                         }
                     } catch is CancellationError {
@@ -415,6 +421,34 @@ public struct AgentRunner {
             if !streamedText.isEmpty { accumulatedToolText += " " + streamedText }
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             let textActions = nativeCalls.isEmpty ? parseActions(from: streamedText) : []
+
+            if streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               nativeCalls.isEmpty,
+               textActions.isEmpty {
+                emptyModelResponseAttempts += 1
+                if emptyModelResponseAttempts <= 3 {
+                    let instruction = "模型本轮没有返回可见回答或工具调用。不要只返回思考过程；请根据刚才的工具结果继续执行当前任务，或给出明确的最终回答。"
+                    taskState.pendingActions = [instruction]
+                    taskState.status = .waitingForTool
+                    taskState.updatedAt = .now
+                    await state(taskState)
+                    conversation.append(
+                        AIMessage(
+                            role: .user,
+                            content: "系统恢复（第 " + String(emptyModelResponseAttempts) + " 次）：" + instruction
+                        )
+                    )
+                    continue
+                }
+                let failure = "模型在流式响应与兼容补请求后仍未返回可用内容，任务未完成。请更换该模型，或关闭模型的深度思考/工具调用兼容模式后重试。"
+                taskState.status = .insufficient
+                taskState.errorState = failure
+                taskState.updatedAt = .now
+                await state(taskState)
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(failure)]))
+                return
+            }
+            emptyModelResponseAttempts = 0
 
             if nativeCalls.isEmpty && textActions.isEmpty {
                 // 模型已输出最终回答 → 正常终止本轮任务。
@@ -826,6 +860,10 @@ public struct AgentRunner {
            case let .httpStatus(status) = providerError {
             return status == 400 || status == 422
         }
+        if let providerError = error as? AIProviderError,
+           case let .httpStatusDetail(status, _) = providerError {
+            return status == 400 || status == 422
+        }
         return false
     }
 
@@ -949,6 +987,41 @@ public struct AgentRunner {
             try await Task.sleep(nanoseconds: UInt64(transientRetryDelay * 1_000_000_000))
             return try await consume(provider, request)
         }
+    }
+
+    /// 流式请求正常结束但没有任何可见文本/工具调用时，补发一次非流式请求。
+    ///
+    /// NewAPI/本地中转常见两类兼容差异：SSE 通道提前结束，或模型把内容只放在
+    /// `reasoning_content`。后者不能直接展示给用户，但可以通过非流式兼容路径重新
+    /// 获取标准 `content` / `tool_calls`；若仍为空，交给上层的继续恢复逻辑处理。
+    private static func streamWithFallback(
+        provider: any AIProvider,
+        request: AICompletionRequest,
+        timeout: TimeInterval,
+        onDelta: @escaping @Sendable (String) async -> Void
+    ) async throws -> StreamOutcome {
+        let streamed = try await streamWithRetry(
+            provider: provider,
+            request: request,
+            timeout: timeout,
+            onDelta: onDelta
+        )
+        guard streamed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              streamed.toolCalls.isEmpty
+        else {
+            return streamed
+        }
+
+        let response = try await completeWithRetry(provider: provider, request: request)
+        var fallback = streamed
+        fallback.text = response.content
+        fallback.toolCalls = response.toolCalls ?? []
+        fallback.inputTokens = response.inputTokens ?? streamed.inputTokens
+        fallback.outputTokens = response.outputTokens ?? streamed.outputTokens
+        if !response.content.isEmpty {
+            await onDelta(response.content)
+        }
+        return fallback
     }
 
     /// 单次流式消费（带单轮超时）：遍历 provider 流事件，拼装 `StreamOutcome`。

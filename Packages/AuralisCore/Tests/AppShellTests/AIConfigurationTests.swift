@@ -53,6 +53,17 @@ func blankConfigIsIncomplete() throws {
     #expect(settings.completenessError != nil)
 }
 
+@Test("AI 请求默认超时为 180 秒")
+func aiRequestTimeoutDefaultsTo180Seconds() {
+    let configuration = AIProviderConfiguration(
+        name: "test",
+        baseURL: URL(string: "https://example.com")!,
+        model: "test-model"
+    )
+    #expect(configuration.timeout == 180)
+    #expect(AIConnectionSettings.defaultTimeout == 180)
+}
+
 @Test("OpenCode Go 的 Muse 自动选择 Responses API")
 func openCodeMuseUsesResponsesAPI() throws {
     let defaults = try #require(UserDefaults(suiteName: "auralis-ai-config-test-\(UUID())"))

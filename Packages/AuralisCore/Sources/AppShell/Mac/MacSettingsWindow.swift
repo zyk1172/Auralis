@@ -441,47 +441,47 @@ public struct MacSettingsWindow: View {
 }
 
 /// 上下文窗口的策略（纯逻辑，可单测）。
-/// 只保留下限 4096，不设置任何人为上限；用户可按模型能力填入任意正整数。
 enum ContextTokenLimitPolicy {
     static let minValue = 4_096
+    static let maxValue = AITokenLimitPresets.context.last ?? minValue
+    static let presets = AITokenLimitPresets.context
 
     static func clamp(_ value: Int) -> Int {
-        max(value, minValue)
+        min(max(value, minValue), maxValue)
     }
 
     static func validationMessage(for value: Int) -> String? {
         guard value >= minValue else {
             return String(localized: "上下文窗口不能低于 \(minValue) token", bundle: .module)
         }
+        guard value <= maxValue else {
+            return String(localized: "上下文窗口不能高于 \(maxValue) token", bundle: .module)
+        }
         return nil
     }
 }
 
-/// 单次输出上限的预设档位 / 自定义策略。
-/// 预设只是快捷入口，不构成人为上限。
+/// 单次输出上限的预设档位策略。
 enum OutputTokenLimitPolicy {
-    static let presets: [Int] = [
-        4_096,
-        8_192,
-        16_384,
-        32_768,
-        65_536,
-        100_000
-    ]
+    static let presets = AITokenLimitPresets.output
 
     static let minValue = 512
+    static let maxValue = AITokenLimitPresets.output.last ?? minValue
 
     static func containsPreset(_ value: Int) -> Bool {
         presets.contains(value)
     }
 
     static func clamp(_ value: Int) -> Int {
-        max(value, minValue)
+        min(max(value, minValue), maxValue)
     }
 
     static func validationMessage(for value: Int) -> String? {
         guard value >= minValue else {
             return String(localized: "单次输出不能低于 \(minValue) token", bundle: .module)
+        }
+        guard value <= maxValue else {
+            return String(localized: "单次输出不能高于 \(maxValue) token", bundle: .module)
         }
         return nil
     }

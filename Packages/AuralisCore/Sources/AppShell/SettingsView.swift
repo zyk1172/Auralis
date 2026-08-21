@@ -755,25 +755,19 @@ struct AIProviderSettingsPage: View {
                 }
 
                 macSection(String(localized: "高级设置", bundle: .module)) {
-                    Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
-                        HStack {
-                            Text(String(localized: "上下文窗口", bundle: .module))
-                            Spacer()
-                            Text("\(aiMaxContextTokens) token")
-                                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                        }
-                    }
+                    AITokenPresetStepper(
+                        title: String(localized: "上下文窗口", bundle: .module),
+                        presets: AITokenLimitPresets.context,
+                        value: $aiMaxContextTokens
+                    )
                     .frame(maxWidth: .infinity)
-                    Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
-                        HStack {
-                            Text(String(localized: "单次输出上限", bundle: .module))
-                            Spacer()
-                            Text("\(aiMaxOutputTokens) token")
-                                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                        }
-                    }
+                    AITokenPresetStepper(
+                        title: String(localized: "单次输出上限", bundle: .module),
+                        presets: AITokenLimitPresets.output,
+                        value: $aiMaxOutputTokens
+                    )
                     .frame(maxWidth: .infinity)
-                    Text(String(localized: "不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。", bundle: .module))
+                    Text(String(localized: "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
@@ -969,21 +963,17 @@ API Key 仅保存于系统 Keychain。
                 }
             }
             Section(String(localized: "高级设置", bundle: .module)) {
-                Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
-                    HStack {
-                        Text(String(localized: "上下文窗口", bundle: .module))
-                        Spacer()
-                        Text("\(aiMaxContextTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                }
-                Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
-                    HStack {
-                        Text(String(localized: "单次输出上限", bundle: .module))
-                        Spacer()
-                        Text("\(aiMaxOutputTokens) token").foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                }
-                Text(String(localized: "不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。", bundle: .module))
+                AITokenPresetStepper(
+                    title: String(localized: "上下文窗口", bundle: .module),
+                    presets: AITokenLimitPresets.context,
+                    value: $aiMaxContextTokens
+                )
+                AITokenPresetStepper(
+                    title: String(localized: "单次输出上限", bundle: .module),
+                    presets: AITokenLimitPresets.output,
+                    value: $aiMaxOutputTokens
+                )
+                Text(String(localized: "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }

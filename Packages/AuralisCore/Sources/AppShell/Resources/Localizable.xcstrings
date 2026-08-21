@@ -2316,6 +2316,28 @@
         }
       }
     },
+    "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context tiers are 4K, 8K, 16K, 32K, 64K, 128K, 200K, 256K, 512K, and 1M; output tiers range from 512 to 128K. The current value is preserved, and the arrows move to the previous or next tier."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文檔位為 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；輸出檔位為 512 至 128K。目前值會保留，使用箭頭時跳到上一檔或下一檔。"
+          }
+        }
+      }
+    },
     "不喜欢" : {
       "localizations" : {
         "en" : {

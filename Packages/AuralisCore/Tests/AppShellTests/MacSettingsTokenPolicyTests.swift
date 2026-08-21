@@ -5,12 +5,12 @@ import Testing
 
 @Suite("AI Token 自定义策略")
 struct MacSettingsTokenPolicyTests {
-    @Test("输出预设仍保留常用档位")
+    @Test("输出预设包含常用档位")
     func presetsRemainAvailable() {
         #expect(OutputTokenLimitPolicy.presets.contains(4_096))
         #expect(OutputTokenLimitPolicy.presets.contains(16_384))
         #expect(OutputTokenLimitPolicy.presets.contains(65_536))
-        #expect(OutputTokenLimitPolicy.presets.contains(100_000))
+        #expect(OutputTokenLimitPolicy.presets.contains(128_000))
     }
 
     @Test("输出值命中预设时仍识别为预设")
@@ -20,17 +20,15 @@ struct MacSettingsTokenPolicyTests {
         #expect(OutputTokenLimitPolicy.containsPreset(100_000))
     }
 
-    @Test("输出 Token 不再存在一百万上限")
-    func outputHasNoArtificialUpperBound() {
+    @Test("输出 Token 有明确的最高档位")
+    func outputUsesDefinedUpperBound() {
         #expect(
-            OutputTokenLimitPolicy.validationMessage(
-                for: 2_000_000
-            ) == nil
+            OutputTokenLimitPolicy.validationMessage(for: 2_000_000) != nil
         )
 
         #expect(
             OutputTokenLimitPolicy.clamp(2_000_000)
-                == 2_000_000
+                == 128_000
         )
     }
 
@@ -48,17 +46,15 @@ struct MacSettingsTokenPolicyTests {
         )
     }
 
-    @Test("上下文 Token 可超过一百万")
-    func contextHasNoArtificialUpperBound() {
+    @Test("上下文 Token 的最高档位为一百万")
+    func contextUsesOneMillionUpperBound() {
         #expect(
-            ContextTokenLimitPolicy.validationMessage(
-                for: 2_000_000
-            ) == nil
+            ContextTokenLimitPolicy.validationMessage(for: 2_000_000) != nil
         )
 
         #expect(
             ContextTokenLimitPolicy.clamp(2_000_000)
-                == 2_000_000
+                == 1_000_000
         )
     }
 

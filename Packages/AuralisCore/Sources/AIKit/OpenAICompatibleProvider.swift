@@ -11,6 +11,8 @@ public enum AIProviderError: Error, Equatable, Sendable {
     case insecureEndpoint
     case transport(String)
     case httpStatus(Int)
+    /// HTTP 错误同时保留服务端返回的短错误摘要，便于定位中转网关的参数拒绝。
+    case httpStatusDetail(status: Int, detail: String)
     /// 模型因输出上限停止，function-call arguments 不能被当成完整工具调用。
     /// 这不是网络瞬态故障；调用方必须缩小任务分片后重新请求。
     case outputTruncated
@@ -28,6 +30,8 @@ public extension AIProviderError {
         switch self {
         case let .httpStatus(status):
             return status == 429 || (500...599).contains(status)
+        case let .httpStatusDetail(status, _):
+            return status == 429 || (500...599).contains(status)
         case .transport:
             return true
         case let .malformedResponse(_, retryable):
@@ -42,19 +46,31 @@ extension AIProviderError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .missingCredential:
-            String(localized: "尚未配置 API Key，请先在设置中填写。", bundle: .module)
+            return String(localized: "尚未配置 API Key，请先在设置中填写。", bundle: .module)
         case .invalidEndpoint:
-            String(localized: "接口地址无效，请检查 Base URL 与 API 路径。", bundle: .module)
+            return String(localized: "接口地址无效，请检查 Base URL 与 API 路径。", bundle: .module)
         case let .unsupportedEndpointProtocol(path):
-            String(localized: "当前接口协议暂不支持：\(path)。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。", bundle: .module)
+            return String(localized: "当前接口协议暂不支持：\(path)。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。", bundle: .module)
         case .insecureEndpoint:
-            String(localized: "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。", bundle: .module)
+            return String(localized: "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。", bundle: .module)
         case .outputTruncated:
-            String(localized: "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。", bundle: .module)
+            return String(localized: "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。", bundle: .module)
         case let .transport(message):
-            String(localized: "网络请求失败：\(message)", bundle: .module)
+            return String(localized: "网络请求失败：\(message)", bundle: .module)
         case let .httpStatus(status):
-            switch status {
+            return Self.httpStatusDescription(status)
+        case let .httpStatusDetail(status, detail):
+            let summary = Self.httpStatusDescription(status)
+            return detail.isEmpty ? summary : "\(summary) 服务端详情：\(detail)"
+        case let .malformedResponse(detail, retryable):
+            return retryable
+                ? String(localized: "返回内容无法解析（已自动重试仍失败）：\(detail)", bundle: .module)
+                : String(localized: "返回内容无法解析，该服务可能不兼容 OpenAI Chat Completions 格式：\(detail)", bundle: .module)
+        }
+    }
+
+    private static func httpStatusDescription(_ status: Int) -> String {
+        switch status {
             case 401, 403:
                 String(localized: "服务返回 HTTP \(status)：API Key 无效或权限不足，请检查设置中的 Key。", bundle: .module)
             case 404:
@@ -66,11 +82,6 @@ extension AIProviderError: LocalizedError {
             default:
                 String(localized: "服务返回 HTTP \(status)。", bundle: .module)
             }
-        case let .malformedResponse(detail, retryable):
-            retryable
-                ? String(localized: "返回内容无法解析（已自动重试仍失败）：\(detail)", bundle: .module)
-                : String(localized: "返回内容无法解析，该服务可能不兼容 OpenAI Chat Completions 格式：\(detail)", bundle: .module)
-        }
     }
 }
 
@@ -413,7 +424,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             do {
                 let urlRequest = try await makeRequest(body: body)
                 let (raw, response) = try await run(urlRequest)
-                try validate(response)
+                try validate(response, body: raw as? Data)
                 return try transform(raw, response)
             } catch {
                 if error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -773,9 +784,15 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
 
-    private func validate(_ response: URLResponse) throws {
+    private func validate(_ response: URLResponse, body: Data? = nil) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200...299).contains(http.statusCode) else {
+            if let body, !body.isEmpty {
+                throw AIProviderError.httpStatusDetail(
+                    status: http.statusCode,
+                    detail: Self.bodyPreview(body)
+                )
+            }
             throw AIProviderError.httpStatus(http.statusCode)
         }
     }

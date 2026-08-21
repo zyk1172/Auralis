@@ -7,6 +7,10 @@ import SecurityKit
 /// 避免保存配置、原生 Responses 与兼容 Chat 请求之间出现不同上限。
 public let auralisDefaultMaxOutputTokens = 16_000
 
+/// OpenAI-compatible request timeout. 180 秒给本地中转和工具型模型留出足够的
+/// 首 token / 长流式响应时间，同时仍能在网络确实不可用时及时返回。
+public let auralisDefaultRequestTimeout: TimeInterval = 180
+
 /// OpenAI 兼容接口默认上下文窗口。不再假设所有模型都是 256K：
 /// 用户可在 Provider「高级设置」中按实际模型修改 maxContextTokens / maxOutputTokens。
 public let auralisDefaultMaxContextTokens = 256_000
@@ -259,7 +263,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         temperature: Double = 0.4,
         maxTokens: Int = auralisDefaultMaxOutputTokens,
         maxContextTokens: Int = auralisDefaultMaxContextTokens,
-        timeout: TimeInterval = 60,
+        timeout: TimeInterval = auralisDefaultRequestTimeout,
         usesStreaming: Bool = true,
         supportsJSONMode: Bool = false,
         supportsJSONSchema: Bool = false,
@@ -309,7 +313,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? auralisDefaultMaxOutputTokens
         maxContextTokens = max(4_096, try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? auralisDefaultMaxContextTokens)
-        timeout = try container.decodeIfPresent(TimeInterval.self, forKey: .timeout) ?? 60
+        timeout = try container.decodeIfPresent(TimeInterval.self, forKey: .timeout) ?? auralisDefaultRequestTimeout
         usesStreaming = try container.decodeIfPresent(Bool.self, forKey: .usesStreaming) ?? true
         supportsJSONMode = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false
         supportsJSONSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false

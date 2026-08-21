@@ -60,9 +60,21 @@ struct AssistantView: View {
             conversation
                 .frame(maxWidth: .infinity)
             .sheet(isPresented: $showsSessionListSheet) {
+                #if os(macOS)
+                sessionSidebar
+                    // macOS sheet 会按内容的理想尺寸计算；不给明确高度时，List
+                    // 会在标题、搜索框和底部操作记录之间被压缩到不可见。
+                    .frame(
+                        minWidth: 360,
+                        idealWidth: 380,
+                        minHeight: 500,
+                        idealHeight: 600
+                    )
+                #else
                 sessionSidebar
                     .presentationDetents([.medium, .large])
                     .presentationBackground(.ultraThinMaterial)
+                #endif
             }
         }
         .background {
@@ -101,16 +113,6 @@ struct AssistantView: View {
             Button(String(localized: "取消", bundle: .module), role: .cancel) { deletingSession = nil }
         } message: {
             Text(String(localized: "会话及其消息会从本机删除，不影响音乐库与服务器数据。", bundle: .module))
-        }
-        .alert(String(localized: "删除 \(selectedSessionIDs.count) 个会话？", bundle: .module), isPresented: $confirmBatchDelete) {
-            Button(String(localized: "删除", bundle: .module), role: .destructive) {
-                let ids = Array(selectedSessionIDs)
-                selectedSessionIDs.removeAll()
-                Task { await agent.delete(ids) }
-            }
-            Button(String(localized: "取消", bundle: .module), role: .cancel) { confirmBatchDelete = false }
-        } message: {
-            Text(String(localized: "选中的会话及其消息会从本机删除，不影响音乐库与服务器数据。", bundle: .module))
         }
         // 首次外发确认（B5）：consentGiven 未写入且本次请求要发往真实 Provider 时弹出。
         .alert(
@@ -191,6 +193,7 @@ struct AssistantView: View {
             }
             .listStyle(.plain)
             #if os(macOS)
+            .frame(minHeight: 320)
             .scrollContentBackground(.hidden)
             .background(theme.colorTokens.elevated.color)
             #endif
@@ -206,8 +209,17 @@ struct AssistantView: View {
                         Label(String(localized: "归档", bundle: .module), systemImage: "archivebox")
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
+                    #if os(macOS)
+                    // macOS 使用原生按钮样式，确保鼠标命中区域和视觉按钮一致；
+                    // iOS/iPadOS 继续保留带触感的移动端样式。
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    #else
                     .buttonStyle(HapticBorderedButtonStyle())
+                    #endif
+                    .accessibilityIdentifier("assistant.batch.archive")
                     .disabled(selectedSessionIDs.isEmpty)
                     Button(role: .destructive) {
                         confirmBatchDelete = true
@@ -215,8 +227,15 @@ struct AssistantView: View {
                         Label(String(localized: "删除", bundle: .module), systemImage: "trash")
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
+                    #if os(macOS)
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    #else
                     .buttonStyle(HapticDestructiveButtonStyle())
+                    #endif
+                    .accessibilityIdentifier("assistant.batch.delete")
                     .disabled(selectedSessionIDs.isEmpty)
                 }
                 .padding(.horizontal, AuralisSpacing.medium)
@@ -237,6 +256,18 @@ struct AssistantView: View {
             .padding(AuralisSpacing.medium)
         }
         .background(theme.colorTokens.elevated.color)
+        // 确认框必须挂在会话 sheet 内：macOS 上如果挂在外层 AssistantView，
+        // sheet 会遮住确认框，用户会看到按钮有按下反馈却没有任何结果。
+        .alert(String(localized: "删除 \(selectedSessionIDs.count) 个会话？", bundle: .module), isPresented: $confirmBatchDelete) {
+            Button(String(localized: "删除", bundle: .module), role: .destructive) {
+                let ids = Array(selectedSessionIDs)
+                selectedSessionIDs.removeAll()
+                Task { await agent.delete(ids) }
+            }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) { confirmBatchDelete = false }
+        } message: {
+            Text(String(localized: "选中的会话及其消息会从本机删除，不影响音乐库与服务器数据。", bundle: .module))
+        }
     }
 
     private func sessionRow(_ session: AgentSession) -> some View {

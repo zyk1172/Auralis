@@ -410,6 +410,11 @@ public enum AgentFailureClassifier {
                 if status == 429 { return .rateLimited }
                 if (500...599).contains(status) { return .serverUnavailable }
                 return .permanent
+            case let .httpStatusDetail(status, _):
+                if status == 401 || status == 403 { return .authentication }
+                if status == 429 { return .rateLimited }
+                if (500...599).contains(status) { return .serverUnavailable }
+                return .permanent
             case .transport:
                 return .transientNetwork
             case let .malformedResponse(_, retryable):
