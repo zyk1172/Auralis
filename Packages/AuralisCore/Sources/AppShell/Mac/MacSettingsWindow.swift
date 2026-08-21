@@ -160,8 +160,6 @@ public struct MacSettingsWindow: View {
     @State private var indexTransferMessage: String?
     @State private var isConfirmingIndexClear = false
     @State private var isClearingIndex = false
-    @State private var isImportingLegacySessions = false
-    @State private var sessionImportMessage: String?
 
     private let credentialVault = KeychainCredentialVault()
 
@@ -190,19 +188,6 @@ public struct MacSettingsWindow: View {
                     Label(issue, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.error.color)
-                }
-            }
-            Section(String(localized: "助手会话", bundle: .module)) {
-                Text(String(localized: "从旧版非沙盒安装迁移会话时，请在文件选择器中选择旧目录或 agent-sessions.json。Auralis 不会在沙盒内静默读取受限路径。", bundle: .module))
-                    .font(.caption)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                Button(String(localized: "导入旧版会话…", bundle: .module)) {
-                    isImportingLegacySessions = true
-                }
-                if let sessionImportMessage {
-                    Text(sessionImportMessage)
-                        .font(.caption)
-                        .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             }
             Section(String(localized: "公开音乐数据", bundle: .module)) {
@@ -306,17 +291,6 @@ public struct MacSettingsWindow: View {
                 indexTransferMessage = String(localized: "导入失败：\(error.localizedDescription)", bundle: .module)
             }
         }
-        .fileImporter(
-            isPresented: $isImportingLegacySessions,
-            allowedContentTypes: [.json, .folder]
-        ) { result in
-            switch result {
-            case let .success(url):
-                Task { await importLegacySessions(from: url) }
-            case let .failure(error):
-                sessionImportMessage = localizedSessionImportFailure(error)
-            }
-        }
         .task {
             hasAPIKey = (try? await credentialVault.retrieve(id: AIConnectionSettings.credentialID)) != nil
             await refreshIndexStatus()
@@ -330,26 +304,6 @@ public struct MacSettingsWindow: View {
         } message: {
             Text(String(localized: "将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
         }
-    }
-
-    private func importLegacySessions(from url: URL) async {
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessing { url.stopAccessingSecurityScopedResource() }
-        }
-        do {
-            let report = try await model.agentCoordinator.importLegacySessions(from: url)
-            sessionImportMessage = String(
-                localized: "已导入 \(report.importedCount) 个旧会话，跳过 \(report.skippedExistingCount) 个重复会话（\(report.sourceFileName)）。",
-                bundle: .module
-            )
-        } catch {
-            sessionImportMessage = localizedSessionImportFailure(error)
-        }
-    }
-
-    private func localizedSessionImportFailure(_ error: Error) -> String {
-        String(localized: "旧版会话导入失败：", bundle: .module) + error.localizedDescription
     }
 
     private var defaultIndexExportFilename: String {

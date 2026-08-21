@@ -75,67 +75,6 @@ public struct AgentSession: Codable, Sendable, Identifiable {
     }
 }
 
-/// 旧版会话导入结果。路径只保留文件名，避免把用户本机目录写入 UI 状态或诊断。
-public struct SessionImportReport: Sendable, Equatable {
-    public let sourceFileName: String
-    public let totalCount: Int
-    public let importedCount: Int
-    public let skippedExistingCount: Int
-    public let usedBackup: Bool
-
-    public init(
-        sourceFileName: String,
-        totalCount: Int,
-        importedCount: Int,
-        skippedExistingCount: Int,
-        usedBackup: Bool
-    ) {
-        self.sourceFileName = sourceFileName
-        self.totalCount = totalCount
-        self.importedCount = importedCount
-        self.skippedExistingCount = skippedExistingCount
-        self.usedBackup = usedBackup
-    }
-}
-
-public enum SessionImportError: Error, LocalizedError, Equatable, Sendable {
-    case sourceNotFound(String)
-    case unreadable(String, String)
-    case invalidFormat(String, String)
-    case empty(String)
-    case persistenceFailed(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case let .sourceNotFound(name):
-            return String(
-                localized: "找不到会话文件：\(name)。请选择旧版 Auralis 目录或 agent-sessions.json。",
-                bundle: .module
-            )
-        case let .unreadable(name, detail):
-            return String(
-                localized: "无法读取会话文件 \(name)：\(detail)",
-                bundle: .module
-            )
-        case let .invalidFormat(name, detail):
-            return String(
-                localized: "会话文件 \(name) 格式无效：\(detail)",
-                bundle: .module
-            )
-        case let .empty(name):
-            return String(
-                localized: "会话文件 \(name) 中没有可导入的会话。",
-                bundle: .module
-            )
-        case let .persistenceFailed(detail):
-            return String(
-                localized: "导入后保存会话失败：\(detail)",
-                bundle: .module
-            )
-        }
-    }
-}
-
 /// 会话持久化与查询。
 public actor SessionStore {
     private let fileURL: URL
@@ -223,62 +162,6 @@ public actor SessionStore {
         persistSafely(operation: "delete")
     }
 
-    /// 从用户明确选择的旧文件或目录导入会话：按 id 去重合并，绝不删除已有数据。
-    /// 读取、格式解析和持久化均通过 throws 暴露，禁止把沙盒授权失败伪装成“没有会话”。
-    public func importSessions(from sourceURL: URL) throws -> SessionImportReport {
-        let candidates = try Self.importCandidates(for: sourceURL)
-        var failures: [String] = []
-
-        for candidate in candidates {
-            do {
-                let data: Data
-                do {
-                    data = try Data(contentsOf: candidate.url)
-                } catch {
-                    throw SessionImportError.unreadable(
-                        candidate.url.lastPathComponent,
-                        error.localizedDescription
-                    )
-                }
-                let imported = try Self.decodeImportData(data, sourceURL: candidate.url)
-                guard !imported.isEmpty else {
-                    throw SessionImportError.empty(candidate.url.lastPathComponent)
-                }
-
-                let originalCache = cache
-                var importedCount = 0
-                for session in imported.values where cache[session.id] == nil {
-                    cache[session.id] = session
-                    importedCount += 1
-                }
-                if importedCount > 0 {
-                    do {
-                        try persist()
-                    } catch {
-                        cache = originalCache
-                        throw SessionImportError.persistenceFailed(error.localizedDescription)
-                    }
-                }
-                return SessionImportReport(
-                    sourceFileName: candidate.url.lastPathComponent,
-                    totalCount: imported.count,
-                    importedCount: importedCount,
-                    skippedExistingCount: imported.count - importedCount,
-                    usedBackup: candidate.usedBackup
-                )
-            } catch let error as SessionImportError {
-                failures.append(error.localizedDescription)
-            } catch {
-                failures.append(error.localizedDescription)
-            }
-        }
-
-        throw SessionImportError.invalidFormat(
-            sourceURL.lastPathComponent,
-            failures.joined(separator: "；")
-        )
-    }
-
     public func search(_ query: String) -> [AgentSession] {
         let q = query.lowercased()
         return all.filter { session in
@@ -335,43 +218,6 @@ public actor SessionStore {
         guard let list = try? JSONDecoder().decode([AgentSession].self, from: data) else { return nil }
         // 用 uniquingKeysWith 兜底重复 id，避免 Dictionary(uniqueKeysWithValues:) 直接 fatalError
         return Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    }
-
-    private struct ImportCandidate {
-        let url: URL
-        let usedBackup: Bool
-    }
-
-    private static func importCandidates(for sourceURL: URL) throws -> [ImportCandidate] {
-        var isDirectory = ObjCBool(false)
-        guard FileManager.default.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory) else {
-            throw SessionImportError.sourceNotFound(sourceURL.lastPathComponent)
-        }
-        if isDirectory.boolValue {
-            let primary = sourceURL.appendingPathComponent("agent-sessions.json")
-            let backup = sourceURL.appendingPathComponent("agent-sessions.backup.json")
-            var candidates: [ImportCandidate] = []
-            if FileManager.default.fileExists(atPath: primary.path) {
-                candidates.append(ImportCandidate(url: primary, usedBackup: false))
-            }
-            if FileManager.default.fileExists(atPath: backup.path) {
-                candidates.append(ImportCandidate(url: backup, usedBackup: true))
-            }
-            guard !candidates.isEmpty else {
-                throw SessionImportError.sourceNotFound("agent-sessions.json")
-            }
-            return candidates
-        }
-        return [ImportCandidate(url: sourceURL, usedBackup: sourceURL.lastPathComponent.contains("backup"))]
-    }
-
-    private static func decodeImportData(_ data: Data, sourceURL: URL) throws -> [UUID: AgentSession] {
-        do {
-            let list = try JSONDecoder().decode([AgentSession].self, from: data)
-            return Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        } catch {
-            throw SessionImportError.invalidFormat(sourceURL.lastPathComponent, error.localizedDescription)
-        }
     }
 
     private static func deriveTitle(from message: AgentChatMessage) -> String {

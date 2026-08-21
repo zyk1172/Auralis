@@ -658,7 +658,222 @@ struct AIProviderSettingsPage: View {
 
     private let credentialVault = KeychainCredentialVault()
 
+#if os(macOS)
+    private var macSettingsContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                macSection(String(localized: "接口地址", bundle: .module)) {
+                    macTextFieldRow(
+                        String(localized: "Base URL", bundle: .module),
+                        text: $aiBaseURL,
+                        prompt: AIConnectionSettings.defaultBaseURL
+                    )
+                    macPickerRow(String(localized: "接口协议", bundle: .module)) {
+                        Picker("", selection: $endpointMode) {
+                            ForEach(AIEndpointMode.allCases) { mode in
+                                VStack(alignment: .leading) {
+                                    Text(mode.title)
+                                    Text(mode.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .onChange(of: endpointMode) { _, newValue in
+                            aiEndpointModeRaw = newValue.rawValue
+                            if let apiPath = newValue.apiPath {
+                                aiAPIPath = apiPath
+                            }
+                        }
+                    }
+                    if endpointMode == .custom {
+                        macTextFieldRow(
+                            String(localized: "API 路径", bundle: .module),
+                            text: $aiAPIPath,
+                            prompt: "/v1/chat/completions"
+                        )
+                    }
+                    macTextFieldRow(
+                        String(localized: "模型", bundle: .module),
+                        text: $aiModel,
+                        prompt: AIConnectionSettings.defaultModel
+                    )
+                    if let recommended = AIConnectionSettings().recommendedEndpointMode,
+                       endpointMode != .custom,
+                       recommended != endpointMode {
+                        Label(
+                            String(localized: "已根据当前模型自动切换为", bundle: .module)
+                                + " " + recommended.subtitle + "：" + (recommended.apiPath ?? ""),
+                            systemImage: "wand.and.stars"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                    if endpointMode == .anthropicMessages {
+                        Label(
+                            String(localized: "Auralis 尚未实现 Anthropic Messages，当前配置不会发送请求。", bundle: .module),
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.error.color)
+                    }
+                }
+
+                macSection("API Key") {
+                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                        Text(String(localized: "状态", bundle: .module))
+                            .frame(width: 96, alignment: .leading)
+                        Text(
+                            hasAPIKey
+                                ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module)
+                                : String(localized: "未配置", bundle: .module)
+                        )
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        Spacer(minLength: 0)
+                    }
+                    HStack {
+                        Button(
+                            hasAPIKey
+                                ? String(localized: "更新 API Key", bundle: .module)
+                                : String(localized: "配置 API Key", bundle: .module)
+                        ) {
+                            isConfiguringAPIKey = true
+                        }
+                        if hasAPIKey {
+                            Spacer()
+                            Button(String(localized: "删除", bundle: .module), role: .destructive) {
+                                Task {
+                                    try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
+                                    hasAPIKey = false
+                                }
+                            }
+                        }
+                    }
+                }
+
+                macSection(String(localized: "高级设置", bundle: .module)) {
+                    Stepper(value: $aiMaxContextTokens, in: 4_096...1_000_000, step: 4_096) {
+                        HStack {
+                            Text(String(localized: "上下文窗口", bundle: .module))
+                            Spacer()
+                            Text("\(aiMaxContextTokens) token")
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    Stepper(value: $aiMaxOutputTokens, in: 512...64_000, step: 512) {
+                        HStack {
+                            Text(String(localized: "单次输出上限", bundle: .module))
+                            Spacer()
+                            Text("\(aiMaxOutputTokens) token")
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    Text(String(localized: "不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。", bundle: .module))
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
+
+                macSection(String(localized: "连接测试", bundle: .module)) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Button(action: testAIConnection) {
+                            if isTestingConnection {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text(String(localized: "测试连接", bundle: .module))
+                            }
+                        }
+                        .disabled(isTestingConnection || !AIConnectionSettings().isComplete)
+                        if let issue = AIConnectionSettings().completenessError {
+                            Text(issue)
+                                .font(.caption)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        }
+                    }
+                    if let connectionTestResult {
+                        switch connectionTestResult {
+                        case let .success(message):
+                            Label(message, systemImage: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(theme.colorTokens.success.color)
+                        case let .failure(message):
+                            Label(message, systemImage: "xmark.octagon.fill")
+                                .font(.caption)
+                                .foregroundStyle(theme.colorTokens.error.color)
+                        }
+                    }
+                }
+
+                Text(String(localized: """
+支持 OpenAI Chat Completions、OpenAI Responses API，
+以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio
+和兼容 OpenAI 协议的中转服务。Anthropic Messages
+暂未实现；选择该协议时不会发送请求。
+API Key 仅保存于系统 Keychain。
+""", bundle: .module))
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+        }
+    }
+
+    private func macSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Text(title)
+                .font(.headline)
+        }
+    }
+
+    private func macTextFieldRow(
+        _ title: String,
+        text: Binding<String>,
+        prompt: String
+    ) -> some View {
+        HStack(spacing: 16) {
+            Text(title)
+                .frame(width: 96, alignment: .leading)
+            TextField(prompt, text: text)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func macPickerRow<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 16) {
+            Text(title)
+                .frame(width: 96, alignment: .leading)
+            content()
+            Spacer(minLength: 0)
+        }
+    }
+#endif
+
     var body: some View {
+        Group {
+#if os(macOS)
+        macSettingsContent
+#else
         Form {
             Section(String(localized: "接口地址", bundle: .module)) {
                 TextField(String(localized: "Base URL", bundle: .module), text: $aiBaseURL, prompt: Text(AIConnectionSettings.defaultBaseURL))
@@ -813,16 +1028,18 @@ API Key 仅保存于系统 Keychain。
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
         }
+#endif
+        }
         .navigationTitle(String(localized: "OpenAI 兼容接口", bundle: .module))
+#if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+#endif
         .onAppear {
             endpointMode = AIConnectionSettings().endpointMode
             syncEndpointFromModelIfNeeded()
         }
         .onChange(of: aiModel) { _, _ in syncEndpointFromModelIfNeeded() }
         .onChange(of: aiBaseURL) { _, _ in syncEndpointFromModelIfNeeded() }
-#if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-#endif
 #if os(macOS)
         .sheet(isPresented: $isConfiguringAPIKey) {
             APIKeySheet(
@@ -889,7 +1106,7 @@ struct AIProviderSettingsSheet: View {
                 }
         }
 #if os(macOS)
-        .frame(minWidth: 480, minHeight: 560)
+        .frame(minWidth: 640, minHeight: 620)
 #endif
     }
 }

@@ -196,19 +196,6 @@ public final class AgentCoordinator: ObservableObject {
         return session.id
     }
 
-    #if os(macOS)
-    /// macOS 旧会话导入：调用方必须先通过 fileImporter / NSOpenPanel 获得用户授权。
-    /// 不再从沙盒内猜测并读取另一个 Application Support 路径。
-    public func importLegacySessions(from sourceURL: URL) async throws -> SessionImportReport {
-        let report = try await sessionStore.importSessions(from: sourceURL)
-        await reloadSessions()
-        if activeSessionID == nil, let latest = sessions.first {
-            await activate(latest.id)
-        }
-        return report
-    }
-    #endif
-
     public func activate(_ id: UUID) async {
         activeSessionID = id
         messages = await sessionStore.session(id)?.messages ?? []
