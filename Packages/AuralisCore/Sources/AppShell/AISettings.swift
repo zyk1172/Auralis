@@ -34,7 +34,7 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .responses:
             return "Responses API"
         case .anthropicMessages:
-            return String(localized: "Messages API（暂不支持）", bundle: .module)
+            return String(localized: "Messages API（原生工具调用）", bundle: .module)
         case .custom:
             return String(localized: "自定义 API 路径", bundle: .module)
         }
@@ -148,11 +148,11 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 
     var supportsToolCalling: Bool {
-        self != .anthropicMessages
+        true
     }
 
     var isSupported: Bool {
-        self != .anthropicMessages
+        true
     }
 }
 
@@ -276,9 +276,6 @@ struct AIConnectionSettings: Sendable {
         if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return String(localized: "请填写模型名称（如 gpt-4o-mini、deepseek-chat）。", bundle: .module)
         }
-        if !effectiveEndpointMode.isSupported {
-            return String(localized: "当前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支持该协议。请换用 Chat/Responses 模型，或选择自定义兼容端点。", bundle: .module)
-        }
         return nil
     }
 
@@ -289,20 +286,20 @@ struct AIConnectionSettings: Sendable {
         guard isComplete,
               let url = normalizedBaseURL()
         else { return nil }
-        return OpenAICompatibleProvider(
-            configuration: AIProviderConfiguration(
+        let configuration = AIProviderConfiguration(
             name: String(localized: "OpenAI 兼容接口", bundle: .module),
-                baseURL: url,
-                apiPath: effectiveAPIPath,
-                credentialID: Self.credentialID,
-                model: model.trimmingCharacters(in: .whitespacesAndNewlines),
-                maxTokens: maxOutputTokens,
-                maxContextTokens: maxContextTokens,
-                timeout: Self.defaultTimeout,
-                supportsToolCalling: effectiveEndpointMode.supportsToolCalling
-            ),
-            credentialVault: credentialVault,
-            session: session
+            baseURL: url,
+            apiPath: effectiveAPIPath,
+            credentialID: Self.credentialID,
+            model: model.trimmingCharacters(in: .whitespacesAndNewlines),
+            maxTokens: maxOutputTokens,
+            maxContextTokens: maxContextTokens,
+            timeout: Self.defaultTimeout,
+            supportsToolCalling: effectiveEndpointMode.supportsToolCalling
         )
+        if effectiveEndpointMode == .anthropicMessages {
+            return AnthropicMessagesProvider(configuration: configuration, credentialVault: credentialVault, session: session)
+        }
+        return OpenAICompatibleProvider(configuration: configuration, credentialVault: credentialVault, session: session)
     }
 }

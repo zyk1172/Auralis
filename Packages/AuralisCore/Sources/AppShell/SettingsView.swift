@@ -714,11 +714,11 @@ struct AIProviderSettingsPage: View {
                     }
                     if endpointMode == .anthropicMessages {
                         Label(
-                            String(localized: "Auralis 尚未实现 Anthropic Messages，当前配置不会发送请求。", bundle: .module),
-                            systemImage: "exclamationmark.triangle"
+                            String(localized: "使用 Anthropic Messages API，并通过原生工具调用执行任务。", bundle: .module),
+                            systemImage: "checkmark.seal"
                         )
                         .font(.caption)
-                        .foregroundStyle(theme.colorTokens.error.color)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }
                 }
 
@@ -922,11 +922,11 @@ API Key 仅保存于系统 Keychain。
                 }
                 if endpointMode == .anthropicMessages {
                     Label(
-                        String(localized: "Auralis 尚未实现 Anthropic Messages，当前配置不会发送请求。", bundle: .module),
-                        systemImage: "exclamationmark.triangle"
+                        String(localized: "使用 Anthropic Messages API，并通过原生工具调用执行任务。", bundle: .module),
+                        systemImage: "checkmark.seal"
                     )
                     .font(.caption)
-                    .foregroundStyle(theme.colorTokens.error.color)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             }
             Section("API Key") {

@@ -34,13 +34,10 @@ func modelHistoryKeepsConversationMessages() {
     ]
 
     let projected = AgentHistoryPolicy.modelMessages(from: history)
-    #expect(projected.count == 5)
+    // 运行时进度、错误、确认和流式半成品只服务 UI，不应重新进入模型上下文。
+    #expect(projected.count == 1)
     #expect(projected[0].role == .user)
     #expect(projected[0].content == "播放一些歌曲")
-    #expect(projected[1].role == .assistant)
-    #expect(projected[1].content.contains("错误：不要继续推荐索引"))
-    #expect(projected[2].content.contains("执行进度：library_index_v2_status"))
-    #expect(projected[4].content.contains("半成品"))
 }
 
 @Test("任务策略与模型历史彼此独立")

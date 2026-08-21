@@ -55,14 +55,14 @@ struct OpenAICompatibleProviderTests {
         #expect(OpenAICompatibleProvider.isRetryable(AIProviderError.transport("connection reset")) == true)
     }
 
-    @Test func messagesProtocolIsDetectedAndNotSent() async {
+    @Test func messagesProtocolIsDetectedByOpenAIProvider() async {
         #expect(OpenAICompatibleProvider.usesAnthropicMessagesAPI(apiPath: "/v1/messages"))
         let provider = makeProvider(baseURL: "https://example.com", apiPath: "/v1/messages")
         #expect(provider.supportsToolCalling == false)
         #expect(provider.capabilities.supportsToolCalling == false)
         do {
             _ = try await provider.testConnection()
-            Issue.record("Messages 协议尚未实现时不应发起请求")
+            Issue.record("OpenAI Provider 不应接管 Messages 协议")
         } catch let error as AIProviderError {
             #expect(error == .unsupportedEndpointProtocol("/v1/messages"))
         } catch {

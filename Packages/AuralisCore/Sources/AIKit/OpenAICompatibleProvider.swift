@@ -5,7 +5,7 @@ import SecurityKit
 public enum AIProviderError: Error, Equatable, Sendable {
     case missingCredential
     case invalidEndpoint
-    /// 当前配置选择了 Auralis 尚未实现的 Provider 协议，例如 Anthropic Messages。
+    /// 当前配置选择了与 OpenAI Provider 不匹配的协议；Anthropic Messages 由独立 Provider 处理。
     case unsupportedEndpointProtocol(String)
     /// 接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（Bearer Key 会明文外发）。
     case insecureEndpoint
@@ -50,7 +50,7 @@ extension AIProviderError: LocalizedError {
         case .invalidEndpoint:
             return String(localized: "接口地址无效，请检查 Base URL 与 API 路径。", bundle: .module)
         case let .unsupportedEndpointProtocol(path):
-            return String(localized: "当前接口协议暂不支持：\(path)。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。", bundle: .module)
+            return String(localized: "当前接口协议不能由 OpenAI Provider 处理：\(path)。请检查协议选择。", bundle: .module)
         case .insecureEndpoint:
             return String(localized: "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。", bundle: .module)
         case .outputTruncated:
@@ -428,7 +428,8 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// 某些 NewAPI / 本地中转只实现了 OpenAI 请求体的一部分：常见表现是拒绝
     /// `tool_choice`、`temperature` 或 token 字段。仅对 400/422 的明确参数错误
-    /// 做一次降级，避免把真正的业务错误或鉴权错误误重试。
+    /// 做一次有限降级；工具字段不能静默删除，否则 Runner 会误以为仍在原生工具
+    /// 模式，system prompt 与实际请求能力不一致。
     private func performRequestBytesWithParameterFallback(body: [String: Any]) async throws -> (URLSession.AsyncBytes, URLResponse) {
         do {
             return try await performRequestBytes(body: body)
@@ -472,8 +473,8 @@ public struct OpenAICompatibleProvider: AIProvider {
         throw lastError
     }
 
-    /// 非流式请求的参数协商版本：先走标准请求，若网关明确拒绝某个参数，
-    /// 只用修改后的请求再试一次。底层瞬时故障仍由 `performRequest` 自己重试。
+    /// 非流式请求的参数协商版本：先走标准请求，若网关明确拒绝某个非工具参数，
+    /// 只用修改后的请求再试一次。工具能力拒绝必须上抛给 Runner 做 ACTION 降级。
     private func performRequestWithParameterFallback<Raw, Value>(
         body: [String: Any],
         run: (URLRequest) async throws -> (Raw, URLResponse),
@@ -501,7 +502,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         return path.hasSuffix("/responses") || path.contains("/v1/responses")
     }
 
-    /// 当前仅识别 Messages 协议用于阻止错误发送；Anthropic transport 尚未实现。
+    /// 识别 Messages 协议，避免误用 OpenAI 请求体；设置层会选择 Anthropic Provider。
     static func usesAnthropicMessagesAPI(apiPath: String) -> Bool {
         let path = apiPath.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return path == "messages"
@@ -724,12 +725,10 @@ public struct OpenAICompatibleProvider: AIProvider {
         let mentionsTemperature = detail.contains("temperature") || detail.contains("sampling")
         let mentionsMaxTokens = detail.contains("max_tokens") || detail.contains("max_output_tokens")
 
-        if mentionsToolChoice, fallback.removeValue(forKey: "tool_choice") != nil {
-            changed = true
-        }
-        if mentionsTools, fallback.removeValue(forKey: "tools") != nil {
-            fallback.removeValue(forKey: "tool_choice")
-            changed = true
+        // 绝不删除 tools/tool_choice。若网关不支持原生工具，保留原错误让
+        // AgentRunner 关闭 nativeMode、重建提示并切换 ACTION 协议。
+        if mentionsToolChoice || mentionsTools {
+            return nil
         }
         if mentionsTemperature, fallback.removeValue(forKey: "temperature") != nil {
             changed = true

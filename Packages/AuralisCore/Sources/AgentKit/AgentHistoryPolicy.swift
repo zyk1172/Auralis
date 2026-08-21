@@ -4,8 +4,9 @@ import Foundation
 /// Agent 会话历史的单一投影策略。
 ///
 /// UI 展示的完整会话历史同时服务于模型上下文与任务恢复。
-/// 任务意图判定仍使用单独的“最近完整指令”投影；模型则尽可能看到完整对话，
-/// 最终是否因模型窗口过小而裁剪由 ContextManager 在发送前统一决定。
+/// 任务意图判定仍使用单独的“最近完整指令”投影；模型则尽可能看到完整语义对话，
+/// 但不重新注入 UI 运行时轨迹（进度、错误、确认、流式半成品）。最终是否因模型
+/// 窗口过小而裁剪由 ContextManager 在发送前统一决定。
 public enum AgentHistoryPolicy {
     /// TaskPolicy 只继承最后一条用户消息；不会扫描助手回答、错误或更早任务。
     public static func latestUserText(in history: [AgentChatMessage]) -> String {
@@ -78,22 +79,21 @@ public enum AgentHistoryPolicy {
                 case let .text(text):
                     content += text + "\n"
                 case let .trackCards(cards):
-                    content += "（推荐 \(cards.count) 首：\(cards.map(\.title).joined(separator: separator))）\n"
+                    let tracks = cards.enumerated().map { index, card in
+                        "\(index + 1).《\(card.title)》-\(card.artistName)（\(card.albumTitle)；id=\(card.globalID.description)）"
+                    }.joined(separator: separator)
+                    content += "（推荐 \(cards.count) 首：\(tracks)）\n"
                 case let .albumCards(cards):
-                    content += "（专辑：\(cards.map(\.title).joined(separator: separator))）\n"
+                    let albums = cards.map { "《\($0.title)》-\($0.artistName)（id=\($0.globalID.description)）" }
+                    content += "（专辑：\(albums.joined(separator: separator))）\n"
                 case let .playlistProposal(name, tracks):
                     content += "（歌单提案「\(name)」，\(tracks.count) 首）\n"
                 case let .actionPreview(title, detail):
                     content += "（操作预览：\(title)；\(detail)）\n"
-                case let .toolProgress(step):
-                    content += "（执行进度：\(step)）\n"
-                case let .error(text):
-                    content += "（错误：\(text)）\n"
-                case let .confirmation(confirmation):
-                    // 只带确认的可读摘要，不把原始参数重新送入模型。
-                    content += "（确认请求：\(confirmation.title)；\(confirmation.detail)；工具：\(confirmation.toolName)）\n"
-                case let .streaming(text):
-                    content += "（生成中的内容：\(text)）\n"
+                case .toolProgress, .error, .confirmation, .streaming:
+                    // 这些是 UI/runtime 轨迹，不是对话事实。重新送入模型会把旧错误、
+                    // 已结束的确认和半成品当作当前指令，尤其容易污染“继续”任务。
+                    continue
                 }
             }
             let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)

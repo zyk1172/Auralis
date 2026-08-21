@@ -191,9 +191,14 @@ public struct SystemToolExecutor {
                 let gid = try parseGlobalID(call, "trackID")
                 try await Self.requireActiveServerMatches(gid.serverID, systemService: systemService, call: call)
                 let result = await systemService.lyrics(for: TrackID(rawValue: gid.remoteID))
-                let text = result.hasLyrics
-                    ? "有歌词（\(result.isSynced ? "逐行" : "纯文本") · \(result.lineCount) 行\(result.language.map { " · \($0)" } ?? "")）"
-                    : "暂无歌词"
+                let text: String
+                if result.hasLyrics {
+                    let header = "有歌词（\(result.isSynced ? "逐行" : "纯文本") · \(result.lineCount) 行\(result.language.map { " · \($0)" } ?? "")）"
+                    let body = result.plainText ?? result.lines.joined(separator: "\n")
+                    text = body.isEmpty ? header : "\(header)\n歌词正文：\n\(body)"
+                } else {
+                    text = "暂无歌词"
+                }
                 return .ok(call, descriptor, text, .text(text))
             case "media_download_offline":
                 let gid = try parseGlobalID(call, "trackID")

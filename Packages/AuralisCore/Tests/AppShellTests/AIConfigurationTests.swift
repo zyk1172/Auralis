@@ -79,8 +79,8 @@ func openCodeMuseUsesResponsesAPI() throws {
     #expect(settings.isComplete)
 }
 
-@Test("OpenCode Go 的 Qwen 明确提示 Messages 协议暂不支持")
-func openCodeQwenMessagesIsUnsupported() throws {
+@Test("OpenCode Go 的 Qwen 自动选择并支持 Messages 协议")
+func openCodeQwenMessagesIsSupported() throws {
     let defaults = try #require(UserDefaults(suiteName: "auralis-ai-config-test-\(UUID())"))
     defaults.set("https://opencode.ai/zen/go", forKey: AIConnectionSettings.Keys.baseURL)
     defaults.set("/v1/chat/completions", forKey: AIConnectionSettings.Keys.apiPath)
@@ -90,13 +90,13 @@ func openCodeQwenMessagesIsUnsupported() throws {
 
     #expect(settings.recommendedEndpointMode == .anthropicMessages)
     #expect(settings.effectiveEndpointMode == .anthropicMessages)
-    #expect(settings.isComplete == false)
-    #expect(settings.completenessError?.contains("Messages") == true)
-    #expect(settings.makeProvider() == nil)
+    #expect(settings.isComplete)
+    #expect(settings.completenessError == nil)
+    #expect(settings.makeProvider() is AnthropicMessagesProvider)
 }
 
-@Test("自定义 Messages 路径也不会发送请求")
-func customMessagesPathIsUnsupported() throws {
+@Test("自定义 Messages 路径使用 Anthropic Provider")
+func customMessagesPathUsesAnthropicProvider() throws {
     let defaults = try #require(UserDefaults(suiteName: "auralis-ai-config-test-\(UUID())"))
     defaults.set("https://example.com", forKey: AIConnectionSettings.Keys.baseURL)
     defaults.set("/v1/messages", forKey: AIConnectionSettings.Keys.apiPath)
@@ -105,6 +105,6 @@ func customMessagesPathIsUnsupported() throws {
     let settings = AIConnectionSettings(defaults: defaults)
 
     #expect(settings.effectiveEndpointMode == .anthropicMessages)
-    #expect(settings.isComplete == false)
-    #expect(settings.makeProvider() == nil)
+    #expect(settings.isComplete)
+    #expect(settings.makeProvider() is AnthropicMessagesProvider)
 }

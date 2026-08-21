@@ -485,12 +485,33 @@ public final class AgentCoordinator: ObservableObject {
                 historyText: historyText,
                 explicitIntent: explicitIntent
             )
-            let taskID = self.taskStore.start(
+            let resumeRecord = self.taskStore.recommendationIndexResumeCandidate(
+                conversationID: sessionID,
+                requestText: trimmed
+            )
+            let taskRecord = resumeRecord ?? self.taskStore.start(
                 conversationID: sessionID,
                 intent: resolvedPolicy.intent,
                 goal: trimmed,
                 budget: resolvedPolicy.budget
-            ).id
+            )
+            let taskID = taskRecord.id
+            let initialTaskState: AgentTaskState? = resumeRecord.flatMap { record in
+                guard let intent = record.intent, let goal = record.goal else { return nil }
+                var state = AgentTaskState(
+                    id: record.id,
+                    intent: intent,
+                    goal: goal,
+                    startedAt: record.createdAt
+                )
+                state.completedActions = record.completedActions ?? []
+                state.status = .running
+                state.updatedAt = .now
+                return state
+            }
+            if resumeRecord != nil {
+                self.taskStore.update(taskID, status: .running)
+            }
             if self.activeSessionID == sessionID {
                 self.activeTask = self.taskStore.record(taskID)
             }
@@ -537,6 +558,7 @@ public final class AgentCoordinator: ObservableObject {
                 history: history,
                 systemService: systemService,
                 externalMusicService: externalMusicService,
+                initialTaskState: initialTaskState,
                 confirm: { _ in true },
                 emit: { [weak self] message in
                     await self?.receive(message, sessionID: sessionID, runID: runID)

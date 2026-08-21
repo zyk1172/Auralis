@@ -476,6 +476,23 @@ struct AgentRuntimeArchitectureTests {
         #expect(decision != .accept)
     }
 
+    @Test func unrelatedSuccessfulToolDoesNotSatisfyLibrarySearch() {
+        var state = AgentTaskState(intent: .librarySearch, goal: "搜索周杰伦")
+        let descriptor = AgentToolRegistry.descriptor(for: "app_get_context")!
+        let result = ToolResult(call: .init(name: descriptor.name), permission: .readOnly, success: true, summary: "页面：AI 助手")
+        _ = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &state)
+        #expect(state.successfulToolCount == 1)
+        #expect(!AgentCompletionEvaluator.factsSatisfied(state: state, policy: .policy(for: .librarySearch)))
+    }
+
+    @Test func matchingSuccessfulToolSatisfiesLibrarySearch() {
+        var state = AgentTaskState(intent: .librarySearch, goal: "搜索周杰伦")
+        let descriptor = AgentToolRegistry.descriptor(for: "library_search")!
+        let result = ToolResult(call: .init(name: descriptor.name), permission: .readOnly, success: true, summary: "找到 1 首")
+        _ = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &state)
+        #expect(AgentCompletionEvaluator.factsSatisfied(state: state, policy: .policy(for: .librarySearch)))
+    }
+
     @Test func memoryListSuccessSatisfiesWithoutEvidence() {
         // 截图回归：memory_list 成功但没有任何 AgentEvidence 时，任务必须通过完成条件。
         var state = AgentTaskState(intent: .memoryManagement, goal: "你能记得什么")

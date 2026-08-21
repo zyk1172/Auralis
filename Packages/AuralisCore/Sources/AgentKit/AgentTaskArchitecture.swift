@@ -142,6 +142,79 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
     public let completion: AgentCompletionPredicate
     public let budget: AgentTaskBudget
 
+    /// `.successfulToolResult` 的完成条件不是“任意工具成功”，而是当前任务
+    /// 至少有一个与意图匹配的真实工具成功。这样 app_get_context、memory_list
+    /// 等旁路工具不会误报搜索/诊断/管理任务已经完成。
+    public var completionToolNames: Set<String> {
+        switch intent {
+        case .conversation:
+            return []
+        case .librarySearch:
+            return [
+                "searchTracks", "searchAlbums", "searchArtists", "getTrack", "getAlbum", "getArtist",
+                "library_search", "server_search", "library_get_song", "library_get_album", "library_get_artist",
+                "library_get_playlist", "library_get_catalog_index", "library_get_catalog_tracks",
+            ]
+        case .playbackControl:
+            return [
+                "playTrack", "playAlbum", "playPlaylist", "pause", "resume", "seek", "next", "previous",
+                "playback_play_song", "playback_play_album", "playback_play_artist", "playback_play_playlist",
+                "playback_play_random", "playback_pause", "playback_resume", "playback_next", "playback_previous",
+                "playback_seek", "playback_set_shuffle", "playback_set_repeat", "playback_set_speed",
+                "playback_set_sleep_timer", "playback_cancel_sleep_timer",
+            ]
+        case .musicDiscovery:
+            return [
+                "library_search", "library_select_tracks", "library_get_catalog_index", "library_get_catalog_tracks",
+                "library_index_v2_read", "server_search", "recommend_by_mood", "recommend_by_constraints",
+                "result_present_tracks", "getSimilarTracks", "library_get_similar_songs",
+            ]
+        case .queueManagement:
+            return [
+                "queue_remove", "removeFromQueue", "reorderQueue", "clearQueue", "queue_get", "queue_append",
+                "queue_play_next", "queue_replace", "queue_clear", "queue_shuffle_remaining", "queue_move",
+            ]
+        case .playlistManagement:
+            return [
+                "listPlaylists", "getPlaylist", "createPlaylist", "renamePlaylist", "addTracksToPlaylist",
+                "removeTracksFromPlaylist", "reorderPlaylist", "duplicatePlaylist", "mergePlaylists", "deletePlaylist",
+                "playlist_create", "playlist_add_songs", "playlist_rename", "playlist_remove_songs", "playlist_move",
+                "playlist_duplicate", "playlist_merge", "playlist_delete", "queue_save_as_playlist",
+            ]
+        case .libraryManagement:
+            return [
+                "getFavorites", "library_search", "library_get_summary", "library_get_song", "library_get_album", "library_get_artist",
+                "library_get_recently_added", "library_get_most_played", "library_get_recently_played",
+                "library_get_starred", "library_get_disliked", "library_find_duplicates", "library_find_metadata_issues",
+                "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable",
+                "likeTrack", "unlikeTrack", "favoriteAlbum", "unfavoriteAlbum", "favoriteArtist", "unfavoriteArtist",
+                "setRating", "clearRating", "favorite_set", "rating_set", "preference_set_disliked",
+                "refreshLibrary", "server_sync_start",
+            ]
+        case .serverManagement:
+            return [
+                "listServers", "getActiveServer", "testServerConnection", "getSyncStatus", "server_list",
+                "server_get_current", "server_test_connection", "server_get_capabilities", "server_sync_status",
+                "server_search", "server_sync_start", "server_switch", "server_remove", "switchServer", "removeServer",
+                "addServer", "updateServer",
+            ]
+        case .diagnostics:
+            return [
+                "app_get_context", "app_get_feature_status", "device_get_network_status", "device_get_audio_route",
+                "device_get_storage_status", "playback_get_state", "getCurrentTrack", "getCurrentQueue",
+                "diagnostics_export_report", "diagnostics_now_playing", "diagnostics_playback", "diagnostics_get_recent_errors",
+                "ios_siri_get_status", "ios_shortcuts_list", "stats_get_listening_summary", "stats_get_format_distribution",
+                "stats_get_storage_distribution",
+            ]
+        case .musicAppreciation:
+            return ["music_appreciate", "music_get_public_evidence", "lyrics_get", "library_get_song"]
+        case .musicDownload:
+            return ["music_download", "media_download_offline", "cache_get_status"]
+        case .memoryManagement:
+            return ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
+        }
+    }
+
     public init(
         intent: AgentTaskIntent,
         scopes: Set<GrantedScope>,
@@ -626,7 +699,7 @@ public enum AgentCompletionEvaluator {
         case .modelAnswer, .appreciationWithEvidence:
             return false
         case .successfulToolResult:
-            return state.successfulToolCount > 0
+            return state.successfulToolNames.contains(where: policy.completionToolNames.contains)
         case .queueMutation:
             return state.facts["sideEffect.queue"] == "success"
         case .playlistMutation:
@@ -679,8 +752,8 @@ public enum AgentCompletionEvaluator {
         case .successfulToolResult:
             // Tool Success ≠ Evidence：只要真实成功执行过工具就算完成条件达成。
             // Evidence 只用于外部事实/大众评价/诊断 provenance，不承担“工具是否执行过”的语义。
-            satisfied = state.successfulToolCount > 0
-            continuation = "当前任务需要至少一次真实成功的工具结果。请调用相关工具后再依据真实结果回答。"
+            satisfied = state.successfulToolNames.contains(where: policy.completionToolNames.contains)
+            continuation = "当前任务需要至少一次与当前意图匹配的真实成功工具结果。请调用相关工具后再依据真实结果回答。"
         case .queueMutation:
             satisfied = state.facts["sideEffect.queue"] == "success"
             continuation = "队列修改尚未得到成功工具结果。请执行获准的队列工具；不要仅用文字声称已经完成。"
@@ -772,6 +845,7 @@ public actor AgentRuntime {
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        initialTaskState: AgentTaskState? = nil,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
@@ -787,7 +861,7 @@ public actor AgentRuntime {
             explicitIntent: explicitIntent
         )
         let intent = policy.intent
-        let taskState = AgentTaskState(id: taskID, intent: intent, goal: userText)
+        let taskState = initialTaskState ?? AgentTaskState(id: taskID, intent: intent, goal: userText)
         runningTaskIDs.insert(taskID)
         defer { runningTaskIDs.remove(taskID) }
         await state(taskState)

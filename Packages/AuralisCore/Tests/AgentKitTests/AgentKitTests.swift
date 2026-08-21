@@ -1133,6 +1133,22 @@ func toolSelectorLoadsDiagnosticsTools() {
     #expect(names.contains("diagnostics_get_recent_errors"))
 }
 
+@Test("ToolSelector exposes app device stats and maintenance tools")
+func toolSelectorExposesAppDeviceStatsAndMaintenanceTools() {
+    let appTools = Set(ToolSelector.select(for: "检查 Siri、网络和音频输出", all: AgentToolRegistry.all).map(\.name))
+    #expect(appTools.contains("ios_siri_get_status"))
+    #expect(appTools.contains("device_get_network_status"))
+    #expect(appTools.contains("device_get_audio_route"))
+
+    let statsTools = Set(ToolSelector.select(for: "查看收听统计和缓存状态", all: AgentToolRegistry.all).map(\.name))
+    #expect(statsTools.contains("stats_get_listening_summary"))
+    #expect(statsTools.contains("cache_get_status"))
+
+    let maintenanceTools = Set(ToolSelector.select(for: "查找重复歌曲和封面问题", all: AgentToolRegistry.all).map(\.name))
+    #expect(maintenanceTools.contains("library_find_duplicates"))
+    #expect(maintenanceTools.contains("library_find_broken_artwork"))
+}
+
 @Test("ToolSelector never exceeds a bounded tool set")
 func toolSelectorIsBounded() {
     let selected = ToolSelector.select(for: "下一首", all: AgentToolRegistry.all)

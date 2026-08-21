@@ -69,6 +69,24 @@ public enum ToolSelector {
         "server_search", "removeServer",
     ]
 
+    /// App / 系统 / 设备状态。它们属于真实能力查询，不应只因为没有“搜索/播放”
+    /// 关键词而被动态 schema 隐藏。
+    static let appDeviceNames: [String] = [
+        "app_get_context", "app_open_page", "app_get_feature_status",
+        "device_get_network_status", "device_get_audio_route", "device_get_storage_status",
+        "ios_siri_get_status", "ios_shortcuts_list",
+    ]
+
+    static let statsNames: [String] = [
+        "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution",
+        "stats_get_listening_summary",
+    ]
+
+    static let catalogMaintenanceNames: [String] = [
+        "library_find_duplicates", "library_find_metadata_issues", "library_find_broken_artwork",
+        "library_find_stale_cache", "library_find_unplayable", "cache_get_status",
+    ]
+
     /// 推荐 / 随机相关。
     static let recommendationNames: [String] = [
         "library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks",
@@ -192,7 +210,15 @@ public enum ToolSelector {
         if containsAny(lower, ["收藏", "喜欢", "评分", "不喜欢", "不感兴趣", "favorite", "star", "heart", "dislike"]) { names += annotationNames }
         if containsAny(lower, ["服务器", "同步", "连接", "在线", "server", "sync", "connect"]) { names += serverNames }
         if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2", "大众评价", "乐评", "评分", "资料", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "学习", "工作", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) { names += recommendationNames }
-        if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error"]) { names += diagnosticsNames }
+        if containsAny(lower, ["页面", "打开", "功能", "能力", "后台", "siri", "快捷指令", "网络", "存储", "空间", "音频输出", "耳机", "设备", "app"]) {
+            names += appDeviceNames
+        }
+        if containsAny(lower, ["统计", "收听", "听了", "最常听", "热门", "格式", "缓存占用", "存储分布", "分布"]) {
+            names += statsNames
+        }
+        if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error", "重复", "元数据", "封面", "损坏", "缓存", "陈旧缓存", "不可播放"]) {
+            names += diagnosticsNames + catalogMaintenanceNames
+        }
         if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
         if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
         if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
@@ -232,7 +258,7 @@ public enum ToolSelector {
         case .serverManagement:
             intentNames = Set(serverNames)
         case .diagnostics:
-            intentNames = Set(diagnosticsNames + serverNames)
+            intentNames = Set(diagnosticsNames + appDeviceNames + statsNames + catalogMaintenanceNames + serverNames)
         case .musicAppreciation:
             intentNames = ["library_search", "library_get_song", "music_appreciate", "music_get_public_evidence"]
         case .musicDownload:

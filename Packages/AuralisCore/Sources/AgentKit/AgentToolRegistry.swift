@@ -589,7 +589,7 @@ public enum AgentToolRegistry {
                 .init(name: "trackID", required: false, description: "GlobalTrackID；省略时使用当前播放歌曲"),
                 .init(name: "refresh", required: false, description: "true=忽略缓存强制刷新，默认 false"),
               ]),
-        .init(name: "lyrics_get", group: .catalog, permission: .readOnly, summary: "获取歌词状态",
+        .init(name: "lyrics_get", group: .catalog, permission: .readOnly, summary: "获取歌词状态与正文（仅在隐私设置允许时回传正文）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "media_download_offline", group: .catalog, permission: .reversible, summary: "下载歌曲到本地离线缓存",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),

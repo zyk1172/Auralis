@@ -219,11 +219,14 @@ public final class AuralisSystemToolService: AgentSystemService {
 
     public func lyrics(for trackID: TrackID) async -> AgentLyricsResult {
         if let document = model.catalog.lyrics[trackID] {
+            let lines = document.lines.map(\.text)
             return AgentLyricsResult(
-                hasLyrics: !document.lines.isEmpty,
+                hasLyrics: !lines.isEmpty,
                 isSynced: document.isSynced,
                 language: document.language,
-                lineCount: document.lines.count
+                lineCount: lines.count,
+                plainText: lines.joined(separator: "\n"),
+                lines: lines
             )
         }
         // 磁盘歌词缓存按「serverID:trackID」隔离（P0-2），需先解析出曲目归属服务器。
@@ -231,7 +234,15 @@ public final class AuralisSystemToolService: AgentSystemService {
             return AgentLyricsResult(hasLyrics: false)
         }
         if let cached = await model.lyricsCache.document(forServer: track.serverID, trackID: trackID) {
-            return AgentLyricsResult(hasLyrics: !cached.lines.isEmpty, isSynced: cached.isSynced, language: cached.language, lineCount: cached.lines.count)
+            let lines = cached.lines.map(\.text)
+            return AgentLyricsResult(
+                hasLyrics: !lines.isEmpty,
+                isSynced: cached.isSynced,
+                language: cached.language,
+                lineCount: lines.count,
+                plainText: lines.joined(separator: "\n"),
+                lines: lines
+            )
         }
         return AgentLyricsResult(hasLyrics: false)
     }

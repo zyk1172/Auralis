@@ -539,32 +539,30 @@ struct OpenAIResponsesNetworkTests {
         #expect(toolsBody[0]["function"] == nil)
     }
 
-    @Test func retriesOnceWithoutRejectedToolChoiceParameter() async throws {
+    @Test func surfacesRejectedToolChoiceInsteadOfSilentlyRemovingTools() async throws {
         let rejected = #"{"error":{"message":"Unsupported parameter: tool_choice"}}"#
-        let accepted = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"收到"}}]}"#
-        AIKitMockURLProtocol.reset(stubs: [
-            .response(statusCode: 400, data: Data(rejected.utf8)),
-            .response(data: Data(accepted.utf8)),
-        ])
+        AIKitMockURLProtocol.reset(stubs: [.response(statusCode: 400, data: Data(rejected.utf8))])
         let provider = makeProvider(session: makeMockSession(), apiPath: "/v1/chat/completions")
         let tool = AIToolDefinition(name: "searchTrack", description: "搜索歌曲")
 
-        let response = try await provider.complete(
-            AICompletionRequest(
-                model: "test-model",
-                messages: [AIMessage(role: .user, content: "搜歌")],
-                tools: [tool],
-                toolChoice: .required
+        do {
+            _ = try await provider.complete(
+                AICompletionRequest(
+                    model: "test-model",
+                    messages: [AIMessage(role: .user, content: "搜歌")],
+                    tools: [tool],
+                    toolChoice: .required
+                )
             )
-        )
-        #expect(response.content == "收到")
-        #expect(AIKitMockURLProtocol.requests.count == 2)
+            Issue.record("网关拒绝 tool_choice 时不应假装已完成")
+        } catch let error as AIProviderError {
+            #expect(error.errorDescription?.contains("tool_choice") == true)
+        }
+        #expect(AIKitMockURLProtocol.requests.count == 1)
 
         let first = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
-        let second = try requestObject(from: try #require(AIKitMockURLProtocol.requests.last))
         #expect(first["tool_choice"] as? String == "required")
-        #expect(second["tool_choice"] == nil)
-        #expect(second["tools"] != nil)
+        #expect(first["tools"] != nil)
     }
 
     @Test func completesWithResponsesNonStream() async throws {

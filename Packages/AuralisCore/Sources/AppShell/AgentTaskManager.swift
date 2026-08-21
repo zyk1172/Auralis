@@ -91,6 +91,34 @@ public final class AgentTaskStore {
 
     public func record(_ id: UUID) -> AgentTaskRecord? { records[id] }
 
+    /// 只恢复明确属于推荐索引长任务的中断记录，并且只响应短后续指令。
+    /// 普通聊天/播放任务不会因为用户说“继续”而被旧任务抢走。
+    public func recommendationIndexResumeCandidate(
+        conversationID: UUID?,
+        requestText: String
+    ) -> AgentTaskRecord? {
+        let normalized = requestText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
+        guard ["继续", "继续吧", "接着来", "继续处理", "继续构建"].contains(normalized) else { return nil }
+        return records.values
+            .filter { record in
+                record.status == .interrupted
+                    && record.conversationID == conversationID
+                    && record.intent == .libraryManagement
+                    && Self.isRecommendationIndexGoal(record.goal)
+            }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .first
+    }
+
+    private static func isRecommendationIndexGoal(_ goal: String?) -> Bool {
+        let text = goal?.lowercased() ?? ""
+        let markers = ["推荐索引", "索引 v2", "索引v2", "library_index_v2", "index v2"]
+        return markers.contains(where: text.contains)
+    }
+
     @discardableResult
     public func start(conversationID: UUID?, intent: AgentTaskIntent? = nil, goal: String? = nil, budget: AgentTaskBudget? = nil) -> AgentTaskRecord {
         let record = AgentTaskRecord(conversationID: conversationID, intent: intent, goal: goal, budget: budget)
@@ -130,7 +158,7 @@ public final class AgentTaskStore {
         for (id, var record) in records {
             if record.status == .running || record.status == .waitingForTool || record.status == .waitingForModel {
                 record.status = .interrupted
-        record.errorSummary = String(localized: "App 在任务运行中被关闭，已标记为中断。", bundle: .module)
+                record.errorSummary = String(localized: "App 在任务运行中被关闭，已标记为中断。", bundle: .module)
                 record.updatedAt = .now
                 records[id] = record
                 changed = true

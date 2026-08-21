@@ -189,12 +189,25 @@ public struct AgentLyricsResult: Sendable, Equatable {
     public var isSynced: Bool
     public var language: String?
     public var lineCount: Int
+    /// 仅在 AgentContext.allowsLyrics 为 true 时由 Runner 回灌给模型。
+    public var plainText: String?
+    /// 保留逐行结构，便于需要按行分析的模型使用；同样受 allowsLyrics gating。
+    public var lines: [String]
 
-    public init(hasLyrics: Bool = false, isSynced: Bool = false, language: String? = nil, lineCount: Int = 0) {
+    public init(
+        hasLyrics: Bool = false,
+        isSynced: Bool = false,
+        language: String? = nil,
+        lineCount: Int = 0,
+        plainText: String? = nil,
+        lines: [String] = []
+    ) {
         self.hasLyrics = hasLyrics
         self.isSynced = isSynced
         self.language = language
         self.lineCount = lineCount
+        self.lines = lines
+        self.plainText = plainText ?? (lines.isEmpty ? nil : lines.joined(separator: "\n"))
     }
 }
 

@@ -268,10 +268,6 @@ public struct AgentRunner {
 
         var toolStepCount = 0
         var completionRepairAttempts = 0
-        // 某些中转模型在收到 tool 结果后会先返回 reasoning_content，或直接结束
-        // SSE 而不带 content/tool_calls。空响应不能立刻判定任务失败，给兼容回退与
-        // 明确的继续指令留出几轮机会；任何真实工具调用/可见文本都会清零计数。
-        var emptyModelResponseAttempts = 0
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
@@ -483,22 +479,41 @@ public struct AgentRunner {
             if streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                nativeCalls.isEmpty,
                textActions.isEmpty {
-                emptyModelResponseAttempts += 1
-                if emptyModelResponseAttempts <= 3 {
-                    let instruction = "模型本轮没有返回可见回答或工具调用。不要只返回思考过程；请根据刚才的工具结果继续执行当前任务，或给出明确的最终回答。"
+                // streamWithFallback 已经尝试过一次非流式请求。原生工具模式仍为空时，
+                // 立即切到 ACTION，而不是在同一份失效的 native schema 上空转三轮。
+                if nativeMode {
+                    nativeMode = false
+                    toolChoice = nil
+                    didSwitchToAction = true
+                    let instruction = "原生工具调用没有返回可用内容。请改用单独一行 ACTION JSON 执行当前任务，不要只返回思考过程。"
+                    Self.replaceSystemPrompt(
+                        &conversation,
+                        context: context,
+                        tools: selectedTools,
+                        nativeToolCalling: false,
+                        task: taskState,
+                        privacy: privacy,
+                        capabilities: provider.capabilities
+                    )
                     taskState.pendingActions = [instruction]
                     taskState.status = .waitingForTool
                     taskState.updatedAt = .now
                     await state(taskState)
-                    conversation.append(
-                        AIMessage(
-                            role: .user,
-                            content: "系统恢复（第 " + String(emptyModelResponseAttempts) + " 次）：" + instruction
-                        )
-                    )
+                    conversation.append(AIMessage(role: .user, content: instruction))
                     continue
                 }
-                let failure = "模型在流式响应与兼容补请求后仍未返回可用内容，任务未完成。请更换该模型，或关闭模型的深度思考/工具调用兼容模式后重试。"
+                if Self.canUseOfflineFallback(intent: intent, userText: userText) {
+                    await runOffline(
+                        userText: userText,
+                        bridge: bridge,
+                        catalog: catalog,
+                        context: context,
+                        emit: emit,
+                        log: log
+                    )
+                    return
+                }
+                let failure = "模型在原生工具与 ACTION 兼容回退后仍未返回可用内容，任务未完成。请检查该模型的工具调用兼容性后重试。"
                 taskState.status = .insufficient
                 taskState.errorState = failure
                 taskState.updatedAt = .now
@@ -506,8 +521,6 @@ public struct AgentRunner {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(failure)]))
                 return
             }
-            emptyModelResponseAttempts = 0
-
             if nativeCalls.isEmpty && textActions.isEmpty {
                 // 模型已输出最终回答 → 正常终止本轮任务。
                 // 流式收尾：Coordinator 会把 in-flight 流式气泡原地定型为该最终文本，
@@ -873,6 +886,13 @@ public struct AgentRunner {
 
             conversation.append(contentsOf: toolMessages)
 
+            // `required` 只用于强制模型在一轮“模型说明但没执行动作”后产出工具。
+            // 一旦工具调用已经发生，下一轮必须回到 `auto`，否则部分网关会持续强迫
+            // 工具调用，导致工具循环或永远无法生成最终文本。
+            if nativeMode, !nativeCalls.isEmpty {
+                toolChoice = .auto
+            }
+
             // 合并工具轨迹：不再逐行刷「调用 X」，而是合并成一条状态。
             if !toolMessages.isEmpty {
                 if roundSearchCalls > 0 {
@@ -955,10 +975,21 @@ public struct AgentRunner {
     }
 
     /// 解析原生 tool call 的 arguments JSON 字符串为参数字典。
-    private static func parseArguments(_ json: String) -> ToolArgumentParseResult {
-        guard let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    /// 一些 OpenAI-compatible 网关会把无参数调用编码成空字符串、`null`，或把
+    /// 整个 JSON 对象再包成一层字符串。无参数 descriptor 应接受这些等价形式；
+    /// 有必填参数的工具仍会在执行器的 `require` 校验处得到明确失败。
+    private static func parseArguments(_ json: String, depth: Int = 0) -> ToolArgumentParseResult {
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "null" { return .success([:]) }
+        guard let data = trimmed.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data)
         else { return .malformed(rawLength: json.utf8.count) }
+        if let encoded = raw as? String, depth < 1 {
+            return parseArguments(encoded, depth: depth + 1)
+        }
+        guard let object = raw as? [String: Any] else {
+            return .malformed(rawLength: json.utf8.count)
+        }
         var args: [String: String] = [:]
         for (key, value) in object { args[key] = argumentString(value) }
         return .success(args)
