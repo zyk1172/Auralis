@@ -17,6 +17,17 @@ public enum AgentHistoryPolicy {
         .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 只让明确的短后续指令继承上一任务的用户意图。
+    /// 新的完整请求和寒暄不会把上一轮（尤其是索引/批处理）带入任务策略，
+    /// 避免“你好”被旧任务的 historyText 重新解释成“继续构建”。
+    public static func relevantHistoryText(
+        for currentUserText: String,
+        in history: [AgentChatMessage]
+    ) -> String {
+        guard isShortFollowUp(currentUserText) else { return "" }
+        return latestUserText(in: history)
+    }
+
     /// 把可作为上下文的最终消息转换为 AIMessage。
     /// `.error`、`.toolProgress`、`.confirmation`、`.streaming` 只属于 UI 运行轨迹，
     /// 绝不回灌模型；卡片和操作预览保留为有限的结构化摘要。
@@ -24,8 +35,29 @@ public enum AgentHistoryPolicy {
         from history: [AgentChatMessage],
         limit: Int = 40
     ) -> [AIMessage] {
+        modelMessages(from: history, for: nil, limit: limit)
+    }
+
+    /// 为当前输入构造会话上下文：短后续指令只取相邻的有限历史，纯寒暄不带旧任务。
+    /// 其余完整请求沿用原有投影，以保留正常对话的连续性。
+    public static func modelMessages(
+        from history: [AgentChatMessage],
+        for currentUserText: String?,
+        limit: Int = 40
+    ) -> [AIMessage] {
+        if let currentUserText {
+            if isGreeting(currentUserText) { return [] }
+            let source = isShortFollowUp(currentUserText)
+                ? Array(history.suffix(min(max(limit, 0), 12)))
+                : Array(history.suffix(max(limit, 0)))
+            return project(source)
+        }
+        return project(Array(history.suffix(max(limit, 0))))
+    }
+
+    private static func project(_ history: [AgentChatMessage]) -> [AIMessage] {
         let separator = "、"
-        return history.suffix(max(limit, 0)).compactMap { message in
+        return history.compactMap { message in
             var content = ""
             for item in message.messages {
                 switch item {
@@ -50,5 +82,27 @@ public enum AgentHistoryPolicy {
                 content: trimmed
             )
         }
+    }
+
+    private static func isShortFollowUp(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
+        return [
+            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "这个",
+            "播放它", "播放这个", "加入队列", "加入播放队列", "把它播放", "选这个",
+        ].contains(normalized)
+    }
+
+    private static func isGreeting(_ text: String) -> Bool {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
+        return [
+            "你好", "你好呀", "您好", "嗨", "哈喽", "hello", "hi", "hey",
+            "早上好", "晚上好", "晚安", "谢谢", "谢谢你",
+        ].contains(normalized)
     }
 }

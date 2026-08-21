@@ -17,55 +17,36 @@ import Foundation
 public enum ToolSelector {
     // MARK: - 工具组（新式名称为主，含无新式替代的旧式名称）
 
-    /// 长期可获得（CommonSafeTools）：核心 + 需求文档 §6.1 的常用工具全部常驻 schema。
-    /// 原生 function calling 只能调用 schema 内工具；为了让模型在任意任务中都能直接
-    /// 使用这些能力（而不依赖脆弱的关键词命中），它们必须常驻。仍保持远小于全量注册表
-    /// 的有界子集（旧别名在此统一映射回 canonical，不重复占位）。
+    /// 仅保留跨意图都安全且体积很小的工具。大部分工具由意图和用户关键词按需加入；
+    /// 把完整音乐库、播放、歌单和索引 Schema 常驻会显著降低小模型的工具选择准确率。
     static let coreNames: [String] = [
-        // 本地库查询
-        "library_get_summary", "library_search", "library_select_tracks",
-        "library_get_catalog_index", "library_get_catalog_tracks", "library_get_song",
-        "library_get_album", "library_get_artist", "library_get_playlist",
-        "library_get_starred", "library_get_recently_played", "library_get_random_songs",
-        "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre",
-        "library_get_least_played", "library_get_downloaded",
-        "music_appreciate",
-        // 推荐索引 V2（长任务：后续轮次可能只写「继续」，必须常驻 schema）
-        "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "library_index_v2_tag_catalog",
-        // 推荐 / 发现
-        "recommend_by_mood", "recommend_by_constraints", "smart_queue_generate",
-        // 播放
-        "playback_get_state",
+        "library_get_summary", "app_get_context", "memory_list",
+    ]
+
+    static let recommendationIndexStatusNames: [String] = [
+        "library_index_v2_status", "library_index_v2_read", "library_index_v2_tag_catalog",
+    ]
+
+    static let recommendationIndexBuildNames: [String] = [
+        "library_index_v2_status", "library_index_v2_next_batch",
+        "library_index_v2_write_batch", "library_index_v2_tag_catalog",
+    ]
+
+    static let playbackNames: [String] = [
+        "library_search", "server_search", "playback_get_state",
         "playback_play_song", "playback_play_album", "playback_play_artist",
-        "playback_play_playlist", "playback_play_random",
-        "playback_pause", "playback_resume",
-        "playback_next", "playback_previous", "playback_seek",
-        "playback_set_shuffle", "playback_set_repeat",
-        // 队列
+        "playback_play_playlist", "playback_play_random", "playback_pause",
+        "playback_resume", "playback_next", "playback_previous", "playback_seek",
+    ]
+
+    static let queueNames: [String] = [
         "queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear",
         "queue_remove", "queue_move", "queue_shuffle_remaining",
-        // 歌单
-        "listPlaylists", "playlist_create", "playlist_add_songs",
-        "playlist_rename", "playlist_remove_songs", "playlist_move",
-        "playlist_duplicate", "playlist_merge", "playlist_delete",
-        // 收藏 / 不喜欢 / 评分
-        "favorite_set", "preference_set_disliked", "library_get_disliked", "rating_set",
-        // 服务器
-        "server_get_current", "server_list", "server_search", "server_sync_status",
-        "server_switch", "server_remove",
-        // 歌词 / 公开音乐资料
-        "lyrics_get", "music_get_public_evidence",
-        // 最终展示协议
-        "result_present_tracks",
-        // 音乐下载（MoviePilot）
-        "music_download",
-        // 记忆与技能
-        "memory_save", "memory_list", "memory_delete", "memory_clear",
-        "skill_create", "skill_list", "skill_read", "skill_delete",
     ]
 
     /// 歌单相关。
     static let playlistNames: [String] = [
+        "library_search",
         "listPlaylists", "library_get_playlist",
         "playlist_create", "playlist_add_songs", "addTracksToPlaylist", "removeTracksFromPlaylist",
         "queue_save_as_playlist", "favorite_set",
@@ -90,13 +71,14 @@ public enum ToolSelector {
 
     /// 推荐 / 随机相关。
     static let recommendationNames: [String] = [
+        "library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks",
         "recommend_by_mood", "recommend_by_constraints",
         "smart_queue_generate",
         "library_get_random_songs", "library_get_most_played",
         "library_get_recently_played", "library_get_similar_songs",
         "library_get_genres", "library_get_tracks_by_genre",
         "music_get_public_evidence",
-        "queue_replace", "queue_append",
+        "result_present_tracks", "queue_replace", "queue_append",
     ]
 
     /// 诊断 / 维护 / 统计相关。
@@ -170,8 +152,41 @@ public enum ToolSelector {
 
     /// 按用户请求选择工具集（去重保序；旧别名映射回 canonical）。
     public static func select(for userText: String, all: [ToolDescriptor]) -> [ToolDescriptor] {
+        select(for: userText, all: all, allowAmbiguousContinuation: true)
+    }
+
+    /// Runtime 已经有结构化意图时，不把“继续”这种短词擅自解释成索引任务。
+    /// 旧式无上下文调用方仍由上面的公开重载保留兼容行为。
+    private static func select(
+        for userText: String,
+        all: [ToolDescriptor],
+        allowAmbiguousContinuation: Bool
+    ) -> [ToolDescriptor] {
         let lower = userText.lowercased()
         var names = coreNames
+
+        if containsAny(lower, ["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放"]) {
+            names += playbackNames
+        }
+        if containsAny(lower, ["队列", "接下来播放", "替换队列", "清空队列"]) {
+            names += queueNames
+        }
+        if containsAny(lower, ["搜索", "查找", "找歌", "哪首", "哪个专辑", "谁唱的"]) {
+            names += ["library_search", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
+        }
+        let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
+        if containsAny(lower, indexMarkers) {
+            let buildMarkers = ["构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
+            names += containsAny(lower, buildMarkers)
+                ? recommendationIndexBuildNames
+                : recommendationIndexStatusNames
+        }
+        // 旧的无上下文调用方仍可查询“继续”的完整索引工具；正式 Runtime 通过
+        // 意图/任务策略调用下面的重载，不会把这个歧义短词带入普通会话。
+        if allowAmbiguousContinuation,
+           lower.trimmingCharacters(in: .whitespacesAndNewlines) == "继续" {
+            names += recommendationIndexBuildNames
+        }
 
         if containsAny(lower, ["歌单", "playlist", "播放列表"]) { names += playlistNames }
         if containsAny(lower, ["收藏", "喜欢", "评分", "不喜欢", "不感兴趣", "favorite", "star", "heart", "dislike"]) { names += annotationNames }
@@ -195,7 +210,7 @@ public enum ToolSelector {
         policy: AgentTaskPolicy,
         all: [ToolDescriptor]
     ) -> [ToolDescriptor] {
-        let selected = select(for: userText, all: all)
+        let selected = select(for: userText, all: all, allowAmbiguousContinuation: false)
         let intentNames: Set<String>
         switch intent {
         case .conversation:
@@ -205,13 +220,15 @@ public enum ToolSelector {
         case .playbackControl:
             intentNames = ["playback_get_state", "playback_play_song", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat"]
         case .musicDiscovery:
-            intentNames = ["library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks", "recommend_by_mood", "recommend_by_constraints", "library_get_similar_songs", "queue_replace", "queue_append"]
+            intentNames = ["library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks", "recommend_by_mood", "recommend_by_constraints", "library_get_similar_songs", "queue_replace", "queue_append", "playback_play_song", "playback_play_playlist", "favorite_set", "preference_set_disliked", "lyrics_get", "result_present_tracks"]
         case .queueManagement:
             intentNames = ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
         case .playlistManagement:
-            intentNames = ["listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
+            intentNames = ["library_search", "library_get_song", "listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
         case .libraryManagement:
-            intentNames = ["library_get_summary", "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "library_index_v2_tag_catalog", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked"]
+            intentNames = policy.completion == .indexPendingCountIsZero
+                ? Set(["library_get_summary"] + recommendationIndexBuildNames)
+                : Set(["library_get_summary", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked"])
         case .serverManagement:
             intentNames = Set(serverNames)
         case .diagnostics:

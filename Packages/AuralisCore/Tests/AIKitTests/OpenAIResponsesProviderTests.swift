@@ -539,6 +539,34 @@ struct OpenAIResponsesNetworkTests {
         #expect(toolsBody[0]["function"] == nil)
     }
 
+    @Test func retriesOnceWithoutRejectedToolChoiceParameter() async throws {
+        let rejected = #"{"error":{"message":"Unsupported parameter: tool_choice"}}"#
+        let accepted = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"收到"}}]}"#
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(statusCode: 400, data: Data(rejected.utf8)),
+            .response(data: Data(accepted.utf8)),
+        ])
+        let provider = makeProvider(session: makeMockSession(), apiPath: "/v1/chat/completions")
+        let tool = AIToolDefinition(name: "searchTrack", description: "搜索歌曲")
+
+        let response = try await provider.complete(
+            AICompletionRequest(
+                model: "test-model",
+                messages: [AIMessage(role: .user, content: "搜歌")],
+                tools: [tool],
+                toolChoice: .required
+            )
+        )
+        #expect(response.content == "收到")
+        #expect(AIKitMockURLProtocol.requests.count == 2)
+
+        let first = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
+        let second = try requestObject(from: try #require(AIKitMockURLProtocol.requests.last))
+        #expect(first["tool_choice"] as? String == "required")
+        #expect(second["tool_choice"] == nil)
+        #expect(second["tools"] != nil)
+    }
+
     @Test func completesWithResponsesNonStream() async throws {
         let stubBody = """
         {"id":"resp_1","object":"response","model":"gpt-4.1","status":"completed",
@@ -635,6 +663,33 @@ struct OpenAIResponsesNetworkTests {
         #expect(events.contains(.delta("好")))
         #expect(events.contains(.toolCall(AIToolCall(id: "call_1", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}"))))
         #expect(events.last == .completed)
+    }
+
+    @Test func streamsResponsesFunctionCallArgumentDeltasWithoutOutputItemDone() async throws {
+        let sse = """
+        data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_delta","type":"function_call","call_id":"call_delta","name":"searchTrack"}}
+
+        data: {"type":"response.function_call_arguments.delta","item_id":"fc_delta","output_index":0,"delta":"{\\"q\\":\\"夜"}
+
+        data: {"type":"response.function_call_arguments.done","item_id":"fc_delta","output_index":0,"arguments":"{\\"q\\":\\"夜曲\\"}"}
+
+        data: {"type":"response.completed"}
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+        ])
+        let provider = makeProvider(session: makeMockSession())
+
+        var events: [AIStreamEvent] = []
+        for try await event in provider.stream(
+            AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "搜歌")])
+        ) {
+            events.append(event)
+        }
+
+        #expect(events.contains(.toolCall(AIToolCall(id: "call_delta", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}"))))
+        #expect(events.last == .completed)
+        #expect(events.contains { if case .delta = $0 { return true }; return false } == false)
     }
 
     /// 网关不发 [DONE] / response.completed 也视为正常结束（沿用 Chat 路径行为）。

@@ -108,4 +108,15 @@ public enum ContextManager {
         }
         return total
     }
+
+    /// 估算原生工具 Schema 的输入成本。Schema 不是消息正文，但同样会占用模型
+    /// 上下文；对 16K/32K 的中转或本地模型尤其重要。
+    public static func estimatedTokens(_ tools: [AIToolDefinition]) -> Int {
+        tools.reduce(0) { total, tool in
+            total
+                + estimatedTokens(tool.name)
+                + estimatedTokens(tool.description)
+                + estimatedTokens(tool.parametersJSON ?? "")
+        }
+    }
 }

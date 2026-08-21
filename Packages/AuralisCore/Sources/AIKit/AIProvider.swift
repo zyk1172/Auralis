@@ -15,6 +15,14 @@ public let auralisDefaultRequestTimeout: TimeInterval = 180
 /// 用户可在 Provider「高级设置」中按实际模型修改 maxContextTokens / maxOutputTokens。
 public let auralisDefaultMaxContextTokens = 256_000
 
+/// 原生工具调用的请求偏好。`required` 只在 Runtime 已确认需要真实工具时使用；
+/// 对不支持该字段的中转，Runner 会有限次数降级到文本 ACTION 协议。
+public enum AIToolChoice: String, Codable, Hashable, Sendable {
+    case auto
+    case required
+    case none
+}
+
 /// Auralis 当前模型能力声明：256K 总上下文、16K 单次输出。
 public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
@@ -425,19 +433,23 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
     public let maxTokens: Int
     /// 原生 function calling 的工具定义；为空则请求体不携带 `tools` 字段。
     public let tools: [AIToolDefinition]?
+    /// 原生工具调用策略；为空则不携带 `tool_choice`，兼容更老的网关。
+    public let toolChoice: AIToolChoice?
 
     public init(
         model: String,
         messages: [AIMessage],
         temperature: Double = 0.4,
         maxTokens: Int = auralisDefaultMaxOutputTokens,
-        tools: [AIToolDefinition]? = nil
+        tools: [AIToolDefinition]? = nil,
+        toolChoice: AIToolChoice? = nil
     ) {
         self.model = model
         self.messages = messages
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.tools = tools
+        self.toolChoice = toolChoice
     }
 }
 

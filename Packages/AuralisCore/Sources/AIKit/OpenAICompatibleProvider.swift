@@ -147,7 +147,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         guard !usesAnthropicMessagesAPI else {
             throw AIProviderError.unsupportedEndpointProtocol(configuration.apiPath)
         }
-        return try await performRequest(
+        return try await performRequestWithParameterFallback(
             body: requestBody(request, stream: false),
             run: { try await session.data(for: $0) },
             transform: { data, _ in
@@ -187,7 +187,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (bytes, _) = try await performRequestBytes(body: requestBody(request, stream: true))
+                    let (bytes, _) = try await performRequestBytesWithParameterFallback(body: requestBody(request, stream: true))
                     continuation.yield(.started(model: request.model))
                     var parser = SSEParser()
                     var toolCallFragments: [Int: ChatToolCallFragment] = [:]
@@ -320,10 +320,12 @@ public struct OpenAICompatibleProvider: AIProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (bytes, _) = try await performRequestBytes(body: requestBody(request, stream: true))
+                    let (bytes, _) = try await performRequestBytesWithParameterFallback(body: requestBody(request, stream: true))
                     continuation.yield(.started(model: request.model))
                     var parser = SSEParser()
                     var pendingLine = Data()
+                    var responseToolCallFragments: [String: ResponsesToolCallFragment] = [:]
+                    var emittedResponseToolCallKeys = Set<String>()
                     for try await byte in bytes {
                         pendingLine.append(byte)
                         guard byte == 0x0A else { continue }
@@ -335,6 +337,14 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 return
                             }
                             if Self.responsesStreamIsTruncated(message.data) { throw AIProviderError.outputTruncated }
+                            if let toolCall = Self.consumeResponsesToolCallEvent(
+                                message.data,
+                                fragments: &responseToolCallFragments,
+                                emittedKeys: &emittedResponseToolCallKeys
+                            ) {
+                                continuation.yield(.toolCall(toolCall))
+                                continue
+                            }
                             let parsed = Self.parseResponsesStreamEvent(message.data)
                             switch parsed {
                             case let .text(text):
@@ -368,6 +378,14 @@ public struct OpenAICompatibleProvider: AIProvider {
                             return
                         }
                         if Self.responsesStreamIsTruncated(message.data) { throw AIProviderError.outputTruncated }
+                        if let toolCall = Self.consumeResponsesToolCallEvent(
+                            message.data,
+                            fragments: &responseToolCallFragments,
+                            emittedKeys: &emittedResponseToolCallKeys
+                        ) {
+                            continuation.yield(.toolCall(toolCall))
+                            continue
+                        }
                         let parsed = Self.parseResponsesStreamEvent(message.data)
                         switch parsed {
                         case let .text(text):
@@ -408,6 +426,18 @@ public struct OpenAICompatibleProvider: AIProvider {
         try await performRequest(body: body, run: { try await session.bytes(for: $0) }, transform: { ($0, $1) })
     }
 
+    /// 某些 NewAPI / 本地中转只实现了 OpenAI 请求体的一部分：常见表现是拒绝
+    /// `tool_choice`、`temperature` 或 token 字段。仅对 400/422 的明确参数错误
+    /// 做一次降级，避免把真正的业务错误或鉴权错误误重试。
+    private func performRequestBytesWithParameterFallback(body: [String: Any]) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        do {
+            return try await performRequestBytes(body: body)
+        } catch {
+            guard let fallback = Self.parameterFallbackBody(body: body, error: error) else { throw error }
+            return try await performRequestBytes(body: fallback)
+        }
+    }
+
     /// 对瞬时故障（503/502/504/429/网络抖动/空响应/截断 JSON）自动重试，
     /// 避免偶发抖动直接把用户打回降级路径。任务被取消时不重试、立即上抛。
     ///
@@ -440,6 +470,21 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
         }
         throw lastError
+    }
+
+    /// 非流式请求的参数协商版本：先走标准请求，若网关明确拒绝某个参数，
+    /// 只用修改后的请求再试一次。底层瞬时故障仍由 `performRequest` 自己重试。
+    private func performRequestWithParameterFallback<Raw, Value>(
+        body: [String: Any],
+        run: (URLRequest) async throws -> (Raw, URLResponse),
+        transform: (Raw, URLResponse) throws -> Value
+    ) async throws -> Value {
+        do {
+            return try await performRequest(body: body, run: run, transform: transform)
+        } catch {
+            guard let fallback = Self.parameterFallbackBody(body: body, error: error) else { throw error }
+            return try await performRequest(body: fallback, run: run, transform: transform)
+        }
     }
 
     // MARK: - Request building
@@ -647,8 +692,58 @@ public struct OpenAICompatibleProvider: AIProvider {
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
+            if let toolChoice = request.toolChoice {
+                body["tool_choice"] = toolChoice.rawValue
+            }
         }
         return body
+    }
+
+    /// 只在服务端错误明确指向参数不兼容时移除/改写参数集合。
+    /// 这是有限的一次协商，不会递归重试，也不会把 Key 写入错误摘要。
+    private static func parameterFallbackBody(body: [String: Any], error: Error) -> [String: Any]? {
+        let status: Int
+        let detail: String
+        guard let providerError = error as? AIProviderError else { return nil }
+        switch providerError {
+        case let .httpStatus(value):
+            status = value
+            detail = ""
+        case let .httpStatusDetail(value, valueDetail):
+            status = value
+            detail = valueDetail.lowercased()
+        default:
+            return nil
+        }
+        guard status == 400 || status == 422 else { return nil }
+
+        var fallback = body
+        var changed = false
+        let mentionsToolChoice = detail.contains("tool_choice") || detail.contains("tool choice")
+        let mentionsTools = detail.contains("tools") || detail.contains("function calling") || detail.contains("function_call")
+        let mentionsTemperature = detail.contains("temperature") || detail.contains("sampling")
+        let mentionsMaxTokens = detail.contains("max_tokens") || detail.contains("max_output_tokens")
+
+        if mentionsToolChoice, fallback.removeValue(forKey: "tool_choice") != nil {
+            changed = true
+        }
+        if mentionsTools, fallback.removeValue(forKey: "tools") != nil {
+            fallback.removeValue(forKey: "tool_choice")
+            changed = true
+        }
+        if mentionsTemperature, fallback.removeValue(forKey: "temperature") != nil {
+            changed = true
+        }
+        if mentionsMaxTokens {
+            if let value = fallback.removeValue(forKey: "max_tokens") {
+                fallback["max_completion_tokens"] = value
+                changed = true
+            } else if let value = fallback.removeValue(forKey: "max_output_tokens") {
+                fallback["max_tokens"] = value
+                changed = true
+            }
+        }
+        return changed ? fallback : nil
     }
 
     /// Responses API 请求体：`{model, input:[...], temperature, max_output_tokens, stream?, tools?}`。
@@ -664,6 +759,9 @@ public struct OpenAICompatibleProvider: AIProvider {
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeResponsesTools(tools)
+            if let toolChoice = request.toolChoice {
+                body["tool_choice"] = toolChoice.rawValue
+            }
         }
         return body
     }
@@ -883,15 +981,23 @@ public struct OpenAICompatibleProvider: AIProvider {
     static func toolCalls(from object: [String: Any]) -> [AIToolCall]? {
         guard let choices = object["choices"] as? [[String: Any]],
               let first = choices.first,
-              let message = first["message"] as? [String: Any],
-              let calls = message["tool_calls"] as? [[String: Any]]
+              let message = first["message"] as? [String: Any]
         else { return nil }
-        let parsed = calls.compactMap { call -> AIToolCall? in
-            guard let id = call["id"] as? String,
-                  let function = call["function"] as? [String: Any],
-                  let name = function["name"] as? String
+        let calls: [[String: Any]]
+        if let nativeCalls = message["tool_calls"] as? [[String: Any]] {
+            calls = nativeCalls
+        } else if let legacyCall = message["function_call"] as? [String: Any] {
+            // 旧版 Chat Completions / 部分中转仍使用单个 function_call 对象。
+            calls = [legacyCall]
+        } else {
+            return nil
+        }
+        let parsed = calls.enumerated().compactMap { index, call -> AIToolCall? in
+            let function = (call["function"] as? [String: Any]) ?? call
+            guard let name = function["name"] as? String, !name.isEmpty
             else { return nil }
-            let arguments = function["arguments"] as? String ?? ""
+            let id = (call["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "call-\(index)"
+            let arguments = stringify(function["arguments"]) ?? ""
             return AIToolCall(id: id, name: name, arguments: arguments)
         }
         return parsed.isEmpty ? nil : parsed
@@ -979,6 +1085,73 @@ public struct OpenAICompatibleProvider: AIProvider {
         case done
         case failed(String)
         case ignore
+    }
+
+    /// Responses 流中一个 function_call 的跨事件状态。真实 API 可能先发送
+    /// output_item.added，再发送若干 arguments.delta，最后只发送 arguments.done；
+    /// 不能把 arguments.delta 当正文，也不能等待一个并不存在的 output_item.done。
+    private struct ResponsesToolCallFragment {
+        var id: String?
+        var name: String?
+        var arguments = ""
+    }
+
+    /// 消费 Responses 的 function_call 增量事件。返回非 nil 表示本事件已经产生
+    /// 一个完整调用，调用方应跳过通用事件解析，避免重复发出 tool call。
+    private static func consumeResponsesToolCallEvent(
+        _ data: String,
+        fragments: inout [String: ResponsesToolCallFragment],
+        emittedKeys: inout Set<String>
+    ) -> AIToolCall? {
+        guard let payload = data.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let type = object["type"] as? String
+        else { return nil }
+
+        let item = (object["item"] as? [String: Any]) ?? (object["output"] as? [String: Any])
+        // 参数事件的 item_id 指向 output_item.added 里的 item.id，优先使用它；
+        // call_id 是回灌用的 ID，不一定等于 item_id。
+        let itemID = (object["item_id"] as? String)
+            ?? (item?["id"] as? String)
+            ?? (object["call_id"] as? String)
+            ?? (item?["call_id"] as? String)
+        let key = itemID ?? String(object["output_index"] as? Int ?? 0)
+        let isAdded = type == "response.output_item.added"
+        let isOutputDone = type == "response.output_item.done"
+        let isArgumentDelta = type == "response.function_call_arguments.delta"
+        let isArgumentDone = type == "response.function_call_arguments.done"
+        guard isAdded || isOutputDone || isArgumentDelta || isArgumentDone else { return nil }
+
+        var fragment = fragments[key] ?? ResponsesToolCallFragment()
+        if let item {
+            fragment.id = (item["call_id"] as? String)
+                ?? (item["id"] as? String)
+                ?? fragment.id
+            fragment.name = (item["name"] as? String) ?? fragment.name
+            if isOutputDone, let arguments = stringify(item["arguments"]) {
+                fragment.arguments = arguments
+            }
+        }
+        if let name = object["name"] as? String { fragment.name = name }
+        if let id = object["call_id"] as? String { fragment.id = id }
+        if isArgumentDelta, let delta = object["delta"] as? String {
+            fragment.arguments += delta
+        }
+        if isArgumentDone, let arguments = stringify(object["arguments"]) {
+            fragment.arguments = arguments
+        }
+        fragments[key] = fragment
+
+        // added/delta 只是积累状态。arguments.done 本身已足以执行；若随后再来
+        // output_item.done，使用 emittedKeys 去重。
+        let terminal = isOutputDone || isArgumentDone
+        guard terminal, !emittedKeys.contains(key),
+              let name = fragment.name, !name.isEmpty
+        else { return nil }
+        let id = fragment.id.flatMap { $0.isEmpty ? nil : $0 } ?? "call-\(key)"
+        emittedKeys.insert(key)
+        fragments.removeValue(forKey: key)
+        return AIToolCall(id: id, name: name, arguments: fragment.arguments)
     }
 
     /// 宽容解析 Responses API 非流式响应：
@@ -1070,11 +1243,13 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 解析 Responses 响应 `output` 中的 function_call 条目。
     static func responsesToolCalls(from object: [String: Any]) -> [AIToolCall]? {
         guard let output = object["output"] as? [[String: Any]] else { return nil }
-        let parsed = output.compactMap { item -> AIToolCall? in
+        let parsed = output.enumerated().compactMap { index, item -> AIToolCall? in
             guard (item["type"] as? String) == "function_call",
-                  let id = item["call_id"] as? String,
-                  let name = item["name"] as? String
+                  let name = item["name"] as? String, !name.isEmpty
             else { return nil }
+            let id = ((item["call_id"] as? String) ?? (item["id"] as? String))
+                .flatMap { $0.isEmpty ? nil : $0 }
+                ?? "call-\(index)"
             return AIToolCall(id: id, name: name, arguments: stringify(item["arguments"]) ?? "")
         }
         return parsed.isEmpty ? nil : parsed
@@ -1137,9 +1312,11 @@ public struct OpenAICompatibleProvider: AIProvider {
             let item = (object["item"] as? [String: Any]) ?? (object["output"] as? [String: Any])
             guard let item,
                   (item["type"] as? String) == "function_call",
-                  let id = item["call_id"] as? String,
-                  let name = item["name"] as? String
+                  let name = item["name"] as? String, !name.isEmpty
             else { return .ignore }
+            let id = ((item["call_id"] as? String) ?? (item["id"] as? String))
+                .flatMap { $0.isEmpty ? nil : $0 }
+                ?? "call-\(item["output_index"] as? Int ?? 0)"
             return .toolCall(AIToolCall(id: id, name: name, arguments: stringify(item["arguments"]) ?? ""))
         case "response.completed", "response.incomplete":
             return .done
@@ -1265,39 +1442,47 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// 解析一条 Chat Completions SSE chunk 里的 `choices[0].delta.tool_calls` 分片。
-    /// 结构不认识 / 没有 tool_calls 时返回空数组。
+    /// 同时兼容旧版 `delta.function_call`；缺失 index 的单调用网关按 0 处理。
     nonisolated static func streamToolCallFragments(from data: String) -> [ChatToolCallFragment] {
         guard let payload = data.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let choices = object["choices"] as? [[String: Any]],
-              let delta = choices.first?["delta"] as? [String: Any],
-              let rawCalls = delta["tool_calls"] as? [[String: Any]]
+              let delta = choices.first?["delta"] as? [String: Any]
         else { return [] }
-        return rawCalls.compactMap { raw -> ChatToolCallFragment? in
-            guard let index = raw["index"] as? Int else { return nil }
+
+        let rawCalls: [(Int, [String: Any])]
+        if let calls = delta["tool_calls"] as? [[String: Any]] {
+            rawCalls = calls.map { (index: $0["index"] as? Int ?? 0, raw: $0) }
+        } else if let legacy = delta["function_call"] as? [String: Any] {
+            rawCalls = [(0, legacy)]
+        } else {
+            return []
+        }
+
+        return rawCalls.compactMap { index, raw -> ChatToolCallFragment? in
             let id = raw["id"] as? String
             var name: String?
             var arguments = ""
-            if let function = raw["function"] as? [String: Any] {
-                name = function["name"] as? String
-                if let args = function["arguments"] as? String {
-                    arguments = args
-                } else if let args = function["arguments"] {
-                    arguments = stringify(args) ?? ""
-                }
+            let function = (raw["function"] as? [String: Any]) ?? raw
+            name = function["name"] as? String
+            if let args = function["arguments"] as? String {
+                arguments = args
+            } else if let args = function["arguments"] {
+                arguments = stringify(args) ?? ""
             }
             return ChatToolCallFragment(index: index, id: id, name: name, arguments: arguments)
         }
     }
 
     /// 把按 index 合并好的 fragments 组装成完整的 `AIToolCall`（按 index 升序）。
-    /// 缺少 id 或 name 的 fragment（异常网关）直接丢弃，不产出半成品调用。
+    /// 缺少 id 时合成稳定 ID，避免网关漏传 id 导致整个工具调用静默消失；
+    /// 缺少 name 仍不产出，因为没有工具名无法安全执行。
     nonisolated static func assembleToolCalls(from fragments: [Int: ChatToolCallFragment]) -> [AIToolCall] {
         fragments.keys.sorted().compactMap { index -> AIToolCall? in
             guard let fragment = fragments[index],
-                  let id = fragment.id,
-                  let name = fragment.name
+                  let name = fragment.name, !name.isEmpty
             else { return nil }
+            let id = fragment.id.flatMap { $0.isEmpty ? nil : $0 } ?? "call-\(index)"
             return AIToolCall(id: id, name: name, arguments: fragment.arguments)
         }
     }

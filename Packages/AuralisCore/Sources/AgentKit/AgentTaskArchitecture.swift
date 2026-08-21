@@ -594,12 +594,54 @@ public enum AgentTaskReducer {
 /// Runtime 层的确定性完成判定。LLM 的自然语言只是一份候选答案；任务事实未满足时，
 /// Runtime 要求继续或明确失败，不能把“看起来完成”当成真实完成。
 public enum AgentCompletionEvaluator {
+    /// 判断任务事实是否已经足够完成，不依赖模型是否又输出了一句客套话。
+    /// 播放、搜索、队列、歌单等真实工具成功后，空 content 也不能覆盖成功事实。
+    public static func factsSatisfied(
+        state: AgentTaskState,
+        policy: AgentTaskPolicy
+    ) -> Bool {
+        switch policy.completion {
+        case .modelAnswer, .appreciationWithEvidence:
+            return false
+        case .successfulToolResult:
+            return state.successfulToolCount > 0
+        case .queueMutation:
+            return state.facts["sideEffect.queue"] == "success"
+        case .playlistMutation:
+            return state.facts["sideEffect.playlist"] == "success"
+        case .playbackMutation:
+            return state.facts["sideEffect.playback"] == "success"
+                || state.facts["sideEffect.queue"] == "success"
+        case .indexPendingCountIsZero:
+            return state.facts["recommendation.index.pending"] == "0"
+                && state.facts["recommendation.index.pendingSemantic"] == "0"
+        }
+    }
+
+    @discardableResult
+    public static func markFactsSatisfied(
+        state: inout AgentTaskState,
+        policy: AgentTaskPolicy
+    ) -> Bool {
+        guard factsSatisfied(state: state, policy: policy) else { return false }
+        state.completed = true
+        state.completionState = .satisfied
+        state.status = .completed
+        state.updatedAt = .now
+        return true
+    }
+
     public static func evaluateModelAnswer(
         _ answer: String,
         state: inout AgentTaskState,
         policy: AgentTaskPolicy,
         repairAttempts: Int
     ) -> AgentModelAnswerDecision {
+        // 工具事实优先于模型最终文本。部分中转在 tool result 后会返回空 content，
+        // 这不应把已经真实完成的播放/搜索/队列操作重新判成失败。
+        if markFactsSatisfied(state: &state, policy: policy) {
+            return .accept
+        }
         guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return repairAttempts == 0
                 ? .continueTask("模型返回了空内容。请根据当前任务状态调用获准工具，或给出明确且完整的最终回答。")
@@ -714,7 +756,7 @@ public actor AgentRuntime {
         progress: @escaping @Sendable (AgentRunner.AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
-        let historyText = AgentHistoryPolicy.latestUserText(in: history)
+        let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
         // AppShell 已经为任务记录解析过策略时必须复用同一份值，避免持久化预算/意图
         // 与真正运行的策略因历史上下文不同而分叉。独立调用者仍可省略并在此解析。
         let policy = explicitPolicy ?? AgentTaskPolicyResolver.resolve(

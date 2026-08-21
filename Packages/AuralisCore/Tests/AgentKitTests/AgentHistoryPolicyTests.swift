@@ -38,3 +38,16 @@ func modelHistoryDropsRuntimeOnlyMessages() {
     #expect(projected.first?.role == .user)
     #expect(projected.first?.content == "播放一些歌曲")
 }
+
+@Test("新寒暄不继承旧索引任务，明确短后续才继承相邻用户意图")
+func newInputHistoryBoundary() {
+    let history = [
+        AgentChatMessage(role: .user, messages: [.text("继续构建推荐索引 V2")]),
+        AgentChatMessage(role: .assistant, messages: [.text("已处理一批，仍有待分类歌曲")]),
+    ]
+
+    #expect(AgentHistoryPolicy.relevantHistoryText(for: "你好", in: history).isEmpty)
+    #expect(AgentHistoryPolicy.relevantHistoryText(for: "继续", in: history) == "继续构建推荐索引 V2")
+    #expect(AgentHistoryPolicy.modelMessages(from: history, for: "你好").isEmpty)
+    #expect(AgentHistoryPolicy.modelMessages(from: history, for: "继续").count == 2)
+}

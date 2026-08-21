@@ -14,10 +14,10 @@ import LocalCatalog
 public struct AgentRunner {
     /// 单个工具调用的最长执行时间。超过后取消该调用并结束整项 Agent 任务，
     /// 防止某个网络/系统服务工具卡住而让任务无限悬挂。
-    public static let toolExecutionTimeout: TimeInterval = 6 * 60
+    public static let toolExecutionTimeout: TimeInterval = 3 * 60
     /// 模型每一轮的总响应时限。长回答、复杂规划和批量 JSON 分类都可能持续数分钟；
-    /// 整项任务没有总轮数上限，但每个独立模型请求最多等待六分钟。
-    public static let roundTimeout: TimeInterval = 6 * 60
+    /// 整项任务没有总轮数上限，但每个独立模型请求最多等待 180 秒。
+    public static let roundTimeout: TimeInterval = 3 * 60
 
     public struct Context: Sendable {
         public let serverID: ServerID?
@@ -224,7 +224,10 @@ public struct AgentRunner {
         var accumulatedToolText = userText
         var selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
         let requestTimeout = roundTimeout
-        var toolDefinitions = provider.supportsToolCalling
+        var nativeMode = provider.supportsToolCalling
+        var toolChoice: AIToolChoice? = nativeMode ? .auto : nil
+        var didSwitchToAction = false
+        var toolDefinitions = nativeMode
             ? ToolSelector.toolDefinitions(from: selectedTools)
             : []
 
@@ -249,21 +252,21 @@ public struct AgentRunner {
             systemPrompt: Self.systemPrompt(
                 context: context,
                 tools: selectedTools,
-                nativeToolCalling: provider.supportsToolCalling,
+                nativeToolCalling: nativeMode,
                 goal: taskState.goal
             ),
             task: taskState,
             facts: [],
-            history: Self.convertHistory(history),
+            history: Self.convertHistory(history, currentUserText: userText),
             permissions: privacy,
             capabilities: provider.capabilities,
             inputBudget: resolvedInputBudget,
             reservedOutputTokens: resolvedOutputBudget
+                + ContextManager.estimatedTokens(toolDefinitions)
         )
         conversation.append(AIMessage(role: .user, content: userText))
 
         var toolStepCount = 0
-        var nativeMode = provider.supportsToolCalling
         var completionRepairAttempts = 0
         // 某些中转模型在收到 tool 结果后会先返回 reasoning_content，或直接结束
         // SSE 而不带 content/tool_calls。空响应不能立刻判定任务失败，给兼容回退与
@@ -289,21 +292,6 @@ public struct AgentRunner {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(violation.localizedDescription)]))
                 return
             }
-            // 上下文裁剪：防止无限增长导致 API 拒绝或 token 爆预算。
-            // 输入与输出预算来自当前 Provider capabilities；
-            // Agent 不再额外写死 256K / 16K。
-            // ContextManager 只负责保证 input + reserved output + protocol reserve
-            // 不超过当前 Provider 声明的总上下文窗口。
-            let reservedOutput = resolvedOutputBudget
-            let contextBudget = ContextManager.inputBudget(
-                capabilities: provider.capabilities,
-                requestedInputBudget: resolvedInputBudget,
-                reservedOutputTokens: reservedOutput
-            )
-            conversation = ContextManager.trimByTokens(conversation, maxTokens: contextBudget)
-
-            // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
-            // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
             // 动态工具扩展：每轮重新展开工具集（只增不减），保证任务中途的新工具需求可达。
             let expanded = ToolSelector.select(for: accumulatedToolText, intent: intent, policy: policy, all: AgentToolRegistry.all)
             var merged = selectedTools
@@ -324,17 +312,32 @@ public struct AgentRunner {
             }
             if merged.count != selectedTools.count {
                 selectedTools = merged
-                if provider.supportsToolCalling {
+                if nativeMode {
                     toolDefinitions = ToolSelector.toolDefinitions(from: selectedTools)
                 }
             }
+
+            // 上下文裁剪：输入预算同时扣除真实工具 Schema 成本；不能再只预留固定
+            // 1024 token，否则 16K/32K 模型会在正文尚未开始前就超过窗口。
+            let reservedOutput = resolvedOutputBudget
+            let schemaTokens = nativeMode ? ContextManager.estimatedTokens(toolDefinitions) : 0
+            let contextBudget = ContextManager.inputBudget(
+                capabilities: provider.capabilities,
+                requestedInputBudget: resolvedInputBudget,
+                reservedOutputTokens: reservedOutput + schemaTokens
+            )
+            conversation = ContextManager.trimByTokens(conversation, maxTokens: contextBudget)
+
+            // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
+            // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
 
             let request = AICompletionRequest(
                 model: model,
                 messages: conversation,
                 temperature: 0.3,
                 maxTokens: reservedOutput,
-                tools: nativeMode ? toolDefinitions : nil
+                tools: nativeMode ? toolDefinitions : nil,
+                toolChoice: nativeMode ? toolChoice : nil
             )
             let outcome: StreamOutcome
             do {
@@ -361,6 +364,16 @@ public struct AgentRunner {
                 // 降级到文本 ACTION 协议重试一次，而不是直接判死。
                 if nativeMode, Self.isSchemaRejection(error) {
                     nativeMode = false
+                    toolChoice = nil
+                    Self.replaceSystemPrompt(
+                        &conversation,
+                        context: context,
+                        tools: selectedTools,
+                        nativeToolCalling: false,
+                        task: taskState,
+                        privacy: privacy,
+                        capabilities: provider.capabilities
+                    )
                     let fallbackRequest = AICompletionRequest(
                         model: model,
                         messages: conversation,
@@ -368,7 +381,8 @@ public struct AgentRunner {
                         // 被网关以 400/422 拒绝时，先收敛到跨模型更稳妥的输出上限。
                         // 这只影响兼容回退请求，不覆盖用户已保存的模型能力配置。
                         maxTokens: min(reservedOutput, auralisDefaultMaxOutputTokens),
-                        tools: nil
+                        tools: nil,
+                        toolChoice: nil
                     )
                     do {
                         outcome = try await streamWithFallback(provider: provider, request: fallbackRequest, timeout: requestTimeout) { delta in
@@ -421,6 +435,50 @@ public struct AgentRunner {
             if !streamedText.isEmpty { accumulatedToolText += " " + streamedText }
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             let textActions = nativeCalls.isEmpty ? parseActions(from: streamedText) : []
+
+            // 真实工具已经完成时，先结算事实，再处理模型是否返回最终文字。
+            // 许多中转在 tool result 后只返回 reasoning 或空 content；这不应覆盖成功状态。
+            if nativeCalls.isEmpty,
+               textActions.isEmpty,
+               AgentCompletionEvaluator.factsSatisfied(state: taskState, policy: policy),
+               !(intent == .musicDiscovery
+                    && !didRequestFinalSelection
+                    && !presentation.candidateOrder.isEmpty
+                    && presentation.resolvedFinalCards.isEmpty
+                    && presentation.disambiguationTracks.isEmpty) {
+                let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
+                _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
+                await state(taskState)
+                if intent == .librarySearch || intent == .libraryManagement {
+                    presentation.applySearchFallback()
+                }
+                // 推荐任务在模型已经完成候选查询、但只返回空/纯 reasoning 时，仍须把有限的
+                // 确定性结果落到最终展示；候选池不能直接在更早的错误分支中泄漏给用户。
+                if intent == .musicDiscovery,
+                   didRequestFinalSelection,
+                   presentation.resolvedFinalCards.isEmpty,
+                   !presentation.candidateOrder.isEmpty,
+                   presentation.disambiguationTracks.isEmpty {
+                    let target = max(ws.targetQueueCount ?? 5, 1)
+                    let chosen = Array(presentation.candidateOrder.prefix(target))
+                    let cards = chosen.compactMap { presentation.candidateTracks[$0] }
+                    if !cards.isEmpty {
+                        presentation.setFinalTracks(cards)
+                        taskState.selectedIDs = Set(cards.map { $0.globalID.description })
+                    }
+                }
+                presentation.applyAlbumFallbackIfNeeded()
+                if let finalMessage = presentation.finalMessage() {
+                    await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
+                }
+                let finalText = reply.isEmpty
+                    ? Self.deterministicCompletionSummary(policy: policy, presentation: presentation)
+                    : reply
+                if !finalText.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text(finalText)]))
+                }
+                return
+            }
 
             if streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                nativeCalls.isEmpty,
@@ -509,6 +567,13 @@ public struct AgentRunner {
                     return
                 case let .continueTask(instruction):
                     completionRepairAttempts += 1
+                    if nativeMode,
+                       Self.policyRequiresToolExecution(policy),
+                       toolChoice == .auto {
+                        // 第一次 prose 说明没有执行动作：下一轮要求模型产生工具调用，
+                        // 但仍保留后续 ACTION 降级机会。
+                        toolChoice = .required
+                    }
                     taskState.pendingActions = [instruction]
                     taskState.status = .waitingForTool
                     taskState.updatedAt = .now
@@ -517,6 +582,42 @@ public struct AgentRunner {
                     conversation.append(AIMessage(role: .user, content: "系统完成条件校验：\(instruction)"))
                     continue
                 case let .fail(message):
+                    if nativeMode,
+                       Self.policyRequiresToolExecution(policy),
+                       !didSwitchToAction {
+                        didSwitchToAction = true
+                        nativeMode = false
+                        toolChoice = nil
+                        completionRepairAttempts = 0
+                        Self.replaceSystemPrompt(
+                            &conversation,
+                            context: context,
+                            tools: selectedTools,
+                            nativeToolCalling: false,
+                            task: taskState,
+                            privacy: privacy,
+                            capabilities: provider.capabilities
+                        )
+                        let fallbackInstruction = "原生工具调用未完成，请改用单独一行 ACTION JSON 执行当前任务，不要只回复说明文字。"
+                        taskState.pendingActions = [fallbackInstruction]
+                        taskState.status = .waitingForTool
+                        taskState.updatedAt = .now
+                        await state(taskState)
+                        conversation.append(AIMessage(role: .user, content: fallbackInstruction))
+                        continue
+                    }
+                    if !nativeMode,
+                       Self.canUseOfflineFallback(intent: intent, userText: userText) {
+                        await runOffline(
+                            userText: userText,
+                            bridge: bridge,
+                            catalog: catalog,
+                            context: context,
+                            emit: emit,
+                            log: log
+                        )
+                        return
+                    }
                     taskState.status = .insufficient
                     taskState.errorState = message
                     taskState.updatedAt = .now
@@ -805,6 +906,29 @@ public struct AgentRunner {
         }
     }
 
+    private static func deterministicCompletionSummary(
+        policy: AgentTaskPolicy,
+        presentation: AgentPresentationState
+    ) -> String {
+        switch policy.completion {
+        case .playbackMutation:
+            if let track = presentation.resolvedFinalCards.first {
+                return "已开始播放《\(track.title)》。"
+            }
+            return "播放操作已完成。"
+        case .queueMutation:
+            return "队列操作已完成。"
+        case .playlistMutation:
+            return "歌单操作已完成。"
+        case .indexPendingCountIsZero:
+            return "推荐索引 V2 已完成。"
+        case .successfulToolResult:
+            return "已根据真实工具结果完成。"
+        case .modelAnswer, .appreciationWithEvidence:
+            return "已完成。"
+        }
+    }
+
     /// 把 ID 解析成有序卡片：优先用内部候选池，缺失时从本地目录补查。
     private static func resolveTrackCards(
         _ ids: [GlobalID],
@@ -865,6 +989,29 @@ public struct AgentRunner {
             return status == 400 || status == 422
         }
         return false
+    }
+
+    private static func policyRequiresToolExecution(_ policy: AgentTaskPolicy) -> Bool {
+        switch policy.completion {
+        case .modelAnswer, .appreciationWithEvidence:
+            return false
+        case .successfulToolResult, .queueMutation, .playlistMutation,
+             .playbackMutation, .indexPendingCountIsZero:
+            return true
+        }
+    }
+
+    private static func canUseOfflineFallback(
+        intent: AgentTaskIntent,
+        userText: String
+    ) -> Bool {
+        guard !userText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        switch intent {
+        case .librarySearch, .playbackControl, .musicDiscovery:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func errorText(_ error: Error) -> String {
@@ -942,7 +1089,7 @@ public struct AgentRunner {
 
     /// 判定错误是否值得再试一次。与 `AIProviderError.isTransient` 同源，额外覆盖网络层错误。
     ///
-    /// 刻意**不**重试 `AgentRunnerError.timeout`：单轮超时已经耗掉完整的六分钟，
+    /// 刻意**不**重试 `AgentRunnerError.timeout`：单轮超时已经耗掉完整的 180 秒，
     /// 再来一轮只会让界面持续无响应；超时后直接结束本轮，避免无感等待。
     /// 其余瞬时故障（5xx / 429 / 连接重置 / 空响应 / 截断 JSON）都是快速失败，重试成本很低。
     static func isTransientFailure(_ error: Error) -> Bool {
@@ -1174,6 +1321,18 @@ public struct AgentRunner {
         }
 
         if lower.contains("播放") {
+            // “播放一首歌 / 随机播放”没有可搜索的曲名，不能把整句当查询词；
+            // AI 失败时仍从本地曲库选一首真实歌曲执行，避免错误地报告“未找到”。
+            if lower.contains("播放一首") || lower.contains("随机播放") || lower.contains("随便播放") {
+                let all = (try? await catalog.allTrackSummaries(serverID: context.serverID)) ?? []
+                if let first = all.randomElement(), await bridge.playTrack(globalID: first.globalID) {
+                    await log(AgentActionRecord(toolName: "playTrack", permission: .reversible, summary: "随机播放《\(first.title)》"))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("开始播放：\(first.title)")]))
+                } else {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("曲库中没有可播放的歌曲。")]))
+                }
+                return
+            }
             let q = extractQuery(text, markers: ["播放"]) ?? text
             let hits = await search(q)
             if let first = hits.first {
@@ -1307,6 +1466,37 @@ public struct AgentRunner {
             results.append((tool, args))
         }
         return results
+    }
+
+    /// Native → ACTION 降级后重建 system prompt，避免旧提示仍要求模型“不要输出 ACTION”。
+    private static func replaceSystemPrompt(
+        _ conversation: inout [AIMessage],
+        context: Context,
+        tools: [ToolDescriptor],
+        nativeToolCalling: Bool,
+        task: AgentTaskState,
+        privacy: AIPrivacyPermissions,
+        capabilities: ModelCapabilities
+    ) {
+        guard let index = conversation.firstIndex(where: { $0.role == .system }) else { return }
+        let rebuilt = AgentContextBuilder.build(
+            systemPrompt: Self.systemPrompt(
+                context: context,
+                tools: tools,
+                nativeToolCalling: nativeToolCalling,
+                goal: task.goal
+            ),
+            task: task,
+            facts: [],
+            history: [],
+            permissions: privacy,
+            capabilities: capabilities,
+            inputBudget: capabilities.maxContextTokens,
+            reservedOutputTokens: capabilities.maxOutputTokens
+        )
+        if let system = rebuilt.first {
+            conversation[index] = system
+        }
     }
 
     /// 当前 App 语言（跟随系统/ Bundle 首选语言），用于决定 Agent 默认回复语言。
@@ -1564,8 +1754,8 @@ public struct AgentRunner {
     /// 把会话历史转成模型可用的消息列表。只保留最近若干轮以控制 token 预算，
     /// 由 AgentHistoryPolicy 统一跳过错误、进度、确认和流式半成品，
     /// 把卡片还原成可读的文本，让上下文连贯且不泄露内部细节。
-    private static func convertHistory(_ history: [AgentChatMessage]) -> [AIMessage] {
-        AgentHistoryPolicy.modelMessages(from: history)
+    private static func convertHistory(_ history: [AgentChatMessage], currentUserText: String) -> [AIMessage] {
+        AgentHistoryPolicy.modelMessages(from: history, for: currentUserText)
     }
 
     private static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {

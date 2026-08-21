@@ -213,6 +213,20 @@ struct OpenAICompatibleProviderTests {
         #expect(response.toolCalls?.first?.arguments.contains("srv:1") == true)
     }
 
+    @Test func parsesLegacyFunctionCallAndSynthesizesMissingID() throws {
+        let response = try OpenAICompatibleProvider.parseCompletion(
+            data: Data("""
+            {"choices":[{"message":{"role":"assistant","content":null,
+              "function_call":{"name":"playTrack","arguments":{"trackID":"srv:1"}}}}]}
+            """.utf8),
+            fallbackModel: "test-model"
+        )
+        #expect(response.toolCalls?.count == 1)
+        #expect(response.toolCalls?.first?.id == "call-0")
+        #expect(response.toolCalls?.first?.name == "playTrack")
+        #expect(response.toolCalls?.first?.arguments.contains("srv:1") == true)
+    }
+
     @Test func toolMessagesRoundTripPreservesToolCallIDAndToolCalls() throws {
         let toolMessage = AIMessage(role: .tool, content: "执行成功", toolCallID: "call_abc", name: "playTrack")
         let assistantMessage = AIMessage(
@@ -269,6 +283,16 @@ struct OpenAICompatibleProviderTests {
         #expect(fragments[0].arguments == "{\"trackID\":\"srv")
     }
 
+    @Test func parsesLegacyStreamingFunctionCallWithoutIndex() {
+        let fragments = OpenAICompatibleProvider.streamToolCallFragments(
+            from: #"{"choices":[{"delta":{"function_call":{"name":"searchTrack","arguments":"{\"q\":\"夜曲\"}"}}}]}"#
+        )
+        #expect(fragments.count == 1)
+        #expect(fragments[0].index == 0)
+        #expect(fragments[0].name == "searchTrack")
+        #expect(fragments[0].arguments.contains("夜曲"))
+    }
+
     /// 同一 index 的多个 fragment 跨 chunk 合并后拼成完整 tool call。
     @Test func mergesToolCallFragmentsAndAssembles() {
         var fragments: [Int: OpenAICompatibleProvider.ChatToolCallFragment] = [:]
@@ -311,12 +335,15 @@ struct OpenAICompatibleProviderTests {
         #expect(calls.map(\.id) == ["call_1", "call_2"])
     }
 
-    /// 缺 id 或 name 的异常 fragment 不产出半成品调用。
+    /// 缺 id 时合成稳定调用 ID；缺 name 仍不会产出无法执行的半成品调用。
     @Test func dropsFragmentsMissingIdentity() {
         let fragments: [Int: OpenAICompatibleProvider.ChatToolCallFragment] = [
             0: .init(index: 0, id: nil, name: "searchTrack", arguments: "{}"),
         ]
-        #expect(OpenAICompatibleProvider.assembleToolCalls(from: fragments).isEmpty)
+        let calls = OpenAICompatibleProvider.assembleToolCalls(from: fragments)
+        #expect(calls.count == 1)
+        #expect(calls.first?.id == "call-0")
+        #expect(calls.first?.name == "searchTrack")
     }
 
     @Test func ignoresChunksWithoutToolCalls() {
