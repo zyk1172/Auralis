@@ -507,6 +507,22 @@
           }
         }
       }
+    },
+    "当前接口协议暂不支持：%@。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unsupported endpoint protocol: %@. Auralis currently supports Chat Completions and the Responses API. Choose another model or protocol."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前不支援此介面協議：%@。Auralis 目前支援 Chat Completions 與 Responses API，請更換模型或協議。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

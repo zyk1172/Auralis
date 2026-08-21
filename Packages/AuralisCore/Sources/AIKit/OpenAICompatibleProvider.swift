@@ -5,6 +5,8 @@ import SecurityKit
 public enum AIProviderError: Error, Equatable, Sendable {
     case missingCredential
     case invalidEndpoint
+    /// 当前配置选择了 Auralis 尚未实现的 Provider 协议，例如 Anthropic Messages。
+    case unsupportedEndpointProtocol(String)
     /// 接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（Bearer Key 会明文外发）。
     case insecureEndpoint
     case transport(String)
@@ -30,7 +32,7 @@ public extension AIProviderError {
             return true
         case let .malformedResponse(_, retryable):
             return retryable
-        case .missingCredential, .invalidEndpoint, .insecureEndpoint, .outputTruncated:
+        case .missingCredential, .invalidEndpoint, .unsupportedEndpointProtocol, .insecureEndpoint, .outputTruncated:
             return false
         }
     }
@@ -43,6 +45,8 @@ extension AIProviderError: LocalizedError {
             String(localized: "尚未配置 API Key，请先在设置中填写。", bundle: .module)
         case .invalidEndpoint:
             String(localized: "接口地址无效，请检查 Base URL 与 API 路径。", bundle: .module)
+        case let .unsupportedEndpointProtocol(path):
+            String(localized: "当前接口协议暂不支持：\(path)。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。", bundle: .module)
         case .insecureEndpoint:
             String(localized: "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。", bundle: .module)
         case .outputTruncated:
@@ -89,7 +93,10 @@ public struct OpenAICompatibleProvider: AIProvider {
         self.session = session
     }
 
-    public var supportsToolCalling: Bool { configuration.supportsToolCalling }
+    public var supportsToolCalling: Bool {
+        !Self.usesAnthropicMessagesAPI(apiPath: configuration.apiPath)
+            && configuration.supportsToolCalling
+    }
     public var capabilities: ModelCapabilities {
         // 不再把所有 OpenAI 兼容模型假设为 256K：上下文与输出都来自用户配置，
         // 默认仍为 256K / 16K 以维持旧行为，但 DeepSeek / OpenRouter / Ollama /
@@ -97,7 +104,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         ModelCapabilities(
             maxContextTokens: configuration.maxContextTokens,
             maxOutputTokens: configuration.maxOutputTokens,
-            supportsToolCalling: configuration.supportsToolCalling,
+            supportsToolCalling: supportsToolCalling,
             supportsStreaming: configuration.usesStreaming,
             supportsJSONMode: configuration.supportsJSONMode,
             supportsJSONSchema: configuration.supportsJSONSchema
@@ -126,7 +133,10 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// 解析放在重试循环**内部**：中转网关偶发返回空响应体、HTML 错误页或被截断的
     /// JSON 时，这类瞬时故障也能自动重试，而不是一次解析失败就直接判死。
     public func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
-        try await performRequest(
+        guard !usesAnthropicMessagesAPI else {
+            throw AIProviderError.unsupportedEndpointProtocol(configuration.apiPath)
+        }
+        return try await performRequest(
             body: requestBody(request, stream: false),
             run: { try await session.data(for: $0) },
             transform: { data, _ in
@@ -144,6 +154,11 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     public func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        if usesAnthropicMessagesAPI {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: AIProviderError.unsupportedEndpointProtocol(configuration.apiPath))
+            }
+        }
         if usesResponsesAPI {
             return responsesStream(request)
         }
@@ -430,8 +445,21 @@ public struct OpenAICompatibleProvider: AIProvider {
         return path.hasSuffix("/responses") || path.contains("/v1/responses")
     }
 
+    /// 当前仅识别 Messages 协议用于阻止错误发送；Anthropic transport 尚未实现。
+    static func usesAnthropicMessagesAPI(apiPath: String) -> Bool {
+        let path = apiPath.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return path == "messages"
+            || path == "/messages"
+            || path.hasSuffix("/messages")
+            || path.contains("/v1/messages")
+    }
+
     private var usesResponsesAPI: Bool {
         Self.usesResponsesAPI(apiPath: configuration.apiPath)
+    }
+
+    private var usesAnthropicMessagesAPI: Bool {
+        Self.usesAnthropicMessagesAPI(apiPath: configuration.apiPath)
     }
 
     /// 由 baseURL + apiPath 拼出完整接口地址。

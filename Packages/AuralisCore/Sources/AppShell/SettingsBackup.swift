@@ -300,6 +300,7 @@ struct SettingsBackupSection: View {
                 baseURL: ai.baseURL,
                 apiPath: ai.apiPath,
                 model: ai.model,
+                endpointMode: ai.endpointMode.rawValue,
                 apiKey: aiKey
             ),
             musicDownload: BackupMusicDownloadSettings(
@@ -323,6 +324,10 @@ struct SettingsBackupSection: View {
         defaults.set(backup.ai.baseURL, forKey: AIConnectionSettings.Keys.baseURL)
         defaults.set(backup.ai.apiPath, forKey: AIConnectionSettings.Keys.apiPath)
         defaults.set(backup.ai.model, forKey: AIConnectionSettings.Keys.model)
+        defaults.set(
+            backup.ai.endpointMode ?? AIEndpointMode.infer(from: backup.ai.apiPath).rawValue,
+            forKey: AIConnectionSettings.Keys.endpointMode
+        )
 
         // 关键凭据写入失败必须抛出，禁止「恢复完成」但重启后密码/API Key 全没（P2-4）。
         if let apiKey = backup.ai.apiKey, !apiKey.isEmpty {

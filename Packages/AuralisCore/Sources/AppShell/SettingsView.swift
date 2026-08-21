@@ -648,6 +648,7 @@ struct AIProviderSettingsPage: View {
     @AppStorage(AIConnectionSettings.Keys.baseURL) private var aiBaseURL = AIConnectionSettings.defaultBaseURL
     @AppStorage(AIConnectionSettings.Keys.apiPath) private var aiAPIPath = AIConnectionSettings.defaultAPIPath
     @AppStorage(AIConnectionSettings.Keys.model) private var aiModel = AIConnectionSettings.defaultModel
+    @AppStorage(AIConnectionSettings.Keys.endpointMode) private var aiEndpointModeRaw = AIEndpointMode.chatCompletions.rawValue
     @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
     @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
     @State private var endpointMode: AIEndpointMode = .chatCompletions
@@ -681,6 +682,7 @@ struct AIProviderSettingsPage: View {
                 .pickerStyle(.menu)
 #endif
                 .onChange(of: endpointMode) { _, newValue in
+                    aiEndpointModeRaw = newValue.rawValue
                     if let apiPath = newValue.apiPath {
                         aiAPIPath = apiPath
                     }
@@ -697,6 +699,26 @@ struct AIProviderSettingsPage: View {
                     .textInputAutocapitalization(.never)
 #endif
                     .autocorrectionDisabled()
+                if let recommended = AIConnectionSettings().recommendedEndpointMode,
+                   endpointMode != .custom,
+                   recommended != endpointMode {
+                    let recommendationText = String(localized: "已根据当前模型自动切换为", bundle: .module)
+                        + " \(recommended.subtitle)：\(recommended.apiPath ?? "")"
+                    Label(
+                        recommendationText,
+                        systemImage: "wand.and.stars"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
+                if endpointMode == .anthropicMessages {
+                    Label(
+                        String(localized: "Auralis 尚未实现 Anthropic Messages，当前配置不会发送请求。", bundle: .module),
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.error.color)
+                }
             }
             Section("API Key") {
                 LabeledContent(
@@ -783,7 +805,8 @@ struct AIProviderSettingsPage: View {
                 Text(String(localized: """
 支持 OpenAI Chat Completions、OpenAI Responses API，
 以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio
-和兼容 OpenAI 协议的中转服务。
+和兼容 OpenAI 协议的中转服务。Anthropic Messages
+暂未实现；选择该协议时不会发送请求。
 API Key 仅保存于系统 Keychain。
 """, bundle: .module))
                     .font(.caption)
@@ -792,8 +815,11 @@ API Key 仅保存于系统 Keychain。
         }
         .navigationTitle(String(localized: "OpenAI 兼容接口", bundle: .module))
         .onAppear {
-            endpointMode = AIEndpointMode.infer(from: aiAPIPath)
+            endpointMode = AIConnectionSettings().endpointMode
+            syncEndpointFromModelIfNeeded()
         }
+        .onChange(of: aiModel) { _, _ in syncEndpointFromModelIfNeeded() }
+        .onChange(of: aiBaseURL) { _, _ in syncEndpointFromModelIfNeeded() }
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
@@ -813,7 +839,10 @@ API Key 仅保存于系统 Keychain。
 
     private func testAIConnection() {
         guard let provider = AIConnectionSettings().makeProvider(credentialVault: credentialVault) else {
-            connectionTestResult = .failure(String(localized: "Base URL 或模型未填写完整。", bundle: .module))
+            connectionTestResult = .failure(
+                AIConnectionSettings().completenessError
+                    ?? String(localized: "Base URL 或模型未填写完整。", bundle: .module)
+            )
             return
         }
         isTestingConnection = true
@@ -829,11 +858,23 @@ API Key 仅保存于系统 Keychain。
         }
     }
 
+    private func syncEndpointFromModelIfNeeded() {
+        guard endpointMode != .custom,
+              let recommended = AIEndpointMode.recommended(baseURL: aiBaseURL, model: aiModel),
+              recommended != endpointMode
+        else { return }
+        endpointMode = recommended
+        aiEndpointModeRaw = recommended.rawValue
+        if let apiPath = recommended.apiPath {
+            aiAPIPath = apiPath
+        }
+    }
+
 
 }
 
 /// macOS 的弹窗包装：iOS 直接推入 AIProviderSettingsPage，不经过 sheet。
-private struct AIProviderSettingsSheet: View {
+struct AIProviderSettingsSheet: View {
     let theme: BuiltInTheme
     @Binding var hasAPIKey: Bool
     @Environment(\.dismiss) private var dismiss

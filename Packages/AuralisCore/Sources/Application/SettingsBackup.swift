@@ -52,13 +52,22 @@ public struct BackupAISettings: Codable, Sendable {
     public var baseURL: String
     public var apiPath: String
     public var model: String
+    /// 用户在设置页选择的协议模式；可选以兼容旧备份。
+    public var endpointMode: String?
     /// API Key 明文——只会存在于已加密的备份文件内部。
     public var apiKey: String?
 
-    public init(baseURL: String, apiPath: String, model: String, apiKey: String?) {
+    public init(
+        baseURL: String,
+        apiPath: String,
+        model: String,
+        endpointMode: String? = nil,
+        apiKey: String?
+    ) {
         self.baseURL = baseURL
         self.apiPath = apiPath
         self.model = model
+        self.endpointMode = endpointMode
         self.apiKey = apiKey
     }
 }

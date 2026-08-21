@@ -52,3 +52,48 @@ func blankConfigIsIncomplete() throws {
     #expect(!settings.isComplete)
     #expect(settings.completenessError != nil)
 }
+
+@Test("OpenCode Go 的 Muse 自动选择 Responses API")
+func openCodeMuseUsesResponsesAPI() throws {
+    let defaults = try #require(UserDefaults(suiteName: "auralis-ai-config-test-\(UUID())"))
+    defaults.set("https://opencode.ai/zen/go", forKey: AIConnectionSettings.Keys.baseURL)
+    defaults.set("/v1/chat/completions", forKey: AIConnectionSettings.Keys.apiPath)
+    defaults.set("muse-spark-1.2-contributor", forKey: AIConnectionSettings.Keys.model)
+    defaults.set(AIEndpointMode.chatCompletions.rawValue, forKey: AIConnectionSettings.Keys.endpointMode)
+    let settings = AIConnectionSettings(defaults: defaults)
+
+    #expect(settings.recommendedEndpointMode == .responses)
+    #expect(settings.effectiveEndpointMode == .responses)
+    #expect(settings.effectiveAPIPath == "/v1/responses")
+    #expect(settings.isComplete)
+}
+
+@Test("OpenCode Go 的 Qwen 明确提示 Messages 协议暂不支持")
+func openCodeQwenMessagesIsUnsupported() throws {
+    let defaults = try #require(UserDefaults(suiteName: "auralis-ai-config-test-\(UUID())"))
+    defaults.set("https://opencode.ai/zen/go", forKey: AIConnectionSettings.Keys.baseURL)
+    defaults.set("/v1/chat/completions", forKey: AIConnectionSettings.Keys.apiPath)
+    defaults.set("qwen3.8-max", forKey: AIConnectionSettings.Keys.model)
+    defaults.set(AIEndpointMode.chatCompletions.rawValue, forKey: AIConnectionSettings.Keys.endpointMode)
+    let settings = AIConnectionSettings(defaults: defaults)
+
+    #expect(settings.recommendedEndpointMode == .anthropicMessages)
+    #expect(settings.effectiveEndpointMode == .anthropicMessages)
+    #expect(settings.isComplete == false)
+    #expect(settings.completenessError?.contains("Messages") == true)
+    #expect(settings.makeProvider() == nil)
+}
+
+@Test("自定义 Messages 路径也不会发送请求")
+func customMessagesPathIsUnsupported() throws {
+    let defaults = try #require(UserDefaults(suiteName: "auralis-ai-config-test-\(UUID())"))
+    defaults.set("https://example.com", forKey: AIConnectionSettings.Keys.baseURL)
+    defaults.set("/v1/messages", forKey: AIConnectionSettings.Keys.apiPath)
+    defaults.set("custom-model", forKey: AIConnectionSettings.Keys.model)
+    defaults.set(AIEndpointMode.custom.rawValue, forKey: AIConnectionSettings.Keys.endpointMode)
+    let settings = AIConnectionSettings(defaults: defaults)
+
+    #expect(settings.effectiveEndpointMode == .anthropicMessages)
+    #expect(settings.isComplete == false)
+    #expect(settings.makeProvider() == nil)
+}

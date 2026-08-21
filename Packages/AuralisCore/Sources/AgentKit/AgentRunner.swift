@@ -1489,35 +1489,10 @@ public struct AgentRunner {
     }
 
     /// 把会话历史转成模型可用的消息列表。只保留最近若干轮以控制 token 预算，
-    /// 跳过纯进度/确认类消息，把卡片还原成可读的文本，让上下文连贯且不泄露内部细节。
+    /// 由 AgentHistoryPolicy 统一跳过错误、进度、确认和流式半成品，
+    /// 把卡片还原成可读的文本，让上下文连贯且不泄露内部细节。
     private static func convertHistory(_ history: [AgentChatMessage]) -> [AIMessage] {
-        let sep = "、"
-        let trimmed = Array(history.suffix(40))
-        return trimmed.compactMap { message in
-            var content = ""
-            for item in message.messages {
-                switch item {
-                case let .text(text):
-                    content += text + "\n"
-                case let .trackCards(cards):
-                    content += "（推荐 \(cards.count) 首：\(cards.map(\.title).joined(separator: sep))）\n"
-                case let .albumCards(cards):
-                    content += "（专辑：\(cards.map(\.title).joined(separator: sep))）\n"
-                case let .playlistProposal(name, tracks):
-                    content += "（歌单提案「\(name)」，\(tracks.count) 首）\n"
-                case let .error(text):
-                    content += "错误：\(text)\n"
-                case let .streaming(text):
-                    content += text + "\n"
-                default:
-                    break
-                }
-            }
-            content = content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !content.isEmpty else { return nil }
-            let role: AIMessage.Role = message.role == .user ? .user : .assistant
-            return AIMessage(role: role, content: content)
-        }
+        AgentHistoryPolicy.modelMessages(from: history)
     }
 
     private static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {

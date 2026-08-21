@@ -15136,6 +15136,182 @@
           }
         }
       }
+    },
+    "Anthropic" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic"
+          }
+        }
+      }
+    },
+    "Messages API（暂不支持）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages API (Not Supported Yet)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages API（尚未支援）"
+          }
+        }
+      }
+    },
+    "已根据当前模型自动切换为" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatically switched for the selected model:"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已根據目前模型自動切換為"
+          }
+        }
+      }
+    },
+    "Auralis 尚未实现 Anthropic Messages，当前配置不会发送请求。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis does not support Anthropic Messages yet. This configuration will not send requests."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis 尚未支援 Anthropic Messages，目前設定不會傳送要求。"
+          }
+        }
+      }
+    },
+    "当前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支持该协议。请换用 Chat/Responses 模型，或选择自定义兼容端点。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected model requires Anthropic Messages (/v1/messages), which Auralis does not support yet. Choose a Chat/Responses model or a custom compatible endpoint."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支援此協議。請改用 Chat/Responses 模型，或選擇自訂相容端點。"
+          }
+        }
+      }
+    },
+    "支持 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio\n和兼容 OpenAI 协议的中转服务。Anthropic Messages\n暂未实现；选择该协议时不会发送请求。\nAPI Key 仅保存于系统 Keychain。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supports OpenAI Chat Completions and the OpenAI Responses API,\nplus DeepSeek, Qwen, Kimi, Ollama, LM Studio,\nand OpenAI-protocol-compatible relay services. Anthropic Messages\nis not supported yet; choosing it will not send requests.\nYour API Key is stored only in the system Keychain."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支援 OpenAI Chat Completions 與 OpenAI Responses API，\n以及 DeepSeek、通義千問、Kimi、Ollama、LM Studio\n和相容 OpenAI 協議的中轉服務。Anthropic Messages\n尚未支援；選擇此協議時不會傳送要求。\nAPI Key 僅儲存於系統 Keychain。"
+          }
+        }
+      }
+    },
+    "助手会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistant Sessions"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "助手會話"
+          }
+        }
+      }
+    },
+    "从旧版非沙盒安装迁移会话时，请在文件选择器中选择旧目录或 agent-sessions.json。Auralis 不会在沙盒内静默读取受限路径。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To migrate sessions from an older non-sandboxed install, choose the old directory or agent-sessions.json in the file picker. Auralis will not silently read a restricted path inside the sandbox."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從舊版非沙盒安裝遷移會話時，請在檔案選擇器中選擇舊資料夾或 agent-sessions.json。Auralis 不會在沙盒內靜默讀取受限路徑。"
+          }
+        }
+      }
+    },
+    "导入旧版会话…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Legacy Sessions…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入舊版會話…"
+          }
+        }
+      }
+    },
+    "旧版会话导入失败：" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Legacy session import failed: "
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "舊版會話匯入失敗："
+          }
+        }
+      }
+    },
+    "已导入 %lld 个旧会话，跳过 %lld 个重复会话（%@）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported %lld legacy sessions and skipped %lld duplicates (%@)."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已匯入 %lld 個舊版會話，略過 %lld 個重複會話（%@）。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

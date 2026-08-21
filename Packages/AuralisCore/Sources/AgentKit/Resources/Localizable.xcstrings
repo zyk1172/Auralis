@@ -1,6 +1,86 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "找不到会话文件：%@。请选择旧版 Auralis 目录或 agent-sessions.json。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session file not found: %@. Choose the old Auralis directory or agent-sessions.json."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到會話檔案：%@。請選擇舊版 Auralis 資料夾或 agent-sessions.json。"
+          }
+        }
+      }
+    },
+    "无法读取会话文件 %@：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not read session file %@: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取會話檔案 %@：%@"
+          }
+        }
+      }
+    },
+    "会话文件 %@ 格式无效：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session file %@ has an invalid format: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "會話檔案 %@ 格式無效：%@"
+          }
+        }
+      }
+    },
+    "会话文件 %@ 中没有可导入的会话。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session file %@ contains no sessions to import."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "會話檔案 %@ 中沒有可匯入的會話。"
+          }
+        }
+      }
+    },
+    "导入后保存会话失败：%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The imported sessions could not be saved: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匯入後儲存會話失敗：%@"
+          }
+        }
+      }
+    }
   },
   "version" : "1.0"
 }

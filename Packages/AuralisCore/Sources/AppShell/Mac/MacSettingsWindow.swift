@@ -5,6 +5,7 @@ import LocalCatalog
 import SecurityKit
 import SwiftUI
 import ThemeEngine
+import UniformTypeIdentifiers
 
 /// macOS 独立设置窗口（Settings Scene）。顶部分类工具栏，内容按分类拆分，不使用 iOS 长列表。
 public struct MacSettingsWindow: View {
@@ -141,17 +142,12 @@ public struct MacSettingsWindow: View {
     @AppStorage("auralis.ai.allowsMetadata") private var allowsMetadata = true
     @AppStorage("auralis.ai.allowsLyrics") private var allowsLyrics = false
     @AppStorage("auralis.ai.allowsHistory") private var allowsHistory = false
-    @AppStorage(AIConnectionSettings.Keys.baseURL) private var aiBaseURL = AIConnectionSettings.defaultBaseURL
-    @AppStorage(AIConnectionSettings.Keys.apiPath) private var aiAPIPath = AIConnectionSettings.defaultAPIPath
-    @AppStorage(AIConnectionSettings.Keys.model) private var aiModel = AIConnectionSettings.defaultModel
-    @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
-    @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
     @AppStorage(ExternalMusicPreferences.Keys.enabled) private var externalMusicEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.musicBrainz) private var musicBrainzEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.critiqueBrainz) private var critiqueBrainzEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.listenBrainz) private var listenBrainzEnabled = true
     @State private var hasAPIKey = false
-    @State private var isConfiguringAPIKey = false
+    @State private var isEditingAIProviderSettings = false
     @State private var indexStatus: RecommendationIndexV2Status?
     @State private var isLoadingIndexStatus = false
     @State private var isClearingExternalMusicCache = false
@@ -164,42 +160,10 @@ public struct MacSettingsWindow: View {
     @State private var indexTransferMessage: String?
     @State private var isConfirmingIndexClear = false
     @State private var isClearingIndex = false
-    /// 自定义 token 输入校验提示（提交时校验，输入过程不打扰）。
-    @State private var contextTokenError: String?
-    @State private var outputTokenError: String?
+    @State private var isImportingLegacySessions = false
+    @State private var sessionImportMessage: String?
 
     private let credentialVault = KeychainCredentialVault()
-
-    /// 单次输出上限输入模式：当前值命中预设档位 → 预设；否则 → 自定义（值即事实）。
-    /// 切回预设档位时给一个默认档位，避免 Picker 无选中。
-    private var outputTokenMode: Binding<OutputTokenMode> {
-        Binding(
-            get: {
-                OutputTokenLimitPolicy.containsPreset(aiMaxOutputTokens) ? .preset : .custom
-            },
-            set: { mode in
-                if mode == .preset,
-                   !OutputTokenLimitPolicy.containsPreset(aiMaxOutputTokens),
-                   let first = OutputTokenLimitPolicy.presets.first {
-                    aiMaxOutputTokens = first
-                }
-            }
-        )
-    }
-
-    /// 自定义上下文窗口输入提交时校验并夹取到合法范围（下限 4096，不设上限）。
-    private func commitCustomContextTokens() {
-        let original = aiMaxContextTokens
-        contextTokenError = ContextTokenLimitPolicy.validationMessage(for: original)
-        aiMaxContextTokens = ContextTokenLimitPolicy.clamp(original)
-    }
-
-    /// 自定义输出上限输入提交时校验并夹取到合法范围（下限 512，不设上限）。
-    private func commitCustomOutputTokens() {
-        let original = aiMaxOutputTokens
-        outputTokenError = OutputTokenLimitPolicy.validationMessage(for: original)
-        aiMaxOutputTokens = OutputTokenLimitPolicy.clamp(original)
-    }
 
     private var ai: some View {
         Form {
@@ -209,89 +173,37 @@ public struct MacSettingsWindow: View {
                 Toggle(String(localized: "允许发送歌词", bundle: .module), isOn: $allowsLyrics)
                 Toggle(String(localized: "允许发送播放历史摘要", bundle: .module), isOn: $allowsHistory)
             }
-            Section(String(localized: "OpenAI 兼容接口", bundle: .module)) {
-                TextField("Base URL", text: $aiBaseURL)
-                TextField(String(localized: "API 路径", bundle: .module), text: $aiAPIPath)
-                TextField(String(localized: "模型", bundle: .module), text: $aiModel)
-                HStack {
-                    LabeledContent("API Key", value: hasAPIKey ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module) : String(localized: "未配置", bundle: .module))
-                    Spacer()
-                    Button(hasAPIKey ? String(localized: "更新 API Key", bundle: .module) : String(localized: "配置 API Key", bundle: .module)) {
-                        isConfiguringAPIKey = true
-                    }
-                    if hasAPIKey {
-                        Button(String(localized: "删除", bundle: .module), role: .destructive) {
-                            Task {
-                                try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
-                                hasAPIKey = false
-                            }
-                        }
-                    }
+            Section(String(localized: "大模型", bundle: .module)) {
+                let settings = AIConnectionSettings()
+                LabeledContent(String(localized: "接口协议", bundle: .module), value: settings.endpointSummary)
+                LabeledContent(String(localized: "模型", bundle: .module), value: settings.model)
+                LabeledContent(
+                    "API Key",
+                    value: hasAPIKey
+                        ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module)
+                        : String(localized: "未配置", bundle: .module)
+                )
+                Button(String(localized: "配置大模型…", bundle: .module)) {
+                    isEditingAIProviderSettings = true
                 }
-            }
-            Section(String(localized: "高级设置", bundle: .module)) {
-                // 上下文窗口：可直接输入任意正整数（下至 4096，不设人为上限）。
-                LabeledContent(String(localized: "上下文窗口", bundle: .module)) {
-                    HStack(spacing: 6) {
-                        TextField(
-                            String(localized: "Token 数量", bundle: .module),
-                            value: Binding(
-                                get: { aiMaxContextTokens },
-                                set: { aiMaxContextTokens = $0 }
-                            ),
-                            format: .number
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
-                        .onSubmit { commitCustomContextTokens() }
-
-                        Text("token")
-                            .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                }
-
-                if let contextTokenError {
-                    Text(contextTokenError)
+                if let issue = settings.completenessError {
+                    Label(issue, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.error.color)
                 }
-                // 单次输出上限：预设档位快捷选择 + 自定义任意正整数（不限制在预设档位）。
-                Picker(String(localized: "单次输出上限", bundle: .module), selection: outputTokenMode) {
-                    Text(String(localized: "预设档位", bundle: .module)).tag(OutputTokenMode.preset)
-                    Text(String(localized: "自定义", bundle: .module)).tag(OutputTokenMode.custom)
-                }
-                .pickerStyle(.segmented)
-                if outputTokenMode.wrappedValue == .preset {
-                    Picker(String(localized: "档位", bundle: .module), selection: $aiMaxOutputTokens) {
-                        ForEach(OutputTokenLimitPolicy.presets, id: \.self) { value in
-                            Text("\(value) token").tag(value)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                } else {
-                    HStack {
-                        TextField(
-                            String(localized: "Token 数量", bundle: .module),
-                            value: Binding(
-                                get: { aiMaxOutputTokens },
-                                set: { aiMaxOutputTokens = $0 }
-                            ),
-                            format: .number
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 120)
-                        .onSubmit { commitCustomOutputTokens() }
-                        Text("token").foregroundStyle(theme.colorTokens.secondaryText.color)
-                    }
-                    if let outputTokenError {
-                        Text(outputTokenError)
-                            .font(.caption)
-                            .foregroundStyle(theme.colorTokens.error.color)
-                    }
-                }
-                Text(String(localized: "上下文窗口和单次输出上限均直接使用这里填写的数值，不再由 Auralis 额外设置固定上限。默认仍为 256K / 16K；可按模型实际能力填写更大的数值。最终可用范围由所连接模型或 API 服务端决定。", bundle: .module))
+            }
+            Section(String(localized: "助手会话", bundle: .module)) {
+                Text(String(localized: "从旧版非沙盒安装迁移会话时，请在文件选择器中选择旧目录或 agent-sessions.json。Auralis 不会在沙盒内静默读取受限路径。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
+                Button(String(localized: "导入旧版会话…", bundle: .module)) {
+                    isImportingLegacySessions = true
+                }
+                if let sessionImportMessage {
+                    Text(sessionImportMessage)
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
             }
             Section(String(localized: "公开音乐数据", bundle: .module)) {
                 Toggle(String(localized: "启用公开音乐数据", bundle: .module), isOn: $externalMusicEnabled)
@@ -370,15 +282,8 @@ public struct MacSettingsWindow: View {
             MoviePilotSettingsSection()
         }
         .formStyle(.grouped)
-        .sheet(isPresented: $isConfiguringAPIKey) {
-            APIKeySheet(
-                theme: theme,
-                hasExistingKey: hasAPIKey,
-                onSave: { key in
-                    try await credentialVault.store(key, for: AIConnectionSettings.credentialID)
-                    hasAPIKey = true
-                }
-            )
+        .sheet(isPresented: $isEditingAIProviderSettings) {
+            AIProviderSettingsSheet(theme: theme, hasAPIKey: $hasAPIKey)
         }
         .fileExporter(
             isPresented: $isExportingIndex,
@@ -401,6 +306,17 @@ public struct MacSettingsWindow: View {
                 indexTransferMessage = String(localized: "导入失败：\(error.localizedDescription)", bundle: .module)
             }
         }
+        .fileImporter(
+            isPresented: $isImportingLegacySessions,
+            allowedContentTypes: [.json, .folder]
+        ) { result in
+            switch result {
+            case let .success(url):
+                Task { await importLegacySessions(from: url) }
+            case let .failure(error):
+                sessionImportMessage = localizedSessionImportFailure(error)
+            }
+        }
         .task {
             hasAPIKey = (try? await credentialVault.retrieve(id: AIConnectionSettings.credentialID)) != nil
             await refreshIndexStatus()
@@ -414,6 +330,26 @@ public struct MacSettingsWindow: View {
         } message: {
             Text(String(localized: "将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
         }
+    }
+
+    private func importLegacySessions(from url: URL) async {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessing { url.stopAccessingSecurityScopedResource() }
+        }
+        do {
+            let report = try await model.agentCoordinator.importLegacySessions(from: url)
+            sessionImportMessage = String(
+                localized: "已导入 \(report.importedCount) 个旧会话，跳过 \(report.skippedExistingCount) 个重复会话（\(report.sourceFileName)）。",
+                bundle: .module
+            )
+        } catch {
+            sessionImportMessage = localizedSessionImportFailure(error)
+        }
+    }
+
+    private func localizedSessionImportFailure(_ error: Error) -> String {
+        String(localized: "旧版会话导入失败：", bundle: .module) + error.localizedDescription
     }
 
     private var defaultIndexExportFilename: String {
