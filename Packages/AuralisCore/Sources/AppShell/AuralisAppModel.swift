@@ -3869,6 +3869,75 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
+    private enum SeamlessNextTarget {
+        case queueEntry(id: UUID, track: Track)
+        case logical(index: Int, track: Track)
+
+        var track: Track {
+            switch self {
+            case let .queueEntry(_, track), let .logical(_, track): track
+            }
+        }
+    }
+
+    /// Resolve the next *queue occurrence*, not merely the next Track identity.
+    /// Consecutive duplicate tracks have the same GlobalID, so a Track-only
+    /// lookup cannot distinguish A1 from A2 in `[A, A, B]`.
+    private func seamlessNextTarget() -> SeamlessNextTarget? {
+        guard !isShuffled, repeatMode != .one else { return nil }
+        if sleepTimerMode == .afterCurrentTrack { return nil }
+
+        if let logical = largeLogicalContext, let current = largeLogicalCurrentIndex {
+            let targetIndex: Int
+            if current + 1 < logical.count {
+                targetIndex = current + 1
+            } else if repeatMode == .all, !logical.isEmpty {
+                targetIndex = 0
+            } else {
+                return nil
+            }
+            let target = logical[targetIndex]
+            if sleepTimerMode == .afterCurrentAlbum, target.albumID != currentTrack.albumID { return nil }
+            if sleepTimerMode == .afterCurrentQueue, targetIndex == 0 { return nil }
+            return .logical(index: targetIndex, track: target)
+        }
+
+        guard let current = currentQueueIndex else { return nil }
+        let targetEntry: QueueEntry
+        if queueStore.entries.indices.contains(current + 1) {
+            targetEntry = queueStore.entries[current + 1]
+        } else if repeatMode == .all, let first = queueStore.entries.first {
+            targetEntry = first
+        } else {
+            return nil
+        }
+        if sleepTimerMode == .afterCurrentAlbum, targetEntry.track.albumID != currentTrack.albumID { return nil }
+        if sleepTimerMode == .afterCurrentQueue, current + 1 >= queueStore.count { return nil }
+        return .queueEntry(id: targetEntry.id, track: targetEntry.track)
+    }
+
+    /// Advance the authoritative queue cursor to a previously resolved target.
+    /// The player has already switched audio items, so this method deliberately
+    /// does not call `selectAndPlay`.
+    private func activateSeamlessTarget(_ target: SeamlessNextTarget) -> Track? {
+        switch target {
+        case let .queueEntry(id, _):
+            return queueStore.play(entryID: id)
+        case let .logical(index, track):
+            guard let logical = largeLogicalContext,
+                  logical.indices.contains(index),
+                  queueIdentity(logical[index]) == queueIdentity(track) else { return nil }
+            if let start = largeLogicalWindowStart {
+                let localIndex = index - start
+                if queueStore.entries.indices.contains(localIndex) {
+                    return queueStore.play(entryID: queueStore.entries[localIndex].id)
+                }
+            }
+            rebuildLargeWindow(around: index)
+            return queueStore.currentTrack
+        }
+    }
+
     /// AVQueuePlayer has already advanced into this item. Update only model,
     /// history and platform metadata; calling selectAndPlay here would tear
     /// down the prebuffered player and reintroduce the gap we just removed.
@@ -3886,22 +3955,28 @@ public final class AuralisAppModel: ObservableObject {
             return
         }
 
-        guard seamlessNextCandidate().map(queueIdentity) == queueIdentity(prepared),
-              let canonical = queueStore.entries.first(where: { queueIdentity($0.track) == queueIdentity(prepared) })?.track else {
+        guard let target = seamlessNextTarget(),
+              queueIdentity(target.track) == queueIdentity(prepared),
+              let canonical = activateSeamlessTarget(target) else {
             // Queue changed at the boundary after preparation. Stop the stale
             // transition and let the current queue policy choose deterministically.
-            if let expected = seamlessNextCandidate() {
-                selectAndPlay(expected)
+            if let expected = seamlessNextTarget(),
+               let expectedTrack = activateSeamlessTarget(expected) {
+                selectAndPlay(expectedTrack, reconcileQueue: false)
             } else {
                 pauseAtQueueEnd()
             }
             return
         }
         playbackHistoryStore.resetSelection()
-        currentTrack = canonical
+        // The queue cursor was advanced above by entry UUID / logical index.
+        // Avoid `currentTrack`'s Track-equality guard and TrackID reverse lookup:
+        // both are intentionally unable to distinguish duplicate occurrences.
+        setCurrentTrackWithoutQueueUpdate(canonical)
         playbackPosition = 0
         playbackState = .playing
         loadLyricsIfNeeded(for: canonical)
+        refillLargeWindowIfNeeded()
         syncProgressTimer()
         syncNowPlayingTrack()
         schedulePlaybackSessionPersistence()
@@ -3928,13 +4003,14 @@ public final class AuralisAppModel: ObservableObject {
 
     private func schedulePreparedNext() {
         prepareNextTask?.cancel()
-        let candidate = seamlessNextCandidate()
-        guard let candidate,
+        let target = seamlessNextTarget()
+        guard let target,
               playbackState == .playing || playbackState == .buffering || playbackState == .preparing
         else {
             prepareNextTask = Task { [engine] in await engine.prepareNext(track: nil) }
             return
         }
+        let candidate = target.track
         let currentIdentity = queueIdentity(currentTrack)
         let candidateIdentity = queueIdentity(candidate)
         prepareNextTask = Task { @MainActor [weak self] in
@@ -3949,38 +4025,7 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     private func seamlessNextCandidate() -> Track? {
-        if let logical = largeLogicalContext, let lIdx = largeLogicalCurrentIndex {
-            guard !isShuffled, repeatMode != .one else { return nil }
-            if sleepTimerMode == .afterCurrentTrack { return nil }
-            let candidate: Track?
-            if lIdx + 1 < logical.count {
-                candidate = logical[lIdx + 1]
-            } else if repeatMode == .all {
-                candidate = logical.first
-            } else {
-                candidate = nil
-            }
-            guard let candidate else { return nil }
-            if sleepTimerMode == .afterCurrentAlbum, candidate.albumID != currentTrack.albumID { return nil }
-            if sleepTimerMode == .afterCurrentQueue, lIdx + 1 >= logical.count { return nil }
-            return candidate
-        }
-        guard !isShuffled, repeatMode != .one,
-              let index = currentQueueIndex else { return nil }
-        if sleepTimerMode == .afterCurrentTrack { return nil }
-
-        let candidate: Track?
-        if let next = queueStore.track(at: index + 1) {
-            candidate = next
-        } else if repeatMode == .all {
-            candidate = queueStore.firstTrack
-        } else {
-            candidate = nil
-        }
-        guard let candidate else { return nil }
-        if sleepTimerMode == .afterCurrentAlbum, candidate.albumID != currentTrack.albumID { return nil }
-        if sleepTimerMode == .afterCurrentQueue, queueStore.track(at: index + 1) == nil { return nil }
-        return candidate
+        seamlessNextTarget()?.track
     }
 
     private func pauseAtQueueEnd() {

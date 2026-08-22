@@ -16,6 +16,9 @@ jobs:
     name: Unit tests + builds
     runs-on: macos-15
     timeout-minutes: 60
+    env:
+      XCODEGEN_VERSION: "2.46.0"
+      XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,15 +40,22 @@ jobs:
 
       # R08：XcodeGen 生成结果一致性检查——project.yml 与 .xcodeproj 不得漂移。
       - name: XcodeGen project consistency
+        shell: bash
         run: |
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
-          cp Auralis.xcodeproj/project.pbxproj /tmp/project.pbxproj.before
-          xcodegen generate
+          set -euo pipefail
+          archive="$RUNNER_TEMP/xcodegen-$XCODEGEN_VERSION.zip"
+          install_dir="$RUNNER_TEMP/xcodegen-$XCODEGEN_VERSION"
+          curl --fail --location --retry 3 \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$archive"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$archive" | shasum -a 256 --check
+          mkdir -p "$install_dir"
+          unzip -q "$archive" -d "$install_dir"
+          xcodegen_bin="$install_dir/xcodegen/bin/xcodegen"
+          "$xcodegen_bin" --version
+          "$xcodegen_bin" generate
           if ! git diff --exit-code -- Auralis.xcodeproj/project.pbxproj >/dev/null 2>&1; then
             echo "::error::project.yml 与 Auralis.xcodeproj 不一致。请在本地运行 'xcodegen generate' 并提交生成的工程文件。"
-            cp /tmp/project.pbxproj.before Auralis.xcodeproj/project.pbxproj
             exit 1
           fi
           echo "XcodeGen 输出与已提交工程一致"

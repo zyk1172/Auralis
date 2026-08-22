@@ -17,8 +17,10 @@
 | SEARCH-001 | P2 / 高 | 在线搜索请求返回顺序与输入顺序不同，旧结果可能显示在新查询下。 | `AuralisAppModel.searchOnServer/clearServerSearch` 增加取消、generation、server/query 校验；`SearchView` 绑定结果查询词并在新查询开始时清空。 | SwiftPM 全套通过；需联网端点的真实搜索矩阵列入手工验收。 |
 | AGENT-001 | P1 / 高 | 基线中 playlist/memory/skill 删除工具经 Coordinator 的 `confirm: { _ in true }` 直接到执行桥，存在不可逆误删。 | `AgentToolRegistry` 仅为 `playlist_delete`、`memory_delete`、`memory_clear`、`skill_delete` 标记 `requiresConfirmation`；`AgentRunner` 在副作用前等待一次任务级 UI continuation，拒绝跳过桥并抑制同签名重复询问；`AgentCoordinator` / `AssistantView` 提供批准与拒绝状态。普通播放、队列清空/替换、下载、服务器切换/本地删除、标注仍直接执行。 | `AgentPermissiveRuntimeTests` 41 项通过，覆盖批准一次、拒绝不执行、重复调用不重复弹窗；`CoordinatorRound3Tests` 通过。 |
 | MEDIA-001 | P2 / 高 | 播放模式切换会把媒体控制中心上一首/下一首重新置灰；远端队列边界状态不随逻辑队列更新。 | `RemoteCommandCoordinator.syncState` 的 previous/next 改为可选增量更新；`SystemMediaIntegrationController.queueCapabilitiesChanged` 与 `AuralisAppModel.syncRemoteCommandCapabilities` 在队列、当前曲目、窗口重建、Now Playing 更新时同步。 | SwiftPM / iOS 与 macOS Release 构建通过；锁屏/控制中心真机矩阵仍需手工确认。 |
-| DATA-001 | P2 / 高 | 小目录的派生艺术家/专辑索引异步发布，UI 立即读取时可能看到旧索引。 | `AppDomainStores.scheduleDerivedIndexRebuild` 对 <=1,000 曲目/专辑同步安装索引，较大目录继续使用 revision-gated detached rebuild。 | 修复前失败的 `MacArtistsRegressionTests` 与全 AppShell 263 项通过。 |
+| GAPLESS-001 | P1 / 高 | AVQueuePlayer 从 A₁ 无缝切到相同 Track 的 A₂ 时，按 TrackID 反查会把 occurrence 留在 A₁；`currentTrack` 的相等保护也会阻止游标更新。 | `AuralisAppModel` 的 prepared-track 回调先解析确定的下一 `QueueEntry` UUID 或 logical occurrence index，再推进 `queueStore`；大队列窗口外目标按 logical index 重建窗口，随后只更新播放状态，不重新调用 `selectAndPlay`。 | `GaplessPreparationTests` 新增普通 `[A,A,B]` 与 >500 首窗口边界重复项回归；该套件 6 项通过。 |
+| DATA-001 | P2 / 高 | 小目录的派生艺术家/专辑索引异步发布，UI 立即读取时可能看到旧索引。 | `AppDomainStores.scheduleDerivedIndexRebuild` 对 <=1,000 曲目/专辑同步安装索引，较大目录继续使用 revision-gated detached rebuild。 | 修复前失败的 `MacArtistsRegressionTests` 与全 AppShell 265 项通过。 |
 | CI-001 | P2 / 高 | CI 只有 Debug 与 generic iOS，无法发现 Release 优化/实际 Simulator 链路问题。 | `.github/workflows/ci.yml` 增加 macOS Release、generic iOS Release、可用 iPhone Simulator Debug 构建（无 runtime 时明确 warning 跳过）。 | 本地 macOS/iOS Release 与 iOS Simulator Debug 均通过。 |
+| CI-002 | P1 / 高 | CI 使用 Homebrew 最新 XcodeGen 会让生成的 `project.pbxproj` 与开发机漂移；Swift 新工具链拒绝 `ratings` 局部变量遮蔽同名方法。 | CI 固定 XcodeGen `2.46.0` 并校验官方 zip SHA-256；`RecommendationIndexV2` 改用 `ratingsByID` 与显式 `self.ratings(serverID:)`；提交的工程文件同步到该版本输出。 | 本地隔离生成一致性检查、SHA 校验、`LocalCatalogTests` 65 项及 macOS/iOS Release 构建通过；推送后以 GitHub Actions 为最终门禁。 |
 | UX-001 | P2 / 中高 | 文档声称 iPad 三栏/`NavigationSplitView`，实际 root 是 iPhone/iPad 共用 `IOSMusicShell` + `NavigationStack`；误导后续维护与验收。 | 更新 `README.md`、`Docs/ApplePlatformAudit.md`、`Docs/ManualValidation.md`，明确统一 Shell、可读宽度、浮动 Dock 与 Stage Manager/分屏手工矩阵。未为了文档而引入第二套 iPad 架构。 | iPhone iOS 27 Simulator 启动与截图；当前机器没有可用 iPadOS 27 runtime，iPad 真机/分屏仍是剩余手工项。 |
 | AI-001 | P2 / 高 | 兼容端点拒绝 tools/schema 时，旧回退请求把大模型输出强制 `min(..., 16K)`，会悄悄缩短用户/provider 配置。 | `AgentRunner` schema fallback 保留 `reservedOutput`；`AIProvider`、`ContextManager`、`AgentCoordinator` 注释改为 Provider/ModelCapabilities 驱动。现有设置档位支持 1M context / 128K output，Agent 不再添加固定 token 上限。 | SwiftPM 全套通过；需真实 400/422 中转端点验证请求体。 |
 
@@ -55,7 +57,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild -scheme
 git diff --check                                                                                                                                                                  PASS
 ```
 
-SwiftPM 结果：AppShell 263/263、Agent 248/248、Network Provider 86/86；合计 597 项通过。现存输出只有 Swift 6 的既有 warning（无需 `await` / 不必要 `try`），未发现新的编译错误。
+SwiftPM 结果：AppShell 265/265（含 2 个 gapless occurrence 回归）、Agent 248/248、Network Provider 86/86、LocalCatalog 65/65 等分组全部通过。现存输出只有 Swift 6 的既有 warning（无需 `await` / 不必要 `try`），未发现新的编译错误。
 
 ## 续接点与剩余风险
 

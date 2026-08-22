@@ -563,13 +563,13 @@ extension LocalCatalogStore {
         let tracks = try allTracks(serverID: serverID)
         let popularity = try popularityScores(serverID: serverID)
         let favorites = Set(try getFavorites(serverID: serverID).map(\.globalID))
-        let ratings = serverID.flatMap { try? ratings(serverID: $0) } ?? [:]
+        let ratingsByID = serverID.flatMap { try? self.ratings(serverID: $0) } ?? [:]
         let lines = tracks.map { track -> CatalogTrackLine in
             let id = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
             return CatalogTrackLine(
                 id: id.description, title: track.title, artist: track.artistName, album: track.albumTitle,
                 year: track.year, genres: track.genres, language: track.language, duration: Int(track.duration),
-                isFavorite: track.isFavorite || favorites.contains(id), rating: ratings[id] ?? track.rating,
+                isFavorite: track.isFavorite || favorites.contains(id), rating: ratingsByID[id] ?? track.rating,
                 playCount: popularity[id]?.playCount ?? 0, isDownloaded: false
             )
         }.sorted { lhs, rhs in lhs.id < rhs.id }
