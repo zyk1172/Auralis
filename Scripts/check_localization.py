@@ -14,7 +14,7 @@ Checks:
 
 Exit code 0 = pass, 1 = fail.
 """
-import json, pathlib, sys, argparse, re, subprocess
+import json, pathlib, sys, argparse, re, shutil, subprocess
 
 HAN_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF]")
 
@@ -124,18 +124,54 @@ HARDCODED_FILE_ALLOWLIST = [
     "RecommendationIndex",
 ]
 
+def _source_files(roots):
+    """Yield repository files without requiring ripgrep on CI runners."""
+    for root in roots:
+        path = pathlib.Path(root)
+        if not path.exists():
+            continue
+        if path.is_file():
+            yield path
+            continue
+        yield from (candidate for candidate in path.rglob("*") if candidate.is_file())
+
+
+def _search_lines_with_rg(args):
+    """Return rg output when available, otherwise let callers use Python fallback."""
+    rg = shutil.which("rg")
+    if not rg:
+        return None
+    result = subprocess.run([rg, *args], capture_output=True, text=True)
+    return result.stdout
+
+
 def check_hardcoded():
     """扫描用户可见硬编码中文（Swift 字符串字面量）。忽略：注释、log、协议/JSON key、
     通过 // i18n:ignore - <reason> 声明忽略的内部固定字符串。"""
     errors = []
-    result = subprocess.run(
-        ["rg", "-n", "--pcre2",
+    rg_output = _search_lines_with_rg(
+        ["-n", "--pcre2",
          '"([^"\\\\]|\\\\.)*\\p{Han}([^"\\\\]|\\\\.)*"',
          "Apps", "Packages/AuralisCore/Sources",
-         "--no-heading", "-g", "!*.xcstrings"],
-        capture_output=True, text=True
+         "--no-heading", "-g", "!*.xcstrings"]
     )
-    lines = result.stdout.strip().splitlines() if result.stdout else []
+    if rg_output is not None:
+        lines = rg_output.strip().splitlines() if rg_output else []
+    else:
+        # GitHub's macos-15 image does not guarantee rg. Keep the audit
+        # hermetic by matching Swift string literals with the standard library.
+        literal_re = re.compile(r'"([^"\\]|\\.)*"')
+        lines = []
+        for path in _source_files(["Apps", "Packages/AuralisCore/Sources"]):
+            if path.suffix != ".swift":
+                continue
+            try:
+                contents = path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+            for lineno, content in enumerate(contents, 1):
+                if any(contains_han(match.group()) for match in literal_re.finditer(content)):
+                    lines.append(f"{path}:{lineno}:{content}")
     # 收集所在行可被识别的 i18n:ignore 注释（用 rg 单独抓取在文件名/行号层面处理）。
     ignore_spans = _collect_ignores()
     for line in lines:
@@ -164,11 +200,23 @@ def _collect_ignores():
     """收集所有 `// i18n:ignore - <reason>` 覆盖的行号。
     行内 ignore 覆盖当前行 + 下一行；独立注释行的 block-ignore 一直延伸到空行/文件尾。"""
     spans = {}
-    result = subprocess.run(
-        ["rg", "-n", "i18n:ignore", "Apps", "Packages"],
-        capture_output=True, text=True)
+    rg_output = _search_lines_with_rg(["-n", "i18n:ignore", "Apps", "Packages"])
+    if rg_output is not None:
+        lines = rg_output.strip().splitlines()
+    else:
+        lines = []
+        for path in _source_files(["Apps", "Packages"]):
+            try:
+                contents = path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+            lines.extend(
+                f"{path}:{lineno}:{content}"
+                for lineno, content in enumerate(contents, 1)
+                if "i18n:ignore" in content
+            )
     cache = {}
-    for line in result.stdout.strip().splitlines():
+    for line in lines:
         parts = line.split(":", 2)
         if len(parts) < 3:
             continue

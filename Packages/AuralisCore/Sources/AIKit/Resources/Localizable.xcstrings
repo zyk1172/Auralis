@@ -68,7 +68,20 @@
       }
     },
     "Responses 流在工具调用参数完成前中断" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Responses stream ended before tool-call arguments were complete"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Responses 串流在工具呼叫參數完成前中斷"
+          }
+        }
+      }
     },
     "响应流失败" : {
       "localizations" : {
@@ -103,7 +116,20 @@
       }
     },
     "当前接口协议不能由 OpenAI Provider 处理：%@。请检查协议选择。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current API protocol cannot be handled by the OpenAI provider: %@. Check the protocol selection."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前的介面協定無法由 OpenAI Provider 處理：%@。請檢查協定選擇。"
+          }
+        }
+      }
     },
     "当前接口协议暂不支持：%@。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。" : {
       "extractionState" : "stale",
