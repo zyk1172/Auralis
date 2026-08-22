@@ -237,22 +237,22 @@ private struct BridgeStub: AgentBridge {
     func setSleepTimer(mode: String, minutes: TimeInterval) {}
     func cancelSleepTimer() {}
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
-    func addToQueue(globalID: GlobalID) {}
-    func playNext(globalID: GlobalID) {}
-    func replaceQueue(globalIDs: [GlobalID]) {}
-    func removeFromQueue(at index: Int) {}
-    func reorderQueue(from: Int, to: Int) {}
-    func clearQueue() {}
-    func shuffleRemaining() {}
+    func addToQueue(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func playNext(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { .confirmed("ok") }
+    func removeFromQueue(at index: Int) async -> AgentMutationResult { .confirmed("ok") }
+    func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
+    func clearQueue() async -> AgentMutationResult { .confirmed("ok") }
+    func shuffleRemaining() async -> AgentMutationResult { .confirmed("ok") }
     func saveQueueAsPlaylist(name: String) async -> Bool { true }
     func createPlaylist(name: String) -> GlobalID? { nil }
-    func renamePlaylist(globalID: GlobalID, name: String) {}
+    func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { .confirmed("ok") }
     func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool { true }
-    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) {}
-    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) {}
-    func duplicatePlaylist(playlistGID: GlobalID) {}
-    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) {}
-    func deletePlaylist(globalID: GlobalID) {}
+    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { .confirmed("ok") }
+    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
+    func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { .confirmed("ok") }
+    func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func likeTrack(globalID: GlobalID) {}
     func unlikeTrack(globalID: GlobalID) {}
     func favoriteAlbum(globalID: GlobalID) {}

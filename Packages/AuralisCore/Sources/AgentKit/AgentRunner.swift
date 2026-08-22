@@ -328,7 +328,20 @@ public struct AgentRunner {
                 requestedInputBudget: resolvedInputBudget,
                 reservedOutputTokens: reservedOutput + schemaTokens
             )
-            conversation = ContextManager.trimByTokens(conversation, maxTokens: contextBudget)
+            guard ContextManager.canFitCurrentUser(conversation, userText: userText, maxTokens: contextBudget) else {
+                let message = "当前模型上下文过小，连系统协议与本次问题都无法同时发送。请切换到上下文更大的模型，或降低输出 Token / 关闭原生工具后重试。"
+                taskState.errors.append(message)
+                taskState.status = .failed
+                taskState.updatedAt = .now
+                await state(taskState)
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                return
+            }
+            conversation = ContextManager.trimByTokens(
+                conversation,
+                maxTokens: contextBudget,
+                preservingUserText: userText
+            )
 
             // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
             // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
@@ -790,7 +803,12 @@ public struct AgentRunner {
                     // 单工具超时/异常只回灌结构化失败结果，不终止整项任务；模型可换工具/换参数继续。
                     let failureText: String
                     if error is AgentRunnerError {
-                        failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，结果未知。可以重试该工具，或换一种方式继续。"
+                        if descriptor.permission != .readOnly {
+                            ws.recordIndeterminateSideEffect(tool: call.name, args: call.args)
+                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，服务端结果未知。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
+                        } else {
+                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，可改用其他查询方式继续。"
+                        }
                     } else {
                         failureText = "（工具执行结果）\(call.name): 执行中断 - \(Self.errorText(error))"
                     }
@@ -1310,15 +1328,6 @@ public struct AgentRunner {
             return
         }
 
-        if lower.contains("歌单") {
-            let list = (try? await catalog.listPlaylists(serverID: context.serverID)) ?? []
-            let text = list.isEmpty
-                ? "暂无歌单。"
-                : "歌单：" + list.map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
-            await emit(AgentChatMessage(role: .assistant, messages: [.text(text)]))
-            return
-        }
-
         // 添加到歌单（LLM 不可用时本地规则直接完成）
         if lower.contains("加到歌单") || lower.contains("加入歌单") || lower.contains("放进歌单") || lower.contains("存到歌单") {
             let trackText = Self.extractBetween(text, left: ["把", "将"], right: ["加到", "加入", "放进", "存到"]) ?? text
@@ -1354,6 +1363,15 @@ public struct AgentRunner {
             } else {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("创建歌单失败，请检查服务器连接。")]))
             }
+            return
+        }
+
+        if lower.contains("歌单") {
+            let list = (try? await catalog.listPlaylists(serverID: context.serverID)) ?? []
+            let text = list.isEmpty
+                ? "暂无歌单。"
+                : "歌单：" + list.map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
+            await emit(AgentChatMessage(role: .assistant, messages: [.text(text)]))
             return
         }
 
@@ -1796,16 +1814,47 @@ public struct AgentRunner {
     }
 
     private static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await body() }
-            group.addTask {
-                try await Task<Never, Never>.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw AgentRunnerError.timeout
+        let gate = TimeoutGate<T>()
+        return try await withCheckedThrowingContinuation { continuation in
+            gate.install(continuation)
+            let operation = Task {
+                do {
+                    gate.resolve(.success(try await body()))
+                } catch {
+                    gate.resolve(.failure(error))
+                }
             }
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else { throw AgentRunnerError.timeout }
-            return result
+            Task {
+                do {
+                    try await Task.sleep(for: .seconds(seconds))
+                } catch {
+                    return
+                }
+                operation.cancel()
+                gate.resolve(.failure(AgentRunnerError.timeout))
+            }
         }
+    }
+}
+
+/// Swift 任务取消是协作式的。这个门闩保证调用方在期限到达时立即恢复，晚到的
+/// 非协作工具结果会被丢弃；写操作在 Runner 中相应标记为 indeterminate。
+private final class TimeoutGate<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+
+    func install(_ continuation: CheckedContinuation<Value, Error>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func resolve(_ result: Result<Value, Error>) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
     }
 }
 

@@ -140,7 +140,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             preparedItem = nil
             preparedTrack = nil
         } else {
-            stopAll()
+            stopAll(invalidateGeneration: false)
         }
         let stopMs = durationMs(stopStart.duration(to: .now))
         AuralisLog.playback.debug("ENGINE_STOP_OLD_PLAYER_MS duration_ms=\(stopMs, privacy: .public) reused=\(reusedPlayer != nil, privacy: .public)")
@@ -149,6 +149,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         playbackState = .preparing
         CrashLog.shared.log("配置 AVAudioSession...")
         await configureSession()
+
+        // configureSession() 在 iOS 上会挂起；恢复时旧 play() 绝不能再触碰共享播放器。
+        try Task.checkCancellation()
+        guard generation == playGeneration else { return }
 
         guard let streamURL = track.streamURL else {
             playbackState = .failed(.engineFailure("该歌曲没有可播放的地址"))
@@ -168,9 +172,11 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         if let existing = reusedPlayer {
             player = existing
             player.automaticallyWaitsToMinimizeStalling = true
-            if player.canInsert(item, after: nil) {
-                player.insert(item, after: nil)
+            guard player.canInsert(item, after: nil) else {
+                playbackState = .failed(.engineFailure("播放器无法插入当前歌曲"))
+                throw PlaybackError.engineFailure("播放器无法插入当前歌曲")
             }
+            player.insert(item, after: nil)
         } else {
             player = AVQueuePlayer(items: [item])
             player.automaticallyWaitsToMinimizeStalling = true
@@ -260,14 +266,18 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     }
 
     public func resume() throws {
-        guard currentTrack != nil else {
-            throw PlaybackError.engineFailure("No current track")
+        guard currentTrack != nil,
+              let player = avPlayer,
+              let item = player.currentItem,
+              item.status != .failed
+        else {
+            throw PlaybackError.engineFailure("No playable current item")
         }
         cancelStallTimeout()
-        avPlayer?.play()
+        player.play()
         // 暂停恢复后重新应用保存的播放速度。
         if playbackRate != 1.0 {
-            avPlayer?.rate = playbackRate
+            player.rate = playbackRate
         }
         playbackState = .playing
     }
@@ -324,8 +334,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         resolvedDuration = nil
     }
 
-    private func stopAll() {
+    private func stopAll(invalidateGeneration: Bool = true) {
         CrashLog.shared.log("AVFoundationPlaybackEngine.stopAll")
+        if invalidateGeneration {
+            // stop 可能发生在 configureSession() 等待期间；让旧任务恢复后直接失效。
+            playGeneration += 1
+        }
         failureReported = false
         cancelStallTimeout()
         cancelBoundaryFallback()

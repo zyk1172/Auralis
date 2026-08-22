@@ -213,22 +213,22 @@ public struct AgentToolkit {
             await bridge.previous(); return .ok(call, descriptor, "上一首")
         case "addToQueue":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.addToQueue(globalID: gid); return .ok(call, descriptor, "已加入队列")
+            return mutationToolResult(call, descriptor, await bridge.addToQueue(globalID: gid))
         case "playNext":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.playNext(globalID: gid); return .ok(call, descriptor, "下一首播放")
+            return mutationToolResult(call, descriptor, await bridge.playNext(globalID: gid))
         case "replaceQueue":
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            await bridge.replaceQueue(globalIDs: gids); return .ok(call, descriptor, "已替换队列（\(gids.count) 首）")
+            return mutationToolResult(call, descriptor, await bridge.replaceQueue(globalIDs: gids))
         case "removeFromQueue", "queue_remove":
             let index = try intParam(call, "index")
-            await bridge.removeFromQueue(at: index); return .ok(call, descriptor, "已移除队列第 \(index) 项")
+            return mutationToolResult(call, descriptor, await bridge.removeFromQueue(at: index))
         case "reorderQueue":
             let from = try intParam(call, "from")
             let to = try intParam(call, "to")
-            await bridge.reorderQueue(from: from, to: to); return .ok(call, descriptor, "已调整队列顺序")
+            return mutationToolResult(call, descriptor, await bridge.reorderQueue(from: from, to: to))
         case "clearQueue":
-            await bridge.clearQueue(); return .ok(call, descriptor, "已清空队列")
+            return mutationToolResult(call, descriptor, await bridge.clearQueue())
 
         // MARK: Playlist
         case "listPlaylists":
@@ -254,8 +254,7 @@ public struct AgentToolkit {
         case "renamePlaylist", "playlist_rename":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             let name = try require(call, "name")
-            await bridge.renamePlaylist(globalID: gid, name: name)
-            return .ok(call, descriptor, "已重命名")
+            return mutationToolResult(call, descriptor, await bridge.renamePlaylist(globalID: gid, name: name))
         case "addTracksToPlaylist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
@@ -268,28 +267,23 @@ public struct AgentToolkit {
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let indices = try intsParam(call, "indices")
-            await bridge.removeTracksFromPlaylist(playlistGID: gid, atIndices: indices)
-            return .ok(call, descriptor, "已移除 \(indices.count) 首")
+            return mutationToolResult(call, descriptor, await bridge.removeTracksFromPlaylist(playlistGID: gid, atIndices: indices))
         case "reorderPlaylist", "playlist_move":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let from = try intParam(call, "from")
             let to = try intParam(call, "to")
-            await bridge.reorderPlaylist(playlistGID: gid, from: from, to: to)
-            return .ok(call, descriptor, "已调整顺序")
+            return mutationToolResult(call, descriptor, await bridge.reorderPlaylist(playlistGID: gid, from: from, to: to))
         case "duplicatePlaylist", "playlist_duplicate":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
-            await bridge.duplicatePlaylist(playlistGID: gid)
-            return .ok(call, descriptor, "已复制歌单")
+            return mutationToolResult(call, descriptor, await bridge.duplicatePlaylist(playlistGID: gid))
         case "mergePlaylists", "playlist_merge":
             let gids = try await requirePlaylistIDs(call, "sourceIDs", catalog: catalog, serverID: serverID)
             let name = try require(call, "name")
-            await bridge.mergePlaylists(sourceGIDs: gids, into: name)
-            return .ok(call, descriptor, "已合并歌单")
+            return mutationToolResult(call, descriptor, await bridge.mergePlaylists(sourceGIDs: gids, into: name))
         case "deletePlaylist", "playlist_delete":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
-            await bridge.deletePlaylist(globalID: gid)
-            return .ok(call, descriptor, "已删除歌单")
+            return mutationToolResult(call, descriptor, await bridge.deletePlaylist(globalID: gid))
 
         // MARK: Annotation
         case "likeTrack":
@@ -886,8 +880,7 @@ public struct AgentToolkit {
             let summaries = try await catalog.tracksForArtist(gid)
             let gids = summaries.map(\.globalID)
             guard !gids.isEmpty else { return .fail(call, descriptor, "该艺术家没有可播放的歌曲") }
-            await bridge.replaceQueue(globalIDs: gids)
-            return .ok(call, descriptor, "开始播放 \(gids.count) 首")
+            return mutationToolResult(call, descriptor, await bridge.replaceQueue(globalIDs: gids))
         case "playback_play_random":
             _ = (try? intParam(call, "limit")) ?? 30
             await bridge.playRandom(); return .ok(call, descriptor, "已开始随机播放")
@@ -946,22 +939,21 @@ public struct AgentToolkit {
             return .ok(call, descriptor, "队列 \(queue.count) 首", .text(queue.prefix(30).map(\.title).joined(separator: "、")))
         case "queue_append":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.addToQueue(globalID: gid); return .ok(call, descriptor, "已加入队列")
+            return mutationToolResult(call, descriptor, await bridge.addToQueue(globalID: gid))
         case "queue_play_next":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.playNext(globalID: gid); return .ok(call, descriptor, "已插入到当前歌曲之后")
+            return mutationToolResult(call, descriptor, await bridge.playNext(globalID: gid))
         case "queue_replace":
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            await bridge.replaceQueue(globalIDs: gids); return .ok(call, descriptor, "已替换队列（\(gids.count) 首）")
+            return mutationToolResult(call, descriptor, await bridge.replaceQueue(globalIDs: gids))
         case "queue_clear":
-            await bridge.clearQueue(); return .ok(call, descriptor, "已清空队列")
+            return mutationToolResult(call, descriptor, await bridge.clearQueue())
         case "queue_move":
             let from = try intParam(call, "from")
             let to = try intParam(call, "to")
-            await bridge.reorderQueue(from: from, to: to)
-            return .ok(call, descriptor, "已调整队列顺序")
+            return mutationToolResult(call, descriptor, await bridge.reorderQueue(from: from, to: to))
         case "queue_shuffle_remaining":
-            await bridge.shuffleRemaining(); return .ok(call, descriptor, "已随机剩余队列")
+            return mutationToolResult(call, descriptor, await bridge.shuffleRemaining())
         case "queue_save_as_playlist":
             let name = try require(call, "name")
             let ok = await bridge.saveQueueAsPlaylist(name: name)
@@ -1011,8 +1003,10 @@ public struct AgentToolkit {
         case "server_test_connection":
             let sid = try requireServerID(call, "serverID")
             let ok = await bridge.testServerConnection(serverID: sid)
-            return .ok(call, descriptor, ok ? "连接成功" : "连接失败",
-                       .text(ok ? "服务器 \(sid.rawValue) 可达" : "服务器 \(sid.rawValue) 无响应或凭据失效，请检查网络与登录状态"))
+            guard ok else {
+                return .fail(call, descriptor, "服务器 \(sid.rawValue) 无响应或凭据失效，请检查网络与登录状态")
+            }
+            return .ok(call, descriptor, "连接成功", .text("服务器 \(sid.rawValue) 可达"))
         case "server_get_capabilities":
             if let server = await bridge.getActiveServer() {
                 return .ok(call, descriptor, "当前服务器：\(server.displayName)", .text("当前服务器：\(server.displayName)（ID \(server.id.rawValue)）。能力以实际连接检测结果为准，可执行 server_test_connection 验证连通性。"))
@@ -1084,6 +1078,17 @@ public struct AgentToolkit {
             return array.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         }
         return raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    private static func mutationToolResult(_ call: ToolCall, _ descriptor: ToolDescriptor, _ result: AgentMutationResult) -> ToolResult {
+        switch result.state {
+        case .confirmed:
+            return .ok(call, descriptor, result.summary)
+        case .failed:
+            return .fail(call, descriptor, result.summary)
+        case .indeterminate:
+            return .fail(call, descriptor, "结果未知：\(result.summary)")
+        }
     }
 
     /// 语言匹配：支持「中文」「zh」「cmn」「Chinese」等常见写法，子串包含即可。
@@ -1206,10 +1211,10 @@ public struct AgentToolkit {
     }
 
     private static func requireTrackIDs(_ call: ToolCall, _ key: String, catalog: LocalCatalogStore, serverID: ServerID?) async throws -> [GlobalID] {
-        let raw = try require(call, key)
+        let values = try listParam(call, key)
+        guard !values.isEmpty else { throw AgentToolError.missingParameter(key) }
         var result: [GlobalID] = []
-        for piece in raw.split(separator: ",") {
-            let trimmed = String(piece).trimmingCharacters(in: .whitespaces)
+        for trimmed in values {
             guard let gid = GlobalID(trimmed),
                   serverIDMatches(gid, serverID),
                   try await catalog.getTrack(gid) != nil
@@ -1222,10 +1227,10 @@ public struct AgentToolkit {
     }
 
     private static func requirePlaylistIDs(_ call: ToolCall, _ key: String, catalog: LocalCatalogStore, serverID: ServerID?) async throws -> [GlobalID] {
-        let raw = try require(call, key)
+        let values = try listParam(call, key)
+        guard !values.isEmpty else { throw AgentToolError.missingParameter(key) }
         let playlists = try await catalog.listPlaylists()
-        return try raw.split(separator: ",").map { piece -> GlobalID in
-            let trimmed = String(piece).trimmingCharacters(in: .whitespaces)
+        return try values.map { trimmed -> GlobalID in
             guard let gid = GlobalID(trimmed), playlists.contains(where: { $0.globalID == gid }) else {
                 throw AgentToolError.invalidEntityID(key, trimmed)
             }

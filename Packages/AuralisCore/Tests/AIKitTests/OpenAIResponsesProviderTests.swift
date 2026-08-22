@@ -713,6 +713,29 @@ struct OpenAIResponsesNetworkTests {
         #expect(events.last == .completed)
     }
 
+    @Test func responsesEOFWithIncompleteFunctionCallIsRetryableFailure() async {
+        let sse = """
+        data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_partial","type":"function_call","call_id":"call_partial","name":"searchTrack"}}
+
+        data: {"type":"response.function_call_arguments.delta","item_id":"fc_partial","output_index":0,"delta":"{\\"q\\":\\"夜"}
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+        ])
+        let provider = makeProvider(session: makeMockSession())
+
+        do {
+            for try await _ in provider.stream(
+                AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])
+            ) {}
+            Issue.record("未完成工具调用的 EOF 不应作为成功完成")
+        } catch let error as AIProviderError {
+            #expect(error == .malformedResponse(detail: String(localized: "Responses 流在工具调用参数完成前中断", bundle: .module), retryable: true))
+        } catch {
+            Issue.record("错误类型不符：\(error)")
+        }
+    }
+
     @Test func streamsFailedEventThrowsMalformed() async {
         let sse = """
         data: {"type":"response.output_text.delta","delta":"你"}

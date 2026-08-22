@@ -445,15 +445,30 @@ func v2LyricsPrivacyGate() async throws {
 func v2ServerTestConnection() async throws {
     let store = try makeV2Store()
     let bridge = MockAgentBridge()
-    let system = StubSystemService()
     let result = await AgentToolkit.executeV2(
-        ToolCall(name: "server_test_connection", arguments: [:]),
-        bridge: bridge, catalog: store, serverID: nil, systemService: system
+        ToolCall(name: "server_test_connection", arguments: ["serverID": "srv"]),
+        bridge: bridge, catalog: store, serverID: nil, systemService: nil
     )
     #expect(result.success)
     #expect(result.summary.contains("连接成功"))
     #expect(!result.summary.contains("token"))
     #expect(!result.summary.contains("http"))
+}
+
+@Test("server_test_connection 的失败不能伪装成工具成功")
+func serverTestConnectionReportsFailure() async throws {
+    let store = try makeV2Store()
+    let bridge = MockAgentBridge(activeServerID: "active-server")
+    bridge.testConnectionResult = false
+    let result = await AgentToolkit.executeV2(
+        ToolCall(name: "server_test_connection", arguments: ["serverID": "other-server"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: ServerID(rawValue: "active-server"),
+        systemService: nil
+    )
+    #expect(!result.success)
+    #expect(result.summary.contains("other-server"))
 }
 
 @Test("v2 system tool without service returns unavailable")
@@ -507,10 +522,12 @@ struct QueueV2Tests {
         #expect(clear.success)
 
         let replace = await AgentToolkit.executeV2(
-            ToolCall(name: "queue_replace", arguments: ["trackIDs": "s:1,s:2"]),
+            // 原生 Function Calling 将 JSON array 保留为字符串值后传入 Toolkit。
+            ToolCall(name: "queue_replace", arguments: ["trackIDs": #"["s:1","s:2"]"#]),
             bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
         )
         #expect(replace.success)
+        #expect(bridge.replacedQueues.last == [GlobalID(serverID: "s", remoteID: "1"), GlobalID(serverID: "s", remoteID: "2")])
     }
 
     @Test("queue_save_as_playlist 调用 bridge 创建歌单")
@@ -538,6 +555,21 @@ struct QueueV2Tests {
         )
         #expect(result.success)
         #expect(result.summary.contains("调整"))
+    }
+
+    @Test("queue_move 仅在 bridge 确认成功后才报告成功")
+    func moveQueueReportsBridgeFailure() async throws {
+        let store = try makeV2Store()
+        let bridge = MockAgentBridge(activeServerID: "s")
+        bridge.mutationResult = .failed("队列下标无效，未调整顺序")
+
+        let result = await AgentToolkit.executeV2(
+            ToolCall(name: "queue_move", arguments: ["from": "0", "to": "1"]),
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
+        )
+
+        #expect(!result.success)
+        #expect(result.summary.contains("未调整"))
     }
 
     @Test("queue_shuffle_remaining 调用 bridge")

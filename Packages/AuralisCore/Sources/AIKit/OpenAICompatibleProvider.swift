@@ -409,6 +409,12 @@ public struct OpenAICompatibleProvider: AIProvider {
                         }
                     }
                     // 网关不发 [DONE] / response.completed 也视为正常结束（沿用 Chat 路径行为）。
+                    guard responseToolCallFragments.isEmpty else {
+                        throw AIProviderError.malformedResponse(
+                            detail: String(localized: "Responses 流在工具调用参数完成前中断", bundle: .module),
+                            retryable: true
+                        )
+                    }
                     continuation.yield(.completed)
                     continuation.finish()
                 } catch {

@@ -217,15 +217,15 @@ extension PlaybackQueuePresentationStoreTests {
         #expect(prepared.persistenceTrackIDs[5000] == "T5000")
     }
 
-    @Test("prepare：去重（输入含重复），selected 定位第一个出现")
-    func prepareDeduplicatesAndFindsFirst() {
-        // [A, B, A, C] → 去重后 [A, B, C]；selected A 定位到 index 0。
+    @Test("prepare：保留重复歌曲，selected 定位第一次出现")
+    func preparePreservesDuplicatesAndFindsFirst() {
+        // [A, B, A, C] 保留每个队列 occurrence；selected A 定位到 index 0。
         let prepared = PlaybackQueuePresentationStore.prepare(
             tracks: [track("A"), track("B"), track("A"), track("C")],
             selectedTrackID: gid("A")
         )
-        #expect(prepared.entries.map(\.track.id.rawValue) == ["A", "B", "C"])
-        #expect(prepared.persistenceTrackIDs == ["A", "B", "C"])
+        #expect(prepared.entries.map(\.track.id.rawValue) == ["A", "B", "A", "C"])
+        #expect(prepared.persistenceTrackIDs == ["A", "B", "A", "C"])
         #expect(prepared.currentIndex == 0)
         #expect(prepared.currentEntryID == prepared.entries[0].id)
     }

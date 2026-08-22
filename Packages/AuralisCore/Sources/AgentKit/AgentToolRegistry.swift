@@ -401,7 +401,8 @@ public enum AgentToolRegistry {
         // 服务器
         .init(name: "server_list", group: .server, permission: .readOnly, summary: "列出已配置的服务器"),
         .init(name: "server_get_current", group: .server, permission: .readOnly, summary: "获取当前服务器信息（不含凭据）"),
-        .init(name: "server_test_connection", group: .server, permission: .readOnly, summary: "对当前服务器执行真实连通性测试"),
+        .init(name: "server_test_connection", group: .server, permission: .readOnly, summary: "对指定服务器执行真实连通性测试",
+              parameters: [.init(name: "serverID", required: true, description: "要测试的服务器 ID")]),
         .init(name: "server_get_capabilities", group: .server, permission: .readOnly, summary: "获取当前服务器支持的 OpenSubsonic 能力"),
         .init(name: "server_sync_status", group: .server, permission: .readOnly, summary: "查看资料库同步状态与上次同步时间"),
         .init(name: "server_sync_start", group: .server, permission: .reversible, summary: "触发一次音乐库增量同步（后台执行，本地未找到歌曲时可先同步）"),

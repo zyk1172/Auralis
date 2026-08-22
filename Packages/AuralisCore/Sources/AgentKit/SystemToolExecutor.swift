@@ -15,7 +15,6 @@ public enum SystemToolNames {
         "device_get_storage_status",
         "server_list",
         "server_get_current",
-        "server_test_connection",
         "server_get_capabilities",
         "server_sync_status",
         "lyrics_get",

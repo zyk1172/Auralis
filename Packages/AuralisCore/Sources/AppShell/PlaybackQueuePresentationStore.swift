@@ -15,7 +15,7 @@ import LocalCatalog
 ///
 /// 性能约束（P0）：队列规模可达 10000+，所有变更必须避免在 MainActor 上做
 /// O(N) 的 Track 复制 / QueueEntry 创建 / UUID 生成。重活由 `PreparedQueue.prepare`
-/// 在后台线程一次性完成（去重 + entry 创建 + selected index + persistence ID），
+/// 在后台线程一次性完成（entry 创建 + selected index + persistence ID），
 /// MainActor 只调用 `installPreparedQueue(_:)` 安装已经准备好的结果。
 /// 队列内容访问（count / first / index / contains）全部走 O(1) 或轻量扫描，
 /// 不得触发 `tracks`（完整 [Track] 快照）。
@@ -132,11 +132,11 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
         }
     }
 
-    /// 纯函数：在后台一次性完成「去重 → QueueEntry 创建 → selected index 定位
+    /// 纯函数：在后台一次性完成「QueueEntry 创建 → selected index 定位
     /// → persistence ID 快照」。不得在 MainActor 调用。
     ///
-    /// 单趟实现：`CatalogEntityUniquing.uniquedTracks` 会额外产生一份中间 [Track]，
-    /// 这里直接融合去重进同一循环，避免第二份 10000 Track 临时数组。
+    /// 单趟实现：保留输入顺序和每一次出现。队列条目允许重复歌曲，不能因后台预构建
+    /// 或窗口化而改变其语义。
     public nonisolated static func prepare(
         tracks: [Track],
         selectedTrackID: GlobalID
@@ -147,7 +147,6 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
         var persistenceTrackIDs: [String] = []
         persistenceTrackIDs.reserveCapacity(tracks.count)
 
-        var seen = Set<GlobalID>()
         var selectedIndex: Int?
         var indexByEntryID: [UUID: Int] = [:]
         indexByEntryID.reserveCapacity(tracks.count)
@@ -156,7 +155,6 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
 
         for track in tracks {
             let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
-            guard seen.insert(gid).inserted else { continue }
 
             let index = entries.count
             let entry = QueueEntry(track: track)

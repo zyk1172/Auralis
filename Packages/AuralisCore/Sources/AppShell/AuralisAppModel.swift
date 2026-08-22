@@ -164,10 +164,9 @@ public final class AuralisAppModel: ObservableObject {
         set {
             // 大队列保护：>500 时仅物化窗口
             if newValue.count > largeContextThreshold {
-                let deduped = uniquedTracks(newValue)
-                let windowEnd = min(largeWindowInitial, deduped.count)
-                let window = Array(deduped[0..<windowEnd])
-                largeLogicalContext = deduped
+                let windowEnd = min(largeWindowInitial, newValue.count)
+                let window = Array(newValue[0..<windowEnd])
+                largeLogicalContext = newValue
                 largeLogicalWindowStart = 0
                 largeLogicalNextIndex = windowEnd
                 shufflePlayedEntryIDs.removeAll()
@@ -1196,12 +1195,12 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 所有入口（页面、控制中心、Siri）最终都经过这里与 selectAndPlay，状态天然一致。
     public func playTracks(_ tracks: [Track]) {
-        let unique = uniquedTracks(tracks)
-        guard !unique.isEmpty else { return }
-        if unique.count > largeContextThreshold {
-            let first = unique[0]
+        let orderedTracks = tracks
+        guard !orderedTracks.isEmpty else { return }
+        if orderedTracks.count > largeContextThreshold {
+            let first = orderedTracks[0]
             selectAndPlay(first, reconcileQueue: false)
-            let snapshot = unique
+            let snapshot = orderedTracks
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let result = await Task.detached(priority: .userInitiated) { () -> (PlaybackQueuePresentationStore.PreparedQueue, [Track]) in
@@ -1225,8 +1224,8 @@ public final class AuralisAppModel: ObservableObject {
         largeLogicalContext = nil
         largeLogicalWindowStart = nil
         largeLogicalNextIndex = nil
-        queue = unique
-        selectAndPlay(unique[0])
+        queue = orderedTracks
+        selectAndPlay(orderedTracks[0])
     }
 
     /// 播放名为 name 的歌单：本地 trackIDs 优先，必要时按需拉取歌单详情。
@@ -1614,17 +1613,10 @@ public final class AuralisAppModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let result = await Task.detached(priority: .userInitiated) { () -> (PlaybackQueuePresentationStore.PreparedQueue, [Track]) in
-                    var seen = Set<GlobalID>()
-                    var deduped: [Track] = []
-                    deduped.reserveCapacity(snapshot.count)
-                    for t in snapshot {
-                        let gid = GlobalID(serverID: t.serverID, remoteID: t.id.rawValue)
-                        if seen.insert(gid).inserted { deduped.append(t) }
-                    }
-                    let windowEnd = min(256, deduped.count)
-                    let window = Array(deduped[0..<windowEnd])
+                    let windowEnd = min(256, snapshot.count)
+                    let window = Array(snapshot[0..<windowEnd])
                     let prepared = PlaybackQueuePresentationStore.prepare(tracks: window, selectedTrackID: GlobalID(serverID: window[0].serverID, remoteID: window[0].id.rawValue))
-                    return (prepared, deduped)
+                    return (prepared, snapshot)
                 }.value
                 guard self.queueIdentity(self.currentTrack) == self.queueIdentity(first) else { return }
                 self.largeLogicalContext = result.1
@@ -1676,19 +1668,12 @@ public final class AuralisAppModel: ObservableObject {
                 guard let self else { return }
                 let prepareStarted = ContinuousClock.now
                 let result = await Task.detached(priority: .userInitiated) { () -> (PlaybackQueuePresentationStore.PreparedQueue, [Track], Int, Int) in
-                    var seen = Set<GlobalID>()
-                    var deduped: [Track] = []
-                    deduped.reserveCapacity(contextSnapshot.count)
-                    for t in contextSnapshot {
-                        let gid = GlobalID(serverID: t.serverID, remoteID: t.id.rawValue)
-                        if seen.insert(gid).inserted { deduped.append(t) }
-                    }
-                    let selIdx = deduped.firstIndex { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == expectedID } ?? 0
+                    let selIdx = contextSnapshot.firstIndex { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) == expectedID } ?? 0
                     let start = selIdx
-                    let end = min(start + 256, deduped.count)
-                    let window = Array(deduped[start..<end])
+                    let end = min(start + 256, contextSnapshot.count)
+                    let window = Array(contextSnapshot[start..<end])
                     let prepared = PlaybackQueuePresentationStore.prepare(tracks: window, selectedTrackID: expectedID)
-                    return (prepared, deduped, start, end)
+                    return (prepared, contextSnapshot, start, end)
                 }.value
                 let prepareMs = self.durationMs(prepareStarted.duration(to: .now))
                 AuralisLog.playback.debug("LARGE_WINDOW_PREPARED logicalCount=\(result.1.count, privacy: .public) windowCount=\(result.0.entries.count, privacy: .public) duration_ms=\(prepareMs, privacy: .public)")
@@ -2571,8 +2556,7 @@ public final class AuralisAppModel: ObservableObject {
         guard !playlist.isReadOnly else { return false }
         let succeeded = await connector.addToPlaylist(serverID: playlist.serverID, playlistID: playlist.id, trackID: track.id)
         if succeeded,
-           let index = catalog.playlists.firstIndex(where: { $0.id == playlist.id }),
-           !catalog.playlists[index].trackIDs.contains(track.id) {
+           let index = catalog.playlists.firstIndex(where: { $0.id == playlist.id }) {
             catalog.playlists[index].trackIDs.append(track.id)
             catalog.playlists[index].modifiedAt = Date()
         }
@@ -2676,11 +2660,13 @@ public final class AuralisAppModel: ObservableObject {
         guard let source = catalog.playlists.first(where: { $0.id == id }) else { return nil }
         // R06：readonly 歌单不可作为修改来源，但允许复制其内容为普通副本。
         guard let copy = await createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return nil }
-        let ids = Set(source.trackIDs)
-        for track in catalog.tracks where ids.contains(track.id) {
-            _ = await addToPlaylist(copy, track: track)
+        let byID = Dictionary(uniqueKeysWithValues: catalog.tracks.map { ($0.id, $0) })
+        var copied = 0
+        for trackID in source.trackIDs {
+            guard let track = byID[trackID] else { continue }
+            if await addToPlaylist(copy, track: track) { copied += 1 }
         }
-        return copy
+        return copied == source.trackIDs.count ? copy : nil
     }
 
     public func deletePlaylist(id: PlaylistID) async -> Bool {
@@ -2863,6 +2849,14 @@ public final class AuralisAppModel: ObservableObject {
     /// 探活当前服务器（用于设置页与 Agent 的连接自检）。
     public func testActiveServerConnection() async -> Bool {
         guard let serverID = catalog.activeServerID else { return false }
+        return await testServerConnection(serverID: serverID)
+    }
+
+    /// 按指定服务器探活。Agent 不能把目标服务器悄悄退化为当前活动服务器。
+    public func testServerConnection(serverID: ServerID) async -> Bool {
+        guard (try? await catalogCoordinator.store.listServers())?.contains(where: { $0.id == serverID }) == true else {
+            return false
+        }
         return await connector.ping(serverID: serverID)
     }
 

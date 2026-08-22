@@ -61,6 +61,8 @@ public struct AgentTaskWorkingSet: Sendable {
     public let targetQueueCount: Int?
     /// 已成功执行的修改型操作：同工具 + 同参数幂等复用；不同参数照常执行。
     private var successfulSideEffects: [String: String] = [:]
+    /// 写操作超时后服务端是否已落盘不可知。同参数不得由模型自动重试，避免重复副作用。
+    private var indeterminateSideEffects: Set<String> = []
     private var recommendationIndexV2 = RecommendationIndexV2RuntimeState()
 
     /// 缓存条数上限（LRU 语义：超出时丢弃最旧）。
@@ -244,6 +246,9 @@ public struct AgentTaskWorkingSet: Sendable {
         if let summary = successfulSideEffects[signature] {
             return "已跳过重复操作：相同的 \(canonical) 已成功执行（\(summary)），不会再次修改播放器状态。"
         }
+        if indeterminateSideEffects.contains(signature) {
+            return "已跳过重复操作：相同的 \(canonical) 上次超时，服务端结果未知。为避免重复副作用，本次不会自动重试。"
+        }
         return nil
     }
 
@@ -252,6 +257,11 @@ public struct AgentTaskWorkingSet: Sendable {
         let canonical = Self.canonicalSideEffectTool(tool)
         let signature = Self.signature(tool: canonical, args: args)
         successfulSideEffects[signature] = summary
+    }
+
+    public mutating func recordIndeterminateSideEffect(tool: String, args: [String: String]) {
+        let canonical = Self.canonicalSideEffectTool(tool)
+        indeterminateSideEffects.insert(Self.signature(tool: canonical, args: args))
     }
 
     /// 尝试命中缓存：命中返回 true 并更新统计。

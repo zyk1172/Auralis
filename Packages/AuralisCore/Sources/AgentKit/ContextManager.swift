@@ -51,10 +51,14 @@ public enum ContextManager {
     /// 整组丢弃，保证 API 上下文的 tool 配对始终合法。
     public static func trimByTokens(
         _ conversation: [AIMessage],
-        maxTokens: Int = ContextManager.maxContextTokens
+        maxTokens: Int = ContextManager.maxContextTokens,
+        preservingUserText: String? = nil
     ) -> [AIMessage] {
         guard !conversation.isEmpty else { return [] }
         let system = conversation.first { $0.role == .system } ?? conversation[0]
+        let requiredUser = preservingUserText.flatMap { text in
+            conversation.last { $0.role == .user && $0.content == text }
+        }
         var kept: [AIMessage] = []
         // System prompt 是实际输入的一部分，必须先占用预算；旧实现把它无条件加回，
         // 在工具清单较长时会使裁剪后的请求仍超过 Provider 上下文窗口。
@@ -62,6 +66,12 @@ public enum ContextManager {
         for message in conversation.reversed() {
             // 系统提示单独保留并最后加回；其成本已经计入 `tokens`。
             if message.role == .system { continue }
+            if let requiredUser, message == requiredUser {
+                guard tokens + estimatedTokens(message) <= maxTokens else { continue }
+                tokens += estimatedTokens(message)
+                kept.insert(message, at: 0)
+                continue
+            }
             let messageTokens = estimatedTokens(message)
             guard tokens + messageTokens <= maxTokens else { break }
             tokens += messageTokens
@@ -73,6 +83,19 @@ public enum ContextManager {
         if index > 0 { kept.removeFirst(index) }
         kept.insert(system, at: 0)
         return kept
+    }
+
+    /// 当前用户问题和首条系统提示是否能同时进入模型上下文。
+    /// 不能时继续裁剪历史没有意义，且绝不能发送一条没有用户问题的请求。
+    public static func canFitCurrentUser(
+        _ conversation: [AIMessage],
+        userText: String,
+        maxTokens: Int
+    ) -> Bool {
+        guard let system = conversation.first(where: { $0.role == .system }),
+              let user = conversation.last(where: { $0.role == .user && $0.content == userText })
+        else { return false }
+        return estimatedTokens(system) + estimatedTokens(user) <= maxTokens
     }
 
     /// 截断工具结果文本，保留开头并注明被截断。

@@ -87,6 +87,29 @@ public struct ToolResult: Sendable {
     }
 }
 
+/// Agent 修改型工具的真实落地结果。`indeterminate` 用于取消/超时后服务端是否已写入
+/// 无法确认的情况，绝不能被映射为工具成功。
+public struct AgentMutationResult: Sendable, Equatable {
+    public enum State: String, Sendable, Equatable {
+        case confirmed
+        case failed
+        case indeterminate
+    }
+
+    public let state: State
+    public let summary: String
+
+    public init(state: State, summary: String) {
+        self.state = state
+        self.summary = summary
+    }
+
+    public static func confirmed(_ summary: String) -> Self { .init(state: .confirmed, summary: summary) }
+    public static func failed(_ summary: String) -> Self { .init(state: .failed, summary: summary) }
+    public static func indeterminate(_ summary: String) -> Self { .init(state: .indeterminate, summary: summary) }
+    public var succeeded: Bool { state == .confirmed }
+}
+
 /// Agent 与播放器/服务器/偏好之间的桥接协议。
 /// 所有修改型操作经此协议落到真实播放器与服务器；AppModel 负责实现。
 /// 协议仅引用 Domain 与 LocalCatalog，保持 AgentKit 不依赖 Application。
@@ -133,26 +156,26 @@ public protocol AgentBridge: Sendable {
     func cancelSleepTimer() async
     /// 返回 (模式, 剩余秒数)。
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval)
-    func addToQueue(globalID: GlobalID) async
-    func playNext(globalID: GlobalID) async
-    func replaceQueue(globalIDs: [GlobalID]) async
-    func removeFromQueue(at index: Int) async
-    func reorderQueue(from: Int, to: Int) async
-    func clearQueue() async
+    func addToQueue(globalID: GlobalID) async -> AgentMutationResult
+    func playNext(globalID: GlobalID) async -> AgentMutationResult
+    func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult
+    func removeFromQueue(at index: Int) async -> AgentMutationResult
+    func reorderQueue(from: Int, to: Int) async -> AgentMutationResult
+    func clearQueue() async -> AgentMutationResult
     /// 只随机尚未播放的剩余队列。
-    func shuffleRemaining() async
+    func shuffleRemaining() async -> AgentMutationResult
     /// 把当前队列保存为服务器歌单；成功返回 true。
     func saveQueueAsPlaylist(name: String) async -> Bool
 
     // Playlist
     func createPlaylist(name: String) async -> GlobalID?
-    func renamePlaylist(globalID: GlobalID, name: String) async
+    func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult
     func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool
-    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async
-    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async
-    func duplicatePlaylist(playlistGID: GlobalID) async
-    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async
-    func deletePlaylist(globalID: GlobalID) async
+    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult
+    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult
+    func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult
+    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult
+    func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult
 
     // Annotation
     func likeTrack(globalID: GlobalID) async

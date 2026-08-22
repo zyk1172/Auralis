@@ -22,8 +22,14 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
 
     /// 播放类工具的统一返回（默认 true；置 false 可模拟「目标不在目录」）。
     var playResult: Bool = true
+    var mutationResult: AgentMutationResult = .confirmed("ok")
     /// 服务器在线流播回退的返回（默认 true）。
     var serverPlayResult: Bool = true
+    var testConnectionResult: Bool = true
+
+    private func mutation(_ defaultSummary: String) -> AgentMutationResult {
+        mutationResult.state == .confirmed ? .confirmed(defaultSummary) : mutationResult
+    }
 
     init(activeServerID: ServerID? = nil) { self.activeServerIDValue = activeServerID }
 
@@ -51,13 +57,13 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func setSleepTimer(mode: String, minutes: TimeInterval) {}
     func cancelSleepTimer() {}
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
-    func addToQueue(globalID: GlobalID) {}
-    func playNext(globalID: GlobalID) {}
-    func replaceQueue(globalIDs: [GlobalID]) { replacedQueues.append(globalIDs) }
-    func removeFromQueue(at index: Int) {}
-    func reorderQueue(from: Int, to: Int) {}
-    func clearQueue() {}
-    func shuffleRemaining() {}
+    func addToQueue(globalID: GlobalID) async -> AgentMutationResult { mutation("已加入队列") }
+    func playNext(globalID: GlobalID) async -> AgentMutationResult { mutation("已设为下一首") }
+    func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return mutation("已替换队列") }
+    func removeFromQueue(at index: Int) async -> AgentMutationResult { mutation("已移除队列歌曲") }
+    func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { mutation("已调整队列顺序") }
+    func clearQueue() async -> AgentMutationResult { mutation("已清空队列") }
+    func shuffleRemaining() async -> AgentMutationResult { mutation("已随机剩余队列") }
     func saveQueueAsPlaylist(name: String) async -> Bool {
         createdPlaylistNames.append(name)
         return true
@@ -67,16 +73,16 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
         createdPlaylistNames.append(name)
         return GlobalID(serverID: "local", remoteID: UUID().uuidString)
     }
-    func renamePlaylist(globalID: GlobalID, name: String) {}
+    func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { mutation("已重命名歌单") }
     func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool {
         addedToPlaylist.append((playlistGID, trackGIDs))
         return true
     }
-    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) {}
-    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) {}
-    func duplicatePlaylist(playlistGID: GlobalID) {}
-    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) {}
-    func deletePlaylist(globalID: GlobalID) { deletedPlaylists.append(globalID) }
+    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { mutation("已移除歌单歌曲") }
+    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult { mutation("已调整歌单顺序") }
+    func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult { mutation("已复制歌单") }
+    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { mutation("已合并歌单") }
+    func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult { deletedPlaylists.append(globalID); return mutation("已删除歌单") }
 
     func likeTrack(globalID: GlobalID) { likedTracks.append(globalID) }
     func unlikeTrack(globalID: GlobalID) {}
@@ -91,7 +97,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func listServers() -> [ServerAccount] { [] }
     func getActiveServer() -> ServerAccount? { nil }
     func serverSearch(query: String, limit: Int) -> [Track] { serverSearchResultsValue }
-    func testServerConnection(serverID: ServerID) async -> Bool { false }
+    func testServerConnection(serverID: ServerID) async -> Bool { testConnectionResult }
     func addServer(displayName: String, baseURL: String, username: String, token: String) async -> Bool { false }
     func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> Bool { false }
     func switchServer(serverID: ServerID) {}
@@ -711,6 +717,25 @@ func offlineLike() async throws {
     #expect(await log.containsTool("likeTrack"))
 }
 
+@Test("Offline degrade: 创建歌单不会被通用歌单列表分支截走")
+func offlineCreatePlaylist() async throws {
+    let store = try makeStore()
+    let bridge = MockAgentBridge(activeServerID: "test-server")
+    let collector = EmittedCollector()
+    await AgentRunner.run(
+        userText: "创建歌单 深夜驾驶",
+        provider: nil,
+        model: "scripted-model",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+    #expect(bridge.createdPlaylistNames.contains("深夜驾驶"))
+    #expect(await collector.containsText("已创建歌单"))
+}
+
 @Test("LLM failure degrades to local rules")
 func llmFailureDegrades() async throws {
     let store = try makeStore()
@@ -1309,6 +1334,18 @@ func contextManagerTrimsByTokens() {
     #expect(allKept.count == messages.count)
 }
 
+@Test("ContextManager 始终保留当前用户问题，放不下时明确拒绝发送")
+func contextManagerPreservesCurrentUserOrRejectsBudget() {
+    let system = AIMessage(role: .system, content: "system prompt")
+    let currentUser = AIMessage(role: .user, content: "请播放这首当前歌曲")
+    let budget = ContextManager.estimatedTokens(system) + ContextManager.estimatedTokens(currentUser)
+
+    #expect(ContextManager.canFitCurrentUser([system, currentUser], userText: currentUser.content, maxTokens: budget))
+    let trimmed = ContextManager.trimByTokens([system, AIMessage(role: .assistant, content: "旧回复"), currentUser], maxTokens: budget, preservingUserText: currentUser.content)
+    #expect(trimmed.contains(currentUser))
+    #expect(!ContextManager.canFitCurrentUser([system, currentUser], userText: currentUser.content, maxTokens: budget - 1))
+}
+
 // MARK: - 任务工作集（防工具调用爆炸）
 
 @Test("WorkingSet: identical query is cached and counted as a duplicate")
@@ -1322,6 +1359,15 @@ func workingSetCachesIdenticalQuery() {
     #expect(second == "结果A")
     #expect(ws.cacheHits == 1)
     #expect(ws.executedCalls == 1)
+}
+
+@Test("WorkingSet: 写操作超时后禁止相同参数自动重试")
+func workingSetBlocksIndeterminateWriteRetry() {
+    var ws = AgentTaskWorkingSet()
+    let args = ["trackIDs": #"["s:1","s:2"]"#]
+    ws.recordIndeterminateSideEffect(tool: "queue_replace", args: args)
+    #expect(ws.sideEffectBlockReason(tool: "queue_replace", args: args)?.contains("结果未知") == true)
+    #expect(ws.sideEffectBlockReason(tool: "queue_replace", args: ["trackIDs": #"["s:3"]"#]) == nil)
 }
 
 @Test("WorkingSet: no-new-results streak is diagnostic-only, never blocks search")

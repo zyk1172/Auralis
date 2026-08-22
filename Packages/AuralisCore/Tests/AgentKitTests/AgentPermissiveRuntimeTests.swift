@@ -47,29 +47,29 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func setSleepTimer(mode: String, minutes: TimeInterval) async {}
     func cancelSleepTimer() async {}
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
-    func addToQueue(globalID: GlobalID) async {}
-    func playNext(globalID: GlobalID) async {}
-    func replaceQueue(globalIDs: [GlobalID]) async { replacedQueues.append(globalIDs) }
-    func removeFromQueue(at index: Int) async {}
-    func reorderQueue(from: Int, to: Int) async {}
-    func clearQueue() async { clearedQueueCount += 1 }
-    func shuffleRemaining() async {}
+    func addToQueue(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func playNext(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return .confirmed("ok") }
+    func removeFromQueue(at index: Int) async -> AgentMutationResult { .confirmed("ok") }
+    func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
+    func clearQueue() async -> AgentMutationResult { clearedQueueCount += 1; return .confirmed("ok") }
+    func shuffleRemaining() async -> AgentMutationResult { .confirmed("ok") }
     func saveQueueAsPlaylist(name: String) async -> Bool { createdPlaylistNames.append(name); return true }
 
     func createPlaylist(name: String) async -> GlobalID? {
         createdPlaylistNames.append(name)
         return GlobalID(serverID: "local", remoteID: UUID().uuidString)
     }
-    func renamePlaylist(globalID: GlobalID, name: String) async {}
+    func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { .confirmed("ok") }
     func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool {
         addedToPlaylist.append((playlistGID, trackGIDs))
         return true
     }
-    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async {}
-    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async {}
-    func duplicatePlaylist(playlistGID: GlobalID) async {}
-    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async {}
-    func deletePlaylist(globalID: GlobalID) async { deletedPlaylists.append(globalID) }
+    func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { .confirmed("ok") }
+    func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
+    func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { .confirmed("ok") }
+    func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult { deletedPlaylists.append(globalID); return .confirmed("ok") }
 
     func likeTrack(globalID: GlobalID) async { likedTracks.append(globalID) }
     func unlikeTrack(globalID: GlobalID) async {}
@@ -583,7 +583,7 @@ struct AgentPermissiveRuntimeTests {
         let store = try makePermStore()
         let bridge = PermissiveBridge()
         let system = PermissiveSystemService()
-        system.slowTestConnection = true
+        bridge.slowTestConnection = true
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"server_test_connection","args":{"serverID":"test-server"}}"#,
@@ -1035,7 +1035,7 @@ struct AgentPermissiveRuntimeTests {
         let store = try makePermStore()
         let bridge = PermissiveBridge()
         let system = PermissiveSystemService()
-        system.slowTestConnection = true
+        bridge.slowTestConnection = true
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"server_test_connection","args":{"serverID":"test-server"}}"#,
@@ -1173,7 +1173,7 @@ struct AgentPermissiveRuntimeTests {
         try await seedPerm(store, tracks)
         let bridge = PermissiveBridge()
         let system = PermissiveSystemService()
-        system.slowTestConnection = true
+        bridge.slowTestConnection = true
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"library_select_tracks","args":{"limit":"80"}}"#,
