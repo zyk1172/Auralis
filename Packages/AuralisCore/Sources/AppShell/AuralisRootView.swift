@@ -166,6 +166,26 @@ enum IOSLayoutMetrics {
     }
 }
 
+/// 收拢态播放器的可视宽度与命中区域必须使用同一个几何值。
+///
+/// 旧实现把点击手势挂在完整 Dock 的 `fullWidth` 外层容器上；播放器虽然已经
+/// 缩短到中间胶囊，透明的左右区域仍会打开播放页。这个纯函数让命中区域可以
+/// 在不渲染 SwiftUI View 的测试中被锁定，并同时覆盖 iPhone 与 iPad 宽度。
+enum BottomDockLayoutMetrics {
+    static let playerCollapseWidth: CGFloat = 128
+    static let minimumBarHeight: CGFloat = 56
+
+    static func playerWidth(
+        fullWidth: CGFloat,
+        collapseProgress: CGFloat,
+        barHeight: CGFloat = minimumBarHeight
+    ) -> CGFloat {
+        let progress = min(max(collapseProgress, 0), 1)
+        let eased = progress * progress * (3 - 2 * progress)
+        return max(fullWidth - playerCollapseWidth * eased, barHeight)
+    }
+}
+
 #if os(iOS)
 /// 底部双层 Dock 两控件共享的可见高度（迷你播放条与主菜单栏完全一致）。
 /// 之前 72pt 太大、占用过多纵向空间，现统一收小到 56pt。
@@ -437,7 +457,11 @@ private struct MorphingBottomDock: View {
                 let fullWidth = max(proxy.size.width - horizontalInset * 2, 0)
                 let navCenterY = height - dockBottomPadding - bottomBarHeight / 2
                 let playerCenterY = navCenterY - (bottomBarHeight + dockSpacing) * (1 - eased)
-                let playerWidth = fullWidth - 128 * eased
+                let playerWidth = BottomDockLayoutMetrics.playerWidth(
+                    fullWidth: fullWidth,
+                    collapseProgress: p,
+                    barHeight: bottomBarHeight
+                )
                 let playerCenterX = proxy.size.width / 2
                 let sections = AppSection.compactDockSections
                 let itemWidth = fullWidth / CGFloat(sections.count)
@@ -465,9 +489,11 @@ private struct MorphingBottomDock: View {
                             .frame(width: max(playerWidth, bottomBarHeight), height: bottomBarHeight)
                             .clipShape(Capsule(style: .continuous))
                         }
-                        .frame(width: fullWidth, height: bottomBarHeight)
+                        // 只让可视胶囊接收点击。外层 fullWidth 仅用于定位 Dock，
+                        // 不能成为播放页的透明命中区域。
+                        .frame(width: playerWidth, height: bottomBarHeight)
                         .position(x: playerCenterX, y: playerCenterY)
-                        .contentShape(Rectangle())
+                        .contentShape(Capsule(style: .continuous))
                         .onTapGesture { model.isNowPlayingPresented = true }
                         .accessibilityElement(children: .contain)
                     }

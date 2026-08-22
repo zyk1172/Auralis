@@ -1,4 +1,5 @@
 @testable import AppShell
+import CoreGraphics
 import Testing
 
 @Suite("底部 Dock 滚动进度")
@@ -28,6 +29,16 @@ struct BottomDockProgressTests {
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 2, height: -320)) == 1)
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 2, height: 48)) == 0)
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 2, height: 320)) == 0)
+    }
+
+    @Test("播放器命中区域跟随可视胶囊，不覆盖完整 Dock")
+    func playerHitRegionUsesVisibleWidth() {
+        let fullWidth: CGFloat = 760
+        #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: fullWidth, collapseProgress: 0) == fullWidth)
+        #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: fullWidth, collapseProgress: 1) == 632)
+        #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: fullWidth, collapseProgress: 0.5) < fullWidth)
+        #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: 40, collapseProgress: 1) == BottomDockLayoutMetrics.minimumBarHeight)
+        #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: fullWidth, collapseProgress: 2) == 632)
     }
 }
 
