@@ -207,7 +207,7 @@ func backgroundRestorePromptsSetupWhenEmpty() async throws {
 
 // MARK: - Automatic tool execution (integration through AgentCoordinator)
 
-@Test("破坏性工具默认直接执行并记入操作日志")
+@Test("不可逆删除在 UI 批准后执行并记入操作日志")
 @MainActor
 func destructiveToolExecutesWithoutConfirmation() async throws {
     let playlistRemoteID = UUID().uuidString
@@ -231,6 +231,9 @@ func destructiveToolExecutesWithoutConfirmation() async throws {
 
     for _ in 0..<500 {
         await Task.yield()
+        if coordinator.pendingOperationConfirmation != nil {
+            coordinator.approveOperationConfirmation()
+        }
         if !coordinator.isRunning { break }
     }
     #expect((await connector.deletedPlaylistIDs).contains(PlaylistID(rawValue: playlistRemoteID)))

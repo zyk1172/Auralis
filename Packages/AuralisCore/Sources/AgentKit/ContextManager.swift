@@ -14,8 +14,9 @@ public enum ContextManager {
     public static let maxConversationMessages = 40
     /// 曲库索引 / 分类歌曲清单允许回灌模型的更大上限（供模型了解曲库后推荐）。
     public static let maxIndexCharacters = 60_000
-    /// 按 token 预算裁剪的模型总上下文上限。当前模型最大 256K；实际输入还会由
-    /// `inputBudget` 为 16K 输出和协议字段预留空间。
+    /// 未声明 Provider 能力时的兼容上下文默认值。正常运行时由
+    /// `ModelCapabilities.maxContextTokens` 决定，实际输入还会由 `inputBudget`
+    /// 为模型声明的输出和协议字段预留空间；这里不是产品级硬上限。
     public static let maxContextTokens = 256_000
     /// 消息角色、JSON 包装、原生工具字段等不在正文估算中的固定协议预留。
     public static let protocolReserveTokens = 1_024

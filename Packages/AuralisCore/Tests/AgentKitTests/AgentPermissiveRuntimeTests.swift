@@ -251,6 +251,14 @@ private actor PermissiveProbe {
     }
 }
 
+private actor RejectingProbe {
+    private(set) var calls = 0
+    func decide(_ pending: PendingConfirmation) -> Bool {
+        calls += 1
+        return false
+    }
+}
+
 // MARK: - Helpers
 
 private func makePermStore() throws -> LocalCatalogStore {
@@ -635,9 +643,9 @@ struct AgentPermissiveRuntimeTests {
         #expect(await collector.containsError("已停止本次任务") == false)
     }
 
-    // MARK: - TEST 13-16：删除歌单直接执行 / 消歧 / 幂等
+    // MARK: - TEST 13-16：不可逆删除需批准 / 消歧 / 幂等
 
-    @Test("TEST13 删除跑步歌单（唯一目标）直接执行，0 确认")
+    @Test("TEST13 删除跑步歌单（唯一目标）只请求一次批准后执行")
     func deletePlaylistDirectExecution() async throws {
         let store = try makePermStore()
         try await store.upsertPlaylist(Playlist(id: "pl-a", serverID: "test-server", name: "跑步", trackIDs: []), serverID: "test-server")
@@ -658,9 +666,35 @@ struct AgentPermissiveRuntimeTests {
             emit: { await collector.record($0) }
         )
         #expect(bridge.deletedPlaylists.contains(GlobalID(serverID: "test-server", remoteID: "pl-a")))
-        #expect(await probe.calls == 0)
+        #expect(await probe.calls == 1)
         #expect(await collector.containsError("没有权限") == false)
         #expect(await collector.containsError("获准范围") == false)
+    }
+
+    @Test("不可逆删除被拒绝时不触发 bridge，且同一调用不会反复弹窗")
+    func deniedPlaylistDeletionDoesNotExecute() async throws {
+        let store = try makePermStore()
+        try await store.upsertPlaylist(Playlist(id: "pl-denied", serverID: "test-server", name: "私密", trackIDs: []), serverID: "test-server")
+        let bridge = PermissiveBridge()
+        let collector = PermissiveCollector()
+        let probe = RejectingProbe()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"playlist_delete","args":{"playlistID":"test-server:pl-denied"}}"#,
+            #"ACTION: {"tool":"playlist_delete","args":{"playlistID":"test-server:pl-denied"}}"#,
+        ], closing: "已停止。")
+        await AgentRunner.run(
+            userText: "删除私密歌单",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            confirm: { await probe.decide($0) },
+            emit: { await collector.record($0) }
+        )
+        #expect(bridge.deletedPlaylists.isEmpty)
+        #expect(await probe.calls == 1)
+        #expect(await collector.containsError("未批准"))
     }
 
     @Test("TEST14 两个同名歌单可分别列出（消歧靠实体解析，不靠风险确认）")

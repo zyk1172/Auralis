@@ -7,7 +7,8 @@ import LocalCatalog
 ///
 /// 流程：用户文本 →（可选 LLM 规划）→ 本地工具执行 → 结果回传 → UI 渲染。
 /// 设计准则：已注册的普通音乐工具默认全部允许；Intent 只是路由提示，不是能力边界；
-/// 用户明确要求且目标唯一时直接执行（删除歌单/清空队列/删除下载等不再二次确认）。
+/// 用户明确要求且目标唯一时直接执行；只有工具元数据明确标出的不可逆高风险操作
+/// （删除歌单、清空记忆、删除技能）需要一次用户批准。
 /// 硬性约束：每一轮模型请求和每一次工具执行都有独立超时；支持取消与防循环。
 /// 单工具超时/失败回灌结构化结果让模型换策略继续，不终止整项任务；
 /// 不设正常任务累计工具调用上限；noProgress / repeatedToolPattern 只做诊断统计。
@@ -121,7 +122,7 @@ public struct AgentRunner {
     /// - Parameters:
     ///   - provider: 可用时为 LLM 规划；为 nil 时走本地规则降级。
     ///   - toolTimeout: 单个工具执行的最长等待时间；超时以结构化失败回灌模型，不终止任务。
-    ///   - confirm: 兼容回调（permissive runtime 不再产生确认请求；保留签名兼容旧调用方）。
+    ///   - confirm: 仅在不可逆高风险工具实际执行前调用；其它工具不会经过该回调。
     ///   - emit: 逐步向 UI 发送结构化消息。
     ///   - log: 所有修改型（reversible / destructive）工具调用的落盘回调。
     public static func run(
@@ -284,6 +285,9 @@ public struct AgentRunner {
             targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
         )
         ws.configureRecommendationIndexV2(maxOutputTokens: resolvedOutputBudget)
+        // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
+        // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
+        var deniedConfirmationSignatures = Set<String>()
 
         while true {
             if Task.isCancelled {
@@ -393,9 +397,10 @@ public struct AgentRunner {
                         model: model,
                         messages: conversation,
                         temperature: 0.3,
-                        // 被网关以 400/422 拒绝时，先收敛到跨模型更稳妥的输出上限。
-                        // 这只影响兼容回退请求，不覆盖用户已保存的模型能力配置。
-                        maxTokens: min(reservedOutput, auralisDefaultMaxOutputTokens),
+                        // 被网关以 400/422 拒绝 tools/schema 时，仅降级协议，不缩小
+                        // 用户/Provider 已声明的输出能力；否则兼容回退会悄悄把大模型
+                        // 的长上下文/长输出截断到旧的 16K 默认值。
+                        maxTokens: reservedOutput,
                         tools: nil,
                         toolChoice: nil
                     )
@@ -772,6 +777,44 @@ public struct AgentRunner {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "缓存命中", reused: true))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: text, native: nativeMode))
                     continue
+                }
+
+                if descriptor.requiresConfirmation {
+                    let signature = Self.confirmationSignature(name: call.name, args: call.args)
+                    let pending = Self.pendingConfirmation(
+                        descriptor: descriptor,
+                        name: call.name,
+                        diagnosticArgs: diagnosticArgs
+                    )
+                    if deniedConfirmationSignatures.contains(signature) {
+                        let message = "用户尚未批准「\(descriptor.summary)」，本次未执行。"
+                        ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "重复调用仍未获批准", reused: true))
+                        toolMessages.append(Self.toolResultMessage(
+                            callID: call.id,
+                            content: "（工具执行结果）\(call.name): 已跳过 - \(message)",
+                            native: nativeMode
+                        ))
+                        continue
+                    }
+                    await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
+                    let approved = await confirm(pending)
+                    guard approved else {
+                        deniedConfirmationSignatures.insert(signature)
+                        let message = "用户未批准「\(descriptor.summary)」，本次未执行。"
+                        taskState.errors.append(message)
+                        taskState.pendingActions = [message]
+                        taskState.status = .waitingForModel
+                        taskState.updatedAt = .now
+                        await state(taskState)
+                        await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                        ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "用户拒绝高风险操作", reused: false))
+                        toolMessages.append(Self.toolResultMessage(
+                            callID: call.id,
+                            content: "（工具执行结果）\(call.name): 已拒绝 - \(message)",
+                            native: nativeMode
+                        ))
+                        continue
+                    }
                 }
 
                 // ③ 执行工具（实际只执行一次；写入任务级缓存供后续复用）。
@@ -1459,6 +1502,34 @@ public struct AgentRunner {
 
     // MARK: - Helpers
 
+    private static func confirmationSignature(name: String, args: [String: String]) -> String {
+        let normalized = args.keys.sorted().map { key in
+            "\(key)=\(args[key] ?? "")"
+        }.joined(separator: "&")
+        return "\(name)|\(normalized)"
+    }
+
+    private static func pendingConfirmation(
+        descriptor: ToolDescriptor,
+        name: String,
+        diagnosticArgs: [String: String]
+    ) -> PendingConfirmation {
+        let detail: String
+        if diagnosticArgs.isEmpty {
+            detail = "此操作不可逆，且不会自动生成恢复副本。"
+        } else {
+            let arguments = diagnosticArgs.keys.sorted().map { "\($0)=\(diagnosticArgs[$0] ?? "")" }.joined(separator: "、")
+            detail = "参数：\(arguments)\n此操作不可逆，且不会自动生成恢复副本。"
+        }
+        return PendingConfirmation(
+            toolName: name,
+            permission: descriptor.permission,
+            title: descriptor.summary,
+            detail: detail,
+            call: ToolCall(name: name, arguments: diagnosticArgs)
+        )
+    }
+
     /// 提取两个标记之间的文本（用于「把X加到歌单Y」这类解析）。
     private static func extractBetween(_ text: String, left: [String], right: [String]) -> String? {
         var value = text
@@ -1736,7 +1807,7 @@ public struct AgentRunner {
         1. 数据源是服务器：查询先走本地缓存（快）；本地没有或结果可疑时，先用 server_search 在服务器上在线搜索（server_search 已带播放地址，可直接流播）。不要把「本地没有」直接说成「服务器不存在」；「本地目录没有」≠「不能播放」。
         2. 播放/收藏/歌单/评分的任何操作，最终都要作用于服务器；参数必须使用当前服务器真实存在的 GlobalID（格式「服务器ID:歌曲ID」）。歌单/艺术家 ID 形如「服务器ID:歌单ID」「服务器ID:艺术家ID」；listPlaylists / library_search / searchArtists / searchArtists 返回结果里，名字后括号内的就是该 ID，直接原样传给 playback_play_playlist / playback_play_artist 等，不要自己拼接或臆造。
         3. 播放流程：先 library_search（或 server_search）找到歌曲 → 用返回的 trackID 调 playback_play_song（或 playback_play_album / playback_play_playlist / playback_play_artist）。搜索命中多首时，说明候选并让用户选择，不要随意播放错误的那首。**server_search 找到但本地目录还没有的歌，直接 playback_play_song 播放即可——App 会自动走服务器在线流播，不需要先同步（server_sync_start）也不需要下载。** 同步只影响离线使用，与「现在能不能播放」无关。
-        4. 歌单：library_get_playlist 查看歌单内容；playlist_create 创建；playlist_add_songs 添加歌曲；favorite_set 收藏。删除歌单、清空队列、删除下载等操作在用户明确要求、且目标解析唯一时直接执行，不再向用户二次确认。
+        4. 歌单：library_get_playlist 查看歌单内容；playlist_create 创建；playlist_add_songs 添加歌曲；favorite_set 收藏。删除歌单属于不可逆操作，必须等待运行时的用户批准；清空队列、删除下载、删除服务器（仅本地配置）等可恢复操作在用户明确要求且目标唯一时直接执行。
         5. 同步：用户问「服务器在线吗」用 server_test_connection；问「同步到哪了」用 server_sync_status；要求「同步音乐库」用 server_sync_start。
         5b. 推荐：用户给心情/场景/用途（如开车、提神、通勤、睡前、运动）时，优先直接调用 recommend_by_mood 或 recommend_by_constraints 获取真实歌曲清单；复杂过滤条件用 library_select_tracks；需要了解曲库结构时再用 library_get_catalog_index。拿到清单后基于真实歌曲给出推荐和理由；绝不编造不存在的歌曲。
         5c. 流派：用户问「有哪些流派/按流派找歌」时，用 library_get_genres 列出流派及歌曲数（返回中文显示名），用 library_get_tracks_by_genre 取某流派下的歌。流派来自音乐文件内嵌标签（Navidrome 的 getGenres / 曲目 genre 字段）；如果流派列表为空，说明服务器可能没写入流派标签，提示用户让 Navidrome 重新扫描，不要编造流派。
@@ -1770,7 +1841,7 @@ public struct AgentRunner {
         8c. 候选足够时即可收尾：已获得用户要求的目标数量、或对应队列操作已由工具确认成功时，直接完成任务，不要继续无意义搜索。同一搜索重复多次没有新结果时，可以基于现有候选回答，或换一个搜索词/换一种策略继续；不要死磕同一条搜索。
         8d. 最终展示协议：搜索/推荐工具产生的是内部候选，不会直接展示给主人。当主人只要求「推荐给我看看」而没有播放/建歌单/改队列时，完成筛选后必须调用 result_present_tracks(trackIDs=[最终选中的真实 ID]) 一次；只能把真正打算推荐给主人的歌曲传入，不要把整个候选池传入。如果已经 queue_replace / playlist_add_songs 成功确定最终集合，不必再额外调用 result_present_tracks。多个同名/相似对象无法确定时，用 result_present_tracks(trackIDs=[候选], kind=\"disambiguation\") 列出候选供主人选择。
         8e. 最终回答文字：当 Runtime 会用歌曲卡片展示最终结果时，最终文字只做简短总结（如「已经为你选好 12 首适合开车提神的歌曲」），可以说明整体风格/筛选逻辑，最多举 2～3 首代表；不要逐首完整罗列 12 个歌名，避免与卡片重复。
-        9. 执行哲学：用户明确要求且目标唯一时，删除歌单、清空队列、删除下载、删除服务器、清空记忆等操作直接执行，不再索要二次确认；不要擅自扩大用户指令范围。多个同名/相似对象无法确定时，先列出候选让用户选择目标，再执行。
+        9. 执行哲学：普通已注册工具不需要额外审批；但删除歌单、删除单条/清空全部记忆、删除技能文件等不可逆高风险操作必须等待运行时批准。清空队列、删除下载、删除服务器（仅本地清理）等不是同等级不可逆操作，用户明确要求且目标唯一时直接执行。不要擅自扩大用户指令范围；多个同名/相似对象无法确定时，先列出候选让主人选择目标，再执行。
         10. 凭据（密码、Token、完整服务器地址）绝不出现在任何参数或回复中。
         10b. 添加 / 修改服务器（地址、账号、凭据）必须由用户在本机「设置 → 服务器」页完成：
             模型不负责填写或保存任何服务器凭据。addServer / updateServer 只是唤起设置页，

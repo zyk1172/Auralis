@@ -43,7 +43,8 @@ public struct AIPrivacyConsentRequest: Sendable, Identifiable {
 ///
 /// 边界约定：
 /// - 把完整会话与工具「结果摘要」发给模型，永不发送完整音乐目录或任何凭据。
-/// - AI 已发起的工具调用直接执行；调用记录仍会保留在本地操作日志中。
+/// - 已注册工具默认直接执行；只有明确不可逆的高风险工具由 Runner 请求一次批准，
+///   调用记录仍会保留在本地操作日志中。
 /// - 隐私：三个隐私开关真实生效（元数据 / 播放历史 / 歌词）；首次外发前需用户确认。
 /// - 模型不可用时自动降级到本地规则模式，搜索/播放/收藏等仍然可用。
 @MainActor
@@ -58,8 +59,10 @@ public final class AgentCoordinator: ObservableObject {
     @Published public private(set) var preferences = UserPreferences()
     /// 当前待用户裁决的首次外发确认；非 nil 时 AssistantView 弹确认 UI（B5）。
     @Published public private(set) var pendingConsent: AIPrivacyConsentRequest?
+    /// 当前待用户裁决的不可逆高风险 Agent 操作；普通工具不会进入此状态。
+    @Published public private(set) var pendingOperationConfirmation: PendingConfirmation?
     /// 无界面模式：来自 Siri / 快捷指令等系统入口时置为 true。
-    /// 所有工具调用与有界面模式一致，直接执行。
+    /// 普通工具调用与有界面模式一致，直接执行；不可逆高风险操作无界面可批准，默认拒绝。
     public var headless = false
     /// 当前正在运行（或最近一次运行）的 Agent 任务；供 UI 展示步骤与状态。
     @Published public private(set) var activeTask: AgentTaskRecord?
@@ -89,6 +92,7 @@ public final class AgentCoordinator: ObservableObject {
 
     private var runTask: Task<Void, Never>?
     private var consentContinuation: CheckedContinuation<AIConsentDecision, Never>?
+    private var operationConfirmationContinuation: CheckedContinuation<Bool, Never>?
     /// 当前运行身份：任何迟到 callback 只要 runID 不匹配就丢弃，绝不污染新运行/新会话。
     var currentRunID: UUID?
     /// 每个 Run 独立的流式状态（key = runID）。`.streaming` 增量累加进该 run 的气泡，
@@ -99,7 +103,8 @@ public final class AgentCoordinator: ObservableObject {
     }
     private var streamingStates: [UUID: AgentStreamingState] = [:]
 
-    /// 单次请求带给模型的总上下文上限（256K，超出时仅在发送前裁剪，不删除会话历史）。
+    /// 兼容旧调用方的默认上下文参考值；真实请求预算始终来自 Provider capabilities，
+    /// 不在 Agent 层额外限制模型的 token 或上下文。
     public static let tokenBudget = ContextManager.maxContextTokens
     /// 首次外发确认的持久化标记键（UserDefaults，默认 false）。
     public static let consentGivenDefaultsKey = "auralis.ai.consentGiven"
@@ -377,8 +382,8 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     /// 无界面入口（Siri / 快捷指令）返回给系统调用方的最终文本长度上限。
-    /// Agent 单次输出上限为 16_000 token。无界面入口保留足够大的字符上限，
-    /// 不会像旧值 500 字符那样把长回答截断成残句。
+    /// 无界面入口保留足够大的字符上限；Agent 单次输出由 Provider / 用户配置的
+    /// ModelCapabilities 决定，不在 Coordinator 再加一层 token 限制。
     private static let maxHeadlessReplyCharacters = 1_000_000
 
     /// 从本轮新增的助手消息中提取最终文本回复（取最后一个非空文本块，控制长度）。
@@ -585,7 +590,10 @@ public final class AgentCoordinator: ObservableObject {
                 systemService: systemService,
                 externalMusicService: externalMusicService,
                 initialTaskState: initialTaskState,
-                confirm: { _ in true },
+                confirm: { [weak self] pending in
+                    guard let self else { return false }
+                    return await self.requestOperationConfirmation(pending)
+                },
                 emit: { [weak self] message in
                     await self?.receive(message, sessionID: sessionID, runID: runID)
                 },
@@ -698,6 +706,7 @@ public final class AgentCoordinator: ObservableObject {
         currentRunID = nil
         streamingStates.removeAll()
         resolveConsent(.deny)
+        resolveOperationConfirmation(false)
         isRunning = false
         if let taskID = activeTask?.id {
             taskStore.update(taskID, status: .cancelled, error: String(localized: "用户取消。", bundle: .module))
@@ -833,6 +842,32 @@ public final class AgentCoordinator: ObservableObject {
         return await withCheckedContinuation { continuation in
             consentContinuation = continuation
         }
+    }
+
+    /// 高风险操作确认：仅由 ToolDescriptor.requiresConfirmation=true 的工具调用。
+    /// Siri / 快捷指令没有可见确认界面，默认拒绝该不可逆操作，但其它工具仍照常直执行。
+    private func requestOperationConfirmation(_ pending: PendingConfirmation) async -> Bool {
+        if headless || Task.isCancelled { return false }
+        guard operationConfirmationContinuation == nil else { return false }
+        pendingOperationConfirmation = pending
+        return await withCheckedContinuation { continuation in
+            operationConfirmationContinuation = continuation
+        }
+    }
+
+    public func approveOperationConfirmation() {
+        resolveOperationConfirmation(true)
+    }
+
+    public func denyOperationConfirmation() {
+        resolveOperationConfirmation(false)
+    }
+
+    private func resolveOperationConfirmation(_ approved: Bool) {
+        guard let continuation = operationConfirmationContinuation else { return }
+        operationConfirmationContinuation = nil
+        pendingOperationConfirmation = nil
+        continuation.resume(returning: approved)
     }
 
     public func approveConsent(remember: Bool) {

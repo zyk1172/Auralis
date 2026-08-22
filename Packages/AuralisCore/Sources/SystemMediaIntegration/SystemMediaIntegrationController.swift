@@ -96,6 +96,11 @@ public final class SystemMediaIntegrationController {
         remoteCommands.syncState(isShuffled: isShuffled, repeatMode: repeatMode)
     }
 
+    /// 队列或当前项变化后同步锁屏/耳机上一首、下一首的可用性。
+    public func queueCapabilitiesChanged(canPrevious: Bool, canNext: Bool) {
+        remoteCommands.syncQueueAvailability(canPrevious: canPrevious, canNext: canNext)
+    }
+
     /// 停止播放或退出服务器：清理 Now Playing 与音频会话。
     public func stop() {
         nowPlaying.clear()

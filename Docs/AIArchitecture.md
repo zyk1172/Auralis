@@ -13,7 +13,7 @@ User intent
   → deterministic filter/ranking/diversity
   → optional LLM ordering and explanation
   → Track ID validation
-  → user confirmation
+  → confirmation only for irreversible deletion
   → queue or playlist use case
 ```
 
@@ -28,10 +28,12 @@ Phase 5 默认接入 `/v1/chat/completions`，并保留未来 `/v1/responses` ad
 
 ## 工具边界
 
-工具集合由 `MusicAssistantTool` 建模。读操作返回最小字段；写操作生成待确认 Action Plan，
-只有用户确认后才调用队列或播放列表 Use Case。每次输出在展示和执行前分别校验 Track ID。
+工具集合由 `MusicAssistantTool` 建模。读操作返回最小字段；普通播放、队列、下载、服务器
+和标注写操作保持直接执行，只有删除歌单、删除/清空记忆、删除技能文件等不可逆操作生成待
+确认 Action Plan。每次输出在展示和执行前分别校验 Track ID。
 
 ## Token 和上下文
 
-会话保存结构化条件而不是无限追加完整聊天。每轮保留当前约束、最近决定和候选摘要；超出预算
-后生成本地摘要。默认不含完整歌词、路径、NAS 地址、令牌或设备标识。
+会话保存结构化条件而不是无限追加完整聊天。每轮保留当前约束、最近决定和候选摘要；超出
+Provider 声明的上下文窗口后生成本地摘要。AI 层不再设置固定 256K/16K 上限；默认不含
+完整歌词、路径、NAS 地址、令牌或设备标识，隐私数据仍受各自开关约束。

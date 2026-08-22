@@ -13,7 +13,9 @@
 
 - iPhone 的专辑、艺术家、歌单、流派和分类详情已由 modal sheet 改为 `NavigationStack` 的 `navigationDestination(item:)`。返回手势、标题层级和 VoiceOver 导航语义由系统承接。
 - 添加到歌单、歌曲信息、服务器配置、编辑首页、确认对话框与正在播放页仍是 modal task，继续使用 sheet / dialog。
-- iPad 保留 `NavigationSplitView`，macOS 保留独立的资料库侧边栏与专辑内容页。其余通用浏览清单在宽屏上仍作为独立任务呈现，避免占用永久 Inspector 列。
+- iPhone 与 iPad 共用 `IOSMusicShell` + `NavigationStack`；iPad 通过可读宽度、浮动 Dock
+  和尺寸自适应承接 regular / compact / Stage Manager，而不是维护第二套 Pad 信息架构。
+  macOS 仍保留独立的资料库侧边栏与专辑内容页。
 - `BrowseDestination` 现在是稳定的 `Hashable & Sendable` 导航值；新增测试覆盖 ID 唯一性。
 
 ## Bottom navigation 与 Mini Player

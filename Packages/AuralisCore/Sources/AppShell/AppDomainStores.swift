@@ -187,6 +187,9 @@ final class LibraryStore: ObservableObject {
     /// catalog 每次变更递增；后台索引构建完成后用它校验结果是否已过期。
     private var catalogRevision: UInt64 = 0
     private var indexBuildTask: Task<Void, Never>?
+    /// 小目录同步刷新，避免目录替换后 UI 在一个 run loop 内读到旧索引；大目录
+    /// 继续走后台构建，避免把数万首曲目的 O(N) 索引工作压在 MainActor。
+    private let synchronousIndexEntryLimit = 1_000
 
     init(catalog: LibraryCatalog) {
         self.catalog = catalog
@@ -222,6 +225,11 @@ final class LibraryStore: ObservableObject {
         let revision = catalogRevision
         let snapshot = catalog
         indexBuildTask?.cancel()
+        if snapshot.tracks.count + snapshot.albums.count <= synchronousIndexEntryLimit {
+            apply(Self.buildIndexes(catalog: snapshot))
+            indexBuildTask = nil
+            return
+        }
         indexBuildTask = Task { [weak self] in
             let indexes = await Task.detached(priority: .userInitiated) {
                 Self.buildIndexes(catalog: snapshot)

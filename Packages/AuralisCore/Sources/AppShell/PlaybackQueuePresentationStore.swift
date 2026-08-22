@@ -139,7 +139,8 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
     /// 或窗口化而改变其语义。
     public nonisolated static func prepare(
         tracks: [Track],
-        selectedTrackID: GlobalID
+        selectedTrackID: GlobalID,
+        selectedLocalIndex: Int? = nil
     ) -> PreparedQueue {
         var entries: [QueueEntry] = []
         entries.reserveCapacity(tracks.count)
@@ -165,7 +166,11 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
                 firstIndexByGlobalID[gid] = index
             }
 
-            if selectedIndex == nil, gid == selectedTrackID {
+            // Windowed queues may contain the same GlobalID more than once.  When the
+            // caller knows the logical occurrence, use the local index rather than
+            // silently selecting the first duplicate in the window.
+            if selectedIndex == nil,
+               (selectedLocalIndex == index || (selectedLocalIndex == nil && gid == selectedTrackID)) {
                 selectedIndex = index
             }
         }
@@ -293,14 +298,19 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
     public func move(from offsets: IndexSet, to destination: Int, currentTrackID: GlobalID?) {
         let moving = offsets.sorted().compactMap { entries.indices.contains($0) ? entries[$0] : nil }
         guard !moving.isEmpty else { return }
-        let movingIDs = Set(moving.map(\.id))
         // 同步迁移 persistence IDs，保持与 entries 逐项对齐。
         let movingTrackIDs = offsets.sorted().compactMap {
             entries.indices.contains($0) ? persistenceTrackIDs[$0] : nil
         }
         mutate {
-            entries.removeAll { movingIDs.contains($0.id) }
-            persistenceTrackIDs.removeAll { movingTrackIDs.contains($0) }
+            // Remove by the exact offsets, not by track ID.  Track IDs are allowed to
+            // repeat (A, B, A); removeAll(where: movingTrackIDs.contains) used to
+            // delete both occurrences and desynchronise persistenceTrackIDs.
+            for index in offsets.sorted(by: >) {
+                guard entries.indices.contains(index), persistenceTrackIDs.indices.contains(index) else { continue }
+                entries.remove(at: index)
+                persistenceTrackIDs.remove(at: index)
+            }
             let insertion = min(max(0, destination - offsets.filter { $0 < destination }.count), entries.count)
             entries.insert(contentsOf: moving, at: insertion)
             persistenceTrackIDs.insert(contentsOf: movingTrackIDs, at: insertion)

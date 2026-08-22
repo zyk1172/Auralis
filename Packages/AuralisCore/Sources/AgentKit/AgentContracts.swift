@@ -2,15 +2,15 @@ import Domain
 import Foundation
 import LocalCatalog
 
-/// Agent 工具权限分级（deprecated / diagnostics-only）。
-/// permissive runtime 不再依据权限拒绝已注册工具，也不再触发确认；
-/// 保留枚举仅为旧任务记录 / 日志 / UI 分类兼容。
+/// Agent 工具权限分级。
+/// 已注册工具不会因为权限分级而被拒绝；`requiresConfirmation` 只针对工具元数据
+/// 标出的不可逆高风险操作（例如删除歌单、清空记忆/技能）触发一次用户批准。
 public enum ToolPermission: String, Codable, Sendable, Hashable {
     /// 只读：查询本地目录、当前播放状态等。
     case readOnly
     /// 可逆：收藏、评分、加入队列等，可撤销/可恢复。
     case reversible
-    /// 破坏性：删除歌单、删除服务器、清空队列等（仅元数据分类，不再触发确认）。
+    /// 破坏性：删除/清理类操作的审计分类；是否需要批准由工具元数据精确声明。
     case destructive
 }
 

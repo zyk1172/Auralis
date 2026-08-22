@@ -48,7 +48,7 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let name: String
     public let group: ToolGroup
     public let permission: ToolPermission
-    /// deprecated / diagnostics-only：permissive runtime 不再因它触发确认。
+    /// 仅对明确不可逆的高风险操作触发一次用户批准；普通可逆/可恢复工具仍直执行。
     public let requiresConfirmation: Bool
     public let summary: String
     public let parameters: [ToolParameter]
@@ -260,7 +260,7 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "name", required: true, description: "新歌单名称"),
                            .init(name: "sourceIDs", required: true, description: "源歌单 GlobalPlaylistID 数组",
                                  schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)]),
-        .init(name: "playlist_delete", group: .playlist, permission: .destructive, summary: "删除歌单",
+        .init(name: "playlist_delete", group: .playlist, permission: .destructive, requiresConfirmation: true, summary: "删除歌单（不可逆，需要用户批准）",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
         .init(name: "rating_set", group: .annotation, permission: .reversible, summary: "设置单曲评分（value 0 表示清除）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID"),
@@ -348,7 +348,7 @@ public enum AgentToolRegistry {
         .init(name: "mergePlaylists", group: .playlist, permission: .reversible, summary: "合并歌单",
               parameters: [.init(name: "sourceIDs", required: true, description: "逗号分隔的 GlobalPlaylistID"),
                            .init(name: "name", required: true, description: "新歌单名称")]),
-        .init(name: "deletePlaylist", group: .playlist, permission: .destructive, summary: "删除歌单",
+        .init(name: "deletePlaylist", group: .playlist, permission: .destructive, requiresConfirmation: true, summary: "删除歌单（不可逆，需要用户批准）",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
 
         // MARK: Annotation
@@ -649,9 +649,9 @@ public enum AgentToolRegistry {
                 .init(name: "value", required: true, description: "要记住的内容"),
               ]),
         .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
-        .init(name: "memory_delete", group: .memory, permission: .reversible, summary: "删除一条记忆",
+        .init(name: "memory_delete", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "删除一条记忆（不可逆，需要用户批准）",
               parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")]),
-        .init(name: "memory_clear", group: .memory, permission: .reversible, summary: "清空全部记忆"),
+        .init(name: "memory_clear", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "清空全部记忆（不可逆，需要用户批准）"),
         .init(name: "skill_create", group: .memory, permission: .reversible, summary: "创建一段可复用指令（skill 文件），之后可读取使用",
               parameters: [
                 .init(name: "name", required: true, description: "技能名，简短英文或中文"),
@@ -660,7 +660,7 @@ public enum AgentToolRegistry {
         .init(name: "skill_list", group: .memory, permission: .readOnly, summary: "查看已创建的技能列表"),
         .init(name: "skill_read", group: .memory, permission: .readOnly, summary: "读取某个技能的完整指令",
               parameters: [.init(name: "name", required: true, description: "技能名")]),
-        .init(name: "skill_delete", group: .memory, permission: .reversible, summary: "删除一个技能",
+        .init(name: "skill_delete", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "删除一个技能（不可逆，需要用户批准）",
               parameters: [.init(name: "name", required: true, description: "技能名")]),
 
     ]

@@ -2,7 +2,11 @@
 
 # Execution Philosophy
 
-Auralis uses a permissive direct-execution agent runtime.
+Auralis uses a permissive direct-execution agent runtime. The only program-level
+approval gate is reserved for explicitly irreversible local/remote deletion:
+deleting a playlist, deleting/clearing memories, or deleting a skill file.
+Playback, queue, download, server, annotation, and other reversible tools remain
+direct-execution as requested.
 
 A user's explicit natural-language request authorizes the requested operation.
 
@@ -27,11 +31,12 @@ User cancellation and per-request timeouts remain supported.
 - `AgentTaskBudget` 只剩极端看门狗：`wallClockSeconds`（默认 60 分钟）与
   `maxModelRounds`（默认 1000，紧急防失控）。`maxNoProgressRounds` /
   `maxRepeatedToolPattern` 保留为诊断统计，不作为终止条件。
-- `AgentRunner` 不再：按 Intent 拦截工具、向用户索取破坏性操作确认、因
-  `stopSearching` / 连续无新结果 / 重复工具模式终止任务。
+- `AgentRunner` 不再按 Intent 拦截工具，也不因 `stopSearching` / 连续无新结果 /
+  重复工具模式终止任务；仅在注册表明确标记的不可逆删除工具前等待 UI 批准。
 - 单工具超时/异常回灌结构化失败结果，模型可换工具、换参数、换策略继续。
 - `queue_replace` 可用不同参数多次调用；相同工具 + 相同参数幂等复用。
-- 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认。
+- 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认；风险确认
+  只表示不可逆删除，不替代实体消歧。
 - `ToolSelector` 是纯 Schema 优化器：§6.1 常用工具（查询/推荐/播放/队列/歌单/收藏/
   服务器/歌词/公开资料）常驻 schema，保证原生 function calling 始终可用；旧式驼峰别名
   （searchTracks、playTrack 等）统一映射回 canonical 名称，不再重复暴露，执行兼容由
@@ -76,15 +81,18 @@ Intent 产生 `AgentTaskPolicy`。Policy 只承担路由/诊断职责，不再�
 - 日志与 UI 状态。
 
 `ToolGroup` / `ToolPermission` / `AgentRisk` / `GrantedScope` 保留为兼容与诊断元数据，
-Runtime 正常执行路径不再依赖它们做门禁。
-- wall-clock、模型轮次、输入/输出 token、无进展和重复模式预算。
+Runtime 正常执行路径不再依赖它们做门禁；唯一例外是 `ToolDescriptor.requiresConfirmation`
+对不可逆删除工具的精确声明。
+- wall-clock 与模型轮次只作极端看门狗；输入/输出 token 跟随 Provider / ModelCapabilities，
+  不在 Agent 层再加固定上限；无进展和重复模式只记录诊断。
 
-模型上下文上限统一为 256,000 token，单次输出上限为 16,000 token。输入上限是每次
-模型请求的上下文限制（并会预留输出空间），不是整项任务跨多轮累计消耗的终止阈值；
-任务累计 token 仅用于进度与用量记录，避免长工具任务被误判为“达到输入 token 预算”。
+模型上下文与单次输出均由设置中的模型能力声明决定（支持 1M 上下文和 128K 输出等档位），
+请求前只按 Provider 能力为输出、工具 Schema 与协议字段预留空间。它们不是整项任务跨多轮
+累计消耗的终止阈值；任务累计 token 仅用于进度与用量记录。
 
-因此工具在注册表中“存在”不代表本次任务可以调用。Runtime 会再次按当前 Policy
-授权；例如歌曲鉴赏不能删除服务器，纯分析不能替换播放队列。
+因此工具在注册表中“存在”即表示普通运行时可用；Runtime 不按意图缩减工具能力。
+只有 playlist_delete、memory_delete、memory_clear、skill_delete 会在副作用执行前等待
+用户批准，拒绝会跳过桥接层并把结构化失败回灌给模型。
 
 ## 任务状态与 Evidence
 
@@ -128,6 +136,11 @@ Evidence 来源包括本地目录、播放状态、服务器、外部 API、用�
 
 注册表把本地工具交给 `AgentToolkit.executeRegistered`，把设备/系统工具交给
 `SystemToolExecutor`。Runner 不再自行维护第二份工具路由。
+
+当前注册表覆盖搜索、目录索引、播放/队列、歌单、服务器、下载、设备网络/音频/存储、
+诊断、公开音乐证据、推荐与记忆/技能 CRUD 等 100+ 工具。技能使用 `skill_create` /
+`skill_list` / `skill_read` / `skill_delete` 管理本地可复用指令；审查本轮没有为凑数新增
+重复工具，也没有限制模型的工具选择范围。
 
 推荐索引 V2 是普通目录工具服务。它的批次规则属于工具描述与工具结果，Runtime 的
 通用模型循环不解析索引摘要、不采用索引专属超时，也不维护索引专属轮次状态。
