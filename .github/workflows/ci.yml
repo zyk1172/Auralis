@@ -69,7 +69,11 @@ jobs:
         run: python3 Scripts/check_localization.py
 
       - name: Swift 6 tests (AuralisCore)
-        run: swift test --package-path Packages/AuralisCore
+        # Xcode 16.4's Swift 6.1.2 frontend can crash with signal 11 while
+        # emitting the large AppShell/AgentKit modules at the default -j8.
+        # Serialize SwiftPM compilation on the runner; the test surface stays
+        # complete and the app build steps remain independently parallelizable.
+        run: swift test --jobs 1 --package-path Packages/AuralisCore
 
       - name: Build macOS app
         run: |
@@ -148,5 +152,6 @@ jobs:
       - name: AVFoundation playback test target
         run: |
           swift test \
+            --jobs 1 \
             --package-path Packages/AuralisCore \
             --filter AVFoundationPlaybackEngine
