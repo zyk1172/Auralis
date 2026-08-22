@@ -294,7 +294,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         guard let object = try? JSONSerialization.jsonObject(with: Data(data.utf8)) as? [String: Any],
               let choices = object["choices"] as? [[String: Any]]
         else { return nil }
-        return choices.compactMap { choice in
+        return choices.compactMap { choice -> String? in
             guard let reason = choice["finish_reason"] as? String else { return nil }
             return reason
         }.first

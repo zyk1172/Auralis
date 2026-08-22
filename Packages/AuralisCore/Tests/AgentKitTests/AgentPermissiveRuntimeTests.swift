@@ -7,6 +7,18 @@ import Testing
 
 // MARK: - 自包含测试替身（与其它测试文件隔离，避免 private 符号冲突）
 
+private actor InvocationGate {
+    private var signaled = false
+
+    func signal() {
+        signaled = true
+    }
+
+    func isSignaled() -> Bool {
+        signaled
+    }
+}
+
 /// 记录副作用的最小 AgentBridge 实现。
 private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     let activeServerIDValue: ServerID?
@@ -35,6 +47,7 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     var nonCooperativeTestConnection = false
     /// 模拟已经发出写请求、但底层 I/O 无视取消的情况。
     var nonCooperativeClearQueue = false
+    let clearQueueStarted = InvocationGate()
 
     func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
     func playServerTrack(globalID: GlobalID) async -> Bool { true }
@@ -59,6 +72,7 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
     func clearQueue() async -> AgentMutationResult {
         if nonCooperativeClearQueue {
+            await clearQueueStarted.signal()
             let sleeper = Task.detached { try? await Task.sleep(for: .seconds(2)) }
             await sleeper.value
         }
@@ -248,6 +262,14 @@ private actor PermissiveProbe {
     func decide(_ pending: PendingConfirmation) -> Bool {
         calls += 1
         return true
+    }
+}
+
+private actor RejectingProbe {
+    private(set) var calls = 0
+    func decide(_ pending: PendingConfirmation) -> Bool {
+        calls += 1
+        return false
     }
 }
 
@@ -635,9 +657,9 @@ struct AgentPermissiveRuntimeTests {
         #expect(await collector.containsError("已停止本次任务") == false)
     }
 
-    // MARK: - TEST 13-16：删除歌单直接执行 / 消歧 / 幂等
+    // MARK: - TEST 13-16：不可逆删除需批准 / 消歧 / 幂等
 
-    @Test("TEST13 删除跑步歌单（唯一目标）直接执行，0 确认")
+    @Test("TEST13 删除跑步歌单（唯一目标）只请求一次批准后执行")
     func deletePlaylistDirectExecution() async throws {
         let store = try makePermStore()
         try await store.upsertPlaylist(Playlist(id: "pl-a", serverID: "test-server", name: "跑步", trackIDs: []), serverID: "test-server")
@@ -658,9 +680,35 @@ struct AgentPermissiveRuntimeTests {
             emit: { await collector.record($0) }
         )
         #expect(bridge.deletedPlaylists.contains(GlobalID(serverID: "test-server", remoteID: "pl-a")))
-        #expect(await probe.calls == 0)
+        #expect(await probe.calls == 1)
         #expect(await collector.containsError("没有权限") == false)
         #expect(await collector.containsError("获准范围") == false)
+    }
+
+    @Test("不可逆删除被拒绝时不触发 bridge，且同一调用不会反复弹窗")
+    func deniedPlaylistDeletionDoesNotExecute() async throws {
+        let store = try makePermStore()
+        try await store.upsertPlaylist(Playlist(id: "pl-denied", serverID: "test-server", name: "私密", trackIDs: []), serverID: "test-server")
+        let bridge = PermissiveBridge()
+        let collector = PermissiveCollector()
+        let probe = RejectingProbe()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"playlist_delete","args":{"playlistID":"test-server:pl-denied"}}"#,
+            #"ACTION: {"tool":"playlist_delete","args":{"playlistID":"test-server:pl-denied"}}"#,
+        ], closing: "已停止。")
+        await AgentRunner.run(
+            userText: "删除私密歌单",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            confirm: { await probe.decide($0) },
+            emit: { await collector.record($0) }
+        )
+        #expect(bridge.deletedPlaylists.isEmpty)
+        #expect(await probe.calls == 1)
+        #expect(await collector.containsError("未批准"))
     }
 
     @Test("TEST14 两个同名歌单可分别列出（消歧靠实体解析，不靠风险确认）")
@@ -1165,7 +1213,22 @@ struct AgentPermissiveRuntimeTests {
                 log: { await actionLog.record($0) }
             )
         }
-        try await Task.sleep(for: .milliseconds(100))
+        // 等待工具真正进入非协作 I/O，再取消 Runner；固定 sleep 在并行测试负载下
+        // 可能在模型仍准备首轮请求时就取消，误测成普通「已取消」而非结果未知。
+        var clearQueueDidStart = false
+        for _ in 0..<500 {
+            if await bridge.clearQueueStarted.isSignaled() {
+                clearQueueDidStart = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(clearQueueDidStart)
+        guard clearQueueDidStart else {
+            task.cancel()
+            _ = await task.value
+            return
+        }
         task.cancel()
         await withTaskGroup(of: Bool.self) { group in
             group.addTask { await task.value; return true }

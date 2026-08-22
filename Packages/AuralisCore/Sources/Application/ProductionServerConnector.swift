@@ -502,15 +502,23 @@ public actor ProductionServerConnector: ServerConnecting {
                         anySongCount = true
                         total += count
                     }
-                    fingerprintParts.append([
+                    // Keep each component as an explicitly typed value.  The
+                    // stricter Swift toolchain used by CI otherwise spends too
+                    // long inferring the nested `map`/`joined` expression.
+                    let year = album.year.map(String.init) ?? ""
+                    let genre = album.genre ?? ""
+                    let artworkKey = album.artworkKey ?? ""
+                    let songCount = album.songCount.map(String.init) ?? ""
+                    let fingerprintPart: String = [
                         album.id.rawValue,
                         album.title,
                         album.artistName,
-                        album.year.map(String.init) ?? "",
-                        album.genre ?? "",
-                        album.artworkKey ?? "",
-                        album.songCount.map(String.init) ?? "",
-                    ].joined(separator: "\u{1f}"))
+                        year,
+                        genre,
+                        artworkKey,
+                        songCount,
+                    ].joined(separator: "\u{1f}")
+                    fingerprintParts.append(fingerprintPart)
                 }
                 if page.count < pageSize {
                     reachedEnd = true
@@ -1186,7 +1194,7 @@ public actor ProductionServerConnector: ServerConnecting {
     ///
     /// 不实现真正数据库两阶段提交，但补偿路径完整：恢复动作本身失败时只记录日志，
     /// 不再向上抛（尽力恢复，避免掩盖原始错误）。
-    private func withAccountMutationRollback<T>(
+    private func withAccountMutationRollback<T: Sendable>(
         serverID: ServerID,
         credentialID: CredentialID,
         _ mutate: () async throws -> T

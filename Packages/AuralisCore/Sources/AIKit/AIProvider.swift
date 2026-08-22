@@ -2,9 +2,8 @@ import Domain
 import Foundation
 import SecurityKit
 
-/// Agent 单次回复的输出 token 上限。当前用户配置的模型使用 256K 上下文，
-/// 其中每次模型回复最多保留 16K；所有 Provider、Runtime 和注释统一使用同一数值，
-/// 避免保存配置、原生 Responses 与兼容 Chat 请求之间出现不同上限。
+/// Agent 单次回复的默认输出 token 上限。实际请求始终跟随用户为模型声明的
+/// `ModelCapabilities`；这个值只用于没有能力元数据时的兼容默认值，不能作为硬上限。
 public let auralisDefaultMaxOutputTokens = 16_000
 
 /// OpenAI-compatible request timeout. 180 秒给本地中转和工具型模型留出足够的
@@ -23,7 +22,8 @@ public enum AIToolChoice: String, Codable, Hashable, Sendable {
     case none
 }
 
-/// Auralis 当前模型能力声明：256K 总上下文、16K 单次输出。
+/// Auralis 当前模型能力声明。上下文与输出均由 Provider / 用户配置决定，默认值
+/// 只服务于旧配置迁移和未声明能力的兼容端点。
 public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
     public var maxOutputTokens: Int

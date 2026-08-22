@@ -92,12 +92,14 @@ public final class RemoteCommandCoordinator {
             self?.dispatch(.togglePlayPause)
             return .success
         }
-        center.previousTrackCommand.isEnabled = true
+        // 初始状态会在 AppModel 启动后通过 syncState 写入；先禁用，避免空队列
+        // 时锁屏/耳机显示一个看似可用但实际无效的上一首按钮。
+        center.previousTrackCommand.isEnabled = false
         center.previousTrackCommand.addTarget { [weak self] _ in
             self?.dispatch(.previousTrack)
             return .success
         }
-        center.nextTrackCommand.isEnabled = true
+        center.nextTrackCommand.isEnabled = false
         center.nextTrackCommand.addTarget { [weak self] _ in
             self?.dispatch(.nextTrack)
             return .success
@@ -123,10 +125,28 @@ public final class RemoteCommandCoordinator {
     }
 
     /// 把应用内状态回写到远程命令中心（随机/循环按钮高亮）。
-    public func syncState(isShuffled: Bool, repeatMode: RepeatMode) {
+    public func syncState(
+        isShuffled: Bool,
+        repeatMode: RepeatMode,
+        canPrevious: Bool? = nil,
+        canNext: Bool? = nil
+    ) {
         let center = MPRemoteCommandCenter.shared()
+        if let canPrevious {
+            center.previousTrackCommand.isEnabled = canPrevious
+        }
+        if let canNext {
+            center.nextTrackCommand.isEnabled = canNext
+        }
         center.changeShuffleModeCommand.currentShuffleType = isShuffled ? .items : .off
         center.changeRepeatModeCommand.currentRepeatType = Self.repeatType(from: repeatMode)
+    }
+
+    /// 只更新上一首/下一首可用性，不覆盖随机与循环模式。
+    public func syncQueueAvailability(canPrevious: Bool, canNext: Bool) {
+        let center = MPRemoteCommandCenter.shared()
+        center.previousTrackCommand.isEnabled = canPrevious
+        center.nextTrackCommand.isEnabled = canNext
     }
 
     private func dispatch(_ command: RemoteCommand) {

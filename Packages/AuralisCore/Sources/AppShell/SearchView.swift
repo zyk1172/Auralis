@@ -32,6 +32,11 @@ struct SearchView: View {
 
     private var needle: String { debouncedQuery.localizedLowercase.trimmingCharacters(in: .whitespaces) }
 
+    private var hasCurrentServerResults: Bool {
+        !model.serverSearchResults.isEmpty
+            && model.serverSearchQuery.localizedLowercase.trimmingCharacters(in: .whitespaces) == needle
+    }
+
     /// 每次 body 计算只扫描各集合一次。旧实现通过多个 computed property 在空态判断和
     /// 列表构建时重复全库过滤，万首资料库输入一个字符会执行多轮相同主线程扫描。
     private func localResults() -> LocalResults {
@@ -60,6 +65,9 @@ struct SearchView: View {
         }
         .background(theme.colorTokens.background.color)
         .task(id: query) {
+            // 新查询开始时立即取消/隐藏旧的在线结果；网络响应还会在 Model 层
+            // 通过 generation + server 校验，双重防止 A 的迟到响应污染 B。
+            model.clearServerSearch()
             // 防抖：输入停顿后再更新实际过滤词；清空立即生效。
             guard !query.isEmpty else {
                 debouncedQuery = ""
@@ -86,6 +94,7 @@ struct SearchView: View {
                 Button {
                     query = ""
                     debouncedQuery = ""
+                    model.clearServerSearch()
                     dismissSearchKeyboard()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -112,7 +121,7 @@ struct SearchView: View {
             if model.isServerSearching {
                 ProgressView { Text(String(localized: "正在服务器搜索…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.serverSearchResults.isEmpty {
+            } else if !hasCurrentServerResults {
                 VStack(spacing: AuralisSpacing.medium) {
                     AuralisEmptyState(
                         icon: "music.note.list",
@@ -184,7 +193,7 @@ struct SearchView: View {
 
     private func resultList(results: LocalResults) -> some View {
         List {
-            if !model.serverSearchResults.isEmpty {
+            if hasCurrentServerResults {
                 Section(String(localized: "服务器在线结果", bundle: .module)) {
                     ForEach(model.serverSearchResults) { track in
                         Button {

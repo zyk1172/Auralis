@@ -386,9 +386,9 @@
 			projectRoot = "";
 			targets = (
 				D2DFF0647A18535580FA7C69 /* Auralis */,
+				0AB239630792168B1AA6B2CA /* AuralisMac */,
 				A94C23FA70165354CFD55948 /* AuralisIntents */,
 				5097797681FF21CB927678CF /* AuralisLiveActivity */,
-				0AB239630792168B1AA6B2CA /* AuralisMac */,
 			);
 		};
 /* End PBXProject section */

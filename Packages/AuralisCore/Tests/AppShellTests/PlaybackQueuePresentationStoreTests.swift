@@ -307,6 +307,19 @@ extension PlaybackQueuePresentationStoreTests {
         assertPersistenceTracks(store, expected: ["X", "B", "C"])
     }
 
+    @Test("move：重复歌曲按 occurrence 移动，持久化 ID 不删除其它同名项")
+    func movePreservesDuplicateOccurrences() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("A"), track("B"), track("A"), track("C")], currentTrackID: gid("A"))
+
+        // 只移动第二个 A（index 2）到队首；第一个 A 必须仍在队列中。
+        store.move(from: IndexSet(integer: 2), to: 0, currentTrackID: gid("A"))
+
+        #expect(store.entries.map { $0.track.id.rawValue } == ["A", "A", "B", "C"])
+        #expect(store.persistenceTrackIDs == ["A", "A", "B", "C"])
+        #expect(store.persistenceTrackIDs.count == store.entries.count)
+    }
+
     @Test("entries(after:) 返回 ArraySlice 且不复制全队列")
     func entriesAfterReturnsSlice() {
         let store = PlaybackQueuePresentationStore()

@@ -129,6 +129,25 @@ struct AssistantView: View {
         } message: { consent in
             Text("\(consent.purpose)\n\(consent.fields.map { "· \($0)" }.joined(separator: "\n"))")
         }
+        // 不可逆 Agent 操作确认：只由 playlist_delete / memory_* / skill_delete
+        // 等工具元数据触发；清空队列、删下载、删服务器等仍保持直接执行。
+        .alert(
+            Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认不可逆操作", bundle: .module)),
+            isPresented: Binding(
+                get: { agent.pendingOperationConfirmation != nil },
+                set: { if !$0 { agent.denyOperationConfirmation() } }
+            ),
+            presenting: agent.pendingOperationConfirmation
+        ) { _ in
+            Button(String(localized: "批准并执行", bundle: .module), role: .destructive) {
+                agent.approveOperationConfirmation()
+            }
+            Button(String(localized: "取消", bundle: .module), role: .cancel) {
+                agent.denyOperationConfirmation()
+            }
+        } message: { pending in
+            Text(pending.detail)
+        }
         .sheet(isPresented: $showsActionLog) {
             ActionLogSheet(agent: agent, theme: theme)
         }

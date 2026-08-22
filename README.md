@@ -53,7 +53,7 @@ Auralis 是一款 SwiftUI 原生实现的私人音乐播放器，作为你自有
 
 | 平台 | 最低版本 | 说明 |
 |---|---|---|
-| iOS / iPadOS | 26+（`project.yml` 为准） | iPhone 五标签；iPad 三栏 + 动态检查器 |
+| iOS / iPadOS | 26+（`project.yml` 为准） | iPhone / iPad 共用原生 `NavigationStack` Shell；iPad 采用自适应可读宽度与居中浮动 Dock |
 | macOS | 15+ | 原生 AppKit/SwiftUI，非 Catalyst |
 
 - Swift 6 严格并发（`SWIFT_STRICT_CONCURRENCY=complete`），编译零警告（`SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`）

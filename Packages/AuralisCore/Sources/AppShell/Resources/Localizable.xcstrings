@@ -1,9 +1,6 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
-    "" : {
-
-    },
     "-12" : {
       "localizations" : {
         "en" : {
@@ -275,7 +272,20 @@
       }
     },
     "%@ token" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ token"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ token"
+          }
+        }
+      }
     },
     "%@ 出现重复记录：%@" : {
       "localizations" : {
@@ -1642,7 +1652,20 @@
       }
     },
     "Messages API（原生工具调用）" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages API (native tool calls)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages API（原生工具呼叫）"
+          }
+        }
+      }
     },
     "Messages API（暂不支持）" : {
       "extractionState" : "stale",
@@ -2014,7 +2037,20 @@
       }
     },
     "上下文窗口不能高于 %lld token" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context window cannot exceed %lld tokens"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內容視窗不能高於 %lld token"
+          }
+        }
+      }
     },
     "上下文窗口和单次输出上限均直接使用这里填写的数值，不再由 Auralis 额外设置固定上限。默认仍为 256K / 16K；可按模型实际能力填写更大的数值。最终可用范围由所连接模型或 API 服务端决定。" : {
       "extractionState" : "stale",
@@ -2985,7 +3021,20 @@
       }
     },
     "使用 Anthropic Messages API，并通过原生工具调用执行任务。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use the Anthropic Messages API and native tool calls to execute tasks."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Anthropic Messages API，並透過原生工具呼叫執行任務。"
+          }
+        }
+      }
     },
     "保存" : {
       "localizations" : {
@@ -4674,7 +4723,20 @@
       }
     },
     "单次输出不能高于 %lld token" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A single output cannot exceed %lld tokens"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "單次輸出不能高於 %lld token"
+          }
+        }
+      }
     },
     "历史记录" : {
       "localizations" : {

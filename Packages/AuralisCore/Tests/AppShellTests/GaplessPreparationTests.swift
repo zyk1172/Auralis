@@ -1,6 +1,7 @@
 import AppShell
 import Domain
 import Foundation
+import LocalCatalog
 import Testing
 
 private actor GaplessProbeEngine: PlaybackControlling {
@@ -77,6 +78,58 @@ struct GaplessPreparationTests {
         #expect(await engine.lastPreparedID() == tracks[2].id)
     }
 
+    @Test("Gapless advances the exact duplicate occurrence")
+    @MainActor
+    func duplicateOccurrenceTransition() async {
+        let engine = GaplessProbeEngine()
+        let duplicate = track("A")
+        let after = track("B")
+        let tracks = [duplicate, duplicate, after]
+        let model = makeModel(engine: engine, tracks: tracks)
+        model.playQueue(tracks)
+        await waitUntil { await engine.lastPreparedID() == duplicate.id }
+
+        let firstEntryID = model.queueStore.currentEntryID
+        await engine.simulatePreparedStart(duplicate)
+        await waitUntilMainActor { model.currentQueueIndex == 1 }
+
+        #expect(model.currentQueueIndex == 1)
+        #expect(model.queueStore.currentEntryID != firstEntryID)
+        model.next()
+        #expect(model.currentQueueIndex == 2)
+        #expect(model.currentTrack.id == after.id)
+    }
+
+    @Test("Large window gapless advances duplicate occurrence at its boundary")
+    @MainActor
+    func largeWindowDuplicateBoundaryTransition() async {
+        let engine = GaplessProbeEngine()
+        var tracks = (0..<520).map { track("track-\($0)") }
+        let duplicate = track("duplicate")
+        let after = track("after-duplicate")
+        // playTrack builds the large window starting at the selected logical
+        // occurrence. The duplicate pair therefore sits at that window edge.
+        tracks[510] = duplicate
+        tracks[511] = duplicate
+        tracks[512] = after
+        let model = makeModel(engine: engine, tracks: tracks)
+        model.playTrack(tracks[510], in: tracks)
+        await waitUntilMainActor {
+            model.currentQueueIndex == 0 && model.queueStore.count == 10
+        }
+        await waitUntil { await engine.lastPreparedID() == duplicate.id }
+
+        let firstEntryID = model.queueStore.currentEntryID
+        await engine.simulatePreparedStart(duplicate)
+        await waitUntilMainActor { model.currentQueueIndex == 1 }
+
+        #expect(model.currentQueueIndex == 1)
+        #expect(model.queueStore.currentEntryID != firstEntryID)
+        model.next()
+        #expect(model.currentQueueIndex == 2)
+        #expect(model.currentTrack.id == after.id)
+    }
+
     @Test("Sleep-after-current-track prevents preloading")
     @MainActor
     func sleepTimerInvalidation() async {
@@ -92,7 +145,13 @@ struct GaplessPreparationTests {
 
     @MainActor
     private func makeModel(engine: GaplessProbeEngine, tracks: [Track]) -> AuralisAppModel {
-        AuralisAppModel(
+        var seenCatalogIDs: Set<GlobalID> = []
+        let catalogTracks = tracks.filter { track in
+            seenCatalogIDs.insert(
+                GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
+            ).inserted
+        }
+        return AuralisAppModel(
             catalog: LibraryCatalog(
                 account: ServerAccount(
                     id: "server",
@@ -101,7 +160,7 @@ struct GaplessPreparationTests {
                     username: "listener",
                     credentialReference: "test"
                 ),
-                artists: [], albums: [], tracks: tracks,
+                artists: [], albums: [], tracks: catalogTracks,
                 genres: [], playlists: [], history: [], downloads: [],
                 lyrics: [:], recommendations: []
             ),
