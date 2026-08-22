@@ -3679,9 +3679,19 @@ public final class AuralisAppModel: ObservableObject {
                     items.remove(at: index)
                 }
                 if removedCurrent, !items.isEmpty {
-                    let replacementIndex = min(currentLogicalIndex, items.count - 1)
-                    currentTokenInOut = items[replacementIndex].token
-                    replacementTrack = items[replacementIndex].track
+                    // `currentLogicalIndex` is an index in the pre-edit array.  Once
+                    // entries before the current occurrence have been removed, using
+                    // it as an index again can skip the real successor (for example,
+                    // deleting A + current C from [A, B, C, D, E] used to select E).
+                    // Tokens are the original occurrence positions, so choose the
+                    // first surviving occurrence after the current one and fall back
+                    // to the nearest surviving predecessor at the end of the queue.
+                    let replacement = items.first(where: { $0.token > currentToken })
+                        ?? items.last(where: { $0.token < currentToken })
+                    if let replacement {
+                        currentTokenInOut = replacement.token
+                        replacementTrack = replacement.track
+                    }
                 }
             }
             guard didMutate else { return }
@@ -3703,20 +3713,36 @@ public final class AuralisAppModel: ObservableObject {
         }
         // R05：按队列项 id 移除——重复歌曲只移除被滑动的具体那一项。
         let entryIDs = offsets.compactMap { queueStore.entries.indices.contains($0) ? queueStore.entries[$0].id : nil }
-        var removedCurrent = false
-        for entryID in entryIDs {
-            if let entry = queueStore.entries.first(where: { $0.id == entryID }),
-               queueIdentity(entry.track) == queueIdentity(currentTrack) {
-                removedCurrent = true
+        guard !entryIDs.isEmpty else { return }
+        let removedEntryIDs = Set(entryIDs)
+        let currentEntryID = queueStore.currentEntryID
+        let currentIndex = queueStore.currentIndex ?? currentEntryID.flatMap { entryID in
+            queueStore.entries.firstIndex { $0.id == entryID }
+        }
+        let removedCurrent = currentEntryID.map(removedEntryIDs.contains) ?? false
+
+        // Capture the replacement before mutating the store.  The current occurrence
+        // is authoritative by UUID; TrackID cannot distinguish [A₁, ..., A₂].
+        let replacement: QueueEntry? = {
+            guard removedCurrent, let currentIndex else { return nil }
+            if let successor = queueStore.entries.dropFirst(currentIndex + 1)
+                .first(where: { !removedEntryIDs.contains($0.id) }) {
+                return successor
             }
+            return queueStore.entries.prefix(currentIndex).reversed()
+                .first(where: { !removedEntryIDs.contains($0.id) })
+        }()
+
+        for entryID in entryIDs {
             queueStore.remove(entryID: entryID, currentTrackID: queueIdentity(currentTrack))
         }
         syncRemoteCommandCapabilities()
         schedulePlaybackSessionPersistence()
         guard removedCurrent else { return }
         // 删除正在播放的曲目时自动切到下一首；队列清空后回到空闲状态。
-        if let next = queueStore.currentTrack {
-            selectAndPlay(next)
+        if let replacement,
+           queueStore.play(entryID: replacement.id) != nil {
+            selectAndPlay(replacement.track)
         } else {
             playbackPosition = 0
             Task {
@@ -3739,29 +3765,11 @@ public final class AuralisAppModel: ObservableObject {
     /// 按队列项 id 移除（R05）：重复歌曲只移除指定那一项。
     /// 删除正在播放的曲目时自动切到下一首；队列清空后回到空闲状态。
     public func removeQueueEntry(id: UUID) {
-        if largeLogicalContext != nil,
-           let localIndex = queueStore.entries.firstIndex(where: { $0.id == id }) {
-            removeFromQueue(atOffsets: IndexSet(integer: localIndex))
-            return
-        }
-        let wasCurrent = queueStore.entries.first(where: { $0.id == id })
-            .map { queueIdentity($0.track) == queueIdentity(currentTrack) } ?? false
-        queueStore.remove(entryID: id, currentTrackID: queueIdentity(currentTrack))
-        syncRemoteCommandCapabilities()
-        schedulePlaybackSessionPersistence()
-        guard wasCurrent else { return }
-        if let next = queueStore.currentTrack {
-            selectAndPlay(next)
-        } else {
-            playbackPosition = 0
-            Task {
-                await engine.stop()
-                playbackState = await engine.state()
-                syncProgressTimer()
-                // 队列清空、播放停止：清理系统 Now Playing 与灵动岛
-                mediaIntegration.stop()
-            }
-        }
+        // Route both public deletion entry points through the same exact-occurrence
+        // implementation.  This keeps UUID identity and successor selection in sync
+        // for duplicate songs and for batch deletion.
+        guard let localIndex = queueStore.entries.firstIndex(where: { $0.id == id }) else { return }
+        removeFromQueue(atOffsets: IndexSet(integer: localIndex))
     }
 
     /// 播放队列中的指定项（用户点击队列 UI）。R05：以队列项 UUID 定位——

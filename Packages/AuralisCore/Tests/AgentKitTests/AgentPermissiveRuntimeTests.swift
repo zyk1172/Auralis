@@ -7,6 +7,18 @@ import Testing
 
 // MARK: - 自包含测试替身（与其它测试文件隔离，避免 private 符号冲突）
 
+private actor InvocationGate {
+    private var signaled = false
+
+    func signal() {
+        signaled = true
+    }
+
+    func isSignaled() -> Bool {
+        signaled
+    }
+}
+
 /// 记录副作用的最小 AgentBridge 实现。
 private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     let activeServerIDValue: ServerID?
@@ -35,6 +47,7 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     var nonCooperativeTestConnection = false
     /// 模拟已经发出写请求、但底层 I/O 无视取消的情况。
     var nonCooperativeClearQueue = false
+    let clearQueueStarted = InvocationGate()
 
     func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
     func playServerTrack(globalID: GlobalID) async -> Bool { true }
@@ -59,6 +72,7 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
     func clearQueue() async -> AgentMutationResult {
         if nonCooperativeClearQueue {
+            await clearQueueStarted.signal()
             let sleeper = Task.detached { try? await Task.sleep(for: .seconds(2)) }
             await sleeper.value
         }
@@ -1199,7 +1213,22 @@ struct AgentPermissiveRuntimeTests {
                 log: { await actionLog.record($0) }
             )
         }
-        try await Task.sleep(for: .milliseconds(100))
+        // 等待工具真正进入非协作 I/O，再取消 Runner；固定 sleep 在并行测试负载下
+        // 可能在模型仍准备首轮请求时就取消，误测成普通「已取消」而非结果未知。
+        var clearQueueDidStart = false
+        for _ in 0..<500 {
+            if await bridge.clearQueueStarted.isSignaled() {
+                clearQueueDidStart = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(clearQueueDidStart)
+        guard clearQueueDidStart else {
+            task.cancel()
+            _ = await task.value
+            return
+        }
         task.cancel()
         await withTaskGroup(of: Bool.self) { group in
             group.addTask { await task.value; return true }

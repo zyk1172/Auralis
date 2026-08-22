@@ -14,6 +14,8 @@
 | --- | --- | --- | --- | --- |
 | QUEUE-001 | P1 / 高 | `PlaybackQueuePresentationStore.move` 对重复歌曲按 GlobalID `removeAll`，移动 `[A,B,A,C]` 时会错删 occurrence，导致顺序与持久化漂移。 | `Packages/AuralisCore/Sources/AppShell/PlaybackQueuePresentationStore.swift`：按 entry offset 倒序移除 `entries` 与 `persistenceTrackIDs`；`prepare` 增加 `selectedLocalIndex`。 | `PlaybackQueuePresentationStoreTests.movePreservesDuplicateOccurrences`；队列测试 17 项通过。 |
 | QUEUE-002 | P1 / 高 | >500 首队列只物化可见窗口，窗口编辑会丢失未物化尾部；重启后只恢复窗口。 | `Packages/AuralisCore/Sources/AppShell/AuralisAppModel.swift`：`largeLogicalContext` 成为持久化与编辑权威，窗口只负责播放热路径；追加、下一首、shuffle、清空、移动、删除、保存歌单统一在逻辑队列上变更；快照保存完整 ID 与逻辑下标。修复异步预构造窗口的 `preparedWindowStart` 对齐问题。 | Agent/ AppShell 全套测试；Debug/Release 构建通过。大队列真实 10,000 首恢复仍需真机长时播放矩阵。 |
+| QUEUE-003 | P1 / 高 | 普通队列删除用 TrackID 判断当前项：删除 `[A₁,B,A₂,C]` 的 A₁ 会误重载正在播放的 A₂；删除唯一当前项还可能清空当前指针而不选择下一首。 | `AuralisAppModel.removeFromQueue(atOffsets:)` 先保存 `currentEntryID`，按 entry UUID 判断是否删除当前 occurrence；删除当前项时优先选择原位置之后的 surviving entry，否则回退到前一个；`removeQueueEntry(id:)` 统一复用该路径。 | `QueueDeletionRegressionTests` 覆盖重复项保持 currentEntryID、当前中间项自动到下一项、队尾回退到前一项。 |
+| QUEUE-004 | P1 / 高 | 大队列批量删除当前项及其之前项目后，使用删除前的 logical index 重新索引，可能跳过正确的下一首。 | 大队列删除改用 occurrence token：删除后取第一个 `token > currentToken` 的 surviving item，无后继时取最近的 `token < currentToken`；窗口重建继续由 logical index 驱动。 | `QueueDeletionRegressionTests` 覆盖 520 首队列当前项+前项、当前项+后项、当前项+队尾，验证不跳过后继。 |
 | SEARCH-001 | P2 / 高 | 在线搜索请求返回顺序与输入顺序不同，旧结果可能显示在新查询下。 | `AuralisAppModel.searchOnServer/clearServerSearch` 增加取消、generation、server/query 校验；`SearchView` 绑定结果查询词并在新查询开始时清空。 | SwiftPM 全套通过；需联网端点的真实搜索矩阵列入手工验收。 |
 | AGENT-001 | P1 / 高 | 基线中 playlist/memory/skill 删除工具经 Coordinator 的 `confirm: { _ in true }` 直接到执行桥，存在不可逆误删。 | `AgentToolRegistry` 仅为 `playlist_delete`、`memory_delete`、`memory_clear`、`skill_delete` 标记 `requiresConfirmation`；`AgentRunner` 在副作用前等待一次任务级 UI continuation，拒绝跳过桥并抑制同签名重复询问；`AgentCoordinator` / `AssistantView` 提供批准与拒绝状态。普通播放、队列清空/替换、下载、服务器切换/本地删除、标注仍直接执行。 | `AgentPermissiveRuntimeTests` 41 项通过，覆盖批准一次、拒绝不执行、重复调用不重复弹窗；`CoordinatorRound3Tests` 通过。 |
 | MEDIA-001 | P2 / 高 | 播放模式切换会把媒体控制中心上一首/下一首重新置灰；远端队列边界状态不随逻辑队列更新。 | `RemoteCommandCoordinator.syncState` 的 previous/next 改为可选增量更新；`SystemMediaIntegrationController.queueCapabilitiesChanged` 与 `AuralisAppModel.syncRemoteCommandCapabilities` 在队列、当前曲目、窗口重建、Now Playing 更新时同步。 | SwiftPM / iOS 与 macOS Release 构建通过；锁屏/控制中心真机矩阵仍需手工确认。 |
@@ -24,6 +26,7 @@
 | CI-003 | P2 / 中 | 原有 `--hardcoded` 本地化扫描把仓库既有 Siri 短语、Agent 协议提示和内部诊断字符串混同为 UI 文案，导致审计在真正编译前就阻断 CI；同时脚本依赖 runner 未保证安装的 `rg`。 | CI 阻塞门禁改为完整 catalog 审计；`Scripts/check_localization.py` 对 `rg` 缺失时使用标准库回退，保留 `--hardcoded` 供专项清理使用；补齐 AIKit/AppShell 缺失的英文与繁体条目。 | 本地有/无 `rg` 两种环境的 catalog 审计均通过；GitHub 继续保留目录结构、JSON、翻译状态检查。 |
 | CI-004 | P1 / 高 | GitHub Runner 的 Swift 工具链比本机更严格：`ProductionServerConnector` 的嵌套指纹表达式触发类型检查超时，账户补偿回滚泛型的返回值跨并发边界又缺少 `Sendable` 约束。 | `Packages/AuralisCore/Sources/Application/ProductionServerConnector.swift`：将专辑指纹的年份、流派、封面键和歌曲数拆成显式 `String`，并将 `withAccountMutationRollback` 改为 `T: Sendable`，不改变运行时回滚顺序或数据格式。 | 本地 macOS Release、iOS Release、iOS Simulator Debug、SwiftPM 全套（AppShell 265、Agent 248、Network 86 等）通过；推送后以 GitHub Actions 为最终门禁。 |
 | CI-005 | P1 / 高 | GitHub `macos-15` 的 Xcode 16.4 Swift 6.1.2 在编译大型 AppShell/AgentKit 模块时出现前端 `signal 11`，并非源码诊断错误；降低 `-j` 仍会复现。 | `.github/workflows/ci.yml`：两个 macOS job 固定到 GitHub `xcode-27` arm64 runner，与本机 Xcode 27 验证工具链一致；SwiftPM 单测与 AV 目标继续使用 `--jobs 1` 串行编译。 | 本地 SwiftPM 默认编译、AV 目标编译与全套回归通过；GitHub Actions run `32579976671` 在 Xcode 27 runner 上全部通过。 |
+| CI-006 | P2 / 中 | CI 的 AVFoundation job 默认跳过 4 项需要持续 RunLoop 的真实播放测试，原名称容易被误读为已执行 AV 集成回归。 | `.github/workflows/ci.yml` 将 job/step 更名为 `macOS AV test target compilation` / `AVFoundation test target compilation`，并在本记录明确 `AURALIS_RUN_AV_TESTS=1` 未设置；真实音频回归仍由本机/真机手工验收负责。 | GitHub job 继续验证 AV 测试目标可编译；`Docs/ManualValidation.md` 保留真实 AV 测试命令。 |
 | UX-001 | P2 / 中高 | 文档声称 iPad 三栏/`NavigationSplitView`，实际 root 是 iPhone/iPad 共用 `IOSMusicShell` + `NavigationStack`；误导后续维护与验收。 | 更新 `README.md`、`Docs/ApplePlatformAudit.md`、`Docs/ManualValidation.md`，明确统一 Shell、可读宽度、浮动 Dock 与 Stage Manager/分屏手工矩阵。未为了文档而引入第二套 iPad 架构。 | iPhone iOS 27 Simulator 启动与截图；当前机器没有可用 iPadOS 27 runtime，iPad 真机/分屏仍是剩余手工项。 |
 | AI-001 | P2 / 高 | 兼容端点拒绝 tools/schema 时，旧回退请求把大模型输出强制 `min(..., 16K)`，会悄悄缩短用户/provider 配置。 | `AgentRunner` schema fallback 保留 `reservedOutput`；`AIProvider`、`ContextManager`、`AgentCoordinator` 注释改为 Provider/ModelCapabilities 驱动。现有设置档位支持 1M context / 128K output，Agent 不再添加固定 token 上限。 | SwiftPM 全套通过；需真实 400/422 中转端点验证请求体。 |
 
@@ -60,9 +63,11 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild -scheme
 git diff --check                                                                                                                                                                  PASS
 ```
 
-SwiftPM 结果：AppShell 265/265（含 2 个 gapless occurrence 回归）、Agent 248/248、Network Provider 86/86、LocalCatalog 65/65 等分组全部通过。现存输出只有 Swift 6 的既有 warning（无需 `await` / 不必要 `try`），未发现新的编译错误。
+SwiftPM 结果：AppShell 271/271（含 2 个 gapless occurrence 回归与 6 个队列删除 occurrence 回归）、Agent 248/248、Network Provider 86/86、LocalCatalog 65/65 等分组全部通过。为避免并行测试负载下的时序误报，`AgentPermissiveRuntimeTests` 的非协作写取消用例现在等待 I/O 真正开始后再取消；生产取消路径未改变。现存输出只有 Swift 6 的既有 warning（无需 `await` / 不必要 `try`），未发现新的编译错误。
 
-AVFoundation 边界测试目标在 CI 与本地默认环境下完成编译并按设计跳过 4 项真实播放测试；这些测试需要持续运行的 AVPlayer run loop，真实音频回归仍按手工验收文档执行。
+AVFoundation 测试目标在 CI 与本地默认环境下完成编译；CI 任务名称明确为
+“macOS AV test target compilation”，并按设计跳过 4 项真实播放测试（未设置
+`AURALIS_RUN_AV_TESTS=1`）。这些测试需要持续运行的 AVPlayer run loop，真实音频回归仍按手工验收文档执行。
 
 ## 续接点与剩余风险
 

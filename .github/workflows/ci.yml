@@ -142,7 +142,7 @@ jobs:
   # run loop，因此这里保留测试目标的编译/跳过检查；真实音频回归仍按
   # Docs/ManualValidation.md 在本机或真机执行。
   macOS-av-integration:
-    name: macOS AV integration tests
+    name: macOS AV test target compilation
     runs-on: xcode-27
     timeout-minutes: 30
     steps:
@@ -151,7 +151,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: AVFoundation playback test target
+      - name: AVFoundation test target compilation
         run: |
           swift test \
             --jobs 1 \
