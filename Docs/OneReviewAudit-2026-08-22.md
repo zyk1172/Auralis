@@ -22,6 +22,7 @@
 | CI-001 | P2 / 高 | CI 只有 Debug 与 generic iOS，无法发现 Release 优化/实际 Simulator 链路问题。 | `.github/workflows/ci.yml` 增加 macOS Release、generic iOS Release、可用 iPhone Simulator Debug 构建（无 runtime 时明确 warning 跳过）。 | 本地 macOS/iOS Release 与 iOS Simulator Debug 均通过。 |
 | CI-002 | P1 / 高 | CI 使用 Homebrew 最新 XcodeGen 会让生成的 `project.pbxproj` 与开发机漂移；Swift 新工具链拒绝 `ratings` 局部变量遮蔽同名方法。 | CI 固定 XcodeGen `2.46.0` 并校验官方 zip SHA-256；`RecommendationIndexV2` 改用 `ratingsByID` 与显式 `self.ratings(serverID:)`；提交的工程文件同步到该版本输出。 | 本地隔离生成一致性检查、SHA 校验、`LocalCatalogTests` 65 项及 macOS/iOS Release 构建通过；推送后以 GitHub Actions 为最终门禁。 |
 | CI-003 | P2 / 中 | 原有 `--hardcoded` 本地化扫描把仓库既有 Siri 短语、Agent 协议提示和内部诊断字符串混同为 UI 文案，导致审计在真正编译前就阻断 CI；同时脚本依赖 runner 未保证安装的 `rg`。 | CI 阻塞门禁改为完整 catalog 审计；`Scripts/check_localization.py` 对 `rg` 缺失时使用标准库回退，保留 `--hardcoded` 供专项清理使用；补齐 AIKit/AppShell 缺失的英文与繁体条目。 | 本地有/无 `rg` 两种环境的 catalog 审计均通过；GitHub 继续保留目录结构、JSON、翻译状态检查。 |
+| CI-004 | P1 / 高 | GitHub Runner 的 Swift 工具链比本机更严格：`ProductionServerConnector` 的嵌套指纹表达式触发类型检查超时，账户补偿回滚泛型的返回值跨并发边界又缺少 `Sendable` 约束。 | `Packages/AuralisCore/Sources/Application/ProductionServerConnector.swift`：将专辑指纹的年份、流派、封面键和歌曲数拆成显式 `String`，并将 `withAccountMutationRollback` 改为 `T: Sendable`，不改变运行时回滚顺序或数据格式。 | 本地 macOS Release、iOS Release、iOS Simulator Debug、SwiftPM 全套（AppShell 265、Agent 248、Network 86 等）通过；推送后以 GitHub Actions 为最终门禁。 |
 | UX-001 | P2 / 中高 | 文档声称 iPad 三栏/`NavigationSplitView`，实际 root 是 iPhone/iPad 共用 `IOSMusicShell` + `NavigationStack`；误导后续维护与验收。 | 更新 `README.md`、`Docs/ApplePlatformAudit.md`、`Docs/ManualValidation.md`，明确统一 Shell、可读宽度、浮动 Dock 与 Stage Manager/分屏手工矩阵。未为了文档而引入第二套 iPad 架构。 | iPhone iOS 27 Simulator 启动与截图；当前机器没有可用 iPadOS 27 runtime，iPad 真机/分屏仍是剩余手工项。 |
 | AI-001 | P2 / 高 | 兼容端点拒绝 tools/schema 时，旧回退请求把大模型输出强制 `min(..., 16K)`，会悄悄缩短用户/provider 配置。 | `AgentRunner` schema fallback 保留 `reservedOutput`；`AIProvider`、`ContextManager`、`AgentCoordinator` 注释改为 Provider/ModelCapabilities 驱动。现有设置档位支持 1M context / 128K output，Agent 不再添加固定 token 上限。 | SwiftPM 全套通过；需真实 400/422 中转端点验证请求体。 |
 
@@ -59,6 +60,8 @@ git diff --check                                                                
 ```
 
 SwiftPM 结果：AppShell 265/265（含 2 个 gapless occurrence 回归）、Agent 248/248、Network Provider 86/86、LocalCatalog 65/65 等分组全部通过。现存输出只有 Swift 6 的既有 warning（无需 `await` / 不必要 `try`），未发现新的编译错误。
+
+AVFoundation 边界测试目标在 CI 与本地默认环境下完成编译并按设计跳过 4 项真实播放测试；这些测试需要持续运行的 AVPlayer run loop，真实音频回归仍按手工验收文档执行。
 
 ## 续接点与剩余风险
 
