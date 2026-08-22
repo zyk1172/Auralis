@@ -15,6 +15,7 @@ public struct MacMiniPlayerView: View {
 
     @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isVolumePopoverPresented = false
 
     /// 大号 Mini Player 顶部内容面板的三态：封面 / 歌词 / 队列。
@@ -27,12 +28,15 @@ public struct MacMiniPlayerView: View {
 
     @State private var contentMode: MacMiniPlayerContentMode = .artwork
     @State private var lyricsState: MacLyricsPresentationState = .loading
+    @State private var lyricScrollTarget: Int?
+    @StateObject private var lyricsFollower: MacLyricsFollower
 
     public init(model: AuralisAppModel, themeStore: ThemeStore) {
         self.model = model
         self.theme = themeStore.current
         self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
         self._queueStore = ObservedObject(wrappedValue: model.queueStore)
+        self._lyricsFollower = StateObject(wrappedValue: MacLyricsFollower(playbackStore: model.playbackStore))
     }
 
     private var hasTrack: Bool { model.hasCurrentTrack }
@@ -190,45 +194,52 @@ public struct MacMiniPlayerView: View {
     /// 滚动只在「当前行下标真正变化」时触发一次——position 每秒更新几十次，
     /// 但 ScrollView 只跨句时滚动，避免每帧 scrollTo。
     private func syncedLyricsView(_ lyrics: LyricsDocument, size: CGFloat) -> some View {
-        let activeIndex = activeLyricIndex
-        return ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 14) {
-                    // 顶部/底部留出半屏空间，保证首行和末行也能滚动到垂直居中。
-                    Color.clear.frame(height: max(12, size / 2 - 18))
-                    ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                        let isCurrent = activeIndex == index
-                        Text(line.text)
-                            // 保持所有行的 layout 高度一致。过去这里在当前行变化时
-                            // 同时改变字号和 ScrollView offset，目标位置会在滚动中重算，
-                            // 因而每句都有一次明显顿挫。
-                            .font(.system(size: 19, weight: isCurrent ? .semibold : .regular))
-                            .scaleEffect(isCurrent ? 1 : 15 / 19)
-                            .foregroundStyle(isCurrent ? theme.colorTokens.primaryText.color : theme.colorTokens.secondaryText.color)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .opacity(isCurrent ? 1 : 0.55)
-                            .animation(.easeInOut(duration: 0.16), value: isCurrent)
-                            .id(index)
-                    }
-                    Color.clear.frame(height: max(12, size / 2 - 18))
+        let activeIndex = lyricsFollower.activeIndex
+        return ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(spacing: 14) {
+                // 顶部/底部留出半屏空间，保证首行和末行也能滚动到垂直居中。
+                Color.clear.frame(height: max(12, size / 2 - 18))
+                ForEach(lyrics.lines.indices, id: \.self) { index in
+                    let line = lyrics.lines[index]
+                    let isCurrent = activeIndex == index
+                    Text(line.text)
+                        .font(.system(size: 19, weight: .semibold))
+                        .scaleEffect(isCurrent ? 1 : 15 / 19)
+                        .opacity(isCurrent ? 1 : 0.62)
+                        .foregroundStyle(isCurrent ? theme.colorTokens.primaryText.color : theme.colorTokens.secondaryText.color)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .animation(
+                            reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
+                            value: isCurrent
+                        )
+                        .id(index)
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 8)
+                Color.clear.frame(height: max(12, size / 2 - 18))
             }
-            .onChange(of: activeIndex) { _, index in
-                guard let index else { return }
-                withAnimation(.easeInOut(duration: 0.32)) {
-                    proxy.scrollTo(index, anchor: .center)
+            .scrollTargetLayout()
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+        }
+        .scrollPosition(id: $lyricScrollTarget, anchor: .center)
+        .onChange(of: activeIndex) { _, newIndex in
+            guard let newIndex, lyricScrollTarget != newIndex else { return }
+            if reduceMotion {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    lyricScrollTarget = newIndex
+                }
+            } else {
+                withAnimation(.smooth(duration: 0.44, extraBounce: 0)) {
+                    lyricScrollTarget = newIndex
                 }
             }
-            // 首次出现定位：视图创建时若已经处于歌词中段（activeLyricIndex 非 nil），
-            // onChange 不会为初始值执行，先无动画定位到当前行；后续跨行仍走上面的
-            // 0.32s 动画。切歌时 task id 变化，重新定位到新歌当前行。
-            .task(id: trackGlobalID) {
-                guard let index = activeIndex else { return }
-                proxy.scrollTo(index, anchor: .center)
-            }
+        }
+        // 首次出现定位：视图创建时若已经处于歌词中段，先无动画定位到当前行。
+        .task(id: "\(trackGlobalID)|\(lyrics.id)") {
+            lyricsFollower.bind(lyrics: lyrics)
+            lyricScrollTarget = lyricsFollower.activeIndex
         }
     }
 
@@ -246,18 +257,6 @@ public struct MacMiniPlayerView: View {
             }
             .padding(16)
         }
-    }
-
-    /// 同步歌词的当前行：遍历时间戳，position 落在哪个区间就是哪一行。
-    private var activeLyricIndex: Int? {
-        guard case let .available(lyrics) = lyricsState else { return nil }
-        guard lyrics.isSynced, lyrics.lines.contains(where: { $0.startTime != nil }) else { return nil }
-        let position = playbackStore.position
-        var index: Int?
-        for (i, line) in lyrics.lines.enumerated() {
-            if let start = line.startTime, start <= position + 0.15 { index = i }
-        }
-        return index
     }
 
     /// 歌词加载只在 contentMode == .lyrics 时触发；切歌后旧任务被 .task(id:) 取消，

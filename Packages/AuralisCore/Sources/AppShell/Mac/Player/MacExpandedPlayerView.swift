@@ -21,8 +21,9 @@ struct MacExpandedPlayerView: View {
 
     @State private var ambienceImage: PlatformImage?
     @State private var lyricsState: MacLyricsPresentationState = .loading
+    @State private var lyricScrollTarget: Int?
+    @StateObject private var lyricsFollower: MacLyricsFollower
 
-    @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -40,30 +41,13 @@ struct MacExpandedPlayerView: View {
         self.isVisible = isVisible
         self.onCollapse = onCollapse
         self.onOpenMiniPlayer = onOpenMiniPlayer
-        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
         self._queueStore = ObservedObject(wrappedValue: model.queueStore)
+        self._lyricsFollower = StateObject(wrappedValue: MacLyricsFollower(playbackStore: model.playbackStore))
     }
 
     private var track: Track { model.currentTrack }
     private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
     private var trackGlobalID: String { "\(track.serverID):\(track.id.rawValue)" }
-    private var isPlaying: Bool { playbackStore.state == .playing }
-    // MARK: - 进度条 scrub 状态（回归修复：拖动中滑块与时间文字必须一致）
-    /// 用户是否正在拖动进度条。拖动中滑块与时间文字显示 scrubValue，
-    /// 不跟随实际播放 position；松手后 seek 一次。
-    @State private var isScrubbing = false
-    /// 拖动中 NSSlider 上报的当前值（秒）。
-    @State private var scrubValue: Double = 0
-    /// 开始拖动时的歌曲时长快照（拖动中切歌场景自洽）。
-    @State private var scrubDuration: Double = 0
-    /// 进度条显示值：拖动中 = scrubValue，否则 = 实际播放位置。
-    private var displayedProgress: Double {
-        isScrubbing ? scrubValue : playbackStore.position
-    }
-    /// 剩余时间显示：拖动中用 scrubDuration 快照，否则用实时 duration。
-    private var displayedRemaining: Double {
-        isScrubbing ? max(0, scrubDuration - scrubValue) : max(0, duration - playbackStore.position)
-    }
     /// 待播队列（当前曲目之后的队列项），由 queueStore 提供，随队列/当前曲目变化更新。
     /// R05：返回带独立 UUID 身份的 QueueEntry，重复歌曲可安全渲染与移除。
     /// 返回 `ArraySlice`，**不复制**——队列上万首时避免 `Array(dropFirst)` 全量拷贝。
@@ -94,14 +78,22 @@ struct MacExpandedPlayerView: View {
 
                 // 前景播放内容（封面/标题/进度/控制/歌词/队列）：
                 // 由外部 isVisible 驱动 offset + scale + opacity，动画在 Shell 侧开启。
-                playerColumn(artworkSize: artwork, columnWidth: playerWidth)
-                    .frame(width: playerWidth, alignment: .leading)
-                    .padding(.leading, playerLeading)
-                    .padding(.top, MacFullPlayerMetrics.topY(window: size))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .offset(y: isVisible ? 0 : (reduceMotion ? 0 : 36))
-                    .scaleEffect(isVisible ? 1 : (reduceMotion ? 1 : 0.97), anchor: .bottom)
-                    .opacity(isVisible ? 1 : 0)
+                MacExpandedPlaybackColumn(
+                    model: model,
+                    theme: theme,
+                    track: track,
+                    trackGlobalID: trackGlobalID,
+                    artworkSize: artwork,
+                    columnWidth: playerWidth
+                )
+                .id(trackGlobalID)
+                .frame(width: playerWidth, alignment: .leading)
+                .padding(.leading, playerLeading)
+                .padding(.top, MacFullPlayerMetrics.topY(window: size))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .offset(y: isVisible ? 0 : (reduceMotion ? 0 : 36))
+                .scaleEffect(isVisible ? 1 : (reduceMotion ? 1 : 0.97), anchor: .bottom)
+                .opacity(isVisible ? 1 : 0)
 
                 if hasContext {
                     rightContext(artworkSize: artwork)
@@ -202,202 +194,6 @@ struct MacExpandedPlayerView: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: - 播放器列
-
-    private func playerColumn(artworkSize: CGFloat, columnWidth: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ArtworkView(
-                title: track.albumTitle,
-                artworkKey: track.artworkKey,
-                colors: theme.colorTokens,
-                size: artworkSize,
-                serverID: track.serverID,
-                cornerRadius: MacUIVisualTokens.ExpandedPlayer.artworkCornerRadius
-            )
-            // frame 始终是播放态的最大尺寸：暂停只改变视觉层，标题/进度/控制
-            // 不会因 Artwork 尺寸变化而重新排版。
-            .frame(width: artworkSize, height: artworkSize)
-            .frame(maxWidth: .infinity, alignment: .center)
-            // Music.app 式呼吸反馈：播放时几乎填满控制轨，暂停从中心收拢。
-            .scaleEffect(
-                isPlaying ? 1 : MacUIVisualTokens.ExpandedPlayer.pausedArtworkScale,
-                anchor: .center
-            )
-            .animation(reduceMotion ? nil : .spring(duration: 0.30, bounce: 0.08), value: isPlaying)
-            .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
-            .accessibilityLabel(String(localized: "\(track.albumTitle) 封面", bundle: .module))
-
-            Spacer().frame(height: 26)  // trackInfo 上间距（保留）
-
-            trackInfoRow
-
-            Spacer().frame(height: MacUIVisualTokens.ExpandedPlayer.columnBlockSpacing)
-
-            progressView(width: columnWidth)
-
-            Spacer().frame(height: 28)  // progress→transport 间距（保留）
-
-            transport(width: columnWidth)
-
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var trackInfoRow: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(track.title)
-                    .font(.system(size: 23, weight: .semibold))
-                    .foregroundStyle(palette.primary)
-                    .lineLimit(1)
-                Text("\(track.artistName) — \(track.albumTitle)")
-                    .font(.system(size: 15))
-                    .foregroundStyle(palette.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Button {
-                model.toggleFavorite(track)
-            } label: {
-                Image(systemName: track.isFavorite ? "heart.fill" : "heart")
-                    .font(.system(size: 20))
-                    .foregroundStyle(track.isFavorite ? palette.accent : palette.control)
-            }
-            .buttonStyle(.plain)
-            .help(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
-            .accessibilityLabel(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
-            Menu {
-                if model.hasCurrentTrack {
-                    let disliked = model.isDisliked(model.currentTrack)
-                    Button(disliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module)) {
-                        model.setDisliked(model.currentTrack, value: !disliked, source: "expanded-player")
-                    }
-                    Button(String(localized: "歌曲信息", bundle: .module)) {
-                        NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
-                    }
-                    Button(String(localized: "歌曲鉴赏", bundle: .module)) {
-                        NotificationCenter.default.post(name: MacCommand.songAppreciation, object: model.currentTrack)
-                    }
-                    if model.isDownloaded(model.currentTrack) {
-                        Button(String(localized: "删除下载", bundle: .module), role: .destructive) { model.removeDownload(model.currentTrack) }
-                    } else {
-                        Button(String(localized: "下载", bundle: .module)) { model.download(model.currentTrack) }
-                    }
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 18))
-                    .foregroundStyle(palette.control)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help(String(localized: "更多", bundle: .module))
-            .accessibilityLabel(String(localized: "更多", bundle: .module))
-        }
-    }
-
-    private func progressView(width: CGFloat) -> some View {
-        VStack(spacing: 4) {
-            MacPlaybackSlider(
-                // 拖动中显示 scrubValue（不跳回实际 position），时间文字同步显示拖动位置。
-                value: displayedProgress,
-                minValue: 0,
-                maxValue: duration,
-                isEnabled: model.hasCurrentTrack,
-                onScrubStart: {
-                    scrubDuration = duration
-                    isScrubbing = true
-                },
-                onScrubChange: { scrubValue = $0 },
-                onCommit: { value in
-                    isScrubbing = false
-                    model.seek(toProgress: min(1, max(0, value / duration)))
-                }
-            )
-            // 切歌重建 NSSlider 与 Coordinator：不继承上一首歌的滑块内部状态，
-            // onCommit 闭包也随重建捕获新 duration（回归修复）。
-            .id(trackGlobalID)
-            .controlSize(.small)
-            .tint(palette.accent)
-            .accessibilityLabel(String(localized: "播放进度", bundle: .module))
-            HStack {
-                Text(MacFormat.time(displayedProgress))
-                Spacer()
-                Text("-" + MacFormat.time(displayedRemaining))
-            }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(palette.secondary)
-        }
-        .frame(width: width)
-        // 切歌瞬间若正在拖动：强制结束 scrub（.id 重建只重置控件，@State 需显式清）。
-        .onChange(of: trackGlobalID) {
-            isScrubbing = false
-            scrubValue = 0
-            scrubDuration = duration
-        }
-    }
-
-    private func transport(width: CGFloat) -> some View {
-        HStack {
-            Button {
-                model.setShuffle(!model.isShuffled)
-            } label: {
-                Image(systemName: "shuffle")
-                    .font(.system(size: 20))
-                    .foregroundStyle(model.isShuffled ? palette.accent : palette.control)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(String(localized: "随机播放", bundle: .module))
-            Spacer()
-            Button {
-                model.previous()
-            } label: {
-                Image(systemName: "backward.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(palette.primary)
-            }
-            .buttonStyle(.plain)
-            .disabled(!model.canGoPrevious)
-            .accessibilityLabel(String(localized: "上一首", bundle: .module))
-            Spacer()
-            Button {
-                model.togglePlayback()
-            } label: {
-                Image(systemName: model.playbackStore.state == .playing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(palette.primary)
-            }
-            .buttonStyle(.plain)
-            .disabled(!model.hasCurrentTrack)
-            .accessibilityLabel(String(localized: "播放 / 暂停", bundle: .module))
-            Spacer()
-            Button {
-                model.next()
-            } label: {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(palette.primary)
-            }
-            .buttonStyle(.plain)
-            .disabled(!model.canGoNext)
-            .accessibilityLabel(String(localized: "下一首", bundle: .module))
-            Spacer()
-            Button {
-                model.cycleRepeatMode()
-                MacUITrace.action("cycleRepeat", "mode=\(model.repeatMode.rawValue)")
-            } label: {
-                Image(systemName: model.repeatMode == .one ? "repeat.1" : "repeat")
-                    .font(.system(size: 20))
-                    .foregroundStyle(model.repeatMode != .off ? palette.accent : palette.control)
-            }
-            .buttonStyle(.plain)
-            .help(String(localized: "循环模式", bundle: .module))
-            .accessibilityLabel(String(localized: "循环模式", bundle: .module))
-        }
-        .frame(width: width)
-    }
-
     // MARK: - 右侧 Context
 
     private func rightContext(artworkSize: CGFloat) -> some View {
@@ -427,47 +223,60 @@ struct MacExpandedPlayerView: View {
                     Spacer()
                 }
             case let .available(lyrics) where !lyrics.lines.isEmpty:
-                let activeIndex = currentLyricIndex
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .center, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
-                            ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                                let isCurrent = activeIndex == index
-                                Text(line.text)
-                                    // 活跃状态只改变绘制，不改变 LazyVStack 的行高；否则
-                                    // scrollTo 动画与字号驱动的重排会在每次换句时相互抢占。
-                                    .font(.system(size: MacUIVisualTokens.Typography.lyricActive, weight: isCurrent ? .semibold : .regular))
-                                    .scaleEffect(
-                                        isCurrent
-                                            ? 1
-                                            : MacUIVisualTokens.Typography.lyricInactive / MacUIVisualTokens.Typography.lyricActive
-                                    )
-                                    .foregroundStyle(isCurrent ? palette.primary : palette.lyricInactive)
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        if let start = line.startTime {
-                                            model.seek(toProgress: min(1, max(0, start / duration)))
-                                        }
+                let activeIndex = lyricsFollower.activeIndex
+                ScrollView {
+                    LazyVStack(alignment: .center, spacing: MacUIVisualTokens.ExpandedPlayer.lyricsLineGap) {
+                        ForEach(lyrics.lines.indices, id: \.self) { index in
+                            let line = lyrics.lines[index]
+                            let isCurrent = activeIndex == index
+                            Text(line.text)
+                                // 所有行使用同一套字体布局；当前状态只改变绘制属性，
+                                // 避免文字重排和滚动目标在同一帧互相影响。
+                                .font(.system(size: MacUIVisualTokens.Typography.lyricActive, weight: .semibold))
+                                .scaleEffect(
+                                    isCurrent
+                                        ? 1
+                                        : MacUIVisualTokens.Typography.lyricInactive / MacUIVisualTokens.Typography.lyricActive
+                                )
+                                .opacity(isCurrent ? 1 : 0.62)
+                                .foregroundStyle(isCurrent ? palette.primary : palette.lyricInactive)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if let start = line.startTime {
+                                        model.seek(toProgress: min(1, max(0, start / duration)))
                                     }
-                                    .id(index)
-                                    .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
-                                    .animation(.easeInOut(duration: 0.16), value: isCurrent)
-                            }
-                        }
-                        .padding(.vertical, 18)
-                    }
-                    .onChange(of: activeIndex) { _, index in
-                        guard let index else { return }
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.32)) {
-                            proxy.scrollTo(index, anchor: .center)
+                                }
+                                .id(index)
+                                .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
+                                .animation(
+                                    reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
+                                    value: isCurrent
+                                )
                         }
                     }
-                    .task(id: "\(trackGlobalID)|\(lyrics.id)") {
-                        guard let activeIndex else { return }
-                        proxy.scrollTo(activeIndex, anchor: .center)
+                    .scrollTargetLayout()
+                    .padding(.vertical, 18)
+                }
+                .scrollPosition(id: $lyricScrollTarget, anchor: .center)
+                .onChange(of: activeIndex) { _, newIndex in
+                    guard let newIndex, lyricScrollTarget != newIndex else { return }
+                    if reduceMotion {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            lyricScrollTarget = newIndex
+                        }
+                    } else {
+                        withAnimation(.smooth(duration: 0.44, extraBounce: 0)) {
+                            lyricScrollTarget = newIndex
+                        }
                     }
+                }
+                .task(id: "\(trackGlobalID)|\(lyrics.id)") {
+                    lyricsFollower.bind(lyrics: lyrics)
+                    lyricScrollTarget = lyricsFollower.activeIndex
                 }
             case .available:
                 unavailableView
@@ -501,16 +310,6 @@ struct MacExpandedPlayerView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var currentLyricIndex: Int? {
-        guard case let .available(lyrics) = lyricsState else { return nil }
-        let position = playbackStore.position
-        var index: Int?
-        for (i, line) in lyrics.lines.enumerated() {
-            if let start = line.startTime, start <= position + 0.15 { index = i }
-        }
-        return index
     }
 
     private var queuePane: some View {
@@ -681,6 +480,238 @@ struct MacExpandedPlayerView: View {
             guard expectedID == trackGlobalID, !Task.isCancelled else { return }
             lyricsState = .unavailable
         }
+    }
+}
+
+/// Expanded Player 的高频播放区域。
+///
+/// PlaybackStore.position 每半秒更新一次；把它限制在这个子树内，避免进度变化
+/// 让封面氛围背景、歌词和队列页面一起重新计算。父视图只接收歌词同步器发布的
+/// activeIndex，因此歌词只会在真正换行时更新。
+private struct MacExpandedPlaybackColumn: View {
+    let model: AuralisAppModel
+    let theme: BuiltInTheme
+    let track: Track
+    let trackGlobalID: String
+    let artworkSize: CGFloat
+    let columnWidth: CGFloat
+
+    @ObservedObject private var playbackStore: PlaybackStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isScrubbing = false
+    @State private var scrubValue: Double = 0
+    @State private var scrubDuration: Double = 0
+
+    init(
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        track: Track,
+        trackGlobalID: String,
+        artworkSize: CGFloat,
+        columnWidth: CGFloat
+    ) {
+        self.model = model
+        self.theme = theme
+        self.track = track
+        self.trackGlobalID = trackGlobalID
+        self.artworkSize = artworkSize
+        self.columnWidth = columnWidth
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+    }
+
+    private var duration: TimeInterval { max(model.effectivePlaybackDuration, 1) }
+    private var isPlaying: Bool { playbackStore.state == .playing }
+    private var displayedProgress: Double {
+        isScrubbing ? scrubValue : playbackStore.position
+    }
+    private var displayedRemaining: Double {
+        isScrubbing ? max(0, scrubDuration - scrubValue) : max(0, duration - playbackStore.position)
+    }
+    private var palette: MacExpandedPlayerPalette {
+        .init(colors: theme.colorTokens, colorScheme: theme.colorScheme)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ArtworkView(
+                title: track.albumTitle,
+                artworkKey: track.artworkKey,
+                colors: theme.colorTokens,
+                size: artworkSize,
+                serverID: track.serverID,
+                cornerRadius: MacUIVisualTokens.ExpandedPlayer.artworkCornerRadius
+            )
+            // frame 始终是播放态的最大尺寸：暂停只改变视觉层，标题/进度/控制
+            // 不会因 Artwork 尺寸变化而重新排版。
+            .frame(width: artworkSize, height: artworkSize)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .scaleEffect(
+                isPlaying ? 1 : MacUIVisualTokens.ExpandedPlayer.pausedArtworkScale,
+                anchor: .center
+            )
+            .animation(reduceMotion ? nil : .spring(duration: 0.30, bounce: 0.08), value: isPlaying)
+            .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
+            .accessibilityLabel(String(localized: "\(track.albumTitle) 封面", bundle: .module))
+
+            Spacer().frame(height: 26)
+            trackInfoRow
+            Spacer().frame(height: MacUIVisualTokens.ExpandedPlayer.columnBlockSpacing)
+            progressView(width: columnWidth)
+            Spacer().frame(height: 28)
+            transport(width: columnWidth)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var trackInfoRow: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(track.title)
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(palette.primary)
+                    .lineLimit(1)
+                Text("\(track.artistName) — \(track.albumTitle)")
+                    .font(.system(size: 15))
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button {
+                model.toggleFavorite(track)
+            } label: {
+                Image(systemName: track.isFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 20))
+                    .foregroundStyle(track.isFavorite ? palette.accent : palette.control)
+            }
+            .buttonStyle(.plain)
+            .help(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
+            .accessibilityLabel(track.isFavorite ? String(localized: "取消收藏", bundle: .module) : String(localized: "收藏", bundle: .module))
+            Menu {
+                if model.hasCurrentTrack {
+                    let disliked = model.isDisliked(model.currentTrack)
+                    Button(disliked ? String(localized: "取消不喜欢", bundle: .module) : String(localized: "不喜欢", bundle: .module)) {
+                        model.setDisliked(model.currentTrack, value: !disliked, source: "expanded-player")
+                    }
+                    Button(String(localized: "歌曲信息", bundle: .module)) {
+                        NotificationCenter.default.post(name: MacCommand.showTrackInformation, object: model.currentTrack)
+                    }
+                    Button(String(localized: "歌曲鉴赏", bundle: .module)) {
+                        NotificationCenter.default.post(name: MacCommand.songAppreciation, object: model.currentTrack)
+                    }
+                    if model.isDownloaded(model.currentTrack) {
+                        Button(String(localized: "删除下载", bundle: .module), role: .destructive) { model.removeDownload(model.currentTrack) }
+                    } else {
+                        Button(String(localized: "下载", bundle: .module)) { model.download(model.currentTrack) }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18))
+                    .foregroundStyle(palette.control)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(String(localized: "更多", bundle: .module))
+            .accessibilityLabel(String(localized: "更多", bundle: .module))
+        }
+    }
+
+    private func progressView(width: CGFloat) -> some View {
+        VStack(spacing: 4) {
+            MacPlaybackSlider(
+                value: displayedProgress,
+                minValue: 0,
+                maxValue: duration,
+                isEnabled: model.hasCurrentTrack,
+                onScrubStart: {
+                    scrubDuration = duration
+                    isScrubbing = true
+                },
+                onScrubChange: { scrubValue = $0 },
+                onCommit: { value in
+                    isScrubbing = false
+                    model.seek(toProgress: min(1, max(0, value / duration)))
+                }
+            )
+            .id(trackGlobalID)
+            .controlSize(.small)
+            .tint(palette.accent)
+            .accessibilityLabel(String(localized: "播放进度", bundle: .module))
+            HStack {
+                Text(MacFormat.time(displayedProgress))
+                Spacer()
+                Text("-" + MacFormat.time(displayedRemaining))
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(palette.secondary)
+        }
+        .frame(width: width)
+        .onChange(of: trackGlobalID) {
+            isScrubbing = false
+            scrubValue = 0
+            scrubDuration = duration
+        }
+    }
+
+    private func transport(width: CGFloat) -> some View {
+        HStack {
+            Button {
+                model.setShuffle(!model.isShuffled)
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(model.isShuffled ? palette.accent : palette.control)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "随机播放", bundle: .module))
+            Spacer()
+            Button {
+                model.previous()
+            } label: {
+                Image(systemName: "backward.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(palette.primary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canGoPrevious)
+            .accessibilityLabel(String(localized: "上一首", bundle: .module))
+            Spacer()
+            Button {
+                model.togglePlayback()
+            } label: {
+                Image(systemName: playbackStore.state == .playing ? "pause.fill" : "play.fill")
+                    .font(.system(size: 32))
+                    .foregroundStyle(palette.primary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.hasCurrentTrack)
+            .accessibilityLabel(String(localized: "播放 / 暂停", bundle: .module))
+            Spacer()
+            Button {
+                model.next()
+            } label: {
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(palette.primary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canGoNext)
+            .accessibilityLabel(String(localized: "下一首", bundle: .module))
+            Spacer()
+            Button {
+                model.cycleRepeatMode()
+                MacUITrace.action("cycleRepeat", "mode=\(model.repeatMode.rawValue)")
+            } label: {
+                Image(systemName: model.repeatMode == .one ? "repeat.1" : "repeat")
+                    .font(.system(size: 20))
+                    .foregroundStyle(model.repeatMode != .off ? palette.accent : palette.control)
+            }
+            .buttonStyle(.plain)
+            .help(String(localized: "循环模式", bundle: .module))
+            .accessibilityLabel(String(localized: "循环模式", bundle: .module))
+        }
+        .frame(width: width)
     }
 }
 

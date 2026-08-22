@@ -9,16 +9,17 @@ struct MacRightPanel: View {
     let theme: BuiltInTheme
     let mode: MacRightPanelMode
 
-    @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var lyricScrollTarget: Int?
+    @StateObject private var lyricsFollower: MacLyricsFollower
 
     init(model: AuralisAppModel, theme: BuiltInTheme, mode: MacRightPanelMode) {
         self.model = model
         self.theme = theme
         self.mode = mode
-        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
         self._queueStore = ObservedObject(wrappedValue: model.queueStore)
+        self._lyricsFollower = StateObject(wrappedValue: MacLyricsFollower(playbackStore: model.playbackStore))
     }
 
     var body: some View {
@@ -57,62 +58,62 @@ struct MacRightPanel: View {
     private var lyricsContent: some View {
         Group {
             if let lyrics = model.currentLyrics, !lyrics.lines.isEmpty {
-                let activeIndex = currentLyricIndex
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 16) {
-                            ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                                let isCurrent = index == activeIndex
-                                Text(line.text)
-                                    .font(.system(size: 23, weight: isCurrent ? .semibold : .regular))
-                                    .scaleEffect(isCurrent ? 1 : 18 / 23, anchor: .leading)
-                                    .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.primary.opacity(0.72))
-                                    .multilineTextAlignment(.leading)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        if let start = line.startTime {
-                                            model.seek(toProgress: min(1, max(0, start / max(model.effectivePlaybackDuration, 1))))
-                                        }
+                let activeIndex = lyricsFollower.activeIndex
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(lyrics.lines.indices, id: \.self) { index in
+                            let line = lyrics.lines[index]
+                            let isCurrent = index == activeIndex
+                            Text(line.text)
+                                .font(.system(size: 23, weight: .semibold))
+                                .scaleEffect(isCurrent ? 1 : 18 / 23, anchor: .leading)
+                                .opacity(isCurrent ? 1 : 0.62)
+                                .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.primary.opacity(0.72))
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if let start = line.startTime {
+                                        model.seek(toProgress: min(1, max(0, start / max(model.effectivePlaybackDuration, 1))))
                                     }
-                                    .id(index)
-                                    .accessibilityElement(children: .ignore)
-                                    .accessibilityLabel(line.text)
-                                    .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
-                                    .animation(.easeInOut(duration: 0.16), value: isCurrent)
-                            }
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 18)
-                    }
-                    // 只在当前歌词真正变化时滚动，避免随播放位置高频动画。
-                    .onChange(of: activeIndex) { _, index in
-                        guard let index else { return }
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.32)) {
-                            proxy.scrollTo(index, anchor: .center)
+                                }
+                                .id(index)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(line.text)
+                                .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
+                                .animation(
+                                    reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
+                                    value: isCurrent
+                                )
                         }
                     }
-                    .task(id: "\(lyricLoadID)|\(lyrics.id)") {
-                        guard let activeIndex else { return }
-                        proxy.scrollTo(activeIndex, anchor: .center)
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 18)
+                }
+                .scrollPosition(id: $lyricScrollTarget, anchor: .center)
+                .onChange(of: activeIndex) { _, newIndex in
+                    guard let newIndex, lyricScrollTarget != newIndex else { return }
+                    if reduceMotion {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            lyricScrollTarget = newIndex
+                        }
+                    } else {
+                        withAnimation(.smooth(duration: 0.44, extraBounce: 0)) {
+                            lyricScrollTarget = newIndex
+                        }
                     }
+                }
+                .task(id: "\(lyricLoadID)|\(lyrics.id)") {
+                    lyricsFollower.bind(lyrics: lyrics)
+                    lyricScrollTarget = lyricsFollower.activeIndex
                 }
             } else {
                 ContentUnavailableView(String(localized: "暂无歌词", bundle: .module), systemImage: "quote.bubble", description: Text(String(localized: "当前歌曲没有可显示的歌词。", bundle: .module)))
             }
         }
-    }
-
-    private var currentLyricIndex: Int? {
-        guard let lyrics = model.currentLyrics else { return nil }
-        let position = playbackStore.position
-        var index: Int?
-        for (i, line) in lyrics.lines.enumerated() {
-            if let start = line.startTime, start <= position + 0.15 {
-                index = i
-            }
-        }
-        return index
     }
 
     // MARK: - 队列

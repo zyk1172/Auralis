@@ -102,7 +102,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "允许连接您局域网中的个人音乐服务器，以浏览和播放音乐。"
+            "value" : "Auralis 需要连接您选择的私人音乐服务器，以同步资料库和播放音乐。"
           }
         },
         "zh-Hant" : {

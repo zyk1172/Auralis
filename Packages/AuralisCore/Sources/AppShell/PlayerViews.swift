@@ -172,6 +172,8 @@ struct NowPlayingView: View {
     @State private var showsMoreActions = false
     @State private var showsAudioTechnicalInfo = false
     @State private var showsTrackInformation = false
+    @State private var lyricScrollTarget: Int?
+    @State private var lyricTimeline: [LyricsIndexResolver.TimedLine] = []
     /// 拖动进度条时暂存的 seek 目标：松手才真正 seek（Apple Music 行为）。
     @State private var pendingSeek: Double?
 #if os(iOS)
@@ -677,58 +679,72 @@ struct NowPlayingView: View {
     /// 当前应高亮的歌词行：仅对带时间轴的同步歌词按播放位置计算。
     private var currentLyricIndex: Int? {
         guard let document = model.currentLyrics, document.isSynced else { return nil }
-        let position = playbackStore.position
-        var result: Int?
-        for (index, line) in document.lines.enumerated() {
-            guard let start = line.startTime else { continue }
-            if start <= position {
-                result = index
-            } else {
-                break
-            }
-        }
-        return result
+        guard document.id == lyricTimelineID else { return nil }
+        return LyricsIndexResolver.index(at: playbackStore.position, in: lyricTimeline)
+    }
+
+    private var lyricTimelineID: TrackID? {
+        model.currentLyrics?.id
     }
 
     private var lyrics: some View {
         let activeIndex = currentLyricIndex
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
-                    if let document = model.currentLyrics {
-                        ForEach(Array(document.lines.enumerated()), id: \.element.id) { index, line in
-                            let isCurrent = index == activeIndex
-                            Text(line.text)
-                                .font(.title3.weight(isCurrent ? .semibold : .regular))
-                                .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .animation(.easeInOut(duration: 0.16), value: isCurrent)
-                                .id(index)
-                        }
-                    } else {
-                        AuralisEmptyState(
-                            icon: "quote.bubble",
-                            title: String(localized: "暂无歌词", bundle: .module),
-                            message: String(localized: "服务器没有返回歌词，稍后可从本地文件或 MusicBrainz 候选补全。", bundle: .module),
-                            colors: theme.colorTokens
-                        )
+        return ScrollView {
+            LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
+                if let document = model.currentLyrics {
+                    ForEach(document.lines.indices, id: \.self) { index in
+                        let line = document.lines[index]
+                        let isCurrent = index == activeIndex
+                        Text(line.text)
+                            .font(.title3.weight(.semibold))
+                            .scaleEffect(isCurrent ? 1 : 0.92)
+                            .opacity(isCurrent ? 1 : 0.62)
+                            .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .animation(
+                                reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0),
+                                value: isCurrent
+                            )
+                            .id(index)
                     }
-                }
-                .frame(maxWidth: 600, alignment: .center)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, AuralisSpacing.huge)
-            }
-            .onChange(of: activeIndex) { _, newIndex in
-                guard let newIndex else { return }
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.32)) {
-                    proxy.scrollTo(newIndex, anchor: .center)
+                } else {
+                    AuralisEmptyState(
+                        icon: "quote.bubble",
+                        title: String(localized: "暂无歌词", bundle: .module),
+                        message: String(localized: "服务器没有返回歌词，稍后可从本地文件或 MusicBrainz 候选补全。", bundle: .module),
+                        colors: theme.colorTokens
+                    )
                 }
             }
-            .task(id: model.currentLyrics?.id) {
-                guard let activeIndex else { return }
-                proxy.scrollTo(activeIndex, anchor: .center)
+            .scrollTargetLayout()
+            .frame(maxWidth: 600, alignment: .center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, AuralisSpacing.huge)
+        }
+        .scrollPosition(id: $lyricScrollTarget, anchor: .center)
+        .onChange(of: activeIndex) { _, newIndex in
+            guard let newIndex, lyricScrollTarget != newIndex else { return }
+            if reduceMotion {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    lyricScrollTarget = newIndex
+                }
+            } else {
+                withAnimation(.smooth(duration: 0.44, extraBounce: 0)) {
+                    lyricScrollTarget = newIndex
+                }
             }
+        }
+        .task(id: model.currentLyrics?.id) {
+            guard let document = model.currentLyrics else {
+                lyricTimeline = []
+                lyricScrollTarget = nil
+                return
+            }
+            lyricTimeline = LyricsIndexResolver.timeline(for: document.lines)
+            lyricScrollTarget = LyricsIndexResolver.index(at: playbackStore.position, in: lyricTimeline)
         }
     }
 
