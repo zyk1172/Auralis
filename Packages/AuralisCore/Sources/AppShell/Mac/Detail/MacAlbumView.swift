@@ -50,7 +50,11 @@ struct MacAlbumView: View {
                 Image(platformImage: ambienceImage)
                     .resizable()
                     .scaledToFill()
-                    .frame(maxWidth: .infinity)
+                    // `ScrollView` gives its content an unbounded vertical proposal.
+                    // Limiting only width lets a loaded artwork image choose its full
+                    // intrinsic height, which grows the Hero to nearly a full window
+                    // and pushes its actual content below the fold.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .blur(radius: 42)
                     .saturation(1.05)
                     .opacity(0.16)
@@ -100,6 +104,12 @@ struct MacAlbumView: View {
             }
             .padding(20)
         }
+        // The foreground has a fixed 250pt artwork plus 20pt vertical padding.
+        // Keep the ambience background in that same bounded region instead of
+        // allowing it to dictate the scroll content height.
+        .frame(maxWidth: .infinity)
+        .frame(height: 290)
+        .clipped()
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
