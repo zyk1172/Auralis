@@ -274,6 +274,9 @@
         }
       }
     },
+    "%@ token" : {
+
+    },
     "%@ 出现重复记录：%@" : {
       "localizations" : {
         "en" : {
@@ -1300,6 +1303,22 @@
         }
       }
     },
+    "Anthropic" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anthropic"
+          }
+        }
+      }
+    },
     "API Key" : {
       "localizations" : {
         "en" : {
@@ -1392,6 +1411,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Auralis · 私人音樂伺服器播放器（OpenSubsonic / Navidrome）"
+          }
+        }
+      }
+    },
+    "Auralis 尚未实现 Anthropic Messages，当前配置不会发送请求。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis does not support Anthropic Messages yet. This configuration will not send requests."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis 尚未支援 Anthropic Messages，目前設定不會傳送要求。"
           }
         }
       }
@@ -1600,6 +1636,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ListenBrainz 資料暫時不可用。"
+          }
+        }
+      }
+    },
+    "Messages API（原生工具调用）" : {
+
+    },
+    "Messages API（暂不支持）" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages API (Not Supported Yet)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages API（尚未支援）"
           }
         }
       }
@@ -1815,6 +1871,7 @@
       }
     },
     "token" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1831,6 +1888,7 @@
       }
     },
     "Token 数量" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1894,6 +1952,28 @@
         }
       }
     },
+    "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context tiers are 4K, 8K, 16K, 32K, 64K, 128K, 200K, 256K, 512K, and 1M; output tiers range from 512 to 128K. The current value is preserved, and the arrows move to the previous or next tier."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文檔位為 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；輸出檔位為 512 至 128K。目前值會保留，使用箭頭時跳到上一檔或下一檔。"
+          }
+        }
+      }
+    },
     "上下文窗口" : {
       "localizations" : {
         "en" : {
@@ -1932,7 +2012,11 @@
         }
       }
     },
+    "上下文窗口不能高于 %lld token" : {
+
+    },
     "上下文窗口和单次输出上限均直接使用这里填写的数值，不再由 Auralis 额外设置固定上限。默认仍为 256K / 16K；可按模型实际能力填写更大的数值。最终可用范围由所连接模型或 API 服务端决定。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2301,6 +2385,7 @@
       }
     },
     "不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2312,28 +2397,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不同 OpenAI 相容端點上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取決於模型）。預設 256K / 16K 維持舊行為，可按實際模型修改。"
-          }
-        }
-      }
-    },
-    "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Context tiers are 4K, 8K, 16K, 32K, 64K, 128K, 200K, 256K, 512K, and 1M; output tiers range from 512 to 128K. The current value is preserved, and the arrows move to the previous or next tier."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上下文檔位為 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；輸出檔位為 512 至 128K。目前值會保留，使用箭頭時跳到上一檔或下一檔。"
           }
         }
       }
@@ -2919,6 +2982,9 @@
           }
         }
       }
+    },
+    "使用 Anthropic Messages API，并通过原生工具调用执行任务。" : {
+
     },
     "保存" : {
       "localizations" : {
@@ -4605,6 +4671,9 @@
           }
         }
       }
+    },
+    "单次输出不能高于 %lld token" : {
+
     },
     "历史记录" : {
       "localizations" : {
@@ -6708,6 +6777,22 @@
         }
       }
     },
+    "已根据当前模型自动切换为" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatically switched for the selected model:"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已根據目前模型自動切換為"
+          }
+        }
+      }
+    },
     "已离线" : {
       "localizations" : {
         "en" : {
@@ -7136,6 +7221,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "目前伺服器的推薦索引 V2 已清空，可重新開始索引。"
+          }
+        }
+      }
+    },
+    "当前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支持该协议。请换用 Chat/Responses 模型，或选择自定义兼容端点。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected model requires Anthropic Messages (/v1/messages), which Auralis does not support yet. Choose a Chat/Responses model or a custom compatible endpoint."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支援此協議。請改用 Chat/Responses 模型，或選擇自訂相容端點。"
           }
         }
       }
@@ -8514,6 +8616,7 @@
       }
     },
     "支持 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio\n和兼容 OpenAI 协议的中转服务。\nAPI Key 仅保存于系统 Keychain。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -8525,6 +8628,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "支援 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通義千問、Kimi、Ollama、LM Studio\n和相容 OpenAI 協議的中轉服務。\nAPI Key 僅儲存於系統 Keychain。"
+          }
+        }
+      }
+    },
+    "支持 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio\n和兼容 OpenAI 协议的中转服务。Anthropic Messages\n暂未实现；选择该协议时不会发送请求。\nAPI Key 仅保存于系统 Keychain。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supports OpenAI Chat Completions and the OpenAI Responses API,\nplus DeepSeek, Qwen, Kimi, Ollama, LM Studio,\nand OpenAI-protocol-compatible relay services. Anthropic Messages\nis not supported yet; choosing it will not send requests.\nYour API Key is stored only in the system Keychain."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支援 OpenAI Chat Completions 與 OpenAI Responses API，\n以及 DeepSeek、通義千問、Kimi、Ollama、LM Studio\n和相容 OpenAI 協議的中轉服務。Anthropic Messages\n尚未支援；選擇此協議時不會傳送要求。\nAPI Key 僅儲存於系統 Keychain。"
           }
         }
       }
@@ -10418,6 +10537,7 @@
       }
     },
     "档位" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -15016,6 +15136,7 @@
       }
     },
     "预设档位" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -15155,102 +15276,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "預設只顯示數量摘要，具體資訊需手動展開。記憶與技能只存在本機 App Support，不會上傳；每次 AI 對話開始時會按需註入相關記憶。"
-          }
-        }
-      }
-    },
-    "Anthropic" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anthropic"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anthropic"
-          }
-        }
-      }
-    },
-    "Messages API（暂不支持）" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Messages API (Not Supported Yet)"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Messages API（尚未支援）"
-          }
-        }
-      }
-    },
-    "已根据当前模型自动切换为" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Automatically switched for the selected model:"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已根據目前模型自動切換為"
-          }
-        }
-      }
-    },
-    "Auralis 尚未实现 Anthropic Messages，当前配置不会发送请求。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Auralis does not support Anthropic Messages yet. This configuration will not send requests."
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Auralis 尚未支援 Anthropic Messages，目前設定不會傳送要求。"
-          }
-        }
-      }
-    },
-    "当前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支持该协议。请换用 Chat/Responses 模型，或选择自定义兼容端点。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The selected model requires Anthropic Messages (/v1/messages), which Auralis does not support yet. Choose a Chat/Responses model or a custom compatible endpoint."
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前模型要求 Anthropic Messages（/v1/messages），Auralis 尚未支援此協議。請改用 Chat/Responses 模型，或選擇自訂相容端點。"
-          }
-        }
-      }
-    },
-    "支持 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio\n和兼容 OpenAI 协议的中转服务。Anthropic Messages\n暂未实现；选择该协议时不会发送请求。\nAPI Key 仅保存于系统 Keychain。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Supports OpenAI Chat Completions and the OpenAI Responses API,\nplus DeepSeek, Qwen, Kimi, Ollama, LM Studio,\nand OpenAI-protocol-compatible relay services. Anthropic Messages\nis not supported yet; choosing it will not send requests.\nYour API Key is stored only in the system Keychain."
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "支援 OpenAI Chat Completions 與 OpenAI Responses API，\n以及 DeepSeek、通義千問、Kimi、Ollama、LM Studio\n和相容 OpenAI 協議的中轉服務。Anthropic Messages\n尚未支援；選擇此協議時不會傳送要求。\nAPI Key 僅儲存於系統 Keychain。"
           }
         }
       }

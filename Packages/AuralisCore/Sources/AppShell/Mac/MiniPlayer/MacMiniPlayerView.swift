@@ -190,19 +190,25 @@ public struct MacMiniPlayerView: View {
     /// 滚动只在「当前行下标真正变化」时触发一次——position 每秒更新几十次，
     /// 但 ScrollView 只跨句时滚动，避免每帧 scrollTo。
     private func syncedLyricsView(_ lyrics: LyricsDocument, size: CGFloat) -> some View {
-        ScrollViewReader { proxy in
+        let activeIndex = activeLyricIndex
+        return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 14) {
                     // 顶部/底部留出半屏空间，保证首行和末行也能滚动到垂直居中。
                     Color.clear.frame(height: max(12, size / 2 - 18))
                     ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
-                        let isCurrent = activeLyricIndex == index
+                        let isCurrent = activeIndex == index
                         Text(line.text)
-                            .font(.system(size: isCurrent ? 19 : 15, weight: isCurrent ? .semibold : .regular))
+                            // 保持所有行的 layout 高度一致。过去这里在当前行变化时
+                            // 同时改变字号和 ScrollView offset，目标位置会在滚动中重算，
+                            // 因而每句都有一次明显顿挫。
+                            .font(.system(size: 19, weight: isCurrent ? .semibold : .regular))
+                            .scaleEffect(isCurrent ? 1 : 15 / 19)
                             .foregroundStyle(isCurrent ? theme.colorTokens.primaryText.color : theme.colorTokens.secondaryText.color)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .opacity(isCurrent ? 1 : 0.55)
+                            .animation(.easeInOut(duration: 0.16), value: isCurrent)
                             .id(index)
                     }
                     Color.clear.frame(height: max(12, size / 2 - 18))
@@ -210,17 +216,17 @@ public struct MacMiniPlayerView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 8)
             }
-            .onChange(of: activeLyricIndex) { _, index in
+            .onChange(of: activeIndex) { _, index in
                 guard let index else { return }
-                withAnimation(.easeInOut(duration: 0.22)) {
+                withAnimation(.easeInOut(duration: 0.32)) {
                     proxy.scrollTo(index, anchor: .center)
                 }
             }
             // 首次出现定位：视图创建时若已经处于歌词中段（activeLyricIndex 非 nil），
             // onChange 不会为初始值执行，先无动画定位到当前行；后续跨行仍走上面的
-            // 0.22s 动画。切歌时 task id 变化，重新定位到新歌当前行。
+            // 0.32s 动画。切歌时 task id 变化，重新定位到新歌当前行。
             .task(id: trackGlobalID) {
-                guard let index = activeLyricIndex else { return }
+                guard let index = activeIndex else { return }
                 proxy.scrollTo(index, anchor: .center)
             }
         }

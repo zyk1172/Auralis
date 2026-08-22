@@ -691,17 +691,19 @@ struct NowPlayingView: View {
     }
 
     private var lyrics: some View {
-        ScrollViewReader { proxy in
+        let activeIndex = currentLyricIndex
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .center, spacing: AuralisSpacing.large) {
                     if let document = model.currentLyrics {
                         ForEach(Array(document.lines.enumerated()), id: \.element.id) { index, line in
-                            let isCurrent = index == currentLyricIndex
+                            let isCurrent = index == activeIndex
                             Text(line.text)
                                 .font(.title3.weight(isCurrent ? .semibold : .regular))
                                 .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : theme.colorTokens.secondaryText.color)
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity, alignment: .center)
+                                .animation(.easeInOut(duration: 0.16), value: isCurrent)
                                 .id(index)
                         }
                     } else {
@@ -717,11 +719,15 @@ struct NowPlayingView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, AuralisSpacing.huge)
             }
-            .onChange(of: currentLyricIndex) { _, newIndex in
+            .onChange(of: activeIndex) { _, newIndex in
                 guard let newIndex else { return }
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.32)) {
                     proxy.scrollTo(newIndex, anchor: .center)
                 }
+            }
+            .task(id: model.currentLyrics?.id) {
+                guard let activeIndex else { return }
+                proxy.scrollTo(activeIndex, anchor: .center)
             }
         }
     }

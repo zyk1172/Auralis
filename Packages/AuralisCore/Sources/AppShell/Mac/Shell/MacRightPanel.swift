@@ -11,6 +11,7 @@ struct MacRightPanel: View {
 
     @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: AuralisAppModel, theme: BuiltInTheme, mode: MacRightPanelMode) {
         self.model = model
@@ -63,7 +64,8 @@ struct MacRightPanel: View {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                                 let isCurrent = index == activeIndex
                                 Text(line.text)
-                                    .font(.system(size: isCurrent ? 23 : 18, weight: isCurrent ? .semibold : .regular))
+                                    .font(.system(size: 23, weight: isCurrent ? .semibold : .regular))
+                                    .scaleEffect(isCurrent ? 1 : 18 / 23, anchor: .leading)
                                     .foregroundStyle(isCurrent ? theme.colorTokens.accent.color : Color.primary.opacity(0.72))
                                     .multilineTextAlignment(.leading)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -77,17 +79,22 @@ struct MacRightPanel: View {
                                     .accessibilityElement(children: .ignore)
                                     .accessibilityLabel(line.text)
                                     .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
+                                    .animation(.easeInOut(duration: 0.16), value: isCurrent)
                             }
                         }
                         .padding(.horizontal, 20)
                         .padding(.vertical, 18)
                     }
                     // 只在当前歌词真正变化时滚动，避免随播放位置高频动画。
-                    .onChange(of: currentLyricIndex) { _, index in
+                    .onChange(of: activeIndex) { _, index in
                         guard let index else { return }
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.32)) {
                             proxy.scrollTo(index, anchor: .center)
                         }
+                    }
+                    .task(id: "\(lyricLoadID)|\(lyrics.id)") {
+                        guard let activeIndex else { return }
+                        proxy.scrollTo(activeIndex, anchor: .center)
                     }
                 }
             } else {

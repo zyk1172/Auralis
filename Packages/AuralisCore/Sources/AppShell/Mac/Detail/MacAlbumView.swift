@@ -45,72 +45,74 @@ struct MacAlbumView: View {
     // MARK: - Hero（ambience 覆盖 Hero 横向整区）
 
     private var hero: some View {
-        ZStack(alignment: .bottomLeading) {
-            if let ambienceImage {
-                Image(platformImage: ambienceImage)
-                    .resizable()
-                    .scaledToFill()
-                    // `ScrollView` gives its content an unbounded vertical proposal.
-                    // Limiting only width lets a loaded artwork image choose its full
-                    // intrinsic height, which grows the Hero to nearly a full window
-                    // and pushes its actual content below the fold.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .blur(radius: 42)
-                    .saturation(1.05)
-                    .opacity(0.16)
-                    .allowsHitTesting(false)
-            }
-            LinearGradient(
-                colors: [.clear, Color(nsColor: .underPageBackgroundColor)],
-                startPoint: .top, endPoint: .bottom
+        // 前景决定 Hero 尺寸。氛围图只能作为 background 绘制，绝不能成为
+        // ScrollView 布局子项，否则原始封面会以自身高度撑大整个详情页。
+        HStack(alignment: .center, spacing: 28) {
+            ArtworkView(
+                title: album.title,
+                artworkKey: album.artworkKey,
+                colors: theme.colorTokens,
+                size: 250,
+                cornerRadius: 12
             )
-            .opacity(0.5)
+            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
 
-            HStack(alignment: .center, spacing: 28) {
-                ArtworkView(
-                    title: album.title,
-                    artworkKey: album.artworkKey,
-                    colors: theme.colorTokens,
-                    size: 250,
-                    cornerRadius: 12
-                )
-                .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(album.title)
-                        .font(.system(size: 32, weight: .bold, design: .default))
-                        .lineLimit(3)
-                    if let artist = model.catalog.artists.first(where: { $0.id == album.artistID && $0.serverID == album.serverID }) {
-                        Button {
-                            onNavigate(.artist(artist))
-                        } label: {
-                            Text(artist.name)
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(theme.colorTokens.accent.color)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Text(album.artistName)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(album.title)
+                    .font(.system(size: 32, weight: .bold, design: .default))
+                    .lineLimit(3)
+                if let artist = model.catalog.artists.first(where: { $0.id == album.artistID && $0.serverID == album.serverID }) {
+                    Button {
+                        onNavigate(.artist(artist))
+                    } label: {
+                        Text(artist.name)
                             .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(theme.colorTokens.accent.color)
                     }
-                    if let metadata = metadataLine {
-                        Text(metadata)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    actions
+                    .buttonStyle(.plain)
+                } else {
+                    Text(album.artistName)
+                        .font(.system(size: 18, weight: .semibold))
                 }
-                Spacer()
+                if let metadata = metadataLine {
+                    Text(metadata)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                actions
             }
-            .padding(20)
+            Spacer(minLength: 0)
         }
-        // The foreground has a fixed 250pt artwork plus 20pt vertical padding.
-        // Keep the ambience background in that same bounded region instead of
-        // allowing it to dictate the scroll content height.
-        .frame(maxWidth: .infinity)
-        .frame(height: 290)
-        .clipped()
-        .background(.background)
+        .padding(20)
+        // 封面 250pt 加上下各 20pt；使用 minHeight 以免较大的辅助功能字体被裁掉。
+        .frame(maxWidth: .infinity, minHeight: 290, alignment: .leading)
+        .background {
+            GeometryReader { proxy in
+                ZStack {
+                    Color(nsColor: .underPageBackgroundColor)
+                    if let ambienceImage {
+                        Image(platformImage: ambienceImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .blur(radius: 36)
+                            .saturation(1.05)
+                            .opacity(0.10)
+                    }
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            Color(nsColor: .underPageBackgroundColor).opacity(0.75)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
+                .allowsHitTesting(false)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 

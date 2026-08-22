@@ -434,7 +434,14 @@ struct MacExpandedPlayerView: View {
                             ForEach(Array(lyrics.lines.enumerated()), id: \.element.id) { index, line in
                                 let isCurrent = activeIndex == index
                                 Text(line.text)
-                                    .font(.system(size: isCurrent ? MacUIVisualTokens.Typography.lyricActive : MacUIVisualTokens.Typography.lyricInactive, weight: isCurrent ? .semibold : .regular))
+                                    // 活跃状态只改变绘制，不改变 LazyVStack 的行高；否则
+                                    // scrollTo 动画与字号驱动的重排会在每次换句时相互抢占。
+                                    .font(.system(size: MacUIVisualTokens.Typography.lyricActive, weight: isCurrent ? .semibold : .regular))
+                                    .scaleEffect(
+                                        isCurrent
+                                            ? 1
+                                            : MacUIVisualTokens.Typography.lyricInactive / MacUIVisualTokens.Typography.lyricActive
+                                    )
                                     .foregroundStyle(isCurrent ? palette.primary : palette.lyricInactive)
                                     .multilineTextAlignment(.center)
                                     .frame(maxWidth: .infinity, alignment: .center)
@@ -446,13 +453,20 @@ struct MacExpandedPlayerView: View {
                                     }
                                     .id(index)
                                     .accessibilityValue(isCurrent ? String(localized: "当前歌词", bundle: .module) : "")
+                                    .animation(.easeInOut(duration: 0.16), value: isCurrent)
                             }
                         }
                         .padding(.vertical, 18)
                     }
-                    .onChange(of: currentLyricIndex) { _, index in
+                    .onChange(of: activeIndex) { _, index in
                         guard let index else { return }
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(index, anchor: .center) }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.32)) {
+                            proxy.scrollTo(index, anchor: .center)
+                        }
+                    }
+                    .task(id: "\(trackGlobalID)|\(lyrics.id)") {
+                        guard let activeIndex else { return }
+                        proxy.scrollTo(activeIndex, anchor: .center)
                     }
                 }
             case .available:

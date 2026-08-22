@@ -67,6 +67,9 @@
         }
       }
     },
+    "Responses 流在工具调用参数完成前中断" : {
+
+    },
     "响应流失败" : {
       "localizations" : {
         "en" : {
@@ -95,6 +98,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "尚未設定 API Key，請先在設定中填寫。"
+          }
+        }
+      }
+    },
+    "当前接口协议不能由 OpenAI Provider 处理：%@。请检查协议选择。" : {
+
+    },
+    "当前接口协议暂不支持：%@。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unsupported endpoint protocol: %@. Auralis currently supports Chat Completions and the Responses API. Choose another model or protocol."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前不支援此介面協議：%@。Auralis 目前支援 Chat Completions 與 Responses API，請更換模型或協議。"
           }
         }
       }
@@ -504,22 +527,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法解析返回內容（自動重試仍失敗）：%@"
-          }
-        }
-      }
-    },
-    "当前接口协议暂不支持：%@。Auralis 目前支持 Chat Completions 与 Responses API，请更换模型或协议。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unsupported endpoint protocol: %@. Auralis currently supports Chat Completions and the Responses API. Choose another model or protocol."
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前不支援此介面協議：%@。Auralis 目前支援 Chat Completions 與 Responses API，請更換模型或協議。"
           }
         }
       }
