@@ -226,16 +226,16 @@ private struct BridgeStub: AgentBridge {
     func playAlbum(globalID: GlobalID) async -> Bool { true }
     func playPlaylist(globalID: GlobalID) async -> Bool { true }
     func playRandom(limit: Int) -> AgentMutationResult { .confirmed("ok") }
-    func pause() {}
-    func resume() {}
-    func seek(seconds: TimeInterval) {}
-    func next() {}
-    func previous() {}
-    func setShuffle(_ enabled: Bool) {}
-    func setRepeatMode(_ mode: RepeatMode) {}
-    func setPlaybackRate(_ rate: Float) {}
-    func setSleepTimer(mode: String, minutes: TimeInterval) {}
-    func cancelSleepTimer() {}
+    func pause() -> AgentMutationResult { .confirmed("已暂停") }
+    func resume() -> AgentMutationResult { .confirmed("已继续") }
+    func seek(seconds: TimeInterval) -> AgentMutationResult { .confirmed("已定位") }
+    func next() -> AgentMutationResult { .confirmed("下一首") }
+    func previous() -> AgentMutationResult { .confirmed("上一首") }
+    func setShuffle(_ enabled: Bool) -> AgentMutationResult { .confirmed("已设置随机播放") }
+    func setRepeatMode(_ mode: RepeatMode) -> AgentMutationResult { .confirmed("已设置循环模式") }
+    func setPlaybackRate(_ rate: Float) -> AgentMutationResult { .confirmed("已设置播放速度") }
+    func setSleepTimer(mode: String, minutes: TimeInterval) -> AgentMutationResult { .confirmed("已设置睡眠定时") }
+    func cancelSleepTimer() -> AgentMutationResult { .confirmed("已取消睡眠定时") }
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
@@ -244,7 +244,7 @@ private struct BridgeStub: AgentBridge {
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
     func clearQueue() async -> AgentMutationResult { .confirmed("ok") }
     func shuffleRemaining() async -> AgentMutationResult { .confirmed("ok") }
-    func saveQueueAsPlaylist(name: String) async -> Bool { true }
+    func saveQueueAsPlaylist(name: String) async -> AgentMutationResult { .confirmed("已保存队列") }
     func createPlaylist(name: String) -> GlobalID? { nil }
     func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { .confirmed("ok") }
     func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult { .confirmed("ok") }
@@ -253,23 +253,23 @@ private struct BridgeStub: AgentBridge {
     func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { .confirmed("ok") }
     func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
-    func likeTrack(globalID: GlobalID) {}
-    func unlikeTrack(globalID: GlobalID) {}
-    func favoriteAlbum(globalID: GlobalID) {}
-    func unfavoriteAlbum(globalID: GlobalID) {}
-    func favoriteArtist(globalID: GlobalID) {}
-    func unfavoriteArtist(globalID: GlobalID) {}
-    func setRating(globalID: GlobalID, rating: Int) {}
-    func clearRating(globalID: GlobalID) {}
+    func likeTrack(globalID: GlobalID) -> AgentMutationResult { .confirmed("已收藏") }
+    func unlikeTrack(globalID: GlobalID) -> AgentMutationResult { .confirmed("已取消收藏") }
+    func favoriteAlbum(globalID: GlobalID) -> AgentMutationResult { .confirmed("已收藏专辑") }
+    func unfavoriteAlbum(globalID: GlobalID) -> AgentMutationResult { .confirmed("已取消收藏专辑") }
+    func favoriteArtist(globalID: GlobalID) -> AgentMutationResult { .confirmed("已收藏艺术家") }
+    func unfavoriteArtist(globalID: GlobalID) -> AgentMutationResult { .confirmed("已取消收藏艺术家") }
+    func setRating(globalID: GlobalID, rating: Int) -> AgentMutationResult { .confirmed("已评分") }
+    func clearRating(globalID: GlobalID) -> AgentMutationResult { .confirmed("已清除评分") }
     func listServers() async -> [ServerAccount] { [] }
     func getActiveServer() async -> ServerAccount? { nil }
     func testServerConnection(serverID: ServerID) async -> Bool { true }
     func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult { .confirmed("ok") }
     func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult { .confirmed("ok") }
     func switchServer(serverID: ServerID) async -> AgentMutationResult { .confirmed("ok") }
-    func refreshLibrary() async {}
+    func refreshLibrary() async -> AgentMutationResult { .confirmed("已触发刷新") }
     func getSyncStatus() async -> [CatalogSyncStatus] { [] }
-    func removeServer(serverID: ServerID) async {}
+    func removeServer(serverID: ServerID) async -> AgentMutationResult { .confirmed("已删除服务器") }
 }
 
 

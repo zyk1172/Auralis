@@ -148,17 +148,17 @@ public protocol AgentBridge: Sendable {
     func playAlbum(globalID: GlobalID) async -> Bool
     func playPlaylist(globalID: GlobalID) async -> Bool
     func playRandom(limit: Int) async -> AgentMutationResult
-    func pause() async
-    func resume() async
-    func seek(seconds: TimeInterval) async
-    func next() async
-    func previous() async
-    func setShuffle(_ enabled: Bool) async
-    func setRepeatMode(_ mode: RepeatMode) async
-    func setPlaybackRate(_ rate: Float) async
+    func pause() async -> AgentMutationResult
+    func resume() async -> AgentMutationResult
+    func seek(seconds: TimeInterval) async -> AgentMutationResult
+    func next() async -> AgentMutationResult
+    func previous() async -> AgentMutationResult
+    func setShuffle(_ enabled: Bool) async -> AgentMutationResult
+    func setRepeatMode(_ mode: RepeatMode) async -> AgentMutationResult
+    func setPlaybackRate(_ rate: Float) async -> AgentMutationResult
     /// 设置睡眠定时。mode 取值：off / afterMinutes / afterCurrentTrack / afterCurrentAlbum / afterCurrentQueue。
-    func setSleepTimer(mode: String, minutes: TimeInterval) async
-    func cancelSleepTimer() async
+    func setSleepTimer(mode: String, minutes: TimeInterval) async -> AgentMutationResult
+    func cancelSleepTimer() async -> AgentMutationResult
     /// 返回 (模式, 剩余秒数)。
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval)
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult
@@ -169,8 +169,8 @@ public protocol AgentBridge: Sendable {
     func clearQueue() async -> AgentMutationResult
     /// 只随机尚未播放的剩余队列。
     func shuffleRemaining() async -> AgentMutationResult
-    /// 把当前队列保存为服务器歌单；成功返回 true。
-    func saveQueueAsPlaylist(name: String) async -> Bool
+    /// 把当前队列保存为服务器歌单。
+    func saveQueueAsPlaylist(name: String) async -> AgentMutationResult
 
     // Playlist
     func createPlaylist(name: String) async -> GlobalID?
@@ -183,14 +183,14 @@ public protocol AgentBridge: Sendable {
     func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult
 
     // Annotation
-    func likeTrack(globalID: GlobalID) async
-    func unlikeTrack(globalID: GlobalID) async
-    func favoriteAlbum(globalID: GlobalID) async
-    func unfavoriteAlbum(globalID: GlobalID) async
-    func favoriteArtist(globalID: GlobalID) async
-    func unfavoriteArtist(globalID: GlobalID) async
-    func setRating(globalID: GlobalID, rating: Int) async
-    func clearRating(globalID: GlobalID) async
+    func likeTrack(globalID: GlobalID) async -> AgentMutationResult
+    func unlikeTrack(globalID: GlobalID) async -> AgentMutationResult
+    func favoriteAlbum(globalID: GlobalID) async -> AgentMutationResult
+    func unfavoriteAlbum(globalID: GlobalID) async -> AgentMutationResult
+    func favoriteArtist(globalID: GlobalID) async -> AgentMutationResult
+    func unfavoriteArtist(globalID: GlobalID) async -> AgentMutationResult
+    func setRating(globalID: GlobalID, rating: Int) async -> AgentMutationResult
+    func clearRating(globalID: GlobalID) async -> AgentMutationResult
 
     // Server
     func listServers() async -> [ServerAccount]
@@ -199,9 +199,9 @@ public protocol AgentBridge: Sendable {
     func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult
     func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult
     func switchServer(serverID: ServerID) async -> AgentMutationResult
-    func refreshLibrary() async
+    func refreshLibrary() async -> AgentMutationResult
     func getSyncStatus() async -> [CatalogSyncStatus]
-    func removeServer(serverID: ServerID) async
+    func removeServer(serverID: ServerID) async -> AgentMutationResult
     /// 在服务器上在线搜索歌曲（HTTP，search3）；本地无结果时使用。未连接或失败返回空数组。
     func serverSearch(query: String, limit: Int) async -> [Track]
 }
@@ -210,6 +210,27 @@ public extension AgentBridge {
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
     func playServerTrack(globalID: GlobalID) async -> Bool { false }
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { .unknown }
+    func pause() async -> AgentMutationResult { .failed("播放器桥接未实现暂停") }
+    func resume() async -> AgentMutationResult { .failed("播放器桥接未实现继续播放") }
+    func seek(seconds: TimeInterval) async -> AgentMutationResult { .failed("播放器桥接未实现定位") }
+    func next() async -> AgentMutationResult { .failed("播放器桥接未实现下一首") }
+    func previous() async -> AgentMutationResult { .failed("播放器桥接未实现上一首") }
+    func setShuffle(_ enabled: Bool) async -> AgentMutationResult { .failed("播放器桥接未实现随机设置") }
+    func setRepeatMode(_ mode: RepeatMode) async -> AgentMutationResult { .failed("播放器桥接未实现循环设置") }
+    func setPlaybackRate(_ rate: Float) async -> AgentMutationResult { .failed("播放器桥接未实现倍速设置") }
+    func setSleepTimer(mode: String, minutes: TimeInterval) async -> AgentMutationResult { .failed("播放器桥接未实现睡眠定时") }
+    func cancelSleepTimer() async -> AgentMutationResult { .failed("播放器桥接未实现取消睡眠定时") }
+    func saveQueueAsPlaylist(name: String) async -> AgentMutationResult { .failed("播放器桥接未实现保存队列") }
+    func likeTrack(globalID: GlobalID) async -> AgentMutationResult { .failed("播放器桥接未实现收藏") }
+    func unlikeTrack(globalID: GlobalID) async -> AgentMutationResult { .failed("播放器桥接未实现取消收藏") }
+    func favoriteAlbum(globalID: GlobalID) async -> AgentMutationResult { .failed("播放器桥接未实现收藏专辑") }
+    func unfavoriteAlbum(globalID: GlobalID) async -> AgentMutationResult { .failed("播放器桥接未实现取消收藏专辑") }
+    func favoriteArtist(globalID: GlobalID) async -> AgentMutationResult { .failed("播放器桥接未实现收藏艺术家") }
+    func unfavoriteArtist(globalID: GlobalID) async -> AgentMutationResult { .failed("播放器桥接未实现取消收藏艺术家") }
+    func setRating(globalID: GlobalID, rating: Int) async -> AgentMutationResult { .failed("播放器桥接未实现评分") }
+    func clearRating(globalID: GlobalID) async -> AgentMutationResult { .failed("播放器桥接未实现清除评分") }
+    func refreshLibrary() async -> AgentMutationResult { .failed("播放器桥接未实现音乐库同步") }
+    func removeServer(serverID: ServerID) async -> AgentMutationResult { .failed("播放器桥接未实现删除服务器") }
 }
 
 /// 需要用户确认的待定操作。

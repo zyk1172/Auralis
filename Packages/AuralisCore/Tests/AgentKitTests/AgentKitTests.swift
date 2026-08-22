@@ -52,16 +52,16 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
         randomLimits.append(limit)
         return mutation("已开始随机播放")
     }
-    func pause() {}
-    func resume() {}
-    func seek(seconds: TimeInterval) {}
-    func next() {}
-    func previous() {}
-    func setShuffle(_ enabled: Bool) {}
-    func setRepeatMode(_ mode: RepeatMode) {}
-    func setPlaybackRate(_ rate: Float) {}
-    func setSleepTimer(mode: String, minutes: TimeInterval) {}
-    func cancelSleepTimer() {}
+    func pause() -> AgentMutationResult { mutation("已暂停") }
+    func resume() -> AgentMutationResult { mutation("已继续") }
+    func seek(seconds: TimeInterval) -> AgentMutationResult { mutation("已定位到 \(Int(seconds)) 秒") }
+    func next() -> AgentMutationResult { mutation("下一首") }
+    func previous() -> AgentMutationResult { mutation("上一首") }
+    func setShuffle(_ enabled: Bool) -> AgentMutationResult { mutation("已设置随机播放") }
+    func setRepeatMode(_ mode: RepeatMode) -> AgentMutationResult { mutation("已设置循环模式") }
+    func setPlaybackRate(_ rate: Float) -> AgentMutationResult { mutation("播放速度已设为 \(rate)x") }
+    func setSleepTimer(mode: String, minutes: TimeInterval) -> AgentMutationResult { mutation("已设置睡眠定时") }
+    func cancelSleepTimer() -> AgentMutationResult { mutation("已取消睡眠定时") }
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult { mutation("已加入队列") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { mutation("已设为下一首") }
@@ -70,9 +70,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { mutation("已调整队列顺序") }
     func clearQueue() async -> AgentMutationResult { mutation("已清空队列") }
     func shuffleRemaining() async -> AgentMutationResult { mutation("已随机剩余队列") }
-    func saveQueueAsPlaylist(name: String) async -> Bool {
+    func saveQueueAsPlaylist(name: String) async -> AgentMutationResult {
         createdPlaylistNames.append(name)
-        return true
+        return mutation("已保存为歌单：\(name)")
     }
 
     func createPlaylist(name: String) -> GlobalID? {
@@ -90,14 +90,14 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { mutation("已合并歌单") }
     func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult { deletedPlaylists.append(globalID); return mutation("已删除歌单") }
 
-    func likeTrack(globalID: GlobalID) { likedTracks.append(globalID) }
-    func unlikeTrack(globalID: GlobalID) {}
-    func favoriteAlbum(globalID: GlobalID) {}
-    func unfavoriteAlbum(globalID: GlobalID) {}
-    func favoriteArtist(globalID: GlobalID) {}
-    func unfavoriteArtist(globalID: GlobalID) {}
-    func setRating(globalID: GlobalID, rating: Int) {}
-    func clearRating(globalID: GlobalID) {}
+    func likeTrack(globalID: GlobalID) -> AgentMutationResult { likedTracks.append(globalID); return mutation("已收藏") }
+    func unlikeTrack(globalID: GlobalID) -> AgentMutationResult { mutation("已取消收藏") }
+    func favoriteAlbum(globalID: GlobalID) -> AgentMutationResult { mutation("已收藏专辑") }
+    func unfavoriteAlbum(globalID: GlobalID) -> AgentMutationResult { mutation("已取消收藏专辑") }
+    func favoriteArtist(globalID: GlobalID) -> AgentMutationResult { mutation("已收藏艺术家") }
+    func unfavoriteArtist(globalID: GlobalID) -> AgentMutationResult { mutation("已取消收藏艺术家") }
+    func setRating(globalID: GlobalID, rating: Int) -> AgentMutationResult { mutation("已评分") }
+    func clearRating(globalID: GlobalID) -> AgentMutationResult { mutation("已清除评分") }
 
     var serverSearchResultsValue: [Track] = []
     func listServers() -> [ServerAccount] { [] }
@@ -107,9 +107,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult { serverMutationResult }
     func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult { serverMutationResult }
     func switchServer(serverID: ServerID) -> AgentMutationResult { serverMutationResult }
-    func refreshLibrary() {}
+    func refreshLibrary() -> AgentMutationResult { mutation("已触发刷新") }
     func getSyncStatus() async -> [CatalogSyncStatus] { [] }
-    func removeServer(serverID: ServerID) { removedServers.append(serverID) }
+    func removeServer(serverID: ServerID) -> AgentMutationResult { removedServers.append(serverID); return mutation("已删除服务器") }
 }
 
 /// Returns queued ACTION responses once, then a closing message, so the LLM loop terminates.
@@ -1367,6 +1367,29 @@ func contextManagerReservesCurrentUserBeforeNewerHistory() {
 
     #expect(trimmed.contains(currentUser))
     #expect(!trimmed.contains(newerToolResult))
+}
+
+@Test("ContextManager 不得保留失去 assistant tool_call 的 tool result")
+func contextManagerKeepsNativeToolCallsAtomically() {
+    let system = AIMessage(role: .system, content: "system")
+    let currentUser = AIMessage(role: .user, content: "请继续处理")
+    let call = AIToolCall(
+        id: "call-long",
+        name: "library_search",
+        arguments: String(repeating: "x", count: 2_000)
+    )
+    let assistantCall = AIMessage(role: .assistant, content: "", toolCalls: [call])
+    let toolResult = AIMessage(role: .tool, content: "找到 1 首", toolCallID: call.id, name: call.name)
+    let budget = ContextManager.estimatedTokens(system) + ContextManager.estimatedTokens(currentUser) + ContextManager.estimatedTokens(toolResult)
+
+    let trimmed = ContextManager.trimByTokens(
+        [system, currentUser, assistantCall, toolResult],
+        maxTokens: budget,
+        preservingUserText: currentUser.content
+    )
+
+    #expect(trimmed == [system, currentUser])
+    #expect(!trimmed.contains(toolResult))
 }
 
 @Test("修改型工具的部分副作用标记为不可自动重试")

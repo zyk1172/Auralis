@@ -2817,34 +2817,34 @@ public final class AuralisAppModel: ObservableObject {
         _ = await removeFromPlaylist(id: playlistID, atIndices: duplicates)
     }
 
-    public func setAlbumFavorite(id: AlbumID, isFavorite: Bool) async {
+    public func setAlbumFavorite(id: AlbumID, isFavorite: Bool) async -> Bool {
         // AlbumID 跨服务器可能重复：优先用本地专辑记录的 serverID，回退当前浏览服务器。
         let serverID = catalog.albums.first(where: { $0.id == id })?.serverID ?? catalog.activeServerID
-        guard let serverID else { return }
-        await connector.setAlbumFavorite(serverID: serverID, albumID: id, isFavorite: isFavorite)
+        guard let serverID else { return false }
+        return await connector.setAlbumFavorite(serverID: serverID, albumID: id, isFavorite: isFavorite)
     }
 
     /// 收藏 / 取消收藏艺术家。
-    public func setArtistFavorite(id: ArtistID, isFavorite: Bool) async {
+    public func setArtistFavorite(id: ArtistID, isFavorite: Bool) async -> Bool {
         // ArtistID 跨服务器可能重复：优先用本地艺术家记录的 serverID，回退当前浏览服务器。
         let serverID = catalog.artists.first(where: { $0.id == id })?.serverID ?? catalog.activeServerID
-        guard let serverID else { return }
-        await connector.setArtistFavorite(serverID: serverID, artistID: id, isFavorite: isFavorite)
+        guard let serverID else { return false }
+        return await connector.setArtistFavorite(serverID: serverID, artistID: id, isFavorite: isFavorite)
     }
 
     /// 设置曲目评分，0 表示清除评分。
     /// 使用 GlobalID：只对活动服务器的曲目生效，避免旧服务器的同 TrackID 在切服后
     /// 被当前连接器误评分，或把 currentTrack 误更新成旧服务器曲目（RC §26）。
-    public func setRating(globalID: GlobalID, rating: Int) async {
+    public func setRating(globalID: GlobalID, rating: Int) async -> Bool {
         let clamped = min(max(rating, 0), 5)
-        guard globalID.serverID == catalog.activeServerID else { return }
+        guard globalID.serverID == catalog.activeServerID else { return false }
         if let index = catalog.tracks.firstIndex(where: {
             $0.serverID == globalID.serverID && $0.id.rawValue == globalID.remoteID
         }) {
             catalog.tracks[index].rating = clamped == 0 ? nil : clamped
             if currentTrack.isSame(as: catalog.tracks[index]) { currentTrack = catalog.tracks[index] }
         }
-        await connector.setRating(serverID: globalID.serverID, trackID: TrackID(rawValue: globalID.remoteID), rating: clamped)
+        return await connector.setRating(serverID: globalID.serverID, trackID: TrackID(rawValue: globalID.remoteID), rating: clamped)
     }
 
     // MARK: - Server lifecycle
@@ -3248,12 +3248,12 @@ public final class AuralisAppModel: ObservableObject {
     /// 切换曲目的收藏状态，并同步到服务器（star/unstar）。
     public func toggleFavorite(_ track: Track) {
         Task { @MainActor [weak self] in
-            await self?.toggleFavoritePersisted(track)
+            _ = await self?.toggleFavoritePersisted(track)
         }
     }
 
     /// 可等待的收藏切换（含与不喜欢的互斥）；测试直接调用以同步断言。
-    func toggleFavoritePersisted(_ track: Track) async {
+    func toggleFavoritePersisted(_ track: Track) async -> Bool {
         // 收藏与不喜欢互斥：点击收藏时若歌曲处于“不喜欢”，先取消不喜欢再收藏。
         let gid = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
         if dislikedTrackIDs.contains(gid) {
@@ -3272,7 +3272,7 @@ public final class AuralisAppModel: ObservableObject {
         favoritesRevision &+= 1
         if currentTrack.isSame(as: track) { currentTrack = updated }
         refreshHomeSnapshots()
-        await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: updated.isFavorite)
+        return await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: updated.isFavorite)
     }
 
     /// 是否“不喜欢”：只影响自动推荐/发现；搜索、浏览与显式播放不受影响。
@@ -3352,7 +3352,7 @@ public final class AuralisAppModel: ObservableObject {
         }
         if currentTrack.isSame(as: track) { currentTrack = updated }
         refreshHomeSnapshots()
-        await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: false)
+        _ = await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: false)
     }
 
     /// 跳到上一首；播放已超过 3 秒时先回到本曲开头（主流播放器的习惯行为）。

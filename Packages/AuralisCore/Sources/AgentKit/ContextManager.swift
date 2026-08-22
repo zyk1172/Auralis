@@ -32,23 +32,27 @@ public enum ContextManager {
         return min(max(0, requestedInputBudget), available)
     }
 
-    /// 裁剪对话：始终保留首条 system；截取末尾若干条。
-    /// 若截取后以 `.tool` 消息开头（失去配对的 assistant tool_calls，会被 API 拒绝），
-    /// 继续前移丢弃，直到第一条不再是 `.tool`。
+    /// 按消息条数裁剪。原生 tool call 及其 tool results 同样按原子组取舍，
+    /// 避免旧调用方也构造出孤立 `.tool`。
     public static func trim(
         _ conversation: [AIMessage],
         maxMessages: Int = ContextManager.maxConversationMessages
     ) -> [AIMessage] {
         guard conversation.count > maxMessages else { return conversation }
-        guard let system = conversation.first else { return Array(conversation.suffix(maxMessages)) }
-        var tail = Array(conversation.dropFirst().suffix(maxMessages - 1))
-        while tail.first?.role == .tool { tail.removeFirst() }
-        return [system] + tail
+        guard !conversation.isEmpty else { return [] }
+        var keptIndices: Set<Int> = [0]
+        var remaining = max(maxMessages - 1, 0)
+        for unit in conversationUnits(conversation).reversed() {
+            guard unit.indices.count <= remaining else { continue }
+            keptIndices.formUnion(unit.indices)
+            remaining -= unit.indices.count
+        }
+        return conversation.indices.compactMap { keptIndices.contains($0) ? conversation[$0] : nil }
     }
 
-    /// 按 token 预算裁剪对话：从最新消息向前累加，直到达到预算；
-    /// 始终保留首条 system；若裁剪后以连续 `.tool` 消息开头（其 assistant tool_calls 已被裁掉），
-    /// 整组丢弃，保证 API 上下文的 tool 配对始终合法。
+    /// 按 token 预算裁剪对话：始终保留首条 system 与当前用户问题，其余从最新历史回填。
+    /// 原生 Function Calling 的 `assistant(tool_calls) + tool results` 被当作不可分割的原子组：
+    /// 要么完整保留，要么完整丢弃，绝不向 Provider 发送孤立 `.tool` 消息。
     public static func trimByTokens(
         _ conversation: [AIMessage],
         maxTokens: Int = ContextManager.maxContextTokens,
@@ -71,20 +75,13 @@ public enum ContextManager {
             keptIndices.insert(requiredUserIndex)
             tokens += estimatedTokens(requiredUser)
         }
-        for index in conversation.indices.reversed() {
-            guard !keptIndices.contains(index), conversation[index].role != .system else { continue }
-            let messageTokens = estimatedTokens(conversation[index])
-            guard tokens + messageTokens <= maxTokens else { continue }
-            tokens += messageTokens
-            keptIndices.insert(index)
+        for unit in conversationUnits(conversation).reversed() {
+            guard !unit.indices.contains(where: keptIndices.contains) else { continue }
+            guard tokens + unit.tokens <= maxTokens else { continue }
+            tokens += unit.tokens
+            keptIndices.formUnion(unit.indices)
         }
-        var kept = conversation.indices.compactMap { keptIndices.contains($0) ? conversation[$0] : nil }
-        // 若首条被裁掉，把开头的连续 .tool 消息整组丢弃（其 assistant tool_calls 已丢失）。
-        var index = 0
-        while index < kept.count, kept[index].role == .tool { index += 1 }
-        if index > 0 { kept.removeFirst(index) }
-        if kept.first != system { kept.insert(system, at: 0) }
-        return kept
+        return conversation.indices.compactMap { keptIndices.contains($0) ? conversation[$0] : nil }
     }
 
     /// 当前用户问题和首条系统提示是否能同时进入模型上下文。
@@ -143,5 +140,63 @@ public enum ContextManager {
                 + estimatedTokens(tool.description)
                 + estimatedTokens(tool.parametersJSON ?? "")
         }
+    }
+
+    private struct ConversationUnit {
+        let indices: [Int]
+        let tokens: Int
+    }
+
+    /// 将历史拆成可独立裁剪的单元。孤立 tool result 本来就不合法，因此不会进入任何单元。
+    private static func conversationUnits(_ conversation: [AIMessage]) -> [ConversationUnit] {
+        var units: [ConversationUnit] = []
+        var index = conversation.startIndex
+
+        while index < conversation.endIndex {
+            let message = conversation[index]
+            guard message.role != .system else {
+                index = conversation.index(after: index)
+                continue
+            }
+
+            guard message.role == .assistant,
+                  let calls = message.toolCalls,
+                  !calls.isEmpty
+            else {
+                // `.tool` 只能由前面的 assistant tool_calls 组消费；任何没有配对的 tool
+                // 都不能回灌给 OpenAI-compatible Provider。
+                if message.role != .tool {
+                    units.append(.init(indices: [index], tokens: estimatedTokens(message)))
+                }
+                index = conversation.index(after: index)
+                continue
+            }
+
+            let expectedIDs = Set(calls.map(\.id))
+            var resultIndices: [Int] = []
+            var receivedIDs: Set<String> = []
+            var cursor = conversation.index(after: index)
+            while cursor < conversation.endIndex, conversation[cursor].role == .tool {
+                guard let id = conversation[cursor].toolCallID,
+                      expectedIDs.contains(id),
+                      receivedIDs.insert(id).inserted
+                else { break }
+                resultIndices.append(cursor)
+                cursor = conversation.index(after: cursor)
+            }
+
+            // assistant 发出的每一个 call 都必须有对应 tool result；不完整的历史同样不能保留。
+            if receivedIDs == expectedIDs {
+                let indices = [index] + resultIndices
+                units.append(.init(
+                    indices: indices,
+                    tokens: indices.reduce(0) { $0 + estimatedTokens(conversation[$1]) }
+                ))
+                index = cursor
+            } else {
+                index = conversation.index(after: index)
+            }
+        }
+        return units
     }
 }

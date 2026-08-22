@@ -200,7 +200,7 @@ public protocol ServerConnecting: Sendable {
     /// 把单曲追加到服务器歌单；成功返回 true。
     func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool
     /// 同步单曲收藏状态到服务器（star/unstar）。
-    func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async
+    func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async -> Bool
     /// 用指定服务器构建一个资料库同步器；未连接时返回 nil。
     func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) async -> LibrarySynchronizer?
 
@@ -223,11 +223,11 @@ public protocol ServerConnecting: Sendable {
     // MARK: 标注
 
     /// 收藏 / 取消收藏专辑。
-    func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async
+    func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async -> Bool
     /// 收藏 / 取消收藏艺术家。
-    func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async
+    func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async -> Bool
     /// 设置单曲评分（0 表示清除）。
-    func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async
+    func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async -> Bool
 
     // MARK: 服务器
 
@@ -285,7 +285,7 @@ public extension ServerConnecting {
     func downloadURL(serverID: ServerID, trackID: TrackID) async -> URL? { nil }
     func downloadData(serverID: ServerID, trackID: TrackID) async -> Data? { nil }
     func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }
-    func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async {}
+    func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async -> Bool { false }
     func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) async -> LibrarySynchronizer? { nil }
     func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {
         throw ServerConnectionError.unsupportedResponse
@@ -301,9 +301,9 @@ public extension ServerConnecting {
     func deletePlaylist(serverID: ServerID, playlistID: PlaylistID) async -> Bool { false }
     func fetchPlaylistTracks(serverID: ServerID, playlistID: PlaylistID) async throws -> [Track] { [] }
 
-    func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async {}
-    func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async {}
-    func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async {}
+    func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async -> Bool { false }
+    func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async -> Bool { false }
+    func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async -> Bool { false }
 
     func ping(serverID: ServerID) async -> Bool { false }
     func disconnect() async {}

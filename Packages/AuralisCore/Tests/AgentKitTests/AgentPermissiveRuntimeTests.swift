@@ -33,31 +33,40 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     var slowTestConnection = false
     /// 模拟无视任务取消的底层 I/O，用于验证 Runner 主动取消能立即释放调用方。
     var nonCooperativeTestConnection = false
+    /// 模拟已经发出写请求、但底层 I/O 无视取消的情况。
+    var nonCooperativeClearQueue = false
 
     func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
     func playServerTrack(globalID: GlobalID) async -> Bool { true }
     func playAlbum(globalID: GlobalID) async -> Bool { true }
     func playPlaylist(globalID: GlobalID) async -> Bool { true }
     func playRandom(limit: Int) async -> AgentMutationResult { .confirmed("ok") }
-    func pause() async {}
-    func resume() async {}
-    func seek(seconds: TimeInterval) async {}
-    func next() async {}
-    func previous() async {}
-    func setShuffle(_ enabled: Bool) async {}
-    func setRepeatMode(_ mode: RepeatMode) async {}
-    func setPlaybackRate(_ rate: Float) async {}
-    func setSleepTimer(mode: String, minutes: TimeInterval) async {}
-    func cancelSleepTimer() async {}
+    func pause() async -> AgentMutationResult { .confirmed("已暂停") }
+    func resume() async -> AgentMutationResult { .confirmed("已继续") }
+    func seek(seconds: TimeInterval) async -> AgentMutationResult { .confirmed("已定位") }
+    func next() async -> AgentMutationResult { .confirmed("下一首") }
+    func previous() async -> AgentMutationResult { .confirmed("上一首") }
+    func setShuffle(_ enabled: Bool) async -> AgentMutationResult { .confirmed("已设置随机播放") }
+    func setRepeatMode(_ mode: RepeatMode) async -> AgentMutationResult { .confirmed("已设置循环模式") }
+    func setPlaybackRate(_ rate: Float) async -> AgentMutationResult { .confirmed("已设置播放速度") }
+    func setSleepTimer(mode: String, minutes: TimeInterval) async -> AgentMutationResult { .confirmed("已设置睡眠定时") }
+    func cancelSleepTimer() async -> AgentMutationResult { .confirmed("已取消睡眠定时") }
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return .confirmed("ok") }
     func removeFromQueue(at index: Int) async -> AgentMutationResult { .confirmed("ok") }
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
-    func clearQueue() async -> AgentMutationResult { clearedQueueCount += 1; return .confirmed("ok") }
+    func clearQueue() async -> AgentMutationResult {
+        if nonCooperativeClearQueue {
+            let sleeper = Task.detached { try? await Task.sleep(for: .seconds(2)) }
+            await sleeper.value
+        }
+        clearedQueueCount += 1
+        return .confirmed("ok")
+    }
     func shuffleRemaining() async -> AgentMutationResult { .confirmed("ok") }
-    func saveQueueAsPlaylist(name: String) async -> Bool { createdPlaylistNames.append(name); return true }
+    func saveQueueAsPlaylist(name: String) async -> AgentMutationResult { createdPlaylistNames.append(name); return .confirmed("已保存队列") }
 
     func createPlaylist(name: String) async -> GlobalID? {
         createdPlaylistNames.append(name)
@@ -74,14 +83,14 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { .confirmed("ok") }
     func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult { deletedPlaylists.append(globalID); return .confirmed("ok") }
 
-    func likeTrack(globalID: GlobalID) async { likedTracks.append(globalID) }
-    func unlikeTrack(globalID: GlobalID) async {}
-    func favoriteAlbum(globalID: GlobalID) async {}
-    func unfavoriteAlbum(globalID: GlobalID) async {}
-    func favoriteArtist(globalID: GlobalID) async {}
-    func unfavoriteArtist(globalID: GlobalID) async {}
-    func setRating(globalID: GlobalID, rating: Int) async {}
-    func clearRating(globalID: GlobalID) async {}
+    func likeTrack(globalID: GlobalID) async -> AgentMutationResult { likedTracks.append(globalID); return .confirmed("已收藏") }
+    func unlikeTrack(globalID: GlobalID) async -> AgentMutationResult { .confirmed("已取消收藏") }
+    func favoriteAlbum(globalID: GlobalID) async -> AgentMutationResult { .confirmed("已收藏专辑") }
+    func unfavoriteAlbum(globalID: GlobalID) async -> AgentMutationResult { .confirmed("已取消收藏专辑") }
+    func favoriteArtist(globalID: GlobalID) async -> AgentMutationResult { .confirmed("已收藏艺术家") }
+    func unfavoriteArtist(globalID: GlobalID) async -> AgentMutationResult { .confirmed("已取消收藏艺术家") }
+    func setRating(globalID: GlobalID, rating: Int) async -> AgentMutationResult { .confirmed("已评分") }
+    func clearRating(globalID: GlobalID) async -> AgentMutationResult { .confirmed("已清除评分") }
 
     func listServers() async -> [ServerAccount] { [] }
     func getActiveServer() async -> ServerAccount? { nil }
@@ -100,9 +109,9 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult { .confirmed("ok") }
     func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult { .confirmed("ok") }
     func switchServer(serverID: ServerID) async -> AgentMutationResult { .confirmed("ok") }
-    func refreshLibrary() async {}
+    func refreshLibrary() async -> AgentMutationResult { .confirmed("已触发刷新") }
     func getSyncStatus() async -> [CatalogSyncStatus] { [] }
-    func removeServer(serverID: ServerID) async { removedServers.append(serverID) }
+    func removeServer(serverID: ServerID) async -> AgentMutationResult { removedServers.append(serverID); return .confirmed("已删除服务器") }
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
 }
 
@@ -226,6 +235,12 @@ private actor PermissiveCollector {
             }
         }
     }
+}
+
+private actor PermissiveActionLog {
+    private(set) var records: [AgentActionRecord] = []
+    func record(_ entry: AgentActionRecord) { records.append(entry) }
+    func contains(_ text: String) -> Bool { records.contains { $0.summary.contains(text) } }
 }
 
 private actor PermissiveProbe {
@@ -1123,6 +1138,44 @@ struct AgentPermissiveRuntimeTests {
             group.cancelAll()
         }
         #expect(await collector.containsText("已取消"))
+    }
+
+    @Test("取消非协作写操作会记录结果未知，不伪装成普通取消")
+    func cancellingWriteRecordsIndeterminateSideEffect() async throws {
+        let store = try makePermStore()
+        let bridge = PermissiveBridge()
+        bridge.nonCooperativeClearQueue = true
+        let collector = PermissiveCollector()
+        let actionLog = PermissiveActionLog()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"queue_clear","args":{}}"#,
+        ])
+        let task = Task {
+            await AgentRunner.run(
+                userText: "清空队列",
+                provider: provider,
+                model: "scripted-model",
+                bridge: bridge,
+                catalog: store,
+                context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 1),
+                intent: .queueManagement,
+                toolTimeout: 30,
+                confirm: { _ in true },
+                emit: { await collector.record($0) },
+                log: { await actionLog.record($0) }
+            )
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await task.value; return true }
+            group.addTask { try? await Task.sleep(for: .milliseconds(500)); return false }
+            if await group.next() != true { Issue.record("取消没有及时结束写操作") }
+            group.cancelAll()
+        }
+
+        #expect(await collector.containsText("结果未知"))
+        #expect(await actionLog.contains("结果未知"))
     }
 
     @Test("TEST25c 部分写入工具结果阻止相同参数再次执行")

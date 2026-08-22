@@ -12,8 +12,9 @@ import Testing
 struct DislikeBehaviorTests {
     private final class RecordingConnector: ServerConnecting, @unchecked Sendable {
         private(set) var favoriteCalls: [(TrackID, Bool)] = []
-        func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async {
+        func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async -> Bool {
             favoriteCalls.append((trackID, isFavorite))
+            return true
         }
         func connect(_ input: ServerConnectionInput) async throws -> ServerConnectionResult {
             throw CancellationError()
@@ -78,7 +79,7 @@ struct DislikeBehaviorTests {
         await model.persistDisliked(current, value: true, source: "user")
         #expect(model.isDisliked(current) == true)
 
-        await model.toggleFavoritePersisted(current)
+        _ = await model.toggleFavoritePersisted(current)
         #expect(model.isDisliked(current) == false)
         #expect(model.catalog.tracks.first?.isFavorite == true)
         #expect(connector.favoriteCalls.contains { $0.0.rawValue == "t1" && $0.1 == true })

@@ -797,7 +797,19 @@ public struct AgentRunner {
                         )
                     }
                 } catch is CancellationError {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+                    if descriptor.permission != .readOnly {
+                        ws.recordIndeterminateSideEffect(tool: call.name, args: call.args)
+                        let message = "已取消；取消请求已发出，但「\(call.name)」可能已在服务端落地，结果未知。为避免重复副作用，本任务不会自动以相同参数重试；请先查询核验。"
+                        taskState.errors.append(message)
+                        taskState.status = .cancelled
+                        taskState.updatedAt = .now
+                        ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "用户取消，写操作结果未知", reused: false))
+                        await state(taskState)
+                        await log(AgentActionRecord(toolName: call.name, permission: descriptor.permission, summary: message))
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text(message)]))
+                    } else {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+                    }
                     return
                 } catch {
                     // 单工具超时/异常只回灌结构化失败结果，不终止整项任务；模型可换工具/换参数继续。
@@ -1294,9 +1306,13 @@ public struct AgentRunner {
             if let q = extractQuery(text, markers: ["收藏", "喜欢"]) {
                 let hits = await search(q)
                 if let first = hits.first {
-                    await bridge.likeTrack(globalID: first.globalID)
-                    await log(AgentActionRecord(toolName: "likeTrack", permission: .reversible, summary: "收藏《\(first.title)》"))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("已收藏：\(first.title)")]))
+                    let result = await bridge.likeTrack(globalID: first.globalID)
+                    if result.succeeded {
+                        await log(AgentActionRecord(toolName: "likeTrack", permission: .reversible, summary: result.summary))
+                        await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("已收藏：\(first.title)")]))
+                    } else {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text("收藏《\(first.title)》未确认：\(result.summary)")]))
+                    }
                 } else {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("未找到匹配的歌曲。")]))
                 }

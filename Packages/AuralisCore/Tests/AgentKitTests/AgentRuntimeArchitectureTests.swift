@@ -161,7 +161,8 @@ struct AgentRuntimeArchitectureTests {
 
         let trimmed = ContextManager.trimByTokens([system, older, newest], maxTokens: budget)
 
-        #expect(trimmed == [system, newest])
+        // 没有完整 tool result 的 assistant tool_calls 不能作为下一轮模型上下文的一部分。
+        #expect(trimmed == [system])
         #expect(trimmed.reduce(0) { $0 + ContextManager.estimatedTokens($1) } <= budget)
     }
 

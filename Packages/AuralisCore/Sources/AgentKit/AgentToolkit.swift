@@ -200,17 +200,16 @@ public struct AgentToolkit {
             }
             return .ok(call, descriptor, "播放歌单", .actionPreview(title: "播放歌单", detail: gid.description))
         case "pause":
-            await bridge.pause(); return .ok(call, descriptor, "已暂停")
+            return mutationToolResult(call, descriptor, await bridge.pause())
         case "resume":
-            await bridge.resume(); return .ok(call, descriptor, "已继续")
+            return mutationToolResult(call, descriptor, await bridge.resume())
         case "seek":
             let seconds = try doubleParam(call, "seconds")
-            await bridge.seek(seconds: seconds)
-            return .ok(call, descriptor, "已定位到 \(Int(seconds)) 秒")
+            return mutationToolResult(call, descriptor, await bridge.seek(seconds: seconds))
         case "next":
-            await bridge.next(); return .ok(call, descriptor, "下一首")
+            return mutationToolResult(call, descriptor, await bridge.next())
         case "previous":
-            await bridge.previous(); return .ok(call, descriptor, "上一首")
+            return mutationToolResult(call, descriptor, await bridge.previous())
         case "addToQueue":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             return mutationToolResult(call, descriptor, await bridge.addToQueue(globalID: gid))
@@ -285,39 +284,36 @@ public struct AgentToolkit {
         // MARK: Annotation
         case "likeTrack":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.likeTrack(globalID: gid); return .ok(call, descriptor, "已收藏")
+            return mutationToolResult(call, descriptor, await bridge.likeTrack(globalID: gid))
         case "unlikeTrack":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.unlikeTrack(globalID: gid); return .ok(call, descriptor, "已取消收藏")
+            return mutationToolResult(call, descriptor, await bridge.unlikeTrack(globalID: gid))
         case "favoriteAlbum":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
-            await bridge.favoriteAlbum(globalID: gid); return .ok(call, descriptor, "已收藏专辑")
+            return mutationToolResult(call, descriptor, await bridge.favoriteAlbum(globalID: gid))
         case "unfavoriteAlbum":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
-            await bridge.unfavoriteAlbum(globalID: gid); return .ok(call, descriptor, "已取消收藏专辑")
+            return mutationToolResult(call, descriptor, await bridge.unfavoriteAlbum(globalID: gid))
         case "favoriteArtist":
             let gid = try await requireArtistID(call, "artistID", catalog: catalog, serverID: serverID)
-            await bridge.favoriteArtist(globalID: gid); return .ok(call, descriptor, "已收藏艺术家")
+            return mutationToolResult(call, descriptor, await bridge.favoriteArtist(globalID: gid))
         case "unfavoriteArtist":
             let gid = try await requireArtistID(call, "artistID", catalog: catalog, serverID: serverID)
-            await bridge.unfavoriteArtist(globalID: gid); return .ok(call, descriptor, "已取消收藏艺术家")
+            return mutationToolResult(call, descriptor, await bridge.unfavoriteArtist(globalID: gid))
         case "setRating":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             let rating = try intParam(call, "rating")
-            await bridge.setRating(globalID: gid, rating: min(max(rating, 1), 5))
-            return .ok(call, descriptor, "已评分 \(rating)")
+            return mutationToolResult(call, descriptor, await bridge.setRating(globalID: gid, rating: min(max(rating, 1), 5)))
         case "clearRating":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            await bridge.clearRating(globalID: gid); return .ok(call, descriptor, "已清除评分")
+            return mutationToolResult(call, descriptor, await bridge.clearRating(globalID: gid))
         case "rating_set":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             let raw = try require(call, "value")
             if let value = Int(raw), value > 0 {
-                await bridge.setRating(globalID: gid, rating: min(max(value, 1), 5))
-                return .ok(call, descriptor, "已评分 \(value)")
+                return mutationToolResult(call, descriptor, await bridge.setRating(globalID: gid, rating: min(max(value, 1), 5)))
             }
-            await bridge.clearRating(globalID: gid)
-            return .ok(call, descriptor, "已清除评分")
+            return mutationToolResult(call, descriptor, await bridge.clearRating(globalID: gid))
         case "preference_set_disliked":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             let value = try boolParam(call, "value")
@@ -408,15 +404,13 @@ public struct AgentToolkit {
             let sid = try requireServerID(call, "serverID")
             return mutationToolResult(call, descriptor, await bridge.switchServer(serverID: sid))
         case "refreshLibrary":
-            await bridge.refreshLibrary()
-            return .ok(call, descriptor, "已触发刷新")
+            return mutationToolResult(call, descriptor, await bridge.refreshLibrary())
         case "getSyncStatus":
             let statuses = await bridge.getSyncStatus()
             return .ok(call, descriptor, "同步状态 \(statuses.count) 个", .text(statuses.map { "\($0.serverID.rawValue): \($0.isRunning ? "同步中" : "空闲")" }.joined(separator: "；")))
         case "removeServer", "server_remove":
             let sid = try requireServerID(call, "serverID")
-            await bridge.removeServer(serverID: sid)
-            return .ok(call, descriptor, "已删除服务器（仅本地清理）")
+            return mutationToolResult(call, descriptor, await bridge.removeServer(serverID: sid))
 
         // MARK: v2 统一命名工具（第一阶段）
 
@@ -887,36 +881,32 @@ public struct AgentToolkit {
             }
             return .ok(call, descriptor, "开始播放歌单")
         case "playback_pause":
-            await bridge.pause(); return .ok(call, descriptor, "已暂停")
+            return mutationToolResult(call, descriptor, await bridge.pause())
         case "playback_resume":
-            await bridge.resume(); return .ok(call, descriptor, "已继续")
+            return mutationToolResult(call, descriptor, await bridge.resume())
         case "playback_next":
-            await bridge.next(); return .ok(call, descriptor, "下一首")
+            return mutationToolResult(call, descriptor, await bridge.next())
         case "playback_previous":
-            await bridge.previous(); return .ok(call, descriptor, "上一首")
+            return mutationToolResult(call, descriptor, await bridge.previous())
         case "playback_seek":
             let seconds = try doubleParam(call, "seconds")
-            await bridge.seek(seconds: seconds)
-            return .ok(call, descriptor, "已定位到 \(Int(seconds)) 秒")
+            return mutationToolResult(call, descriptor, await bridge.seek(seconds: seconds))
         case "playback_set_speed":
             let rate = Float(try doubleParam(call, "rate"))
-            await bridge.setPlaybackRate(rate)
-            return .ok(call, descriptor, "播放速度已设为 \(rate)x")
+            return mutationToolResult(call, descriptor, await bridge.setPlaybackRate(rate))
         case "playback_set_sleep_timer":
             let mode = try require(call, "mode")
             let minutes = (try? doubleParam(call, "minutes")) ?? 30
-            await bridge.setSleepTimer(mode: mode, minutes: minutes)
-            return .ok(call, descriptor, "已设置睡眠定时：\(mode)")
+            return mutationToolResult(call, descriptor, await bridge.setSleepTimer(mode: mode, minutes: minutes))
         case "playback_cancel_sleep_timer":
-            await bridge.cancelSleepTimer(); return .ok(call, descriptor, "已取消睡眠定时")
+            return mutationToolResult(call, descriptor, await bridge.cancelSleepTimer())
         case "playback_get_sleep_timer":
             let (mode, remaining) = await bridge.getSleepTimer()
             let text = "睡眠定时：\(mode) · 剩余 \(Int(remaining)) 秒"
             return .ok(call, descriptor, text, .text(text))
         case "playback_set_shuffle":
             let enabled = try boolParam(call, "enabled")
-            await bridge.setShuffle(enabled)
-            return .ok(call, descriptor, enabled ? "已开启随机播放" : "已关闭随机播放")
+            return mutationToolResult(call, descriptor, await bridge.setShuffle(enabled))
         case "playback_set_repeat":
             let modeRaw = try require(call, "mode").lowercased()
             let mode: RepeatMode
@@ -926,8 +916,7 @@ public struct AgentToolkit {
             case "one", "single": mode = .one
             default: throw AgentToolError.invalidParameter("mode", modeRaw)
             }
-            await bridge.setRepeatMode(mode)
-            return .ok(call, descriptor, "循环模式：\(mode.title)")
+            return mutationToolResult(call, descriptor, await bridge.setRepeatMode(mode))
 
         // 队列
         case "queue_get":
@@ -952,8 +941,7 @@ public struct AgentToolkit {
             return mutationToolResult(call, descriptor, await bridge.shuffleRemaining())
         case "queue_save_as_playlist":
             let name = try require(call, "name")
-            let ok = await bridge.saveQueueAsPlaylist(name: name)
-            return ok ? .ok(call, descriptor, "已保存为歌单：\(name)") : .fail(call, descriptor, "保存歌单失败")
+            return mutationToolResult(call, descriptor, await bridge.saveQueueAsPlaylist(name: name))
 
         // 收藏 / 歌单
         case "favorite_set":
@@ -962,16 +950,15 @@ public struct AgentToolkit {
             switch type {
             case "song":
                 let gid = try await requireTrackID(call, "targetID", catalog: catalog, serverID: serverID)
-                if value { await bridge.likeTrack(globalID: gid) } else { await bridge.unlikeTrack(globalID: gid) }
+                return mutationToolResult(call, descriptor, value ? await bridge.likeTrack(globalID: gid) : await bridge.unlikeTrack(globalID: gid))
             case "album":
                 let gid = try await requireAlbumID(call, "targetID", catalog: catalog, serverID: serverID)
-                if value { await bridge.favoriteAlbum(globalID: gid) } else { await bridge.unfavoriteAlbum(globalID: gid) }
+                return mutationToolResult(call, descriptor, value ? await bridge.favoriteAlbum(globalID: gid) : await bridge.unfavoriteAlbum(globalID: gid))
             case "artist":
                 let gid = try await requireArtistID(call, "targetID", catalog: catalog, serverID: serverID)
-                if value { await bridge.favoriteArtist(globalID: gid) } else { await bridge.unfavoriteArtist(globalID: gid) }
+                return mutationToolResult(call, descriptor, value ? await bridge.favoriteArtist(globalID: gid) : await bridge.unfavoriteArtist(globalID: gid))
             default: throw AgentToolError.invalidParameter("targetType", type)
             }
-            return .ok(call, descriptor, value ? "已收藏" : "已取消收藏")
         case "playlist_create":
             let name = try require(call, "name")
             guard let gid = await bridge.createPlaylist(name: name) else { return .fail(call, descriptor, "创建歌单失败") }
@@ -1020,8 +1007,7 @@ public struct AgentToolkit {
             return .ok(call, descriptor, "同步状态 \(statuses.count) 个", .text(lines.joined(separator: "；")))
         case "server_sync_start":
             // 触发增量同步（同步音乐库），属于修改型操作。
-            await bridge.refreshLibrary()
-            return .ok(call, descriptor, "已触发音乐库同步", .text("已开始后台同步，可稍后用 server_sync_status 查询进度。"))
+            return mutationToolResult(call, descriptor, await bridge.refreshLibrary())
         case "server_search":
             // 服务器在线搜索（HTTP）：本地目录没有时，实时向服务器查询歌曲信息。
             let query = try require(call, "query")

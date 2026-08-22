@@ -590,8 +590,8 @@ public actor ProductionServerConnector: ServerConnecting {
     }
 
     /// 同步收藏状态到服务器；失败静默（本地状态已生效，下次同步会对齐）。
-    public func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async {
-        guard let client = clients[serverID] else { return }
+    public func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async -> Bool {
+        guard let client = clients[serverID] else { return false }
         do {
             if isFavorite {
                 try await client.star(.track(trackID))
@@ -601,7 +601,7 @@ public actor ProductionServerConnector: ServerConnecting {
         } catch {
             // 收藏是本地立即可见的操作，服务器同步失败不阻塞 UI；
             // 失败时不更新本地缓存，后续后台刷新会以服务器真实状态校正。
-            return
+            return false
         }
         // 同步成功后即时更新本地缓存的收藏集合，冷启动即与服务器一致。
         let cached = await auxiliaryCache.snapshot(serverID: serverID)
@@ -612,6 +612,7 @@ public actor ProductionServerConnector: ServerConnecting {
             ids.remove(trackID.rawValue)
         }
         await auxiliaryCache.updateFavorites(Array(ids).sorted(), serverID: serverID)
+        return true
     }
 
     /// 用指定服务器构建资料库同步器（本地目录写入）。
@@ -878,27 +879,30 @@ public actor ProductionServerConnector: ServerConnecting {
 
     // MARK: - 标注
 
-    public func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async {
-        guard let client = clients[serverID] else { return }
-        if isFavorite {
-            try? await client.star(.album(albumID))
-        } else {
-            try? await client.unstar(.album(albumID))
-        }
+    public func setAlbumFavorite(serverID: ServerID, albumID: AlbumID, isFavorite: Bool) async -> Bool {
+        guard let client = clients[serverID] else { return false }
+        do {
+            if isFavorite { try await client.star(.album(albumID)) }
+            else { try await client.unstar(.album(albumID)) }
+            return true
+        } catch { return false }
     }
 
-    public func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async {
-        guard let client = clients[serverID] else { return }
-        if isFavorite {
-            try? await client.star(.artist(artistID))
-        } else {
-            try? await client.unstar(.artist(artistID))
-        }
+    public func setArtistFavorite(serverID: ServerID, artistID: ArtistID, isFavorite: Bool) async -> Bool {
+        guard let client = clients[serverID] else { return false }
+        do {
+            if isFavorite { try await client.star(.artist(artistID)) }
+            else { try await client.unstar(.artist(artistID)) }
+            return true
+        } catch { return false }
     }
 
-    public func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async {
-        guard let client = clients[serverID] else { return }
-        try? await client.setRating(min(max(rating, 0), 5), trackID: trackID)
+    public func setRating(serverID: ServerID, trackID: TrackID, rating: Int) async -> Bool {
+        guard let client = clients[serverID] else { return false }
+        do {
+            try await client.setRating(min(max(rating, 0), 5), trackID: trackID)
+            return true
+        } catch { return false }
     }
 
     // MARK: - 服务器

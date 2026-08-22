@@ -64,9 +64,12 @@ public final class AuralisAgentBridge: AgentBridge {
     }
 
     public func playPlaylist(globalID: GlobalID) async -> Bool {
-        guard let playlist = model.catalog.playlists.first(where: { $0.id.rawValue == globalID.remoteID }) else { return false }
-        let byID = Dictionary(uniqueKeysWithValues: model.catalog.tracks.map { ($0.id, $0) })
-        let tracks = playlist.trackIDs.compactMap { byID[$0] }
+        guard let playlist = await playlistValue(globalID) else { return false }
+        var tracks: [Track] = []
+        for trackID in playlist.trackIDs {
+            guard let track = await resolveTrackAnywhere(GlobalID(serverID: playlist.serverID, remoteID: trackID.rawValue)) else { continue }
+            tracks.append(track)
+        }
         guard !tracks.isEmpty else { return false }
         model.queue = tracks
         model.selectAndPlay(tracks[0])
@@ -79,13 +82,41 @@ public final class AuralisAgentBridge: AgentBridge {
         return .confirmed("已开始随机播放（\(count) 首）")
     }
 
-    public func pause() async { model.pausePlayback() }
-    public func resume() async { model.resumePlayback() }
-    public func setShuffle(_ enabled: Bool) async { model.setShuffle(enabled) }
-    public func setRepeatMode(_ mode: RepeatMode) async { model.setRepeatMode(mode) }
-    public func setPlaybackRate(_ rate: Float) async { model.setPlaybackRate(rate) }
+    public func pause() async -> AgentMutationResult {
+        guard model.playbackState == .playing else { return .failed("当前没有正在播放的歌曲，未暂停") }
+        model.pausePlayback()
+        return model.playbackState == .playing ? .failed("播放器未进入暂停状态") : .confirmed("已暂停")
+    }
 
-    public func setSleepTimer(mode: String, minutes: TimeInterval) async {
+    public func resume() async -> AgentMutationResult {
+        guard model.currentTrack.id.rawValue != "placeholder", model.playbackState != .idle else {
+            return .failed("当前没有可继续播放的歌曲")
+        }
+        model.resumePlayback()
+        return model.playbackState == .playing ? .confirmed("已继续播放") : .failed("播放器未能恢复播放")
+    }
+
+    public func setShuffle(_ enabled: Bool) async -> AgentMutationResult {
+        model.setShuffle(enabled)
+        return model.isShuffled == enabled
+            ? .confirmed(enabled ? "已开启随机播放" : "已关闭随机播放")
+            : .failed("随机播放设置未生效")
+    }
+
+    public func setRepeatMode(_ mode: RepeatMode) async -> AgentMutationResult {
+        model.setRepeatMode(mode)
+        return model.repeatMode == mode ? .confirmed("循环模式：\(mode.title)") : .failed("循环模式设置未生效")
+    }
+
+    public func setPlaybackRate(_ rate: Float) async -> AgentMutationResult {
+        let expected = min(max(rate, 0.5), 2.0)
+        model.setPlaybackRate(rate)
+        return model.playbackRate == expected
+            ? .confirmed("播放速度已设为 \(expected)x")
+            : .failed("播放速度设置未生效")
+    }
+
+    public func setSleepTimer(mode: String, minutes: TimeInterval) async -> AgentMutationResult {
         let normalized = mode.lowercased()
         let resolved: AuralisAppModel.SleepTimerMode
         switch normalized {
@@ -96,22 +127,43 @@ public final class AuralisAgentBridge: AgentBridge {
         default: resolved = .afterMinutes
         }
         model.setSleepTimer(mode: resolved, minutes: minutes)
+        return model.sleepTimerStatus().mode == resolved
+            ? .confirmed(resolved == .off ? "已关闭睡眠定时" : "已设置睡眠定时：\(resolved.rawValue)")
+            : .failed("睡眠定时设置未生效")
     }
 
-    public func cancelSleepTimer() async { model.cancelSleepTimer() }
+    public func cancelSleepTimer() async -> AgentMutationResult {
+        model.cancelSleepTimer()
+        return model.sleepTimerStatus().mode == .off ? .confirmed("已取消睡眠定时") : .failed("睡眠定时未能取消")
+    }
 
     public func getSleepTimer() async -> (mode: String, remaining: TimeInterval) {
         let status = model.sleepTimerStatus()
         return (status.mode.rawValue, status.remaining)
     }
 
-    public func seek(seconds: TimeInterval) async {
-        guard model.effectivePlaybackDuration > 0 else { return }
-        model.seek(toProgress: seconds / model.effectivePlaybackDuration)
+    public func seek(seconds: TimeInterval) async -> AgentMutationResult {
+        guard model.currentTrack.id.rawValue != "placeholder", model.effectivePlaybackDuration > 0 else {
+            return .failed("当前歌曲没有可定位的时长")
+        }
+        let target = min(max(seconds, 0), model.effectivePlaybackDuration)
+        model.seek(toProgress: target / model.effectivePlaybackDuration)
+        return abs(model.playbackPosition - target) < 0.01
+            ? .confirmed("已定位到 \(Int(target)) 秒")
+            : .failed("播放位置未更新")
     }
 
-    public func next() async { model.next() }
-    public func previous() async { model.previous() }
+    public func next() async -> AgentMutationResult {
+        guard !model.queue.isEmpty else { return .failed("队列为空，无法切到下一首") }
+        model.next()
+        return model.currentTrack.id.rawValue == "placeholder" ? .failed("未能切换到下一首") : .confirmed("已切到下一首")
+    }
+
+    public func previous() async -> AgentMutationResult {
+        guard !model.queue.isEmpty else { return .failed("队列为空，无法切到上一首") }
+        model.previous()
+        return model.currentTrack.id.rawValue == "placeholder" ? .failed("未能切换到上一首") : .confirmed("已切到上一首")
+    }
 
     public func addToQueue(globalID: GlobalID) async -> AgentMutationResult {
         // R05：允许重复歌曲（每次独立队列项）；走 queueStore.append 直调，
@@ -161,8 +213,18 @@ public final class AuralisAgentBridge: AgentBridge {
         return .confirmed("已随机剩余队列")
     }
 
-    public func saveQueueAsPlaylist(name: String) async -> Bool {
-        await model.saveQueueAsPlaylist(named: name)
+    public func saveQueueAsPlaylist(name: String) async -> AgentMutationResult {
+        let tracks = model.queue
+        guard !tracks.isEmpty else { return .failed("队列为空，未创建歌单") }
+        guard let playlist = await model.createPlaylist(named: name) else { return .failed("服务器未确认创建歌单") }
+        var added = 0
+        for track in tracks {
+            if await model.addToPlaylist(playlist, track: track) { added += 1 }
+        }
+        guard added == tracks.count else {
+            return .indeterminate("歌单「\(playlist.name)」已创建，但仅写入 \(added)/\(tracks.count) 首；请先核验，系统不会自动重试")
+        }
+        return .confirmed("已保存队列为歌单：\(playlist.name)")
     }
 
     // MARK: - Playlist
@@ -216,16 +278,21 @@ public final class AuralisAgentBridge: AgentBridge {
     }
 
     public func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult {
-        guard let source = model.catalog.playlists.first(where: { $0.id.rawValue == playlistGID.remoteID }) else { return .failed("歌单不存在，未复制") }
-        guard let copy = await model.createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return .failed("服务器未确认创建歌单副本") }
-        let byID = Dictionary(uniqueKeysWithValues: model.catalog.tracks.map { ($0.id, $0) })
-        var added = 0
+        guard let source = await playlistValue(playlistGID) else { return .failed("歌单不存在，未复制") }
+        var tracks: [Track] = []
         for trackID in source.trackIDs {
-            guard let track = byID[trackID] else { continue }
+            guard let track = await resolveTrackAnywhere(GlobalID(serverID: source.serverID, remoteID: trackID.rawValue)) else {
+                return .failed("源歌单含未同步歌曲，未创建副本")
+            }
+            tracks.append(track)
+        }
+        guard let copy = await model.createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return .failed("服务器未确认创建歌单副本") }
+        var added = 0
+        for track in tracks {
             if await model.addToPlaylist(copy, track: track) { added += 1 }
         }
-        guard added == source.trackIDs.count else {
-            return .indeterminate("副本「\(copy.name)」已创建，但仅复制 \(added)/\(source.trackIDs.count) 首；请先核验，系统不会自动重试")
+        guard added == tracks.count else {
+            return .indeterminate("副本「\(copy.name)」已创建，但仅复制 \(added)/\(tracks.count) 首；请先核验，系统不会自动重试")
         }
         return .confirmed("已复制歌单")
     }
@@ -233,7 +300,7 @@ public final class AuralisAgentBridge: AgentBridge {
     public func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult {
         var sourcePlaylists: [Playlist] = []
         for gid in sourceGIDs {
-            guard let source = model.catalog.playlists.first(where: { $0.id.rawValue == gid.remoteID }) else {
+            guard let source = await playlistValue(gid) else {
                 return .failed("源歌单不存在，未创建合并歌单")
             }
             sourcePlaylists.append(source)
@@ -243,7 +310,7 @@ public final class AuralisAgentBridge: AgentBridge {
         for source in sourcePlaylists {
             for trackID in source.trackIDs where !seen.contains(trackID) {
                 seen.insert(trackID)
-                guard let track = model.catalog.tracks.first(where: { $0.id == trackID }) else {
+                guard let track = await resolveTrackAnywhere(GlobalID(serverID: source.serverID, remoteID: trackID.rawValue)) else {
                     return .failed("源歌单含未同步歌曲，未创建合并歌单")
                 }
                 tracks.append(track)
@@ -268,42 +335,56 @@ public final class AuralisAgentBridge: AgentBridge {
 
     // MARK: - Annotation
 
-    public func likeTrack(globalID: GlobalID) async {
-        guard let track = resolveTrack(globalID), !track.isFavorite else { return }
-        model.toggleFavorite(track)
-        try? await catalog.setFavorite(globalID, value: true)
+    public func likeTrack(globalID: GlobalID) async -> AgentMutationResult {
+        guard let track = await resolveTrackAnywhere(globalID) else { return .failed("歌曲不存在，未收藏") }
+        guard !track.isFavorite else { return .confirmed("歌曲已收藏") }
+        let confirmed = await model.toggleFavoritePersisted(track)
+        return confirmed ? .confirmed("已收藏") : .indeterminate("本地收藏状态已更新，但服务器未确认；请稍后核验")
     }
 
-    public func unlikeTrack(globalID: GlobalID) async {
-        guard let track = resolveTrack(globalID), track.isFavorite else { return }
-        model.toggleFavorite(track)
-        try? await catalog.setFavorite(globalID, value: false)
+    public func unlikeTrack(globalID: GlobalID) async -> AgentMutationResult {
+        guard let track = await resolveTrackAnywhere(globalID) else { return .failed("歌曲不存在，未取消收藏") }
+        guard track.isFavorite else { return .confirmed("歌曲本来就未收藏") }
+        let confirmed = await model.toggleFavoritePersisted(track)
+        return confirmed ? .confirmed("已取消收藏") : .indeterminate("本地收藏状态已更新，但服务器未确认；请稍后核验")
     }
 
-    public func favoriteAlbum(globalID: GlobalID) async {
+    public func favoriteAlbum(globalID: GlobalID) async -> AgentMutationResult {
         await model.setAlbumFavorite(id: AlbumID(rawValue: globalID.remoteID), isFavorite: true)
+            ? .confirmed("已收藏专辑") : .failed("服务器未确认收藏专辑")
     }
 
-    public func unfavoriteAlbum(globalID: GlobalID) async {
+    public func unfavoriteAlbum(globalID: GlobalID) async -> AgentMutationResult {
         await model.setAlbumFavorite(id: AlbumID(rawValue: globalID.remoteID), isFavorite: false)
+            ? .confirmed("已取消收藏专辑") : .failed("服务器未确认取消收藏专辑")
     }
 
-    public func favoriteArtist(globalID: GlobalID) async {
+    public func favoriteArtist(globalID: GlobalID) async -> AgentMutationResult {
         await model.setArtistFavorite(id: ArtistID(rawValue: globalID.remoteID), isFavorite: true)
+            ? .confirmed("已收藏艺术家") : .failed("服务器未确认收藏艺术家")
     }
 
-    public func unfavoriteArtist(globalID: GlobalID) async {
+    public func unfavoriteArtist(globalID: GlobalID) async -> AgentMutationResult {
         await model.setArtistFavorite(id: ArtistID(rawValue: globalID.remoteID), isFavorite: false)
+            ? .confirmed("已取消收藏艺术家") : .failed("服务器未确认取消收藏艺术家")
     }
 
-    public func setRating(globalID: GlobalID, rating: Int) async {
-        try? await catalog.setRating(globalID, rating: rating)
-        await model.setRating(globalID: globalID, rating: rating)
+    public func setRating(globalID: GlobalID, rating: Int) async -> AgentMutationResult {
+        guard await resolveTrackAnywhere(globalID) != nil else { return .failed("歌曲不存在，未评分") }
+        do { try await catalog.setRating(globalID, rating: rating) }
+        catch { return .failed("本地评分写入失败：\(error.localizedDescription)") }
+        return await model.setRating(globalID: globalID, rating: rating)
+            ? .confirmed("已评分 \(rating)")
+            : .indeterminate("本地评分已更新，但服务器未确认；请稍后核验")
     }
 
-    public func clearRating(globalID: GlobalID) async {
-        try? await catalog.clearRating(globalID)
-        await model.setRating(globalID: globalID, rating: 0)
+    public func clearRating(globalID: GlobalID) async -> AgentMutationResult {
+        guard await resolveTrackAnywhere(globalID) != nil else { return .failed("歌曲不存在，未清除评分") }
+        do { try await catalog.clearRating(globalID) }
+        catch { return .failed("本地评分清除失败：\(error.localizedDescription)") }
+        return await model.setRating(globalID: globalID, rating: 0)
+            ? .confirmed("已清除评分")
+            : .indeterminate("本地评分已清除，但服务器未确认；请稍后核验")
     }
 
     // MARK: - Server
@@ -336,9 +417,10 @@ public final class AuralisAgentBridge: AgentBridge {
             : .failed("服务器不存在或无法恢复，未切换")
     }
 
-    public func refreshLibrary() async {
-        guard let serverID = model.catalog.activeServerID else { return }
+    public func refreshLibrary() async -> AgentMutationResult {
+        guard let serverID = model.catalog.activeServerID else { return .failed("当前未连接服务器，未启动同步") }
         coordinator.manualRefresh(serverID: serverID)
+        return .confirmed("已启动音乐库后台同步，可稍后查询进度")
     }
 
     public func getSyncStatus() async -> [CatalogSyncStatus] {
@@ -347,9 +429,16 @@ public final class AuralisAgentBridge: AgentBridge {
     }
 
     /// 删除服务器：仅清理本地（目录 / 缓存 / 凭据），远端数据不受影响。
-    public func removeServer(serverID: ServerID) async {
+    public func removeServer(serverID: ServerID) async -> AgentMutationResult {
+        guard (try? await catalog.listServers())?.contains(where: { $0.id == serverID }) == true else {
+            return .failed("服务器不存在，未删除")
+        }
         await coordinator.purgeLocalData(serverID: serverID)
         await model.removeServerLocally(serverID: serverID)
+        let exists = (try? await catalog.listServers())?.contains(where: { $0.id == serverID }) == true
+        return exists
+            ? .indeterminate("本地删除已发起，但未能确认所有服务器数据都已清理；请核验设置列表")
+            : .confirmed("已删除服务器（仅本地清理）")
     }
 
     /// 在服务器上在线搜索歌曲（HTTP）：本地没有时由 Agent 调用来获取服务器实时信息。
