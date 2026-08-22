@@ -73,11 +73,10 @@ public final class AuralisAgentBridge: AgentBridge {
         return true
     }
 
-    public func playRandom() async {
-        let tracks = Array(model.catalog.tracks.shuffled().prefix(30))
-        guard !tracks.isEmpty else { return }
-        model.queue = tracks
-        model.selectAndPlay(tracks[0])
+    public func playRandom(limit: Int) async -> AgentMutationResult {
+        let count = model.playRandom(limit: limit)
+        guard count > 0 else { return .failed("没有可随机播放的歌曲") }
+        return .confirmed("已开始随机播放（\(count) 首）")
     }
 
     public func pause() async { model.pausePlayback() }
@@ -180,14 +179,28 @@ public final class AuralisAgentBridge: AgentBridge {
             : .failed("歌单不存在或服务器未确认重命名")
     }
 
-    public func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool {
-        guard let playlist = await playlistValue(playlistGID) else { return false }
-        var added = 0
+    public func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult {
+        guard let playlist = await playlistValue(playlistGID) else {
+            return .failed("歌单不存在，未添加歌曲")
+        }
+        var tracks: [Track] = []
         for gid in trackGIDs {
-            guard let track = await resolveTrackAnywhere(gid) else { continue }
+            guard let track = await resolveTrackAnywhere(gid) else {
+                return .failed("存在不在本地目录的歌曲，未修改歌单")
+            }
+            tracks.append(track)
+        }
+        var added = 0
+        for track in tracks {
             if await model.addToPlaylist(playlist, track: track) { added += 1 }
         }
-        return added > 0
+        guard added == tracks.count else {
+            if added > 0 {
+                return .indeterminate("已添加 \(added)/\(tracks.count) 首；部分写入已发生，请先核验歌单，系统不会自动重试")
+            }
+            return .failed("服务器未确认添加歌曲，未报告成功")
+        }
+        return .confirmed("已添加 \(added) 首")
     }
 
     public func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult {
@@ -211,25 +224,39 @@ public final class AuralisAgentBridge: AgentBridge {
             guard let track = byID[trackID] else { continue }
             if await model.addToPlaylist(copy, track: track) { added += 1 }
         }
-        guard added == source.trackIDs.count else { return .failed("副本已创建但未完整复制歌曲") }
+        guard added == source.trackIDs.count else {
+            return .indeterminate("副本「\(copy.name)」已创建，但仅复制 \(added)/\(source.trackIDs.count) 首；请先核验，系统不会自动重试")
+        }
         return .confirmed("已复制歌单")
     }
 
     public func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult {
-        guard let target = await model.createPlaylist(named: name) else { return .failed("服务器未确认创建合并歌单") }
-        var seen: Set<TrackID> = []
-        var expected = 0
-        var added = 0
+        var sourcePlaylists: [Playlist] = []
         for gid in sourceGIDs {
-            guard let source = model.catalog.playlists.first(where: { $0.id.rawValue == gid.remoteID }) else { return .failed("源歌单不存在，未完成合并") }
+            guard let source = model.catalog.playlists.first(where: { $0.id.rawValue == gid.remoteID }) else {
+                return .failed("源歌单不存在，未创建合并歌单")
+            }
+            sourcePlaylists.append(source)
+        }
+        var seen: Set<TrackID> = []
+        var tracks: [Track] = []
+        for source in sourcePlaylists {
             for trackID in source.trackIDs where !seen.contains(trackID) {
                 seen.insert(trackID)
-                expected += 1
-                guard let track = model.catalog.tracks.first(where: { $0.id == trackID }) else { continue }
-                if await model.addToPlaylist(target, track: track) { added += 1 }
+                guard let track = model.catalog.tracks.first(where: { $0.id == trackID }) else {
+                    return .failed("源歌单含未同步歌曲，未创建合并歌单")
+                }
+                tracks.append(track)
             }
         }
-        guard expected == added else { return .failed("合并歌单未完整写入") }
+        guard let target = await model.createPlaylist(named: name) else { return .failed("服务器未确认创建合并歌单") }
+        var added = 0
+        for track in tracks {
+            if await model.addToPlaylist(target, track: track) { added += 1 }
+        }
+        guard tracks.count == added else {
+            return .indeterminate("合并歌单「\(target.name)」已创建，但仅写入 \(added)/\(tracks.count) 首；请先核验，系统不会自动重试")
+        }
         return .confirmed("已合并歌单")
     }
 
@@ -292,19 +319,21 @@ public final class AuralisAgentBridge: AgentBridge {
     }
 
     /// 出于安全考虑，Agent 不能凭模型输出添加服务器：凭据必须走原生表单。
-    public func addServer(displayName: String, baseURL: String, username: String, token: String) async -> Bool {
+    public func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult {
         model.shouldPresentServerSetup = true
-        return false
+        return .failed("为保护服务器凭据，已打开原生服务器设置；未添加服务器")
     }
 
     /// 同上：更新服务器凭据只能通过原生表单。
-    public func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> Bool {
+    public func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult {
         model.shouldPresentServerSetup = true
-        return false
+        return .failed("为保护服务器凭据，已打开原生服务器设置；未更新服务器")
     }
 
-    public func switchServer(serverID: ServerID) async {
+    public func switchServer(serverID: ServerID) async -> AgentMutationResult {
         await model.switchServer(serverID: serverID)
+            ? .confirmed("已切换服务器")
+            : .failed("服务器不存在或无法恢复，未切换")
     }
 
     public func refreshLibrary() async {

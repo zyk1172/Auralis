@@ -59,29 +59,31 @@ public enum ContextManager {
         let requiredUser = preservingUserText.flatMap { text in
             conversation.last { $0.role == .user && $0.content == text }
         }
-        var kept: [AIMessage] = []
-        // System prompt 是实际输入的一部分，必须先占用预算；旧实现把它无条件加回，
-        // 在工具清单较长时会使裁剪后的请求仍超过 Provider 上下文窗口。
-        var tokens = estimatedTokens(system)
-        for message in conversation.reversed() {
-            // 系统提示单独保留并最后加回；其成本已经计入 `tokens`。
-            if message.role == .system { continue }
-            if let requiredUser, message == requiredUser {
-                guard tokens + estimatedTokens(message) <= maxTokens else { continue }
-                tokens += estimatedTokens(message)
-                kept.insert(message, at: 0)
-                continue
-            }
-            let messageTokens = estimatedTokens(message)
-            guard tokens + messageTokens <= maxTokens else { break }
-            tokens += messageTokens
-            kept.insert(message, at: 0)
+        let systemIndex = conversation.firstIndex(where: { $0 == system }) ?? 0
+        let requiredUserIndex = requiredUser.flatMap { required in
+            conversation.lastIndex(where: { $0 == required })
         }
+        var keptIndices: Set<Int> = [systemIndex]
+        // 当前用户问题必须在任何历史消息之前预留预算。Runner 会先用
+        // `canFitCurrentUser` 拒绝放不下的配置，因此这里不会产生超预算请求。
+        var tokens = estimatedTokens(system)
+        if let requiredUser, let requiredUserIndex {
+            keptIndices.insert(requiredUserIndex)
+            tokens += estimatedTokens(requiredUser)
+        }
+        for index in conversation.indices.reversed() {
+            guard !keptIndices.contains(index), conversation[index].role != .system else { continue }
+            let messageTokens = estimatedTokens(conversation[index])
+            guard tokens + messageTokens <= maxTokens else { continue }
+            tokens += messageTokens
+            keptIndices.insert(index)
+        }
+        var kept = conversation.indices.compactMap { keptIndices.contains($0) ? conversation[$0] : nil }
         // 若首条被裁掉，把开头的连续 .tool 消息整组丢弃（其 assistant tool_calls 已丢失）。
         var index = 0
         while index < kept.count, kept[index].role == .tool { index += 1 }
         if index > 0 { kept.removeFirst(index) }
-        kept.insert(system, at: 0)
+        if kept.first != system { kept.insert(system, at: 0) }
         return kept
     }
 

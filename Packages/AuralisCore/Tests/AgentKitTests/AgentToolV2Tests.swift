@@ -825,7 +825,7 @@ struct NowPlayingDiagnosticsTests {
 
 @Suite("播放随机 / 系统集成状态工具")
 struct PlaybackRandomAndSystemToolsTests {
-    @Test("playback_play_random 调用 bridge")
+    @Test("playback_play_random 将 limit 原样传给 bridge")
     func playRandom() async throws {
         let store = try makeV2Store()
         try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "1", title: "A")])
@@ -836,6 +836,7 @@ struct PlaybackRandomAndSystemToolsTests {
         )
         #expect(result.success)
         #expect(result.summary.contains("随机"))
+        #expect(bridge.randomLimits == [10])
     }
 
     @Test("ios_siri_get_status 走系统服务")

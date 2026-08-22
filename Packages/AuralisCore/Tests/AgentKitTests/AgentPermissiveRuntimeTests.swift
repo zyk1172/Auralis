@@ -28,14 +28,17 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
 
     var playResult: Bool = true
     var testConnectionResult: Bool = true
+    var playlistAddResult: AgentMutationResult = .confirmed("ok")
     /// 置为 true 时 server_test_connection 会睡眠（用于超时/取消路径）。
     var slowTestConnection = false
+    /// 模拟无视任务取消的底层 I/O，用于验证 Runner 主动取消能立即释放调用方。
+    var nonCooperativeTestConnection = false
 
     func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
     func playServerTrack(globalID: GlobalID) async -> Bool { true }
     func playAlbum(globalID: GlobalID) async -> Bool { true }
     func playPlaylist(globalID: GlobalID) async -> Bool { true }
-    func playRandom() async {}
+    func playRandom(limit: Int) async -> AgentMutationResult { .confirmed("ok") }
     func pause() async {}
     func resume() async {}
     func seek(seconds: TimeInterval) async {}
@@ -61,9 +64,9 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
         return GlobalID(serverID: "local", remoteID: UUID().uuidString)
     }
     func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { .confirmed("ok") }
-    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool {
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult {
         addedToPlaylist.append((playlistGID, trackGIDs))
-        return true
+        return playlistAddResult
     }
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { .confirmed("ok") }
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
@@ -83,14 +86,20 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func listServers() async -> [ServerAccount] { [] }
     func getActiveServer() async -> ServerAccount? { nil }
     func testServerConnection(serverID: ServerID) async -> Bool {
+        if nonCooperativeTestConnection {
+            let sleeper = Task.detached {
+                try? await Task.sleep(for: .seconds(2))
+            }
+            await sleeper.value
+        }
         if slowTestConnection {
             try? await Task.sleep(for: .seconds(10))
         }
         return testConnectionResult
     }
-    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> Bool { true }
-    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> Bool { true }
-    func switchServer(serverID: ServerID) async {}
+    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult { .confirmed("ok") }
+    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult { .confirmed("ok") }
+    func switchServer(serverID: ServerID) async -> AgentMutationResult { .confirmed("ok") }
     func refreshLibrary() async {}
     func getSyncStatus() async -> [CatalogSyncStatus] { [] }
     func removeServer(serverID: ServerID) async { removedServers.append(serverID) }
@@ -1072,6 +1081,76 @@ struct AgentPermissiveRuntimeTests {
             group.cancelAll()
         }
         #expect(await collector.containsText("已取消"))
+    }
+
+    @Test("TEST25b 取消不响应取消的工具时立即结束")
+    func userCancelPropagatesToNonCooperativeTool() async throws {
+        let store = try makePermStore()
+        let bridge = PermissiveBridge()
+        bridge.nonCooperativeTestConnection = true
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"server_test_connection","args":{"serverID":"test-server"}}"#,
+        ])
+        let task = Task {
+            await AgentRunner.run(
+                userText: "检查服务器",
+                provider: provider,
+                model: "scripted-model",
+                bridge: bridge,
+                catalog: store,
+                context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+                intent: .conversation,
+                toolTimeout: 30,
+                confirm: { _ in true },
+                emit: { await collector.record($0) }
+            )
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await task.value
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(500))
+                return false
+            }
+            if await group.next() != true {
+                Issue.record("取消没有及时传递给非协作工具")
+            }
+            group.cancelAll()
+        }
+        #expect(await collector.containsText("已取消"))
+    }
+
+    @Test("TEST25c 部分写入工具结果阻止相同参数再次执行")
+    func indeterminateWriteBlocksAutomaticRetry() async throws {
+        let store = try makePermStore()
+        let track = makePermTrack(serverID: "test-server", remoteID: "t1", title: "歌")
+        try await seedPerm(store, [track])
+        try await store.upsertPlaylist(Playlist(id: "pl-a", serverID: "test-server", name: "通勤", trackIDs: []), serverID: "test-server")
+        let bridge = PermissiveBridge()
+        bridge.playlistAddResult = .indeterminate("已添加 1/2 首")
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"playlist_add_songs","args":{"playlistID":"test-server:pl-a","trackIDs":"test-server:t1"}}"#,
+            #"ACTION: {"tool":"playlist_add_songs","args":{"playlistID":"test-server:pl-a","trackIDs":"test-server:t1"}}"#,
+        ], closing: "已停止重试。")
+        await AgentRunner.run(
+            userText: "把歌加入通勤歌单",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            intent: .conversation,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        #expect(bridge.addedToPlaylist.count == 1)
+        #expect(await collector.containsText("不会自动重试"))
     }
 
     // MARK: - TEST 26：无公开 Evidence 时不得编造大众评价

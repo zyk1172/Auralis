@@ -65,6 +65,9 @@ public struct ToolResult: Sendable {
     public let evidence: [AgentEvidence]
     /// 展示角色（候选 / 最终 / 歧义 / 无）。由 Tool 执行或 Descriptor 声明，模型不能决定。
     public let presentationRole: ToolPresentationRole
+    /// 工具已产生部分写入或服务端状态无法确认。即使 `success == false`，Runner 也必须
+    /// 阻止相同参数自动重试，避免创建重复歌单、重复添加歌曲等副作用。
+    public let hasIndeterminateSideEffect: Bool
 
     public init(
         call: ToolCall,
@@ -74,7 +77,8 @@ public struct ToolResult: Sendable {
         payload: AgentMessage? = nil,
         facts: [String: String] = [:],
         evidence: [AgentEvidence] = [],
-        presentationRole: ToolPresentationRole = .none
+        presentationRole: ToolPresentationRole = .none,
+        hasIndeterminateSideEffect: Bool = false
     ) {
         self.call = call
         self.permission = permission
@@ -84,6 +88,7 @@ public struct ToolResult: Sendable {
         self.facts = facts
         self.evidence = evidence
         self.presentationRole = presentationRole
+        self.hasIndeterminateSideEffect = hasIndeterminateSideEffect
     }
 }
 
@@ -142,7 +147,7 @@ public protocol AgentBridge: Sendable {
     func playServerTrack(globalID: GlobalID) async -> Bool
     func playAlbum(globalID: GlobalID) async -> Bool
     func playPlaylist(globalID: GlobalID) async -> Bool
-    func playRandom() async
+    func playRandom(limit: Int) async -> AgentMutationResult
     func pause() async
     func resume() async
     func seek(seconds: TimeInterval) async
@@ -170,7 +175,7 @@ public protocol AgentBridge: Sendable {
     // Playlist
     func createPlaylist(name: String) async -> GlobalID?
     func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult
-    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult
     func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult
@@ -191,9 +196,9 @@ public protocol AgentBridge: Sendable {
     func listServers() async -> [ServerAccount]
     func getActiveServer() async -> ServerAccount?
     func testServerConnection(serverID: ServerID) async -> Bool
-    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> Bool
-    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> Bool
-    func switchServer(serverID: ServerID) async
+    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult
+    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult
+    func switchServer(serverID: ServerID) async -> AgentMutationResult
     func refreshLibrary() async
     func getSyncStatus() async -> [CatalogSyncStatus]
     func removeServer(serverID: ServerID) async

@@ -1724,13 +1724,16 @@ public final class AuralisAppModel: ObservableObject {
         playQueue(Array(tracks.shuffled()))
     }
 
-    /// 随机播放（30 首）。整库随机属于自动发现：必须排除“不喜欢”的歌曲。
-    public func playRandom() {
+    /// 随机播放指定数量的歌曲。整库随机属于自动发现：必须排除“不喜欢”的歌曲。
+    /// 返回真正加入队列的数量，供 Agent 只在播放器已收到歌曲时报告成功。
+    @discardableResult
+    public func playRandom(limit: Int = 30) -> Int {
         let candidates = catalog.tracks.filter { !isDisliked($0) }
-        let tracks = Array(candidates.shuffled().prefix(30))
-        guard !tracks.isEmpty else { return }
+        let tracks = Array(candidates.shuffled().prefix(max(1, limit)))
+        guard !tracks.isEmpty else { return 0 }
         queue = tracks
         selectAndPlay(tracks[0])
+        return tracks.count
     }
 
     /// GlobalID → 内存 catalog 中 Track 的统一解析：必须同时匹配 serverID 与 remoteID。
@@ -2863,11 +2866,16 @@ public final class AuralisAppModel: ObservableObject {
     /// 切换活跃服务器：先记录目标服务器，再恢复其本地资料库（零网络出界面，
     /// 随后后台增量同步）。切换不会清空播放队列或停止当前音频会话之外的状态——
     /// apply() 对同库刷新保留播放上下文；跨服务器切换由 apply() 清理内存缓存。
-    public func switchServer(serverID: ServerID) async {
-        guard catalog.activeServerID != serverID else { return }
+    @discardableResult
+    public func switchServer(serverID: ServerID) async -> Bool {
+        guard (try? await catalogCoordinator.store.listServers())?.contains(where: { $0.id == serverID }) == true else {
+            return false
+        }
+        guard catalog.activeServerID != serverID else { return true }
         defaults.set(serverID.rawValue, forKey: Self.lastActiveServerKey)
         attemptedRestore = false
         await restorePersistedLibrary()
+        return catalog.activeServerID == serverID
     }
 
     /// 修改服务器显示名称（持久化到本地库与 SQLite 目录，不影响凭据 / 连接 / 资料库）。

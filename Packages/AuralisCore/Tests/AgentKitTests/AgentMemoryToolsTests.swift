@@ -225,7 +225,7 @@ private struct BridgeStub: AgentBridge {
     func playServerTrack(globalID: GlobalID) async -> Bool { false }
     func playAlbum(globalID: GlobalID) async -> Bool { true }
     func playPlaylist(globalID: GlobalID) async -> Bool { true }
-    func playRandom() {}
+    func playRandom(limit: Int) -> AgentMutationResult { .confirmed("ok") }
     func pause() {}
     func resume() {}
     func seek(seconds: TimeInterval) {}
@@ -247,7 +247,7 @@ private struct BridgeStub: AgentBridge {
     func saveQueueAsPlaylist(name: String) async -> Bool { true }
     func createPlaylist(name: String) -> GlobalID? { nil }
     func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { .confirmed("ok") }
-    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool { true }
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult { .confirmed("ok") }
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { .confirmed("ok") }
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
     func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
@@ -264,9 +264,9 @@ private struct BridgeStub: AgentBridge {
     func listServers() async -> [ServerAccount] { [] }
     func getActiveServer() async -> ServerAccount? { nil }
     func testServerConnection(serverID: ServerID) async -> Bool { true }
-    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> Bool { true }
-    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> Bool { true }
-    func switchServer(serverID: ServerID) async {}
+    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult { .confirmed("ok") }
+    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult { .confirmed("ok") }
+    func switchServer(serverID: ServerID) async -> AgentMutationResult { .confirmed("ok") }
     func refreshLibrary() async {}
     func getSyncStatus() async -> [CatalogSyncStatus] { [] }
     func removeServer(serverID: ServerID) async {}

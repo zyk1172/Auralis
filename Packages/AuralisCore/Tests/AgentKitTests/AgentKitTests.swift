@@ -19,10 +19,13 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     private(set) var addedToPlaylist: [(GlobalID, [GlobalID])] = []
     private(set) var createdPlaylistNames: [String] = []
     private(set) var replacedQueues: [[GlobalID]] = []
+    private(set) var randomLimits: [Int] = []
 
     /// 播放类工具的统一返回（默认 true；置 false 可模拟「目标不在目录」）。
     var playResult: Bool = true
     var mutationResult: AgentMutationResult = .confirmed("ok")
+    var playlistAddResult: AgentMutationResult = .confirmed("ok")
+    var serverMutationResult: AgentMutationResult = .confirmed("ok")
     /// 服务器在线流播回退的返回（默认 true）。
     var serverPlayResult: Bool = true
     var testConnectionResult: Bool = true
@@ -45,7 +48,10 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func playServerTrack(globalID: GlobalID) async -> Bool { serverPlayedTracks.append(globalID); return serverPlayResult }
     func playAlbum(globalID: GlobalID) async -> Bool { playResult }
     func playPlaylist(globalID: GlobalID) async -> Bool { playResult }
-    func playRandom() {}
+    func playRandom(limit: Int) -> AgentMutationResult {
+        randomLimits.append(limit)
+        return mutation("已开始随机播放")
+    }
     func pause() {}
     func resume() {}
     func seek(seconds: TimeInterval) {}
@@ -74,9 +80,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
         return GlobalID(serverID: "local", remoteID: UUID().uuidString)
     }
     func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { mutation("已重命名歌单") }
-    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> Bool {
+    func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult {
         addedToPlaylist.append((playlistGID, trackGIDs))
-        return true
+        return playlistAddResult
     }
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { mutation("已移除歌单歌曲") }
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult { mutation("已调整歌单顺序") }
@@ -98,9 +104,9 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func getActiveServer() -> ServerAccount? { nil }
     func serverSearch(query: String, limit: Int) -> [Track] { serverSearchResultsValue }
     func testServerConnection(serverID: ServerID) async -> Bool { testConnectionResult }
-    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> Bool { false }
-    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> Bool { false }
-    func switchServer(serverID: ServerID) {}
+    func addServer(displayName: String, baseURL: String, username: String, token: String) async -> AgentMutationResult { serverMutationResult }
+    func updateServer(serverID: ServerID, displayName: String?, baseURL: String?, username: String?, token: String?) async -> AgentMutationResult { serverMutationResult }
+    func switchServer(serverID: ServerID) -> AgentMutationResult { serverMutationResult }
     func refreshLibrary() {}
     func getSyncStatus() async -> [CatalogSyncStatus] { [] }
     func removeServer(serverID: ServerID) { removedServers.append(serverID) }
@@ -1344,6 +1350,77 @@ func contextManagerPreservesCurrentUserOrRejectsBudget() {
     let trimmed = ContextManager.trimByTokens([system, AIMessage(role: .assistant, content: "旧回复"), currentUser], maxTokens: budget, preservingUserText: currentUser.content)
     #expect(trimmed.contains(currentUser))
     #expect(!ContextManager.canFitCurrentUser([system, currentUser], userText: currentUser.content, maxTokens: budget - 1))
+}
+
+@Test("ContextManager 先预留当前用户问题，再填充其后的工具历史")
+func contextManagerReservesCurrentUserBeforeNewerHistory() {
+    let system = AIMessage(role: .system, content: "system")
+    let currentUser = AIMessage(role: .user, content: "请把这首歌加入歌单")
+    let newerToolResult = AIMessage(role: .assistant, content: String(repeating: "tool-result ", count: 40))
+    let budget = ContextManager.estimatedTokens(system) + ContextManager.estimatedTokens(newerToolResult)
+
+    let trimmed = ContextManager.trimByTokens(
+        [system, currentUser, newerToolResult],
+        maxTokens: budget,
+        preservingUserText: currentUser.content
+    )
+
+    #expect(trimmed.contains(currentUser))
+    #expect(!trimmed.contains(newerToolResult))
+}
+
+@Test("修改型工具的部分副作用标记为不可自动重试")
+func indeterminateMutationResultCarriesRetryBlock() async throws {
+    let store = try makeStore()
+    let serverID: ServerID = "test-server"
+    let playlist = Playlist(id: "pl", serverID: serverID, name: "通勤", trackIDs: [])
+    let track = makeTrack(serverID: serverID, remoteID: "t1", title: "歌")
+    try await store.upsertPlaylist(playlist, serverID: serverID)
+    try await seed(store, [track])
+    let bridge = MockAgentBridge(activeServerID: serverID)
+    bridge.playlistAddResult = .indeterminate("已添加 1/2 首")
+
+    let result = await AgentToolkit.executeV2(
+        ToolCall(name: "playlist_add_songs", arguments: ["playlistID": "test-server:pl", "trackIDs": "test-server:t1"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: serverID,
+        systemService: nil
+    )
+
+    #expect(!result.success)
+    #expect(result.hasIndeterminateSideEffect)
+    #expect(result.summary.contains("结果未知"))
+}
+
+@Test("服务器修改失败不会伪装成工具成功")
+func serverMutationFailureIsNotSuccessful() async throws {
+    let store = try makeStore()
+    let bridge = MockAgentBridge()
+    bridge.serverMutationResult = .failed("原生设置未提交")
+
+    let add = await AgentToolkit.execute(
+        ToolCall(name: "addServer", arguments: ["displayName": "NAS", "baseURL": "https://music.example"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: nil
+    )
+    let update = await AgentToolkit.execute(
+        ToolCall(name: "updateServer", arguments: ["serverID": "s"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: nil
+    )
+    let switched = await AgentToolkit.execute(
+        ToolCall(name: "switchServer", arguments: ["serverID": "s"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: nil
+    )
+
+    #expect(!add.success)
+    #expect(!update.success)
+    #expect(!switched.success)
 }
 
 // MARK: - 任务工作集（防工具调用爆炸）

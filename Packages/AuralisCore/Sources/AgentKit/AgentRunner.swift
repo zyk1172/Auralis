@@ -817,7 +817,9 @@ public struct AgentRunner {
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
                     continue
                 }
-                if result.success, result.permission != .readOnly {
+                if result.hasIndeterminateSideEffect, result.permission != .readOnly {
+                    ws.recordIndeterminateSideEffect(tool: call.name, args: call.args)
+                } else if result.success, result.permission != .readOnly {
                     ws.recordSuccessfulSideEffect(tool: call.name, args: call.args, summary: result.summary)
                 }
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
@@ -1342,11 +1344,11 @@ public struct AgentRunner {
             let name = playlistName.isEmpty ? "默认歌单" : playlistName
             if let gid = await bridge.createPlaylist(name: name) {
                 let added = await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: [first.globalID])
-                if added {
+                if added.succeeded {
                     await log(AgentActionRecord(toolName: "addTracksToPlaylist", permission: .reversible, summary: "把《\(first.title)》加入歌单「\(name)」"))
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("已把《\(first.title)》加入歌单「\(name)」")]))
                 } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("加入歌单「\(name)」失败，请稍后重试。")]))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("加入歌单「\(name)」失败：\(added.summary)")]))
                 }
             } else {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("创建歌单「\(name)」失败，请检查服务器。")]))
@@ -1815,25 +1817,30 @@ public struct AgentRunner {
 
     private static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
         let gate = TimeoutGate<T>()
-        return try await withCheckedThrowingContinuation { continuation in
-            gate.install(continuation)
-            let operation = Task {
-                do {
-                    gate.resolve(.success(try await body()))
-                } catch {
-                    gate.resolve(.failure(error))
+        return try await withTaskCancellationHandler(operation: {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                gate.install(continuation)
+                let operation = Task {
+                    do {
+                        gate.resolve(.success(try await body()))
+                    } catch {
+                        gate.resolve(.failure(error))
+                    }
                 }
-            }
-            Task {
-                do {
-                    try await Task.sleep(for: .seconds(seconds))
-                } catch {
-                    return
+                let timeout = Task {
+                    do {
+                        try await Task.sleep(for: .seconds(seconds))
+                    } catch {
+                        return
+                    }
+                    gate.resolve(.failure(AgentRunnerError.timeout), cancellingOperation: true)
                 }
-                operation.cancel()
-                gate.resolve(.failure(AgentRunnerError.timeout))
+                gate.attach(operation: operation, timeout: timeout)
             }
-        }
+        }, onCancel: {
+            gate.cancelForCaller()
+        })
     }
 }
 
@@ -1842,19 +1849,63 @@ public struct AgentRunner {
 private final class TimeoutGate<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Value, Error>?
+    private var operation: Task<Void, Never>?
+    private var timeout: Task<Void, Never>?
+    private var callerCancelled = false
 
     func install(_ continuation: CheckedContinuation<Value, Error>) {
         lock.lock()
-        self.continuation = continuation
+        let cancelled = callerCancelled
+        if !cancelled {
+            self.continuation = continuation
+        }
         lock.unlock()
+        if cancelled {
+            continuation.resume(throwing: CancellationError())
+        }
     }
 
-    func resolve(_ result: Result<Value, Error>) {
+    func attach(operation: Task<Void, Never>, timeout: Task<Void, Never>) {
+        lock.lock()
+        let shouldCancel = continuation == nil || callerCancelled
+        if !shouldCancel {
+            self.operation = operation
+            self.timeout = timeout
+        }
+        lock.unlock()
+        if shouldCancel {
+            operation.cancel()
+            timeout.cancel()
+        }
+    }
+
+    func resolve(_ result: Result<Value, Error>, cancellingOperation: Bool = false) {
         lock.lock()
         let continuation = self.continuation
         self.continuation = nil
+        let operation = self.operation
+        let timeout = self.timeout
+        self.operation = nil
+        self.timeout = nil
         lock.unlock()
+        timeout?.cancel()
+        if cancellingOperation { operation?.cancel() }
         continuation?.resume(with: result)
+    }
+
+    func cancelForCaller() {
+        lock.lock()
+        callerCancelled = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let operation = self.operation
+        let timeout = self.timeout
+        self.operation = nil
+        self.timeout = nil
+        lock.unlock()
+        operation?.cancel()
+        timeout?.cancel()
+        continuation?.resume(throwing: CancellationError())
     }
 }
 

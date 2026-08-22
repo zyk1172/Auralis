@@ -259,10 +259,7 @@ public struct AgentToolkit {
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            guard await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids) else {
-                return .fail(call, descriptor, "添加失败：歌单或曲目在本地目录不存在（可能尚未同步），请先 listPlaylists / library_search 确认后重试")
-            }
-            return .ok(call, descriptor, "已添加 \(gids.count) 首")
+            return mutationToolResult(call, descriptor, await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids))
         case "removeTracksFromPlaylist", "playlist_remove_songs":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
@@ -396,21 +393,20 @@ public struct AgentToolkit {
         case "testServerConnection":
             let sid = try requireServerID(call, "serverID")
             let ok = await bridge.testServerConnection(serverID: sid)
-            return .ok(call, descriptor, ok ? "连接成功" : "连接失败")
+            return ok
+                ? .ok(call, descriptor, "连接成功")
+                : .fail(call, descriptor, "连接失败：服务器无响应、凭据失效或目标不存在")
         case "addServer":
             let name = try require(call, "displayName")
             let url = try require(call, "baseURL")
             // token 不进入模型；实际凭据由原生表单采集。
-            let ok = await bridge.addServer(displayName: name, baseURL: url, username: "", token: "")
-            return .ok(call, descriptor, ok ? "已添加服务器" : "添加服务器失败")
+            return mutationToolResult(call, descriptor, await bridge.addServer(displayName: name, baseURL: url, username: "", token: ""))
         case "updateServer":
             let sid = try requireServerID(call, "serverID")
-            let ok = await bridge.updateServer(serverID: sid, displayName: nil, baseURL: nil, username: nil, token: nil)
-            return .ok(call, descriptor, ok ? "已更新服务器" : "更新失败")
+            return mutationToolResult(call, descriptor, await bridge.updateServer(serverID: sid, displayName: nil, baseURL: nil, username: nil, token: nil))
         case "switchServer", "server_switch":
             let sid = try requireServerID(call, "serverID")
-            await bridge.switchServer(serverID: sid)
-            return .ok(call, descriptor, "已切换服务器")
+            return mutationToolResult(call, descriptor, await bridge.switchServer(serverID: sid))
         case "refreshLibrary":
             await bridge.refreshLibrary()
             return .ok(call, descriptor, "已触发刷新")
@@ -882,8 +878,8 @@ public struct AgentToolkit {
             guard !gids.isEmpty else { return .fail(call, descriptor, "该艺术家没有可播放的歌曲") }
             return mutationToolResult(call, descriptor, await bridge.replaceQueue(globalIDs: gids))
         case "playback_play_random":
-            _ = (try? intParam(call, "limit")) ?? 30
-            await bridge.playRandom(); return .ok(call, descriptor, "已开始随机播放")
+            let limit = min(max((try? intParam(call, "limit")) ?? 30, 1), 200)
+            return mutationToolResult(call, descriptor, await bridge.playRandom(limit: limit))
         case "playback_play_playlist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             guard await bridge.playPlaylist(globalID: gid) else {
@@ -984,10 +980,7 @@ public struct AgentToolkit {
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            guard await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids) else {
-                return .fail(call, descriptor, "添加失败：歌单或曲目在本地目录不存在（可能尚未同步），请先 listPlaylists / library_search 确认后重试")
-            }
-            return .ok(call, descriptor, "已添加 \(gids.count) 首")
+            return mutationToolResult(call, descriptor, await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids))
 
         // MARK: v2 服务器工具
 
@@ -1087,7 +1080,13 @@ public struct AgentToolkit {
         case .failed:
             return .fail(call, descriptor, result.summary)
         case .indeterminate:
-            return .fail(call, descriptor, "结果未知：\(result.summary)")
+            return ToolResult(
+                call: call,
+                permission: descriptor.permission,
+                success: false,
+                summary: "结果未知：\(result.summary)",
+                hasIndeterminateSideEffect: true
+            )
         }
     }
 
