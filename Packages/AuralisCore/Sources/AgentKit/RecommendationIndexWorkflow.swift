@@ -17,6 +17,16 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
         case completed
     }
 
+    public enum ProviderFailureRecovery: Sendable, Equatable {
+        /// The model had received a batch but had not committed it. The batch
+        /// must be fetched again after shrinking; otherwise the next request
+        /// can refer to a payload that is no longer present in the transcript.
+        case retryCurrentBatch(limit: Int)
+        /// A previous write already completed, so only the catalog facts need
+        /// to be read again. Never shrink a batch that is no longer pending.
+        case resumeFromStatus
+    }
+
     public private(set) var state: State
     public private(set) var pending = 0
     public private(set) var pendingSemantic = 0
@@ -31,6 +41,8 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     }
 
     public var isCompleted: Bool { state == .completed }
+
+    public var hasCurrentBatch: Bool { !currentBatchIDs.isEmpty }
 
     public mutating func configure(maxOutputTokens: Int) {
         preferredBatchSize = RecommendationIndexV2BatchPolicy.recommendedLimit(
@@ -152,6 +164,19 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     public mutating func beginVerification() {
         guard !isCompleted else { return }
         state = .verifying
+    }
+
+    /// Recover from a transient Provider failure without changing the wire
+    /// protocol. A current, uncommitted batch is discarded and retried at a
+    /// smaller boundary; after a successful write, verification resumes from
+    /// the catalog instead of repeating the write.
+    @discardableResult
+    public mutating func recoverFromProviderFailure() -> ProviderFailureRecovery {
+        if hasCurrentBatch {
+            return .retryCurrentBatch(limit: shrinkBatch())
+        }
+        beginStatusRead()
+        return .resumeFromStatus
     }
 
     @discardableResult

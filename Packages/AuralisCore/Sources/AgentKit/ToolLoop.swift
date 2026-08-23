@@ -675,6 +675,10 @@ public struct ToolLoop {
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
+        // A transient Provider failure may be recovered once at the current
+        // workflow checkpoint. The flag resets after a successful model turn;
+        // it is not a tool-call or model-capability limit.
+        var didRecoverRecommendationProviderFailure = false
 
         while true {
             if Task.isCancelled {
@@ -772,6 +776,7 @@ public struct ToolLoop {
                 return
             } catch {
                 if Self.isOutputTruncated(error), policy.completion == .indexPendingCountIsZero {
+                    let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
                     let limit = recommendationWorkflow?.shrinkBatch()
                         ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
                     let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只对刚返回的完整批次生成 items。"
@@ -781,7 +786,39 @@ public struct ToolLoop {
                     taskState.updatedAt = .now
                     await state(taskState)
                     await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
+                    conversation = Self.compactRecommendationIndexTranscript(
+                        conversation,
+                        droppingLatestRecommendationUnit: hadCurrentBatch
+                    )
                     conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
+                    continue
+                }
+                if workflow.usesRecommendationIndexV2,
+                   Self.isTransientFailure(error),
+                   !didRecoverRecommendationProviderFailure {
+                    let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
+                    let recovery = recommendationWorkflow?.recoverFromProviderFailure()
+                    let instruction: String
+                    switch recovery {
+                    case let .retryCurrentBatch(limit):
+                        instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。未写入的当前批次已丢弃，并缩小为 \(limit) 首。请继续使用原生工具协议，重新调用 library_index_v2_next_batch(limit=\(limit))，再分类并写回。"
+                    case .resumeFromStatus:
+                        instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。此前成功写入的索引状态已保留，请继续使用原生工具协议调用 library_index_v2_status，再从当前 pending 继续。"
+                    case nil:
+                        instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。请继续使用原生工具协议从当前推荐索引状态恢复。"
+                    }
+                    didRecoverRecommendationProviderFailure = true
+                    taskState.errors.append(instruction)
+                    taskState.pendingActions = [instruction]
+                    taskState.status = .waitingForTool
+                    taskState.updatedAt = .now
+                    await state(taskState)
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "原生工具协议暂时不可用，正在保持原协议恢复…")]))
+                    conversation = Self.compactRecommendationIndexTranscript(
+                        conversation,
+                        droppingLatestRecommendationUnit: hadCurrentBatch
+                    )
+                    conversation.append(AIMessage(role: .user, content: "系统恢复：\(instruction)"))
                     continue
                 }
                 // Provider 协议在请求前已经确定。网络瞬时错误由
@@ -803,6 +840,10 @@ public struct ToolLoop {
                     await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；未切换到另一种工具协议，也未将请求改写为本地音乐搜索。")]))
                 }
                 return
+            }
+
+            if workflow.usesRecommendationIndexV2 {
+                didRecoverRecommendationProviderFailure = false
             }
 
             await progress(AgentProgress(
@@ -1057,7 +1098,37 @@ public struct ToolLoop {
                 }
             }
 
+            // Never echo an incomplete native V2 call back to the Provider.
+            // Some compatible gateways reject that follow-up transcript with
+            // a generic HTTP 500, hiding the real truncation cause. No tool in
+            // this round is executed; the workflow will refetch a clean batch.
+            if workflow.usesRecommendationIndexV2,
+               calls.contains(where: { $0.malformedArguments }) {
+                if let last = conversation.last,
+                   last.role == .assistant,
+                   last.toolCalls?.isEmpty == false {
+                    conversation.removeLast()
+                }
+                let limit = recommendationWorkflow?.shrinkBatch()
+                    ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
+                let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只使用刚返回的完整批次。"
+                taskState.progress.toolCalls += calls.count
+                taskState.errors.append(recovery)
+                taskState.pendingActions = [recovery]
+                taskState.status = .waitingForTool
+                taskState.updatedAt = .now
+                await state(taskState)
+                await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
+                conversation = Self.compactRecommendationIndexTranscript(
+                    conversation,
+                    droppingLatestRecommendationUnit: true
+                )
+                conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
+                continue
+            }
+
             var toolMessages: [AIMessage] = []
+            var shouldCompactRecommendationTranscript = false
             // 本轮统计（用于合并工具轨迹展示）。
             var roundSearchCalls = 0
             var roundToolNames: Set<String> = []
@@ -1122,6 +1193,7 @@ public struct ToolLoop {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "V2 批身份或 items 无效", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
                     await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批参数不完整，正在缩小批次重试…")]))
+                    shouldCompactRecommendationTranscript = true
                     continue
                 }
 
@@ -1298,6 +1370,7 @@ public struct ToolLoop {
                         pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
                         pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
                     )
+                    shouldCompactRecommendationTranscript = true
                 } else if result.success, call.name == "library_index_v2_status" {
                     _ = recommendationWorkflow?.applyStatus(
                         pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
@@ -1388,6 +1461,13 @@ public struct ToolLoop {
             }
 
             conversation.append(contentsOf: toolMessages)
+            if shouldCompactRecommendationTranscript {
+                // A completed classification payload is no longer needed once
+                // the catalog has accepted it. Keep the newest valid V2 turn
+                // so the Provider transcript remains legal, but discard older
+                // batches before they can grow into a gateway-sized request.
+                conversation = Self.compactRecommendationIndexTranscript(conversation)
+            }
 
             // `required` 只用于强制模型在一轮“模型说明但没执行动作”后产出工具。
             // 一旦工具调用已经发生，下一轮必须回到 `auto`，否则部分网关会持续强迫
@@ -1432,6 +1512,88 @@ public struct ToolLoop {
     /// Hosted web is selected by the Provider codec. Remove the same local
     /// function from the model schema for that round so the model does not see
     /// two competing implementations of one capability.
+    private static let recommendationIndexToolNames: Set<String> = [
+        "library_index_v2_status",
+        "library_index_v2_read",
+        "library_index_v2_next_batch",
+        "library_index_v2_write_batch",
+        "library_index_v2_tag_catalog",
+    ]
+
+    /// Keep the native transcript legal while preventing a long index build
+    /// from replaying every previous classification payload on every request.
+    /// A completed V2 turn is an atomic assistant(tool_calls)+tool-result unit;
+    /// only the newest such unit is needed for the next model decision.
+    private static func compactRecommendationIndexTranscript(
+        _ conversation: [AIMessage],
+        droppingLatestRecommendationUnit: Bool = false
+    ) -> [AIMessage] {
+        struct ToolUnit {
+            let indices: [Int]
+            let isRecommendationOnly: Bool
+        }
+
+        var units: [ToolUnit] = []
+        var cursor = 0
+        while cursor < conversation.count {
+            let message = conversation[cursor]
+            guard message.role == .assistant,
+                  let calls = message.toolCalls,
+                  !calls.isEmpty
+            else {
+                cursor += 1
+                continue
+            }
+
+            let names = Set(calls.map(\.name))
+            guard !names.isDisjoint(with: recommendationIndexToolNames) else {
+                cursor += 1
+                continue
+            }
+
+            let expectedIDs = Set(calls.map(\.id))
+            var receivedIDs: Set<String> = []
+            var end = cursor + 1
+            while end < conversation.count, conversation[end].role == .tool,
+                  let callID = conversation[end].toolCallID,
+                  expectedIDs.contains(callID),
+                  receivedIDs.insert(callID).inserted {
+                end += 1
+            }
+            guard receivedIDs == expectedIDs else {
+                cursor += 1
+                continue
+            }
+
+            units.append(ToolUnit(
+                indices: Array(cursor..<end),
+                isRecommendationOnly: names.isSubset(of: recommendationIndexToolNames)
+            ))
+            cursor = end
+        }
+
+        let recommendationUnits = units.filter(\.isRecommendationOnly)
+        guard !recommendationUnits.isEmpty else { return conversation }
+
+        var indicesToRemove = Set<Int>()
+        var keptUnit: ToolUnit?
+        if droppingLatestRecommendationUnit {
+            let latest = recommendationUnits.last
+            indicesToRemove.formUnion(latest?.indices ?? [])
+            keptUnit = recommendationUnits.dropLast().last
+        } else {
+            keptUnit = recommendationUnits.last
+        }
+
+        for unit in recommendationUnits where unit.indices != keptUnit?.indices {
+            indicesToRemove.formUnion(unit.indices)
+        }
+
+        return conversation.indices.compactMap { index in
+            indicesToRemove.contains(index) ? nil : conversation[index]
+        }
+    }
+
     private static func localModelTools(
         _ tools: [ToolDescriptor],
         capabilities: ModelCapabilities

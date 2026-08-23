@@ -87,7 +87,9 @@ private final class IndexScriptedProvider: AIProvider, @unchecked Sendable {
 /// 覆盖真机使用的 OpenAI 原生 function calling：参数中的 items 是数组而不是
 /// 预先转义的 JSON 字符串。
 private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
     private var calls: [AIToolCall]
+    private var recordedRequests: [AICompletionRequest] = []
     var supportsToolCalling: Bool { true }
 
     init(calls: [AIToolCall]) { self.calls = calls }
@@ -97,6 +99,7 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
     }
 
     func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        record(request)
         if !calls.isEmpty {
             let call = calls.removeFirst()
             return AICompletionResponse(model: request.model, content: "", finishReason: "tool_calls", toolCalls: [call])
@@ -105,7 +108,8 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
     }
 
     func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
-        AsyncThrowingStream { continuation in
+        record(request)
+        return AsyncThrowingStream<AIStreamEvent, Error> { continuation in
             continuation.yield(.started(model: request.model))
             if !calls.isEmpty {
                 let call = calls.removeFirst()
@@ -116,6 +120,124 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
             continuation.yield(.completed)
             continuation.finish()
         }
+    }
+
+    func requests() -> [AICompletionRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedRequests
+    }
+
+    private func record(_ request: AICompletionRequest) {
+        lock.lock()
+        recordedRequests.append(request)
+        lock.unlock()
+    }
+}
+
+/// 先模拟 Provider 已经用同一原生协议重试失败，再在工作流恢复请求中继续。
+private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [AIToolCall]
+    private var failuresRemaining: Int
+    private var successfulResponsesBeforeFailure: Int
+    private var recordedRequests: [AICompletionRequest] = []
+
+    let capabilities = ModelCapabilities(
+        maxContextTokens: 32_000,
+        maxOutputTokens: 4_096,
+        supportsToolCalling: true,
+        supportsParallelTools: true,
+        supportsToolChoice: true,
+        supportsStrictSchema: true,
+        supportsStreaming: true,
+        toolMode: .openAIChat
+    )
+
+    var supportsToolCalling: Bool { true }
+
+    init(calls: [AIToolCall], failures: Int = 2, successfulResponsesBeforeFailure: Int = 0) {
+        self.calls = calls
+        self.failuresRemaining = failures
+        self.successfulResponsesBeforeFailure = successfulResponsesBeforeFailure
+    }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "transient-native-index", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        record(request)
+        return nextResponse(model: request.model)
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        let result = nextStreamResult(request)
+        return AsyncThrowingStream<AIStreamEvent, Error> { continuation in
+            switch result {
+            case let .failure(error):
+                continuation.finish(throwing: error)
+            case let .call(call):
+                continuation.yield(.started(model: request.model))
+                continuation.yield(.toolCall(call))
+                continuation.yield(.completed)
+                continuation.finish()
+            case .final:
+                continuation.yield(.started(model: request.model))
+                continuation.yield(.delta("索引已完成。"))
+                continuation.yield(.completed)
+                continuation.finish()
+            }
+        }
+    }
+
+    func requests() -> [AICompletionRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedRequests
+    }
+
+    private enum StreamResult {
+        case failure(Error)
+        case call(AIToolCall)
+        case final
+    }
+
+    private func nextStreamResult(_ request: AICompletionRequest) -> StreamResult {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedRequests.append(request)
+        if successfulResponsesBeforeFailure > 0 {
+            successfulResponsesBeforeFailure -= 1
+            guard !calls.isEmpty else { return .final }
+            return .call(calls.removeFirst())
+        }
+        if failuresRemaining > 0 {
+            failuresRemaining -= 1
+            return .failure(AIProviderError.httpStatus(500))
+        }
+        guard !calls.isEmpty else { return .final }
+        return .call(calls.removeFirst())
+    }
+
+    private func nextResponse(model: String) -> AICompletionResponse {
+        lock.lock()
+        defer { lock.unlock() }
+        if !calls.isEmpty {
+            return AICompletionResponse(
+                model: model,
+                content: "",
+                finishReason: "tool_calls",
+                toolCalls: [calls.removeFirst()]
+            )
+        }
+        return AICompletionResponse(model: model, content: "索引已完成。", finishReason: "stop")
+    }
+
+    private func record(_ request: AICompletionRequest) {
+        lock.lock()
+        recordedRequests.append(request)
+        lock.unlock()
     }
 }
 
@@ -292,6 +414,58 @@ func recommendationIndexV2MalformedArgumentsRecover() async throws {
     #expect(status.pendingUniqueTracks == 0)
     #expect(await collector.contains("本批结构化输出不完整"))
     #expect(await collector.contains("缺少参数：items") == false)
+    let malformedTranscriptCalls = provider.requests()
+        .flatMap { $0.messages.flatMap { $0.toolCalls ?? [] } }
+        .filter { call in
+            if case .string = call.arguments { return true }
+            return false
+        }
+    #expect(malformedTranscriptCalls.isEmpty)
+}
+
+@Test("V2 原生 Provider 500 后从工作流检查点恢复，不重复已写入批次")
+func recommendationIndexV2TransientProviderFailureRecovers() async throws {
+    let store = try makeV2Store()
+    let serverID: ServerID = "transient-provider-index-server"
+    let tracks = (0..<8).map {
+        makeV2Track(serverID: serverID, remoteID: "transient-\($0)", title: "Transient \($0)")
+    }
+    try await seedV2(store, tracks)
+
+    func classification(for id: String) -> RecommendationIndexV2Classification {
+        RecommendationIndexV2Classification(
+            id: id,
+            moods: ["平静"], scenes: ["深夜"], energy: 2,
+            tempo: 2, acousticness: 5, danceability: 1,
+            vocals: ["器乐"], textures: ["钢琴"], styles: ["轻音乐"], confidence: 0.94
+        )
+    }
+
+    let ids = tracks.map { GlobalID(serverID: serverID, remoteID: $0.id.rawValue).description }
+    let firstItems = try AIJSONValue(jsonData: JSONEncoder().encode(ids.map(classification)))
+    let provider = TransientNativeIndexProvider(calls: [
+        .init(id: "next-1", name: "library_index_v2_next_batch", arguments: .object([:])),
+        .init(id: "write-1", name: "library_index_v2_write_batch", arguments: .object(["items": firstItems])),
+        .init(id: "status-final", name: "library_index_v2_status", arguments: .object([:])),
+    ], successfulResponsesBeforeFailure: 2)
+    let collector = IndexResultCollector()
+
+    await AgentRunner.run(
+        userText: "构建推荐索引 V2",
+        provider: provider,
+        model: "transient-native-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID, currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    let didResumeOnSameProtocol = await collector.contains("保持原协议恢复")
+    #expect(status.pendingUniqueTracks == 0)
+    #expect(didResumeOnSameProtocol)
+    #expect(provider.requests().count >= 6) // 两次同协议 500 重试 + 恢复后的 status 与最终回答
 }
 
 @Test("1000 首 V2 分片在一次模拟截断后仍可从 pending 完成")
