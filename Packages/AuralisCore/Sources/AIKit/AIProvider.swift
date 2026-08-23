@@ -113,7 +113,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         maxOutputTokens: Int = auralisDefaultMaxOutputTokens,
         supportsToolCalling: Bool = false,
         supportsParallelTools: Bool = true,
-        supportsToolChoice: Bool = true,
+        supportsToolChoice: Bool = false,
         supportsStrictSchema: Bool = false,
         supportsStreaming: Bool = true,
         supportsJSONMode: Bool = false,
@@ -155,7 +155,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
             maxOutputTokens: try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens) ?? auralisDefaultMaxOutputTokens,
             supportsToolCalling: try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false,
             supportsParallelTools: try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true,
-            supportsToolChoice: try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? true,
+            supportsToolChoice: try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? false,
             supportsStrictSchema: try container.decodeIfPresent(Bool.self, forKey: .supportsStrictSchema) ?? false,
             supportsStreaming: try container.decodeIfPresent(Bool.self, forKey: .supportsStreaming) ?? true,
             supportsJSONMode: try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false,
@@ -400,7 +400,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONSchema: Bool = false,
         supportsToolCalling: Bool = false,
         supportsParallelTools: Bool = true,
-        supportsToolChoice: Bool = true,
+        supportsToolChoice: Bool = false,
         supportsStrictSchema: Bool = false,
         supportsHostedWebSearch: Bool = false,
         supportsHostedWebFetch: Bool = false,
@@ -464,7 +464,10 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false
         supportsToolCalling = try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false
         supportsParallelTools = try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true
-        supportsToolChoice = try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? true
+        // Arbitrary OpenAI-compatible gateways frequently accept but ignore
+        // `tool_choice`.  Treat missing custom configuration as unsupported;
+        // known provider presets opt in explicitly.
+        supportsToolChoice = try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? false
         supportsStrictSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsStrictSchema) ?? false
         supportsHostedWebSearch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebSearch) ?? false
         supportsHostedWebFetch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebFetch) ?? false

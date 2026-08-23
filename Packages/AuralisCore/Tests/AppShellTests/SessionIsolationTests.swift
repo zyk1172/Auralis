@@ -101,6 +101,20 @@ struct SessionIsolationTests {
         } })
     }
 
+    @Test("旧 Run 收尾不能释放新 Run 的所有权")
+    func oldRunCannotFinishNewRun() async throws {
+        let (model, coordinator) = makeCoordinator()
+        _ = model
+        _ = await coordinator.newSession()
+        let oldRun = UUID()
+        let newRun = UUID()
+        coordinator.currentRunID = newRun
+
+        coordinator.finishOwnedRun(oldRun)
+
+        #expect(coordinator.currentRunID == newRun)
+    }
+
     @Test("TEST E/F：切换会话不污染 UI（activeSessionID 正确、消息按会话隔离）")
     func progressIsolation() async throws {
         let (model, coordinator) = makeCoordinator()

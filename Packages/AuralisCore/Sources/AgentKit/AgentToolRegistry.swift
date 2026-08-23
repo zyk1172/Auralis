@@ -796,7 +796,7 @@ public enum AgentToolRegistry {
         .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；由受信任的 Recommendation Index V2 Skill 内部调用；每个真实 ID 必须恰好分类一次，不能加入歌词、路径或播放地址",
               parameters: [.init(name: "limit", required: false, description: "每批 1-100；Skill Runtime 会按模型输出预算选择安全分片")],
               maxResultCharacters: ContextManager.maxIndexCharacters,
-              visibility: .skillOnly, requiredSkillID: "recommendation-index-v2"),
+              visibility: .internalOnly, requiredSkillID: "recommendation-index-v2"),
         .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入刚刚由 library_index_v2_next_batch 返回的推荐索引分类；items 必须严格覆盖该批全部真实 ID 各一次。mode=full 写固定维度与可选开放 semanticTags；mode=semanticTagsOnly 只写 id、mode 和 semanticTags，不能伪造固定维度。开放 semanticTags 没有全局数量硬上限；写入成功后必须重新调用 next_batch 获取下一批，直到 pending=0",
               parameters: [.init(
                 name: "items",
@@ -805,7 +805,7 @@ public enum AgentToolRegistry {
                 schemaJSON: Self.recommendationClassificationArraySchema
               )],
               maxResultCharacters: 24_000,
-              visibility: .skillOnly, requiredSkillID: "recommendation-index-v2"),
+              visibility: .internalOnly, requiredSkillID: "recommendation-index-v2"),
         .init(name: "library_select_tracks", group: .catalog, permission: .readOnly, summary: "集合查询：一次筛选语言/流派/艺术家/年代，按本地热度代理排序，返回候选歌曲清单（多首任务优先用这个，不要逐个歌手搜索）",
               parameters: [
                 .init(name: "languages", required: false, description: "语言数组，如 [\"中文\",\"粤语\"]",

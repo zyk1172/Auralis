@@ -51,8 +51,11 @@ public struct ToolRuntime {
         }
 
         do {
-            if descriptor.visibility == .skillOnly,
-               !descriptor.isVisible(toSkillID: activeSkillID) {
+            // Internal state-machine primitives are executable only by their
+            // trusted built-in skill.  Visibility controls discovery; this is
+            // the runtime enforcement boundary for direct/malformed calls.
+            if let requiredSkillID = descriptor.requiredSkillID,
+               requiredSkillID != activeSkillID {
                 throw ToolRuntimeError.skillUnavailable(call.name)
             }
             if descriptor.visibility == .model,

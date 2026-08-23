@@ -122,7 +122,8 @@ struct OpenAIResponsesProviderTests {
                 baseURL: URL(string: baseURL)!,
                 apiPath: apiPath,
                 model: "test-model",
-                supportsToolCalling: true
+                supportsToolCalling: true,
+                supportsToolChoice: true
             ),
             credentialVault: KeychainCredentialVault()
         )
@@ -468,7 +469,8 @@ struct OpenAIResponsesNetworkTests {
                 baseURL: URL(string: "https://api.openai.com")!,
                 apiPath: apiPath,
                 model: "test-model",
-                supportsToolCalling: true
+                supportsToolCalling: true,
+                supportsToolChoice: true
             ),
             credentialVault: KeychainCredentialVault(),
             session: session

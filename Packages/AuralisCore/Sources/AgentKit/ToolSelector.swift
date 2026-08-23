@@ -202,6 +202,11 @@ public enum ToolSelector {
         if semantics.domain == .musicLibrary {
             names += ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
         }
+        if semantics.domain == .conversation,
+           semantics.suggestedToolNamespaces.contains("catalog"),
+           semantics.suggestedToolNamespaces.contains("web") {
+            names += ["library_search", "library_resolve_entity", "web_search"]
+        }
         if semantics.suggestedToolNamespaces.contains("annotation") {
             names += annotationNames
         }

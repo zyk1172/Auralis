@@ -6,8 +6,22 @@ import Foundation
 /// recovery and completion.
 public enum AgentSkillStep: Sendable, Equatable {
     case executeTool(name: String, arguments: [String: AIJSONValue])
-    case modelTurn(requiredToolName: String?)
+    /// The Runtime has already selected the next transition.  The model only
+    /// returns data satisfying this contract; it does not choose a tool or a
+    /// state transition.
+    case modelOutput(AgentSkillOutputContract)
     case completed(message: String)
+}
+
+public enum AgentSkillOutputContract: Sendable, Equatable {
+    case recommendationIndexClassification
+
+    var instruction: String {
+        switch self {
+        case .recommendationIndexClassification:
+            return "只输出一个 JSON 对象：{\"items\":[...] }。items 必须恰好覆盖刚取得的当前批次全部 ID 各一次；不要输出 Markdown、说明文字、ACTION 或工具调用。"
+        }
+    }
 }
 
 public struct AgentSkillRecovery: Sendable, Equatable {
@@ -28,6 +42,11 @@ public enum AgentSkillToolConsumption: Sendable, Equatable {
     case fail(String)
 }
 
+public enum AgentSkillModelOutput: Sendable, Equatable {
+    case executeTool(name: String, arguments: [String: AIJSONValue])
+    case retry(AgentSkillRecovery)
+}
+
 public protocol AgentStatefulSkillRuntime: AnyObject, Sendable {
     var skillID: String { get }
     var privateToolNames: Set<String> { get }
@@ -42,6 +61,7 @@ public protocol AgentStatefulSkillRuntime: AnyObject, Sendable {
 
     func configure(maxOutputTokens: Int)
     func nextStep() -> AgentSkillStep
+    func consumeModelOutput(_ text: String, contract: AgentSkillOutputContract) -> AgentSkillModelOutput
     func prepareToolCall(name: String, arguments: [String: AIJSONValue]) -> [String: AIJSONValue]
     func validateToolCall(name: String, arguments: [String: AIJSONValue]) -> String?
     func consumeToolResult(name: String, result: ToolResult) -> AgentSkillToolConsumption
@@ -127,7 +147,7 @@ public struct RecommendationIndexCheckpoint: Codable, Sendable, Equatable {
 public struct RecommendationIndexV2Skill: AgentStatefulSkill {
     public let id = "recommendation-index-v2"
     public let name = "Recommendation Index V2"
-    public let instructions = "固定链路由 Skill Runtime 控制：status → next_batch → 当前批次分类 → write_batch → status。模型只能为刚返回的当前批次生成结构化分类；不能声明完成、跳过批次或自行构造 ID。"
+    public let instructions = "固定链路由 Skill Runtime 控制：status → next_batch → 当前批次分类 → Runtime write_batch → status。模型只能为刚返回的当前批次生成结构化 JSON 分类；不能声明完成、选择内部工具、跳过批次或自行构造 ID。"
     public let privateToolNames: Set<String> = [
         "library_index_v2_next_batch", "library_index_v2_write_batch",
     ]
@@ -216,7 +236,7 @@ public final class RecommendationIndexV2SkillRuntime: AgentStatefulSkillRuntime,
                 "limit": .number(Double(workflow.preferredBatchSize)),
             ])
         case .classifyingBatch, .writingBatch:
-            return .modelTurn(requiredToolName: "library_index_v2_write_batch")
+            return .modelOutput(.recommendationIndexClassification)
         case .completed:
             return .completed(message: "推荐索引 V2 已完成。")
         }
@@ -237,6 +257,17 @@ public final class RecommendationIndexV2SkillRuntime: AgentStatefulSkillRuntime,
         }
         touch()
         return arguments
+    }
+
+    public func consumeModelOutput(_ text: String, contract: AgentSkillOutputContract) -> AgentSkillModelOutput {
+        switch contract {
+        case .recommendationIndexClassification:
+            guard let arguments = Self.classificationArguments(from: text),
+                  workflow.writeIssue(arguments: arguments) == nil else {
+                return .retry(malformedClassificationRecovery())
+            }
+            return .executeTool(name: "library_index_v2_write_batch", arguments: arguments)
+        }
     }
 
     public func validateToolCall(name: String, arguments: [String: AIJSONValue]) -> String? {
@@ -314,8 +345,12 @@ public final class RecommendationIndexV2SkillRuntime: AgentStatefulSkillRuntime,
 
     public func handleMalformedCall(name: String) -> AgentSkillRecovery? {
         guard name == "library_index_v2_write_batch" else { return nil }
+        return malformedClassificationRecovery()
+    }
+
+    private func malformedClassificationRecovery() -> AgentSkillRecovery {
         let limit = workflow.shrinkBatch()
-        let message = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新获取完整当前批次后只提交结构化 write_batch。"
+        let message = "本批结构化分类无效，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。Runtime 会重新获取当前批次，请只返回完整 JSON 分类对象。"
         touch(stoppedReason: message)
         return AgentSkillRecovery(message: message, dropCurrentBatch: true, compactTranscript: true)
     }
@@ -356,5 +391,20 @@ public final class RecommendationIndexV2SkillRuntime: AgentStatefulSkillRuntime,
         guard let providerError = error as? AIProviderError else { return false }
         if case .outputTruncated = providerError { return true }
         return false
+    }
+
+    private static func classificationArguments(from text: String) -> [String: AIJSONValue]? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let json = trimmed
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```JSON", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = try? AIJSONValue(jsonString: json) else { return nil }
+        switch value {
+        case let .object(object): return object
+        case let .array(items): return ["items": .array(items)]
+        default: return nil
+        }
     }
 }

@@ -119,6 +119,27 @@ public actor SessionStore {
         persistSafely(operation: "append")
     }
 
+    /// A running tool loop has one live activity row.  Replacing its previous
+    /// progress message avoids persisting an unbounded wall of transient
+    /// “executing tool” chat bubbles.
+    @discardableResult
+    public func replaceTrailingToolProgress(_ message: AgentChatMessage, in id: UUID) -> Bool {
+        guard var session = cache[id],
+              let index = session.messages.indices.last,
+              session.messages[index].role == .assistant,
+              session.messages[index].messages.allSatisfy({ item in
+                  if case .toolProgress = item { return true }
+                  return false
+              }) else {
+            return false
+        }
+        session.messages[index] = message
+        session.updatedAt = .now
+        cache[id] = session
+        persistSafely(operation: "replaceToolProgress")
+        return true
+    }
+
     public func rename(_ id: UUID, to title: String) {
         guard var session = cache[id] else { return }
         session.title = title

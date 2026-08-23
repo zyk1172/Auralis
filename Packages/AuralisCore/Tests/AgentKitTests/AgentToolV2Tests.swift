@@ -135,10 +135,65 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+/// A native-tool provider that deliberately returns ordinary text for the
+/// classification turn.  It models gateways such as MiMo that may not honor
+/// a named tool choice: the Runtime must still validate the JSON and perform
+/// its private write transition itself.
+private final class NativeJSONIndexProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var responses: [String]
+    private var recordedRequests: [AICompletionRequest] = []
+    var supportsToolCalling: Bool { true }
+    let capabilities = ModelCapabilities(
+        supportsToolCalling: true,
+        supportsParallelTools: true,
+        supportsToolChoice: true,
+        supportsStrictSchema: true,
+        toolMode: .openAIChat
+    )
+
+    init(responses: [String]) { self.responses = responses }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "native-json-index", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        record(request)
+        return AICompletionResponse(model: request.model, content: nextResponse())
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        record(request)
+        let response = nextResponse()
+        return AsyncThrowingStream { continuation in
+            continuation.yield(.started(model: request.model))
+            continuation.yield(.delta(response))
+            continuation.yield(.completed)
+            continuation.finish()
+        }
+    }
+
+    func requests() -> [AICompletionRequest] {
+        lock.lock(); defer { lock.unlock() }
+        return recordedRequests
+    }
+
+    private func nextResponse() -> String {
+        lock.lock(); defer { lock.unlock() }
+        return responses.isEmpty ? "索引已完成。" : responses.removeFirst()
+    }
+
+    private func record(_ request: AICompletionRequest) {
+        lock.lock(); defer { lock.unlock() }
+        recordedRequests.append(request)
+    }
+}
+
 /// 先模拟 Provider 已经用同一原生协议重试失败，再在工作流恢复请求中继续。
 private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendable {
     private let lock = NSLock()
-    private var calls: [AIToolCall]
+    private var responses: [String]
     private var failuresRemaining: Int
     private var recordedRequests: [AICompletionRequest] = []
 
@@ -155,8 +210,8 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
 
     var supportsToolCalling: Bool { true }
 
-    init(calls: [AIToolCall], failures: Int = 2) {
-        self.calls = calls
+    init(responses: [String], failures: Int = 2) {
+        self.responses = responses
         self.failuresRemaining = failures
     }
 
@@ -175,9 +230,9 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
             switch result {
             case let .failure(error):
                 continuation.finish(throwing: error)
-            case let .call(call):
+            case let .text(text):
                 continuation.yield(.started(model: request.model))
-                continuation.yield(.toolCall(call))
+                continuation.yield(.delta(text))
                 continuation.yield(.completed)
                 continuation.finish()
             case .final:
@@ -197,7 +252,7 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
 
     private enum StreamResult {
         case failure(Error)
-        case call(AIToolCall)
+        case text(String)
         case final
     }
 
@@ -209,22 +264,14 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
             failuresRemaining -= 1
             return .failure(AIProviderError.httpStatus(500))
         }
-        guard !calls.isEmpty else { return .final }
-        return .call(calls.removeFirst())
+        guard !responses.isEmpty else { return .final }
+        return .text(responses.removeFirst())
     }
 
     private func nextResponse(model: String) -> AICompletionResponse {
         lock.lock()
         defer { lock.unlock() }
-        if !calls.isEmpty {
-            return AICompletionResponse(
-                model: model,
-                content: "",
-                finishReason: "tool_calls",
-                toolCalls: [calls.removeFirst()]
-            )
-        }
-        return AICompletionResponse(model: model, content: "索引已完成。", finishReason: "stop")
+        return AICompletionResponse(model: model, content: responses.isEmpty ? "索引已完成。" : responses.removeFirst(), finishReason: "stop")
     }
 
     private func record(_ request: AICompletionRequest) {
@@ -291,12 +338,10 @@ func recommendationIndexV2TextAgentRoundTrip() async throws {
         vocals: ["器乐"], textures: ["钢琴"], styles: ["轻音乐"], confidence: 0.96
     )
     let itemsJSON = String(decoding: try JSONEncoder().encode([classification]), as: UTF8.self)
-    func action(_ tool: String, _ args: [String: String] = [:]) throws -> String {
-        let payload: [String: Any] = ["tool": tool, "args": args]
-        return "ACTION: " + String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
-    }
     let provider = IndexScriptedProvider([
-        try action("library_index_v2_write_batch", ["itemsJSON": itemsJSON]),
+        // The model provides classification data only.  The Runtime owns the
+        // write_batch transition and executes it after structural validation.
+        itemsJSON,
     ])
     let collector = IndexResultCollector()
     await AgentRunner.run(
@@ -338,21 +383,8 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
         ]],
     ]
     let argumentData = try JSONSerialization.data(withJSONObject: arguments)
-    let provider = NativeIndexProvider(calls: [
-        // A deliberately wrong model response: the fixed workflow must reject
-        // a Runtime-owned control edge without executing or echoing it. The
-        // next Provider request is forced to the required write step, while
-        // auxiliary tools remain present in the schema.
-        AIToolCall(
-            id: "wrong-runtime-edge",
-            name: "library_index_v2_status",
-            arguments: .object([:])
-        ),
-        AIToolCall(
-            id: "native-write-1",
-            name: "library_index_v2_write_batch",
-            arguments: try AIJSONValue(jsonData: argumentData)
-        ),
+    let provider = NativeJSONIndexProvider(responses: [
+        String(decoding: argumentData, as: UTF8.self),
     ])
     let collector = IndexResultCollector()
 
@@ -373,34 +405,20 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
     #expect(fixed.map(\.track.id) == [gid.description])
     #expect(await collector.contains("tool_search") == false)
     #expect(provider.requests().first?.toolChoice == .auto)
-    #expect(provider.requests().dropFirst().first?.toolChoice == .named("library_index_v2_write_batch"))
-    #expect(provider.requests().first?.tools?.contains { $0.name == "tool_search" } == true)
-    #expect(await collector.allTexts().filter { $0.hasPrefix("正在执行：") } == [
-        "正在执行：library_index_v2_status…",
-        "正在执行：library_index_v2_next_batch…",
-        "正在执行：library_index_v2_write_batch…",
-        "正在执行：library_index_v2_status…",
-    ])
+    #expect(provider.requests().allSatisfy { request in
+        !(request.tools?.contains { $0.name == "library_index_v2_next_batch" || $0.name == "library_index_v2_write_batch" } ?? false)
+    })
 
-    let definition = try #require(ToolSelector.toolDefinitions(
+    let definitions = ToolSelector.toolDefinitions(
         from: AgentToolRegistry.all.filter { $0.name == "library_index_v2_write_batch" },
         strict: true,
         activeSkillID: "recommendation-index-v2"
-    ).first)
-    let schemaData = try #require(definition.parametersJSON?.data(using: .utf8))
-    let schema = try #require(JSONSerialization.jsonObject(with: schemaData) as? [String: Any])
-    let properties = try #require(schema["properties"] as? [String: Any])
-    let items = try #require(properties["items"] as? [String: Any])
-    #expect(items["type"] as? String == "array")
-    let required = try #require(schema["required"] as? [String])
-    #expect(required.contains("items"))
-    let itemSchema = try #require(items["items"] as? [String: Any])
-    let itemRequired = try #require(itemSchema["required"] as? [String])
-    #expect(itemRequired.contains("id"))
+    )
+    #expect(definitions.isEmpty)
 }
 
-@Test("截断的原生 V2 items 不会伪装成缺少参数，并会缩批重新取 pending")
-func recommendationIndexV2MalformedArgumentsRecover() async throws {
+@Test("模型重复调用内部 write_batch 时受控失败且不会写入")
+func recommendationIndexV2RejectsModelOwnedWriteCalls() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "malformed-index-server"
     try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "malformed-1", title: "Recover Me")])
@@ -422,9 +440,10 @@ func recommendationIndexV2MalformedArgumentsRecover() async throws {
         confirm: { _ in true }, emit: { await collector.record($0) }
     )
     let status = try await store.recommendationIndexV2Status(serverID: serverID)
-    #expect(status.pendingUniqueTracks == 0)
-    #expect(await collector.contains("本批结构化输出不完整"))
-    #expect(await collector.contains("缺少参数：items") == false)
+    #expect(status.pendingUniqueTracks == 1)
+    #expect(await collector.contains("模型尝试调用 Runtime 内部步骤"))
+    #expect(await collector.contains("连续无效"))
+    #expect(provider.requests().count == 3)
     let malformedTranscriptCalls = provider.requests()
         .flatMap { $0.messages.flatMap { $0.toolCalls ?? [] } }
         .filter { call in
@@ -453,11 +472,11 @@ func recommendationIndexV2TransientProviderFailureRecovers() async throws {
     }
 
     let ids = tracks.map { GlobalID(serverID: serverID, remoteID: $0.id.rawValue).description }
-    let firstItems = try AIJSONValue(jsonData: JSONEncoder().encode(ids.prefix(4).map(classification)))
-    let secondItems = try AIJSONValue(jsonData: JSONEncoder().encode(ids.suffix(4).map(classification)))
-    let provider = TransientNativeIndexProvider(calls: [
-        .init(id: "write-1", name: "library_index_v2_write_batch", arguments: .object(["items": firstItems])),
-        .init(id: "write-2", name: "library_index_v2_write_batch", arguments: .object(["items": secondItems])),
+    let firstItems = ids.prefix(4).map(classification)
+    let secondItems = ids.suffix(4).map(classification)
+    let provider = TransientNativeIndexProvider(responses: [
+        String(decoding: try JSONEncoder().encode(["items": firstItems]), as: UTF8.self),
+        String(decoding: try JSONEncoder().encode(["items": secondItems]), as: UTF8.self),
     ])
     let collector = IndexResultCollector()
 

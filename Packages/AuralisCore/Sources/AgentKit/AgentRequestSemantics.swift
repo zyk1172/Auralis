@@ -332,6 +332,21 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             return Self(domain: .musicLibrary, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces))
         }
 
+        // “搜索胡广生” does not prove either a local-music or public-web
+        // target.  Expose only the two read-only search entrances so a weaker
+        // model can make a useful first choice without reviving the old
+        // Chinese-name-is-music heuristic.
+        if genericSearch && !webContext && !isMusicContext {
+            return Self(
+                domain: .conversation,
+                operation: .read,
+                isMusicContext: false,
+                isContinuation: continuation,
+                requestedOperations: requested,
+                suggestedToolNamespaces: ["catalog", "web"]
+            )
+        }
+
         return Self(domain: .conversation, operation: .conversation, isMusicContext: isMusicContext, isContinuation: continuation, requestedOperations: requested)
     }
 

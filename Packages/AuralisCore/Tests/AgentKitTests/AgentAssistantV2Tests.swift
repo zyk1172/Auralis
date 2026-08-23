@@ -51,7 +51,11 @@ struct AgentAssistantV2Tests {
 
     @Test("Provider capability mode differentiates native and textual protocols")
     func providerCapabilityMode() {
-        let native = ModelCapabilities(supportsToolCalling: true, toolMode: .anthropicMessages)
+        let native = ModelCapabilities(
+            supportsToolCalling: true,
+            supportsToolChoice: true,
+            toolMode: .anthropicMessages
+        )
         let textual = ModelCapabilities(supportsToolCalling: false, toolMode: .textualToolProtocol)
         #expect(native.toolMode == .anthropicMessages)
         #expect(native.supportsToolChoice)
@@ -121,8 +125,8 @@ struct AgentAssistantV2Tests {
         )
         let activeNames = Set(active.map(\.name))
         #expect(activeNames.contains("library_index_v2_status"))
-        #expect(activeNames.contains("library_index_v2_next_batch"))
-        #expect(activeNames.contains("library_index_v2_write_batch"))
+        #expect(!activeNames.contains("library_index_v2_next_batch"))
+        #expect(!activeNames.contains("library_index_v2_write_batch"))
     }
 
     @Test("Every model-visible write declares a canonical authorization operation")

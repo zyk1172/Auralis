@@ -136,6 +136,16 @@ private struct ScenarioWebService: AgentWebService {
     }
 }
 
+private struct EmptyScenarioWebService: AgentWebService {
+    func search(query: String, limit: Int) async throws -> WebSearchResult {
+        WebSearchResult(query: query, sources: [])
+    }
+
+    func fetch(url: URL) async throws -> WebDocument {
+        throw WebCapabilityError.fetchRequiresSearchResult
+    }
+}
+
 /// Minimal system double for the system-tool path. The audio route value is
 /// intentionally concrete so the scenario proves the second tool really ran.
 private final class ScenarioSystemService: AgentSystemService, @unchecked Sendable {
@@ -604,6 +614,41 @@ func genericShortlistUsesExplicitContext() {
     let docsTools = Set(ToolSelector.select(for: "搜索 Python 官方文档", all: AgentToolRegistry.all).map(\.name))
     #expect(docsTools.contains("web_search"))
     #expect(!docsTools.contains("library_search"))
+
+    let ambiguousTools = Set(ToolSelector.select(for: "搜索胡广生", all: AgentToolRegistry.all).map(\.name))
+    #expect(ambiguousTools.contains("library_search"))
+    #expect(ambiguousTools.contains("web_search"))
+    #expect(!ambiguousTools.contains("queue_append"))
+}
+
+@Test("generic search converges after repeated empty evidence")
+func genericSearchConvergesAfterNoNewResults() async throws {
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(id: "web-1", name: "web_search", arguments: ["query": .string("不存在的关键词 1")])]),
+        scenarioResponse(calls: [scenarioCall(id: "web-2", name: "web_search", arguments: ["query": .string("不存在的关键词 2")])]),
+        scenarioResponse(calls: [scenarioCall(id: "web-3", name: "web_search", arguments: ["query": .string("不存在的关键词 3")])]),
+        scenarioResponse(content: "没有查到可靠来源，因此无法确认这项信息。"),
+    ])
+    let collector = ScenarioMessageCollector()
+
+    await ConversationEngine().run(
+        userText: "查一下这个不存在的科技名词。",
+        provider: provider,
+        model: "scenario",
+        bridge: MockAgentBridge(),
+        catalog: try scenarioStore(),
+        context: ToolLoop.Context(),
+        webService: EmptyScenarioWebService(),
+        intent: .conversation,
+        policy: .policy(for: .conversation),
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    #expect(await collector.containsText("没有查到可靠来源"))
+    let requests = provider.requests()
+    #expect(requests.count == 4)
+    #expect(requests.last?.tools?.contains { $0.name == "web_search" } == false)
 }
 
 @Test("side-effect authorization is operation-level and avoids lexical false positives")

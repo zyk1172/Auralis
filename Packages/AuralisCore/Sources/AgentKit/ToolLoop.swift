@@ -299,6 +299,12 @@ public struct ToolLoop {
         var indeterminateSideEffects = Set<String>()
         var cachedReadResults: [String: String] = [:]
         var readRepeatCounts: [String: Int] = [:]
+        // Search exhaustion is per capability, not a global tool-call cap.
+        // It stops a backend that keeps returning no new evidence while all
+        // unrelated tools and ordinary conversation remain available.
+        var searchEvidenceByTool: [String: Set<String>] = [:]
+        var searchNoNewEvidenceStreak: [String: Int] = [:]
+        var exhaustedSearchTools = Set<String>()
         // Generic chat has no task completion evaluator, but read-only music
         // results still need the same buffered UI presentation contract as
         // deterministic tasks: collect cards during tool turns and emit them
@@ -447,6 +453,14 @@ public struct ToolLoop {
                     continue
                 }
                 let signature = confirmationSignature(name: call.name, args: call.stringArguments)
+                if exhaustedSearchTools.contains(call.name) {
+                    resultMessages.append(toolResultMessage(
+                        callID: call.id,
+                        content: "（工具执行结果）\(call.name)：本轮该搜索能力连续没有提供新证据，已停止继续搜索；请基于已有结果直接回答，并如实说明没有找到的部分。",
+                        native: nativeMode
+                    ))
+                    continue
+                }
                 if descriptor.permission != .readOnly {
                     if indeterminateSideEffects.contains(signature) {
                         resultMessages.append(toolResultMessage(
@@ -563,6 +577,24 @@ public struct ToolLoop {
                     resultText = "（工具执行结果）lyrics_get：成功 - 歌词已按隐私设置隐藏。"
                 }
                 resultText = ContextManager.truncateToolResult(resultText, limit: descriptor.maxResultCharacters)
+                if result.success,
+                   Self.isSearchCapability(call.name),
+                   let evidence = Self.searchEvidenceIDs(from: result.payload) {
+                    let known = searchEvidenceByTool[call.name, default: []]
+                    let newEvidence = evidence.subtracting(known)
+                    searchEvidenceByTool[call.name, default: []].formUnion(evidence)
+                    if newEvidence.isEmpty {
+                        let streak = (searchNoNewEvidenceStreak[call.name] ?? 0) + 1
+                        searchNoNewEvidenceStreak[call.name] = streak
+                        if streak >= 3 {
+                            exhaustedSearchTools.insert(call.name)
+                            selectedTools.removeAll { $0.name == call.name }
+                            resultText += "\n（搜索收敛）\(call.name) 已连续 \(streak) 次没有提供新证据，本轮不再暴露该搜索能力。请直接根据已有事实回答；若没有结果，请明确说明。"
+                        }
+                    } else {
+                        searchNoNewEvidenceStreak[call.name] = 0
+                    }
+                }
                 if descriptor.permission == .readOnly, descriptor.cachePolicy == .task, result.success {
                     cachedReadResults[signature] = resultText
                 } else if descriptor.permission != .readOnly, result.success {
@@ -597,9 +629,8 @@ public struct ToolLoop {
             }
 
             conversation.append(contentsOf: resultMessages)
-            if !resultMessages.isEmpty {
-                await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "工具执行完成，正在继续对话…")]))
-            }
+            // The view has one current activity state through `progress`; do
+            // not append a permanent chat bubble after every tool round.
             // Give provider-side test doubles and URLSession-backed streams a
             // scheduling boundary before the next request is observed. This
             // is not a retry or a loop limit; it only preserves ordered
@@ -749,6 +780,10 @@ public struct ToolLoop {
         // checkpoint. This is protocol-preserving recovery, not a tool-call or
         // model-capability limit.
         var didRecoverSkillProviderFailure = false
+        // A fixed skill may repair a malformed classification response a
+        // couple of times, but it must never turn a non-compliant provider
+        // into an unbounded correction loop.
+        var skillOutputRepairAttempts = 0
 
         while true {
             if Task.isCancelled {
@@ -874,9 +909,17 @@ public struct ToolLoop {
                 // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
                 // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
 
+                var requestConversation = conversation
+                if let activeSkill,
+                   case let .modelOutput(contract) = activeSkill.nextStep() {
+                    requestConversation.append(AIMessage(
+                        role: .user,
+                        content: "Skill Runtime 分类输出契约：\(contract.instruction)"
+                    ))
+                }
                 let request = AICompletionRequest(
                     model: model,
-                    transcript: AITranscript(messages: conversation),
+                    transcript: AITranscript(messages: requestConversation),
                     temperature: 0.3,
                     maxTokens: reservedOutput,
                     tools: nativeMode ? toolDefinitions : nil,
@@ -968,35 +1011,73 @@ public struct ToolLoop {
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
 
-            // A model response cannot replace a skill's control-flow edge.
-            // Auxiliary capabilities remain available: only tools owned by the
-            // active skill are constrained here; unrelated registered tools
-            // remain usable for diagnostics, capability discovery and reads.
+            // A stateful skill owns its state transitions.  At a model-output
+            // step the provider contributes only typed data; it never has to
+            // honor a named tool_choice for the internal write transition.
+            // Auxiliary public tools remain available, but private skill tools
+            // are not part of the provider schema and therefore cannot be
+            // selected or replayed by the model.
+            var generatedSkillCall: LoopToolCall?
             if let activeSkill,
-               case let .modelTurn(requiredToolName) = activeSkill.nextStep(),
-               let requiredToolName,
+               case let .modelOutput(contract) = activeSkill.nextStep(),
                !didUseForcedSkillCall {
-                let names = nativeMode
-                    ? nativeCalls.map(\.name)
-                    : textActions.map(\.tool)
-                let containsOwnedTool = names.contains { activeSkill.ownedToolNames.contains($0) }
-                let isRequiredToolTurn = names.count == 1 && names.first == requiredToolName
-                let isAuxiliaryToolTurn = !names.isEmpty && !containsOwnedTool
-                if !isRequiredToolTurn && (!isAuxiliaryToolTurn || containsOwnedTool) {
-                    let correction = "当前 Stateful Skill 需要调用 \(requiredToolName) 完成本步骤；不要重复执行由 Runtime 自动控制的步骤，也不要只返回说明文字。"
-                    if nativeMode, provider.capabilities.supportsToolChoice {
-                        toolChoice = .named(requiredToolName)
+                let returnedToolNames = nativeMode ? nativeCalls.map(\.name) : textActions.map(\.tool)
+                let attemptedInternalTool = returnedToolNames.contains { activeSkill.privateToolNames.contains($0) }
+                if attemptedInternalTool || returnedToolNames.isEmpty {
+                    let output: AgentSkillModelOutput
+                    if attemptedInternalTool {
+                        output = .retry(AgentSkillRecovery(
+                            message: "模型尝试调用 Runtime 内部步骤；本次未执行写入。请改为返回符合契约的 JSON 分类对象。",
+                            dropCurrentBatch: false,
+                            compactTranscript: false
+                        ))
+                    } else {
+                        output = activeSkill.consumeModelOutput(streamedText, contract: contract)
                     }
-                    taskState.pendingActions = [correction]
-                    taskState.status = .waitingForModel
+                    switch output {
+                case let .executeTool(name, arguments):
+                    skillOutputRepairAttempts = 0
+                    generatedSkillCall = LoopToolCall(
+                        id: "skill-output-\(toolStepCount + 1)-\(name)",
+                        name: name,
+                        arguments: arguments,
+                        malformedArguments: false,
+                        usesTextProtocol: !nativeMode
+                    )
+                case let .retry(recovery):
+                    skillOutputRepairAttempts += 1
+                    if skillOutputRepairAttempts > 2 {
+                        let message = "Recommendation Index V2 分类输出连续无效，未执行未确认的写入。请检查当前 AI Provider 是否能稳定返回 JSON 后再继续。"
+                        taskState.errors.append(message)
+                        taskState.errorState = message
+                        taskState.status = .failed
+                        taskState.updatedAt = .now
+                        Self.mergeSkillFacts(activeSkill, into: &taskState)
+                        await state(taskState)
+                        await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                        return
+                    }
+                    taskState.errors.append(recovery.message)
+                    taskState.pendingActions = [recovery.message]
+                    taskState.status = .waitingForTool
                     taskState.updatedAt = .now
                     Self.mergeSkillFacts(activeSkill, into: &taskState)
                     await state(taskState)
-                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: correction)]))
-                    conversation.append(AIMessage(role: .user, content: "系统恢复：\(correction)"))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: recovery.message)]))
+                    conversation = Self.compactSkillTranscript(
+                        conversation,
+                        ownedToolNames: activeSkill.ownedToolNames,
+                        droppingLatestOwnedUnit: recovery.dropCurrentBatch
+                    )
+                    conversation.append(AIMessage(
+                        role: .user,
+                        content: "系统恢复：\(recovery.message) \(contract.instruction)"
+                    ))
                     continue
                 }
+                }
             }
+            let skillInternalCall = forcedSkillCall ?? generatedSkillCall
 
             let completionFactsSatisfied: Bool
             if let activeSkill {
@@ -1009,7 +1090,7 @@ public struct ToolLoop {
             // 许多中转在 tool result 后只返回 reasoning 或空 content；这不应覆盖成功状态。
             if nativeCalls.isEmpty,
                textActions.isEmpty,
-               forcedSkillCall == nil,
+               skillInternalCall == nil,
                completionFactsSatisfied,
                !(intent == .musicDiscovery
                     && !didRequestFinalSelection
@@ -1060,7 +1141,7 @@ public struct ToolLoop {
             if streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                nativeCalls.isEmpty,
                textActions.isEmpty,
-               forcedSkillCall == nil {
+               skillInternalCall == nil {
                 if !nativeMode, Self.canUseOfflineFallback(intent: intent, userText: userText) {
                     await runOffline(
                         userText: userText,
@@ -1082,7 +1163,7 @@ public struct ToolLoop {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(failure)]))
                 return
             }
-            if nativeCalls.isEmpty && textActions.isEmpty && forcedSkillCall == nil {
+            if nativeCalls.isEmpty && textActions.isEmpty && skillInternalCall == nil {
                 // 模型已输出最终回答 → 正常终止本轮任务。
                 // 流式收尾：Coordinator 会把 in-flight 流式气泡原地定型为该最终文本，
                 // 不会出现「流式半成品 + 成品」两条重复气泡。
@@ -1175,10 +1256,18 @@ public struct ToolLoop {
             }
 
             // 有工具调用：先把 assistant 消息（含 tool_calls）写入对话，再逐条执行回灌。
-            if forcedSkillCall != nil, nativeMode {
-                conversation.append(AIMessage(role: .assistant, content: "", toolCalls: nativeCalls))
-            } else if let forcedSkillCall {
-                conversation.append(AIMessage(role: .assistant, content: "Stateful Skill 步骤：\(forcedSkillCall.name)"))
+            if let skillInternalCall, nativeMode {
+                conversation.append(AIMessage(
+                    role: .assistant,
+                    content: didUseForcedSkillCall ? "" : "Stateful Skill 分类数据已验证。",
+                    toolCalls: [AIToolCall(
+                        id: skillInternalCall.id ?? "skill-\(toolStepCount + 1)",
+                        name: skillInternalCall.name,
+                        arguments: .object(skillInternalCall.arguments)
+                    )]
+                ))
+            } else if let skillInternalCall {
+                conversation.append(AIMessage(role: .assistant, content: "Stateful Skill 步骤：\(skillInternalCall.name)"))
             } else if nativeMode, !nativeCalls.isEmpty {
                 conversation.append(AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls))
             } else {
@@ -1187,8 +1276,8 @@ public struct ToolLoop {
 
             // 统一调用视图：原生调用带稳定 id，文本 ACTION 合成 text-N。
             let calls: [LoopToolCall]
-            if let forcedSkillCall {
-                calls = [forcedSkillCall]
+            if let skillInternalCall {
+                calls = [skillInternalCall]
             } else if nativeMode, !nativeCalls.isEmpty {
                 calls = nativeCalls.map { native in
                     switch Self.parseArguments(native.arguments) {
@@ -1602,15 +1691,7 @@ public struct ToolLoop {
             // 普通任务在工具回灌后回到 auto；V2 分类阶段始终锁定唯一的
             // write_batch，避免下一轮又回到旁路工具。
             if nativeMode, !nativeCalls.isEmpty {
-                if let activeSkill,
-                   case let .modelTurn(requiredToolName) = activeSkill.nextStep(),
-                   let requiredToolName,
-                   !didUseForcedSkillCall,
-                   provider.capabilities.supportsToolChoice {
-                    toolChoice = .named(requiredToolName)
-                } else {
-                    toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
-                }
+                toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
             }
 
             // 合并工具轨迹：不再逐行刷「调用 X」，而是合并成一条状态。
@@ -2392,6 +2473,30 @@ public struct ToolLoop {
             return value
         case .toolProgress, .confirmation:
             return ""
+        }
+    }
+
+    private static func isSearchCapability(_ name: String) -> Bool {
+        AgentTaskWorkingSet.isSearchTool(name)
+            || ["web_search", "web_fetch"].contains(name)
+    }
+
+    /// Stable evidence identity used only for per-capability search
+    /// convergence.  A nil return means this tool does not yield a result set
+    /// that can be compared, so it must not be disabled by this mechanism.
+    private static func searchEvidenceIDs(from payload: AgentMessage?) -> Set<String>? {
+        guard let payload else { return nil }
+        switch payload {
+        case let .trackCards(cards):
+            return Set(cards.map { $0.globalID.description })
+        case let .albumCards(cards):
+            return Set(cards.map { $0.globalID.description })
+        case let .webSources(sources):
+            return Set(sources.map { WebSource.canonicalURL($0.url).absoluteString })
+        case let .playlistProposal(_, tracks):
+            return Set(tracks.map { $0.globalID.description })
+        default:
+            return nil
         }
     }
 

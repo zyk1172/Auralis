@@ -478,15 +478,16 @@ public final class AgentCoordinator: ObservableObject {
         let systemService = self.systemService
         // 创建并持久化任务记录（不依赖任何 View 生命周期）。
         // 历史只从 SessionStore 读取（Session A 只能看到 A 的历史），不依赖全局 messages。
+        // Allocate ownership before the task starts.  A cancellation can arrive
+        // before a newly-created Task gets its first executor turn; keeping the
+        // identity outside the task makes that race harmless.
+        let runID = UUID()
+        currentRunID = runID
         runTask = Task { [weak self] in
             guard let self else { return }
-            let runID = UUID()
-            self.currentRunID = runID
             // 用户在任务真正开始前点了停止：直接结束，不回任何消息。
             if Task.isCancelled {
-                if self.currentRunID == runID { self.currentRunID = nil }
-                self.runTask = nil
-                await MainActor.run { [weak self] in self?.isRunning = false }
+                self.finishOwnedRun(runID)
                 return
             }
             // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
@@ -537,9 +538,7 @@ public final class AgentCoordinator: ObservableObject {
                             sessionID: sessionID,
                             runID: runID
                         )
-                        if self.currentRunID == runID { self.currentRunID = nil }
-                        self.runTask = nil
-                        await MainActor.run { [weak self] in self?.isRunning = false }
+                        self.finishOwnedRun(runID)
                         return
                     case .allowOnce, .allowAndRemember:
                         break
@@ -577,9 +576,7 @@ public final class AgentCoordinator: ObservableObject {
                 if self.activeSessionID == sessionID {
                     await self.summarizeActiveSession()
                 }
-                if self.currentRunID == runID { self.currentRunID = nil }
-                self.runTask = nil
-                await MainActor.run { [weak self] in self?.isRunning = false }
+                self.finishOwnedRun(runID)
                 return
             }
 
@@ -669,9 +666,7 @@ public final class AgentCoordinator: ObservableObject {
                         runID: runID
                     )
                     taskStore.update(taskID, status: .cancelled, error: String(localized: "用户未授权首次外发请求。", bundle: .module))
-                    if self.currentRunID == runID { self.currentRunID = nil }
-                    self.runTask = nil
-                    await MainActor.run { [weak self] in self?.isRunning = false }
+                    self.finishOwnedRun(runID)
                     return
                 case .allowOnce, .allowAndRemember:
                     break
@@ -706,10 +701,10 @@ public final class AgentCoordinator: ObservableObject {
                     await self?.record(record)
                 },
                 progress: { [weak self] p in
-                    await self?.updateTaskProgress(p, taskID: taskID, sessionID: sessionID)
+                    await self?.updateTaskProgress(p, taskID: taskID, sessionID: sessionID, runID: runID)
                 },
                 state: { [weak self] taskState in
-                    await self?.updateTaskState(taskState, taskID: taskID, sessionID: sessionID)
+                    await self?.updateTaskState(taskState, taskID: taskID, sessionID: sessionID, runID: runID)
                 }
             )
             // 收尾顺序：先结算任务 → 再清理运行身份 → 最后才释放 isRunning。
@@ -717,18 +712,21 @@ public final class AgentCoordinator: ObservableObject {
             let wasCancelled = Task.isCancelled
             let sessionMessages = await self.sessionStore.session(sessionID)?.messages ?? []
             let failure = Self.failureSummary(in: sessionMessages.dropFirst(history.count))
-            await self.finishTask(taskID, sessionID: sessionID, wasCancelled: wasCancelled, failure: failure)
-            if self.activeSessionID == sessionID {
+            await self.finishTask(taskID, sessionID: sessionID, runID: runID, wasCancelled: wasCancelled, failure: failure)
+            if self.currentRunID == runID, self.activeSessionID == sessionID {
                 await self.summarizeActiveSession()
             }
-            if self.currentRunID == runID { self.currentRunID = nil }
-            self.runTask = nil
-            await MainActor.run { [weak self] in self?.isRunning = false }
+            self.finishOwnedRun(runID)
         }
     }
 
     /// 更新任务进度（工具步骤 / 当前阶段 / token 用量）。
-    private func updateTaskProgress(_ progress: ToolLoop.AgentProgress, taskID: UUID, sessionID: UUID) async {
+    private func updateTaskProgress(
+        _ progress: ToolLoop.AgentProgress,
+        taskID: UUID,
+        sessionID: UUID,
+        runID: UUID
+    ) async {
         taskStore.update(
             taskID,
             step: progress.currentStep,
@@ -737,14 +735,19 @@ public final class AgentCoordinator: ObservableObject {
             outputTokens: progress.outputTokens ?? 0
         )
         // 只有属于当前活动会话的任务才更新 UI 进度，避免 Session A 的步骤显示在 B 界面。
-        if activeSessionID == sessionID {
+        if currentRunID == runID, activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)
         }
     }
 
     /// Runtime 是任务状态的权威；把结构化状态同步进持久化仓库，App 重启后可审计
     /// 已完成动作与停止原因，而不是只剩一条“正在执行工具”的 UI 文本。
-    private func updateTaskState(_ state: AgentTaskState, taskID: UUID, sessionID: UUID) async {
+    private func updateTaskState(
+        _ state: AgentTaskState,
+        taskID: UUID,
+        sessionID: UUID,
+        runID: UUID
+    ) async {
         taskStore.update(
             taskID,
             status: Self.persistedStatus(for: state.status),
@@ -757,7 +760,7 @@ public final class AgentCoordinator: ObservableObject {
             noProgressRounds: state.progress.noProgressRounds,
             checkpointJSON: state.facts["recommendation.index.checkpoint"]
         )
-        if activeSessionID == sessionID {
+        if currentRunID == runID, activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)
         }
     }
@@ -777,7 +780,13 @@ public final class AgentCoordinator: ObservableObject {
 
     /// 任务结束后按真实结果落盘。此前 Runner 已发出 `.error` 时仍被一律标为
     /// completed，导致用户看到失败、任务记录却显示完成，无法诊断或恢复。
-    private func finishTask(_ taskID: UUID, sessionID: UUID, wasCancelled: Bool, failure: String?) async {
+    private func finishTask(
+        _ taskID: UUID,
+        sessionID: UUID,
+        runID: UUID,
+        wasCancelled: Bool,
+        failure: String?
+    ) async {
         let status: AgentTaskStatus
         if wasCancelled {
             status = .cancelled
@@ -788,9 +797,22 @@ public final class AgentCoordinator: ObservableObject {
         }
         taskStore.update(taskID, status: status, error: failure)
         // 只有属于当前活动会话的任务才更新 UI 任务状态，避免 A 的收尾污染 B 界面。
-        if activeSessionID == sessionID {
+        if currentRunID == runID, activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)
         }
+    }
+
+    /// Releases only the state owned by `runID`.  An older cancelled task may
+    /// finish after a newer request has started; it must never clear that new
+    /// task's `runTask`, spinner or streaming state.
+    /// Internal for the lifecycle regression test; callers can only release
+    /// their own run identity.
+    func finishOwnedRun(_ runID: UUID) {
+        guard currentRunID == runID else { return }
+        currentRunID = nil
+        runTask = nil
+        streamingStates[runID] = nil
+        isRunning = false
     }
 
     private static func failureSummary(in messages: ArraySlice<AgentChatMessage>) -> String? {
@@ -807,10 +829,13 @@ public final class AgentCoordinator: ObservableObject {
 
     /// 用户主动取消当前运行。
     public func cancel() {
+        let cancelledRunID = currentRunID
         runTask?.cancel()
         runTask = nil
         currentRunID = nil
-        streamingStates.removeAll()
+        if let cancelledRunID {
+            streamingStates[cancelledRunID] = nil
+        }
         resolveConsent(.deny)
         resolveOperationConfirmation(false)
         isRunning = false
@@ -876,6 +901,19 @@ public final class AgentCoordinator: ObservableObject {
             await sessionStore.append(message, to: sessionID)
             return
         }
+        // Tool activity is transient run state, not a chat transcript.  Keep
+        // exactly one trailing activity row and replace it in both the live
+        // UI and persistence; a long index run no longer fills the screen
+        // with one bubble per status/next/write operation.
+        if Self.isToolProgress(message), isActiveSession,
+           let index = messages.indices.last,
+           messages[index].role == .assistant,
+           Self.isToolProgress(messages[index]) {
+            messages[index] = message
+            if await sessionStore.replaceTrailingToolProgress(message, in: sessionID) {
+                return
+            }
+        }
         if isActiveSession {
             messages.append(message)
         }
@@ -891,6 +929,13 @@ public final class AgentCoordinator: ObservableObject {
         }
         guard !pieces.isEmpty else { return nil }
         return pieces.joined()
+    }
+
+    private static func isToolProgress(_ message: AgentChatMessage) -> Bool {
+        !message.messages.isEmpty && message.messages.allSatisfy { item in
+            if case .toolProgress = item { return true }
+            return false
+        }
     }
 
     /// 汇总一条消息里已有的流式文本（用于在 in-flight 气泡上继续累加）。

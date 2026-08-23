@@ -333,8 +333,8 @@ struct AgentRuntimeArchitectureTests {
         )
         let names = Set(selected.map(\.name))
         #expect(names.contains("library_index_v2_status"))
-        #expect(names.contains("library_index_v2_next_batch"))
-        #expect(names.contains("library_index_v2_write_batch"))
+        #expect(!names.contains("library_index_v2_next_batch"))
+        #expect(!names.contains("library_index_v2_write_batch"))
     }
 
     @Test func indexStatusQuestionDoesNotStartFullBuild() {
