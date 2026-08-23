@@ -28,6 +28,12 @@ public struct AgentWorkflowRoute: Codable, Equatable, Sendable {
 }
 
 public enum WorkflowEngine {
+    public static func recommendationIndexWorkflow(
+        preferredBatchSize: Int = 16
+    ) -> RecommendationIndexWorkflow {
+        RecommendationIndexWorkflow(preferredBatchSize: preferredBatchSize)
+    }
+
     public static func route(intent: AgentTaskIntent, text: String) -> AgentWorkflowRoute {
         let normalized = text.lowercased()
         if intent == .libraryManagement,

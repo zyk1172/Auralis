@@ -44,6 +44,17 @@ public enum ToolEvidencePolicy: String, Sendable, Hashable {
     case externalAPI
 }
 
+/// Controls which boundary may expose a registered tool.
+///
+/// Visibility is not an execution permission. Runtime lookup deliberately
+/// keeps all three classes executable so old persisted calls and aliases keep
+/// working, while model discovery and provider schemas only use `.model`.
+public enum ToolVisibility: String, Codable, Sendable, Hashable {
+    case model
+    case legacyOnly
+    case internalOnly
+}
+
 /// 工具元数据：分组、权限、展示角色、参数。
 public struct ToolDescriptor: Sendable, Hashable {
     public let name: String
@@ -71,6 +82,7 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let parallelSafe: Bool
     public let networkAccess: Bool
     public let aliases: [String]
+    public let visibility: ToolVisibility
 
     public init(
         name: String,
@@ -91,7 +103,8 @@ public struct ToolDescriptor: Sendable, Hashable {
         idempotent: Bool? = nil,
         parallelSafe: Bool? = nil,
         networkAccess: Bool? = nil,
-        aliases: [String] = []
+        aliases: [String] = [],
+        visibility: ToolVisibility? = nil
     ) {
         self.name = name
         self.namespace = namespace ?? group.rawValue
@@ -118,6 +131,28 @@ public struct ToolDescriptor: Sendable, Hashable {
         self.parallelSafe = parallelSafe ?? (permission == .readOnly)
         self.networkAccess = networkAccess ?? (group == .server || group == .download)
         self.aliases = aliases
+        self.visibility = visibility ?? Self.defaultVisibility(for: name)
+    }
+
+    private static func defaultVisibility(for name: String) -> ToolVisibility {
+        // These descriptors are retained as an execution/persistence
+        // compatibility layer. Their canonical replacements are registered
+        // separately and are the only schemas exposed to the model.
+        let legacyNames: Set<String> = [
+            "searchTracks", "searchAlbums", "searchArtists", "getTrack", "getAlbum", "getArtist",
+            "getFavorites", "getRecentHistory", "getLeastPlayed", "getDownloadedTracks",
+            "getSimilarTracks", "getCurrentTrack", "getCurrentQueue",
+            "playTrack", "playAlbum", "playPlaylist", "pause", "resume", "seek", "next", "previous",
+            "addToQueue", "playNext", "replaceQueue", "removeFromQueue", "reorderQueue", "clearQueue",
+            "music_download",
+            "listPlaylists", "getPlaylist", "createPlaylist", "renamePlaylist", "addTracksToPlaylist",
+            "removeTracksFromPlaylist", "reorderPlaylist", "duplicatePlaylist", "mergePlaylists", "deletePlaylist",
+            "likeTrack", "unlikeTrack", "favoriteAlbum", "unfavoriteAlbum", "favoriteArtist", "unfavoriteArtist",
+            "setRating", "clearRating",
+            "listServers", "getActiveServer", "testServerConnection", "addServer", "updateServer",
+            "switchServer", "refreshLibrary", "getSyncStatus", "removeServer",
+        ]
+        return legacyNames.contains(name) ? .legacyOnly : .model
     }
 
     private static func defaultRequiredScopes(
@@ -841,9 +876,9 @@ public enum AgentToolRegistry {
 
         switch call.name {
         case "tool_search":
-            let query = call.arguments["query"] ?? ""
-            let namespace = call.arguments["namespace"]
-            let limit = min(max(Int(call.arguments["limit"] ?? "8") ?? 8, 1), 50)
+            let query = call.optionalString("query") ?? ""
+            let namespace = call.optionalString("namespace")
+            let limit = min(max(Int(call.optionalString("limit") ?? "8") ?? 8, 1), 50)
             let entries = ToolCatalog().search(query: query, namespace: namespace, limit: limit)
             let text = entries.isEmpty
                 ? "未找到匹配工具。可以换一个能力描述、工具名或命名空间再搜索。"
@@ -877,8 +912,8 @@ public enum AgentToolRegistry {
                 return .fail(call, descriptor, "联网能力未配置；当前 Provider 也没有托管搜索能力。")
             }
             do {
-                let query = call.arguments["query"] ?? ""
-                let limit = min(max(Int(call.arguments["limit"] ?? "5") ?? 5, 1), 10)
+                let query = call.optionalString("query") ?? ""
+                let limit = min(max(Int(call.optionalString("limit") ?? "5") ?? 5, 1), 10)
                 let result = try await webService.search(query: query, limit: limit)
                 return .ok(
                     call,
@@ -894,7 +929,7 @@ public enum AgentToolRegistry {
             guard let webService else {
                 return .fail(call, descriptor, "网页读取能力未配置。")
             }
-            guard let rawURL = call.arguments["url"], let url = URL(string: rawURL) else {
+            guard let rawURL = call.optionalString("url"), let url = URL(string: rawURL) else {
                 return .fail(call, descriptor, "网页地址无效。")
             }
             do {
@@ -926,7 +961,7 @@ public enum AgentToolRegistry {
             case "music_download_history_remove": action = "history_remove"
             default: action = "history_clean"
             }
-            legacyArguments["action"] = action
+            legacyArguments["action"] = .string(action)
             let legacyCall = ToolCall(name: "music_download", arguments: legacyArguments)
             return await SystemToolExecutor.execute(
                 legacyCall,

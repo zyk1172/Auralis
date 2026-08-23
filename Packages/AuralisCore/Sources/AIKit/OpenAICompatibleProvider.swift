@@ -506,7 +506,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// 非流式请求的参数协商版本：先走标准请求，若网关明确拒绝某个非工具参数，
-    /// 只用修改后的请求再试一次。工具能力拒绝必须上抛给 Runner 做 ACTION 降级。
+    /// 只用修改后的请求再试一次。工具能力拒绝必须沿原生协议上抛。
     private func performRequestWithParameterFallback<Raw, Value>(
         body: [String: Any],
         run: (URLRequest) async throws -> (Raw, URLResponse),
@@ -758,8 +758,8 @@ public struct OpenAICompatibleProvider: AIProvider {
         let mentionsTemperature = detail.contains("temperature") || detail.contains("sampling")
         let mentionsMaxTokens = detail.contains("max_tokens") || detail.contains("max_output_tokens")
 
-        // 绝不删除 tools/tool_choice。若网关不支持原生工具，保留原错误让
-        // AgentRunner 关闭 nativeMode、重建提示并切换 ACTION 协议。
+        // 绝不删除 tools/tool_choice。若网关不支持原生工具，保留原错误，
+        // 让上层报告原生协议失败，不改变同一任务的工具语义。
         if mentionsToolChoice || mentionsTools {
             return nil
         }
@@ -842,6 +842,20 @@ public struct OpenAICompatibleProvider: AIProvider {
         }
     }
 
+    /// Decode provider wire text once, at the provider boundary. Invalid JSON
+    /// is retained as a string so the ToolLoop can report malformed arguments
+    /// without ever handing raw JSON text to ToolRuntime as its canonical model.
+    private static func decodeToolCall(id: String, name: String, rawArguments: String) -> AIToolCall {
+        let trimmed = rawArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let arguments: AIJSONValue
+        if trimmed.isEmpty || trimmed == "null" {
+            arguments = .object([:])
+        } else {
+            arguments = (try? AIJSONValue(jsonString: trimmed)) ?? .string(rawArguments)
+        }
+        return AIToolCall(id: id, name: name, arguments: arguments)
+    }
+
     /// OpenAI Responses hosted tools are top-level tools, not function
     /// definitions. Keep this codec separate so a hosted tool can never be
     /// accidentally sent as `type=function`.
@@ -872,7 +886,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                     [
                         "id": call.id,
                         "type": "function",
-                        "function": ["name": call.name, "arguments": call.arguments],
+                        "function": ["name": call.name, "arguments": call.arguments.jsonString],
                     ]
                 }
             }
@@ -919,7 +933,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                         "type": "function_call",
                         "call_id": call.id,
                         "name": call.name,
-                        "arguments": call.arguments,
+                        "arguments": call.arguments.jsonString,
                     ]
                 })
             }
@@ -1053,7 +1067,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             else { return nil }
             let id = (call["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "call-\(index)"
             let arguments = stringify(function["arguments"]) ?? ""
-            return AIToolCall(id: id, name: name, arguments: arguments)
+            return decodeToolCall(id: id, name: name, rawArguments: arguments)
         }
         return parsed.isEmpty ? nil : parsed
     }
@@ -1207,7 +1221,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         let id = fragment.id.flatMap { $0.isEmpty ? nil : $0 } ?? "call-\(key)"
         emittedKeys.insert(key)
         fragments.removeValue(forKey: key)
-        return AIToolCall(id: id, name: name, arguments: fragment.arguments)
+        return decodeToolCall(id: id, name: name, rawArguments: fragment.arguments)
     }
 
     /// 宽容解析 Responses API 非流式响应：
@@ -1349,7 +1363,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             let id = ((item["call_id"] as? String) ?? (item["id"] as? String))
                 .flatMap { $0.isEmpty ? nil : $0 }
                 ?? "call-\(index)"
-            return AIToolCall(id: id, name: name, arguments: stringify(item["arguments"]) ?? "")
+            return decodeToolCall(id: id, name: name, rawArguments: stringify(item["arguments"]) ?? "")
         }
         return parsed.isEmpty ? nil : parsed
     }
@@ -1418,7 +1432,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             let id = ((item["call_id"] as? String) ?? (item["id"] as? String))
                 .flatMap { $0.isEmpty ? nil : $0 }
                 ?? "call-\(item["output_index"] as? Int ?? 0)"
-            return .toolCall(AIToolCall(id: id, name: name, arguments: stringify(item["arguments"]) ?? ""))
+            return .toolCall(decodeToolCall(id: id, name: name, rawArguments: stringify(item["arguments"]) ?? ""))
         case "response.output_item.added", "response.content_part.added":
             let item = (object["item"] as? [String: Any]) ?? (object["content_part"] as? [String: Any])
             guard let item,
@@ -1589,7 +1603,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                   let name = fragment.name, !name.isEmpty
             else { return nil }
             let id = fragment.id.flatMap { $0.isEmpty ? nil : $0 } ?? "call-\(index)"
-            return AIToolCall(id: id, name: name, arguments: fragment.arguments)
+            return decodeToolCall(id: id, name: name, rawArguments: fragment.arguments)
         }
     }
 

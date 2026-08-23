@@ -43,10 +43,11 @@ public struct AIPrivacyConsentRequest: Sendable, Identifiable {
 ///
 /// 边界约定：
 /// - 把完整会话与工具「结果摘要」发给模型，永不发送完整音乐目录或任何凭据。
-/// - 已注册工具默认直接执行；只有明确不可逆的高风险工具由 Runner 请求一次批准，
+/// - 已注册工具默认直接执行；只有明确不可逆的高风险工具由 ToolLoop 请求一次批准，
 ///   调用记录仍会保留在本地操作日志中。
 /// - 隐私：三个隐私开关真实生效（元数据 / 播放历史 / 歌词）；首次外发前需用户确认。
-/// - 模型不可用时自动降级到本地规则模式，搜索/播放/收藏等仍然可用。
+/// - 模型不可用时，仅显式音乐请求可降级到本地规则模式；普通聊天保持 Provider 错误语义，
+///   不会被改写为本地音乐搜索。
 @MainActor
 public final class AgentCoordinator: ObservableObject {
     // MARK: - Published state
@@ -83,6 +84,8 @@ public final class AgentCoordinator: ObservableObject {
     private let taskStore: AgentTaskStore
     /// 真正拥有任务生命周期与策略边界的独立运行时。
     private let runtime: AgentRuntime
+    /// 普通聊天不创建业务 AgentTask，直接进入 ConversationEngine。
+    private let conversationEngine: ConversationEngine
     /// 系统服务工具适配：App / 设备 / 服务器 / 缓存 / 统计 / 诊断 / 记忆与技能。
     private let systemService: AuralisSystemToolService
     /// 按需开放音乐数据；与歌曲信息 UI、无歌词补全共用同一个 MusicEnrichmentService 实例。
@@ -137,6 +140,7 @@ public final class AgentCoordinator: ObservableObject {
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
         self.taskStore = AgentTaskStore(fileURL: dir.appendingPathComponent("agent-tasks.json"))
         self.runtime = AgentRuntime()
+        self.conversationEngine = ConversationEngine()
     }
 
     public static func defaultDirectory() -> URL {
@@ -496,6 +500,75 @@ public final class AgentCoordinator: ObservableObject {
                 historyText: historyText,
                 explicitIntent: explicitIntent
             )
+
+            // Generic chat is a first-class provider conversation. It must not
+            // be represented as a business task merely to reach the model
+            // loop; otherwise CompletionEvaluator and task persistence become
+            // an accidental capability boundary for ordinary questions.
+            if resolvedPolicy.intent == .conversation,
+               resolvedPolicy.completion == .modelAnswer {
+                if needsFirstSendConsent {
+                    let consent = Self.consentRequest(
+                        providerName: Self.providerDisplayName,
+                        modelName: modelName,
+                        permissions: permissions
+                    )
+                    switch await self.ensureConsentIfNeeded(consent) {
+                    case .deny:
+                        await self.receive(
+                            AgentChatMessage(role: .user, messages: [.text(trimmed)]),
+                            sessionID: sessionID,
+                            runID: runID
+                        )
+                        await self.receive(
+                            AgentChatMessage(role: .assistant, messages: [.text(Self.consentDeniedText(consent))]),
+                            sessionID: sessionID,
+                            runID: runID
+                        )
+                        if self.currentRunID == runID { self.currentRunID = nil }
+                        self.runTask = nil
+                        await MainActor.run { [weak self] in self?.isRunning = false }
+                        return
+                    case .allowOnce, .allowAndRemember:
+                        break
+                    }
+                }
+
+                await self.conversationEngine.run(
+                    userText: trimmed,
+                    provider: resolvedProvider,
+                    model: modelName,
+                    bridge: bridge,
+                    catalog: catalog,
+                    context: context,
+                    history: history,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    webService: webService,
+                    intent: .conversation,
+                    policy: resolvedPolicy,
+                    confirm: { [weak self] pending in
+                        guard let self else { return false }
+                        return await self.requestOperationConfirmation(pending)
+                    },
+                    emit: { [weak self] message in
+                        await self?.receive(message, sessionID: sessionID, runID: runID)
+                    },
+                    log: { [weak self] record in
+                        await self?.record(record)
+                    },
+                    progress: { _ in },
+                    state: { _ in }
+                )
+                if self.activeSessionID == sessionID {
+                    await self.summarizeActiveSession()
+                }
+                if self.currentRunID == runID { self.currentRunID = nil }
+                self.runTask = nil
+                await MainActor.run { [weak self] in self?.isRunning = false }
+                return
+            }
+
             let resumeRecord = self.taskStore.recommendationIndexResumeCandidate(
                 conversationID: sessionID,
                 requestText: trimmed

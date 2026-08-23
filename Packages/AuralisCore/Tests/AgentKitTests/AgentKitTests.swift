@@ -1093,7 +1093,7 @@ func streamingErrorDoesNotDegradeOrdinaryChatToMusicSearch() async {
     }.joined(separator: "\n")
     #expect(errors.contains("AI 服务暂时不可用"))
     #expect(errors.contains("测试错误"))
-    #expect(errors.contains("未将普通聊天改写为本地音乐搜索"))
+    #expect(errors.contains("未将请求改写为本地音乐搜索"))
     #expect(await collector.containsText("本地未找到匹配的歌曲") == false)
 }
 
@@ -1157,7 +1157,7 @@ func contextManagerTruncatesToolResult() {
 func toolSelectorLoadsPlaylistTools() {
     let selected = ToolSelector.select(for: "从我的歌单随机推荐一首", all: AgentToolRegistry.all)
     let names = Set(selected.map(\.name))
-    #expect(names.contains("listPlaylists"))
+    #expect(names.contains("library_get_playlist"))
     #expect(names.contains("recommend_by_constraints"))
     #expect(names.contains("library_search"))
 }
@@ -1203,8 +1203,8 @@ func toolSelectorIsBounded() {
 func toolSelectorCoversFiveAcceptanceRequests() {
     let cases: [(String, Set<String>)] = [
         ("播放七里香。", ["library_search", "playback_play_song"]),
-        ("我有哪些歌单？", ["listPlaylists"]),
-        ("从我的歌单随机推荐一首。", ["listPlaylists", "recommend_by_constraints"]),
+        ("我有哪些歌单？", ["library_get_playlist"]),
+        ("从我的歌单随机推荐一首。", ["library_get_playlist", "recommend_by_constraints"]),
         ("挑选 20 首比较火的中文歌，列入清单，顺序播放。", ["library_select_tracks", "queue_replace"]),
         ("从深夜、伤感、女声三个标签里选 20 首，排除最近一周听过的，建立播放队列。", ["library_select_tracks", "queue_replace"]),
     ]
@@ -1222,7 +1222,7 @@ func toolSelectorCoversEightRequests() {
     let cases: [(String, String)] = [
         ("下一首。", "playback_next"),
         ("播放七里香。", "library_search"),
-        ("我有哪些歌单？", "listPlaylists"),
+        ("我有哪些歌单？", "library_get_playlist"),
         ("从我的歌单随机推荐一首。", "recommend_by_constraints"),
         ("从收藏里面找五首最近没有听过的歌。", "library_get_starred"),
         ("从深夜、伤感、女声标签里面选十首并建立队列。", "library_get_tracks_by_genre"),

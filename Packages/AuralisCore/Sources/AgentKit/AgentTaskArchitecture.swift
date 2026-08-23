@@ -525,6 +525,19 @@ public enum AgentIntentClassifier {
         if has(["推荐索引", "索引 v2", "索引v2", "library_index_v2"]) { return .libraryManagement }
         if has(["鉴赏", "赏析", "乐评", "大众评价", "appreciate"]) { return .musicAppreciation }
         if has(["下载", "离线", "torrent", "moviepilot"]) { return .musicDownload }
+        // 新闻/网页与设备事实是通用对话的联网或系统工具需求；不要因为“查/看”
+        // 这样的动词把它们误路由成曲库搜索任务。Generic Chat 仍可通过
+        // tool_search 动态发现未首轮暴露的工具。
+        let musicMarkers = [
+            "歌曲", "音乐", "曲库", "歌手", "艺人", "专辑", "歌单", "播放", "队列",
+            "收藏", "评分", "找歌", "playlist", "music", "track", "album", "artist",
+        ]
+        if has(["新闻", "网页", "联网", "网上", "web", "internet", "news"]), !has(musicMarkers) {
+            return .conversation
+        }
+        if has(["音频输出", "音频设备", "耳机", "设备状态", "系统设备", "网络状态", "存储状态"]) {
+            return .conversation
+        }
         if has(["诊断", "为什么", "错误", "失败", "日志", "卡住"]) { return .diagnostics }
         if has(["播放状态", "当前播放状态", "正在播放状态"]) { return .diagnostics }
         if has(["服务器", "同步", "连接", "navidrome", "nas"]) { return .serverManagement }
@@ -688,6 +701,10 @@ public enum AgentTaskReducer {
 
 /// Runtime 层的确定性完成判定。LLM 的自然语言只是一份候选答案；任务事实未满足时，
 /// Runtime 要求继续或明确失败，不能把“看起来完成”当成真实完成。
+///
+/// 普通聊天不会进入这里；Recommendation Index V2 的活动路径由
+/// `RecommendationIndexWorkflow` 持有自己的状态和完成判定。这里保留 index 分支，
+/// 仅用于旧任务记录和兼容调用方的恢复。
 public enum AgentCompletionEvaluator {
     /// 判断任务事实是否已经足够完成，不依赖模型是否又输出了一句客套话。
     /// 播放、搜索、队列、歌单等真实工具成功后，空 content 也不能覆盖成功事实。
@@ -815,7 +832,8 @@ public enum AgentCompletionEvaluator {
     }
 }
 
-/// Runtime 是任务生命周期与策略的拥有者；旧 Runner 暂作为低层模型循环实现。
+/// Runtime 是确定性任务的生命周期与策略拥有者；通用聊天直接进入
+/// ConversationEngine/ToolLoop，旧 AgentRunner 只保留 source-compatible forwarding。
 public actor AgentRuntime {
     private var runningTaskIDs: Set<UUID> = []
     private let conversationEngine: ConversationEngine

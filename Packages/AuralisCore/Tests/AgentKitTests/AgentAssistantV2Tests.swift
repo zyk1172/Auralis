@@ -9,6 +9,8 @@ struct AgentAssistantV2Tests {
         #expect(!ConversationEngine.allowsOfflineFallback(intent: .conversation, userText: "你是谁"))
         #expect(ConversationEngine.allowsOfflineFallback(intent: .librarySearch, userText: "帮我找歌 夜曲"))
         #expect(ConversationEngine.allowsOfflineFallback(intent: .playbackControl, userText: "暂停播放"))
+        #expect(AgentIntentClassifier.classify("查一下今天有什么科技新闻") == .conversation)
+        #expect(AgentIntentClassifier.classify("查看当前音频输出设备") == .conversation)
     }
 
     @Test("ToolCatalog 是发现工具的唯一搜索源")
@@ -77,5 +79,55 @@ struct AgentAssistantV2Tests {
         #expect(definitions.contains { $0.name == "web_search" })
         #expect(definitions.contains { $0.name == "web_fetch" })
         #expect(!definitions.contains { !$0.strict })
+    }
+
+    @Test("legacy tools remain executable but never enter model discovery")
+    func legacyToolsAreHiddenFromModel() throws {
+        let legacy = try #require(AgentToolRegistry.descriptor(for: "music_download"))
+        #expect(legacy.visibility == .legacyOnly)
+        #expect(!ToolCatalog().search(query: "music_download").contains { $0.name == "music_download" })
+
+        let definitions = ToolSelector.toolDefinitions(from: AgentToolRegistry.all)
+        #expect(!definitions.contains { $0.name == "music_download" })
+        #expect(!definitions.contains { $0.name == "playTrack" })
+        #expect(definitions.contains { $0.name == "music_download_search" })
+    }
+
+    @Test("recursive schema validation checks enum, nested object, arrays and extra keys")
+    func recursivelyValidatesStructuredArguments() throws {
+        let descriptor = ToolDescriptor(
+            name: "structured_test",
+            group: .catalog,
+            permission: .readOnly,
+            summary: "test",
+            parameters: [
+                .init(name: "mode", required: true, description: "mode", schemaJSON: #"{"type":"string","enum":["off","all"]}"#),
+                .init(name: "items", required: true, description: "items", schemaJSON: #"{"type":"array","minItems":1,"maxItems":2,"items":{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string"},"score":{"type":"number","minimum":0,"maximum":1}},"required":["id","score"]}}"#),
+            ]
+        )
+        let valid = ToolCall(name: descriptor.name, arguments: [
+            "mode": .string("all"),
+            "items": .array([.object(["id": .string("a"), "score": .number(0.5)])]),
+        ])
+        try ToolRuntime.validate(valid, descriptor: descriptor)
+
+        #expect(throws: ToolRuntimeError.self) {
+            try ToolRuntime.validate(
+                ToolCall(name: descriptor.name, arguments: [
+                    "mode": .string("sometimes"),
+                    "items": .array([.object(["id": .string("a"), "score": .number(0.5)])]),
+                ]),
+                descriptor: descriptor
+            )
+        }
+        #expect(throws: ToolRuntimeError.self) {
+            try ToolRuntime.validate(
+                ToolCall(name: descriptor.name, arguments: [
+                    "mode": .string("all"),
+                    "items": .array([.object(["id": .string("a"), "score": .number(0.5), "extra": .bool(true)])]),
+                ]),
+                descriptor: descriptor
+            )
+        }
     }
 }

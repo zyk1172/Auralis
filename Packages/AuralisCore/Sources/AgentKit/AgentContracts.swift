@@ -26,14 +26,149 @@ public enum ToolGroup: String, Codable, Sendable, Hashable {
     case memory
 }
 
-/// Agent 工具调用。arguments 为已解析的参数字典（值经 Agent 内部编码，不含任何凭据）。
+/// Values accepted by the deprecated text-argument compatibility initializer.
+/// The runtime canonical representation remains `AIJSONValue`.
+public protocol ToolArgumentValue: Sendable {
+    var aiJSONValue: AIJSONValue { get }
+}
+
+extension AIJSONValue: ToolArgumentValue {
+    public var aiJSONValue: AIJSONValue { self }
+}
+
+extension String: ToolArgumentValue {
+    public var aiJSONValue: AIJSONValue { .string(self) }
+}
+
+/// Agent 工具调用。arguments 是 Runtime 的 canonical 结构化 JSON 对象；
+/// ACTION 文本兼容层只在进入此类型时把字符串包装成 `.string`。
 public struct ToolCall: Codable, Sendable {
     public let name: String
-    public let arguments: [String: String]
+    public let arguments: [String: AIJSONValue]
 
-    public init(name: String, arguments: [String: String] = [:]) {
+    public init(name: String, arguments: [String: AIJSONValue] = [:]) {
         self.name = name
         self.arguments = arguments
+    }
+
+    /// 兼容 ACTION / 旧持久化调用点。Canonical property 仍然是 JSON value。
+    @available(*, deprecated, message: "Use structured AIJSONValue arguments")
+    public init<T: ToolArgumentValue>(name: String, arguments: [String: T]) {
+        self.name = name
+        self.arguments = arguments.mapValues(\.aiJSONValue)
+    }
+
+    public init(name: String, rawArguments: [String: String]) {
+        self.name = name
+        self.arguments = rawArguments.mapValues(AIJSONValue.string)
+    }
+
+    public func string(_ key: String) throws -> String {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .string(value): return value
+        case let .number(value): return String(value)
+        case let .bool(value): return value ? "true" : "false"
+        default: throw ToolArgumentError.invalid(key, expected: "string")
+        }
+    }
+
+    public func optionalString(_ key: String) -> String? {
+        try? string(key)
+    }
+
+    /// Returns legacy text unchanged for string values, or canonical JSON for
+    /// arrays/objects. This is only for service adapters that still decode a
+    /// domain payload from text; the ToolCall itself remains structured.
+    public func jsonText(_ key: String) -> String? {
+        guard let value = arguments[key] else { return nil }
+        if case let .string(value) = value { return value }
+        return value.jsonString
+    }
+
+    public func int(_ key: String) throws -> Int {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .number(value) where value.isFinite && value.rounded() == value:
+            return Int(value)
+        case let .string(value) where Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) != nil:
+            return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))!
+        default: throw ToolArgumentError.invalid(key, expected: "integer")
+        }
+    }
+
+    public func double(_ key: String) throws -> Double {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .number(value): return value
+        case let .string(value) where Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) != nil:
+            return Double(value.trimmingCharacters(in: .whitespacesAndNewlines))!
+        default: throw ToolArgumentError.invalid(key, expected: "number")
+        }
+    }
+
+    public func bool(_ key: String) throws -> Bool {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .bool(value): return value
+        case let .string(value):
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1": return true
+            case "false", "0": return false
+            default: throw ToolArgumentError.invalid(key, expected: "boolean")
+            }
+        default: throw ToolArgumentError.invalid(key, expected: "boolean")
+        }
+    }
+
+    public func strings(_ key: String) throws -> [String] {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .array(values):
+            return try values.map { value in
+                guard case let .string(string) = value else {
+                    throw ToolArgumentError.invalid(key, expected: "array of strings")
+                }
+                return string
+            }
+        case let .string(value):
+            // ACTION compatibility only; native structured calls arrive as an array.
+            return value.split { $0 == "," || $0 == "，" }.map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }.filter { !$0.isEmpty }
+        default: throw ToolArgumentError.invalid(key, expected: "array of strings")
+        }
+    }
+
+    public func object(_ key: String) throws -> [String: AIJSONValue] {
+        guard let value = arguments[key], case let .object(object) = value else {
+            throw ToolArgumentError.invalid(key, expected: "object")
+        }
+        return object
+    }
+
+    /// Stable string projection for legacy diagnostics and task persistence.
+    public var stringArguments: [String: String] {
+        arguments.mapValues(Self.stringValue)
+    }
+
+    private static func stringValue(_ value: AIJSONValue) -> String {
+        switch value {
+        case let .string(value): return value
+        default: return value.jsonString
+        }
+    }
+}
+
+public enum ToolArgumentError: Error, LocalizedError, Sendable, Equatable {
+    case missing(String)
+    case invalid(String, expected: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .missing(key): return "缺少参数：\(key)"
+        case let .invalid(key, expected): return "参数 \(key) 应为 \(expected)"
+        }
     }
 }
 
@@ -50,6 +185,13 @@ public enum AgentSensitiveDataRedactor {
             let isSensitive = sensitiveFragments.contains { normalized.contains($0) }
             return (key, isSensitive ? "<redacted>" : value)
         }.reduce(into: [:]) { $0[$1.0] = $1.1 }
+    }
+
+    public static func arguments(_ values: [String: AIJSONValue]) -> [String: String] {
+        arguments(values.mapValues { value in
+            if case let .string(string) = value { return string }
+            return value.jsonString
+        })
     }
 }
 

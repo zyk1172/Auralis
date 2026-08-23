@@ -153,7 +153,7 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, "共 \(memories.count) 条记忆", .text(text))
             case "memory_search":
                 let query = try require(call, "query")
-                let limit = min(max((Int(call.arguments["limit"] ?? "10") ?? 10), 1), 50)
+                let limit = min(max((Int(call.optionalString("limit") ?? "10") ?? 10), 1), 50)
                 let memories = Array((await systemService.searchMemories(query: query)).prefix(limit))
                 if memories.isEmpty {
                     return .ok(call, descriptor, "没有找到相关记忆", .text("没有找到与「\(query)」相关的长期记忆。"))
@@ -237,14 +237,14 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, text, .trackCards(recommendation.tracks))
             case "recommend_by_constraints":
                 let constraints = AgentRecommendationConstraints(
-                    languages: (call.arguments["languages"] ?? "").split(separator: ",").map(String.init),
-                    genres: (call.arguments["genres"] ?? "").split(separator: ",").map(String.init),
+                    languages: Self.listParam(call, "languages"),
+                    genres: Self.listParam(call, "genres"),
                     yearFrom: try? intParam(call, "yearFrom"),
                     yearTo: try? intParam(call, "yearTo"),
                     favoritesOnly: (try? boolParam(call, "favoritesOnly")) ?? false,
                     excludeRecentlyPlayed: (try? boolParam(call, "excludeRecentlyPlayed")) ?? false,
                     onlyOffline: (try? boolParam(call, "onlyOffline")) ?? false,
-                    excludeArtist: call.arguments["excludeArtist"],
+                    excludeArtist: call.optionalString("excludeArtist"),
                     maxTotalMinutes: try? doubleParam(call, "maxTotalMinutes"),
                     losslessOnly: (try? boolParam(call, "losslessOnly")) ?? false,
                     limit: (try? intParam(call, "limit")) ?? 20
@@ -334,7 +334,7 @@ public struct SystemToolExecutor {
                     let result = await systemService.musicSearch(
                         artist: optionalParam(call, "artist"),
                         album: optionalParam(call, "album"),
-                        albumAliases: (call.arguments["album_aliases"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+                        albumAliases: Self.listParam(call, "album_aliases"),
                         keyword: optionalParam(call, "keyword"),
                         year: optionalIntParam(call, "year"),
                         limit: optionalIntParam(call, "limit") ?? 10,
@@ -409,14 +409,14 @@ public struct SystemToolExecutor {
     }
 
     private static func require(_ call: ToolCall, _ key: String) throws -> String {
-        guard let value = call.arguments[key], !value.isEmpty else {
+        guard let value = call.optionalString(key), !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SystemToolError.missingParameter(key)
         }
         return value
     }
 
     private static func boolParam(_ call: ToolCall, _ key: String) throws -> Bool {
-        guard let raw = call.arguments[key] else { throw SystemToolError.invalidParameter(key, "缺失") }
+        guard let raw = call.optionalString(key) else { throw SystemToolError.invalidParameter(key, "缺失") }
         switch raw.lowercased() {
         case "true", "1", "yes", "on": return true
         case "false", "0", "no", "off": return false
@@ -425,42 +425,49 @@ public struct SystemToolExecutor {
     }
 
     private static func doubleParam(_ call: ToolCall, _ key: String) throws -> Double {
-        guard let raw = call.arguments[key], let value = Double(raw) else {
-            throw SystemToolError.invalidParameter(key, call.arguments[key] ?? "缺失")
+        guard let raw = call.optionalString(key), let value = Double(raw) else {
+            throw SystemToolError.invalidParameter(key, call.jsonText(key) ?? "缺失")
         }
         return value
     }
 
     private static func intParam(_ call: ToolCall, _ key: String) throws -> Int {
-        guard let raw = call.arguments[key], let value = Int(raw) else {
-            throw SystemToolError.invalidParameter(key, call.arguments[key] ?? "")
+        guard let raw = call.optionalString(key), let value = Int(raw) else {
+            throw SystemToolError.invalidParameter(key, call.jsonText(key) ?? "")
         }
         return value
     }
 
 
     private static func optionalParam(_ call: ToolCall, _ key: String) -> String? {
-        guard let value = call.arguments[key], !value.isEmpty else { return nil }
+        guard let value = call.optionalString(key), !value.isEmpty else { return nil }
         return value
     }
 
     private static func optionalIntParam(_ call: ToolCall, _ key: String) -> Int? {
-        guard let raw = call.arguments[key], let value = Int(raw) else { return nil }
+        guard let raw = call.optionalString(key), let value = Int(raw) else { return nil }
         return value
     }
 
     private static func optionalDoubleParam(_ call: ToolCall, _ key: String) -> Double? {
-        guard let raw = call.arguments[key], !raw.isEmpty else { return nil }
+        guard let raw = call.optionalString(key), !raw.isEmpty else { return nil }
         return Double(raw)
     }
 
     private static func optionalBoolParam(_ call: ToolCall, _ key: String) -> Bool? {
-        guard let raw = call.arguments[key] else { return nil }
+        guard let raw = call.optionalString(key) else { return nil }
         switch raw.lowercased() {
         case "true", "1", "yes", "on": return true
         case "false", "0", "no", "off": return false
         default: return nil
         }
+    }
+
+    private static func listParam(_ call: ToolCall, _ key: String) -> [String] {
+        if let values = try? call.strings(key) { return values }
+        return call.optionalString(key)?.split { $0 == "," || $0 == "，" }.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty } ?? []
     }
 
     // MARK: - 音乐下载结果格式化

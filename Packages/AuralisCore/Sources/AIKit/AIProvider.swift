@@ -15,7 +15,7 @@ public let auralisDefaultRequestTimeout: TimeInterval = 180
 public let auralisDefaultMaxContextTokens = 256_000
 
 /// 原生工具调用的请求偏好。`required` 只在 Runtime 已确认需要真实工具时使用；
-/// 对不支持该字段的中转，Runner 会有限次数降级到文本 ACTION 协议。
+/// Provider 协议在请求前确定，工具能力被拒绝时必须报告原协议错误。
 public enum AIToolChoice: String, Codable, Hashable, Sendable {
     case auto
     case required
@@ -464,21 +464,37 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
 public struct AIToolCall: Codable, Hashable, Sendable {
     public let id: String
     public let name: String
-    /// 参数 JSON 字符串（如 `{"trackID":"server:1"}`），由调用方自行解析。
-    public let arguments: String
+    /// Provider decode 边界之后的 canonical 结构化参数。
+    public let arguments: AIJSONValue
 
-    public init(id: String, name: String, arguments: String) {
+    public init(id: String, name: String, arguments: AIJSONValue) {
         self.id = id
         self.name = name
         self.arguments = arguments
     }
 
-    public init(id: String, name: String, arguments: AIJSONValue) {
-        self.init(id: id, name: name, arguments: arguments.jsonString)
+    /// 兼容旧调用点。新 Provider codec 应在 decode 边界使用
+    /// `init(id:name:rawArguments:)`，不要把 raw JSON 继续传入 ToolRuntime。
+    @available(*, deprecated, message: "Decode raw JSON at the Provider boundary and pass AIJSONValue")
+    public init(id: String, name: String, arguments: String) {
+        self.id = id
+        self.name = name
+        self.arguments = (try? AIJSONValue(jsonString: arguments)) ?? .string(arguments)
     }
 
-    public var structuredArguments: AIJSONValue? {
-        try? AIJSONValue(jsonString: arguments)
+    public init(id: String, name: String, rawArguments: String) throws {
+        self.id = id
+        self.name = name
+        self.arguments = try AIJSONValue(jsonString: rawArguments)
+    }
+
+    public var rawArguments: String { arguments.jsonString }
+
+    public var structuredArguments: AIJSONValue { arguments }
+
+    public var argumentObject: [String: AIJSONValue]? {
+        guard case let .object(value) = arguments else { return nil }
+        return value
     }
 }
 

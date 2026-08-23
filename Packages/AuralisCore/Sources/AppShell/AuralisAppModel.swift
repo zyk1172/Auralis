@@ -2324,7 +2324,7 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     /// 设置页的快捷入口：复用 Agent 已验证的“状态 → 分批分类 → 写回至 0”流程，
-    /// 由 AgentRunner 的索引任务约束保证不会在中途把自然语言回复误报为完成。
+    /// 由 RecommendationIndexWorkflow 的索引任务约束保证不会在中途把自然语言回复误报为完成。
     public func startOrContinueRecommendationIndexV2() {
         selectTopLevelSection(.assistant)
         agentCoordinator.send(

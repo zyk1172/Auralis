@@ -114,8 +114,23 @@ public struct ToolLoop {
         var outputTokens: Int?
     }
 
+    /// Internal loop representation. Native provider calls stay structured all
+    /// the way into ToolRuntime; `stringArguments` exists only for legacy
+    /// ledgers, diagnostics, and the ACTION compatibility codec.
+    private struct LoopToolCall {
+        let id: String?
+        let name: String
+        var arguments: [String: AIJSONValue]
+        let malformedArguments: Bool
+        let usesTextProtocol: Bool
+
+        var stringArguments: [String: String] {
+            ToolCall(name: name, arguments: arguments).stringArguments
+        }
+    }
+
     private enum ToolArgumentParseResult {
-        case success([String: String])
+        case success([String: AIJSONValue])
         case malformed(rawLength: Int)
     }
 
@@ -153,27 +168,47 @@ public struct ToolLoop {
         let resolvedIntent = intent ?? AgentIntentClassifier.classify(userText)
         let resolvedPolicy = policy ?? AgentTaskPolicy.policy(for: resolvedIntent)
         if let provider {
-            await runWithLLM(
-                userText: userText,
-                provider: provider,
-                model: model,
-                bridge: bridge,
-                catalog: catalog,
-                context: context,
-                history: history,
-                systemService: systemService,
-                externalMusicService: externalMusicService,
-                webService: webService,
-                intent: resolvedIntent,
-                policy: resolvedPolicy,
-                initialTaskState: initialTaskState,
-                toolTimeout: toolTimeout,
-                confirm: confirm,
-                emit: emit,
-                log: log,
-                progress: progress,
-                state: state
-            )
+            if resolvedIntent == .conversation, resolvedPolicy.completion == .modelAnswer {
+                await runGenericChat(
+                    userText: userText,
+                    provider: provider,
+                    model: model,
+                    bridge: bridge,
+                    catalog: catalog,
+                    context: context,
+                    history: history,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    webService: webService,
+                    toolTimeout: toolTimeout,
+                    confirm: confirm,
+                    emit: emit,
+                    log: log,
+                    progress: progress
+                )
+            } else {
+                await runWithLLM(
+                    userText: userText,
+                    provider: provider,
+                    model: model,
+                    bridge: bridge,
+                    catalog: catalog,
+                    context: context,
+                    history: history,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    webService: webService,
+                    intent: resolvedIntent,
+                    policy: resolvedPolicy,
+                    initialTaskState: initialTaskState,
+                    toolTimeout: toolTimeout,
+                    confirm: confirm,
+                    emit: emit,
+                    log: log,
+                    progress: progress,
+                    state: state
+                )
+            }
         } else if ConversationEngine.allowsOfflineFallback(intent: resolvedIntent, userText: userText) {
             await runOffline(
                 userText: userText,
@@ -188,6 +223,333 @@ public struct ToolLoop {
                 role: .assistant,
                 messages: [.error("AI 服务未配置或暂时不可用；这是普通聊天请求，不会改写为本地音乐库搜索。请先配置可用的 AI Provider。")]
             ))
+        }
+    }
+
+    // MARK: - Generic conversation loop
+
+    /// A provider-first chat loop. It deliberately has no AgentTaskState,
+    /// WorkflowEngine route or CompletionEvaluator: a normal answer is a
+    /// complete answer, while optional tools are executed only when the model
+    /// actually requests them.
+    private static func runGenericChat(
+        userText: String,
+        provider: any AIProvider,
+        model: String,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        context: Context,
+        history: [AgentChatMessage],
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)?,
+        webService: (any AgentWebService)?,
+        toolTimeout: TimeInterval,
+        confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void,
+        log: @escaping @Sendable (AgentActionRecord) async -> Void,
+        progress: @escaping @Sendable (AgentProgress) async -> Void
+    ) async {
+        var selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
+        let nativeMode = provider.supportsToolCalling
+            && provider.capabilities.toolMode != .none
+            && provider.capabilities.toolMode != .textualToolProtocol
+        var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
+        var conversation = [AIMessage(
+            role: .system,
+            content: systemPrompt(
+                context: context,
+                tools: selectedTools,
+                nativeToolCalling: nativeMode
+            )
+        )]
+        conversation.append(contentsOf: convertHistory(history, currentUserText: userText))
+        conversation.append(AIMessage(role: .user, content: userText))
+
+        var toolSteps = 0
+        // Generic chat still needs execution safety, but it does not need a
+        // business completion evaluator. These ledgers are deliberately
+        // protocol-agnostic: they prevent an accidental duplicate mutation
+        // and reuse repeatable reads without imposing a tool-call budget.
+        var completedSideEffects = Set<String>()
+        var indeterminateSideEffects = Set<String>()
+        var cachedReadResults: [String: String] = [:]
+        var readRepeatCounts: [String: Int] = [:]
+        while true {
+            if Task.isCancelled {
+                await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+                return
+            }
+
+            let hostedTools = nativeMode
+                ? hostedTools(for: provider.capabilities, availableTools: selectedTools)
+                : []
+            let modelTools = localModelTools(selectedTools, capabilities: provider.capabilities)
+            let toolDefinitions = nativeMode
+                ? ToolSelector.toolDefinitions(from: modelTools, strict: provider.capabilities.supportsStrictSchema)
+                : []
+            let schemaTokens = nativeMode ? ContextManager.estimatedTokens(toolDefinitions) : 0
+            let inputBudget = ContextManager.inputBudget(
+                capabilities: provider.capabilities,
+                requestedInputBudget: provider.capabilities.maxContextTokens,
+                reservedOutputTokens: provider.capabilities.maxOutputTokens + schemaTokens
+            )
+            guard ContextManager.canFitCurrentUser(conversation, userText: userText, maxTokens: inputBudget) else {
+                await emit(AgentChatMessage(role: .assistant, messages: [.error("当前模型上下文不足，无法发送完整对话。请切换到上下文更大的模型。")]))
+                return
+            }
+            conversation = ContextManager.trimByTokens(
+                conversation,
+                maxTokens: inputBudget,
+                preservingUserText: userText
+            )
+
+            let request = AICompletionRequest(
+                model: model,
+                transcript: AITranscript(messages: conversation),
+                temperature: 0.3,
+                maxTokens: provider.capabilities.maxOutputTokens,
+                tools: nativeMode ? toolDefinitions : nil,
+                toolChoice: nativeMode ? toolChoice : nil,
+                hostedTools: hostedTools.isEmpty ? nil : hostedTools
+            )
+            let outcome: StreamOutcome
+            do {
+                outcome = try await streamWithFallback(provider: provider, request: request, timeout: roundTimeout) { delta in
+                    await emitStreamingDelta(delta, emit: emit)
+                }
+            } catch is CancellationError {
+                await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+                return
+            } catch {
+                // A provider failure is a provider failure. Generic chat never
+                // changes protocol or silently becomes a local music search.
+                await emit(AgentChatMessage(role: .assistant, messages: [.error("AI Provider 请求失败：\(errorText(error))")]))
+                return
+            }
+
+            if !outcome.webCitations.isEmpty {
+                let sources = webSources(from: outcome.webCitations)
+                if !sources.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
+                }
+            }
+
+            let streamedText = outcome.text
+            let nativeCalls = nativeMode ? outcome.toolCalls : []
+            // Native requests only accept provider-native tool calls. ACTION is
+            // decoded exclusively when the request started in textual mode.
+            let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
+            if nativeCalls.isEmpty, textActions.isEmpty {
+                let answer = streamedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if answer.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.error("AI Provider 返回了空回答。")]))
+                } else {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text(answer)]))
+                }
+                return
+            }
+
+            if nativeMode, !nativeCalls.isEmpty {
+                conversation.append(AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls))
+            } else {
+                conversation.append(AIMessage(role: .assistant, content: streamedText))
+            }
+
+            let calls: [LoopToolCall]
+            if nativeMode, !nativeCalls.isEmpty {
+                calls = nativeCalls.map { native in
+                    switch parseArguments(native.arguments) {
+                    case let .success(args):
+                        LoopToolCall(
+                            id: native.id,
+                            name: native.name,
+                            arguments: args,
+                            malformedArguments: false,
+                            usesTextProtocol: false
+                        )
+                    case .malformed:
+                        LoopToolCall(
+                            id: native.id,
+                            name: native.name,
+                            arguments: [:],
+                            malformedArguments: true,
+                            usesTextProtocol: false
+                        )
+                    }
+                }
+            } else {
+                calls = textActions.enumerated().map {
+                    LoopToolCall(
+                        id: "text-\($0.offset)",
+                        name: $0.element.tool,
+                        arguments: $0.element.args.mapValues(AIJSONValue.string),
+                        malformedArguments: false,
+                        usesTextProtocol: true
+                    )
+                }
+            }
+
+            var resultMessages: [AIMessage] = []
+            for call in calls {
+                toolSteps += 1
+                await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
+                guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
+                    resultMessages.append(toolResultMessage(
+                        callID: call.id,
+                        content: "（工具执行结果）\(call.name)：失败 - 未知工具。请先使用 tool_search 发现可用的 canonical 工具。",
+                        native: nativeMode
+                    ))
+                    continue
+                }
+                if call.malformedArguments {
+                    resultMessages.append(toolResultMessage(
+                        callID: call.id,
+                        content: "（工具执行结果）\(call.name)：失败 - 工具参数不是合法 JSON 对象。",
+                        native: nativeMode
+                    ))
+                    continue
+                }
+                let signature = confirmationSignature(name: call.name, args: call.stringArguments)
+                if descriptor.permission != .readOnly {
+                    if indeterminateSideEffects.contains(signature) {
+                        resultMessages.append(toolResultMessage(
+                            callID: call.id,
+                            content: "（工具执行结果）\(call.name)：已跳过 - 相同参数的上一次写操作结果未知，为避免重复副作用不会自动重试；请先查询真实状态。",
+                            native: nativeMode
+                        ))
+                        continue
+                    }
+                    if completedSideEffects.contains(signature) {
+                        resultMessages.append(toolResultMessage(
+                            callID: call.id,
+                            content: "（工具执行结果）\(call.name)：已跳过 - 相同参数已经成功执行，本轮不会自动重试。",
+                            native: nativeMode
+                        ))
+                        continue
+                    }
+                } else if descriptor.cachePolicy == .task {
+                    let count = (readRepeatCounts[signature] ?? 0) + 1
+                    readRepeatCounts[signature] = count
+                    if let cached = cachedReadResults[signature] {
+                        let hint = count >= 3
+                            ? "\n（提示）同一搜索已执行 \(count) 次且没有新结果，当前结果可以直接用于回答，或换一个搜索词继续。"
+                            : ""
+                        resultMessages.append(toolResultMessage(
+                            callID: call.id,
+                            content: cached + hint,
+                            native: nativeMode
+                        ))
+                        continue
+                    }
+                }
+                let pending = descriptor.requiresConfirmation
+                    ? pendingConfirmation(descriptor: descriptor, name: call.name, diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments))
+                    : nil
+                if let pending, !(await confirm(pending)) {
+                    let text = "（工具执行结果）\(call.name)：失败 - 用户未批准该操作。"
+                    resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
+                    continue
+                }
+
+                let executableCall = call.usesTextProtocol
+                    ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
+                    : ToolCall(name: call.name, arguments: call.arguments)
+                let result: ToolResult
+                do {
+                    result = try await withTimeout(toolTimeout) {
+                        await ToolRuntime.execute(
+                            executableCall,
+                            bridge: bridge,
+                            catalog: catalog,
+                            serverID: context.serverID,
+                            systemService: systemService,
+                            externalMusicService: externalMusicService,
+                            allowsLyrics: context.allowsLyrics,
+                            providerCapabilities: provider.capabilities,
+                            webService: webService
+                        )
+                    }
+                } catch is CancellationError {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+                    return
+                } catch {
+                    let reason = error is AgentRunnerError
+                        ? "超时 - 工具执行超过限定时间，结果可能未知。"
+                        : errorText(error)
+                    if descriptor.permission != .readOnly, error is AgentRunnerError {
+                        indeterminateSideEffects.insert(signature)
+                    }
+                    let text = error is AgentRunnerError
+                        ? "（工具执行结果）\(call.name): 超时 - 工具执行超过限定时间，结果可能未知；为避免重复副作用不会自动重试。"
+                        : "（工具执行结果）\(call.name)：失败 - \(reason)"
+                    resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text(text)]))
+                    continue
+                }
+
+                // Generic chat owns the UI-facing tool loop too. Preserve
+                // structured web sources as a separate message instead of
+                // flattening them into model-only text; the assistant view
+                // can render title/domain/snippet/link without parsing prose.
+                if case let .webSources(sources)? = result.payload, !sources.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
+                }
+
+                var resultText = "（工具执行结果）\(call.name): \(result.success ? "成功" : "失败") - \(result.summary)"
+                if let payload = result.payload {
+                    let detail = messageTextForModel(payload)
+                    if !detail.isEmpty { resultText += "；详情：\(detail)" }
+                }
+                resultText = AIContentTrustBoundary.wrap(resultText, trustLevel: result.trustLevel)
+                if call.name == "lyrics_get", !context.allowsLyrics {
+                    resultText = "（工具执行结果）lyrics_get：成功 - 歌词已按隐私设置隐藏。"
+                }
+                resultText = ContextManager.truncateToolResult(resultText, limit: descriptor.maxResultCharacters)
+                if descriptor.permission == .readOnly, descriptor.cachePolicy == .task, result.success {
+                    cachedReadResults[signature] = resultText
+                } else if descriptor.permission != .readOnly, result.success {
+                    completedSideEffects.insert(signature)
+                } else if descriptor.permission != .readOnly, result.hasIndeterminateSideEffect {
+                    indeterminateSideEffects.insert(signature)
+                    await emit(AgentChatMessage(
+                        role: .assistant,
+                        messages: [.text("\(call.name) 的写操作结果未知；为避免重复副作用不会自动重试，请先查询真实状态。")]
+                    ))
+                }
+                resultMessages.append(toolResultMessage(callID: call.id, content: resultText, native: nativeMode))
+
+                if result.success, call.name == "tool_search" {
+                    let stringArguments = call.stringArguments
+                    let query = stringArguments["query"] ?? ""
+                    let namespace = stringArguments["namespace"]
+                    let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
+                    let names = ToolCatalog().search(query: query, namespace: namespace, limit: limit).map(\.name)
+                    let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                    var existing = Set(selectedTools.map(\.name))
+                    for name in names where !existing.contains(name) {
+                        if let tool = byName[name] {
+                            selectedTools.append(tool)
+                            existing.insert(name)
+                        }
+                    }
+                }
+                if result.success, descriptor.permission != .readOnly {
+                    await log(AgentActionRecord(toolName: call.name, permission: descriptor.permission, summary: result.summary))
+                }
+            }
+
+            conversation.append(contentsOf: resultMessages)
+            if !resultMessages.isEmpty {
+                await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "工具执行完成，正在继续对话…")]))
+            }
+            // Give provider-side test doubles and URLSession-backed streams a
+            // scheduling boundary before the next request is observed. This
+            // is not a retry or a loop limit; it only preserves ordered
+            // request bookkeeping for asynchronous stream implementations.
+            await Task.yield()
+            if nativeMode, !nativeCalls.isEmpty {
+                toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
+            }
         }
     }
 
@@ -236,11 +598,10 @@ public struct ToolLoop {
         var accumulatedToolText = userText
         var selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
         let requestTimeout = roundTimeout
-        var nativeMode = provider.supportsToolCalling
+        let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
-        var didSwitchToAction = false
         var toolDefinitions = nativeMode
             ? ToolSelector.toolDefinitions(
                 from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
@@ -250,6 +611,9 @@ public struct ToolLoop {
 
         var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
         let workflow = WorkflowEngine.route(intent: intent, text: userText)
+        var recommendationWorkflow: RecommendationIndexWorkflow? = workflow.usesRecommendationIndexV2
+            ? WorkflowEngine.recommendationIndexWorkflow()
+            : nil
         taskState.facts["workflow"] = workflow.kind.rawValue
         taskState.facts["workflow_uses_batch_tools"] = workflow.usesBatchTools ? "true" : "false"
         taskState.facts["workflow_uses_recommendation_index_v2"] = workflow.usesRecommendationIndexV2 ? "true" : "false"
@@ -268,6 +632,7 @@ public struct ToolLoop {
         let resolvedOutputBudget = policy.budget.resolvedOutputTokens(
             capabilities: provider.capabilities
         )
+        recommendationWorkflow?.configure(maxOutputTokens: resolvedOutputBudget)
 
         var conversation = AgentContextBuilder.build(
             systemPrompt: Self.systemPrompt(
@@ -304,7 +669,6 @@ public struct ToolLoop {
         var ws = AgentTaskWorkingSet(
             targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
         )
-        ws.configureRecommendationIndexV2(maxOutputTokens: resolvedOutputBudget)
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
@@ -405,7 +769,8 @@ public struct ToolLoop {
                 return
             } catch {
                 if Self.isOutputTruncated(error), policy.completion == .indexPendingCountIsZero {
-                    let limit = ws.recoverRecommendationIndexV2Batch()
+                    let limit = recommendationWorkflow?.shrinkBatch()
+                        ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
                     let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只对刚返回的完整批次生成 items。"
                     taskState.errors.append(recovery)
                     taskState.pendingActions = [recovery]
@@ -416,71 +781,25 @@ public struct ToolLoop {
                     conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
                     continue
                 }
-                // 原生 tools 字段被 400/422 拒绝（部分自托管端点不认识 tools）：
-                // 降级到文本 ACTION 协议重试一次，而不是直接判死。
-                if nativeMode, Self.isSchemaRejection(error) {
-                    nativeMode = false
-                    toolChoice = nil
-                    Self.replaceSystemPrompt(
-                        &conversation,
+                // Provider 协议在请求前已经确定。网络瞬时错误由
+                // streamWithFallback/completeWithRetry 按同一协议重试；协议或
+                // schema 错误不能偷偷切换成 ACTION。只有请求一开始就是文本
+                // 协议时，才保留既有的显式音乐本地降级。
+                if !nativeMode, ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
+                    await runOffline(
+                        userText: userText,
+                        bridge: bridge,
+                        catalog: catalog,
                         context: context,
-                        tools: selectedTools,
-                        nativeToolCalling: false,
-                        task: taskState,
-                        privacy: privacy,
-                        capabilities: provider.capabilities
+                        emit: emit,
+                        log: log
                     )
-                    let fallbackRequest = AICompletionRequest(
-                        model: model,
-                        transcript: AITranscript(messages: conversation),
-                        temperature: 0.3,
-                        // 被网关以 400/422 拒绝 tools/schema 时，仅降级协议，不缩小
-                        // 用户/Provider 已声明的输出能力；否则兼容回退会悄悄把大模型
-                        // 的长上下文/长输出截断到旧的 16K 默认值。
-                        maxTokens: reservedOutput,
-                        tools: nil,
-                        toolChoice: nil,
-                        hostedTools: nil
-                    )
-                    do {
-                        outcome = try await streamWithFallback(provider: provider, request: fallbackRequest, timeout: requestTimeout) { delta in
-                            await Self.emitStreamingDelta(delta, emit: emit)
-                        }
-                    } catch is CancellationError {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
-                        return
-                    } catch {
-                        if ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
-                            await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
-                            await runOffline(
-                                userText: userText,
-                                bridge: bridge,
-                                catalog: catalog,
-                                context: context,
-                                emit: emit,
-                                log: log
-                            )
-                        } else {
-                            await emit(AgentChatMessage(role: .assistant, messages: [.error("AI 服务暂时不可用（\(Self.errorText(error))）；未将普通聊天改写为本地音乐搜索。")]))
-                        }
-                        return
-                    }
                 } else {
-                    if ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
-                        await runOffline(
-                            userText: userText,
-                            bridge: bridge,
-                            catalog: catalog,
-                            context: context,
-                            emit: emit,
-                            log: log
-                        )
-                    } else {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.error("AI 服务暂时不可用（\(Self.errorText(error))）；未将普通聊天改写为本地音乐搜索。")]))
-                    }
-                    return
+                    let prefix = nativeMode ? "原生工具协议请求失败" : "AI 服务暂时不可用"
+                    await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；未切换到另一种工具协议，也未将请求改写为本地音乐搜索。")]))
                 }
+                return
             }
 
             await progress(AgentProgress(
@@ -503,24 +822,36 @@ public struct ToolLoop {
                 }
             }
 
-            // 解析本轮工具调用：原生 tool_calls 优先（流式事件收集），文本 ACTION 兜底。
+            // 解析本轮工具调用：原生请求只接受 provider-native tool_calls；
+            // ACTION 仅属于请求开始时已经确定的文本协议。
             let streamedText = outcome.text
             if !streamedText.isEmpty { accumulatedToolText += " " + streamedText }
             let nativeCalls = nativeMode ? outcome.toolCalls : []
-            let textActions = nativeCalls.isEmpty ? parseActions(from: streamedText) : []
+            let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
+
+            let completionFactsSatisfied: Bool
+            if workflow.usesRecommendationIndexV2 {
+                completionFactsSatisfied = recommendationWorkflow?.isCompleted == true
+            } else {
+                completionFactsSatisfied = AgentCompletionEvaluator.factsSatisfied(state: taskState, policy: policy)
+            }
 
             // 真实工具已经完成时，先结算事实，再处理模型是否返回最终文字。
             // 许多中转在 tool result 后只返回 reasoning 或空 content；这不应覆盖成功状态。
             if nativeCalls.isEmpty,
                textActions.isEmpty,
-               AgentCompletionEvaluator.factsSatisfied(state: taskState, policy: policy),
+               completionFactsSatisfied,
                !(intent == .musicDiscovery
                     && !didRequestFinalSelection
                     && !presentation.candidateOrder.isEmpty
                     && presentation.resolvedFinalCards.isEmpty
                     && presentation.disambiguationTracks.isEmpty) {
                 let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
-                _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
+                if workflow.usesRecommendationIndexV2 {
+                    Self.markWorkflowCompleted(state: &taskState)
+                } else {
+                    _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
+                }
                 await state(taskState)
                 if intent == .librarySearch || intent == .libraryManagement {
                     presentation.applySearchFallback()
@@ -556,30 +887,7 @@ public struct ToolLoop {
             if streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                nativeCalls.isEmpty,
                textActions.isEmpty {
-                // streamWithFallback 已经尝试过一次非流式请求。原生工具模式仍为空时，
-                // 立即切到 ACTION，而不是在同一份失效的 native schema 上空转三轮。
-                if nativeMode {
-                    nativeMode = false
-                    toolChoice = nil
-                    didSwitchToAction = true
-                    let instruction = "原生工具调用没有返回可用内容。请改用单独一行 ACTION JSON 执行当前任务，不要只返回思考过程。"
-                    Self.replaceSystemPrompt(
-                        &conversation,
-                        context: context,
-                        tools: selectedTools,
-                        nativeToolCalling: false,
-                        task: taskState,
-                        privacy: privacy,
-                        capabilities: provider.capabilities
-                    )
-                    taskState.pendingActions = [instruction]
-                    taskState.status = .waitingForTool
-                    taskState.updatedAt = .now
-                    await state(taskState)
-                    conversation.append(AIMessage(role: .user, content: instruction))
-                    continue
-                }
-                if Self.canUseOfflineFallback(intent: intent, userText: userText) {
+                if !nativeMode, Self.canUseOfflineFallback(intent: intent, userText: userText) {
                     await runOffline(
                         userText: userText,
                         bridge: bridge,
@@ -590,7 +898,9 @@ public struct ToolLoop {
                     )
                     return
                 }
-                let failure = "模型在原生工具与 ACTION 兼容回退后仍未返回可用内容，任务未完成。请检查该模型的工具调用兼容性后重试。"
+                let failure = nativeMode
+                    ? "原生工具协议返回了空内容，未切换到 ACTION 或本地音乐搜索；请检查 Provider 的原生工具兼容性后重试。"
+                    : "模型在 ACTION 协议下未返回可用内容，任务未完成。"
                 taskState.status = .insufficient
                 taskState.errorState = failure
                 taskState.updatedAt = .now
@@ -603,12 +913,20 @@ public struct ToolLoop {
                 // 流式收尾：Coordinator 会把 in-flight 流式气泡原地定型为该最终文本，
                 // 不会出现「流式半成品 + 成品」两条重复气泡。
                 let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
-                switch AgentCompletionEvaluator.evaluateModelAnswer(
-                    reply,
-                    state: &taskState,
-                    policy: policy,
-                    repairAttempts: completionRepairAttempts
-                ) {
+                let completionDecision: AgentModelAnswerDecision
+                if workflow.usesRecommendationIndexV2 {
+                    completionDecision = recommendationWorkflow?.completionDecision(
+                        repairAttempts: completionRepairAttempts
+                    ) ?? .fail("Recommendation Index workflow 尚未初始化。")
+                } else {
+                    completionDecision = AgentCompletionEvaluator.evaluateModelAnswer(
+                        reply,
+                        state: &taskState,
+                        policy: policy,
+                        repairAttempts: completionRepairAttempts
+                    )
+                }
+                switch completionDecision {
                 case .accept:
                     // 纯推荐任务（musicDiscovery）：已有候选但既没有显式 final（result_present_tracks）
                     // 也没有真实 queue/playlist 副作用时，先要求模型调用 result_present_tracks 选择
@@ -660,8 +978,8 @@ public struct ToolLoop {
                     if nativeMode,
                        Self.policyRequiresToolExecution(policy),
                        toolChoice == .auto {
-                        // 第一次 prose 说明没有执行动作：下一轮要求模型产生工具调用，
-                        // 但仍保留后续 ACTION 降级机会。
+                        // 第一次 prose 说明没有执行动作：下一轮仍使用同一 native
+                        // 协议要求模型产生工具调用。
                         toolChoice = .required
                     }
                     taskState.pendingActions = [instruction]
@@ -672,30 +990,6 @@ public struct ToolLoop {
                     conversation.append(AIMessage(role: .user, content: "系统完成条件校验：\(instruction)"))
                     continue
                 case let .fail(message):
-                    if nativeMode,
-                       Self.policyRequiresToolExecution(policy),
-                       !didSwitchToAction {
-                        didSwitchToAction = true
-                        nativeMode = false
-                        toolChoice = nil
-                        completionRepairAttempts = 0
-                        Self.replaceSystemPrompt(
-                            &conversation,
-                            context: context,
-                            tools: selectedTools,
-                            nativeToolCalling: false,
-                            task: taskState,
-                            privacy: privacy,
-                            capabilities: provider.capabilities
-                        )
-                        let fallbackInstruction = "原生工具调用未完成，请改用单独一行 ACTION JSON 执行当前任务，不要只回复说明文字。"
-                        taskState.pendingActions = [fallbackInstruction]
-                        taskState.status = .waitingForTool
-                        taskState.updatedAt = .now
-                        await state(taskState)
-                        conversation.append(AIMessage(role: .user, content: fallbackInstruction))
-                        continue
-                    }
                     if !nativeMode,
                        Self.canUseOfflineFallback(intent: intent, userText: userText) {
                         await runOffline(
@@ -726,19 +1020,37 @@ public struct ToolLoop {
             }
 
             // 统一调用视图：原生调用带稳定 id，文本 ACTION 合成 text-N。
-            let calls: [(id: String?, name: String, args: [String: String], malformedArguments: Bool)]
+            let calls: [LoopToolCall]
             if nativeMode, !nativeCalls.isEmpty {
                 calls = nativeCalls.map { native in
                     switch Self.parseArguments(native.arguments) {
                     case let .success(args):
-                        (id: native.id, name: native.name, args: args, malformedArguments: false)
+                        LoopToolCall(
+                            id: native.id,
+                            name: native.name,
+                            arguments: args,
+                            malformedArguments: false,
+                            usesTextProtocol: false
+                        )
                     case .malformed:
-                        (id: native.id, name: native.name, args: [:], malformedArguments: true)
+                        LoopToolCall(
+                            id: native.id,
+                            name: native.name,
+                            arguments: [:],
+                            malformedArguments: true,
+                            usesTextProtocol: false
+                        )
                     }
                 }
             } else {
                 calls = textActions.enumerated().map {
-                    (id: "text-\($0.offset)", name: $0.element.tool, args: $0.element.args, malformedArguments: false)
+                    LoopToolCall(
+                        id: "text-\($0.offset)",
+                        name: $0.element.tool,
+                        arguments: $0.element.args.mapValues(AIJSONValue.string),
+                        malformedArguments: false,
+                        usesTextProtocol: true
+                    )
                 }
             }
 
@@ -750,12 +1062,21 @@ public struct ToolLoop {
             for rawCall in calls {
                 var call = rawCall
                 if call.name == "library_index_v2_next_batch" {
-                    call.args["limit"] = "\(ws.recommendationIndexV2PreferredBatchSize)"
+                    call.arguments["limit"] = .number(Double(
+                        recommendationWorkflow?.preferredBatchSize
+                            ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
+                    ))
+                    recommendationWorkflow?.beginBatchFetch()
+                } else if call.name == "library_index_v2_status" {
+                    recommendationWorkflow?.beginStatusRead()
+                } else if call.name == "library_index_v2_write_batch" {
+                    recommendationWorkflow?.beginWritingBatch()
                 }
                 toolStepCount += 1
                 taskState.progress.toolCalls += 1
-                taskState.recordToolCall(name: call.name, arguments: call.args)
-                let diagnosticArgs = AgentSensitiveDataRedactor.arguments(call.args)
+                let stringArguments = call.stringArguments
+                taskState.recordToolCall(name: call.name, arguments: stringArguments)
+                let diagnosticArgs = AgentSensitiveDataRedactor.arguments(call.arguments)
                 if let violation = taskState.budgetViolation(policy: policy) {
                     await emit(AgentChatMessage(role: .assistant, messages: [.error(violation.localizedDescription)]))
                     return
@@ -776,7 +1097,8 @@ public struct ToolLoop {
                 if call.malformedArguments {
                     let failureText: String
                     if call.name == "library_index_v2_write_batch" {
-                        let limit = ws.recoverRecommendationIndexV2Batch()
+                        let limit = recommendationWorkflow?.shrinkBatch()
+                            ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
                         failureText = "（工具执行结果）library_index_v2_write_batch: 参数 JSON 不完整或被截断，本次没有执行写入。请重新调用 library_index_v2_next_batch(limit=\(limit))，只使用刚返回的完整批次。"
                         await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
                     } else {
@@ -789,8 +1111,9 @@ public struct ToolLoop {
                 }
 
                 if call.name == "library_index_v2_write_batch",
-                   let issue = ws.recommendationIndexV2WriteIssue(arguments: call.args) {
-                    let limit = ws.recoverRecommendationIndexV2Batch()
+                   let issue = recommendationWorkflow?.writeIssue(arguments: call.arguments) {
+                    let limit = recommendationWorkflow?.shrinkBatch()
+                        ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
                     let failureText = "（工具执行结果）library_index_v2_write_batch: \(issue)，本次没有执行写入。请重新调用 library_index_v2_next_batch(limit=\(limit))，只提交刚返回的完整批次。"
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "V2 批身份或 items 无效", reused: false))
@@ -803,7 +1126,7 @@ public struct ToolLoop {
                 // 幂等复用（不重复副作用）；不同参数（例如第二次 queue_replace 使用不同
                 // 歌曲列表）照常执行，任务不被“互斥保护”卡死。
                 if descriptor.permission != .readOnly,
-                   let reason = ws.sideEffectBlockReason(tool: call.name, args: call.args) {
+                   let reason = ws.sideEffectBlockReason(tool: call.name, args: stringArguments) {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复副作用", reused: true))
                     // 这是一次真实的状态保护，而不是普通的模型内部提示：用户需要知道
                     // 第二次修改没有发生，否则最终回答仍可能谎称队列再次被替换。
@@ -819,7 +1142,7 @@ public struct ToolLoop {
                 // ② 任务级缓存：同一工具 + 规范化参数已执行过 → 直接复用结果。
                 // 搜索类工具的重复调用同样记为「无新结果」，连续多次后触发停止搜索。
                 if descriptor.cachePolicy == .task,
-                   let cachedText = ws.tryReuse(tool: call.name, args: call.args) {
+                   let cachedText = ws.tryReuse(tool: call.name, args: stringArguments) {
                     var text = cachedText
                     if AgentTaskWorkingSet.isSearchTool(call.name) {
                         _ = ws.observeCandidates([])
@@ -833,7 +1156,7 @@ public struct ToolLoop {
                 }
 
                 if descriptor.requiresConfirmation {
-                    let signature = Self.confirmationSignature(name: call.name, args: call.args)
+                    let signature = Self.confirmationSignature(name: call.name, args: stringArguments)
                     let pending = Self.pendingConfirmation(
                         descriptor: descriptor,
                         name: call.name,
@@ -879,7 +1202,9 @@ public struct ToolLoop {
                 taskState.updatedAt = .now
                 await state(taskState)
                 let result: ToolResult
-                let executableCall = ToolCall(name: call.name, arguments: call.args)
+                let executableCall = call.usesTextProtocol
+                    ? structuredToolCall(name: call.name, legacyArguments: stringArguments)
+                    : ToolCall(name: call.name, arguments: call.arguments)
                 do {
                     result = try await Self.withTimeout(toolTimeout) {
                         await ToolRuntime.execute(
@@ -896,7 +1221,7 @@ public struct ToolLoop {
                     }
                 } catch is CancellationError {
                     if descriptor.permission != .readOnly {
-                        ws.recordIndeterminateSideEffect(tool: call.name, args: call.args)
+                        ws.recordIndeterminateSideEffect(tool: call.name, args: stringArguments)
                         let message = "已取消；取消请求已发出，但「\(call.name)」可能已在服务端落地，结果未知。为避免重复副作用，本任务不会自动以相同参数重试；请先查询核验。"
                         taskState.errors.append(message)
                         taskState.status = .cancelled
@@ -914,7 +1239,7 @@ public struct ToolLoop {
                     let failureText: String
                     if error is AgentRunnerError {
                         if descriptor.permission != .readOnly {
-                            ws.recordIndeterminateSideEffect(tool: call.name, args: call.args)
+                            ws.recordIndeterminateSideEffect(tool: call.name, args: stringArguments)
                             failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，服务端结果未知。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
                         } else {
                             failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，可改用其他查询方式继续。"
@@ -928,15 +1253,15 @@ public struct ToolLoop {
                     continue
                 }
                 if result.hasIndeterminateSideEffect, result.permission != .readOnly {
-                    ws.recordIndeterminateSideEffect(tool: call.name, args: call.args)
+                    ws.recordIndeterminateSideEffect(tool: call.name, args: stringArguments)
                 } else if result.success, result.permission != .readOnly {
-                    ws.recordSuccessfulSideEffect(tool: call.name, args: call.args, summary: result.summary)
+                    ws.recordSuccessfulSideEffect(tool: call.name, args: stringArguments, summary: result.summary)
                 }
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
                 if result.success, call.name == "tool_search" {
-                    let query = call.args["query"] ?? ""
-                    let namespace = call.args["namespace"]
-                    let limit = min(max(Int(call.args["limit"] ?? "8") ?? 8, 1), 50)
+                    let query = stringArguments["query"] ?? ""
+                    let namespace = stringArguments["namespace"]
+                    let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
                     let discoveredNames = ToolCatalog()
                         .search(query: query, namespace: namespace, limit: limit)
                         .map(\.name)
@@ -958,9 +1283,22 @@ public struct ToolLoop {
                     }
                 }
                 if result.success, call.name == "library_index_v2_next_batch" {
-                    ws.recordRecommendationIndexV2Batch(facts: result.facts)
+                    _ = recommendationWorkflow?.applyBatch(
+                        ids: result.facts["recommendation.index.currentBatchIDs"]?.split(separator: ",").map(String.init) ?? [],
+                        mode: result.facts["recommendation.index.currentBatchMode"] ?? "full",
+                        pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
+                        pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
+                    )
                 } else if result.success, call.name == "library_index_v2_write_batch" {
-                    ws.completeRecommendationIndexV2Batch()
+                    _ = recommendationWorkflow?.applyWrite(
+                        pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
+                        pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
+                    )
+                } else if result.success, call.name == "library_index_v2_status" {
+                    _ = recommendationWorkflow?.applyStatus(
+                        pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
+                        pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
+                    )
                 }
                 if madeProgress { completionRepairAttempts = 0 }
                 await state(taskState)
@@ -986,7 +1324,7 @@ public struct ToolLoop {
                         }
                     }
                     // 真实副作用：queue / playlist 写成功 → 以实际入队/入歌单的 ID 确定 final。
-                    if let gids = Self.sideEffectFinalIDs(name: call.name, args: call.args, descriptor: descriptor) {
+                    if let gids = Self.sideEffectFinalIDs(name: call.name, args: stringArguments, descriptor: descriptor) {
                         var cards = await Self.resolveTrackCards(gids, presentation: presentation, catalog: catalog)
                         let append = descriptor.sideEffectPolicy == .queue
                             && call.name != "queue_replace" && call.name != "replaceQueue"
@@ -1036,11 +1374,11 @@ public struct ToolLoop {
                     }
                 }
                 if AgentTaskWorkingSet.isSearchTool(call.name) == false, AgentTaskWorkingSet.queueWritingTools.contains(call.name) {
-                    let queued = AgentTaskWorkingSet.songIDs(from: call.args)
+                    let queued = AgentTaskWorkingSet.songIDs(from: stringArguments)
                     if !queued.isEmpty { ws.noteQueued(queued) }
                 }
                 resultText = ContextManager.truncateToolResult(resultText, limit: descriptor.maxResultCharacters)
-                ws.recordExecution(tool: call.name, args: call.args, resultText: resultText)
+                ws.recordExecution(tool: call.name, args: stringArguments, resultText: resultText)
                 ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: result.summary, reused: false))
                 toolMessages.append(Self.toolResultMessage(callID: call.id, content: resultText, native: nativeMode))
             }
@@ -1159,6 +1497,13 @@ public struct ToolLoop {
         }
     }
 
+    private static func markWorkflowCompleted(state: inout AgentTaskState) {
+        state.completed = true
+        state.completionState = .satisfied
+        state.status = .completed
+        state.updatedAt = .now
+    }
+
     /// 把 ID 解析成有序卡片：优先用内部候选池，缺失时从本地目录补查。
     private static func resolveTrackCards(
         _ ids: [GlobalID],
@@ -1184,52 +1529,55 @@ public struct ToolLoop {
         return AIMessage(role: .user, content: content)
     }
 
-    /// 解析原生 tool call 的 arguments JSON 字符串为参数字典。
-    /// 一些 OpenAI-compatible 网关会把无参数调用编码成空字符串、`null`，或把
-    /// 整个 JSON 对象再包成一层字符串。无参数 descriptor 应接受这些等价形式；
-    /// 有必填参数的工具仍会在执行器的 `require` 校验处得到明确失败。
-    private static func parseArguments(_ json: String, depth: Int = 0) -> ToolArgumentParseResult {
-        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "null" { return .success([:]) }
-        guard let data = trimmed.data(using: .utf8),
-              let raw = try? JSONSerialization.jsonObject(with: data)
-        else { return .malformed(rawLength: json.utf8.count) }
-        if let encoded = raw as? String, depth < 1 {
-            return parseArguments(encoded, depth: depth + 1)
+    /// Provider codecs decode raw wire JSON before the call reaches ToolLoop.
+    /// Keep the object structured here; only the ACTION compatibility branch
+    /// below projects text arguments back into JSON values.
+    private static func parseArguments(_ value: AIJSONValue) -> ToolArgumentParseResult {
+        guard case let .object(object) = value else {
+            return .malformed(rawLength: value.jsonString.utf8.count)
         }
-        guard let object = raw as? [String: Any] else {
-            return .malformed(rawLength: json.utf8.count)
-        }
-        var args: [String: String] = [:]
-        for (key, value) in object { args[key] = argumentString(value) }
-        return .success(args)
+        return .success(object)
     }
 
-    /// 原生工具参数可能包含数组或对象。`String(describing:)` 会生成 Swift 的
-    /// `[(key: value)]` 表示而不是 JSON，索引写入因而无法解码；结构值必须重新编码
-    /// 为标准 JSON，字符串和标量则保持原值。
-    private static func argumentString(_ value: Any) -> String {
-        if let value = value as? String { return value }
-        if JSONSerialization.isValidJSONObject(value),
-           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
-           let json = String(data: data, encoding: .utf8) {
-            return json
+    /// ACTION/text-protocol compatibility boundary. Legacy arguments arrive as
+    /// strings, but the call handed to ToolRuntime is immediately projected to
+    /// canonical AIJSONValue values. Native provider calls should use the
+    /// structured overload directly once the provider codec has decoded them.
+    private static func structuredToolCall(
+        name: String,
+        legacyArguments: [String: String]
+    ) -> ToolCall {
+        var arguments = legacyArguments.mapValues(AIJSONValue.string)
+        guard let descriptor = AgentToolRegistry.descriptor(for: name) else {
+            return ToolCall(name: name, arguments: arguments)
         }
-        if let value = value as? NSNumber { return value.stringValue }
-        return String(describing: value)
-    }
-
-    /// 判定是否「模型不认识 tools 字段」的确定性拒绝（400 / 422），以便降级重试。
-    private static func isSchemaRejection(_ error: Error) -> Bool {
-        if let providerError = error as? AIProviderError,
-           case let .httpStatus(status) = providerError {
-            return status == 400 || status == 422
+        for parameter in descriptor.parameters {
+            guard let raw = legacyArguments[parameter.name],
+                  let schemaData = parameter.schemaJSON?.data(using: .utf8),
+                  let schema = try? AIJSONValue(jsonData: schemaData),
+                  case let .object(schemaObject) = schema,
+                  case let .string(type)? = schemaObject["type"] else { continue }
+            switch type {
+            case "array":
+                if let parsed = try? AIJSONValue(jsonString: raw), case .array = parsed {
+                    arguments[parameter.name] = parsed
+                } else {
+                    let items = raw.split { $0 == "," || $0 == "，" }
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                    if !items.isEmpty {
+                        arguments[parameter.name] = .array(items.map(AIJSONValue.string))
+                    }
+                }
+            case "object":
+                if let parsed = try? AIJSONValue(jsonString: raw), case .object = parsed {
+                    arguments[parameter.name] = parsed
+                }
+            default:
+                break
+            }
         }
-        if let providerError = error as? AIProviderError,
-           case let .httpStatusDetail(status, _) = providerError {
-            return status == 400 || status == 422
-        }
-        return false
+        return ToolCall(name: name, arguments: arguments)
     }
 
     private static func policyRequiresToolExecution(_ policy: AgentTaskPolicy) -> Bool {
@@ -1652,7 +2000,7 @@ public struct ToolLoop {
             permission: descriptor.permission,
             title: descriptor.summary,
             detail: detail,
-            call: ToolCall(name: name, arguments: diagnosticArgs)
+            call: ToolCall(name: name, rawArguments: diagnosticArgs)
         )
     }
 
@@ -1732,7 +2080,7 @@ public struct ToolLoop {
             var args: [String: String] = [:]
             if let rawArgs = obj["args"] as? [String: Any] {
                 for (key, value) in rawArgs {
-                    args[key] = argumentString(value)
+                    args[key] = textArgumentString(value)
                 }
             }
             results.append((tool, args))
@@ -1740,35 +2088,17 @@ public struct ToolLoop {
         return results
     }
 
-    /// Native → ACTION 降级后重建 system prompt，避免旧提示仍要求模型“不要输出 ACTION”。
-    private static func replaceSystemPrompt(
-        _ conversation: inout [AIMessage],
-        context: Context,
-        tools: [ToolDescriptor],
-        nativeToolCalling: Bool,
-        task: AgentTaskState,
-        privacy: AIPrivacyPermissions,
-        capabilities: ModelCapabilities
-    ) {
-        guard let index = conversation.firstIndex(where: { $0.role == .system }) else { return }
-        let rebuilt = AgentContextBuilder.build(
-            systemPrompt: Self.systemPrompt(
-                context: context,
-                tools: tools,
-                nativeToolCalling: nativeToolCalling,
-                goal: task.goal
-            ),
-            task: task,
-            facts: [],
-            history: [],
-            permissions: privacy,
-            capabilities: capabilities,
-            inputBudget: capabilities.maxContextTokens,
-            reservedOutputTokens: capabilities.maxOutputTokens
-        )
-        if let system = rebuilt.first {
-            conversation[index] = system
+    /// ACTION 文本协议的兼容边界：将 JSON 值投影为旧协议使用的字符串。
+    /// Provider native tool call 不经过此转换，canonical runtime arguments 仍是 AIJSONValue。
+    private static func textArgumentString(_ value: Any) -> String {
+        if let value = value as? String { return value }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            return json
         }
+        if let value = value as? NSNumber { return value.stringValue }
+        return String(describing: value)
     }
 
     /// 当前 App 语言（跟随系统/ Bundle 首选语言），用于决定 Agent 默认回复语言。
@@ -1794,6 +2124,14 @@ public struct ToolLoop {
     }
 
     public static func systemPrompt(context: Context, tools: [ToolDescriptor], nativeToolCalling: Bool, goal: String = "") -> String {
+        return SystemPromptBuilder.build(
+            context: context,
+            tools: tools,
+            nativeToolCalling: nativeToolCalling,
+            goal: goal
+        )
+
+        /*
         let tools = Self.promptToolList(tools)
         let lang = currentAppLanguage
         let serverLine: String
@@ -1970,6 +2308,7 @@ public struct ToolLoop {
         14. 记忆：主人说「我是谁 / 我叫XX / 我喜欢XX / 我的生日是…」这类个人信息时，主动调用 memory_save 记住（key 用简短字段名，如 名字 / 喜欢的歌手 / 生日）。记住后跨会话都有效，不要重复询问；主人问「你记得我吗」时用 memory_list 核对。
         15. 技能：需要执行已存技能时，先用 skill_read 读取完整指令再执行；技能名以 skill_list 或上面的「可用技能」为准。主人要求「记住这段流程 / 创建一个技能」时，用 skill_create(name, instructions) 存成本地 skill 文件。
         """
+        */
     }
 
     /// 生成按分组的工具清单，突出服务器/查询/播放等常用工具。
@@ -1977,6 +2316,20 @@ public struct ToolLoop {
     /// 只展示本次动态加载选中的工具（见 ToolSelector）；旧式驼峰别名
     /// （searchTracks、playTrack 等）仍可执行但不再展示，避免模型混淆。
     private static func promptToolList(_ tools: [ToolDescriptor]) -> String {
+        let visible = tools.filter { $0.visibility == .model }
+        let grouped = Dictionary(grouping: visible, by: \.namespace)
+            .map { namespace, descriptors in
+                let names = descriptors.map { descriptor in
+                    descriptor.parameters.isEmpty
+                        ? descriptor.name
+                        : "\(descriptor.name)(\(descriptor.parameters.map { $0.name }.joined(separator: ",")))"
+                }.sorted().joined(separator: "、")
+                return "- \(namespace)：\(names)"
+            }
+            .sorted()
+        return grouped.joined(separator: "\n")
+
+        /*
         let groups: [(String, [String])] = [
             ("服务器与同步", ["server_get_current", "server_list", "server_test_connection", "server_get_capabilities", "server_sync_status", "server_sync_start", "server_search", "library_get_summary"]),
             ("本地库查询", ["library_search", "library_get_song", "music_appreciate", "library_get_album", "library_get_artist", "library_get_playlist", "library_get_starred", "library_get_recently_played", "library_get_recently_added", "library_get_most_played", "library_get_random_songs", "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre"]),
@@ -2008,6 +2361,7 @@ public struct ToolLoop {
             lines.append("- 其他工具：\(others.joined(separator: "、"))")
         }
         return lines.joined(separator: "\n")
+        */
     }
 
     /// 把完整会话历史转成模型可用的消息列表。历史不再按固定轮数截断，

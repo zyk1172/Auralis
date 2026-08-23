@@ -127,7 +127,7 @@ public enum ContextManager {
         for call in message.toolCalls ?? [] {
             total += estimatedTokens(call.id)
             total += estimatedTokens(call.name)
-            total += estimatedTokens(call.arguments)
+            total += estimatedTokens(call.arguments.jsonString)
         }
         return total
     }

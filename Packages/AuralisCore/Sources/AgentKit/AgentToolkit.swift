@@ -169,7 +169,7 @@ public struct AgentToolkit {
                 }
             }
             let cards = resolvedCards
-            let kind = call.arguments["kind"]?.lowercased()
+            let kind = call.optionalString("kind")?.lowercased()
             if kind == "disambiguation" {
                 return .ok(call, descriptor, "已列出 \(cards.count) 个匹配供选择", .trackCards(cards), presentationRole: .disambiguation)
             }
@@ -338,7 +338,7 @@ public struct AgentToolkit {
                 .joined(separator: "、")
             return .ok(call, descriptor, text, .trackCards(tracks.map(TrackCard.from)))
         case "music_get_public_evidence":
-            let rawTrackID = call.arguments["trackID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawTrackID = call.optionalString("trackID")?.trimmingCharacters(in: .whitespacesAndNewlines)
             let track: Track
             if let rawTrackID, !rawTrackID.isEmpty {
                 let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
@@ -636,7 +636,7 @@ public struct AgentToolkit {
             let downloaded = (try? await catalog.getDownloadedTracks(serverID: serverID).contains { $0.globalID == gid }) ?? false
             return .ok(call, descriptor, track.title, .text(Self.songDetailLine(track, downloaded: downloaded)))
         case "music_appreciate":
-            let rawTrackID = call.arguments["trackID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawTrackID = call.optionalString("trackID")?.trimmingCharacters(in: .whitespacesAndNewlines)
             let track: Track
             if let rawTrackID, !rawTrackID.isEmpty {
                 let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
@@ -797,7 +797,7 @@ public struct AgentToolkit {
             // 按分类取歌曲清单（artist/album/genre/language/year/favorites/recent/popular/all），
             // 只含元数据（无歌词/海报），供模型按需注入对话后做推荐。
             let category = (try? require(call, "category"))?.lowercased() ?? "all"
-            let value = call.arguments["value"]
+            let value = call.optionalString("value")
             let limit = (try? intParam(call, "limit")) ?? 100
             let lines = try await catalog.catalogTracks(
                 serverID: serverID, category: category, value: value, limit: limit
@@ -1109,7 +1109,7 @@ public struct AgentToolkit {
     }
 
     private static func require(_ call: ToolCall, _ key: String) throws -> String {
-        guard let value = call.arguments[key], !value.isEmpty else {
+        guard let value = call.optionalString(key), !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentToolError.missingParameter(key)
         }
         return value
@@ -1117,7 +1117,7 @@ public struct AgentToolkit {
 
     /// 多值参数解析：native function calling 传 JSON 数组，文本 ACTION 传逗号字符串。
     private static func listParam(_ call: ToolCall, _ key: String) throws -> [String] {
-        guard let raw = call.arguments[key], !raw.isEmpty else { return [] }
+        guard let raw = call.jsonText(key), !raw.isEmpty else { return [] }
         if let data = raw.data(using: .utf8),
            let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
             return array.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -1192,7 +1192,7 @@ public struct AgentToolkit {
     }
 
     private static func boolParam(_ call: ToolCall, _ key: String) throws -> Bool {
-        guard let raw = call.arguments[key]?.lowercased() else {
+        guard let raw = call.optionalString(key)?.lowercased() else {
             throw AgentToolError.missingParameter(key)
         }
         switch raw {

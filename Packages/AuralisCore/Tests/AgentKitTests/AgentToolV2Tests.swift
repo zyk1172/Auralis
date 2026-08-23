@@ -522,8 +522,9 @@ struct QueueV2Tests {
         #expect(clear.success)
 
         let replace = await AgentToolkit.executeV2(
-            // 原生 Function Calling 将 JSON array 保留为字符串值后传入 Toolkit。
-            ToolCall(name: "queue_replace", arguments: ["trackIDs": #"["s:1","s:2"]"#]),
+            ToolCall(name: "queue_replace", arguments: [
+                "trackIDs": .array([.string("s:1"), .string("s:2")]),
+            ]),
             bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: nil
         )
         #expect(replace.success)

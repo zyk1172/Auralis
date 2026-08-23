@@ -256,4 +256,24 @@ public enum AIJSONValue: Codable, Hashable, Sendable {
     public var jsonString: String {
         String(data: jsonData, encoding: .utf8) ?? "null"
     }
+
+    /// Compatibility helper for callers that previously inspected the raw
+    /// JSON argument string. New code should pattern-match the structured
+    /// value instead of using textual searches.
+    @available(*, deprecated, message: "Inspect AIJSONValue structurally instead of searching its JSON text")
+    public func contains(_ substring: String) -> Bool {
+        jsonString.contains(substring)
+    }
+
+    /// Source compatibility for older tests and integrations that compared
+    /// the former raw argument string. The canonical value remains structured.
+    @available(*, deprecated, message: "Compare structured AIJSONValue values instead of raw JSON text")
+    public static func == (lhs: AIJSONValue, rhs: String) -> Bool {
+        lhs.jsonString == rhs
+    }
+
+    @available(*, deprecated, message: "Compare structured AIJSONValue values instead of raw JSON text")
+    public static func == (lhs: String, rhs: AIJSONValue) -> Bool {
+        lhs == rhs.jsonString
+    }
 }

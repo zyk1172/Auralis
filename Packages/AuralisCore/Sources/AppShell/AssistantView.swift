@@ -689,6 +689,11 @@ struct AssistantView: View {
                             Text(source.domain)
                                 .font(.caption2)
                                 .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            if let publishedAt = source.publishedAt, !publishedAt.isEmpty {
+                                Text(publishedAt)
+                                    .font(.caption2)
+                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            }
                             if !source.snippet.isEmpty {
                                 Text(source.snippet)
                                     .font(.caption2)

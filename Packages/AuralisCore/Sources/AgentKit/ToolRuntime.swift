@@ -76,7 +76,7 @@ public struct ToolRuntime {
         for parameter in descriptor.parameters where parameter.required {
             let value = call.arguments[parameter.name]
                 ?? (call.name == "library_index_v2_write_batch" && parameter.name == "items" ? call.arguments["itemsJSON"] : nil)
-            guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard let value, !isMissing(value) else {
                 throw ToolRuntimeError.missingParameter(parameter.name)
             }
         }
@@ -88,58 +88,167 @@ public struct ToolRuntime {
         }
     }
 
-    private static func validate(value: String, name: String, schemaJSON: String) throws {
-        guard let data = schemaJSON.data(using: .utf8),
-              let schema = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = schema["type"] as? String else { return }
+    private static func isMissing(_ value: AIJSONValue) -> Bool {
+        switch value {
+        case .null: return true
+        case let .string(value): return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default: return false
+        }
+    }
 
+    private static func validate(value: AIJSONValue, name: String, schemaJSON: String) throws {
+        guard let data = schemaJSON.data(using: .utf8),
+              let rawSchema = try? AIJSONValue(jsonData: data),
+              case let .object(schema) = rawSchema else { return }
+        try validate(value: value, name: name, schema: schema, path: name)
+    }
+
+    private static func validate(
+        value originalValue: AIJSONValue,
+        name: String,
+        schema: [String: AIJSONValue],
+        path: String
+    ) throws {
+        let value = legacyStructuredValue(originalValue, expectedType: stringValue(schema["type"]))
+        if let enumValue = schema["enum"],
+           case let .array(values) = enumValue,
+           !values.contains(value) {
+            throw invalid(name: name, expected: "枚举值", value: value)
+        }
+
+        guard let type = stringValue(schema["type"]) else { return }
         switch type {
-        case "array", "object":
-            guard let data = value.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) else {
-                // ACTION 文本协议的历史参数允许用逗号分隔的 Global ID / 标签。
-                // 原生 function calling 仍由 closed JSON Schema 约束；这里只保留
-                // 文本兼容层，不把明显的垃圾值当作结构化数组接受。
-                if type == "array", value.contains(":") || value.contains(",") || value.contains("，") {
-                    return
-                }
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "JSON \(type)", value: value)
-            }
-            if type == "array", !(object is [Any]) {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "JSON array", value: value)
-            }
-            if type == "object", !(object is [String: Any]) {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "JSON object", value: value)
-            }
-            if let enumValues = schema["enum"] as? [Any], !enumValues.contains(where: { String(describing: $0) == value }) {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "枚举值", value: value)
-            }
-        case "integer":
-            guard let number = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "整数", value: value)
-            }
-            if let minimum = schema["minimum"] as? NSNumber, number < minimum.intValue {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "不小于 \(minimum.intValue)", value: value)
-            }
-            if let maximum = schema["maximum"] as? NSNumber, number > maximum.intValue {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "不大于 \(maximum.intValue)", value: value)
-            }
-        case "number":
-            guard let number = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "数字", value: value)
-            }
-            if let minimum = schema["minimum"] as? NSNumber, number < minimum.doubleValue {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "不小于 \(minimum.doubleValue)", value: value)
-            }
-            if let maximum = schema["maximum"] as? NSNumber, number > maximum.doubleValue {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "不大于 \(maximum.doubleValue)", value: value)
-            }
+        case "null":
+            guard value == .null else { throw invalid(name: name, expected: "null", value: value) }
+        case "string":
+            guard case .string = value else { throw invalid(name: name, expected: "字符串", value: value) }
         case "boolean":
-            guard ["true", "false", "1", "0"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
-                throw ToolRuntimeError.invalidParameter(name: name, expected: "布尔值", value: value)
+            guard case .bool = value else { throw invalid(name: name, expected: "布尔值", value: value) }
+        case "integer":
+            guard case let .number(number) = value, number.isFinite, number.rounded() == number else {
+                throw invalid(name: name, expected: "整数", value: value)
+            }
+            try validateNumber(number, name: name, schema: schema, value: value)
+        case "number":
+            guard case let .number(number) = value, number.isFinite else {
+                throw invalid(name: name, expected: "数字", value: value)
+            }
+            try validateNumber(number, name: name, schema: schema, value: value)
+        case "array":
+            guard case let .array(items) = value else {
+                throw invalid(name: name, expected: "JSON array", value: value)
+            }
+            if let minimum = intValue(schema["minItems"]), items.count < minimum {
+                throw invalid(name: name, expected: "数组至少包含 \(minimum) 项", value: value)
+            }
+            if let maximum = intValue(schema["maxItems"]), items.count > maximum {
+                throw invalid(name: name, expected: "数组最多包含 \(maximum) 项", value: value)
+            }
+            if case let .object(itemSchema) = schema["items"] {
+                for (index, item) in items.enumerated() {
+                    try validate(value: item, name: name, schema: itemSchema, path: "\(path)[\(index)]")
+                }
+            }
+        case "object":
+            guard case let .object(object) = value else {
+                throw invalid(name: name, expected: "JSON object", value: value)
+            }
+            let properties = objectValue(schema["properties"])
+            if case let .array(required) = schema["required"] {
+                for item in required.compactMap(stringValue) where object[item].map(isMissing) ?? true {
+                    throw ToolRuntimeError.missingParameter("\(path).\(item)")
+                }
+            }
+            let allowsAdditional = boolValue(schema["additionalProperties"]) ?? true
+            if !allowsAdditional {
+                for key in object.keys where properties[key] == nil {
+                    throw ToolRuntimeError.unknownParameter("\(path).\(key)")
+                }
+            }
+            for (key, propertySchema) in properties {
+                guard let item = object[key], case let .object(propertySchema) = propertySchema else { continue }
+                try validate(value: item, name: name, schema: propertySchema, path: "\(path).\(key)")
             }
         default:
             break
         }
+    }
+
+    private static func validateNumber(
+        _ number: Double,
+        name: String,
+        schema: [String: AIJSONValue],
+        value: AIJSONValue
+    ) throws {
+        if let minimum = doubleValue(schema["minimum"]), number < minimum {
+            throw invalid(name: name, expected: "不小于 \(minimum)", value: value)
+        }
+        if let maximum = doubleValue(schema["maximum"]), number > maximum {
+            throw invalid(name: name, expected: "不大于 \(maximum)", value: value)
+        }
+    }
+
+    private static func legacyStructuredValue(_ value: AIJSONValue, expectedType: String?) -> AIJSONValue {
+        guard case let .string(raw) = value, expectedType == "array" || expectedType == "object" else {
+            // ACTION compatibility keeps scalar text as text. Native values
+            // already arrive as the correct JSON kind.
+            if case let .string(raw) = value, expectedType == "integer", let number = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return .number(Double(number))
+            }
+            if case let .string(raw) = value, expectedType == "number", let number = Double(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return .number(number)
+            }
+            if case let .string(raw) = value, expectedType == "boolean" {
+                switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                case "true", "1": return .bool(true)
+                case "false", "0": return .bool(false)
+                default: break
+                }
+            }
+            return value
+        }
+        if let parsed = try? AIJSONValue(jsonString: raw) { return parsed }
+        return value
+    }
+
+    private static func stringValue(_ value: AIJSONValue?) -> String? {
+        guard case let .string(string) = value else { return nil }
+        return string
+    }
+
+    private static func intValue(_ value: AIJSONValue?) -> Int? {
+        switch value {
+        case let .number(number) where number.rounded() == number: return Int(number)
+        case let .string(string): return Int(string)
+        default: return nil
+        }
+    }
+
+    private static func doubleValue(_ value: AIJSONValue?) -> Double? {
+        switch value {
+        case let .number(number): return number
+        case let .string(string): return Double(string)
+        default: return nil
+        }
+    }
+
+    private static func boolValue(_ value: AIJSONValue?) -> Bool? {
+        guard case let .bool(value) = value else { return nil }
+        return value
+    }
+
+    private static func objectValue(_ value: AIJSONValue?) -> [String: AIJSONValue] {
+        guard case let .object(value) = value else { return [:] }
+        return value
+    }
+
+    private static func invalid(name: String, expected: String, value: AIJSONValue) -> ToolRuntimeError {
+        let display: String
+        if case let .string(string) = value {
+            display = string
+        } else {
+            display = value.jsonString
+        }
+        return .invalidParameter(name: name, expected: expected, value: display)
     }
 }

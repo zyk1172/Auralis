@@ -3,7 +3,7 @@ import Domain
 import LocalCatalog
 
 /// 推荐索引是一个普通的 Catalog 工具服务。批次协议、标签写回与结构化进度事实
-/// 封装在这里，不进入 AgentRunner 的通用模型循环。
+/// 封装在这里，由 ToolLoop 的 RecommendationIndexWorkflow 编排，不进入通用聊天循环。
 enum RecommendationIndexToolService {
     static let toolNames: Set<String> = [
         "library_index_v2_status",
@@ -29,8 +29,8 @@ enum RecommendationIndexToolService {
 
         case "library_index_v2_read":
             let limit = min(max(int(call, "limit") ?? 50, 1), 100)
-            let dimension = normalized(call.arguments["dimension"])
-            let value = normalized(call.arguments["value"])
+            let dimension = normalized(call.optionalString("dimension"))
+            let value = normalized(call.optionalString("value"))
             let entries = try await catalog.readRecommendationIndexV2(
                 serverID: serverID,
                 dimension: dimension,
@@ -100,7 +100,7 @@ enum RecommendationIndexToolService {
         case "library_index_v2_write_batch":
             // `items` 是当前原生结构化参数；`itemsJSON` 继续兼容已保存的旧会话和
             // 不支持原生 tools 的 ACTION 文本协议。
-            guard let rawValue = call.arguments["items"] ?? call.arguments["itemsJSON"] else {
+            guard let rawValue = call.jsonText("items") ?? call.jsonText("itemsJSON") else {
                 throw AgentToolError.missingParameter("items")
             }
             let raw = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,7 +137,7 @@ enum RecommendationIndexToolService {
         case "library_index_v2_tag_catalog":
             let limit = min(max(int(call, "limit") ?? 50, 1), 100)
             let offset = max(int(call, "offset") ?? 0, 0)
-            let query = normalized(call.arguments["query"])
+            let query = normalized(call.optionalString("query"))
             let page = try await catalog.recommendationIndexV2TagCatalog(
                 serverID: serverID, query: query, limit: limit, offset: offset
             )
@@ -181,7 +181,7 @@ enum RecommendationIndexToolService {
     }
 
     private static func int(_ call: ToolCall, _ key: String) -> Int? {
-        guard let raw = normalized(call.arguments[key]) else { return nil }
+        guard let raw = normalized(call.optionalString(key)) else { return nil }
         return Int(raw)
     }
 

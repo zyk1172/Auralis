@@ -127,10 +127,10 @@ public struct AnthropicMessagesProvider: AIProvider {
                             }
                         case "message_stop":
                             for fragment in toolFragments.values.sorted(by: { $0.id < $1.id }) {
-                                continuation.yield(.toolCall(AIToolCall(
+                                continuation.yield(.toolCall(Self.decodeToolCall(
                                     id: fragment.id,
                                     name: fragment.name,
-                                    arguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
+                                    rawArguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
                                 )))
                             }
                             ended = true
@@ -157,10 +157,10 @@ public struct AnthropicMessagesProvider: AIProvider {
                     // 兼容没有 message_stop 的网关：不要让 Agent 永远等待。
                     if !ended, !toolFragments.isEmpty {
                         for fragment in toolFragments.values.sorted(by: { $0.id < $1.id }) {
-                            continuation.yield(.toolCall(AIToolCall(
+                            continuation.yield(.toolCall(Self.decodeToolCall(
                                 id: fragment.id,
                                 name: fragment.name,
-                                arguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
+                                rawArguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
                             )))
                         }
                     }
@@ -306,7 +306,7 @@ public struct AnthropicMessagesProvider: AIProvider {
                 var content: [[String: Any]] = []
                 if !message.content.isEmpty { content.append(["type": "text", "text": message.content]) }
                 for call in message.toolCalls ?? [] {
-                    let input = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
+                    let input = (try? JSONSerialization.jsonObject(with: Data(call.arguments.jsonString.utf8))) as? [String: Any] ?? [:]
                     content.append(["type": "tool_use", "id": call.id, "name": call.name, "input": input])
                 }
                 messages.append(["role": "assistant", "content": content.isEmpty ? [["type": "text", "text": ""]] : content])
@@ -353,10 +353,10 @@ public struct AnthropicMessagesProvider: AIProvider {
             case "tool_use":
                 let input = block["input"] ?? [:]
                 let data = try JSONSerialization.data(withJSONObject: input)
-                calls.append(AIToolCall(
+                calls.append(Self.decodeToolCall(
                     id: block["id"] as? String ?? UUID().uuidString,
                     name: block["name"] as? String ?? "",
-                    arguments: String(data: data, encoding: .utf8) ?? "{}"
+                    rawArguments: String(data: data, encoding: .utf8) ?? "{}"
                 ))
             default: break
             }
@@ -370,5 +370,16 @@ public struct AnthropicMessagesProvider: AIProvider {
             finishReason: object["stop_reason"] as? String,
             toolCalls: calls.isEmpty ? nil : calls
         )
+    }
+
+    private static func decodeToolCall(id: String, name: String, rawArguments: String) -> AIToolCall {
+        let trimmed = rawArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let arguments: AIJSONValue
+        if trimmed.isEmpty || trimmed == "null" {
+            arguments = .object([:])
+        } else {
+            arguments = (try? AIJSONValue(jsonString: trimmed)) ?? .string(rawArguments)
+        }
+        return AIToolCall(id: id, name: name, arguments: arguments)
     }
 }

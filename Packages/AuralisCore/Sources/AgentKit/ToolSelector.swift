@@ -5,7 +5,7 @@ import Foundation
 /// 绝不决定 Agent 能否完成任务（permissive runtime 里已注册工具默认全部可执行）。
 ///
 /// 规则：CommonSafeTools ∪ IntentSuggestedTools ∪ KeywordSuggestedTools ∪
-/// TaskRequiredTools（纯加法）。任务进行中由 AgentRunner 每轮用「用户原文 + 模型
+/// TaskRequiredTools（纯加法）。任务进行中由 ToolLoop 每轮用「用户原文 + 模型
 /// 已输出文本 + 已执行工具」重新展开，第一轮没选中的工具不会永久缺失。
 ///
 /// 选择结果同时驱动：
@@ -226,7 +226,7 @@ public enum ToolSelector {
         if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
 
         let unique = Self.resolvedNames(names)
-        let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
+        let byName = Dictionary(uniqueKeysWithValues: all.filter { $0.visibility == .model }.map { ($0.name, $0) })
         return unique.compactMap { byName[$0] }
     }
 
@@ -270,7 +270,7 @@ public enum ToolSelector {
         }
         let names = selected.map(\.name) + intentNames.sorted()
         let unique = Self.resolvedNames(names)
-        let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
+        let byName = Dictionary(uniqueKeysWithValues: all.filter { $0.visibility == .model }.map { ($0.name, $0) })
         return unique.compactMap { byName[$0] }
     }
 
@@ -282,7 +282,7 @@ public enum ToolSelector {
     /// Provider capabilities decide whether strict schema is emitted; the
     /// descriptor itself remains provider-neutral.
     public static func toolDefinitions(from descriptors: [ToolDescriptor], strict: Bool) -> [AIToolDefinition] {
-        descriptors.map { descriptor in
+        descriptors.filter { $0.visibility == .model }.map { descriptor in
             AIToolDefinition(
                 name: descriptor.name,
                 description: descriptor.summary,
