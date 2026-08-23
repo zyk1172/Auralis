@@ -148,9 +148,14 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 
     var supportsToolCalling: Bool {
-        // Endpoint shape only tells us how to encode a request.  It cannot
-        // prove that a particular model/gateway accepts native functions.
-        false
+        // 协议选择是用户对 wire format 的显式声明。它决定可否尝试原生 tools，
+        // 不是一次模型行为探针的硬门禁；实际协议拒绝仍会被 Provider 明确上报。
+        switch self {
+        case .chatCompletions, .responses, .anthropicMessages:
+            return true
+        case .custom:
+            return false
+        }
     }
 
     var isSupported: Bool {
@@ -293,13 +298,28 @@ struct AIConnectionSettings: Sendable {
     }
 
     static func persistDiagnostics(_ diagnostics: AIProviderDiagnostics, for settings: AIConnectionSettings) {
+        // “模型这次没有调用测试工具”只能说明探测不确定，不能作为长期负能力
+        // 缓存。保留其它已验证阶段，同时让下次诊断重新尝试 native/tool_choice。
+        let persisted = AIProviderDiagnostics(
+            modelCatalog: diagnostics.modelCatalog,
+            modelAvailability: diagnostics.modelAvailability,
+            textCompletion: diagnostics.textCompletion,
+            streaming: diagnostics.streaming,
+            nativeTools: diagnostics.nativeTools == .unavailable ? .notTested : diagnostics.nativeTools,
+            toolChoice: diagnostics.toolChoice == .unavailable ? .notTested : diagnostics.toolChoice,
+            details: diagnostics.details
+        )
         let saved = VerifiedProviderCapabilities(
             fingerprint: settings.capabilityFingerprint,
-            diagnostics: diagnostics,
+            diagnostics: persisted,
             checkedAt: .now
         )
         guard let data = try? JSONEncoder().encode(saved) else { return }
         UserDefaults.standard.set(data, forKey: Keys.verifiedCapabilities)
+    }
+
+    static func clearPersistedDiagnostics() {
+        UserDefaults.standard.removeObject(forKey: Keys.verifiedCapabilities)
     }
 
     /// 校验未通过时的可读原因，便于设置页给出明确提示。
@@ -333,7 +353,10 @@ struct AIConnectionSettings: Sendable {
             maxContextTokens: maxContextTokens,
             timeout: Self.defaultTimeout,
             usesStreaming: verifiedCapabilities?.streaming != .failed,
-            supportsToolCalling: verifiedCapabilities?.nativeTools == .passed,
+            // 已知协议默认可尝试原生工具。自定义 path 仍需显式探测成功才启用，
+            // 但 probe 的一次不确定结果绝不能关闭标准 Provider 的真实工具路径。
+            supportsToolCalling: effectiveEndpointMode.supportsToolCalling
+                || verifiedCapabilities?.nativeTools == .passed,
             hasVerifiedModelAvailability: verifiedCapabilities?.modelAvailability == .passed,
             supportsToolChoice: verifiedCapabilities?.toolChoice == .passed
         )

@@ -685,6 +685,7 @@ struct AIProviderSettingsPage: View {
                         .pickerStyle(.menu)
                         .onChange(of: endpointMode) { _, newValue in
                             aiEndpointModeRaw = newValue.rawValue
+                            AIConnectionSettings.clearPersistedDiagnostics()
                             if let apiPath = newValue.apiPath {
                                 aiAPIPath = apiPath
                             }
@@ -748,6 +749,7 @@ struct AIProviderSettingsPage: View {
                             Button(String(localized: "删除", bundle: .module), role: .destructive) {
                                 Task {
                                     try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
+                                    AIConnectionSettings.clearPersistedDiagnostics()
                                     hasAPIKey = false
                                 }
                             }
@@ -893,6 +895,7 @@ API Key 仅保存于系统 Keychain。
 #endif
                 .onChange(of: endpointMode) { _, newValue in
                     aiEndpointModeRaw = newValue.rawValue
+                    AIConnectionSettings.clearPersistedDiagnostics()
                     if let apiPath = newValue.apiPath {
                         aiAPIPath = apiPath
                     }
@@ -946,6 +949,7 @@ API Key 仅保存于系统 Keychain。
                     ) {
                         APIKeyPage(theme: theme, hasExistingKey: hasAPIKey) { key in
                             try await credentialVault.store(key, for: AIConnectionSettings.credentialID)
+                            AIConnectionSettings.clearPersistedDiagnostics()
                             hasAPIKey = true
                         }
                     }
@@ -957,6 +961,7 @@ API Key 仅保存于系统 Keychain。
                         Button(String(localized: "删除", bundle: .module), role: .destructive) {
                             Task {
                                 try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
+                                AIConnectionSettings.clearPersistedDiagnostics()
                                 hasAPIKey = false
                             }
                         }
@@ -1029,8 +1034,17 @@ API Key 仅保存于系统 Keychain。
             endpointMode = AIConnectionSettings().endpointMode
             syncEndpointFromModelIfNeeded()
         }
-        .onChange(of: aiModel) { _, _ in syncEndpointFromModelIfNeeded() }
-        .onChange(of: aiBaseURL) { _, _ in syncEndpointFromModelIfNeeded() }
+        .onChange(of: aiModel) { _, _ in
+            AIConnectionSettings.clearPersistedDiagnostics()
+            syncEndpointFromModelIfNeeded()
+        }
+        .onChange(of: aiBaseURL) { _, _ in
+            AIConnectionSettings.clearPersistedDiagnostics()
+            syncEndpointFromModelIfNeeded()
+        }
+        .onChange(of: aiAPIPath) { _, _ in
+            AIConnectionSettings.clearPersistedDiagnostics()
+        }
 #if os(macOS)
         .sheet(isPresented: $isConfiguringAPIKey) {
             APIKeySheet(
@@ -1038,6 +1052,7 @@ API Key 仅保存于系统 Keychain。
                 hasExistingKey: hasAPIKey,
                 onSave: { key in
                     try await credentialVault.store(key, for: AIConnectionSettings.credentialID)
+                    AIConnectionSettings.clearPersistedDiagnostics()
                     hasAPIKey = true
                 }
             )

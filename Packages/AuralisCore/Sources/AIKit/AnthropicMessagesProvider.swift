@@ -95,32 +95,75 @@ public struct AnthropicMessagesProvider: AIProvider {
     }
 
     private func probeNativeTools() async -> (native: AIProbeStatus, toolChoice: AIProbeStatus, details: [String]) {
-        let name = "auralis_capability_probe"
+        let name = "capabilities_get"
         let tool = AIToolDefinition(
             name: name,
-            description: "Auralis connection capability probe. Call this function now with an empty object.",
+            description: "Return the available Auralis capabilities. Call this read-only function with an empty object.",
             parametersJSON: #"{"type":"object","properties":{},"additionalProperties":false}"#
         )
         do {
-            let response = try await complete(AICompletionRequest(
-                model: configuration.model,
-                messages: [AIMessage(role: .user, content: "Call auralis_capability_probe now. Do not answer with text.")],
-                temperature: 0,
-                maxTokens: 32,
-                tools: [tool],
-                toolChoice: .required
-            ))
-            if response.toolCalls?.contains(where: { $0.name == name }) == true {
-                return (.passed, .passed, [])
+            let observed = try await observesToolCall(with: self, tool: tool, toolChoice: nil)
+            guard observed else {
+                return (.unavailable, .notTested, [String(localized: "原生工具探测未收到工具调用；这不代表模型不支持工具。", bundle: .module)])
             }
-            return (.failed, .unavailable, [String(localized: "端点接受工具 schema，但模型未返回测试工具调用。", bundle: .module)])
+            let choice = await probeToolChoice(with: tool)
+            return (.passed, choice.status, choice.details)
+        } catch let error as AIProviderError {
+            if error.explicitlyRejectsNativeTools {
+                return (.failed, .notTested, [String(localized: "服务端明确拒绝原生工具：\(error.localizedDescription)", bundle: .module)])
+            }
+            return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
         } catch {
-            return (.failed, .failed, [String(localized: "原生工具调用失败：\(error.localizedDescription)", bundle: .module)])
+            return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
         }
     }
 
+    private func probeToolChoice(with tool: AIToolDefinition) async -> (status: AIProbeStatus, details: [String]) {
+        var probeConfiguration = configuration
+        probeConfiguration.supportsToolChoice = true
+        let probeProvider = AnthropicMessagesProvider(
+            configuration: probeConfiguration,
+            credentialVault: credentialVault,
+            session: session
+        )
+        do {
+            let observed = try await observesToolCall(with: probeProvider, tool: tool, toolChoice: .required)
+            return observed
+                ? (.passed, [])
+                : (.unavailable, [String(localized: "tool_choice 探测未收到工具调用；生产请求将继续省略该字段。", bundle: .module)])
+        } catch let error as AIProviderError where error.explicitlyRejectsToolChoice {
+            return (.failed, [String(localized: "服务端明确拒绝 tool_choice：\(error.localizedDescription)", bundle: .module)])
+        } catch {
+            return (.unavailable, [String(localized: "tool_choice 探测未完成：\(error.localizedDescription)", bundle: .module)])
+        }
+    }
+
+    private func observesToolCall(
+        with provider: AnthropicMessagesProvider,
+        tool: AIToolDefinition,
+        toolChoice: AIToolChoice?
+    ) async throws -> Bool {
+        for try await event in provider.stream(AICompletionRequest(
+            model: configuration.model,
+            messages: [AIMessage(role: .user, content: "Use capabilities_get to inspect the available Auralis capabilities.")],
+            temperature: 0,
+            maxTokens: configuration.maxOutputTokens,
+            tools: [tool],
+            toolChoice: toolChoice
+        )) {
+            if case let .toolCall(call) = event, call.name == tool.name {
+                return true
+            }
+        }
+        return false
+    }
+
     public func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
-        let body = try Self.requestBody(request, stream: false)
+        let body = try Self.requestBody(
+            request,
+            stream: false,
+            supportsToolChoice: configuration.supportsToolChoice
+        )
         let (data, response) = try await perform(body: body)
         try Self.validate(response, body: data)
         return try Self.parseCompletion(data: data, fallbackModel: request.model)
@@ -130,7 +173,11 @@ public struct AnthropicMessagesProvider: AIProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let body = try Self.requestBody(request, stream: true)
+                    let body = try Self.requestBody(
+                        request,
+                        stream: true,
+                        supportsToolChoice: configuration.supportsToolChoice
+                    )
                     let (bytes, response) = try await performBytes(body: body)
                     try Self.validate(response)
                     continuation.yield(.started(model: request.model))
@@ -299,7 +346,11 @@ public struct AnthropicMessagesProvider: AIProvider {
         return request
     }
 
-    private static func requestBody(_ request: AICompletionRequest, stream: Bool) throws -> [String: Any] {
+    private static func requestBody(
+        _ request: AICompletionRequest,
+        stream: Bool,
+        supportsToolChoice: Bool
+    ) throws -> [String: Any] {
         guard request.hostedTools?.isEmpty != false else {
             throw AIProviderError.unsupportedEndpointProtocol("Anthropic hosted web tools are not enabled")
         }
@@ -330,7 +381,7 @@ public struct AnthropicMessagesProvider: AIProvider {
                 }
                 return item
             }
-            if let choice = request.toolChoice {
+            if supportsToolChoice, let choice = request.toolChoice {
                 switch choice {
                 case .auto: body["tool_choice"] = ["type": "auto"]
                 case .required: body["tool_choice"] = ["type": "any"]

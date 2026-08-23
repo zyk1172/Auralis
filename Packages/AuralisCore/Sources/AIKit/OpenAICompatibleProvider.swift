@@ -53,6 +53,29 @@ public extension AIProviderError {
         failureKind == .modelRouting
     }
 
+    /// 只有服务端明确拒绝 tools/function calling 时才能得出“不支持”的结论。
+    /// 模型没有按提示调用某个函数属于不确定观察，绝不能由此关闭生产工具路径。
+    var explicitlyRejectsNativeTools: Bool {
+        guard case let .httpStatusDetail(_, detail) = self else { return false }
+        let text = detail.lowercased()
+        return text.contains("tools is not supported")
+            || text.contains("tools are not supported")
+            || text.contains("unsupported parameter: tools")
+            || text.contains("unsupported parameter 'tools'")
+            || text.contains("function calling unavailable")
+            || text.contains("function calling is not supported")
+    }
+
+    /// `tool_choice` 是可选优化而不是原生 tools 的前置条件，单独探测和单独缓存。
+    var explicitlyRejectsToolChoice: Bool {
+        guard case let .httpStatusDetail(_, detail) = self else { return false }
+        let text = detail.lowercased()
+        return text.contains("tool_choice")
+            && (text.contains("not supported")
+                || text.contains("unsupported")
+                || text.contains("unknown parameter"))
+    }
+
     /// 是否属于「瞬时故障」——值得再试一次，而不是配置或业务层面的确定性错误。
     /// 供 Provider 内部重试与上层（如 AgentRunner）判定是否补一次重试共用。
     var isTransient: Bool {
@@ -341,33 +364,81 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     private func probeNativeTools() async -> (native: AIProbeStatus, toolChoice: AIProbeStatus, details: [String]) {
-        let probeName = "auralis_capability_probe"
+        // Use the same streaming wire path and a real, read-only Auralis
+        // descriptor shape as production. This is observational only: a
+        // model declining one prompt is inconclusive, never a tool gate.
+        let probeName = "capabilities_get"
         let probe = AIToolDefinition(
             name: probeName,
-            description: "Auralis connection capability probe. Call this function now with an empty object.",
+            description: "Return the available Auralis capabilities. Call this read-only function with an empty object.",
             parametersJSON: #"{"type":"object","properties":{},"additionalProperties":false}"#
         )
         do {
-            let response = try await complete(AICompletionRequest(
-                model: configuration.model,
-                messages: [AIMessage(role: .user, content: "Call auralis_capability_probe now. Do not answer with text.")],
-                temperature: 0,
-                maxTokens: 32,
-                tools: [probe],
-                toolChoice: .required
-            ))
-            if response.toolCalls?.contains(where: { $0.name == probeName }) == true {
-                return (.passed, .passed, [])
-            }
-            return (.failed, .unavailable, [String(localized: "端点接受工具 schema，但模型未返回测试工具调用。", bundle: .module)])
-        } catch {
-            let isToolChoiceFailure = (error as? AIProviderError)?.failureKind == .incompatibleRequest
-            return (
-                .failed,
-                isToolChoiceFailure ? .failed : .unavailable,
-                [String(localized: "原生工具调用失败：\(error.localizedDescription)", bundle: .module)]
+            let observed = try await observesToolCall(
+                with: self,
+                tool: probe,
+                toolChoice: nil
             )
+            guard observed else {
+                return (.unavailable, .notTested, [String(localized: "原生工具探测未收到工具调用；这不代表模型不支持工具。", bundle: .module)])
+            }
+            let choice = await probeToolChoice(with: probe)
+            return (.passed, choice.status, choice.details)
+        } catch let error as AIProviderError {
+            if error.explicitlyRejectsNativeTools {
+                return (.failed, .notTested, [String(localized: "服务端明确拒绝原生工具：\(error.localizedDescription)", bundle: .module)])
+            }
+            return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
+        } catch {
+            return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
         }
+    }
+
+    private func probeToolChoice(with tool: AIToolDefinition) async -> (status: AIProbeStatus, details: [String]) {
+        var probeConfiguration = configuration
+        // This isolated diagnostic is the only place an unverified
+        // `tool_choice` may be emitted. Production requests retain the
+        // configuration guard below.
+        probeConfiguration.supportsToolChoice = true
+        let probeProvider = OpenAICompatibleProvider(
+            configuration: probeConfiguration,
+            credentialVault: credentialVault,
+            session: session
+        )
+        do {
+            let observed = try await observesToolCall(
+                with: probeProvider,
+                tool: tool,
+                toolChoice: .required
+            )
+            return observed
+                ? (.passed, [])
+                : (.unavailable, [String(localized: "tool_choice 探测未收到工具调用；生产请求将继续省略该字段。", bundle: .module)])
+        } catch let error as AIProviderError where error.explicitlyRejectsToolChoice {
+            return (.failed, [String(localized: "服务端明确拒绝 tool_choice：\(error.localizedDescription)", bundle: .module)])
+        } catch {
+            return (.unavailable, [String(localized: "tool_choice 探测未完成：\(error.localizedDescription)", bundle: .module)])
+        }
+    }
+
+    private func observesToolCall(
+        with provider: OpenAICompatibleProvider,
+        tool: AIToolDefinition,
+        toolChoice: AIToolChoice?
+    ) async throws -> Bool {
+        for try await event in provider.stream(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: "Use capabilities_get to inspect the available Auralis capabilities.")],
+                temperature: 0,
+                maxTokens: configuration.maxOutputTokens,
+                tools: [tool],
+                toolChoice: toolChoice
+            )) {
+            if case let .toolCall(call) = event, call.name == tool.name {
+                return true
+            }
+        }
+        return false
     }
 
     private func fetchModelIDs() async throws -> Set<String> {
@@ -1100,7 +1171,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
-            if let toolChoice = request.toolChoice {
+            if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
                 body["tool_choice"] = Self.encodeToolChoice(toolChoice, responses: false)
             }
         }
@@ -1170,7 +1241,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             + Self.encodeResponsesHostedTools(hostedTools)
         if !encodedTools.isEmpty {
             body["tools"] = encodedTools
-            if let toolChoice = request.toolChoice {
+            if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
                 body["tool_choice"] = Self.encodeToolChoice(toolChoice, responses: true)
             }
         }

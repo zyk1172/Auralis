@@ -534,12 +534,17 @@ struct OpenAIResponsesNetworkTests {
 
         data: [DONE]
         """
-        let tool = #"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"probe","type":"function","function":{"name":"auralis_capability_probe","arguments":"{}"}}]}}]}"#
+        let tool = """
+        data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"probe","type":"function","function":{"name":"capabilities_get","arguments":"{}"}}]}}]}
+
+        data: [DONE]
+        """
         AIKitMockURLProtocol.reset(stubs: [
             .response(data: Data(#"{"data":[{"id":"mimo-v2.5"}]}"#.utf8)),
             .response(data: Data(text.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
-            .response(data: Data(tool.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(tool.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(tool.utf8)),
         ])
         let provider = makeChatProvider(
             session: makeMockSession(),
@@ -550,6 +555,34 @@ struct OpenAIResponsesNetworkTests {
         let result = try await provider.testConnection()
         #expect(result.diagnostics?.modelAvailability == .passed)
         #expect(AIKitMockURLProtocol.requests.first?.url?.absoluteString == "https://opencode.ai/zen/go/v1/models")
+    }
+
+    @Test func inconclusiveNativeToolProbeDoesNotMarkToolsAsUnsupported() async throws {
+        let text = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"文本正常"}}]}"#
+        let stream = """
+        data: {"choices":[{"delta":{"content":"OK"}}]}
+
+        data: [DONE]
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(data: Data(#"{"data":[{"id":"test-model"}]}"#.utf8)),
+            .response(data: Data(text.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
+        ])
+        let provider = makeChatProvider(session: makeMockSession())
+
+        let result = try await provider.testConnection()
+        let diagnostics = try #require(result.diagnostics)
+        #expect(diagnostics.nativeTools == .unavailable)
+        #expect(diagnostics.toolChoice == .notTested)
+        #expect(diagnostics.supportsOrdinaryChat)
+
+        let nativeProbe = try requestObject(from: try #require(AIKitMockURLProtocol.requests.last))
+        #expect(nativeProbe["stream"] as? Bool == true)
+        #expect(nativeProbe["tools"] != nil)
+        #expect(nativeProbe["tool_choice"] == nil)
+        #expect(nativeProbe["max_tokens"] as? Int == auralisDefaultMaxOutputTokens)
     }
 
     @Test func verifiedModelRoutingErrorRefreshesCatalogAndRecovers() async throws {
@@ -685,6 +718,34 @@ struct OpenAIResponsesNetworkTests {
         #expect(first["tools"] != nil)
     }
 
+    @Test func unverifiedToolChoiceIsOmittedWhileNativeToolsRemainPresent() async throws {
+        let success = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"好"}}]}"#
+        AIKitMockURLProtocol.reset(stubs: [.response(data: Data(success.utf8))])
+        let provider = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "test",
+                baseURL: URL(string: "https://api.openai.com")!,
+                apiPath: "/v1/chat/completions",
+                model: "test-model",
+                supportsToolCalling: true,
+                supportsToolChoice: false
+            ),
+            credentialVault: KeychainCredentialVault(),
+            session: makeMockSession()
+        )
+        let tool = AIToolDefinition(name: "capabilities_get", description: "读取能力")
+        _ = try await provider.complete(AICompletionRequest(
+            model: "test-model",
+            messages: [AIMessage(role: .user, content: "检查能力")],
+            tools: [tool],
+            toolChoice: .required
+        ))
+
+        let object = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
+        #expect(object["tools"] != nil)
+        #expect(object["tool_choice"] == nil)
+    }
+
     @Test func completesWithResponsesNonStream() async throws {
         let stubBody = """
         {"id":"resp_1","object":"response","model":"gpt-4.1","status":"completed",
@@ -721,14 +782,16 @@ struct OpenAIResponsesNetworkTests {
         data: [DONE]
         """
         let toolBody = """
-        {"id":"resp_tool","object":"response","model":"gpt-4.1","status":"completed",
-         "output":[{"type":"function_call","call_id":"probe","name":"auralis_capability_probe","arguments":"{}"}]}
+        data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_probe","type":"function_call","call_id":"probe","name":"capabilities_get","arguments":"{}"}}
+
+        data: {"type":"response.completed","response":{"id":"resp_tool"}}
         """
         AIKitMockURLProtocol.reset(stubs: [
             .response(data: Data(#"{"data":[{"id":"test-model"}]}"#.utf8)),
             .response(data: Data(stubBody.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
-            .response(data: Data(toolBody.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
         ])
         let provider = makeProvider(session: makeMockSession())
 
@@ -737,11 +800,18 @@ struct OpenAIResponsesNetworkTests {
         #expect(result.model == "gpt-4.1")
 
         let requests = AIKitMockURLProtocol.requests
-        #expect(requests.count == 4)
+        #expect(requests.count == 5)
         let object = try requestObject(from: requests[1])
         #expect(object["max_output_tokens"] as? Int == 32)
         #expect(object["input"] != nil)
         #expect(object["messages"] == nil)
+        let nativeProbe = try requestObject(from: requests[3])
+        #expect(nativeProbe["stream"] as? Bool == true)
+        #expect(nativeProbe["tools"] != nil)
+        #expect(nativeProbe["tool_choice"] == nil)
+        #expect(nativeProbe["max_output_tokens"] as? Int == auralisDefaultMaxOutputTokens)
+        let toolChoiceProbe = try requestObject(from: requests[4])
+        #expect(toolChoiceProbe["tool_choice"] as? String == "required")
     }
 
     /// Chat 路径回归：apiPath 为 chat/completions 时仍用旧格式，不受 Responses 改动影响。

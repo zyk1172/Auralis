@@ -278,10 +278,9 @@ public struct ToolLoop {
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
-        // A provider that has not passed native-tool diagnostics must remain a
-        // normal chat provider.  Do not advertise or parse a second textual
-        // tool protocol for it; that would make an unverified gateway appear
-        // to control Auralis.
+        // Only a protocol which does not declare native tools stays text-only.
+        // Capability diagnostics are observational and must never turn a
+        // declared Chat/Responses/Messages provider into a different protocol.
         if provider.capabilities.toolMode == .none {
             selectedTools = []
         }
@@ -700,7 +699,7 @@ public struct ToolLoop {
             && provider.capabilities.toolMode != .textualToolProtocol
         if provider.capabilities.toolMode == .none {
             await emit(AgentChatMessage(role: .assistant, messages: [.error(
-                "当前模型支持普通聊天，但尚未通过 Auralis 原生工具调用能力验证；请先在设置中运行能力诊断后再执行播放、队列、歌单或索引操作。"
+                "当前接口未配置 Auralis 原生工具调用协议；请在设置中选择兼容的 Chat Completions、Responses 或 Messages 协议后再执行播放、队列、歌单或索引操作。"
             )]))
             return
         }

@@ -80,7 +80,8 @@ struct AnthropicMessagesProviderTests {
                 baseURL: URL(string: "https://relay.example.com")!,
                 apiPath: "/v1/messages",
                 model: "claude-test",
-                supportsToolCalling: true
+                supportsToolCalling: true,
+                supportsToolChoice: true
             ),
             credentialVault: KeychainCredentialVault(),
             session: makeSession()
