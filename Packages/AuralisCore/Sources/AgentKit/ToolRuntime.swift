@@ -49,7 +49,7 @@ public struct ToolRuntime {
             try validate(call, descriptor: descriptor)
             if let authorizationContext,
                descriptor.permission != .readOnly,
-               !authorizationContext.allows(descriptor.sideEffectPolicy) {
+               !authorizationContext.allows(descriptor) {
                 return ToolResult(
                     call: call,
                     permission: descriptor.permission,

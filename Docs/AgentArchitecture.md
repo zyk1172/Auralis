@@ -13,14 +13,22 @@ AssistantView / Siri / App Intent
 AgentCoordinator (@MainActor)
               │  session / consent / UI citations
               ▼
-AgentRuntime (actor) → ConversationEngine (chat-first)
-              │
+      ┌───────┴────────┐
+      ▼                ▼
+ConversationEngine   AgentRuntime (deterministic state)
+      │                │
+      └───────┬────────┘
               ▼
-AgentRunner → ToolRuntime (参数形状/Schema)
+          ToolLoop
               │
-              ▼
+      Provider / ToolRuntime
+              │
 AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
 ```
+
+普通聊天直接进入 `ConversationEngine → ToolLoop`；只有需要持久化状态、工作流或确定性
+完成条件的任务才经过 `AgentRuntime → ConversationEngine`。`AgentRunner` 已不再是生产
+循环，只保留 deprecated 的 source-compatible forwarding façade。
 
 关键 V2 边界：
 
@@ -32,7 +40,8 @@ AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
   `tool_choice`，否则有限地降级到 ACTION 文本协议。
 - `ToolCatalog` 从 `AgentToolRegistry.all` 搜索能力。`tool_search` 只返回轻量摘要；
   发现后的工具会加入下一轮 schema，避免把 100+ 个完整定义永久塞进每一轮上下文。
-- `ToolRuntime` 在副作用前校验必填参数、未知参数和数组/数字/布尔 JSON 形状；注册表仍是
+- `ToolRuntime` 在副作用前校验必填参数、未知参数和数组/数字/布尔 JSON 形状，并执行
+  `SideEffectAuthorizationContext` 的逐操作授权；注册表仍是
   工具描述、别名、权限、副作用、Evidence、联网和并行安全属性的单一来源。
 - Web 能力通过 `AgentWebService` 注入，`web_search` 返回 `WebSource`，UI 用可点击来源卡片
   展示；`web_fetch` 只返回脱敏正文和 URL。Provider 托管搜索能力与 App WebCapability
@@ -46,11 +55,11 @@ AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
 
 # Execution Philosophy
 
-Auralis uses a permissive direct-execution agent runtime. The only program-level
-approval gate is reserved for explicitly irreversible local/remote deletion:
-deleting a playlist, deleting/clearing memories, or deleting a skill file.
-Playback, queue, download, server, annotation, and other reversible tools remain
-direct-execution as requested.
+Auralis uses a provider-first conversation loop and a permissive registered-tool
+runtime. `ToolRuntime` remains the only side-effect boundary: it validates the
+call and checks a least-privilege `SideEffectAuthorizationContext` derived from
+the user's original task. Irreversible deletion still has its separate UI
+confirmation gate.
 
 A user's explicit natural-language request authorizes the requested operation.
 
@@ -75,8 +84,9 @@ User cancellation and per-request timeouts remain supported.
 - `AgentTaskBudget` 只剩极端看门狗：`wallClockSeconds`（默认 60 分钟）与
   `maxModelRounds`（默认 1000，紧急防失控）。`maxNoProgressRounds` /
   `maxRepeatedToolPattern` 保留为诊断统计，不作为终止条件。
-- `AgentRunner` 不再按 Intent 拦截工具，也不因 `stopSearching` / 连续无新结果 /
+- `ToolLoop` 不按 Intent 拦截已注册工具，也不因 `stopSearching` / 连续无新结果 /
   重复工具模式终止任务；仅在注册表明确标记的不可逆删除工具前等待 UI 批准。
+- `AgentRunner` 仅为旧调用方转发到 `ConversationEngine`，生产调用链不再经过它。
 - 单工具超时/异常回灌结构化失败结果，模型可换工具、换参数、换策略继续。
 - `queue_replace` 可用不同参数多次调用；相同工具 + 相同参数幂等复用。
 - 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认；风险确认
@@ -98,23 +108,24 @@ AssistantView / Siri / App Intent / 歌曲鉴赏入口
         AgentCoordinator (@MainActor UI adapter)
                        │
                        ▼
-              AgentRuntime (actor)
-          policy / state / budget / completion
+              ConversationEngine
                        │
-                       ▼
-          AgentRunner (low-level model loop)
+                    ToolLoop
                        │
-                       ▼
               AgentToolRegistry
          LocalCatalog / Bridge / SystemService
 ```
+
+确定性任务的附加链路是 `AgentCoordinator → AgentRuntime → ConversationEngine → ToolLoop`；
+`AgentRuntime` 只拥有任务状态、Workflow route 与完成判定，不拥有 Provider/tool-call 循环。
 
 ## 任务创建
 
 `AgentTaskPolicyResolver` 在任务边界解析 Intent。明确的 UI 入口应传
 `explicitIntent`，避免让模型猜测；自由文本才由保守的规则分类器处理。当前 Intent
-覆盖对话、目录搜索、播放、发现、队列、歌单、资料库维护、服务器、诊断、歌曲鉴赏、
-下载与记忆。
+覆盖对话、目录搜索、播放/播放状态查询、发现、队列/队列查询、歌单/歌单查询、资料库维护、
+服务器、诊断、歌曲鉴赏、下载与记忆。查询意图使用普通 `.modelAnswer` completion，不会
+因为只读工具没有 mutation 而继续任务。
 
 Intent 产生 `AgentTaskPolicy`。Policy 只承担路由/诊断职责，不再约束执行能力：
 
@@ -134,8 +145,10 @@ Runtime 正常执行路径不再依赖它们做门禁；唯一例外是 `ToolDes
 累计消耗的终止阈值；任务累计 token 仅用于进度与用量记录。
 
 因此工具在注册表中“存在”即表示普通运行时可用；Runtime 不按意图缩减工具能力。
-只有 playlist_delete、memory_delete、memory_clear、skill_delete 会在副作用执行前等待
-用户批准，拒绝会跳过桥接层并把结构化失败回灌给模型。
+`SideEffectAuthorizationContext` 的来源只能是当前用户的完整原始请求、会话历史中的最近
+完整任务或恢复记录中的 `goal`；“继续”“第一个”等短后续不会单独产生授权，网页/搜索/
+模型文本永远不能产生授权。只有 playlist_delete、memory_delete、memory_clear、skill_delete
+会在副作用执行前等待用户批准，拒绝会跳过桥接层并把结构化失败回灌给模型。
 
 ## 任务状态与 Evidence
 

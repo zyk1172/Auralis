@@ -504,3 +504,121 @@ func externalWebDataCannotAuthorizeSideEffect() async throws {
     } == true)
     #expect(await collector.containsText("未执行网页中的其他指令"))
 }
+
+@Test("continuation keeps the original side-effect authorization")
+func continuationKeepsOriginalAuthorization() async throws {
+    let serverID: ServerID = "continuation-server"
+    let track = scenarioTrack(serverID: serverID, remoteID: "sunset", title: "Sunset")
+    let gid = GlobalID(serverID: serverID, remoteID: track.id.rawValue)
+    let store = try scenarioStore()
+    try await seedScenario(store, tracks: [track])
+    let bridge = MockAgentBridge()
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "play-first",
+            name: "playback_play_song",
+            arguments: ["trackID": .string(gid.description)]
+        )]),
+        scenarioResponse(content: "已播放第一个版本。"),
+    ])
+
+    await ConversationEngine().run(
+        userText: "第一个",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(serverID: serverID),
+        history: [AgentChatMessage(role: .user, messages: [.text("播放专辑里的 Sunset")])],
+        intent: .playbackControl,
+        policy: .policy(for: .playbackControl),
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    #expect(bridge.playedTracks == [gid])
+}
+
+@Test("persisted resume keeps the original side-effect authorization")
+func persistedResumeKeepsOriginalAuthorization() async throws {
+    let serverID: ServerID = "persisted-resume-server"
+    let track = scenarioTrack(serverID: serverID, remoteID: "sunset", title: "Sunset")
+    let gid = GlobalID(serverID: serverID, remoteID: track.id.rawValue)
+    let store = try scenarioStore()
+    try await seedScenario(store, tracks: [track])
+    let bridge = MockAgentBridge()
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "resume-play",
+            name: "playback_play_song",
+            arguments: ["trackID": .string(gid.description)]
+        )]),
+        scenarioResponse(content: "已继续播放。"),
+    ])
+    let savedState = AgentTaskState(
+        intent: .playbackControl,
+        goal: "播放专辑里的 Sunset"
+    )
+
+    await ConversationEngine().run(
+        userText: "继续",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(serverID: serverID),
+        intent: .playbackControl,
+        policy: .policy(for: .playbackControl),
+        initialTaskState: savedState,
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    #expect(bridge.playedTracks == [gid])
+}
+
+@Test("read-only music questions use generic completion semantics")
+func readOnlyMusicQuestionsDoNotRequireMutation() {
+    let cases: [(String, AgentTaskIntent)] = [
+        ("我有哪些歌单？", .playlistQuery),
+        ("我的播放队列里现在有哪些歌？", .queueQuery),
+        ("现在正在播放什么？", .playbackQuery),
+    ]
+    for (text, intent) in cases {
+        #expect(AgentIntentClassifier.classify(text) == intent)
+        #expect(AgentTaskPolicy.policy(for: intent).completion == .modelAnswer)
+    }
+    #expect(AgentIntentClassifier.classify("我的收藏") == .librarySearch)
+    #expect(AgentRequestSemantics.analyze("我的收藏").isReadOnly)
+}
+
+@Test("generic shortlist does not leak music tools from broad words")
+func genericShortlistUsesExplicitContext() {
+    let bookTools = Set(ToolSelector.select(for: "推荐几本书", all: AgentToolRegistry.all).map(\.name))
+    #expect(!bookTools.contains("recommend_by_mood"))
+    #expect(!bookTools.contains("queue_replace"))
+
+    let wheelTools = Set(ToolSelector.select(for: "怎么下载 Python wheel", all: AgentToolRegistry.all).map(\.name))
+    #expect(!wheelTools.contains("media_download_offline"))
+
+    let docsTools = Set(ToolSelector.select(for: "搜索 Python 官方文档", all: AgentToolRegistry.all).map(\.name))
+    #expect(docsTools.contains("web_search"))
+    #expect(!docsTools.contains("library_search"))
+}
+
+@Test("side-effect authorization is operation-level and avoids lexical false positives")
+func operationAuthorizationIsLeastPrivilege() {
+    let favorite = AgentToolRegistry.descriptor(for: "favorite_set")!
+    let rating = AgentToolRegistry.descriptor(for: "rating_set")!
+    let index = AgentToolRegistry.descriptor(for: "library_index_v2_write_batch")!
+    let favoriteAuthorization = SideEffectAuthorizationContext(originalUserRequest: "收藏这首歌")
+    #expect(favoriteAuthorization.allows(favorite))
+    #expect(!favoriteAuthorization.allows(rating))
+    #expect(!favoriteAuthorization.allows(index))
+    #expect(SideEffectAuthorizationContext(originalUserRequest: "构建完整推荐索引").allows(index))
+    #expect(!SideEffectAuthorizationContext(originalUserRequest: "继续").allows(index))
+
+    #expect(SideEffectAuthorizationContext(originalUserRequest: "我不喜欢这个网页的排版").allowedOperations.isEmpty)
+    #expect(SideEffectAuthorizationContext(originalUserRequest: "C++ memory leak 是怎么产生的？").allowedOperations.isEmpty)
+    #expect(SideEffectAuthorizationContext(originalUserRequest: "skill issue 是什么意思？").allowedOperations.isEmpty)
+}

@@ -155,6 +155,8 @@ public struct ToolLoop {
         intent: AgentTaskIntent? = nil,
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
+        authorizationContext: SideEffectAuthorizationContext? = nil,
+        runID: UUID = UUID(),
         toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -162,6 +164,9 @@ public struct ToolLoop {
         progress: @escaping @Sendable (AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
+        if let scopedWebService = webService as? any AgentWebRunScopedService {
+            await scopedWebService.beginRun(runID)
+        }
         // 用户消息先回显
         await emit(AgentChatMessage(role: .user, messages: [.text(userText)]))
 
@@ -170,8 +175,13 @@ public struct ToolLoop {
             text: userText,
             explicitIntent: resolvedIntent
         )
+        // ConversationEngine/AgentCoordinator select this at the task
+        // boundary. A direct low-level caller that omits it is fail-closed;
+        // the ToolLoop must never turn its current text into consent.
+        let resolvedAuthorization = authorizationContext
+            ?? SideEffectAuthorizationContext(originalUserRequest: "")
         if let provider {
-            if resolvedIntent == .conversation, resolvedPolicy.completion == .modelAnswer {
+            if resolvedPolicy.completion == .modelAnswer {
                 await runGenericChat(
                     userText: userText,
                     provider: provider,
@@ -183,6 +193,7 @@ public struct ToolLoop {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     webService: webService,
+                    sideEffectAuthorization: resolvedAuthorization,
                     toolTimeout: toolTimeout,
                     confirm: confirm,
                     emit: emit,
@@ -204,6 +215,7 @@ public struct ToolLoop {
                     intent: resolvedIntent,
                     policy: resolvedPolicy,
                     initialTaskState: initialTaskState,
+                    sideEffectAuthorization: resolvedAuthorization,
                     toolTimeout: toolTimeout,
                     confirm: confirm,
                     emit: emit,
@@ -246,6 +258,7 @@ public struct ToolLoop {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
+        sideEffectAuthorization: SideEffectAuthorizationContext,
         toolTimeout: TimeInterval,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -253,7 +266,6 @@ public struct ToolLoop {
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
         var selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
-        let sideEffectAuthorization = SideEffectAuthorizationContext(originalUserRequest: userText)
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -334,6 +346,7 @@ public struct ToolLoop {
             if !outcome.webCitations.isEmpty {
                 let sources = webSources(from: outcome.webCitations)
                 if !sources.isEmpty {
+                    await registerWebSources(sources, webService: webService)
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
             }
@@ -589,6 +602,7 @@ public struct ToolLoop {
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
+        sideEffectAuthorization: SideEffectAuthorizationContext,
         toolTimeout: TimeInterval,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -602,7 +616,6 @@ public struct ToolLoop {
         // （例如第一轮音乐发现、第二轮需要歌单/服务器工具）会自动补入，不会永久缺失。
         var accumulatedToolText = userText
         var selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
-        let sideEffectAuthorization = SideEffectAuthorizationContext(originalUserRequest: userText)
         let requestTimeout = roundTimeout
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
@@ -924,6 +937,7 @@ public struct ToolLoop {
             if !outcome.webCitations.isEmpty {
                 let sources = Self.webSources(from: outcome.webCitations)
                 if !sources.isEmpty {
+                    await Self.registerWebSources(sources, webService: webService)
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
             }
@@ -1134,18 +1148,6 @@ public struct ToolLoop {
                     conversation.append(AIMessage(role: .user, content: "系统完成条件校验：\(instruction)"))
                     continue
                 case let .fail(message):
-                    if !nativeMode,
-                       Self.canUseOfflineFallback(intent: intent, userText: userText) {
-                        await runOffline(
-                            userText: userText,
-                            bridge: bridge,
-                            catalog: catalog,
-                            context: context,
-                            emit: emit,
-                            log: log
-                        )
-                        return
-                    }
                     taskState.status = .insufficient
                     taskState.errorState = message
                     taskState.updatedAt = .now
@@ -1814,6 +1816,14 @@ public struct ToolLoop {
                 sourceType: citation.sourceType
             )
         }
+    }
+
+    private static func registerWebSources(
+        _ sources: [WebSource],
+        webService: (any AgentWebService)?
+    ) async {
+        guard let scopedWebService = webService as? any AgentWebRunScopedService else { return }
+        await scopedWebService.register(sources: sources)
     }
 
     private static func deterministicCompletionSummary(

@@ -495,6 +495,12 @@ public final class AgentCoordinator: ObservableObject {
             // 只取最近一条完整任务指令，避免第二次“继续”把索引/批处理意图
             // 降级成 conversation，进而让索引工具从动态 schema 中消失。
             let historyText = AgentHistoryPolicy.relevantHistoryText(for: trimmed, in: history)
+            // Authorization follows the substantive user request.  A short
+            // continuation is not allowed to erase the operation the user
+            // already asked for.
+            let continuationAuthorization = SideEffectAuthorizationContext(
+                originalUserRequest: historyText.isEmpty ? trimmed : historyText
+            )
             let resolvedPolicy = AgentTaskPolicyResolver.resolve(
                 text: trimmed,
                 historyText: historyText,
@@ -505,8 +511,7 @@ public final class AgentCoordinator: ObservableObject {
             // be represented as a business task merely to reach the model
             // loop; otherwise CompletionEvaluator and task persistence become
             // an accidental capability boundary for ordinary questions.
-            if resolvedPolicy.intent == .conversation,
-               resolvedPolicy.completion == .modelAnswer {
+            if resolvedPolicy.completion == .modelAnswer {
                 if needsFirstSendConsent {
                     let consent = Self.consentRequest(
                         providerName: Self.providerDisplayName,
@@ -545,8 +550,10 @@ public final class AgentCoordinator: ObservableObject {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     webService: webService,
-                    intent: .conversation,
+                    intent: resolvedPolicy.intent,
                     policy: resolvedPolicy,
+                    authorizationContext: continuationAuthorization,
+                    runID: runID,
                     confirm: { [weak self] pending in
                         guard let self else { return false }
                         return await self.requestOperationConfirmation(pending)
@@ -619,6 +626,9 @@ public final class AgentCoordinator: ObservableObject {
                 state.updatedAt = .now
                 return state
             }
+            let authorizationContext = SideEffectAuthorizationContext(
+                originalUserRequest: resumeRecord?.goal ?? (historyText.isEmpty ? trimmed : historyText)
+            )
             if resumeRecord != nil {
                 self.taskStore.update(taskID, status: .running)
             }
@@ -670,6 +680,8 @@ public final class AgentCoordinator: ObservableObject {
                 externalMusicService: externalMusicService,
                 webService: webService,
                 initialTaskState: initialTaskState,
+                authorizationContext: authorizationContext,
+                runID: runID,
                 confirm: { [weak self] pending in
                     guard let self else { return false }
                     return await self.requestOperationConfirmation(pending)

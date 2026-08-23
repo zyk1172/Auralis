@@ -9,21 +9,8 @@ public struct ConversationEngine: Sendable {
     public init() {}
 
     public static func isExplicitMusicCommand(_ text: String) -> Bool {
-        let value = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !value.isEmpty else { return false }
-        let musicContext = [
-            "歌曲", "歌", "音乐", "曲库", "音乐库", "歌手", "艺人", "专辑", "歌单", "播放列表", "队列", "歌词", "收藏",
-            "song", "music", "artist", "album", "playlist", "queue", "track", "lyrics",
-        ].contains(where: value.contains)
-        let unambiguousMusicAction = [
-            "播放", "暂停", "下一首", "上一首", "继续播放", "加入队列", "接下来播放", "替换队列",
-            "创建歌单", "新建歌单", "加入歌单", "加到歌单", "删除歌单", "清空队列", "保存队列",
-            "play", "pause", "next", "previous",
-        ].contains(where: value.contains)
-        let contextualMusicAction = [
-            "收藏", "喜欢", "评分", "推荐", "找歌", "搜索歌曲", "搜索音乐", "下载", "离线", "favorite", "recommend", "download",
-        ].contains(where: value.contains) && musicContext
-        return unambiguousMusicAction || contextualMusicAction
+        let semantics = AgentRequestSemantics.analyze(text)
+        return semantics.isMusicContext && semantics.domain != .conversation
     }
 
     public static func allowsOfflineFallback(intent: AgentTaskIntent, userText: String) -> Bool {
@@ -32,7 +19,8 @@ public struct ConversationEngine: Sendable {
         case .librarySearch, .playbackControl, .musicDiscovery, .queueManagement,
              .playlistManagement, .libraryManagement, .musicAppreciation, .musicDownload:
             return true
-        case .conversation, .serverManagement, .diagnostics, .memoryManagement:
+        case .conversation, .playbackQuery, .queueQuery, .playlistQuery,
+             .serverManagement, .diagnostics, .memoryManagement:
             return false
         }
     }
@@ -51,6 +39,8 @@ public struct ConversationEngine: Sendable {
         intent: AgentTaskIntent? = nil,
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
+        authorizationContext: SideEffectAuthorizationContext? = nil,
+        runID: UUID = UUID(),
         toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -58,6 +48,11 @@ public struct ConversationEngine: Sendable {
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
+        let resolvedAuthorization = authorizationContext ?? Self.authorizationContext(
+            userText: userText,
+            history: history,
+            initialTaskState: initialTaskState
+        )
         await ToolLoop.run(
             userText: userText,
             provider: provider,
@@ -72,6 +67,8 @@ public struct ConversationEngine: Sendable {
             intent: intent,
             policy: policy,
             initialTaskState: initialTaskState,
+            authorizationContext: resolvedAuthorization,
+            runID: runID,
             toolTimeout: toolTimeout,
             confirm: confirm,
             emit: emit,
@@ -79,5 +76,26 @@ public struct ConversationEngine: Sendable {
             progress: progress,
             state: state
         )
+    }
+
+    /// Resolve authorization at the conversation/task boundary.  A short
+    /// continuation refers to the last substantive user request, while a
+    /// persisted task goal wins for resume.  ToolLoop never derives consent
+    /// from the current model-loop text.
+    private static func authorizationContext(
+        userText: String,
+        history: [AgentChatMessage],
+        initialTaskState: AgentTaskState?
+    ) -> SideEffectAuthorizationContext {
+        if let goal = initialTaskState?.goal.trimmingCharacters(in: .whitespacesAndNewlines),
+           !goal.isEmpty,
+           goal.caseInsensitiveCompare(userText.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame {
+            return SideEffectAuthorizationContext(originalUserRequest: goal)
+        }
+        let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
+        if !historyText.isEmpty {
+            return SideEffectAuthorizationContext(originalUserRequest: historyText)
+        }
+        return SideEffectAuthorizationContext(originalUserRequest: userText)
     }
 }

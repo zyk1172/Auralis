@@ -213,7 +213,7 @@ private final class BoundedURLDataLoader: NSObject, URLSessionDataDelegate, @unc
 ///
 /// DuckDuckGo's public endpoint is an Instant Answer service, not a complete
 /// web index. It is intentionally named and reported as a limited fallback.
-public actor DuckDuckGoInstantAnswerService: AgentWebSearchBackend {
+public actor DuckDuckGoInstantAnswerService: AgentWebRunScopedService, AgentWebSearchBackend {
     public static let backendIdentifier = "duckduckgo-instant-answer"
     public static let maxRawBodyBytes = 2_000_000
     public static let maxModelCharacters = 20_000
@@ -235,6 +235,14 @@ public actor DuckDuckGoInstantAnswerService: AgentWebSearchBackend {
         self.userAgent = userAgent
         self.policy = policy
         self.fetchScope = fetchScope
+    }
+
+    public func beginRun(_ runID: UUID) async {
+        await fetchScope.beginRun(runID)
+    }
+
+    public func register(sources: [WebSource]) async {
+        await fetchScope.register(sources: sources)
     }
 
     private static func configuration(from session: URLSession) -> URLSessionConfiguration {

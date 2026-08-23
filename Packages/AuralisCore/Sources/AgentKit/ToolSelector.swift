@@ -20,7 +20,7 @@ public enum ToolSelector {
     /// 仅保留跨意图都安全且体积很小的工具。大部分工具由意图和用户关键词按需加入；
     /// 把完整音乐库、播放、歌单和索引 Schema 常驻会显著降低小模型的工具选择准确率。
     static let coreNames: [String] = [
-        "tool_search", "capabilities_get", "library_get_summary", "app_get_context", "memory_list",
+        "tool_search", "capabilities_get", "app_get_context",
     ]
 
     static let recommendationIndexStatusNames: [String] = [
@@ -182,19 +182,30 @@ public enum ToolSelector {
         allowAmbiguousContinuation: Bool
     ) -> [ToolDescriptor] {
         let lower = userText.lowercased()
+        let semantics = AgentRequestSemantics.analyze(userText)
         var names = coreNames
 
-        if containsAny(lower, ["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放"]) {
+        // A catalog summary is useful for an explicit Auralis request, but it
+        // is not a generic-chat tool merely because the user said "推荐" or
+        // "搜索".
+        if semantics.isMusicContext {
+            names += ["library_get_summary"]
+        }
+
+        if semantics.isMusicContext,
+           (semantics.domain == .playback || containsAny(lower, ["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放"])) {
             names += playbackNames
         }
-        if containsAny(lower, ["队列", "接下来播放", "替换队列", "清空队列"]) {
+        if semantics.isMusicContext,
+           (semantics.domain == .queue || containsAny(lower, ["队列", "接下来播放", "替换队列", "清空队列"])) {
             names += queueNames
         }
-        if containsAny(lower, ["搜索", "查找", "找歌", "哪首", "哪个专辑", "谁唱的"]) {
+        if semantics.isMusicContext,
+           (semantics.domain == .musicLibrary || containsAny(lower, ["找歌", "哪首", "哪个专辑", "谁唱的"])) {
             names += ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
         }
         let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
-        if containsAny(lower, indexMarkers) {
+        if semantics.isMusicContext, containsAny(lower, indexMarkers) {
             let buildMarkers = ["开始", "启动", "建立", "创建", "构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
             names += containsAny(lower, buildMarkers)
                 ? recommendationIndexBuildNames
@@ -207,23 +218,28 @@ public enum ToolSelector {
             names += recommendationIndexBuildNames
         }
 
-        if containsAny(lower, ["歌单", "playlist", "播放列表"]) { names += playlistNames }
-        if containsAny(lower, ["收藏", "喜欢", "评分", "不喜欢", "不感兴趣", "favorite", "star", "heart", "dislike"]) { names += annotationNames }
-        if containsAny(lower, ["服务器", "同步", "连接", "在线", "server", "sync", "connect"]) { names += serverNames }
-        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2", "大众评价", "乐评", "评分", "资料", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "学习", "工作", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) { names += recommendationNames }
-        if containsAny(lower, ["页面", "打开", "功能", "能力", "后台", "siri", "快捷指令", "网络", "存储", "空间", "音频输出", "耳机", "设备", "app"]) {
+        if semantics.isMusicContext, containsAny(lower, ["歌单", "playlist", "播放列表"]) { names += playlistNames }
+        if semantics.isMusicContext, containsAny(lower, ["收藏", "喜欢", "评分", "不喜欢", "不感兴趣", "favorite", "star", "heart", "dislike"]) { names += annotationNames }
+        if semantics.domain == .server { names += serverNames }
+        if semantics.isMusicContext,
+           (semantics.domain == .recommendation || containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2", "大众评价", "乐评", "评分", "资料", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "学习", "工作", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"])) {
+            names += recommendationNames
+        }
+        if semantics.domain == .system || containsAny(lower, ["页面", "打开", "功能", "能力", "后台", "siri", "快捷指令", "网络", "存储", "空间", "音频输出", "耳机", "设备", "app"]) {
             names += appDeviceNames
         }
-        if containsAny(lower, ["统计", "收听", "听了", "最常听", "热门", "最近添加", "最近加入", "新添加", "新加入", "格式", "缓存占用", "存储分布", "分布"]) {
+        if semantics.domain == .diagnostics || containsAny(lower, ["统计", "收听", "听了", "最常听", "热门", "最近添加", "最近加入", "新添加", "新加入", "格式", "缓存占用", "存储分布", "分布"]) {
             names += statsNames
         }
-        if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error", "重复", "元数据", "封面", "损坏", "缓存", "陈旧缓存", "不可播放"]) {
+        if semantics.domain == .diagnostics {
             names += diagnosticsNames + catalogMaintenanceNames
         }
-        if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
-        if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
-        if containsAny(lower, ["联网", "网上", "网页", "新闻", "最新", "web", "internet", "news", "online"]) { names += ["web_search", "web_fetch"] }
-        if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
+        if semantics.isMusicContext, containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
+        if semantics.domain == .download { names += ["media_download_offline", "getDownloadedTracks"] }
+        if semantics.domain == .web { names += ["web_search", "web_fetch"] }
+        if semantics.domain == .memory {
+            names += ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
+        }
 
         let unique = Self.resolvedNames(names)
         let byName = Dictionary(uniqueKeysWithValues: all.filter { $0.visibility == .model }.map { ($0.name, $0) })
@@ -242,17 +258,27 @@ public enum ToolSelector {
         let intentNames: Set<String>
         switch intent {
         case .conversation:
-            intentNames = ["library_get_summary", "app_get_context", "memory_list"]
+            // Generic conversation starts from the compact core set.  A
+            // model-visible tool is added by explicit semantics or
+            // tool_search, never merely because the caller supplied the
+            // compatibility `.conversation` intent.
+            intentNames = []
         case .librarySearch:
             intentNames = ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
         case .playbackControl:
             intentNames = ["playback_get_state", "playback_play_song", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat"]
+        case .playbackQuery:
+            intentNames = ["playback_get_state", "diagnostics_now_playing", "getCurrentTrack", "getCurrentQueue"]
         case .musicDiscovery:
             intentNames = ["library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks", "recommend_by_mood", "recommend_by_constraints", "library_get_similar_songs", "queue_replace", "queue_append", "playback_play_song", "playback_play_playlist", "favorite_set", "preference_set_disliked", "lyrics_get", "result_present_tracks"]
         case .queueManagement:
             intentNames = ["queue_get", "queue_append", "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
+        case .queueQuery:
+            intentNames = ["queue_get", "getCurrentQueue"]
         case .playlistManagement:
             intentNames = ["library_search", "library_get_song", "listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
+        case .playlistQuery:
+            intentNames = ["listPlaylists", "library_get_playlist", "getPlaylist"]
         case .libraryManagement:
             intentNames = policy.completion == .indexPendingCountIsZero
                 ? Set(["library_get_summary"] + recommendationIndexBuildNames)

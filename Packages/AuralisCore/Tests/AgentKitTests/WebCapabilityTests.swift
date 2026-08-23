@@ -263,4 +263,33 @@ struct WebCapabilityTests {
         #expect(fallbackOnly.capability == .instantAnswerFallback)
         #expect(try await fallbackOnly.search(query: "q", limit: 1).sources.first?.backend == "fallback")
     }
+
+    @Test("web fetch scope is cleared between runs and accepts hosted citations")
+    func webFetchScopeIsRunScoped() async throws {
+        let firstURL = URL(string: "https://example.com/first")!
+        let secondURL = URL(string: "https://example.com/second")!
+        let scope = WebFetchURLScope()
+        let firstRun = UUID()
+        let secondRun = UUID()
+        await scope.beginRun(firstRun)
+        await scope.record([firstURL])
+        #expect(await scope.allows(firstURL))
+
+        await scope.beginRun(secondRun)
+        #expect(!(await scope.allows(firstURL)))
+
+        let backend = FixtureSearchBackend(capability: .configuredFullSearch, label: "hosted-citation")
+        let router = WebCapabilityRouter(configuredFullSearch: backend, fetchScope: scope)
+        await router.beginRun(secondRun)
+        await router.register(sources: [WebSource(
+            title: "Hosted citation",
+            url: secondURL,
+            snippet: "citation",
+            backend: "provider-hosted",
+            sourceType: "citation"
+        )])
+        _ = try await router.fetch(url: secondURL)
+        #expect(!(await scope.allows(firstURL)))
+        #expect(await scope.allows(secondURL))
+    }
 }
