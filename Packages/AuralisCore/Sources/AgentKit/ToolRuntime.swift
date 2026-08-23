@@ -10,6 +10,8 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
     case missingParameter(String)
     case unknownParameter(String)
     case invalidParameter(name: String, expected: String, value: String)
+    case skillUnavailable(String)
+    case modelWriteMissingAuthorizationOperation(String)
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +19,8 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
         case let .missingParameter(name): "缺少必填参数：\(name)"
         case let .unknownParameter(name): "工具不接受参数：\(name)"
         case let .invalidParameter(name, expected, value): "参数 \(name) 应为 \(expected)，实际为：\(value)"
+        case let .skillUnavailable(name): "工具 \(name) 只能由受信任的内置 Skill 执行"
+        case let .modelWriteMissingAuthorizationOperation(name): "工具 \(name) 缺少副作用授权操作声明，已拒绝执行"
         }
     }
 }
@@ -34,7 +38,8 @@ public struct ToolRuntime {
         allowsLyrics: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
         webService: (any AgentWebService)? = nil,
-        authorizationContext: SideEffectAuthorizationContext? = nil
+        authorizationContext: SideEffectAuthorizationContext? = nil,
+        activeSkillID: String? = nil
     ) async -> ToolResult {
         guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
             return ToolResult(
@@ -46,6 +51,15 @@ public struct ToolRuntime {
         }
 
         do {
+            if descriptor.visibility == .skillOnly,
+               !descriptor.isVisible(toSkillID: activeSkillID) {
+                throw ToolRuntimeError.skillUnavailable(call.name)
+            }
+            if descriptor.visibility == .model,
+               descriptor.permission != .readOnly,
+               descriptor.authorizationOperation == nil {
+                throw ToolRuntimeError.modelWriteMissingAuthorizationOperation(call.name)
+            }
             try validate(call, descriptor: descriptor)
             if let authorizationContext,
                descriptor.permission != .readOnly,
@@ -66,7 +80,8 @@ public struct ToolRuntime {
                 externalMusicService: externalMusicService,
                 allowsLyrics: allowsLyrics,
                 providerCapabilities: providerCapabilities,
-                webService: webService
+                webService: webService,
+                activeSkillID: activeSkillID
             )
         } catch {
             return ToolResult(

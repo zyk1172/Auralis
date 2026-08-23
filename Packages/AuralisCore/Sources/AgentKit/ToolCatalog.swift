@@ -43,11 +43,16 @@ public struct ToolCatalog: Sendable {
         }
     }
 
-    public func search(query: String, namespace: String? = nil, limit: Int = 8) -> [ToolCatalogEntry] {
+    public func search(
+        query: String,
+        namespace: String? = nil,
+        limit: Int = 8,
+        activeSkillID: String? = nil
+    ) -> [ToolCatalogEntry] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let namespaceNeedle = namespace?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered = descriptors.filter { descriptor in
-            guard descriptor.visibility == .model else { return false }
+            guard descriptor.isVisible(toSkillID: activeSkillID) else { return false }
             guard namespaceNeedle.map({ descriptor.namespace.lowercased() == $0 }) ?? true else { return false }
             guard !needle.isEmpty else { return true }
             return descriptor.name.lowercased().contains(needle)

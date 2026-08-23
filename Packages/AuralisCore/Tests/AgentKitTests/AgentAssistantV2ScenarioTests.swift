@@ -611,10 +611,24 @@ func operationAuthorizationIsLeastPrivilege() {
     let favorite = AgentToolRegistry.descriptor(for: "favorite_set")!
     let rating = AgentToolRegistry.descriptor(for: "rating_set")!
     let index = AgentToolRegistry.descriptor(for: "library_index_v2_write_batch")!
+    let queueAppend = AgentToolRegistry.descriptor(for: "queue_append")!
+    let queueReplace = AgentToolRegistry.descriptor(for: "queue_replace")!
+    let playlistCreate = AgentToolRegistry.descriptor(for: "playlist_create")!
+    let playlistAdd = AgentToolRegistry.descriptor(for: "playlist_add_songs")!
+    let play = AgentToolRegistry.descriptor(for: "playback_play_song")!
     let favoriteAuthorization = SideEffectAuthorizationContext(originalUserRequest: "收藏这首歌")
     #expect(favoriteAuthorization.allows(favorite))
     #expect(!favoriteAuthorization.allows(rating))
     #expect(!favoriteAuthorization.allows(index))
+    let appendAuthorization = SideEffectAuthorizationContext(originalUserRequest: "把这首歌加入队列")
+    #expect(appendAuthorization.allows(queueAppend))
+    #expect(!appendAuthorization.allows(queueReplace))
+    let createAuthorization = SideEffectAuthorizationContext(originalUserRequest: "创建一个歌单")
+    #expect(createAuthorization.allows(playlistCreate))
+    #expect(!createAuthorization.allows(playlistAdd))
+    let playAuthorization = SideEffectAuthorizationContext(originalUserRequest: "播放这首歌")
+    #expect(playAuthorization.allows(play))
+    #expect(!playAuthorization.allows(queueReplace))
     #expect(SideEffectAuthorizationContext(originalUserRequest: "构建完整推荐索引").allows(index))
     #expect(!SideEffectAuthorizationContext(originalUserRequest: "继续").allows(index))
 

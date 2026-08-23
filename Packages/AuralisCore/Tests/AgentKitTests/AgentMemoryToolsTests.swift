@@ -289,7 +289,13 @@ struct AgentSystemPromptTests {
 
     @Test("文本工具协议会列出推荐索引 V2 的完整工具链")
     func recommendationIndexV2ToolsAreListed() {
-        let selected = ToolSelector.select(for: "构建推荐索引 V2", all: AgentToolRegistry.all)
+        let selected = ToolSelector.select(
+            for: "构建推荐索引 V2",
+            intent: .libraryManagement,
+            policy: AgentTaskPolicy.policy(for: .libraryManagement),
+            all: AgentToolRegistry.all,
+            activeSkillID: "recommendation-index-v2"
+        )
         let prompt = AgentRunner.systemPrompt(context: AgentRunner.Context(), tools: selected, nativeToolCalling: false)
         #expect(prompt.contains("library_index_v2_status"))
         #expect(prompt.contains("library_index_v2_next_batch"))
@@ -298,7 +304,13 @@ struct AgentSystemPromptTests {
 
     @Test("索引任务的后续短指令也保留 V2 原生工具")
     func recommendationIndexV2ToolsRemainAvailableForContinuation() {
-        let selected = ToolSelector.select(for: "继续", all: AgentToolRegistry.all)
+        let selected = ToolSelector.select(
+            for: "继续",
+            intent: .libraryManagement,
+            policy: AgentTaskPolicy.policy(for: .libraryManagement),
+            all: AgentToolRegistry.all,
+            activeSkillID: "recommendation-index-v2"
+        )
         let names = Set(selected.map(\.name))
         #expect(names.contains("library_index_v2_status"))
         #expect(names.contains("library_index_v2_next_batch"))

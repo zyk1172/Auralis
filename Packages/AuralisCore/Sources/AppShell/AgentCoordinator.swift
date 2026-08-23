@@ -499,7 +499,10 @@ public final class AgentCoordinator: ObservableObject {
             // continuation is not allowed to erase the operation the user
             // already asked for.
             let continuationAuthorization = SideEffectAuthorizationContext(
-                originalUserRequest: historyText.isEmpty ? trimmed : historyText
+                sourceRequest: historyText.isEmpty ? trimmed : historyText,
+                semantics: AgentRequestSemantics.analyze(
+                    historyText.isEmpty ? trimmed : historyText
+                )
             )
             let resolvedPolicy = AgentTaskPolicyResolver.resolve(
                 text: trimmed,
@@ -511,7 +514,11 @@ public final class AgentCoordinator: ObservableObject {
             // be represented as a business task merely to reach the model
             // loop; otherwise CompletionEvaluator and task persistence become
             // an accidental capability boundary for ordinary questions.
-            if resolvedPolicy.completion == .modelAnswer {
+            let requestSemantics = AgentRequestSemantics.analyze(trimmed, historyText: historyText)
+            let canUseGenericConversation = !requestSemantics.requiresSideEffect
+                && requestSemantics.domain != .recommendation
+                && resolvedPolicy.completion != .appreciationWithEvidence
+            if canUseGenericConversation {
                 if needsFirstSendConsent {
                     let consent = Self.consentRequest(
                         providerName: Self.providerDisplayName,
@@ -619,15 +626,21 @@ public final class AgentCoordinator: ObservableObject {
                     startedAt: record.createdAt
                 )
                 state.completedActions = record.completedActions ?? []
+                if let checkpointJSON = record.checkpointJSON {
+                    state.facts["recommendation.index.checkpoint"] = checkpointJSON
+                }
                 state.pendingActions = [
-                    "这是一个已恢复的推荐索引任务。请先调用 library_index_v2_status 读取当前待处理数量，再从当前 pending 批次继续；不要重复已完成动作。"
+                    "这是一个已恢复的 Stateful Skill。请先从真实状态继续，不要重复已完成动作。"
                 ]
                 state.status = .running
                 state.updatedAt = .now
                 return state
             }
             let authorizationContext = SideEffectAuthorizationContext(
-                originalUserRequest: resumeRecord?.goal ?? (historyText.isEmpty ? trimmed : historyText)
+                sourceRequest: resumeRecord?.goal ?? (historyText.isEmpty ? trimmed : historyText),
+                semantics: AgentRequestSemantics.analyze(
+                    resumeRecord?.goal ?? (historyText.isEmpty ? trimmed : historyText)
+                )
             )
             if resumeRecord != nil {
                 self.taskStore.update(taskID, status: .running)
@@ -741,7 +754,8 @@ public final class AgentCoordinator: ObservableObject {
             outputTokens: state.progress.outputTokens,
             error: state.errorState,
             completedActions: state.completedActions,
-            noProgressRounds: state.progress.noProgressRounds
+            noProgressRounds: state.progress.noProgressRounds,
+            checkpointJSON: state.facts["recommendation.index.checkpoint"]
         )
         if activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)

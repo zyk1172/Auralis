@@ -4,7 +4,7 @@ import Foundation
 import LocalCatalog
 
 /// 用户请求的粗粒度意图。意图只用于任务理解、工具排序、提示、完成语义与 UI/诊断，
-/// 不再是普通音乐工具的执行权限边界（permissive direct-execution runtime）。
+/// 不再是普通模型工具或可信 Stateful Skill 之外工具的执行权限边界。
 public enum AgentTaskIntent: String, Codable, CaseIterable, Sendable {
     case conversation
     case librarySearch
@@ -133,8 +133,8 @@ public enum AgentCompletionPredicate: Codable, Equatable, Sendable {
 }
 
 /// 每个任务的路由/诊断策略（intent、completion、budget 等）。
-/// 已注册的普通音乐工具默认全部允许执行；`authorizes` 不再构成能力门禁，
-/// 保留方法仅为兼容旧调用方，恒返回 true。
+/// `authorizes` 不再构成模型能力门禁，保留方法仅为兼容旧调用方，恒返回 true；
+/// 真实副作用授权由 ToolRuntime 按 canonical operation 执行。
 public struct AgentTaskPolicy: Codable, Equatable, Sendable {
     public let intent: AgentTaskIntent
     public let scopes: Set<GrantedScope>
@@ -201,7 +201,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
                 "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable",
                 "likeTrack", "unlikeTrack", "favoriteAlbum", "unfavoriteAlbum", "favoriteArtist", "unfavoriteArtist",
                 "setRating", "clearRating", "favorite_set", "rating_set", "preference_set_disliked",
-                "refreshLibrary", "server_sync_start",
+                "refreshLibrary", "server_sync_start", "library_index_v2_status", "library_index_v2_read", "library_index_v2_tag_catalog",
             ]
         case .serverManagement:
             return [
@@ -537,18 +537,15 @@ public enum AgentIntentClassifier {
     }
 
     private static func classifyDirect(_ text: String) -> AgentTaskIntent {
-        let value = text.lowercased()
-        func has(_ words: [String]) -> Bool { words.contains { value.contains($0) } }
         let semantics = AgentRequestSemantics.analyze(text)
 
         // Appreciation is a deterministic evidence workflow, so it is
         // checked before the shared playback/diagnostic domain mapping.
-        if semantics.isMusicContext, has(["鉴赏", "赏析", "乐评", "大众评价", "appreciate"]) {
+        if semantics.isMusicAppreciation {
             return .musicAppreciation
         }
         if semantics.domain == .memory { return .memoryManagement }
-        if semantics.domain == .musicLibrary,
-           has(["推荐索引", "索引 v2", "索引v2", "library_index_v2"]) {
+        if semantics.isRecommendationIndex {
             return .libraryManagement
         }
         if semantics.domain == .download { return .musicDownload }
@@ -623,14 +620,11 @@ public enum AgentTaskPolicyResolver {
     }
 }
 
-/// Recommendation Index 是普通本地工具服务；这里只负责在任务创建边界选择完成条件，
-/// 不参与模型循环、重试、超时或工具分派。
+/// Recommendation Index 的任务兼容规则只负责在任务创建边界选择恢复策略；真正的
+/// 批次状态、重试、checkpoint 和完成判定由 RecommendationIndexV2SkillRuntime 持有。
 public enum RecommendationIndexTaskRules {
     public static func requiresCompleteBuild(text: String, historyText: String = "") -> Bool {
-        let combined = (text + " " + historyText).lowercased()
-        let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
-        let actionMarkers = ["开始", "启动", "建立", "创建", "构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
-        return indexMarkers.contains(where: combined.contains) && actionMarkers.contains(where: combined.contains)
+        AgentRequestSemantics.analyze(text, historyText: historyText).isRecommendationIndexBuild
     }
 }
 

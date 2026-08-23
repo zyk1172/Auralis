@@ -383,7 +383,9 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
     ])
 
     let definition = try #require(ToolSelector.toolDefinitions(
-        from: AgentToolRegistry.all.filter { $0.name == "library_index_v2_write_batch" }
+        from: AgentToolRegistry.all.filter { $0.name == "library_index_v2_write_batch" },
+        strict: true,
+        activeSkillID: "recommendation-index-v2"
     ).first)
     let schemaData = try #require(definition.parametersJSON?.data(using: .utf8))
     let schema = try #require(JSONSerialization.jsonObject(with: schemaData) as? [String: Any])

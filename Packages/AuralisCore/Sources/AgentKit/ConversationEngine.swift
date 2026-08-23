@@ -90,12 +90,21 @@ public struct ConversationEngine: Sendable {
         if let goal = initialTaskState?.goal.trimmingCharacters(in: .whitespacesAndNewlines),
            !goal.isEmpty,
            goal.caseInsensitiveCompare(userText.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame {
-            return SideEffectAuthorizationContext(originalUserRequest: goal)
+            return SideEffectAuthorizationContext(
+                sourceRequest: goal,
+                semantics: AgentRequestSemantics.analyze(goal)
+            )
         }
         let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
         if !historyText.isEmpty {
-            return SideEffectAuthorizationContext(originalUserRequest: historyText)
+            return SideEffectAuthorizationContext(
+                sourceRequest: historyText,
+                semantics: AgentRequestSemantics.analyze(historyText)
+            )
         }
-        return SideEffectAuthorizationContext(originalUserRequest: userText)
+        return SideEffectAuthorizationContext(
+            sourceRequest: userText,
+            semantics: AgentRequestSemantics.analyze(userText)
+        )
     }
 }

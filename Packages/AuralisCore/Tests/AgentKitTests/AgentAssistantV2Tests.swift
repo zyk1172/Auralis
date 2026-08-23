@@ -103,6 +103,54 @@ struct AgentAssistantV2Tests {
         #expect(definitions.contains { $0.name == "music_download_search" })
     }
 
+    @Test("Recommendation Index private tools require the trusted skill")
+    func recommendationIndexPrivateToolsRequireSkill() {
+        let ordinary = ToolSelector.select(for: "开始构建推荐索引 V2", all: AgentToolRegistry.all)
+        let ordinaryNames = Set(ordinary.map(\.name))
+        #expect(!ordinaryNames.contains("library_index_v2_next_batch"))
+        #expect(!ordinaryNames.contains("library_index_v2_write_batch"))
+        #expect(!ToolCatalog().search(query: "library_index_v2_next_batch").contains { $0.name == "library_index_v2_next_batch" })
+        #expect(!ToolCatalog().search(query: "library_index_v2_write_batch").contains { $0.name == "library_index_v2_write_batch" })
+
+        let active = ToolSelector.select(
+            for: "开始构建推荐索引 V2",
+            intent: .libraryManagement,
+            policy: AgentTaskPolicy.policy(for: .libraryManagement),
+            all: AgentToolRegistry.all,
+            activeSkillID: "recommendation-index-v2"
+        )
+        let activeNames = Set(active.map(\.name))
+        #expect(activeNames.contains("library_index_v2_status"))
+        #expect(activeNames.contains("library_index_v2_next_batch"))
+        #expect(activeNames.contains("library_index_v2_write_batch"))
+    }
+
+    @Test("Every model-visible write declares a canonical authorization operation")
+    func modelVisibleWritesDeclareLeastPrivilegeOperation() {
+        let missing = AgentToolRegistry.all
+            .filter { $0.visibility == .model && $0.permission != .readOnly && $0.authorizationOperation == nil }
+            .map(\.name)
+        #expect(missing.isEmpty, "缺少逐操作授权声明：\(missing.sorted().joined(separator: ", "))")
+    }
+
+    @Test("Index status questions never activate the build workflow")
+    func indexQueriesDoNotStartBuild() {
+        let queries = [
+            "索引处理了几首歌",
+            "推荐索引分类了多少首",
+            "现在索引进度怎么样",
+            "索引还剩多少首",
+            "推荐索引全部处理完了吗",
+        ]
+        for query in queries {
+            let semantics = AgentRequestSemantics.analyze(query)
+            #expect(semantics.isRecommendationIndex)
+            #expect(!semantics.isRecommendationIndexBuild, "查询不应启动构建：\(query)")
+            #expect(AgentTaskPolicyResolver.resolve(text: query).completion != .indexPendingCountIsZero)
+            #expect(WorkflowEngine.route(intent: .libraryManagement, text: query).kind == .generic)
+        }
+    }
+
     @Test("recursive schema validation checks enum, nested object, arrays and extra keys")
     func recursivelyValidatesStructuredArguments() throws {
         let descriptor = ToolDescriptor(

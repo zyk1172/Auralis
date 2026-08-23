@@ -328,7 +328,8 @@ struct AgentRuntimeArchitectureTests {
             for: "继续",
             intent: policy.intent,
             policy: policy,
-            all: AgentToolRegistry.all
+            all: AgentToolRegistry.all,
+            activeSkillID: "recommendation-index-v2"
         )
         let names = Set(selected.map(\.name))
         #expect(names.contains("library_index_v2_status"))
