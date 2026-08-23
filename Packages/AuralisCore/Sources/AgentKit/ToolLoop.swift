@@ -170,9 +170,12 @@ public struct ToolLoop {
         // 用户消息先回显
         await emit(AgentChatMessage(role: .user, messages: [.text(userText)]))
 
-        let resolvedIntent = intent ?? AgentIntentClassifier.classify(userText)
+        let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
+        let requestSemantics = AgentRequestSemantics.analyze(userText, historyText: historyText)
+        let resolvedIntent = intent ?? AgentIntentClassifier.classify(userText, historyText: historyText)
         let resolvedPolicy = policy ?? AgentTaskPolicyResolver.resolve(
             text: userText,
+            historyText: historyText,
             explicitIntent: resolvedIntent
         )
         // ConversationEngine/AgentCoordinator select this at the task
@@ -181,7 +184,10 @@ public struct ToolLoop {
         let resolvedAuthorization = authorizationContext
             ?? SideEffectAuthorizationContext(originalUserRequest: "")
         if let provider {
-            if resolvedPolicy.completion == .modelAnswer {
+            if !requestSemantics.requiresSideEffect,
+               requestSemantics.domain != .recommendation,
+               resolvedPolicy.completion != .appreciationWithEvidence,
+               initialTaskState == nil {
                 await runGenericChat(
                     userText: userText,
                     provider: provider,
@@ -194,6 +200,7 @@ public struct ToolLoop {
                     externalMusicService: externalMusicService,
                     webService: webService,
                     sideEffectAuthorization: resolvedAuthorization,
+                    runID: runID,
                     toolTimeout: toolTimeout,
                     confirm: confirm,
                     emit: emit,
@@ -216,6 +223,7 @@ public struct ToolLoop {
                     policy: resolvedPolicy,
                     initialTaskState: initialTaskState,
                     sideEffectAuthorization: resolvedAuthorization,
+                    runID: runID,
                     toolTimeout: toolTimeout,
                     confirm: confirm,
                     emit: emit,
@@ -259,6 +267,7 @@ public struct ToolLoop {
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
         sideEffectAuthorization: SideEffectAuthorizationContext,
+        runID: UUID,
         toolTimeout: TimeInterval,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -290,6 +299,11 @@ public struct ToolLoop {
         var indeterminateSideEffects = Set<String>()
         var cachedReadResults: [String: String] = [:]
         var readRepeatCounts: [String: Int] = [:]
+        // Generic chat has no task completion evaluator, but read-only music
+        // results still need the same buffered UI presentation contract as
+        // deterministic tasks: collect cards during tool turns and emit them
+        // once alongside the natural final answer.
+        var presentation = AgentPresentationState()
         while true {
             if Task.isCancelled {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
@@ -346,7 +360,7 @@ public struct ToolLoop {
             if !outcome.webCitations.isEmpty {
                 let sources = webSources(from: outcome.webCitations)
                 if !sources.isEmpty {
-                    await registerWebSources(sources, webService: webService)
+                    await registerWebSources(sources, webService: webService, runID: runID)
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
             }
@@ -361,7 +375,13 @@ public struct ToolLoop {
                 if answer.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.error("AI Provider 返回了空回答。")]))
                 } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text(answer)]))
+                    presentation.applySearchFallback()
+                    var messages: [AgentMessage] = []
+                    if let finalMessage = presentation.finalMessage() {
+                        messages.append(finalMessage)
+                    }
+                    messages.append(.text(answer))
+                    await emit(AgentChatMessage(role: .assistant, messages: messages))
                 }
                 return
             }
@@ -512,6 +532,26 @@ public struct ToolLoop {
                 if case let .webSources(sources)? = result.payload, !sources.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
+                if let payload = result.payload {
+                    let role = result.presentationRole == .none ? descriptor.defaultPresentationRole : result.presentationRole
+                    switch (role, payload) {
+                    case (.candidate, let .trackCards(cards)):
+                        presentation.addCandidateTracks(cards)
+                    case (.finalResult, let .trackCards(cards)):
+                        presentation.setFinalTracks(cards)
+                    case (.disambiguation, let .trackCards(cards)):
+                        presentation.setDisambiguation(cards)
+                    case (.candidate, let .albumCards(albums)):
+                        presentation.addCandidateAlbums(albums)
+                    case (.finalResult, let .albumCards(albums)):
+                        presentation.setFinalAlbums(albums)
+                    case (.candidate, let .playlistProposal(name, tracks)):
+                        presentation.addCandidateTracks(tracks)
+                        presentation.setFinalPlaylistProposal(name, tracks)
+                    default:
+                        break
+                    }
+                }
 
                 var resultText = "（工具执行结果）\(call.name): \(result.success ? "成功" : "失败") - \(result.summary)"
                 if let payload = result.payload {
@@ -603,6 +643,7 @@ public struct ToolLoop {
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
         sideEffectAuthorization: SideEffectAuthorizationContext,
+        runID: UUID,
         toolTimeout: TimeInterval,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -615,27 +656,38 @@ public struct ToolLoop {
         // 每轮用「用户原文 + 模型已输出文本 + 已执行工具」重新展开，任务中途需要新工具
         // （例如第一轮音乐发现、第二轮需要歌单/服务器工具）会自动补入，不会永久缺失。
         var accumulatedToolText = userText
-        var selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
         let requestTimeout = roundTimeout
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
+        var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
+        let skillSemantics = AgentRequestSemantics.analyze(
+            userText,
+            historyText: AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
+        )
+        let activeSkill = BuiltInStatefulSkillRegistry.activate(
+            semantics: skillSemantics,
+            userText: userText,
+            initialTaskState: initialTaskState
+        )
+        let activeSkillID = activeSkill?.skillID
+        activeSkill?.configure(maxOutputTokens: provider.capabilities.maxOutputTokens)
+        Self.mergeSkillFacts(activeSkill, into: &taskState)
+        var selectedTools = ToolSelector.select(
+            for: userText,
+            intent: intent,
+            policy: policy,
+            all: AgentToolRegistry.all,
+            activeSkillID: activeSkillID
+        )
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
         var toolDefinitions = nativeMode
             ? ToolSelector.toolDefinitions(
                 from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
-                strict: provider.capabilities.supportsStrictSchema
+                strict: provider.capabilities.supportsStrictSchema,
+                activeSkillID: activeSkillID
             )
             : []
-
-        var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
-        let workflow = WorkflowEngine.route(intent: intent, text: userText)
-        var recommendationWorkflow: RecommendationIndexWorkflow? = workflow.usesRecommendationIndexV2
-            ? WorkflowEngine.recommendationIndexWorkflow()
-            : nil
-        taskState.facts["workflow"] = workflow.kind.rawValue
-        taskState.facts["workflow_uses_batch_tools"] = workflow.usesBatchTools ? "true" : "false"
-        taskState.facts["workflow_uses_recommendation_index_v2"] = workflow.usesRecommendationIndexV2 ? "true" : "false"
         var privacy = AIPrivacyPermissions()
         privacy.allowsMetadata = context.allowsMetadata
         privacy.allowsLyrics = context.allowsLyrics
@@ -651,17 +703,16 @@ public struct ToolLoop {
         let resolvedOutputBudget = policy.budget.resolvedOutputTokens(
             capabilities: provider.capabilities
         )
-        recommendationWorkflow?.configure(maxOutputTokens: resolvedOutputBudget)
+        activeSkill?.configure(maxOutputTokens: resolvedOutputBudget)
+        Self.mergeSkillFacts(activeSkill, into: &taskState)
 
         var conversation = AgentContextBuilder.build(
             systemPrompt: Self.systemPrompt(
                 context: context,
-                tools: Self.modelToolsForWorkflow(selectedTools, workflow: workflow),
+                tools: selectedTools,
                 nativeToolCalling: nativeMode,
                 goal: taskState.goal,
-                workflowInstruction: workflow.usesRecommendationIndexV2
-                    ? Self.recommendationIndexWorkflowInstruction
-                    : nil
+                workflowInstruction: activeSkill?.instructions
             ),
             task: taskState,
             facts: [],
@@ -673,10 +724,10 @@ public struct ToolLoop {
                 + ContextManager.estimatedTokens(toolDefinitions)
         )
         conversation.append(AIMessage(role: .user, content: userText))
-        if initialTaskState != nil, policy.completion == .indexPendingCountIsZero {
+        if initialTaskState != nil, activeSkill != nil {
             conversation.append(AIMessage(
                 role: .user,
-                content: "系统恢复要求：这是一个已保存的推荐索引任务。请先调用 library_index_v2_status 读取当前待处理数量，再从 pending 批次继续；不要重复已完成动作。"
+                content: "系统恢复要求：这是一个已保存的 Stateful Skill。请先执行 Skill Runtime 当前步骤，从真实状态继续；不要重复已完成动作。"
             ))
         }
 
@@ -694,10 +745,10 @@ public struct ToolLoop {
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
-        // A transient Provider failure may be recovered once at the current
-        // workflow checkpoint. The flag resets after a successful model turn;
-        // it is not a tool-call or model-capability limit.
-        var didRecoverRecommendationProviderFailure = false
+        // A transient Provider failure may be recovered at the current skill
+        // checkpoint. This is protocol-preserving recovery, not a tool-call or
+        // model-capability limit.
+        var didRecoverSkillProviderFailure = false
 
         while true {
             if Task.isCancelled {
@@ -708,20 +759,24 @@ public struct ToolLoop {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(violation.localizedDescription)]))
                 return
             }
-            if workflow.usesRecommendationIndexV2,
-               recommendationWorkflow?.isCompleted == true {
-                Self.markWorkflowCompleted(state: &taskState)
+            if activeSkill?.isCompleted == true {
+                Self.mergeSkillFacts(activeSkill, into: &taskState)
+                Self.markSkillCompleted(state: &taskState)
                 await state(taskState)
                 await emit(AgentChatMessage(
                     role: .assistant,
-                    messages: [.text(workflow.usesRecommendationIndexV2
-                        ? "推荐索引 V2 已完成。"
-                        : Self.deterministicCompletionSummary(policy: policy, presentation: presentation))]
+                    messages: [.text(Self.skillCompletionMessage(activeSkill))]
                 ))
                 return
             }
             // 动态工具扩展：每轮重新展开工具集（只增不减），保证任务中途的新工具需求可达。
-            let expanded = ToolSelector.select(for: accumulatedToolText, intent: intent, policy: policy, all: AgentToolRegistry.all)
+            let expanded = ToolSelector.select(
+                for: accumulatedToolText,
+                intent: intent,
+                policy: policy,
+                all: AgentToolRegistry.all,
+                activeSkillID: activeSkillID
+            )
             var merged = selectedTools
             var haveNames = Set(merged.map(\.name))
             for tool in expanded where !haveNames.contains(tool.name) {
@@ -730,7 +785,9 @@ public struct ToolLoop {
             }
             // TaskRequiredTools：本轮已实际执行过的工具永远保留在 schema 中。
             if !ws.perToolCounts.isEmpty {
-                let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all
+                    .filter { $0.isVisible(toSkillID: activeSkillID) }
+                    .map { ($0.name, $0) })
                 for name in ws.perToolCounts.keys where !haveNames.contains(name) {
                     if let tool = byName[name] {
                         merged.append(tool)
@@ -742,11 +799,9 @@ public struct ToolLoop {
                 selectedTools = merged
                 if nativeMode {
                     toolDefinitions = ToolSelector.toolDefinitions(
-                        from: Self.modelToolsForWorkflow(
-                            Self.localModelTools(selectedTools, capabilities: provider.capabilities),
-                            workflow: workflow
-                        ),
-                        strict: provider.capabilities.supportsStrictSchema
+                        from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                        strict: provider.capabilities.supportsStrictSchema,
+                        activeSkillID: activeSkillID
                     )
                 }
             }
@@ -759,42 +814,35 @@ public struct ToolLoop {
             // real native hosted web tool.
             if nativeMode {
                 toolDefinitions = ToolSelector.toolDefinitions(
-                    from: Self.modelToolsForWorkflow(
-                        Self.localModelTools(selectedTools, capabilities: provider.capabilities),
-                        workflow: workflow
-                    ),
-                    strict: provider.capabilities.supportsStrictSchema
+                    from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                    strict: provider.capabilities.supportsStrictSchema,
+                    activeSkillID: activeSkillID
                 )
             }
 
-            // Recommendation Index V2 owns the control-flow edges. The only
-            // Provider turn is the classification step; status and batch
-            // fetching are executed as synthetic LoopToolCalls below.
-            let forcedWorkflowToolName = workflow.usesRecommendationIndexV2
-                ? Self.recommendationIndexForcedToolName(for: recommendationWorkflow?.state)
-                : nil
-            let forcedWorkflowCallID = forcedWorkflowToolName.map {
-                "workflow-\(toolStepCount + 1)-\($0)"
-            }
-            let forcedWorkflowCall = forcedWorkflowToolName.map {
-                LoopToolCall(
-                    id: forcedWorkflowCallID,
-                    name: $0,
-                    arguments: [:],
+            // A stateful skill owns mandatory control-flow edges. The model is
+            // only asked for a turn when the skill explicitly says so.
+            let forcedSkillCall: LoopToolCall? = {
+                guard let activeSkill else { return nil }
+                guard case let .executeTool(name, arguments) = activeSkill.nextStep() else { return nil }
+                return LoopToolCall(
+                    id: "skill-\(toolStepCount + 1)-\(name)",
+                    name: name,
+                    arguments: arguments,
                     malformedArguments: false,
                     usesTextProtocol: !nativeMode
                 )
-            }
-            let didUseForcedWorkflowCall = forcedWorkflowCall != nil
+            }()
+            let didUseForcedSkillCall = forcedSkillCall != nil
 
             let outcome: StreamOutcome
-            if didUseForcedWorkflowCall {
+            if didUseForcedSkillCall {
                 var forcedOutcome = StreamOutcome()
-                if nativeMode, let forcedWorkflowCall {
+                if nativeMode, let forcedSkillCall {
                     forcedOutcome.toolCalls = [AIToolCall(
-                        id: forcedWorkflowCall.id ?? "workflow-\(toolStepCount + 1)",
-                        name: forcedWorkflowCall.name,
-                        arguments: .object([:])
+                        id: forcedSkillCall.id ?? "skill-\(toolStepCount + 1)",
+                        name: forcedSkillCall.name,
+                        arguments: .object(forcedSkillCall.arguments)
                     )]
                 }
                 outcome = forcedOutcome
@@ -843,50 +891,23 @@ public struct ToolLoop {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                     return
                 } catch {
-                    if Self.isOutputTruncated(error), workflow.usesRecommendationIndexV2 {
-                        let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
-                        let limit = recommendationWorkflow?.shrinkBatch()
-                            ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
-                        let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只对刚返回的完整批次生成 items。"
-                        taskState.errors.append(recovery)
-                        taskState.pendingActions = [recovery]
+                    if let activeSkill,
+                       !didRecoverSkillProviderFailure,
+                       let recovery = activeSkill.handleProviderFailure(error) {
+                        didRecoverSkillProviderFailure = true
+                        taskState.errors.append(recovery.message)
+                        taskState.pendingActions = [recovery.message]
                         taskState.status = .waitingForTool
                         taskState.updatedAt = .now
+                        Self.mergeSkillFacts(activeSkill, into: &taskState)
                         await state(taskState)
-                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
-                        conversation = Self.compactRecommendationIndexTranscript(
+                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: recovery.message)]))
+                        conversation = Self.compactSkillTranscript(
                             conversation,
-                            droppingLatestRecommendationUnit: hadCurrentBatch
+                            ownedToolNames: activeSkill.ownedToolNames,
+                            droppingLatestOwnedUnit: recovery.dropCurrentBatch
                         )
-                        conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
-                        continue
-                    }
-                    if workflow.usesRecommendationIndexV2,
-                       Self.isTransientFailure(error),
-                       !didRecoverRecommendationProviderFailure {
-                        let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
-                        let recovery = recommendationWorkflow?.recoverFromProviderFailure()
-                        let instruction: String
-                        switch recovery {
-                        case let .retryCurrentBatch(limit):
-                            instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。未写入的当前批次已丢弃，并缩小为 \(limit) 首。请继续使用原生工具协议，重新调用 library_index_v2_next_batch(limit=\(limit))，再分类并写回。"
-                        case .resumeFromStatus:
-                            instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。此前成功写入的索引状态已保留，请继续使用原生工具协议调用 library_index_v2_status，再从当前 pending 继续。"
-                        case nil:
-                            instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。请继续使用原生工具协议从当前推荐索引状态恢复。"
-                        }
-                        didRecoverRecommendationProviderFailure = true
-                        taskState.errors.append(instruction)
-                        taskState.pendingActions = [instruction]
-                        taskState.status = .waitingForTool
-                        taskState.updatedAt = .now
-                        await state(taskState)
-                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "原生工具协议暂时不可用，正在保持原协议恢复…")]))
-                        conversation = Self.compactRecommendationIndexTranscript(
-                            conversation,
-                            droppingLatestRecommendationUnit: hadCurrentBatch
-                        )
-                        conversation.append(AIMessage(role: .user, content: "系统恢复：\(instruction)"))
+                        conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery.message)"))
                         continue
                     }
                     // Provider 协议在请求前已经确定。网络瞬时错误由
@@ -911,11 +932,9 @@ public struct ToolLoop {
                 }
             }
 
-            if workflow.usesRecommendationIndexV2 {
-                didRecoverRecommendationProviderFailure = false
-            }
+            didRecoverSkillProviderFailure = false
 
-            if !didUseForcedWorkflowCall {
+            if !didUseForcedSkillCall {
                 await progress(AgentProgress(
                     toolSteps: toolStepCount,
                     currentStep: "正在理解请求",
@@ -937,7 +956,7 @@ public struct ToolLoop {
             if !outcome.webCitations.isEmpty {
                 let sources = Self.webSources(from: outcome.webCitations)
                 if !sources.isEmpty {
-                    await Self.registerWebSources(sources, webService: webService)
+                    await Self.registerWebSources(sources, webService: webService, runID: runID)
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
             }
@@ -949,43 +968,39 @@ public struct ToolLoop {
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
 
-            // A model response cannot replace the fixed V2 control-flow edges.
-            // Auxiliary capabilities remain available: the workflow owns
-            // status/next_batch, while the model may still use diagnostics,
-            // capabilities_get, tool_search, or other registered tools when
-            // it needs them before producing the current batch classification.
-            if workflow.usesRecommendationIndexV2,
-               recommendationWorkflow?.state == .classifyingBatch,
-               forcedWorkflowCall == nil {
+            // A model response cannot replace a skill's control-flow edge.
+            // Auxiliary capabilities remain available: only tools owned by the
+            // active skill are constrained here; unrelated registered tools
+            // remain usable for diagnostics, capability discovery and reads.
+            if let activeSkill,
+               case let .modelTurn(requiredToolName) = activeSkill.nextStep(),
+               let requiredToolName,
+               !didUseForcedSkillCall {
                 let names = nativeMode
                     ? nativeCalls.map(\.name)
                     : textActions.map(\.tool)
-                let isSingleWrite = names.count == 1
-                    && names.first == "library_index_v2_write_batch"
-                let containsRuntimeOwnedControlCall = names.contains {
-                    Self.recommendationIndexRuntimeOwnedTools.contains($0)
-                }
-                let isAuxiliaryToolTurn = !names.isEmpty
-                    && !names.contains("library_index_v2_write_batch")
-                    && !containsRuntimeOwnedControlCall
-                if !isSingleWrite && (!isAuxiliaryToolTurn || containsRuntimeOwnedControlCall) {
-                    let correction = "Recommendation Index V2 当前需要对当前批次生成结构化 library_index_v2_write_batch；status 与 next_batch 由 Runtime 自动执行，不要重复调用它们，也不要只返回说明文字。"
+                let containsOwnedTool = names.contains { activeSkill.ownedToolNames.contains($0) }
+                let isRequiredToolTurn = names.count == 1 && names.first == requiredToolName
+                let isAuxiliaryToolTurn = !names.isEmpty && !containsOwnedTool
+                if !isRequiredToolTurn && (!isAuxiliaryToolTurn || containsOwnedTool) {
+                    let correction = "当前 Stateful Skill 需要调用 \(requiredToolName) 完成本步骤；不要重复执行由 Runtime 自动控制的步骤，也不要只返回说明文字。"
                     if nativeMode, provider.capabilities.supportsToolChoice {
-                        toolChoice = .named("library_index_v2_write_batch")
+                        toolChoice = .named(requiredToolName)
                     }
                     taskState.pendingActions = [correction]
                     taskState.status = .waitingForModel
                     taskState.updatedAt = .now
+                    Self.mergeSkillFacts(activeSkill, into: &taskState)
                     await state(taskState)
-                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "固定链路：等待当前批次 write_batch…")]))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: correction)]))
                     conversation.append(AIMessage(role: .user, content: "系统恢复：\(correction)"))
                     continue
                 }
             }
 
             let completionFactsSatisfied: Bool
-            if workflow.usesRecommendationIndexV2 {
-                completionFactsSatisfied = recommendationWorkflow?.isCompleted == true
+            if let activeSkill {
+                completionFactsSatisfied = activeSkill.isCompleted
             } else {
                 completionFactsSatisfied = AgentCompletionEvaluator.factsSatisfied(state: taskState, policy: policy)
             }
@@ -994,7 +1009,7 @@ public struct ToolLoop {
             // 许多中转在 tool result 后只返回 reasoning 或空 content；这不应覆盖成功状态。
             if nativeCalls.isEmpty,
                textActions.isEmpty,
-               forcedWorkflowCall == nil,
+               forcedSkillCall == nil,
                completionFactsSatisfied,
                !(intent == .musicDiscovery
                     && !didRequestFinalSelection
@@ -1002,8 +1017,9 @@ public struct ToolLoop {
                     && presentation.resolvedFinalCards.isEmpty
                     && presentation.disambiguationTracks.isEmpty) {
                 let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
-                if workflow.usesRecommendationIndexV2 {
-                    Self.markWorkflowCompleted(state: &taskState)
+                if activeSkill != nil {
+                    Self.mergeSkillFacts(activeSkill, into: &taskState)
+                    Self.markSkillCompleted(state: &taskState)
                 } else {
                     _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
                 }
@@ -1031,8 +1047,8 @@ public struct ToolLoop {
                     await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
                 }
                 let finalText = reply.isEmpty
-                    ? (workflow.usesRecommendationIndexV2
-                        ? "推荐索引 V2 已完成。"
+                    ? (activeSkill != nil
+                        ? Self.skillCompletionMessage(activeSkill)
                         : Self.deterministicCompletionSummary(policy: policy, presentation: presentation))
                     : reply
                 if !finalText.isEmpty {
@@ -1044,7 +1060,7 @@ public struct ToolLoop {
             if streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                nativeCalls.isEmpty,
                textActions.isEmpty,
-               forcedWorkflowCall == nil {
+               forcedSkillCall == nil {
                 if !nativeMode, Self.canUseOfflineFallback(intent: intent, userText: userText) {
                     await runOffline(
                         userText: userText,
@@ -1066,16 +1082,16 @@ public struct ToolLoop {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(failure)]))
                 return
             }
-            if nativeCalls.isEmpty && textActions.isEmpty && forcedWorkflowCall == nil {
+            if nativeCalls.isEmpty && textActions.isEmpty && forcedSkillCall == nil {
                 // 模型已输出最终回答 → 正常终止本轮任务。
                 // 流式收尾：Coordinator 会把 in-flight 流式气泡原地定型为该最终文本，
                 // 不会出现「流式半成品 + 成品」两条重复气泡。
                 let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
                 let completionDecision: AgentModelAnswerDecision
-                if workflow.usesRecommendationIndexV2 {
-                    completionDecision = recommendationWorkflow?.completionDecision(
+                if let activeSkill {
+                    completionDecision = activeSkill.completionDecision(
                         repairAttempts: completionRepairAttempts
-                    ) ?? .fail("Recommendation Index workflow 尚未初始化。")
+                    )
                 } else {
                     completionDecision = AgentCompletionEvaluator.evaluateModelAnswer(
                         reply,
@@ -1159,10 +1175,10 @@ public struct ToolLoop {
             }
 
             // 有工具调用：先把 assistant 消息（含 tool_calls）写入对话，再逐条执行回灌。
-            if forcedWorkflowCall != nil, nativeMode {
+            if forcedSkillCall != nil, nativeMode {
                 conversation.append(AIMessage(role: .assistant, content: "", toolCalls: nativeCalls))
-            } else if let forcedWorkflowCall {
-                conversation.append(AIMessage(role: .assistant, content: "固定工作流步骤：\(forcedWorkflowCall.name)"))
+            } else if let forcedSkillCall {
+                conversation.append(AIMessage(role: .assistant, content: "Stateful Skill 步骤：\(forcedSkillCall.name)"))
             } else if nativeMode, !nativeCalls.isEmpty {
                 conversation.append(AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls))
             } else {
@@ -1171,8 +1187,8 @@ public struct ToolLoop {
 
             // 统一调用视图：原生调用带稳定 id，文本 ACTION 合成 text-N。
             let calls: [LoopToolCall]
-            if let forcedWorkflowCall {
-                calls = [forcedWorkflowCall]
+            if let forcedSkillCall {
+                calls = [forcedSkillCall]
             } else if nativeMode, !nativeCalls.isEmpty {
                 calls = nativeCalls.map { native in
                     switch Self.parseArguments(native.arguments) {
@@ -1206,54 +1222,47 @@ public struct ToolLoop {
                 }
             }
 
-            // Never echo an incomplete native V2 call back to the Provider.
+            // Never echo an incomplete native skill call back to the Provider.
             // Some compatible gateways reject that follow-up transcript with
             // a generic HTTP 500, hiding the real truncation cause. No tool in
-            // this round is executed; the workflow will refetch a clean batch.
-            if workflow.usesRecommendationIndexV2,
-               calls.contains(where: { $0.malformedArguments }) {
+            // this round is executed; the active skill decides how to recover.
+            if let malformed = calls.first(where: { $0.malformedArguments }),
+               let activeSkill,
+               let recovery = activeSkill.handleMalformedCall(name: malformed.name) {
                 if let last = conversation.last,
                    last.role == .assistant,
                    last.toolCalls?.isEmpty == false {
                     conversation.removeLast()
                 }
-                let limit = recommendationWorkflow?.shrinkBatch()
-                    ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
-                let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只使用刚返回的完整批次。"
                 taskState.progress.toolCalls += calls.count
-                taskState.errors.append(recovery)
-                taskState.pendingActions = [recovery]
+                taskState.errors.append(recovery.message)
+                taskState.pendingActions = [recovery.message]
                 taskState.status = .waitingForTool
                 taskState.updatedAt = .now
+                Self.mergeSkillFacts(activeSkill, into: &taskState)
                 await state(taskState)
-                await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
-                conversation = Self.compactRecommendationIndexTranscript(
+                await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: recovery.message)]))
+                conversation = Self.compactSkillTranscript(
                     conversation,
-                    droppingLatestRecommendationUnit: true
+                    ownedToolNames: activeSkill.ownedToolNames,
+                    droppingLatestOwnedUnit: recovery.dropCurrentBatch
                 )
-                conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
+                conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery.message)"))
                 continue
             }
 
             var toolMessages: [AIMessage] = []
-            var shouldCompactRecommendationTranscript = false
-            var fixedWorkflowFailure: String?
+            var shouldCompactSkillTranscript = false
+            var fixedSkillFailure: String?
             // 本轮统计（用于合并工具轨迹展示）。
             var roundSearchCalls = 0
             var roundToolNames: Set<String> = []
 
             for rawCall in calls {
                 var call = rawCall
-                if call.name == "library_index_v2_next_batch" {
-                    call.arguments["limit"] = .number(Double(
-                        recommendationWorkflow?.preferredBatchSize
-                            ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
-                    ))
-                    recommendationWorkflow?.beginBatchFetch()
-                } else if call.name == "library_index_v2_status" {
-                    recommendationWorkflow?.beginStatusRead()
-                } else if call.name == "library_index_v2_write_batch" {
-                    recommendationWorkflow?.beginWritingBatch()
+                if let activeSkill, activeSkill.ownedToolNames.contains(call.name) {
+                    call.arguments = activeSkill.prepareToolCall(name: call.name, arguments: call.arguments)
+                    Self.mergeSkillFacts(activeSkill, into: &taskState)
                 }
                 toolStepCount += 1
                 taskState.progress.toolCalls += 1
@@ -1278,31 +1287,27 @@ public struct ToolLoop {
                 }
 
                 if call.malformedArguments {
-                    let failureText: String
-                    if call.name == "library_index_v2_write_batch" {
-                        let limit = recommendationWorkflow?.shrinkBatch()
-                            ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
-                        failureText = "（工具执行结果）library_index_v2_write_batch: 参数 JSON 不完整或被截断，本次没有执行写入。请重新调用 library_index_v2_next_batch(limit=\(limit))，只使用刚返回的完整批次。"
-                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
-                    } else {
-                        failureText = "（工具执行结果）\(call.name): 参数 JSON 不完整或被截断，本次没有执行工具。"
-                    }
+                    let failureText = "（工具执行结果）\(call.name): 参数 JSON 不完整或被截断，本次没有执行工具。"
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: [:], summary: "原生参数 JSON 不完整", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
                     continue
                 }
 
-                if call.name == "library_index_v2_write_batch",
-                   let issue = recommendationWorkflow?.writeIssue(arguments: call.arguments) {
-                    let limit = recommendationWorkflow?.shrinkBatch()
-                        ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
-                    let failureText = "（工具执行结果）library_index_v2_write_batch: \(issue)，本次没有执行写入。请重新调用 library_index_v2_next_batch(limit=\(limit))，只提交刚返回的完整批次。"
+                if let activeSkill,
+                   activeSkill.ownedToolNames.contains(call.name),
+                   let issue = activeSkill.validateToolCall(name: call.name, arguments: call.arguments) {
+                    let recovery = activeSkill.handleMalformedCall(name: call.name)
+                    let failureText = "（工具执行结果）\(call.name): \(issue)，本次没有执行写入。"
                     taskState.errors.append(failureText)
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "V2 批身份或 items 无效", reused: false))
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Stateful Skill 参数无效", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批参数不完整，正在缩小批次重试…")]))
-                    shouldCompactRecommendationTranscript = true
+                    if let recovery {
+                        taskState.pendingActions = [recovery.message]
+                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: recovery.message)]))
+                        shouldCompactSkillTranscript = recovery.compactTranscript
+                    }
+                    Self.mergeSkillFacts(activeSkill, into: &taskState)
                     continue
                 }
 
@@ -1401,7 +1406,8 @@ public struct ToolLoop {
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
-                            authorizationContext: sideEffectAuthorization
+                            authorizationContext: sideEffectAuthorization,
+                            activeSkillID: activeSkillID
                         )
                     }
                 } catch is CancellationError {
@@ -1432,14 +1438,13 @@ public struct ToolLoop {
                     } else {
                         failureText = "（工具执行结果）\(call.name): 执行中断 - \(Self.errorText(error))"
                     }
-                    if workflow.usesRecommendationIndexV2 {
-                        if call.name == "library_index_v2_write_batch" {
-                            // 写入结果不确定时先核验真实 catalog 状态，避免重复副作用。
-                            recommendationWorkflow?.beginVerification()
-                        } else if call.name == "library_index_v2_status"
-                                    || call.name == "library_index_v2_next_batch" {
-                            fixedWorkflowFailure = failureText
+                    if let activeSkill,
+                       activeSkill.ownedToolNames.contains(call.name) {
+                        let consumption = activeSkill.handleToolFailure(name: call.name, message: failureText)
+                        if case let .fail(message) = consumption {
+                            fixedSkillFailure = message
                         }
+                        Self.mergeSkillFacts(activeSkill, into: &taskState)
                     }
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "工具超时/中断", reused: false))
@@ -1451,13 +1456,16 @@ public struct ToolLoop {
                 } else if result.success, result.permission != .readOnly {
                     ws.recordSuccessfulSideEffect(tool: call.name, args: stringArguments, summary: result.summary)
                 }
+                if case let .webSources(sources)? = result.payload, !sources.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
+                }
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
                 if result.success, call.name == "tool_search" {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
                     let discoveredNames = ToolCatalog()
-                        .search(query: query, namespace: namespace, limit: limit)
+                        .search(query: query, namespace: namespace, limit: limit, activeSkillID: activeSkillID)
                         .map(\.name)
                     let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
                     var existing = Set(selectedTools.map(\.name))
@@ -1471,40 +1479,23 @@ public struct ToolLoop {
                     }
                     if addedDiscoveredTool, nativeMode {
                         toolDefinitions = ToolSelector.toolDefinitions(
-                            from: Self.modelToolsForWorkflow(
-                                Self.localModelTools(selectedTools, capabilities: provider.capabilities),
-                                workflow: workflow
-                            ),
-                            strict: provider.capabilities.supportsStrictSchema
+                            from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                            strict: provider.capabilities.supportsStrictSchema,
+                            activeSkillID: activeSkillID
                         )
                     }
                 }
-                if result.success, call.name == "library_index_v2_next_batch" {
-                    _ = recommendationWorkflow?.applyBatch(
-                        ids: result.facts["recommendation.index.currentBatchIDs"]?.split(separator: ",").map(String.init) ?? [],
-                        mode: result.facts["recommendation.index.currentBatchMode"] ?? "full",
-                        pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
-                        pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
-                    )
-                } else if result.success, call.name == "library_index_v2_write_batch" {
-                    _ = recommendationWorkflow?.applyWrite(
-                        pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
-                        pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
-                    )
-                    shouldCompactRecommendationTranscript = true
-                } else if result.success, call.name == "library_index_v2_status" {
-                    _ = recommendationWorkflow?.applyStatus(
-                        pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
-                        pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
-                    )
-                }
-                if workflow.usesRecommendationIndexV2, !result.success {
-                    if call.name == "library_index_v2_write_batch" {
-                        recommendationWorkflow?.retryCurrentBatch()
-                    } else if call.name == "library_index_v2_status"
-                                || call.name == "library_index_v2_next_batch" {
-                        fixedWorkflowFailure = result.summary
+                if let activeSkill,
+                   activeSkill.ownedToolNames.contains(call.name) {
+                    switch activeSkill.consumeToolResult(name: call.name, result: result) {
+                    case .compactTranscript:
+                        shouldCompactSkillTranscript = true
+                    case let .fail(message):
+                        fixedSkillFailure = message
+                    case .none:
+                        break
                     }
+                    Self.mergeSkillFacts(activeSkill, into: &taskState)
                 }
                 if madeProgress { completionRepairAttempts = 0 }
                 await state(taskState)
@@ -1590,16 +1581,15 @@ public struct ToolLoop {
             }
 
             conversation.append(contentsOf: toolMessages)
-            if shouldCompactRecommendationTranscript {
-                // A completed classification payload is no longer needed once
-                // the catalog has accepted it. Keep the newest valid V2 turn
-                // so the Provider transcript remains legal, but discard older
-                // batches before they can grow into a gateway-sized request.
-                conversation = Self.compactRecommendationIndexTranscript(conversation)
+            if shouldCompactSkillTranscript, let activeSkill {
+                conversation = Self.compactSkillTranscript(
+                    conversation,
+                    ownedToolNames: activeSkill.ownedToolNames
+                )
             }
 
-            if let fixedWorkflowFailure {
-                let message = "推荐索引 V2 固定链路执行失败：\(fixedWorkflowFailure)"
+            if let fixedSkillFailure {
+                let message = "Stateful Skill 固定链路执行失败：\(fixedSkillFailure)"
                 taskState.errors.append(message)
                 taskState.errorState = message
                 taskState.status = .failed
@@ -1612,11 +1602,12 @@ public struct ToolLoop {
             // 普通任务在工具回灌后回到 auto；V2 分类阶段始终锁定唯一的
             // write_batch，避免下一轮又回到旁路工具。
             if nativeMode, !nativeCalls.isEmpty {
-                if workflow.usesRecommendationIndexV2,
-                   recommendationWorkflow?.state == .classifyingBatch,
-                   !didUseForcedWorkflowCall,
+                if let activeSkill,
+                   case let .modelTurn(requiredToolName) = activeSkill.nextStep(),
+                   let requiredToolName,
+                   !didUseForcedSkillCall,
                    provider.capabilities.supportsToolChoice {
-                    toolChoice = .named("library_index_v2_write_batch")
+                    toolChoice = .named(requiredToolName)
                 } else {
                     toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
                 }
@@ -1655,60 +1646,43 @@ public struct ToolLoop {
         }
     }
 
-    /// Hosted web is selected by the Provider codec. Remove the same local
-    /// function from the model schema for that round so the model does not see
-    /// two competing implementations of one capability.
-    private static let recommendationIndexToolNames: Set<String> = [
-        "library_index_v2_status",
-        "library_index_v2_read",
-        "library_index_v2_next_batch",
-        "library_index_v2_write_batch",
-        "library_index_v2_tag_catalog",
-    ]
+    private static func mergeSkillFacts(
+        _ skill: (any AgentStatefulSkillRuntime)?,
+        into state: inout AgentTaskState
+    ) {
+        guard let skill else { return }
+        state.facts.merge(skill.facts) { _, newValue in newValue }
+    }
 
-    private static let recommendationIndexRuntimeOwnedTools: Set<String> = [
-        "library_index_v2_status",
-        "library_index_v2_next_batch",
-    ]
-
-    private static let recommendationIndexWorkflowInstruction =
-        "固定主链路：Runtime 自动执行 library_index_v2_status → library_index_v2_next_batch；你只负责对刚返回的当前批次生成一次结构化 library_index_v2_write_batch。写入成功后 Runtime 自动核验 status，再决定下一批。辅助工具仍可用于诊断、能力查询或补充读取，但不能替代 status → next_batch → write_batch → status 主链路，也不要在没有当前批次时猜造 items。"
-
-    private static func recommendationIndexForcedToolName(
-        for state: RecommendationIndexWorkflow.State?
-    ) -> String? {
-        switch state {
-        case .readingStatus, .verifying:
-            return "library_index_v2_status"
-        case .fetchingBatch:
-            return "library_index_v2_next_batch"
-        case .classifyingBatch, .writingBatch, .completed, nil:
-            return nil
+    private static func skillCompletionMessage(
+        _ skill: (any AgentStatefulSkillRuntime)?
+    ) -> String {
+        guard let skill else { return "已完成。" }
+        if case let .completed(message) = skill.nextStep() {
+            return message
         }
+        return "已完成。"
     }
 
-    /// Workflow routing owns mandatory control-flow edges, not model
-    /// capabilities. Keep every selected model-visible descriptor in the
-    /// request so auxiliary tools remain discoverable and usable; the runtime
-    /// enforces the V2 status/next_batch edges independently.
-    private static func modelToolsForWorkflow(
-        _ tools: [ToolDescriptor],
-        workflow _: AgentWorkflowRoute
-    ) -> [ToolDescriptor] {
-        tools
+    private static func markSkillCompleted(state: inout AgentTaskState) {
+        state.completed = true
+        state.completionState = .satisfied
+        state.status = .completed
+        state.updatedAt = .now
     }
 
-    /// Keep the native transcript legal while preventing a long index build
-    /// from replaying every previous classification payload on every request.
-    /// A completed V2 turn is an atomic assistant(tool_calls)+tool-result unit;
-    /// only the newest such unit is needed for the next model decision.
-    private static func compactRecommendationIndexTranscript(
+    /// Keep the native transcript legal while preventing any long-running
+    /// stateful skill from replaying every completed payload on each request.
+    /// A completed skill turn is an atomic assistant(tool_calls)+tool-result
+    /// unit; only the newest owned-only unit is needed for the next decision.
+    private static func compactSkillTranscript(
         _ conversation: [AIMessage],
-        droppingLatestRecommendationUnit: Bool = false
+        ownedToolNames: Set<String>,
+        droppingLatestOwnedUnit: Bool = false
     ) -> [AIMessage] {
         struct ToolUnit {
             let indices: [Int]
-            let isRecommendationOnly: Bool
+            let isOwnedOnly: Bool
         }
 
         var units: [ToolUnit] = []
@@ -1724,7 +1698,7 @@ public struct ToolLoop {
             }
 
             let names = Set(calls.map(\.name))
-            guard !names.isDisjoint(with: recommendationIndexToolNames) else {
+            guard !names.isDisjoint(with: ownedToolNames) else {
                 cursor += 1
                 continue
             }
@@ -1745,25 +1719,25 @@ public struct ToolLoop {
 
             units.append(ToolUnit(
                 indices: Array(cursor..<end),
-                isRecommendationOnly: names.isSubset(of: recommendationIndexToolNames)
+                isOwnedOnly: names.isSubset(of: ownedToolNames)
             ))
             cursor = end
         }
 
-        let recommendationUnits = units.filter(\.isRecommendationOnly)
-        guard !recommendationUnits.isEmpty else { return conversation }
+        let ownedUnits = units.filter(\.isOwnedOnly)
+        guard !ownedUnits.isEmpty else { return conversation }
 
         var indicesToRemove = Set<Int>()
         var keptUnit: ToolUnit?
-        if droppingLatestRecommendationUnit {
-            let latest = recommendationUnits.last
+        if droppingLatestOwnedUnit {
+            let latest = ownedUnits.last
             indicesToRemove.formUnion(latest?.indices ?? [])
-            keptUnit = recommendationUnits.dropLast().last
+            keptUnit = ownedUnits.dropLast().last
         } else {
-            keptUnit = recommendationUnits.last
+            keptUnit = ownedUnits.last
         }
 
-        for unit in recommendationUnits where unit.indices != keptUnit?.indices {
+        for unit in ownedUnits where unit.indices != keptUnit?.indices {
             indicesToRemove.formUnion(unit.indices)
         }
 
@@ -1820,10 +1794,11 @@ public struct ToolLoop {
 
     private static func registerWebSources(
         _ sources: [WebSource],
-        webService: (any AgentWebService)?
+        webService: (any AgentWebService)?,
+        runID: UUID
     ) async {
         guard let scopedWebService = webService as? any AgentWebRunScopedService else { return }
-        await scopedWebService.register(sources: sources)
+        await scopedWebService.register(sources: sources, runID: runID)
     }
 
     private static func deterministicCompletionSummary(

@@ -179,7 +179,12 @@ public enum SystemPromptBuilder {
     }
 
     private static func capabilitySummary(_ tools: [ToolDescriptor]) -> String {
-        let visible = tools.filter { $0.visibility == .model }
+        // A trusted Stateful Skill may intentionally include its private
+        // control tools in the current selected set. They are not searchable
+        // outside that skill, but the active skill still needs their names in
+        // the textual protocol prompt. Legacy/internal descriptors remain
+        // hidden in every case.
+        let visible = tools.filter { $0.visibility == .model || $0.visibility == .skillOnly }
         if visible.isEmpty {
             return "tool_search、capabilities_get、memory_search、memory_list、memory_save；其他已注册能力通过 tool_search 发现。"
         }
