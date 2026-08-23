@@ -60,6 +60,11 @@ struct AgentAssistantV2Tests {
 
     @Test("WorkflowEngine 只编排批处理，不把意图当成工具权限")
     func routesBatchWorkflows() {
+        let start = AgentTaskPolicyResolver.resolve(text: "开始索引 V2")
+        #expect(start.intent == .libraryManagement)
+        #expect(start.completion == .indexPendingCountIsZero)
+        #expect(WorkflowEngine.route(intent: start.intent, text: "开始索引 V2").kind == .recommendationIndexV2)
+
         let index = WorkflowEngine.route(intent: .libraryManagement, text: "重建推荐索引 V2，全部处理")
         #expect(index.kind == .recommendationIndexV2)
         #expect(index.usesRecommendationIndexV2)

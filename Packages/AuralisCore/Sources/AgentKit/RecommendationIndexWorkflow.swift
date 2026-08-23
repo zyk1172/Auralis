@@ -90,6 +90,15 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
         state = .writingBatch
     }
 
+    /// Keep the fetched batch intact when the write payload is structurally
+    /// valid enough to retry but the runtime rejects its contents. The next
+    /// Provider turn must remain a classification turn; it must not regain
+    /// control of status/next routing.
+    public mutating func retryCurrentBatch() {
+        guard !isCompleted else { return }
+        state = currentBatchIDs.isEmpty ? .fetchingBatch : .classifyingBatch
+    }
+
     @discardableResult
     public mutating func applyWrite(pending: Int, pendingSemantic: Int) -> State {
         self.pending = max(0, pending)
@@ -149,11 +158,11 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
 
         let continuation: String
         if pending == 0, pendingSemantic == 0 {
-            continuation = "推荐索引的最终核验尚未完成。请调用 library_index_v2_status，确认固定分类与开放语义标签都为 0 后再结束。"
+            continuation = "推荐索引的最终核验尚未完成；Runtime 将继续执行 library_index_v2_status，只有确认固定分类与开放语义标签都为 0 后才会结束。"
         } else if pending > 0 {
-            continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pending) 首）。请调用 library_index_v2_next_batch 获取当前安全批次，分类后调用 library_index_v2_write_batch；直到固定分类与开放标签都完成。"
+            continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pending) 首）。Runtime 将自动执行 library_index_v2_next_batch；请只对刚返回的当前批次调用 library_index_v2_write_batch，直到固定分类与开放标签都完成。"
         } else {
-            continuation = "推荐索引固定分类已完成，但仍需为 \(pendingSemantic) 首歌曲补充开放语义标签。请继续调用 library_index_v2_next_batch（本批模式 semanticTagsOnly）并写回。"
+            continuation = "推荐索引固定分类已完成，但仍需为 \(pendingSemantic) 首歌曲补充开放语义标签。Runtime 将自动执行 library_index_v2_next_batch（本批模式 semanticTagsOnly）；请只对当前批次调用 library_index_v2_write_batch。"
         }
         if repairAttempts == 0 {
             return .continueTask(continuation)

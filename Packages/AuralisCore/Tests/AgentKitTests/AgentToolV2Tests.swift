@@ -140,7 +140,6 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
     private let lock = NSLock()
     private var calls: [AIToolCall]
     private var failuresRemaining: Int
-    private var successfulResponsesBeforeFailure: Int
     private var recordedRequests: [AICompletionRequest] = []
 
     let capabilities = ModelCapabilities(
@@ -156,10 +155,9 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
 
     var supportsToolCalling: Bool { true }
 
-    init(calls: [AIToolCall], failures: Int = 2, successfulResponsesBeforeFailure: Int = 0) {
+    init(calls: [AIToolCall], failures: Int = 2) {
         self.calls = calls
         self.failuresRemaining = failures
-        self.successfulResponsesBeforeFailure = successfulResponsesBeforeFailure
     }
 
     func testConnection() async -> AIConnectionResult {
@@ -207,11 +205,6 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
         lock.lock()
         defer { lock.unlock() }
         recordedRequests.append(request)
-        if successfulResponsesBeforeFailure > 0 {
-            successfulResponsesBeforeFailure -= 1
-            guard !calls.isEmpty else { return .final }
-            return .call(calls.removeFirst())
-        }
         if failuresRemaining > 0 {
             failuresRemaining -= 1
             return .failure(AIProviderError.httpStatus(500))
@@ -255,6 +248,7 @@ private actor IndexResultCollector {
         }
     }
     func contains(_ text: String) -> Bool { texts.contains { $0.contains(text) } }
+    func allTexts() -> [String] { texts }
 }
 
 // MARK: - Helpers
@@ -302,8 +296,6 @@ func recommendationIndexV2TextAgentRoundTrip() async throws {
         return "ACTION: " + String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
     }
     let provider = IndexScriptedProvider([
-        try action("library_index_v2_status"),
-        try action("library_index_v2_next_batch", ["limit": "1"]),
         try action("library_index_v2_write_batch", ["itemsJSON": itemsJSON]),
     ])
     let collector = IndexResultCollector()
@@ -321,7 +313,7 @@ func recommendationIndexV2TextAgentRoundTrip() async throws {
     #expect(status.indexedTracks == 1)
     #expect(status.pendingTracks == 0)
     #expect(try await store.recommendationIndexV2TrackIDs(serverID: serverID, query: "深夜") == [gid])
-    #expect(await collector.contains("已处理完成"))
+    #expect(await collector.contains("推荐索引 V2 已完成"))
 }
 
 @Test("原生工具调用可用结构化数组写入 V2（固定维度）")
@@ -347,29 +339,48 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
     ]
     let argumentData = try JSONSerialization.data(withJSONObject: arguments)
     let provider = NativeIndexProvider(calls: [
-        AIToolCall(id: "native-next-1", name: "library_index_v2_next_batch", arguments: "{}"),
+        // A deliberately wrong model response: the fixed workflow must reject
+        // a Runtime-owned control edge without executing or echoing it. The
+        // next Provider request is forced to the required write step, while
+        // auxiliary tools remain present in the schema.
+        AIToolCall(
+            id: "wrong-runtime-edge",
+            name: "library_index_v2_status",
+            arguments: .object([:])
+        ),
         AIToolCall(
             id: "native-write-1",
             name: "library_index_v2_write_batch",
-            arguments: String(decoding: argumentData, as: UTF8.self)
+            arguments: try AIJSONValue(jsonData: argumentData)
         ),
     ])
+    let collector = IndexResultCollector()
 
     await AgentRunner.run(
-        userText: "继续构建推荐索引 V2",
+        userText: "开始索引 V2",
         provider: provider,
         model: "native-index-model",
         bridge: MockAgentBridge(activeServerID: serverID),
         catalog: store,
         context: .init(serverID: serverID, currentTrackTitle: nil, queueCount: 0),
         confirm: { _ in true },
-        emit: { _ in }
+        emit: { await collector.record($0) }
     )
 
     let status = try await store.recommendationIndexV2Status(serverID: serverID)
     #expect(status.pendingTracks == 0)
     let fixed = try await store.readRecommendationIndexV2(serverID: serverID, dimension: "texture", value: "弦乐")
     #expect(fixed.map(\.track.id) == [gid.description])
+    #expect(await collector.contains("tool_search") == false)
+    #expect(provider.requests().first?.toolChoice == .auto)
+    #expect(provider.requests().dropFirst().first?.toolChoice == .named("library_index_v2_write_batch"))
+    #expect(provider.requests().first?.tools?.contains { $0.name == "tool_search" } == true)
+    #expect(await collector.allTexts().filter { $0.hasPrefix("正在执行：") } == [
+        "正在执行：library_index_v2_status…",
+        "正在执行：library_index_v2_next_batch…",
+        "正在执行：library_index_v2_write_batch…",
+        "正在执行：library_index_v2_status…",
+    ])
 
     let definition = try #require(ToolSelector.toolDefinitions(
         from: AgentToolRegistry.all.filter { $0.name == "library_index_v2_write_batch" }
@@ -399,9 +410,7 @@ func recommendationIndexV2MalformedArgumentsRecover() async throws {
     ]])
     let collector = IndexResultCollector()
     let provider = NativeIndexProvider(calls: [
-        .init(id: "next-1", name: "library_index_v2_next_batch", arguments: "{}"),
         .init(id: "bad-write", name: "library_index_v2_write_batch", arguments: #"{"items":[{"id":"malformed-index-server:malformed-1"}"#),
-        .init(id: "next-2", name: "library_index_v2_next_batch", arguments: "{}"),
         .init(id: "good-write", name: "library_index_v2_write_batch", arguments: String(decoding: arguments, as: UTF8.self)),
     ])
     await AgentRunner.run(
@@ -442,12 +451,12 @@ func recommendationIndexV2TransientProviderFailureRecovers() async throws {
     }
 
     let ids = tracks.map { GlobalID(serverID: serverID, remoteID: $0.id.rawValue).description }
-    let firstItems = try AIJSONValue(jsonData: JSONEncoder().encode(ids.map(classification)))
+    let firstItems = try AIJSONValue(jsonData: JSONEncoder().encode(ids.prefix(4).map(classification)))
+    let secondItems = try AIJSONValue(jsonData: JSONEncoder().encode(ids.suffix(4).map(classification)))
     let provider = TransientNativeIndexProvider(calls: [
-        .init(id: "next-1", name: "library_index_v2_next_batch", arguments: .object([:])),
         .init(id: "write-1", name: "library_index_v2_write_batch", arguments: .object(["items": firstItems])),
-        .init(id: "status-final", name: "library_index_v2_status", arguments: .object([:])),
-    ], successfulResponsesBeforeFailure: 2)
+        .init(id: "write-2", name: "library_index_v2_write_batch", arguments: .object(["items": secondItems])),
+    ])
     let collector = IndexResultCollector()
 
     await AgentRunner.run(
@@ -465,7 +474,7 @@ func recommendationIndexV2TransientProviderFailureRecovers() async throws {
     let didResumeOnSameProtocol = await collector.contains("保持原协议恢复")
     #expect(status.pendingUniqueTracks == 0)
     #expect(didResumeOnSameProtocol)
-    #expect(provider.requests().count >= 6) // 两次同协议 500 重试 + 恢复后的 status 与最终回答
+    #expect(provider.requests().count >= 4) // 两次同协议 500 重试 + 两个恢复后的分类回合
 }
 
 @Test("1000 首 V2 分片在一次模拟截断后仍可从 pending 完成")

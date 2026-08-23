@@ -181,8 +181,10 @@ enum RecommendationIndexToolService {
     }
 
     private static func int(_ call: ToolCall, _ key: String) -> Int? {
-        guard let raw = normalized(call.optionalString(key)) else { return nil }
-        return Int(raw)
+        // Synthetic workflow calls carry `limit` as a structured JSON number
+        // (for example 4.0). Keep the canonical structured accessor here so a
+        // recovery batch cannot silently fall back to the default limit.
+        try? call.int(key)
     }
 
     private static func statusFacts(

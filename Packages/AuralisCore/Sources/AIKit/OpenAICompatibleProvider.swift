@@ -727,7 +727,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
             if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
-                body["tool_choice"] = toolChoice.rawValue
+                body["tool_choice"] = Self.encodeToolChoice(toolChoice, responses: false)
             }
         }
         return body
@@ -797,10 +797,23 @@ public struct OpenAICompatibleProvider: AIProvider {
         if !encodedTools.isEmpty {
             body["tools"] = encodedTools
             if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
-                body["tool_choice"] = toolChoice.rawValue
+                body["tool_choice"] = Self.encodeToolChoice(toolChoice, responses: true)
             }
         }
         return body
+    }
+
+    private static func encodeToolChoice(_ choice: AIToolChoice, responses: Bool) -> Any {
+        switch choice {
+        case .auto: return "auto"
+        case .required: return "required"
+        case .none: return "none"
+        case let .named(name):
+            if responses {
+                return ["type": "function", "name": name]
+            }
+            return ["type": "function", "function": ["name": name]]
+        }
     }
 
     /// 工具定义编码（Chat Completions 版）：

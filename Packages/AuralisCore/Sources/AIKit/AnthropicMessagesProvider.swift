@@ -276,6 +276,7 @@ public struct AnthropicMessagesProvider: AIProvider {
                 switch choice {
                 case .auto: body["tool_choice"] = ["type": "auto"]
                 case .required: body["tool_choice"] = ["type": "any"]
+                case let .named(name): body["tool_choice"] = ["type": "tool", "name": name]
                 case .none: break
                 }
             }

@@ -166,7 +166,10 @@ public struct ToolLoop {
         await emit(AgentChatMessage(role: .user, messages: [.text(userText)]))
 
         let resolvedIntent = intent ?? AgentIntentClassifier.classify(userText)
-        let resolvedPolicy = policy ?? AgentTaskPolicy.policy(for: resolvedIntent)
+        let resolvedPolicy = policy ?? AgentTaskPolicyResolver.resolve(
+            text: userText,
+            explicitIntent: resolvedIntent
+        )
         if let provider {
             if resolvedIntent == .conversation, resolvedPolicy.completion == .modelAnswer {
                 await runGenericChat(
@@ -640,9 +643,12 @@ public struct ToolLoop {
         var conversation = AgentContextBuilder.build(
             systemPrompt: Self.systemPrompt(
                 context: context,
-                tools: selectedTools,
+                tools: Self.modelToolsForWorkflow(selectedTools, workflow: workflow),
                 nativeToolCalling: nativeMode,
-                goal: taskState.goal
+                goal: taskState.goal,
+                workflowInstruction: workflow.usesRecommendationIndexV2
+                    ? Self.recommendationIndexWorkflowInstruction
+                    : nil
             ),
             task: taskState,
             facts: [],
@@ -689,6 +695,18 @@ public struct ToolLoop {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(violation.localizedDescription)]))
                 return
             }
+            if workflow.usesRecommendationIndexV2,
+               recommendationWorkflow?.isCompleted == true {
+                Self.markWorkflowCompleted(state: &taskState)
+                await state(taskState)
+                await emit(AgentChatMessage(
+                    role: .assistant,
+                    messages: [.text(workflow.usesRecommendationIndexV2
+                        ? "推荐索引 V2 已完成。"
+                        : Self.deterministicCompletionSummary(policy: policy, presentation: presentation))]
+                ))
+                return
+            }
             // 动态工具扩展：每轮重新展开工具集（只增不减），保证任务中途的新工具需求可达。
             let expanded = ToolSelector.select(for: accumulatedToolText, intent: intent, policy: policy, all: AgentToolRegistry.all)
             var merged = selectedTools
@@ -711,7 +729,10 @@ public struct ToolLoop {
                 selectedTools = merged
                 if nativeMode {
                     toolDefinitions = ToolSelector.toolDefinitions(
-                        from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                        from: Self.modelToolsForWorkflow(
+                            Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                            workflow: workflow
+                        ),
                         strict: provider.capabilities.supportsStrictSchema
                     )
                 }
@@ -725,139 +746,180 @@ public struct ToolLoop {
             // real native hosted web tool.
             if nativeMode {
                 toolDefinitions = ToolSelector.toolDefinitions(
-                    from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                    from: Self.modelToolsForWorkflow(
+                        Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                        workflow: workflow
+                    ),
                     strict: provider.capabilities.supportsStrictSchema
                 )
             }
 
-            // 上下文裁剪：输入预算同时扣除真实工具 Schema 成本；不能再只预留固定
-            // 1024 token，否则 16K/32K 模型会在正文尚未开始前就超过窗口。
-            let reservedOutput = resolvedOutputBudget
-            let schemaTokens = nativeMode ? ContextManager.estimatedTokens(toolDefinitions) : 0
-            let contextBudget = ContextManager.inputBudget(
-                capabilities: provider.capabilities,
-                requestedInputBudget: resolvedInputBudget,
-                reservedOutputTokens: reservedOutput + schemaTokens
-            )
-            guard ContextManager.canFitCurrentUser(conversation, userText: userText, maxTokens: contextBudget) else {
-                let message = "当前模型上下文过小，连系统协议与本次问题都无法同时发送。请切换到上下文更大的模型，或降低输出 Token / 关闭原生工具后重试。"
-                taskState.errors.append(message)
-                taskState.status = .failed
-                taskState.updatedAt = .now
-                await state(taskState)
-                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
-                return
+            // Recommendation Index V2 owns the control-flow edges. The only
+            // Provider turn is the classification step; status and batch
+            // fetching are executed as synthetic LoopToolCalls below.
+            let forcedWorkflowToolName = workflow.usesRecommendationIndexV2
+                ? Self.recommendationIndexForcedToolName(for: recommendationWorkflow?.state)
+                : nil
+            let forcedWorkflowCallID = forcedWorkflowToolName.map {
+                "workflow-\(toolStepCount + 1)-\($0)"
             }
-            conversation = ContextManager.trimByTokens(
-                conversation,
-                maxTokens: contextBudget,
-                preservingUserText: userText
-            )
+            let forcedWorkflowCall = forcedWorkflowToolName.map {
+                LoopToolCall(
+                    id: forcedWorkflowCallID,
+                    name: $0,
+                    arguments: [:],
+                    malformedArguments: false,
+                    usesTextProtocol: !nativeMode
+                )
+            }
+            let didUseForcedWorkflowCall = forcedWorkflowCall != nil
 
-            // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
-            // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
-
-            let request = AICompletionRequest(
-                model: model,
-                transcript: AITranscript(messages: conversation),
-                temperature: 0.3,
-                maxTokens: reservedOutput,
-                tools: nativeMode ? toolDefinitions : nil,
-                toolChoice: nativeMode ? toolChoice : nil,
-                hostedTools: hostedTools.isEmpty ? nil : hostedTools
-            )
             let outcome: StreamOutcome
-            do {
-                outcome = try await streamWithFallback(provider: provider, request: request, timeout: requestTimeout) { delta in
-                    await Self.emitStreamingDelta(delta, emit: emit)
+            if didUseForcedWorkflowCall {
+                var forcedOutcome = StreamOutcome()
+                if nativeMode, let forcedWorkflowCall {
+                    forcedOutcome.toolCalls = [AIToolCall(
+                        id: forcedWorkflowCall.id ?? "workflow-\(toolStepCount + 1)",
+                        name: forcedWorkflowCall.name,
+                        arguments: .object([:])
+                    )]
                 }
-            } catch is CancellationError {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
-                return
-            } catch {
-                if Self.isOutputTruncated(error), policy.completion == .indexPendingCountIsZero {
-                    let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
-                    let limit = recommendationWorkflow?.shrinkBatch()
-                        ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
-                    let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只对刚返回的完整批次生成 items。"
-                    taskState.errors.append(recovery)
-                    taskState.pendingActions = [recovery]
-                    taskState.status = .waitingForTool
+                outcome = forcedOutcome
+            } else {
+                // 上下文裁剪：输入预算同时扣除真实工具 Schema 成本；不能再只预留固定
+                // 1024 token，否则 16K/32K 模型会在正文尚未开始前就超过窗口。
+                let reservedOutput = resolvedOutputBudget
+                let schemaTokens = nativeMode ? ContextManager.estimatedTokens(toolDefinitions) : 0
+                let contextBudget = ContextManager.inputBudget(
+                    capabilities: provider.capabilities,
+                    requestedInputBudget: resolvedInputBudget,
+                    reservedOutputTokens: reservedOutput + schemaTokens
+                )
+                guard ContextManager.canFitCurrentUser(conversation, userText: userText, maxTokens: contextBudget) else {
+                    let message = "当前模型上下文过小，连系统协议与本次问题都无法同时发送。请切换到上下文更大的模型，或降低输出 Token / 关闭原生工具后重试。"
+                    taskState.errors.append(message)
+                    taskState.status = .failed
                     taskState.updatedAt = .now
                     await state(taskState)
-                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
-                    conversation = Self.compactRecommendationIndexTranscript(
-                        conversation,
-                        droppingLatestRecommendationUnit: hadCurrentBatch
-                    )
-                    conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
-                    continue
+                    await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                    return
                 }
-                if workflow.usesRecommendationIndexV2,
-                   Self.isTransientFailure(error),
-                   !didRecoverRecommendationProviderFailure {
-                    let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
-                    let recovery = recommendationWorkflow?.recoverFromProviderFailure()
-                    let instruction: String
-                    switch recovery {
-                    case let .retryCurrentBatch(limit):
-                        instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。未写入的当前批次已丢弃，并缩小为 \(limit) 首。请继续使用原生工具协议，重新调用 library_index_v2_next_batch(limit=\(limit))，再分类并写回。"
-                    case .resumeFromStatus:
-                        instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。此前成功写入的索引状态已保留，请继续使用原生工具协议调用 library_index_v2_status，再从当前 pending 继续。"
-                    case nil:
-                        instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。请继续使用原生工具协议从当前推荐索引状态恢复。"
+                conversation = ContextManager.trimByTokens(
+                    conversation,
+                    maxTokens: contextBudget,
+                    preservingUserText: userText
+                )
+
+                // 单次回复上限真正来自用户配置（request.maxTokens 直接使用该值）。
+                // 多轮累计 token 仅用于诊断，不会被误当成单次上下文上限。
+
+                let request = AICompletionRequest(
+                    model: model,
+                    transcript: AITranscript(messages: conversation),
+                    temperature: 0.3,
+                    maxTokens: reservedOutput,
+                    tools: nativeMode ? toolDefinitions : nil,
+                    toolChoice: nativeMode ? toolChoice : nil,
+                    hostedTools: hostedTools.isEmpty ? nil : hostedTools
+                )
+                do {
+                    outcome = try await streamWithFallback(provider: provider, request: request, timeout: requestTimeout) { delta in
+                        await Self.emitStreamingDelta(delta, emit: emit)
                     }
-                    didRecoverRecommendationProviderFailure = true
-                    taskState.errors.append(instruction)
-                    taskState.pendingActions = [instruction]
-                    taskState.status = .waitingForTool
-                    taskState.updatedAt = .now
-                    await state(taskState)
-                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "原生工具协议暂时不可用，正在保持原协议恢复…")]))
-                    conversation = Self.compactRecommendationIndexTranscript(
-                        conversation,
-                        droppingLatestRecommendationUnit: hadCurrentBatch
-                    )
-                    conversation.append(AIMessage(role: .user, content: "系统恢复：\(instruction)"))
-                    continue
+                } catch is CancellationError {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+                    return
+                } catch {
+                    if Self.isOutputTruncated(error), workflow.usesRecommendationIndexV2 {
+                        let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
+                        let limit = recommendationWorkflow?.shrinkBatch()
+                            ?? RecommendationIndexV2BatchPolicy.fallbackTracksPerBatch
+                        let recovery = "本批结构化输出不完整，未执行任何写入；已将 Recommendation Index V2 批次缩小为 \(limit) 首。请重新调用 library_index_v2_next_batch(limit=\(limit))，只对刚返回的完整批次生成 items。"
+                        taskState.errors.append(recovery)
+                        taskState.pendingActions = [recovery]
+                        taskState.status = .waitingForTool
+                        taskState.updatedAt = .now
+                        await state(taskState)
+                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "本批结构化输出不完整，正在缩小批次重试…")]))
+                        conversation = Self.compactRecommendationIndexTranscript(
+                            conversation,
+                            droppingLatestRecommendationUnit: hadCurrentBatch
+                        )
+                        conversation.append(AIMessage(role: .user, content: "系统恢复：\(recovery)"))
+                        continue
+                    }
+                    if workflow.usesRecommendationIndexV2,
+                       Self.isTransientFailure(error),
+                       !didRecoverRecommendationProviderFailure {
+                        let hadCurrentBatch = recommendationWorkflow?.hasCurrentBatch == true
+                        let recovery = recommendationWorkflow?.recoverFromProviderFailure()
+                        let instruction: String
+                        switch recovery {
+                        case let .retryCurrentBatch(limit):
+                            instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。未写入的当前批次已丢弃，并缩小为 \(limit) 首。请继续使用原生工具协议，重新调用 library_index_v2_next_batch(limit=\(limit))，再分类并写回。"
+                        case .resumeFromStatus:
+                            instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。此前成功写入的索引状态已保留，请继续使用原生工具协议调用 library_index_v2_status，再从当前 pending 继续。"
+                        case nil:
+                            instruction = "原生工具协议暂时不可用；本轮没有执行任何工具调用。请继续使用原生工具协议从当前推荐索引状态恢复。"
+                        }
+                        didRecoverRecommendationProviderFailure = true
+                        taskState.errors.append(instruction)
+                        taskState.pendingActions = [instruction]
+                        taskState.status = .waitingForTool
+                        taskState.updatedAt = .now
+                        await state(taskState)
+                        await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "原生工具协议暂时不可用，正在保持原协议恢复…")]))
+                        conversation = Self.compactRecommendationIndexTranscript(
+                            conversation,
+                            droppingLatestRecommendationUnit: hadCurrentBatch
+                        )
+                        conversation.append(AIMessage(role: .user, content: "系统恢复：\(instruction)"))
+                        continue
+                    }
+                    // Provider 协议在请求前已经确定。网络瞬时错误由
+                    // streamWithFallback/completeWithRetry 按同一协议重试；协议或
+                    // schema 错误不能偷偷切换成 ACTION。只有请求一开始就是文本
+                    // 协议时，才保留既有的显式音乐本地降级。
+                    if !nativeMode, ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
+                        await runOffline(
+                            userText: userText,
+                            bridge: bridge,
+                            catalog: catalog,
+                            context: context,
+                            emit: emit,
+                            log: log
+                        )
+                    } else {
+                        let prefix = nativeMode ? "原生工具协议请求失败" : "AI 服务暂时不可用"
+                        await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；未切换到另一种工具协议，也未将请求改写为本地音乐搜索。")]))
+                    }
+                    return
                 }
-                // Provider 协议在请求前已经确定。网络瞬时错误由
-                // streamWithFallback/completeWithRetry 按同一协议重试；协议或
-                // schema 错误不能偷偷切换成 ACTION。只有请求一开始就是文本
-                // 协议时，才保留既有的显式音乐本地降级。
-                if !nativeMode, ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
-                    await runOffline(
-                        userText: userText,
-                        bridge: bridge,
-                        catalog: catalog,
-                        context: context,
-                        emit: emit,
-                        log: log
-                    )
-                } else {
-                    let prefix = nativeMode ? "原生工具协议请求失败" : "AI 服务暂时不可用"
-                    await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；未切换到另一种工具协议，也未将请求改写为本地音乐搜索。")]))
-                }
-                return
             }
 
             if workflow.usesRecommendationIndexV2 {
                 didRecoverRecommendationProviderFailure = false
             }
 
-            await progress(AgentProgress(
-                toolSteps: toolStepCount,
-                currentStep: "正在理解请求",
-                inputTokens: outcome.inputTokens,
-                outputTokens: outcome.outputTokens
-            ))
-            taskState.progress.modelRounds += 1
-            taskState.progress.inputTokens += outcome.inputTokens ?? 0
-            taskState.progress.outputTokens += outcome.outputTokens ?? 0
-            taskState.status = .waitingForModel
-            taskState.updatedAt = .now
-            await state(taskState)
+            if !didUseForcedWorkflowCall {
+                await progress(AgentProgress(
+                    toolSteps: toolStepCount,
+                    currentStep: "正在理解请求",
+                    inputTokens: outcome.inputTokens,
+                    outputTokens: outcome.outputTokens
+                ))
+                taskState.progress.modelRounds += 1
+                taskState.progress.inputTokens += outcome.inputTokens ?? 0
+                taskState.progress.outputTokens += outcome.outputTokens ?? 0
+                taskState.status = .waitingForModel
+                taskState.updatedAt = .now
+                await state(taskState)
+            } else {
+                taskState.status = .waitingForTool
+                taskState.updatedAt = .now
+                await state(taskState)
+            }
 
             if !outcome.webCitations.isEmpty {
                 let sources = Self.webSources(from: outcome.webCitations)
@@ -873,6 +935,40 @@ public struct ToolLoop {
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
 
+            // A model response cannot replace the fixed V2 control-flow edges.
+            // Auxiliary capabilities remain available: the workflow owns
+            // status/next_batch, while the model may still use diagnostics,
+            // capabilities_get, tool_search, or other registered tools when
+            // it needs them before producing the current batch classification.
+            if workflow.usesRecommendationIndexV2,
+               recommendationWorkflow?.state == .classifyingBatch,
+               forcedWorkflowCall == nil {
+                let names = nativeMode
+                    ? nativeCalls.map(\.name)
+                    : textActions.map(\.tool)
+                let isSingleWrite = names.count == 1
+                    && names.first == "library_index_v2_write_batch"
+                let containsRuntimeOwnedControlCall = names.contains {
+                    Self.recommendationIndexRuntimeOwnedTools.contains($0)
+                }
+                let isAuxiliaryToolTurn = !names.isEmpty
+                    && !names.contains("library_index_v2_write_batch")
+                    && !containsRuntimeOwnedControlCall
+                if !isSingleWrite && (!isAuxiliaryToolTurn || containsRuntimeOwnedControlCall) {
+                    let correction = "Recommendation Index V2 当前需要对当前批次生成结构化 library_index_v2_write_batch；status 与 next_batch 由 Runtime 自动执行，不要重复调用它们，也不要只返回说明文字。"
+                    if nativeMode, provider.capabilities.supportsToolChoice {
+                        toolChoice = .named("library_index_v2_write_batch")
+                    }
+                    taskState.pendingActions = [correction]
+                    taskState.status = .waitingForModel
+                    taskState.updatedAt = .now
+                    await state(taskState)
+                    await emit(AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "固定链路：等待当前批次 write_batch…")]))
+                    conversation.append(AIMessage(role: .user, content: "系统恢复：\(correction)"))
+                    continue
+                }
+            }
+
             let completionFactsSatisfied: Bool
             if workflow.usesRecommendationIndexV2 {
                 completionFactsSatisfied = recommendationWorkflow?.isCompleted == true
@@ -884,6 +980,7 @@ public struct ToolLoop {
             // 许多中转在 tool result 后只返回 reasoning 或空 content；这不应覆盖成功状态。
             if nativeCalls.isEmpty,
                textActions.isEmpty,
+               forcedWorkflowCall == nil,
                completionFactsSatisfied,
                !(intent == .musicDiscovery
                     && !didRequestFinalSelection
@@ -920,7 +1017,9 @@ public struct ToolLoop {
                     await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
                 }
                 let finalText = reply.isEmpty
-                    ? Self.deterministicCompletionSummary(policy: policy, presentation: presentation)
+                    ? (workflow.usesRecommendationIndexV2
+                        ? "推荐索引 V2 已完成。"
+                        : Self.deterministicCompletionSummary(policy: policy, presentation: presentation))
                     : reply
                 if !finalText.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text(finalText)]))
@@ -930,7 +1029,8 @@ public struct ToolLoop {
 
             if streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                nativeCalls.isEmpty,
-               textActions.isEmpty {
+               textActions.isEmpty,
+               forcedWorkflowCall == nil {
                 if !nativeMode, Self.canUseOfflineFallback(intent: intent, userText: userText) {
                     await runOffline(
                         userText: userText,
@@ -952,7 +1052,7 @@ public struct ToolLoop {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(failure)]))
                 return
             }
-            if nativeCalls.isEmpty && textActions.isEmpty {
+            if nativeCalls.isEmpty && textActions.isEmpty && forcedWorkflowCall == nil {
                 // 模型已输出最终回答 → 正常终止本轮任务。
                 // 流式收尾：Coordinator 会把 in-flight 流式气泡原地定型为该最终文本，
                 // 不会出现「流式半成品 + 成品」两条重复气泡。
@@ -1057,7 +1157,11 @@ public struct ToolLoop {
             }
 
             // 有工具调用：先把 assistant 消息（含 tool_calls）写入对话，再逐条执行回灌。
-            if nativeMode, !nativeCalls.isEmpty {
+            if forcedWorkflowCall != nil, nativeMode {
+                conversation.append(AIMessage(role: .assistant, content: "", toolCalls: nativeCalls))
+            } else if let forcedWorkflowCall {
+                conversation.append(AIMessage(role: .assistant, content: "固定工作流步骤：\(forcedWorkflowCall.name)"))
+            } else if nativeMode, !nativeCalls.isEmpty {
                 conversation.append(AIMessage(role: .assistant, content: streamedText, toolCalls: nativeCalls))
             } else {
                 conversation.append(AIMessage(role: .assistant, content: streamedText))
@@ -1065,7 +1169,9 @@ public struct ToolLoop {
 
             // 统一调用视图：原生调用带稳定 id，文本 ACTION 合成 text-N。
             let calls: [LoopToolCall]
-            if nativeMode, !nativeCalls.isEmpty {
+            if let forcedWorkflowCall {
+                calls = [forcedWorkflowCall]
+            } else if nativeMode, !nativeCalls.isEmpty {
                 calls = nativeCalls.map { native in
                     switch Self.parseArguments(native.arguments) {
                     case let .success(args):
@@ -1129,6 +1235,7 @@ public struct ToolLoop {
 
             var toolMessages: [AIMessage] = []
             var shouldCompactRecommendationTranscript = false
+            var fixedWorkflowFailure: String?
             // 本轮统计（用于合并工具轨迹展示）。
             var roundSearchCalls = 0
             var roundToolNames: Set<String> = []
@@ -1323,6 +1430,15 @@ public struct ToolLoop {
                     } else {
                         failureText = "（工具执行结果）\(call.name): 执行中断 - \(Self.errorText(error))"
                     }
+                    if workflow.usesRecommendationIndexV2 {
+                        if call.name == "library_index_v2_write_batch" {
+                            // 写入结果不确定时先核验真实 catalog 状态，避免重复副作用。
+                            recommendationWorkflow?.beginVerification()
+                        } else if call.name == "library_index_v2_status"
+                                    || call.name == "library_index_v2_next_batch" {
+                            fixedWorkflowFailure = failureText
+                        }
+                    }
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "工具超时/中断", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
@@ -1353,7 +1469,10 @@ public struct ToolLoop {
                     }
                     if addedDiscoveredTool, nativeMode {
                         toolDefinitions = ToolSelector.toolDefinitions(
-                            from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                            from: Self.modelToolsForWorkflow(
+                                Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                                workflow: workflow
+                            ),
                             strict: provider.capabilities.supportsStrictSchema
                         )
                     }
@@ -1376,6 +1495,14 @@ public struct ToolLoop {
                         pending: Int(result.facts["recommendation.index.pending"] ?? "0") ?? 0,
                         pendingSemantic: Int(result.facts["recommendation.index.pendingSemantic"] ?? "0") ?? 0
                     )
+                }
+                if workflow.usesRecommendationIndexV2, !result.success {
+                    if call.name == "library_index_v2_write_batch" {
+                        recommendationWorkflow?.retryCurrentBatch()
+                    } else if call.name == "library_index_v2_status"
+                                || call.name == "library_index_v2_next_batch" {
+                        fixedWorkflowFailure = result.summary
+                    }
                 }
                 if madeProgress { completionRepairAttempts = 0 }
                 await state(taskState)
@@ -1469,11 +1596,28 @@ public struct ToolLoop {
                 conversation = Self.compactRecommendationIndexTranscript(conversation)
             }
 
-            // `required` 只用于强制模型在一轮“模型说明但没执行动作”后产出工具。
-            // 一旦工具调用已经发生，下一轮必须回到 `auto`，否则部分网关会持续强迫
-            // 工具调用，导致工具循环或永远无法生成最终文本。
+            if let fixedWorkflowFailure {
+                let message = "推荐索引 V2 固定链路执行失败：\(fixedWorkflowFailure)"
+                taskState.errors.append(message)
+                taskState.errorState = message
+                taskState.status = .failed
+                taskState.updatedAt = .now
+                await state(taskState)
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                return
+            }
+
+            // 普通任务在工具回灌后回到 auto；V2 分类阶段始终锁定唯一的
+            // write_batch，避免下一轮又回到旁路工具。
             if nativeMode, !nativeCalls.isEmpty {
-                toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
+                if workflow.usesRecommendationIndexV2,
+                   recommendationWorkflow?.state == .classifyingBatch,
+                   !didUseForcedWorkflowCall,
+                   provider.capabilities.supportsToolChoice {
+                    toolChoice = .named("library_index_v2_write_batch")
+                } else {
+                    toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
+                }
             }
 
             // 合并工具轨迹：不再逐行刷「调用 X」，而是合并成一条状态。
@@ -1519,6 +1663,38 @@ public struct ToolLoop {
         "library_index_v2_write_batch",
         "library_index_v2_tag_catalog",
     ]
+
+    private static let recommendationIndexRuntimeOwnedTools: Set<String> = [
+        "library_index_v2_status",
+        "library_index_v2_next_batch",
+    ]
+
+    private static let recommendationIndexWorkflowInstruction =
+        "固定主链路：Runtime 自动执行 library_index_v2_status → library_index_v2_next_batch；你只负责对刚返回的当前批次生成一次结构化 library_index_v2_write_batch。写入成功后 Runtime 自动核验 status，再决定下一批。辅助工具仍可用于诊断、能力查询或补充读取，但不能替代 status → next_batch → write_batch → status 主链路，也不要在没有当前批次时猜造 items。"
+
+    private static func recommendationIndexForcedToolName(
+        for state: RecommendationIndexWorkflow.State?
+    ) -> String? {
+        switch state {
+        case .readingStatus, .verifying:
+            return "library_index_v2_status"
+        case .fetchingBatch:
+            return "library_index_v2_next_batch"
+        case .classifyingBatch, .writingBatch, .completed, nil:
+            return nil
+        }
+    }
+
+    /// Workflow routing owns mandatory control-flow edges, not model
+    /// capabilities. Keep every selected model-visible descriptor in the
+    /// request so auxiliary tools remain discoverable and usable; the runtime
+    /// enforces the V2 status/next_batch edges independently.
+    private static func modelToolsForWorkflow(
+        _ tools: [ToolDescriptor],
+        workflow _: AgentWorkflowRoute
+    ) -> [ToolDescriptor] {
+        tools
+    }
 
     /// Keep the native transcript legal while preventing a long index build
     /// from replaying every previous classification payload on every request.
@@ -2289,12 +2465,19 @@ public struct ToolLoop {
         }
     }
 
-    public static func systemPrompt(context: Context, tools: [ToolDescriptor], nativeToolCalling: Bool, goal: String = "") -> String {
+    public static func systemPrompt(
+        context: Context,
+        tools: [ToolDescriptor],
+        nativeToolCalling: Bool,
+        goal: String = "",
+        workflowInstruction: String? = nil
+    ) -> String {
         return SystemPromptBuilder.build(
             context: context,
             tools: tools,
             nativeToolCalling: nativeToolCalling,
-            goal: goal
+            goal: goal,
+            workflowInstruction: workflowInstruction
         )
 
         /*

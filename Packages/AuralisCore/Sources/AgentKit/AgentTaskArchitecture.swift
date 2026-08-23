@@ -615,7 +615,7 @@ public enum RecommendationIndexTaskRules {
     public static func requiresCompleteBuild(text: String, historyText: String = "") -> Bool {
         let combined = (text + " " + historyText).lowercased()
         let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
-        let actionMarkers = ["构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
+        let actionMarkers = ["开始", "启动", "建立", "创建", "构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
         return indexMarkers.contains(where: combined.contains) && actionMarkers.contains(where: combined.contains)
     }
 }

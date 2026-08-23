@@ -15,11 +15,62 @@ public let auralisDefaultRequestTimeout: TimeInterval = 180
 public let auralisDefaultMaxContextTokens = 256_000
 
 /// 原生工具调用的请求偏好。`required` 只在 Runtime 已确认需要真实工具时使用；
+/// `named` 用于确定性 Workflow 强制当前步骤的唯一工具，避免模型跳到旁路工具。
 /// Provider 协议在请求前确定，工具能力被拒绝时必须报告原协议错误。
-public enum AIToolChoice: String, Codable, Hashable, Sendable {
+public enum AIToolChoice: Codable, Hashable, Sendable {
     case auto
     case required
     case none
+    case named(String)
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case name
+    }
+
+    public init(from decoder: any Decoder) throws {
+        if let value = try? decoder.singleValueContainer().decode(String.self) {
+            switch value {
+            case "auto": self = .auto
+            case "required": self = .required
+            case "none": self = .none
+            default: self = .named(value)
+            }
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let name = try container.decodeIfPresent(String.self, forKey: .name) {
+            self = .named(name)
+        } else {
+            switch try container.decode(String.self, forKey: .mode) {
+            case "auto": self = .auto
+            case "required": self = .required
+            case "none": self = .none
+            default: throw DecodingError.dataCorruptedError(
+                forKey: .mode,
+                in: container,
+                debugDescription: "Unknown tool choice mode"
+            )
+            }
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .auto:
+            var container = encoder.singleValueContainer()
+            try container.encode("auto")
+        case .required:
+            var container = encoder.singleValueContainer()
+            try container.encode("required")
+        case .none:
+            var container = encoder.singleValueContainer()
+            try container.encode("none")
+        case let .named(name):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(name, forKey: .name)
+        }
+    }
 }
 
 /// Provider 原生托管工具。它们不是 Auralis 的 function tool：Provider 必须把

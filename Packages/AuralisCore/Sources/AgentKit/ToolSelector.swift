@@ -195,7 +195,7 @@ public enum ToolSelector {
         }
         let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
         if containsAny(lower, indexMarkers) {
-            let buildMarkers = ["构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
+            let buildMarkers = ["开始", "启动", "建立", "创建", "构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
             names += containsAny(lower, buildMarkers)
                 ? recommendationIndexBuildNames
                 : recommendationIndexStatusNames
