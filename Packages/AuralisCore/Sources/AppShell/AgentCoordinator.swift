@@ -129,7 +129,7 @@ public final class AgentCoordinator: ObservableObject {
         self.systemService = AuralisSystemToolService(model: model, memoryStore: memoryStore)
         // UI / Agent / 歌词补全共用同一个 MusicEnrichmentService；未传入时自建（测试用）。
         self.externalMusicService = musicEnrichment ?? MusicEnrichmentService(catalog: coordinator.store)
-        self.webService = webService ?? DuckDuckGoWebService()
+        self.webService = webService ?? DuckDuckGoInstantAnswerService()
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))

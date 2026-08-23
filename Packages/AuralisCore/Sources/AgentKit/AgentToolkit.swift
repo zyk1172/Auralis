@@ -1,3 +1,4 @@
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -1491,7 +1492,8 @@ extension ToolResult {
         _ payload: AgentMessage? = nil,
         facts: [String: String] = [:],
         evidence: [AgentEvidence] = [],
-        presentationRole: ToolPresentationRole? = nil
+        presentationRole: ToolPresentationRole? = nil,
+        trustLevel: AIContentTrustLevel = .trustedTool
     ) -> ToolResult {
         ToolResult(
             call: call,
@@ -1501,7 +1503,8 @@ extension ToolResult {
             payload: payload,
             facts: facts,
             evidence: evidence,
-            presentationRole: presentationRole ?? descriptor.defaultPresentationRole
+            presentationRole: presentationRole ?? descriptor.defaultPresentationRole,
+            trustLevel: trustLevel
         )
     }
 

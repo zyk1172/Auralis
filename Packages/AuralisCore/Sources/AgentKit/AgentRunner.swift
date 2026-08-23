@@ -987,6 +987,7 @@ public struct AgentRunner {
                     let detail = Self.messageTextForModel(payload)
                     if !detail.isEmpty { resultText += "；详情：\(detail)" }
                 }
+                resultText = AIContentTrustBoundary.wrap(resultText, trustLevel: result.trustLevel)
 
                 // 隐私 gating：歌词权限关闭时，把歌词工具结果替换为固定隐藏摘要，
                 // 不把行数 / 语言 / 逐行状态等歌词相关字段回传模型。

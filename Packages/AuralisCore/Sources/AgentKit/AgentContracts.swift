@@ -1,3 +1,4 @@
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -68,6 +69,8 @@ public struct ToolResult: Sendable {
     /// 工具已产生部分写入或服务端状态无法确认。即使 `success == false`，Runner 也必须
     /// 阻止相同参数自动重试，避免创建重复歌单、重复添加歌曲等副作用。
     public let hasIndeterminateSideEffect: Bool
+    /// 外部 Web 内容只能作为数据回灌 Provider，不能变成系统指令或用户授权。
+    public let trustLevel: AIContentTrustLevel
 
     public init(
         call: ToolCall,
@@ -78,7 +81,8 @@ public struct ToolResult: Sendable {
         facts: [String: String] = [:],
         evidence: [AgentEvidence] = [],
         presentationRole: ToolPresentationRole = .none,
-        hasIndeterminateSideEffect: Bool = false
+        hasIndeterminateSideEffect: Bool = false,
+        trustLevel: AIContentTrustLevel = .trustedTool
     ) {
         self.call = call
         self.permission = permission
@@ -89,6 +93,7 @@ public struct ToolResult: Sendable {
         self.evidence = evidence
         self.presentationRole = presentationRole
         self.hasIndeterminateSideEffect = hasIndeterminateSideEffect
+        self.trustLevel = trustLevel
     }
 }
 

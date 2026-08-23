@@ -884,7 +884,8 @@ public enum AgentToolRegistry {
                     call,
                     descriptor,
                     "联网搜索找到 \(result.sources.count) 个来源",
-                    .webSources(result.sources)
+                    .webSources(result.sources),
+                    trustLevel: .externalUntrusted
                 )
             } catch {
                 return .fail(call, descriptor, "联网搜索失败：\(error.localizedDescription)")
@@ -902,7 +903,8 @@ public enum AgentToolRegistry {
                     call,
                     descriptor,
                     "已读取网页：\(document.source.title)",
-                    .text("来源：\(document.source.title)\nURL：\(document.source.url.absoluteString)\n\n\(document.text)")
+                    .text("来源：\(document.source.title)\nURL：\(document.source.url.absoluteString)\n\n\(document.text)"),
+                    trustLevel: .externalUntrusted
                 )
             } catch {
                 return .fail(call, descriptor, "网页读取失败：\(error.localizedDescription)")
