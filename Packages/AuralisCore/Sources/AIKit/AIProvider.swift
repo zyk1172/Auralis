@@ -22,6 +22,13 @@ public enum AIToolChoice: String, Codable, Hashable, Sendable {
     case none
 }
 
+/// Provider 原生托管工具。它们不是 Auralis 的 function tool：Provider 必须把
+/// 这些值编码成自己的 server-side tool 协议，不能伪装成普通函数交给 ToolRuntime。
+public enum AIHostedTool: String, Codable, Hashable, Sendable {
+    case webSearch
+    case webFetch
+}
+
 /// The protocol selected before a model run starts.  A run may use a
 /// controlled compatibility retry, but it never silently mixes wire formats
 /// inside one transcript.
@@ -475,6 +482,33 @@ public struct AIToolCall: Codable, Hashable, Sendable {
     }
 }
 
+/// Provider 原生联网工具返回的中立来源信息。
+/// AIKit 不依赖 AgentKit，AgentKit 在 UI / ToolResult 边界将其映射为 WebSource。
+public struct AIWebCitation: Codable, Hashable, Sendable {
+    public let title: String
+    public let url: URL
+    public let snippet: String?
+    public let publishedAt: String?
+    public let backend: String?
+    public let sourceType: String?
+
+    public init(
+        title: String,
+        url: URL,
+        snippet: String? = nil,
+        publishedAt: String? = nil,
+        backend: String? = nil,
+        sourceType: String? = nil
+    ) {
+        self.title = title
+        self.url = url
+        self.snippet = snippet
+        self.publishedAt = publishedAt
+        self.backend = backend
+        self.sourceType = sourceType
+    }
+}
+
 /// 发送给模型的原生工具定义（OpenAI `tools` 数组中的 function 条目）。
 /// `parameters` 以 JSON 字符串保存（JSON Schema），Provider 会原样嵌入请求体。
 public struct AIToolDefinition: Codable, Hashable, Sendable {
@@ -533,9 +567,11 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
     public let tools: [AIToolDefinition]?
     /// 原生工具调用策略；为空则不携带 `tool_choice`，兼容更老的网关。
     public let toolChoice: AIToolChoice?
+    /// Provider 原生托管工具。普通 function schema 不应承载这些工具。
+    public let hostedTools: [AIHostedTool]?
 
     private enum CodingKeys: String, CodingKey {
-        case model, transcript, messages, temperature, maxTokens, tools, toolChoice
+        case model, transcript, messages, temperature, maxTokens, tools, toolChoice, hostedTools
     }
 
     public init(
@@ -544,7 +580,8 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         temperature: Double = 0.4,
         maxTokens: Int = auralisDefaultMaxOutputTokens,
         tools: [AIToolDefinition]? = nil,
-        toolChoice: AIToolChoice? = nil
+        toolChoice: AIToolChoice? = nil,
+        hostedTools: [AIHostedTool]? = nil
     ) {
         self.model = model
         self.transcript = AITranscript(messages: messages)
@@ -552,6 +589,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.maxTokens = maxTokens
         self.tools = tools
         self.toolChoice = toolChoice
+        self.hostedTools = hostedTools
     }
 
     public init(
@@ -560,7 +598,8 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         temperature: Double = 0.4,
         maxTokens: Int = auralisDefaultMaxOutputTokens,
         tools: [AIToolDefinition]? = nil,
-        toolChoice: AIToolChoice? = nil
+        toolChoice: AIToolChoice? = nil,
+        hostedTools: [AIHostedTool]? = nil
     ) {
         self.model = model
         self.transcript = transcript
@@ -568,6 +607,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.maxTokens = maxTokens
         self.tools = tools
         self.toolChoice = toolChoice
+        self.hostedTools = hostedTools
     }
 
     public init(from decoder: any Decoder) throws {
@@ -582,6 +622,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? auralisDefaultMaxOutputTokens
         self.tools = try container.decodeIfPresent([AIToolDefinition].self, forKey: .tools)
         self.toolChoice = try container.decodeIfPresent(AIToolChoice.self, forKey: .toolChoice)
+        self.hostedTools = try container.decodeIfPresent([AIHostedTool].self, forKey: .hostedTools)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -593,6 +634,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encodeIfPresent(tools, forKey: .tools)
         try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
+        try container.encodeIfPresent(hostedTools, forKey: .hostedTools)
     }
 }
 
@@ -609,6 +651,8 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
     public let finishReason: String?
     /// 模型要求的原生工具调用；非空时表示需要执行工具并回灌结果。
     public let toolCalls: [AIToolCall]?
+    /// Provider hosted web/search 返回的来源，不泄漏 Provider 私有 payload。
+    public let webCitations: [AIWebCitation]?
 
     public init(
         model: String,
@@ -617,7 +661,8 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
         inputTokens: Int? = nil,
         outputTokens: Int? = nil,
         finishReason: String? = nil,
-        toolCalls: [AIToolCall]? = nil
+        toolCalls: [AIToolCall]? = nil,
+        webCitations: [AIWebCitation]? = nil
     ) {
         self.model = model
         self.content = content
@@ -626,6 +671,7 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
         self.outputTokens = outputTokens
         self.finishReason = finishReason
         self.toolCalls = toolCalls
+        self.webCitations = webCitations
     }
 }
 
@@ -647,6 +693,8 @@ public enum AIStreamEvent: Equatable, Sendable {
     /// `response.output_item.done` / Chat 的 `delta.tool_calls`）。
     /// 复用 `AIToolCall`，不新增重复 DTO。
     case toolCall(AIToolCall)
+    /// Provider hosted web/search 返回的来源。
+    case webCitations([AIWebCitation])
     case completed
     case usage(input: Int, output: Int)
 }

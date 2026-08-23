@@ -35,8 +35,12 @@ public struct AnthropicMessagesProvider: AIProvider {
             supportsStreaming: configuration.usesStreaming,
             supportsJSONMode: false,
             supportsJSONSchema: configuration.supportsJSONSchema,
-            supportsHostedWebSearch: configuration.supportsHostedWebSearch,
-            supportsHostedWebFetch: configuration.supportsHostedWebFetch,
+            // The stored flags predate a real server-tool codec. Keep them
+            // out of advertised capabilities until the Anthropic server-tool
+            // continuation blocks (including pause_turn) are represented by
+            // the neutral transcript model.
+            supportsHostedWebSearch: false,
+            supportsHostedWebFetch: false,
             supportsReasoningMetadata: configuration.supportsReasoningMetadata,
             toolMode: supportsToolCalling ? .anthropicMessages : .textualToolProtocol
         )
@@ -238,6 +242,9 @@ public struct AnthropicMessagesProvider: AIProvider {
     }
 
     private static func requestBody(_ request: AICompletionRequest, stream: Bool) throws -> [String: Any] {
+        guard request.hostedTools?.isEmpty != false else {
+            throw AIProviderError.unsupportedEndpointProtocol("Anthropic hosted web tools are not enabled")
+        }
         let transcript = request.transcript
         var system: [String] = []
         for message in transcript.messages where message.role == .system {

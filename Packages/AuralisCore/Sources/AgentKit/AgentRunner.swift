@@ -109,6 +109,7 @@ public struct AgentRunner {
     private struct StreamOutcome: Sendable {
         var text = ""
         var toolCalls: [AIToolCall] = []
+        var webCitations: [AIWebCitation] = []
         var inputTokens: Int?
         var outputTokens: Int?
     }
@@ -241,7 +242,10 @@ public struct AgentRunner {
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
         var didSwitchToAction = false
         var toolDefinitions = nativeMode
-            ? ToolSelector.toolDefinitions(from: selectedTools, strict: provider.capabilities.supportsStrictSchema)
+            ? ToolSelector.toolDefinitions(
+                from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                strict: provider.capabilities.supportsStrictSchema
+            )
             : []
 
         var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
@@ -335,8 +339,24 @@ public struct AgentRunner {
             if merged.count != selectedTools.count {
                 selectedTools = merged
                 if nativeMode {
-                    toolDefinitions = ToolSelector.toolDefinitions(from: selectedTools, strict: provider.capabilities.supportsStrictSchema)
+                    toolDefinitions = ToolSelector.toolDefinitions(
+                        from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                        strict: provider.capabilities.supportsStrictSchema
+                    )
                 }
+            }
+
+            let hostedTools = nativeMode
+                ? Self.hostedTools(for: provider.capabilities, availableTools: selectedTools)
+                : []
+            // Recompute after hosted routing: a local web_search function is
+            // not duplicated in the Provider schema when the Provider has a
+            // real native hosted web tool.
+            if nativeMode {
+                toolDefinitions = ToolSelector.toolDefinitions(
+                    from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                    strict: provider.capabilities.supportsStrictSchema
+                )
             }
 
             // 上下文裁剪：输入预算同时扣除真实工具 Schema 成本；不能再只预留固定
@@ -372,7 +392,8 @@ public struct AgentRunner {
                 temperature: 0.3,
                 maxTokens: reservedOutput,
                 tools: nativeMode ? toolDefinitions : nil,
-                toolChoice: nativeMode ? toolChoice : nil
+                toolChoice: nativeMode ? toolChoice : nil,
+                hostedTools: hostedTools.isEmpty ? nil : hostedTools
             )
             let outcome: StreamOutcome
             do {
@@ -418,7 +439,8 @@ public struct AgentRunner {
                         // 的长上下文/长输出截断到旧的 16K 默认值。
                         maxTokens: reservedOutput,
                         tools: nil,
-                        toolChoice: nil
+                        toolChoice: nil,
+                        hostedTools: nil
                     )
                     do {
                         outcome = try await streamWithFallback(provider: provider, request: fallbackRequest, timeout: requestTimeout) { delta in
@@ -473,6 +495,13 @@ public struct AgentRunner {
             taskState.status = .waitingForModel
             taskState.updatedAt = .now
             await state(taskState)
+
+            if !outcome.webCitations.isEmpty {
+                let sources = Self.webSources(from: outcome.webCitations)
+                if !sources.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
+                }
+            }
 
             // 解析本轮工具调用：原生 tool_calls 优先（流式事件收集），文本 ACTION 兜底。
             let streamedText = outcome.text
@@ -923,7 +952,7 @@ public struct AgentRunner {
                     }
                     if addedDiscoveredTool, nativeMode {
                         toolDefinitions = ToolSelector.toolDefinitions(
-                            from: selectedTools,
+                            from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
                             strict: provider.capabilities.supportsStrictSchema
                         )
                     }
@@ -1055,6 +1084,55 @@ public struct AgentRunner {
             return nil
         default:
             return nil
+        }
+    }
+
+    /// Hosted web is selected by the Provider codec. Remove the same local
+    /// function from the model schema for that round so the model does not see
+    /// two competing implementations of one capability.
+    private static func localModelTools(
+        _ tools: [ToolDescriptor],
+        capabilities: ModelCapabilities
+    ) -> [ToolDescriptor] {
+        tools.filter { descriptor in
+            if descriptor.name == "web_search" && capabilities.supportsHostedWebSearch {
+                return false
+            }
+            if descriptor.name == "web_fetch" && capabilities.supportsHostedWebFetch {
+                return false
+            }
+            return true
+        }
+    }
+
+    private static func hostedTools(
+        for capabilities: ModelCapabilities,
+        availableTools: [ToolDescriptor]
+    ) -> [AIHostedTool] {
+        let names = Set(availableTools.map(\.name))
+        var result: [AIHostedTool] = []
+        if capabilities.supportsHostedWebSearch, names.contains("web_search") {
+            result.append(.webSearch)
+        }
+        if capabilities.supportsHostedWebFetch, names.contains("web_fetch") {
+            result.append(.webFetch)
+        }
+        return result
+    }
+
+    private static func webSources(from citations: [AIWebCitation]) -> [WebSource] {
+        var seen = Set<String>()
+        return citations.compactMap { citation in
+            let canonical = WebSource.canonicalURL(citation.url).absoluteString
+            guard seen.insert(canonical).inserted else { return nil }
+            return WebSource(
+                title: citation.title,
+                url: citation.url,
+                snippet: citation.snippet ?? "",
+                publishedAt: citation.publishedAt,
+                backend: citation.backend,
+                sourceType: citation.sourceType
+            )
         }
     }
 
@@ -1320,6 +1398,7 @@ public struct AgentRunner {
         var fallback = streamed
         fallback.text = response.content
         fallback.toolCalls = response.toolCalls ?? []
+        fallback.webCitations = response.webCitations ?? streamed.webCitations
         fallback.inputTokens = response.inputTokens ?? streamed.inputTokens
         fallback.outputTokens = response.outputTokens ?? streamed.outputTokens
         if !response.content.isEmpty {
@@ -1351,6 +1430,8 @@ public struct AgentRunner {
                     await onDelta(text)
                 case let .toolCall(call):
                     outcome.toolCalls.append(call)
+                case let .webCitations(citations):
+                    outcome.webCitations.append(contentsOf: citations)
                 case let .usage(input, output):
                     outcome.inputTokens = input
                     outcome.outputTokens = output

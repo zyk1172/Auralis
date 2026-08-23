@@ -23,6 +23,31 @@ private final class WebFixtureURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private struct FixtureSearchBackend: AgentWebSearchBackend {
+    let capability: WebSearchCapability
+    let label: String
+
+    func search(query: String, limit: Int) async throws -> WebSearchResult {
+        WebSearchResult(
+            query: query,
+            sources: [WebSource(
+                title: label,
+                url: URL(string: "https://example.com/\(label)")!,
+                snippet: "fixture",
+                backend: label,
+                sourceType: "fixture"
+            )]
+        )
+    }
+
+    func fetch(url: URL) async throws -> WebDocument {
+        WebDocument(
+            source: WebSource(title: label, url: url, snippet: "fixture", backend: label, sourceType: "fixture"),
+            text: "fixture"
+        )
+    }
+}
+
 @Suite("Web capability security", .serialized)
 struct WebCapabilityTests {
     private let publicAddress = SafeWebIPAddress.ipv4([93, 184, 216, 34])
@@ -193,5 +218,31 @@ struct WebCapabilityTests {
         #expect(source.publishedAt == "2026-08-23")
         #expect(source.backend == "fixture")
         #expect(source.sourceType == "search")
+    }
+
+    @Test("WebCapabilityRouter 按 hosted、configured、instant fallback 优先级选择")
+    func routesByCapabilityPriority() async throws {
+        let configured = FixtureSearchBackend(capability: .configuredFullSearch, label: "configured")
+        let fallback = FixtureSearchBackend(capability: .instantAnswerFallback, label: "fallback")
+
+        let hosted = WebCapabilityRouter(
+            hostedSearchAvailable: true,
+            configuredFullSearch: configured,
+            instantAnswerFallback: fallback
+        )
+        #expect(hosted.capability == .hostedFullSearch)
+        let hostedLocalResult = try await hosted.search(query: "q", limit: 1)
+        #expect(hostedLocalResult.sources.first?.backend == "configured")
+
+        let configuredOnly = WebCapabilityRouter(
+            configuredFullSearch: configured,
+            instantAnswerFallback: fallback
+        )
+        #expect(configuredOnly.capability == .configuredFullSearch)
+        #expect(try await configuredOnly.search(query: "q", limit: 1).sources.first?.backend == "configured")
+
+        let fallbackOnly = WebCapabilityRouter(instantAnswerFallback: fallback)
+        #expect(fallbackOnly.capability == .instantAnswerFallback)
+        #expect(try await fallbackOnly.search(query: "q", limit: 1).sources.first?.backend == "fallback")
     }
 }

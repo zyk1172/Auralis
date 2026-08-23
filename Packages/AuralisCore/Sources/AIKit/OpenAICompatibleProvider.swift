@@ -122,8 +122,13 @@ public struct OpenAICompatibleProvider: AIProvider {
             supportsStreaming: configuration.usesStreaming,
             supportsJSONMode: configuration.supportsJSONMode,
             supportsJSONSchema: configuration.supportsJSONSchema,
-            supportsHostedWebSearch: configuration.supportsHostedWebSearch,
-            supportsHostedWebFetch: configuration.supportsHostedWebFetch,
+            // OpenAI's hosted web tool is a Responses API tool. A Chat
+            // Completions endpoint (or an arbitrary compatible gateway) must
+            // not inherit this flag merely because the stored config says so.
+            supportsHostedWebSearch: usesResponsesAPI && configuration.supportsHostedWebSearch,
+            // OpenAI Responses currently exposes web search/open-page actions,
+            // not a separate Auralis-style web_fetch contract.
+            supportsHostedWebFetch: false,
             supportsReasoningMetadata: configuration.supportsReasoningMetadata,
             toolMode: usesResponsesAPI ? .openAIResponses : (supportsToolCalling ? .openAIChat : .textualToolProtocol)
         )
@@ -154,6 +159,9 @@ public struct OpenAICompatibleProvider: AIProvider {
         guard !usesAnthropicMessagesAPI else {
             throw AIProviderError.unsupportedEndpointProtocol(configuration.apiPath)
         }
+        guard usesResponsesAPI || request.hostedTools?.isEmpty != false else {
+            throw AIProviderError.unsupportedEndpointProtocol("OpenAI hosted web tools require /responses")
+        }
         return try await performRequestWithParameterFallback(
             body: requestBody(request, stream: false),
             run: { try await session.data(for: $0) },
@@ -175,6 +183,13 @@ public struct OpenAICompatibleProvider: AIProvider {
         if usesAnthropicMessagesAPI {
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: AIProviderError.unsupportedEndpointProtocol(configuration.apiPath))
+            }
+        }
+        if !usesResponsesAPI, request.hostedTools?.isEmpty == false {
+            // Chat Completions is deliberately not treated as a hosted web
+            // protocol here; its separate search API has different semantics.
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: AIProviderError.unsupportedEndpointProtocol("OpenAI hosted web tools require /responses"))
             }
         }
         if usesResponsesAPI {
@@ -358,6 +373,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 continuation.yield(.delta(text))
                             case let .toolCall(call):
                                 continuation.yield(.toolCall(call))
+                            case let .webCitations(citations):
+                                continuation.yield(.webCitations(citations))
                             case .done:
                                 if let usage = Self.responsesUsage(from: message.data) {
                                     continuation.yield(.usage(input: usage.input, output: usage.output))
@@ -399,6 +416,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.yield(.delta(text))
                         case let .toolCall(call):
                             continuation.yield(.toolCall(call))
+                        case let .webCitations(citations):
+                            continuation.yield(.webCitations(citations))
                         case .done:
                             if let usage = Self.responsesUsage(from: message.data) {
                                 continuation.yield(.usage(input: usage.input, output: usage.output))
@@ -771,8 +790,12 @@ public struct OpenAICompatibleProvider: AIProvider {
             "max_output_tokens": request.maxTokens,
         ]
         if stream { body["stream"] = true }
-        if let tools = request.tools, !tools.isEmpty {
-            body["tools"] = Self.encodeResponsesTools(tools)
+        let functionTools = request.tools ?? []
+        let hostedTools = request.hostedTools ?? []
+        let encodedTools = Self.encodeResponsesTools(functionTools)
+            + Self.encodeResponsesHostedTools(hostedTools)
+        if !encodedTools.isEmpty {
+            body["tools"] = encodedTools
             if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
                 body["tool_choice"] = toolChoice.rawValue
             }
@@ -816,6 +839,21 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
             if tool.strict { item["strict"] = true }
             return item
+        }
+    }
+
+    /// OpenAI Responses hosted tools are top-level tools, not function
+    /// definitions. Keep this codec separate so a hosted tool can never be
+    /// accidentally sent as `type=function`.
+    static func encodeResponsesHostedTools(_ tools: [AIHostedTool]) -> [[String: Any]] {
+        tools.compactMap { tool in
+            switch tool {
+            case .webSearch:
+                return ["type": "web_search"]
+            case .webFetch:
+                // No separate OpenAI hosted web_fetch protocol is implemented.
+                return nil
+            }
         }
     }
 
@@ -937,7 +975,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                     inputTokens: usage?["prompt_tokens"] as? Int,
                     outputTokens: usage?["completion_tokens"] as? Int,
                     finishReason: finishReason(from: object),
-                    toolCalls: toolCalls(from: object)
+                    toolCalls: toolCalls(from: object),
+                    webCitations: nil
                 )
             }
             if let message = errorMessage(from: object) {
@@ -1098,6 +1137,7 @@ public struct OpenAICompatibleProvider: AIProvider {
     enum ResponsesStreamParseResult: Equatable, Sendable {
         case text(String)
         case toolCall(AIToolCall)
+        case webCitations([AIWebCitation])
         case done
         case failed(String)
         case ignore
@@ -1196,7 +1236,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                     inputTokens: (usage?["input_tokens"] as? Int) ?? (usage?["prompt_tokens"] as? Int),
                     outputTokens: (usage?["output_tokens"] as? Int) ?? (usage?["completion_tokens"] as? Int),
                     finishReason: finishReason(fromResponses: object),
-                    toolCalls: responsesToolCalls(from: object)
+                    toolCalls: responsesToolCalls(from: object),
+                    webCitations: responsesWebCitations(from: object)
                 )
             }
             if let message = errorMessage(from: object) {
@@ -1237,6 +1278,48 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
         }
         return parts.joined()
+    }
+
+    /// Extract only provider-neutral URL citation fields from Responses
+    /// message annotations. Raw hosted-search payload never crosses AIKit.
+    static func responsesWebCitations(from object: [String: Any]) -> [AIWebCitation]? {
+        guard let output = object["output"] as? [[String: Any]] else { return nil }
+        var citations: [AIWebCitation] = []
+        for item in output where (item["type"] as? String) == "message" {
+            citations.append(contentsOf: webCitations(from: item) ?? [])
+        }
+        return deduplicatedWebCitations(citations)
+    }
+
+    /// Extract citations from one streamed Responses message item.
+    static func webCitations(from item: [String: Any]) -> [AIWebCitation]? {
+        guard let content = item["content"] as? [[String: Any]] else { return nil }
+        var citations: [AIWebCitation] = []
+        for part in content {
+            guard let annotations = part["annotations"] as? [[String: Any]] else { continue }
+            for annotation in annotations where (annotation["type"] as? String) == "url_citation" {
+                guard let rawURL = annotation["url"] as? String,
+                      let url = URL(string: rawURL),
+                      let scheme = url.scheme?.lowercased(),
+                      scheme == "https" || scheme == "http" else { continue }
+                citations.append(AIWebCitation(
+                    title: (annotation["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? url.host ?? rawURL,
+                    url: url,
+                    backend: "openai-responses",
+                    sourceType: "hosted-web-search"
+                ))
+            }
+        }
+        return citations.isEmpty ? nil : deduplicatedWebCitations(citations)
+    }
+
+    private static func deduplicatedWebCitations(_ citations: [AIWebCitation]) -> [AIWebCitation]? {
+        var seen = Set<String>()
+        let unique = citations.filter { citation in
+            let canonical = citation.url.absoluteString.split(separator: "#", maxSplits: 1).first.map(String.init) ?? citation.url.absoluteString
+            return seen.insert(canonical).inserted
+        }
+        return unique.isEmpty ? nil : unique
     }
 
     /// 提取 Responses API 的 reasoning 条目（type == "reasoning"）文本，
@@ -1326,14 +1409,21 @@ public struct OpenAICompatibleProvider: AIProvider {
             // 工具调用在流式模式下被整体丢弃 → Agent 只输出文字「我在调用」却没任何动作。
             // 个别网关/旧实现用 `output`，这里两者都兼容（`item` 优先）。
             let item = (object["item"] as? [String: Any]) ?? (object["output"] as? [String: Any])
-            guard let item,
-                  (item["type"] as? String) == "function_call",
-                  let name = item["name"] as? String, !name.isEmpty
-            else { return .ignore }
+            guard let item else { return .ignore }
+            if (item["type"] as? String) == "message" {
+                return .webCitations(webCitations(from: item) ?? [])
+            }
+            guard (item["type"] as? String) == "function_call",
+                  let name = item["name"] as? String, !name.isEmpty else { return .ignore }
             let id = ((item["call_id"] as? String) ?? (item["id"] as? String))
                 .flatMap { $0.isEmpty ? nil : $0 }
                 ?? "call-\(item["output_index"] as? Int ?? 0)"
             return .toolCall(AIToolCall(id: id, name: name, arguments: stringify(item["arguments"]) ?? ""))
+        case "response.output_item.added", "response.content_part.added":
+            let item = (object["item"] as? [String: Any]) ?? (object["content_part"] as? [String: Any])
+            guard let item,
+                  (item["type"] as? String) == "message" else { return .ignore }
+            return .webCitations(webCitations(from: item) ?? [])
         case "response.completed", "response.incomplete":
             return .done
         case "response.failed":

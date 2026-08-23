@@ -764,4 +764,89 @@ struct OpenAIResponsesNetworkTests {
             Issue.record("错误类型不符：\(error)")
         }
     }
+
+    @Test func hostedWebCapabilityRequiresResponsesProtocol() {
+        let responses = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "responses",
+                baseURL: URL(string: "https://api.openai.com")!,
+                apiPath: "/v1/responses",
+                model: "gpt-5.6",
+                supportsToolCalling: true,
+                supportsHostedWebSearch: true,
+                supportsHostedWebFetch: true
+            ),
+            credentialVault: KeychainCredentialVault()
+        )
+        #expect(responses.capabilities.supportsHostedWebSearch)
+        #expect(responses.capabilities.supportsHostedWebFetch == false)
+
+        let chat = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "chat",
+                baseURL: URL(string: "https://api.openai.com")!,
+                apiPath: "/v1/chat/completions",
+                model: "gpt-5-search-api",
+                supportsToolCalling: true,
+                supportsHostedWebSearch: true
+            ),
+            credentialVault: KeychainCredentialVault()
+        )
+        #expect(chat.capabilities.supportsHostedWebSearch == false)
+    }
+
+    @Test func sendsResponsesHostedWebToolAndMapsCitations() async throws {
+        let responseBody = """
+        {"id":"resp_web","object":"response","model":"gpt-5.6","status":"completed",
+         "output":[
+           {"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"latest news"}},
+           {"type":"message","role":"assistant","content":[{"type":"output_text","text":"结果见来源。","annotations":[{"type":"url_citation","url":"https://example.com/news#section","title":"Example News","start_index":0,"end_index":4}]}]}
+         ]}
+        """
+        AIKitMockURLProtocol.reset(stubs: [.response(data: Data(responseBody.utf8))])
+        let provider = makeProvider(session: makeMockSession())
+        let response = try await provider.complete(AICompletionRequest(
+            model: "gpt-5.6",
+            messages: [AIMessage(role: .user, content: "查最新新闻")],
+            hostedTools: [.webSearch]
+        ))
+
+        let body = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
+        let tools = try #require(body["tools"] as? [[String: Any]])
+        #expect(tools.count == 1)
+        #expect(tools[0]["type"] as? String == "web_search")
+        #expect(tools[0]["function"] == nil)
+        let citation = try #require(response.webCitations?.first)
+        #expect(citation.title == "Example News")
+        #expect(citation.url.absoluteString == "https://example.com/news#section")
+        #expect(citation.backend == "openai-responses")
+    }
+
+    @Test func streamsResponsesHostedWebCitations() async throws {
+        let sse = """
+        data: {"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"结果","annotations":[{"type":"url_citation","url":"https://example.com/a","title":"A"}]}]}}
+
+        data: {"type":"response.completed"}
+
+        data: [DONE]
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+        ])
+        let provider = makeProvider(session: makeMockSession())
+        var events: [AIStreamEvent] = []
+        for try await event in provider.stream(AICompletionRequest(
+            model: "test-model",
+            messages: [AIMessage(role: .user, content: "搜新闻")],
+            hostedTools: [.webSearch]
+        )) {
+            events.append(event)
+        }
+        #expect(events.contains { event in
+            if case let .webCitations(citations) = event {
+                return citations.first?.title == "A"
+            }
+            return false
+        })
+    }
 }
