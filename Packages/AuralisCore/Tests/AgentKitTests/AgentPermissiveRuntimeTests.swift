@@ -795,11 +795,14 @@ struct AgentPermissiveRuntimeTests {
         #expect(await probe.calls == 0)
     }
 
-    @Test("TEST18 删除离线下载直接执行（无确认）")
+    @Test("TEST18 拆分后的下载历史删除工具保持直接执行元数据")
     func removeDownloadDirectExecution() async throws {
-        // 当前注册表没有专门的“删除下载”工具；若未来加入，必须直接执行。
-        let hasRemoveTool = AgentToolRegistry.all.contains { $0.name.contains("remove") && $0.name.contains("download") }
-        #expect(hasRemoveTool == false, "当前没有下载删除工具，本测试只记录现状；不要求凭空新增")
+        let removeTool = AgentToolRegistry.descriptor(for: "music_download_history_remove")
+        let cleanTool = AgentToolRegistry.descriptor(for: "music_download_history_clean")
+        #expect(removeTool != nil)
+        #expect(cleanTool != nil)
+        #expect(removeTool?.requiresConfirmation == false)
+        #expect(cleanTool?.requiresConfirmation == false)
     }
 
     // MARK: - TEST 19-22：conversation Intent 可调用写/播放/队列/推荐工具

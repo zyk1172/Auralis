@@ -1067,8 +1067,8 @@ func streamingToolCallsExecuteAndFinalize() async throws {
     #expect(await collector.containsText("已处理完成。"))
 }
 
-@Test("Streaming: mid-stream error degrades to local fallback with error text")
-func streamingErrorDegradesToLocalFallback() async {
+@Test("Streaming: 普通聊天中途失败不会降级为本地音乐搜索")
+func streamingErrorDoesNotDegradeOrdinaryChatToMusicSearch() async {
     let store = try! makeStore()
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
@@ -1085,10 +1085,15 @@ func streamingErrorDegradesToLocalFallback() async {
         emit: { await collector.record($0) }
     )
 
-    #expect(await collector.containsText("AI 服务暂时不可用"))
-    #expect(await collector.containsText("测试错误"))
-    // 兜底路径仍然生效（本地搜索找不到 → 提示）。
-    #expect(await collector.containsText("本地未找到匹配的歌曲") == true)
+    let emitted = await collector.all()
+    let errors = emitted.flatMap(\.messages).compactMap { item -> String? in
+        if case let .error(value) = item { return value }
+        return nil
+    }.joined(separator: "\n")
+    #expect(errors.contains("AI 服务暂时不可用"))
+    #expect(errors.contains("测试错误"))
+    #expect(errors.contains("未将普通聊天改写为本地音乐搜索"))
+    #expect(await collector.containsText("本地未找到匹配的歌曲") == false)
 }
 
 

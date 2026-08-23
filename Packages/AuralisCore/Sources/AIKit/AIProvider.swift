@@ -22,32 +22,91 @@ public enum AIToolChoice: String, Codable, Hashable, Sendable {
     case none
 }
 
+/// The protocol selected before a model run starts.  A run may use a
+/// controlled compatibility retry, but it never silently mixes wire formats
+/// inside one transcript.
+public enum AIProviderToolMode: String, Codable, Hashable, Sendable {
+    case none
+    case openAIChat
+    case openAIResponses
+    case anthropicMessages
+    case textualToolProtocol
+}
+
 /// Auralis 当前模型能力声明。上下文与输出均由 Provider / 用户配置决定，默认值
 /// 只服务于旧配置迁移和未声明能力的兼容端点。
 public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
     public var maxOutputTokens: Int
     public var supportsToolCalling: Bool
+    public var supportsParallelTools: Bool
+    public var supportsToolChoice: Bool
+    public var supportsStrictSchema: Bool
     public var supportsStreaming: Bool
     public var supportsJSONMode: Bool
     public var supportsJSONSchema: Bool
+    public var supportsHostedWebSearch: Bool
+    public var supportsHostedWebFetch: Bool
+    public var supportsReasoningMetadata: Bool
+    public var toolMode: AIProviderToolMode
 
     public init(
         maxContextTokens: Int = 256_000,
         maxOutputTokens: Int = auralisDefaultMaxOutputTokens,
         supportsToolCalling: Bool = false,
+        supportsParallelTools: Bool = true,
+        supportsToolChoice: Bool = true,
+        supportsStrictSchema: Bool = false,
         supportsStreaming: Bool = true,
         supportsJSONMode: Bool = false,
-        supportsJSONSchema: Bool = false
+        supportsJSONSchema: Bool = false,
+        supportsHostedWebSearch: Bool = false,
+        supportsHostedWebFetch: Bool = false,
+        supportsReasoningMetadata: Bool = false,
+        toolMode: AIProviderToolMode? = nil
     ) {
         self.maxContextTokens = max(4_096, maxContextTokens)
         // 不再把输出硬性限制为「上下文的一半」：上下文与输出各自按用户配置取值，
         // 由服务端 / Provider 实际能力决定，Auralis 不自设比例限制。
         self.maxOutputTokens = max(512, maxOutputTokens)
         self.supportsToolCalling = supportsToolCalling
+        self.supportsParallelTools = supportsParallelTools
+        self.supportsToolChoice = supportsToolChoice
+        self.supportsStrictSchema = supportsStrictSchema
         self.supportsStreaming = supportsStreaming
         self.supportsJSONMode = supportsJSONMode
         self.supportsJSONSchema = supportsJSONSchema
+        self.supportsHostedWebSearch = supportsHostedWebSearch
+        self.supportsHostedWebFetch = supportsHostedWebFetch
+        self.supportsReasoningMetadata = supportsReasoningMetadata
+        self.toolMode = toolMode ?? (supportsToolCalling ? .openAIChat : .textualToolProtocol)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case maxContextTokens, maxOutputTokens, supportsToolCalling
+        case supportsParallelTools, supportsToolChoice, supportsStrictSchema
+        case supportsStreaming, supportsJSONMode, supportsJSONSchema
+        case supportsHostedWebSearch, supportsHostedWebFetch, supportsReasoningMetadata
+        case toolMode
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            maxContextTokens: try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? 256_000,
+            maxOutputTokens: try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens) ?? auralisDefaultMaxOutputTokens,
+            supportsToolCalling: try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false,
+            supportsParallelTools: try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true,
+            supportsToolChoice: try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? true,
+            supportsStrictSchema: try container.decodeIfPresent(Bool.self, forKey: .supportsStrictSchema) ?? false,
+            supportsStreaming: try container.decodeIfPresent(Bool.self, forKey: .supportsStreaming) ?? true,
+            supportsJSONMode: try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false,
+            supportsJSONSchema: try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false,
+            supportsHostedWebSearch: try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebSearch) ?? false,
+            supportsHostedWebFetch: try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebFetch) ?? false,
+            supportsReasoningMetadata: try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningMetadata) ?? false,
+            toolMode: try container.decodeIfPresent(AIProviderToolMode.self, forKey: .toolMode)
+        )
     }
 
     public static let conservative = ModelCapabilities()
@@ -256,6 +315,12 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     public var supportsJSONMode: Bool
     public var supportsJSONSchema: Bool
     public var supportsToolCalling: Bool
+    public var supportsParallelTools: Bool
+    public var supportsToolChoice: Bool
+    public var supportsStrictSchema: Bool
+    public var supportsHostedWebSearch: Bool
+    public var supportsHostedWebFetch: Bool
+    public var supportsReasoningMetadata: Bool
     public var supportsImageInput: Bool
 
     public init(
@@ -276,6 +341,12 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONMode: Bool = false,
         supportsJSONSchema: Bool = false,
         supportsToolCalling: Bool = false,
+        supportsParallelTools: Bool = true,
+        supportsToolChoice: Bool = true,
+        supportsStrictSchema: Bool = false,
+        supportsHostedWebSearch: Bool = false,
+        supportsHostedWebFetch: Bool = false,
+        supportsReasoningMetadata: Bool = false,
         supportsImageInput: Bool = false
     ) {
         self.id = id
@@ -295,6 +366,12 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.supportsJSONMode = supportsJSONMode
         self.supportsJSONSchema = supportsJSONSchema
         self.supportsToolCalling = supportsToolCalling
+        self.supportsParallelTools = supportsParallelTools
+        self.supportsToolChoice = supportsToolChoice
+        self.supportsStrictSchema = supportsStrictSchema
+        self.supportsHostedWebSearch = supportsHostedWebSearch
+        self.supportsHostedWebFetch = supportsHostedWebFetch
+        self.supportsReasoningMetadata = supportsReasoningMetadata
         self.supportsImageInput = supportsImageInput
     }
 
@@ -304,7 +381,9 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         case id, name, baseURL, apiPath, credentialID, model, customHeaders
         case organization, project, temperature, maxTokens, maxContextTokens
         case timeout, usesStreaming, supportsJSONMode, supportsJSONSchema
-        case supportsToolCalling, supportsImageInput
+        case supportsToolCalling, supportsParallelTools, supportsToolChoice
+        case supportsStrictSchema, supportsHostedWebSearch, supportsHostedWebFetch
+        case supportsReasoningMetadata, supportsImageInput
     }
 
     public init(from decoder: any Decoder) throws {
@@ -326,6 +405,12 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONMode = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false
         supportsJSONSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false
         supportsToolCalling = try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false
+        supportsParallelTools = try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true
+        supportsToolChoice = try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? true
+        supportsStrictSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsStrictSchema) ?? false
+        supportsHostedWebSearch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebSearch) ?? false
+        supportsHostedWebFetch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebFetch) ?? false
+        supportsReasoningMetadata = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningMetadata) ?? false
         supportsImageInput = try container.decodeIfPresent(Bool.self, forKey: .supportsImageInput) ?? false
     }
 
@@ -380,6 +465,14 @@ public struct AIToolCall: Codable, Hashable, Sendable {
         self.name = name
         self.arguments = arguments
     }
+
+    public init(id: String, name: String, arguments: AIJSONValue) {
+        self.init(id: id, name: name, arguments: arguments.jsonString)
+    }
+
+    public var structuredArguments: AIJSONValue? {
+        try? AIJSONValue(jsonString: arguments)
+    }
 }
 
 /// 发送给模型的原生工具定义（OpenAI `tools` 数组中的 function 条目）。
@@ -388,11 +481,13 @@ public struct AIToolDefinition: Codable, Hashable, Sendable {
     public let name: String
     public let description: String
     public let parametersJSON: String?
+    public let strict: Bool
 
-    public init(name: String, description: String, parametersJSON: String? = nil) {
+    public init(name: String, description: String, parametersJSON: String? = nil, strict: Bool = false) {
         self.name = name
         self.description = description
         self.parametersJSON = parametersJSON
+        self.strict = strict
     }
 }
 
@@ -428,13 +523,20 @@ public struct AIMessage: Codable, Hashable, Sendable, Identifiable {
 
 public struct AICompletionRequest: Codable, Hashable, Sendable {
     public let model: String
-    public let messages: [AIMessage]
+    /// Provider-neutral transcript. `messages` remains a compatibility
+    /// projection for legacy codecs and callers.
+    public let transcript: AITranscript
+    public var messages: [AIMessage] { transcript.messages }
     public let temperature: Double
     public let maxTokens: Int
     /// 原生 function calling 的工具定义；为空则请求体不携带 `tools` 字段。
     public let tools: [AIToolDefinition]?
     /// 原生工具调用策略；为空则不携带 `tool_choice`，兼容更老的网关。
     public let toolChoice: AIToolChoice?
+
+    private enum CodingKeys: String, CodingKey {
+        case model, transcript, messages, temperature, maxTokens, tools, toolChoice
+    }
 
     public init(
         model: String,
@@ -445,11 +547,52 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         toolChoice: AIToolChoice? = nil
     ) {
         self.model = model
-        self.messages = messages
+        self.transcript = AITranscript(messages: messages)
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.tools = tools
         self.toolChoice = toolChoice
+    }
+
+    public init(
+        model: String,
+        transcript: AITranscript,
+        temperature: Double = 0.4,
+        maxTokens: Int = auralisDefaultMaxOutputTokens,
+        tools: [AIToolDefinition]? = nil,
+        toolChoice: AIToolChoice? = nil
+    ) {
+        self.model = model
+        self.transcript = transcript
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.tools = tools
+        self.toolChoice = toolChoice
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.model = try container.decode(String.self, forKey: .model)
+        if let transcript = try container.decodeIfPresent(AITranscript.self, forKey: .transcript) {
+            self.transcript = transcript
+        } else {
+            self.transcript = AITranscript(messages: try container.decodeIfPresent([AIMessage].self, forKey: .messages) ?? [])
+        }
+        self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
+        self.maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? auralisDefaultMaxOutputTokens
+        self.tools = try container.decodeIfPresent([AIToolDefinition].self, forKey: .tools)
+        self.toolChoice = try container.decodeIfPresent(AIToolChoice.self, forKey: .toolChoice)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(model, forKey: .model)
+        try container.encode(transcript, forKey: .transcript)
+        try container.encode(messages, forKey: .messages)
+        try container.encode(temperature, forKey: .temperature)
+        try container.encode(maxTokens, forKey: .maxTokens)
+        try container.encodeIfPresent(tools, forKey: .tools)
+        try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
     }
 }
 

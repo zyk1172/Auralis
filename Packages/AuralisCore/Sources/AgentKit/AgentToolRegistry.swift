@@ -1,3 +1,4 @@
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -24,7 +25,7 @@ public enum ToolCachePolicy: String, Sendable, Hashable {
     case task
 }
 
-public enum ToolSideEffectPolicy: String, Sendable, Hashable {
+public enum ToolSideEffectPolicy: String, Codable, Sendable, Hashable {
     case none
     case playback
     case queue
@@ -46,6 +47,7 @@ public enum ToolEvidencePolicy: String, Sendable, Hashable {
 /// 工具元数据：分组、权限、展示角色、参数。
 public struct ToolDescriptor: Sendable, Hashable {
     public let name: String
+    public let namespace: String
     public let group: ToolGroup
     public let permission: ToolPermission
     /// 仅对明确不可逆的高风险操作触发一次用户批准；普通可逆/可恢复工具仍直执行。
@@ -61,6 +63,14 @@ public struct ToolDescriptor: Sendable, Hashable {
     /// 默认展示角色：决定工具结果进入候选池 / 最终 / 歧义（Tool 执行可覆盖）。
     public let defaultPresentationRole: ToolPresentationRole
     public let maxResultCharacters: Int
+    /// Searchable terms are part of the descriptor rather than a second
+    /// keyword table owned by ToolSelector.
+    public let tags: [String]
+    public let outputSchemaJSON: String?
+    public let idempotent: Bool
+    public let parallelSafe: Bool
+    public let networkAccess: Bool
+    public let aliases: [String]
 
     public init(
         name: String,
@@ -74,9 +84,17 @@ public struct ToolDescriptor: Sendable, Hashable {
         evidencePolicy: ToolEvidencePolicy? = nil,
         requiredScopes: Set<GrantedScope>? = nil,
         defaultPresentationRole: ToolPresentationRole = .candidate,
-        maxResultCharacters: Int = ContextManager.maxToolResultCharacters
+        maxResultCharacters: Int = ContextManager.maxToolResultCharacters,
+        namespace: String? = nil,
+        tags: [String] = [],
+        outputSchemaJSON: String? = nil,
+        idempotent: Bool? = nil,
+        parallelSafe: Bool? = nil,
+        networkAccess: Bool? = nil,
+        aliases: [String] = []
     ) {
         self.name = name
+        self.namespace = namespace ?? group.rawValue
         self.group = group
         self.permission = permission
         self.requiresConfirmation = requiresConfirmation
@@ -94,6 +112,12 @@ public struct ToolDescriptor: Sendable, Hashable {
         )
         self.defaultPresentationRole = defaultPresentationRole
         self.maxResultCharacters = maxResultCharacters
+        self.tags = tags.isEmpty ? [name, group.rawValue, summary] : tags
+        self.outputSchemaJSON = outputSchemaJSON
+        self.idempotent = idempotent ?? (permission == .readOnly)
+        self.parallelSafe = parallelSafe ?? (permission == .readOnly)
+        self.networkAccess = networkAccess ?? (group == .server || group == .download)
+        self.aliases = aliases
     }
 
     private static func defaultRequiredScopes(
@@ -202,6 +226,119 @@ public enum AgentToolRegistry {
     """#
 
     public static let all: [ToolDescriptor] = [
+        // MARK: Runtime discovery and generic capabilities
+        .init(name: "tool_search", group: .catalog, permission: .readOnly,
+              summary: "按名称、描述、标签或命名空间发现可用工具；发现后下一轮即可使用其完整 schema",
+              parameters: [
+                .init(name: "query", required: true, description: "工具名称、能力或自然语言描述"),
+                .init(name: "namespace", required: false, description: "可选命名空间，如 catalog/playback/web"),
+                .init(name: "limit", required: false, description: "返回数量，默认 8，最多 50",
+                      schemaJSON: #"{"type":"integer","minimum":1,"maximum":50}"#),
+              ],
+              tags: ["discover", "capability", "schema", "工具发现"],
+              aliases: ["tools_list"]),
+        .init(name: "capabilities_get", group: .catalog, permission: .readOnly,
+              summary: "查询当前 Provider、原生工具、联网与主要 App 能力摘要",
+              tags: ["capability", "provider", "web", "能力"]),
+        .init(name: "memory_search", group: .memory, permission: .readOnly,
+              summary: "按关键词搜索长期记忆，只返回与当前问题相关的记忆",
+              parameters: [
+                .init(name: "query", required: true, description: "记忆关键词或问题"),
+                .init(name: "limit", required: false, description: "返回数量，默认 10",
+                      schemaJSON: #"{"type":"integer","minimum":1,"maximum":50}"#),
+              ],
+              tags: ["memory", "search", "长期记忆"]),
+        .init(name: "web_search", group: .server, permission: .readOnly,
+              summary: "搜索互联网并返回带标题、URL、域名和摘要的来源",
+              parameters: [
+                .init(name: "query", required: true, description: "互联网搜索问题"),
+                .init(name: "limit", required: false, description: "返回数量，默认 5",
+                      schemaJSON: #"{"type":"integer","minimum":1,"maximum":10}"#),
+              ],
+              evidencePolicy: .externalAPI,
+              tags: ["web", "search", "internet", "联网"]),
+        .init(name: "web_fetch", group: .server, permission: .readOnly,
+              summary: "读取指定 HTTPS 网页的正文摘要；不会把凭据带入请求",
+              parameters: [
+                .init(name: "url", required: true, description: "要读取的 HTTPS URL"),
+              ],
+              evidencePolicy: .externalAPI,
+              tags: ["web", "fetch", "internet", "网页"]),
+        .init(name: "library_resolve_entity", group: .catalog, permission: .readOnly,
+              summary: "按自然语言解析歌曲、专辑、艺术家或歌单，并返回真实 Global ID",
+              parameters: [
+                .init(name: "query", required: true, description: "歌曲、专辑、艺术家或歌单名称"),
+                .init(name: "kind", required: false, description: "song/album/artist/playlist，默认自动"),
+                .init(name: "limit", required: false, description: "返回数量，默认 5，最多 20",
+                      schemaJSON: #"{"type":"integer","minimum":1,"maximum":20}"#),
+              ],
+              tags: ["catalog", "resolve", "entity", "ID", "解析"]),
+        .init(name: "library_get_songs_batch", group: .catalog, permission: .readOnly,
+              summary: "一次读取多首歌曲的真实详情，避免逐首调用 getTrack",
+              parameters: [
+                .init(name: "trackIDs", required: true, description: "GlobalTrackID JSON 数组",
+                      schemaJSON: #"{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string"}}"#),
+              ],
+              tags: ["catalog", "batch", "songs", "批量"]),
+
+        // MARK: Music download canonical split tools
+        .init(name: "music_download_search", group: .download, permission: .readOnly,
+              summary: "在 MoviePilot 中搜索音乐下载候选，不提交下载",
+              parameters: [
+                .init(name: "artist", required: false, description: "艺人名"),
+                .init(name: "album", required: false, description: "专辑名"),
+                .init(name: "album_aliases", required: false, description: "专辑英文名/别名"),
+                .init(name: "keyword", required: false, description: "关键词"),
+                .init(name: "year", required: false, description: "年份"),
+                .init(name: "limit", required: false, description: "返回数量",
+                      schemaJSON: #"{"type":"integer","minimum":1,"maximum":50}"#),
+                .init(name: "prefer_lossless", required: false, description: "是否优先无损",
+                      schemaJSON: #"{"type":"boolean"}"#),
+                .init(name: "min_seeders", required: false, description: "最低做种数",
+                      schemaJSON: #"{"type":"integer","minimum":0}"#),
+                .init(name: "kind", required: false, description: "single/album/auto"),
+              ],
+              tags: ["download", "moviepilot", "music", "search"],
+              aliases: ["music_download.action=search"]),
+        .init(name: "music_download_submit", group: .download, permission: .reversible,
+              summary: "提交一个已确认候选的音乐下载任务",
+              parameters: [
+                .init(name: "ref", required: false, description: "搜索结果引用"),
+                .init(name: "site_id", required: false, description: "站点 ID"),
+                .init(name: "index", required: false, description: "站点候选序号"),
+                .init(name: "magnet", required: false, description: "磁力链接"),
+                .init(name: "title", required: false, description: "资源标题"),
+                .init(name: "max_size_gb", required: false, description: "搜索结果返回的体积上限",
+                      schemaJSON: #"{"type":"number","minimum":0}"#),
+                .init(name: "verify_song", required: false, description: "单曲校验歌名"),
+                .init(name: "verify_artist", required: false, description: "单曲校验艺人"),
+              ],
+              tags: ["download", "moviepilot", "submit"]),
+        .init(name: "music_download_status", group: .download, permission: .readOnly,
+              summary: "查询 MoviePilot 音乐下载插件配置和目录状态",
+              tags: ["download", "moviepilot", "status"]),
+        .init(name: "music_download_tasks", group: .download, permission: .readOnly,
+              summary: "查询当前音乐下载任务",
+              parameters: [.init(name: "status", required: false, description: "downloading/completed/failed/paused")],
+              tags: ["download", "tasks"]),
+        .init(name: "music_download_history", group: .download, permission: .readOnly,
+              summary: "查看音乐下载历史",
+              tags: ["download", "history"]),
+        .init(name: "music_download_history_remove", group: .download, permission: .reversible,
+              summary: "移除一条音乐下载历史记录",
+              parameters: [.init(name: "hash", required: true, description: "下载任务 hash")],
+              tags: ["download", "history", "remove"]),
+        .init(name: "music_download_history_clean", group: .download, permission: .reversible,
+              summary: "按状态、保留数量或孤儿记录清理下载历史",
+              parameters: [
+                .init(name: "status", required: false, description: "按状态清理"),
+                .init(name: "keep", required: false, description: "只保留最近 N 条",
+                      schemaJSON: #"{"type":"integer","minimum":0}"#),
+                .init(name: "orphans", required: false, description: "是否清理孤儿记录",
+                      schemaJSON: #"{"type":"boolean"}"#),
+              ],
+              tags: ["download", "history", "clean"]),
+
         // MARK: Catalog
         .init(name: "searchTracks", group: .catalog, permission: .readOnly, summary: "按关键词搜索单曲",
               parameters: [.init(name: "q", required: true, description: "搜索关键词")]),
@@ -546,8 +683,16 @@ public enum AgentToolRegistry {
         .init(name: "queue_get", group: .playback, permission: .readOnly, summary: "获取当前播放队列"),
         .init(name: "queue_append", group: .playback, permission: .reversible, summary: "把歌曲追加到队列末尾",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
+        .init(name: "queue_append_many", group: .playback, permission: .reversible, summary: "一次把多首歌曲追加到队列末尾",
+              parameters: [.init(name: "trackIDs", required: true, description: "GlobalTrackID JSON 数组",
+                                 schemaJSON: #"{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string"}}"#)],
+              tags: ["queue", "batch", "append", "批量"]),
         .init(name: "queue_play_next", group: .playback, permission: .reversible, summary: "把歌曲插入到当前歌曲之后播放",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
+        .init(name: "queue_play_next_many", group: .playback, permission: .reversible, summary: "一次把多首歌曲按顺序插入到当前歌曲之后播放",
+              parameters: [.init(name: "trackIDs", required: true, description: "GlobalTrackID JSON 数组",
+                                 schemaJSON: #"{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string"}}"#)],
+              tags: ["queue", "batch", "play_next", "批量"]),
         .init(name: "queue_replace", group: .playback, permission: .reversible, summary: "替换整个播放队列",
               parameters: [.init(name: "trackIDs", required: true, description: "GlobalTrackID 数组",
                                  schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)]),
@@ -667,25 +812,128 @@ public enum AgentToolRegistry {
 
     public static func descriptor(for name: String) -> ToolDescriptor? {
         all.first { $0.name == name }
+            ?? all.first { $0.aliases.contains(name) }
     }
 
     /// 元数据查找与执行的唯一公开入口。调用方无需再判断系统工具或旧工具分支。
     public static func execute(
-        _ call: ToolCall,
+        _ incomingCall: ToolCall,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
-        allowsLyrics: Bool = false
+        allowsLyrics: Bool = false,
+        providerCapabilities: ModelCapabilities? = nil,
+        webService: (any AgentWebService)? = nil
     ) async -> ToolResult {
-        guard let descriptor = descriptor(for: call.name) else {
+        guard let descriptor = descriptor(for: incomingCall.name) else {
             return ToolResult(
-                call: call,
+                call: incomingCall,
                 permission: .readOnly,
                 success: false,
-                summary: "未知工具：\(call.name)"
+                summary: "未知工具：\(incomingCall.name)"
             )
+        }
+        let call = incomingCall.name == descriptor.name
+            ? incomingCall
+            : ToolCall(name: descriptor.name, arguments: incomingCall.arguments)
+
+        switch call.name {
+        case "tool_search":
+            let query = call.arguments["query"] ?? ""
+            let namespace = call.arguments["namespace"]
+            let limit = min(max(Int(call.arguments["limit"] ?? "8") ?? 8, 1), 50)
+            let entries = ToolCatalog().search(query: query, namespace: namespace, limit: limit)
+            let text = entries.isEmpty
+                ? "未找到匹配工具。可以换一个能力描述、工具名或命名空间再搜索。"
+                : entries.map { entry in
+                    let flags = [
+                        entry.sideEffect == .none ? "只读" : "会改变状态",
+                        entry.networkAccess ? "联网" : nil,
+                    ].compactMap { $0 }.joined(separator: " · ")
+                    return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）"
+                }.joined(separator: "\n")
+            return .ok(call, descriptor, "发现 \(entries.count) 个工具", .text(text))
+        case "capabilities_get":
+            let capabilities = providerCapabilities ?? .conservative
+            let mode = capabilities.toolMode.rawValue
+            let providerText = capabilities.supportsToolCalling ? "原生工具调用=支持" : "原生工具调用=不支持"
+            let webText = [
+                capabilities.supportsHostedWebSearch ? "Provider 搜索" : nil,
+                capabilities.supportsHostedWebFetch ? "Provider 网页读取" : nil,
+                webService == nil ? nil : "App 网页能力",
+            ].compactMap { $0 }.joined(separator: "、")
+            let text = [
+                "工具协议：\(mode)",
+                providerText,
+                "并行工具=\(capabilities.supportsParallelTools ? "支持" : "不支持") · tool_choice=\(capabilities.supportsToolChoice ? "支持" : "不支持") · strict schema=\(capabilities.supportsStrictSchema ? "支持" : "不支持")",
+                "上下文约 \(capabilities.maxContextTokens) tokens · 输出约 \(capabilities.maxOutputTokens) tokens",
+                "联网能力：\(webText.isEmpty ? "未配置" : webText)",
+            ].joined(separator: "\n")
+            return .ok(call, descriptor, "已读取当前能力摘要", .text(text))
+        case "web_search":
+            guard let webService else {
+                return .fail(call, descriptor, "联网能力未配置；当前 Provider 也没有托管搜索能力。")
+            }
+            do {
+                let query = call.arguments["query"] ?? ""
+                let limit = min(max(Int(call.arguments["limit"] ?? "5") ?? 5, 1), 10)
+                let result = try await webService.search(query: query, limit: limit)
+                return .ok(
+                    call,
+                    descriptor,
+                    "联网搜索找到 \(result.sources.count) 个来源",
+                    .webSources(result.sources)
+                )
+            } catch {
+                return .fail(call, descriptor, "联网搜索失败：\(error.localizedDescription)")
+            }
+        case "web_fetch":
+            guard let webService else {
+                return .fail(call, descriptor, "网页读取能力未配置。")
+            }
+            guard let rawURL = call.arguments["url"], let url = URL(string: rawURL) else {
+                return .fail(call, descriptor, "网页地址无效。")
+            }
+            do {
+                let document = try await webService.fetch(url: url)
+                return .ok(
+                    call,
+                    descriptor,
+                    "已读取网页：\(document.source.title)",
+                    .text("来源：\(document.source.title)\nURL：\(document.source.url.absoluteString)\n\n\(document.text)")
+                )
+            } catch {
+                return .fail(call, descriptor, "网页读取失败：\(error.localizedDescription)")
+            }
+        case "music_download_search", "music_download_submit", "music_download_status",
+             "music_download_tasks", "music_download_history", "music_download_history_remove",
+             "music_download_history_clean":
+            guard let systemService, let legacyDescriptor = Self.descriptor(for: "music_download") else {
+                return .fail(call, descriptor, "音乐下载系统服务不可用。")
+            }
+            var legacyArguments = call.arguments
+            let action: String
+            switch call.name {
+            case "music_download_search": action = "search"
+            case "music_download_submit": action = "download"
+            case "music_download_status": action = "status"
+            case "music_download_tasks": action = "tasks"
+            case "music_download_history": action = "history"
+            case "music_download_history_remove": action = "history_remove"
+            default: action = "history_clean"
+            }
+            legacyArguments["action"] = action
+            let legacyCall = ToolCall(name: "music_download", arguments: legacyArguments)
+            return await SystemToolExecutor.execute(
+                legacyCall,
+                descriptor: legacyDescriptor,
+                systemService: systemService,
+                allowsLyrics: allowsLyrics
+            )
+        default:
+            break
         }
         if SystemToolNames.contains(call.name) {
             guard let systemService else {

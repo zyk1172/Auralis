@@ -20,7 +20,7 @@ public enum ToolSelector {
     /// 仅保留跨意图都安全且体积很小的工具。大部分工具由意图和用户关键词按需加入；
     /// 把完整音乐库、播放、歌单和索引 Schema 常驻会显著降低小模型的工具选择准确率。
     static let coreNames: [String] = [
-        "library_get_summary", "app_get_context", "memory_list",
+        "tool_search", "capabilities_get", "library_get_summary", "app_get_context", "memory_list",
     ]
 
     static let recommendationIndexStatusNames: [String] = [
@@ -40,7 +40,7 @@ public enum ToolSelector {
     ]
 
     static let queueNames: [String] = [
-        "queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear",
+        "queue_get", "queue_append", "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear",
         "queue_remove", "queue_move", "queue_shuffle_remaining",
     ]
 
@@ -191,7 +191,7 @@ public enum ToolSelector {
             names += queueNames
         }
         if containsAny(lower, ["搜索", "查找", "找歌", "哪首", "哪个专辑", "谁唱的"]) {
-            names += ["library_search", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
+            names += ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
         }
         let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
         if containsAny(lower, indexMarkers) {
@@ -222,7 +222,8 @@ public enum ToolSelector {
         }
         if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
         if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
-        if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
+        if containsAny(lower, ["联网", "网上", "网页", "新闻", "最新", "web", "internet", "news", "online"]) { names += ["web_search", "web_fetch"] }
+        if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
 
         let unique = Self.resolvedNames(names)
         let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
@@ -243,13 +244,13 @@ public enum ToolSelector {
         case .conversation:
             intentNames = ["library_get_summary", "app_get_context", "memory_list"]
         case .librarySearch:
-            intentNames = ["library_search", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
+            intentNames = ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
         case .playbackControl:
             intentNames = ["playback_get_state", "playback_play_song", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat"]
         case .musicDiscovery:
             intentNames = ["library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks", "recommend_by_mood", "recommend_by_constraints", "library_get_similar_songs", "queue_replace", "queue_append", "playback_play_song", "playback_play_playlist", "favorite_set", "preference_set_disliked", "lyrics_get", "result_present_tracks"]
         case .queueManagement:
-            intentNames = ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
+            intentNames = ["queue_get", "queue_append", "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
         case .playlistManagement:
             intentNames = ["library_search", "library_get_song", "listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
         case .libraryManagement:
@@ -263,9 +264,9 @@ public enum ToolSelector {
         case .musicAppreciation:
             intentNames = ["library_search", "library_get_song", "music_appreciate", "music_get_public_evidence"]
         case .musicDownload:
-            intentNames = ["library_search", "server_search", "music_download", "media_download_offline", "getDownloadedTracks"]
+            intentNames = ["library_search", "server_search", "music_download_search", "music_download_submit", "music_download_status", "music_download_tasks", "music_download_history", "music_download_history_remove", "music_download_history_clean", "media_download_offline", "getDownloadedTracks"]
         case .memoryManagement:
-            intentNames = ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
+            intentNames = ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
         }
         let names = selected.map(\.name) + intentNames.sorted()
         let unique = Self.resolvedNames(names)
@@ -275,18 +276,24 @@ public enum ToolSelector {
 
     /// 把选中的工具描述转为原生 function calling 定义。
     public static func toolDefinitions(from descriptors: [ToolDescriptor]) -> [AIToolDefinition] {
+        toolDefinitions(from: descriptors, strict: false)
+    }
+
+    /// Provider capabilities decide whether strict schema is emitted; the
+    /// descriptor itself remains provider-neutral.
+    public static func toolDefinitions(from descriptors: [ToolDescriptor], strict: Bool) -> [AIToolDefinition] {
         descriptors.map { descriptor in
             AIToolDefinition(
                 name: descriptor.name,
                 description: descriptor.summary,
-                parametersJSON: Self.parametersJSON(for: descriptor)
+                parametersJSON: Self.parametersJSON(for: descriptor),
+                strict: strict
             )
         }
     }
 
     /// 由 ToolParameter 生成最小 JSON Schema。
     static func parametersJSON(for descriptor: ToolDescriptor) -> String? {
-        guard !descriptor.parameters.isEmpty else { return nil }
         var properties: [String: Any] = [:]
         for parameter in descriptor.parameters {
             if let schemaJSON = parameter.schemaJSON,
@@ -303,6 +310,7 @@ public enum ToolSelector {
             "type": "object",
             "properties": properties,
             "required": required,
+            "additionalProperties": false,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: schema) else { return nil }
         return String(data: data, encoding: .utf8)

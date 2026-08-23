@@ -883,6 +883,14 @@ public final class AuralisSystemToolService: AgentSystemService {
         memoryStore.memories
     }
 
+    public func searchMemories(query: String) async -> [AgentMemoryEntry] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return [] }
+        return memoryStore.memories.filter {
+            $0.key.lowercased().contains(needle) || $0.value.lowercased().contains(needle)
+        }
+    }
+
     public func saveMemory(key: String, value: String) async -> Bool {
         memoryStore.saveMemory(key: key, value: value)
     }

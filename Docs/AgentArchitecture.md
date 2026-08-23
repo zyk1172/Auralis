@@ -1,5 +1,49 @@
 # Auralis Agent 架构
 
+## AI Assistant V2 当前实现
+
+V2 的入口是聊天，而不是一个先把用户请求硬分进音乐意图的路由器。`AgentIntentClassifier`
+只产出排序、完成条件和诊断提示；真正的能力来自注册表与运行时。普通知识聊天在 Provider
+缺失或失败时不会被改写为本地音乐搜索，只有明确的音乐操作/查询才允许使用离线音乐能力。
+
+```text
+AssistantView / Siri / App Intent
+              │
+              ▼
+AgentCoordinator (@MainActor)
+              │  session / consent / UI citations
+              ▼
+AgentRuntime (actor) → ConversationEngine (chat-first)
+              │
+              ▼
+AgentRunner → ToolRuntime (参数形状/Schema)
+              │
+              ▼
+AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
+```
+
+关键 V2 边界：
+
+- `AITranscript` 是 Provider-neutral 的 tool conversation；Chat、Responses 和 Anthropic
+  codec 从 transcript 投影到各自 wire format。Anthropic 的同一轮并行结果会聚合成一个
+  `user` content block，保留每个 `tool_use_id`。
+- `ModelCapabilities.toolMode`、`supportsParallelTools`、`supportsToolChoice` 和
+  `supportsStrictSchema` 描述真实协议能力；Runner 只在能力允许时发送原生工具或
+  `tool_choice`，否则有限地降级到 ACTION 文本协议。
+- `ToolCatalog` 从 `AgentToolRegistry.all` 搜索能力。`tool_search` 只返回轻量摘要；
+  发现后的工具会加入下一轮 schema，避免把 100+ 个完整定义永久塞进每一轮上下文。
+- `ToolRuntime` 在副作用前校验必填参数、未知参数和数组/数字/布尔 JSON 形状；注册表仍是
+  工具描述、别名、权限、副作用、Evidence、联网和并行安全属性的单一来源。
+- Web 能力通过 `AgentWebService` 注入，`web_search` 返回 `WebSource`，UI 用可点击来源卡片
+  展示；`web_fetch` 只返回脱敏正文和 URL。Provider 托管搜索能力与 App WebCapability
+  是两条可替换路径。
+- `music_download` 保留为兼容入口，但模型 schema 暴露为 search/submit/status/tasks/
+  history/history_remove/history_clean 七个小工具；`library_resolve_entity`、
+  `library_get_songs_batch`、`queue_append_many` 与 `queue_play_next_many` 用于减少逐项往返。
+
+这部分是当前代码已经落地的架构，不把尚未完成的 Provider hosted web adapter 或真实端到端
+联网 smoke test 写成已验证事实。
+
 # Execution Philosophy
 
 Auralis uses a permissive direct-execution agent runtime. The only program-level
@@ -37,10 +81,9 @@ User cancellation and per-request timeouts remain supported.
 - `queue_replace` 可用不同参数多次调用；相同工具 + 相同参数幂等复用。
 - 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认；风险确认
   只表示不可逆删除，不替代实体消歧。
-- `ToolSelector` 是纯 Schema 优化器：§6.1 常用工具（查询/推荐/播放/队列/歌单/收藏/
-  服务器/歌词/公开资料）常驻 schema，保证原生 function calling 始终可用；旧式驼峰别名
-  （searchTracks、playTrack 等）统一映射回 canonical 名称，不再重复暴露，执行兼容由
-  注册表保留。
+- `ToolSelector` 是纯 Schema 优化器：只有 `tool_search`、能力摘要和少量安全上下文工具
+  常驻；用户关键词、意图建议和已执行工具按需追加。旧式驼峰别名统一映射回 canonical
+  名称，不再重复暴露，执行兼容由注册表保留；模型需要新能力时可先调用 `tool_search`。
 
 ## 目标
 
@@ -122,8 +165,9 @@ Evidence 来源包括本地目录、播放状态、服务器、外部 API、用�
 
 ## 工具系统
 
-`AgentToolRegistry.execute` 是唯一公开执行路径。`AgentToolkit.execute` 与
-`executeV2` 只作为源码兼容别名，都会转发到注册表，不构成两套执行系统。
+`ToolRuntime.execute` 是 Runner 的唯一执行前入口：先按 `ToolDescriptor` 校验参数，再调用
+`AgentToolRegistry.execute`。`AgentToolkit.execute` 与 `executeV2` 只作为源码兼容别名，都会
+转发到注册表，不构成两套执行系统。
 
 每个 `ToolDescriptor` 自描述：
 
@@ -139,8 +183,8 @@ Evidence 来源包括本地目录、播放状态、服务器、外部 API、用�
 
 当前注册表覆盖搜索、目录索引、播放/队列、歌单、服务器、下载、设备网络/音频/存储、
 诊断、公开音乐证据、推荐与记忆/技能 CRUD 等 100+ 工具。技能使用 `skill_create` /
-`skill_list` / `skill_read` / `skill_delete` 管理本地可复用指令；审查本轮没有为凑数新增
-重复工具，也没有限制模型的工具选择范围。
+`skill_list` / `skill_read` / `skill_delete` 管理本地可复用指令；`memory_search` 只查询
+相关长期记忆。模型的工具选择范围由 discovery 动态扩展，不是由 Intent 永久裁剪。
 
 推荐索引 V2 是普通目录工具服务。它的批次规则属于工具描述与工具结果，Runtime 的
 通用模型循环不解析索引摘要、不采用索引专属超时，也不维护索引专属轮次状态。

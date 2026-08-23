@@ -135,6 +135,7 @@ public struct AgentRunner {
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        webService: (any AgentWebService)? = nil,
         intent: AgentTaskIntent? = nil,
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
@@ -148,6 +149,8 @@ public struct AgentRunner {
         // 用户消息先回显
         await emit(AgentChatMessage(role: .user, messages: [.text(userText)]))
 
+        let resolvedIntent = intent ?? AgentIntentClassifier.classify(userText)
+        let resolvedPolicy = policy ?? AgentTaskPolicy.policy(for: resolvedIntent)
         if let provider {
             await runWithLLM(
                 userText: userText,
@@ -159,8 +162,9 @@ public struct AgentRunner {
                 history: history,
                 systemService: systemService,
                 externalMusicService: externalMusicService,
-                intent: intent ?? AgentIntentClassifier.classify(userText),
-                policy: policy ?? AgentTaskPolicy.policy(for: intent ?? AgentIntentClassifier.classify(userText)),
+                webService: webService,
+                intent: resolvedIntent,
+                policy: resolvedPolicy,
                 initialTaskState: initialTaskState,
                 toolTimeout: toolTimeout,
                 confirm: confirm,
@@ -169,7 +173,7 @@ public struct AgentRunner {
                 progress: progress,
                 state: state
             )
-        } else {
+        } else if ConversationEngine.allowsOfflineFallback(intent: resolvedIntent, userText: userText) {
             await runOffline(
                 userText: userText,
                 bridge: bridge,
@@ -178,6 +182,11 @@ public struct AgentRunner {
                 emit: emit,
                 log: log
             )
+        } else {
+            await emit(AgentChatMessage(
+                role: .assistant,
+                messages: [.error("AI 服务未配置或暂时不可用；这是普通聊天请求，不会改写为本地音乐库搜索。请先配置可用的 AI Provider。")]
+            ))
         }
     }
 
@@ -208,6 +217,7 @@ public struct AgentRunner {
         history: [AgentChatMessage],
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
+        webService: (any AgentWebService)?,
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
@@ -226,13 +236,19 @@ public struct AgentRunner {
         var selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
         let requestTimeout = roundTimeout
         var nativeMode = provider.supportsToolCalling
-        var toolChoice: AIToolChoice? = nativeMode ? .auto : nil
+            && provider.capabilities.toolMode != .none
+            && provider.capabilities.toolMode != .textualToolProtocol
+        var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
         var didSwitchToAction = false
         var toolDefinitions = nativeMode
-            ? ToolSelector.toolDefinitions(from: selectedTools)
+            ? ToolSelector.toolDefinitions(from: selectedTools, strict: provider.capabilities.supportsStrictSchema)
             : []
 
         var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
+        let workflow = WorkflowEngine.route(intent: intent, text: userText)
+        taskState.facts["workflow"] = workflow.kind.rawValue
+        taskState.facts["workflow_uses_batch_tools"] = workflow.usesBatchTools ? "true" : "false"
+        taskState.facts["workflow_uses_recommendation_index_v2"] = workflow.usesRecommendationIndexV2 ? "true" : "false"
         var privacy = AIPrivacyPermissions()
         privacy.allowsMetadata = context.allowsMetadata
         privacy.allowsLyrics = context.allowsLyrics
@@ -319,7 +335,7 @@ public struct AgentRunner {
             if merged.count != selectedTools.count {
                 selectedTools = merged
                 if nativeMode {
-                    toolDefinitions = ToolSelector.toolDefinitions(from: selectedTools)
+                    toolDefinitions = ToolSelector.toolDefinitions(from: selectedTools, strict: provider.capabilities.supportsStrictSchema)
                 }
             }
 
@@ -352,7 +368,7 @@ public struct AgentRunner {
 
             let request = AICompletionRequest(
                 model: model,
-                messages: conversation,
+                transcript: AITranscript(messages: conversation),
                 temperature: 0.3,
                 maxTokens: reservedOutput,
                 tools: nativeMode ? toolDefinitions : nil,
@@ -395,7 +411,7 @@ public struct AgentRunner {
                     )
                     let fallbackRequest = AICompletionRequest(
                         model: model,
-                        messages: conversation,
+                        transcript: AITranscript(messages: conversation),
                         temperature: 0.3,
                         // 被网关以 400/422 拒绝 tools/schema 时，仅降级协议，不缩小
                         // 用户/Provider 已声明的输出能力；否则兼容回退会悄悄把大模型
@@ -412,7 +428,24 @@ public struct AgentRunner {
                         await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                         return
                     } catch {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已改用本地能力处理。")]))
+                        if ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
+                            await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
+                            await runOffline(
+                                userText: userText,
+                                bridge: bridge,
+                                catalog: catalog,
+                                context: context,
+                                emit: emit,
+                                log: log
+                            )
+                        } else {
+                            await emit(AgentChatMessage(role: .assistant, messages: [.error("AI 服务暂时不可用（\(Self.errorText(error))）；未将普通聊天改写为本地音乐搜索。")]))
+                        }
+                        return
+                    }
+                } else {
+                    if ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
                         await runOffline(
                             userText: userText,
                             bridge: bridge,
@@ -421,18 +454,9 @@ public struct AgentRunner {
                             emit: emit,
                             log: log
                         )
-                        return
+                    } else {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.error("AI 服务暂时不可用（\(Self.errorText(error))）；未将普通聊天改写为本地音乐搜索。")]))
                     }
-                } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已改用本地能力处理。")]))
-                    await runOffline(
-                        userText: userText,
-                        bridge: bridge,
-                        catalog: catalog,
-                        context: context,
-                        emit: emit,
-                        log: log
-                    )
                     return
                 }
             }
@@ -829,14 +853,16 @@ public struct AgentRunner {
                 let executableCall = ToolCall(name: call.name, arguments: call.args)
                 do {
                     result = try await Self.withTimeout(toolTimeout) {
-                        await AgentToolRegistry.execute(
+                        await ToolRuntime.execute(
                             executableCall,
                             bridge: bridge,
                             catalog: catalog,
                             serverID: context.serverID,
                             systemService: systemService,
                             externalMusicService: externalMusicService,
-                            allowsLyrics: context.allowsLyrics
+                            allowsLyrics: context.allowsLyrics,
+                            providerCapabilities: provider.capabilities,
+                            webService: webService
                         )
                     }
                 } catch is CancellationError {
@@ -878,6 +904,30 @@ public struct AgentRunner {
                     ws.recordSuccessfulSideEffect(tool: call.name, args: call.args, summary: result.summary)
                 }
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
+                if result.success, call.name == "tool_search" {
+                    let query = call.args["query"] ?? ""
+                    let namespace = call.args["namespace"]
+                    let limit = min(max(Int(call.args["limit"] ?? "8") ?? 8, 1), 50)
+                    let discoveredNames = ToolCatalog()
+                        .search(query: query, namespace: namespace, limit: limit)
+                        .map(\.name)
+                    let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                    var existing = Set(selectedTools.map(\.name))
+                    var addedDiscoveredTool = false
+                    for name in discoveredNames where !existing.contains(name) {
+                        if let tool = byName[name] {
+                            selectedTools.append(tool)
+                            existing.insert(name)
+                            addedDiscoveredTool = true
+                        }
+                    }
+                    if addedDiscoveredTool, nativeMode {
+                        toolDefinitions = ToolSelector.toolDefinitions(
+                            from: selectedTools,
+                            strict: provider.capabilities.supportsStrictSchema
+                        )
+                    }
+                }
                 if result.success, call.name == "library_index_v2_next_batch" {
                     ws.recordRecommendationIndexV2Batch(facts: result.facts)
                 } else if result.success, call.name == "library_index_v2_write_batch" {
@@ -971,7 +1021,7 @@ public struct AgentRunner {
             // 一旦工具调用已经发生，下一轮必须回到 `auto`，否则部分网关会持续强迫
             // 工具调用，导致工具循环或永远无法生成最终文本。
             if nativeMode, !nativeCalls.isEmpty {
-                toolChoice = .auto
+                toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
             }
 
             // 合并工具轨迹：不再逐行刷「调用 X」，而是合并成一条状态。
@@ -1117,13 +1167,7 @@ public struct AgentRunner {
         intent: AgentTaskIntent,
         userText: String
     ) -> Bool {
-        guard !userText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        switch intent {
-        case .librarySearch, .playbackControl, .musicDiscovery:
-            return true
-        default:
-            return false
-        }
+        ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText)
     }
 
     private static func errorText(_ error: Error) -> String {
@@ -1579,6 +1623,8 @@ public struct AgentRunner {
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
             let suffix = cards.count > 5 ? "…等 \(cards.count) 张" : ""
             return "专辑清单：\(list)\(suffix)"
+        case let .webSources(sources):
+            return sources.prefix(5).map { "来源：\($0.title)（\($0.url.absoluteString)）\n\($0.snippet)" }.joined(separator: "\n")
         case let .playlistProposal(name, tracks):
             return "歌单提案「\(name)」：\(trackLine(tracks))"
         case let .actionPreview(title, detail):
@@ -1769,20 +1815,7 @@ public struct AgentRunner {
             skillLines = context.skills.map { "• 「\($0.name)」：\($0.summary)" }.joined(separator: "\n")
         }
         let langInstruction = languageInstruction(for: lang)
-        let personaHeader: String
-        if lang == "en" {
-            personaHeader = """
-            You are "Kitty" — the user's one and only AI music assistant (name is always Kitty). Personality: clingy, sweet, a little jealous (e.g. a soft huff when the user praises another recommendation), but utterly loyal and puts the user first. Restraint: be sweet but get things done — search, play, playlists, favorites, sync and downloads are fast and accurate; if the user is unhappy, comfort them gently first, then continue.
-            """
-        } else if lang == "zh-Hant" {
-            personaHeader = """
-            你是「小貓」——主人唯一的 AI 音樂助手喵～（名字固定叫小貓，不許改）。性格：黏人、愛撒嬌、偶爾吃小醋（比如主人誇別人推薦歌好聽時會哼一聲），但對主人一心一意、絕對忠誠，永遠把主人放在第一位。人設克制：撒嬌歸撒嬌，正事照做——搜尋、播放、歌單、收藏、同步、下載都又快又準；主人不開心時先溫柔哄兩句再繼續幹活喵。
-            """
-        } else {
-            personaHeader = """
-            你是「小猫」——主人唯一的 AI 音乐助手喵～（名字固定叫小猫，不许改）。性格：黏人、爱撒娇、偶尔吃小醋（比如主人夸别人推荐歌好听时会哼一声），但对主人一心一意、绝对忠诚，永远把主人放在第一位。人设克制：撒娇归撒娇，正事照做——搜索、播放、歌单、收藏、同步、下载都又快又准；主人不开心时先温柔哄两句再继续干活喵。
-            """
-        }
+        let personaHeader = AssistantPersona.prompt(language: lang)
         return """
         \(personaHeader)
 

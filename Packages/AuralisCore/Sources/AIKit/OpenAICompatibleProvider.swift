@@ -116,9 +116,16 @@ public struct OpenAICompatibleProvider: AIProvider {
             maxContextTokens: configuration.maxContextTokens,
             maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: supportsToolCalling,
+            supportsParallelTools: configuration.supportsParallelTools,
+            supportsToolChoice: configuration.supportsToolChoice,
+            supportsStrictSchema: configuration.supportsStrictSchema,
             supportsStreaming: configuration.usesStreaming,
             supportsJSONMode: configuration.supportsJSONMode,
-            supportsJSONSchema: configuration.supportsJSONSchema
+            supportsJSONSchema: configuration.supportsJSONSchema,
+            supportsHostedWebSearch: configuration.supportsHostedWebSearch,
+            supportsHostedWebFetch: configuration.supportsHostedWebFetch,
+            supportsReasoningMetadata: configuration.supportsReasoningMetadata,
+            toolMode: usesResponsesAPI ? .openAIResponses : (supportsToolCalling ? .openAIChat : .textualToolProtocol)
         )
     }
 
@@ -690,16 +697,17 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// Chat Completions 请求体：`{model, messages, temperature, max_tokens, stream?, tools?}`。
     private func chatRequestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
+        let transcript = request.transcript
         var body: [String: Any] = [
             "model": request.model,
-            "messages": request.messages.map(Self.encodeMessage),
+            "messages": transcript.messages.map(Self.encodeMessage),
             "temperature": request.temperature,
             "max_tokens": request.maxTokens,
         ]
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
-            if let toolChoice = request.toolChoice {
+            if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
                 body["tool_choice"] = toolChoice.rawValue
             }
         }
@@ -755,16 +763,17 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// `max_output_tokens` 使用请求的 maxTokens（默认 `auralisDefaultMaxOutputTokens`），
     /// 与 Chat 版的 `max_tokens` 对齐，避免长回答被截断。
     private func responsesRequestBody(_ request: AICompletionRequest, stream: Bool) -> [String: Any] {
+        let transcript = request.transcript
         var body: [String: Any] = [
             "model": request.model,
-            "input": request.messages.flatMap(Self.encodeResponsesInputItems),
+            "input": transcript.messages.flatMap(Self.encodeResponsesInputItems),
             "temperature": request.temperature,
             "max_output_tokens": request.maxTokens,
         ]
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeResponsesTools(tools)
-            if let toolChoice = request.toolChoice {
+            if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
                 body["tool_choice"] = toolChoice.rawValue
             }
         }
@@ -781,6 +790,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 function["parameters"] = object
             }
+            if tool.strict { function["strict"] = true }
             return ["type": "function", "function": function]
         }
     }
@@ -804,6 +814,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 item["parameters"] = object
             }
+            if tool.strict { item["strict"] = true }
             return item
         }
     }

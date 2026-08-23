@@ -29,9 +29,16 @@ public struct AnthropicMessagesProvider: AIProvider {
             maxContextTokens: configuration.maxContextTokens,
             maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: supportsToolCalling,
+            supportsParallelTools: configuration.supportsParallelTools,
+            supportsToolChoice: configuration.supportsToolChoice,
+            supportsStrictSchema: false,
             supportsStreaming: configuration.usesStreaming,
             supportsJSONMode: false,
-            supportsJSONSchema: configuration.supportsJSONSchema
+            supportsJSONSchema: configuration.supportsJSONSchema,
+            supportsHostedWebSearch: configuration.supportsHostedWebSearch,
+            supportsHostedWebFetch: configuration.supportsHostedWebFetch,
+            supportsReasoningMetadata: configuration.supportsReasoningMetadata,
+            toolMode: supportsToolCalling ? .anthropicMessages : .textualToolProtocol
         )
     }
 
@@ -231,30 +238,12 @@ public struct AnthropicMessagesProvider: AIProvider {
     }
 
     private static func requestBody(_ request: AICompletionRequest, stream: Bool) throws -> [String: Any] {
+        let transcript = request.transcript
         var system: [String] = []
-        var messages: [[String: Any]] = []
-        for message in request.messages {
-            switch message.role {
-            case .system:
-                if !message.content.isEmpty { system.append(message.content) }
-            case .user:
-                messages.append(["role": "user", "content": [["type": "text", "text": message.content]]])
-            case .assistant:
-                var content: [[String: Any]] = []
-                if !message.content.isEmpty { content.append(["type": "text", "text": message.content]) }
-                for call in message.toolCalls ?? [] {
-                    let input = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
-                    content.append(["type": "tool_use", "id": call.id, "name": call.name, "input": input])
-                }
-                messages.append(["role": "assistant", "content": content.isEmpty ? [["type": "text", "text": ""]] : content])
-            case .tool:
-                messages.append(["role": "user", "content": [[
-                    "type": "tool_result",
-                    "tool_use_id": message.toolCallID ?? "",
-                    "content": message.content,
-                ]]])
-            }
+        for message in transcript.messages where message.role == .system {
+            if !message.content.isEmpty { system.append(message.content) }
         }
+        let messages = encodeMessages(transcript)
 
         var body: [String: Any] = [
             "model": request.model,
@@ -285,6 +274,51 @@ public struct AnthropicMessagesProvider: AIProvider {
             }
         }
         return body
+    }
+
+    /// Encode the neutral message projection into Anthropic content blocks.
+    /// Parallel tool calls must be answered by one `user` message containing
+    /// all `tool_result` blocks; one user message per result is invalid for
+    /// the Messages API and loses the call/result association.
+    static func encodeMessages(_ transcript: AITranscript) -> [[String: Any]] {
+        encodeMessages(transcript.messages)
+    }
+
+    static func encodeMessages(_ source: [AIMessage]) -> [[String: Any]] {
+        var messages: [[String: Any]] = []
+        var index = 0
+        while index < source.count {
+            let message = source[index]
+            switch message.role {
+            case .system:
+                index += 1
+            case .user:
+                messages.append(["role": "user", "content": [["type": "text", "text": message.content]]])
+                index += 1
+            case .assistant:
+                var content: [[String: Any]] = []
+                if !message.content.isEmpty { content.append(["type": "text", "text": message.content]) }
+                for call in message.toolCalls ?? [] {
+                    let input = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
+                    content.append(["type": "tool_use", "id": call.id, "name": call.name, "input": input])
+                }
+                messages.append(["role": "assistant", "content": content.isEmpty ? [["type": "text", "text": ""]] : content])
+                index += 1
+            case .tool:
+                var blocks: [[String: Any]] = []
+                while index < source.count, source[index].role == .tool {
+                    let result = source[index]
+                    blocks.append([
+                        "type": "tool_result",
+                        "tool_use_id": result.toolCallID ?? "",
+                        "content": result.content,
+                    ])
+                    index += 1
+                }
+                messages.append(["role": "user", "content": blocks])
+            }
+        }
+        return messages
     }
 
     private static func validate(_ response: URLResponse, body: Data? = nil) throws {

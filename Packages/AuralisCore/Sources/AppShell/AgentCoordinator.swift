@@ -87,6 +87,8 @@ public final class AgentCoordinator: ObservableObject {
     private let systemService: AuralisSystemToolService
     /// 按需开放音乐数据；与歌曲信息 UI、无歌词补全共用同一个 MusicEnrichmentService 实例。
     private let externalMusicService: MusicEnrichmentService
+    /// Provider 没有托管联网工具时使用的可替换 WebCapability 实现。
+    private let webService: any AgentWebService
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
     public let memoryStore: AgentMemoryStore
 
@@ -115,7 +117,8 @@ public final class AgentCoordinator: ObservableObject {
         model: AuralisAppModel,
         coordinator: CatalogCoordinator,
         directory: URL? = nil,
-        musicEnrichment: MusicEnrichmentService? = nil
+        musicEnrichment: MusicEnrichmentService? = nil,
+        webService: (any AgentWebService)? = nil
     ) {
         self.model = model
         self.catalog = coordinator.store
@@ -126,6 +129,7 @@ public final class AgentCoordinator: ObservableObject {
         self.systemService = AuralisSystemToolService(model: model, memoryStore: memoryStore)
         // UI / Agent / 歌词补全共用同一个 MusicEnrichmentService；未传入时自建（测试用）。
         self.externalMusicService = musicEnrichment ?? MusicEnrichmentService(catalog: coordinator.store)
+        self.webService = webService ?? DuckDuckGoWebService()
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
@@ -589,6 +593,7 @@ public final class AgentCoordinator: ObservableObject {
                 history: history,
                 systemService: systemService,
                 externalMusicService: externalMusicService,
+                webService: webService,
                 initialTaskState: initialTaskState,
                 confirm: { [weak self] pending in
                     guard let self else { return false }

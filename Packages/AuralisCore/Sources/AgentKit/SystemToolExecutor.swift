@@ -39,6 +39,7 @@ public enum SystemToolNames {
         "music_download",
         "memory_save",
         "memory_list",
+        "memory_search",
         "memory_delete",
         "memory_clear",
         "skill_create",
@@ -150,6 +151,15 @@ public struct SystemToolExecutor {
                 }
                 let text = memories.map { "\($0.key)：\($0.value)（记于 \(Self.dateText($0.updatedAt))）" }.joined(separator: "\n")
                 return .ok(call, descriptor, "共 \(memories.count) 条记忆", .text(text))
+            case "memory_search":
+                let query = try require(call, "query")
+                let limit = min(max((Int(call.arguments["limit"] ?? "10") ?? 10), 1), 50)
+                let memories = Array((await systemService.searchMemories(query: query)).prefix(limit))
+                if memories.isEmpty {
+                    return .ok(call, descriptor, "没有找到相关记忆", .text("没有找到与「\(query)」相关的长期记忆。"))
+                }
+                let text = memories.map { "\($0.key)：\($0.value)（记于 \(Self.dateText($0.updatedAt))）" }.joined(separator: "\n")
+                return .ok(call, descriptor, "找到 \(memories.count) 条相关记忆", .text(text))
             case "memory_delete":
                 let key = try require(call, "key")
                 let deleted = await systemService.deleteMemory(key: key)

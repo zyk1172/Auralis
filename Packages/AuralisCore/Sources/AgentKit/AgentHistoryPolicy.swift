@@ -86,6 +86,9 @@ public enum AgentHistoryPolicy {
                 case let .albumCards(cards):
                     let albums = cards.map { "《\($0.title)》-\($0.artistName)（id=\($0.globalID.description)）" }
                     content += "（专辑：\(albums.joined(separator: separator))）\n"
+                case let .webSources(sources):
+                    let links = sources.prefix(5).map { "\($0.title)（\($0.url.absoluteString)）" }
+                    content += "（联网来源：\(links.joined(separator: separator))）\n"
                 case let .playlistProposal(name, tracks):
                     content += "（歌单提案「\(name)」，\(tracks.count) 首）\n"
                 case let .actionPreview(title, detail):

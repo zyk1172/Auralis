@@ -675,6 +675,37 @@ struct AssistantView: View {
         case let .albumCards(cards):
             AlbumCardList(cards: cards, theme: theme)
 
+        case let .webSources(sources):
+            VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+                Label(String(localized: "联网来源", bundle: .module), systemImage: "globe")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                ForEach(sources) { source in
+                    Link(destination: source.url) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.title)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(2)
+                            Text(source.domain)
+                                .font(.caption2)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            if !source.snippet.isEmpty {
+                                Text(source.snippet)
+                                    .font(.caption2)
+                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                    .lineLimit(3)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(AuralisSpacing.medium)
+            .background(theme.colorTokens.elevated.color)
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .frame(maxWidth: 560, alignment: .leading)
+
         case let .playlistProposal(name, tracks):
             VStack(alignment: .leading, spacing: AuralisSpacing.small) {
                 HStack {

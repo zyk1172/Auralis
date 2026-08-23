@@ -825,6 +825,7 @@ public protocol AgentMusicDownloadService: Sendable {
 
 public protocol AgentMemoryService: Sendable {
     func agentMemories() async -> [AgentMemoryEntry]
+    func searchMemories(query: String) async -> [AgentMemoryEntry]
     func saveMemory(key: String, value: String) async -> Bool
     func deleteMemory(key: String) async -> Bool
     func clearMemories() async -> Int
@@ -875,6 +876,13 @@ public extension AgentSystemService {
     }
 
     func agentMemories() async -> [AgentMemoryEntry] { [] }
+    func searchMemories(query: String) async -> [AgentMemoryEntry] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return [] }
+        return await agentMemories().filter {
+            $0.key.lowercased().contains(needle) || $0.value.lowercased().contains(needle)
+        }
+    }
     func saveMemory(key: String, value: String) async -> Bool { false }
     func deleteMemory(key: String) async -> Bool { false }
     func clearMemories() async -> Int { 0 }

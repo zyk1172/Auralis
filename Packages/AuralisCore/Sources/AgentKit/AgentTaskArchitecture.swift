@@ -172,7 +172,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .queueManagement:
             return [
                 "queue_remove", "removeFromQueue", "reorderQueue", "clearQueue", "queue_get", "queue_append",
-                "queue_play_next", "queue_replace", "queue_clear", "queue_shuffle_remaining", "queue_move",
+                "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear", "queue_shuffle_remaining", "queue_move",
             ]
         case .playlistManagement:
             return [
@@ -209,7 +209,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .musicAppreciation:
             return ["music_appreciate", "music_get_public_evidence", "lyrics_get", "library_get_song"]
         case .musicDownload:
-            return ["music_download", "media_download_offline", "cache_get_status"]
+            return ["music_download", "music_download_search", "music_download_submit", "music_download_status", "music_download_tasks", "music_download_history", "music_download_history_remove", "music_download_history_clean", "media_download_offline", "cache_get_status"]
         case .memoryManagement:
             return ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
         }
@@ -818,8 +818,11 @@ public enum AgentCompletionEvaluator {
 /// Runtime 是任务生命周期与策略的拥有者；旧 Runner 暂作为低层模型循环实现。
 public actor AgentRuntime {
     private var runningTaskIDs: Set<UUID> = []
+    private let conversationEngine: ConversationEngine
 
-    public init() {}
+    public init(conversationEngine: ConversationEngine = ConversationEngine()) {
+        self.conversationEngine = conversationEngine
+    }
 
     public func isRunning(_ id: UUID) -> Bool { runningTaskIDs.contains(id) }
 
@@ -845,6 +848,7 @@ public actor AgentRuntime {
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        webService: (any AgentWebService)? = nil,
         initialTaskState: AgentTaskState? = nil,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -865,7 +869,7 @@ public actor AgentRuntime {
         runningTaskIDs.insert(taskID)
         defer { runningTaskIDs.remove(taskID) }
         await state(taskState)
-        await AgentRunner.run(
+        await conversationEngine.run(
             userText: userText,
             provider: provider,
             model: model,
@@ -875,6 +879,7 @@ public actor AgentRuntime {
             history: history,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            webService: webService,
             intent: intent,
             policy: policy,
             initialTaskState: taskState,

@@ -10,6 +10,9 @@ public enum AgentMessage: Sendable {
     case trackCards([TrackCard])
     /// 专辑卡片列表。
     case albumCards([AlbumCard])
+    /// Internet citations returned by web_search/web_fetch.  Sources are
+    /// separate from assistant prose so the UI can render them as links.
+    case webSources([WebSource])
     /// 歌单提案（一组曲目 + 命名建议）。
     case playlistProposal(name: String, tracks: [TrackCard])
     /// 即将执行的操作预览（修改型操作在执行前展示）。
@@ -28,7 +31,7 @@ public enum AgentMessage: Sendable {
 
 extension AgentMessage: Codable {
     private enum Kind: String, Codable {
-        case text, trackCards, albumCards, playlistProposal, actionPreview, toolProgress, error, confirmation, streaming
+        case text, trackCards, albumCards, webSources, playlistProposal, actionPreview, toolProgress, error, confirmation, streaming
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -42,6 +45,9 @@ extension AgentMessage: Codable {
             try container.encode(value, forKey: .value)
         case let .albumCards(value):
             try container.encode(Kind.albumCards, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case let .webSources(value):
+            try container.encode(Kind.webSources, forKey: .type)
             try container.encode(value, forKey: .value)
         case let .playlistProposal(name, tracks):
             try container.encode(Kind.playlistProposal, forKey: .type)
@@ -73,6 +79,7 @@ extension AgentMessage: Codable {
         case .text: self = .text(try container.decode(String.self, forKey: .value))
         case .trackCards: self = .trackCards(try container.decode([TrackCard].self, forKey: .value))
         case .albumCards: self = .albumCards(try container.decode([AlbumCard].self, forKey: .value))
+        case .webSources: self = .webSources(try container.decode([WebSource].self, forKey: .value))
         case .playlistProposal:
             self = .playlistProposal(
                 name: try container.decode(String.self, forKey: .name),

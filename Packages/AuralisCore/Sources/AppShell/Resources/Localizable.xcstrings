@@ -12936,6 +12936,22 @@
         }
       }
     },
+    "联网来源" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Web sources"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聯網來源"
+          }
+        }
+      }
+    },
     "聚合" : {
       "localizations" : {
         "en" : {
