@@ -55,6 +55,27 @@ struct OpenAICompatibleProviderTests {
         #expect(OpenAICompatibleProvider.isRetryable(AIProviderError.transport("connection reset")) == true)
     }
 
+    @Test func modelError401IsNotReportedAsInvalidAPIKey() {
+        let error = AIProviderError.httpStatusDetail(
+            status: 401,
+            detail: #"{"type":"error","error":{"type":"ModelError","message":"不支持模型"}}"#
+        )
+        #expect(error.failureKind == .modelRouting)
+        #expect(error.isTransient == false)
+        #expect(error.errorDescription?.contains("API Key 不一定有问题") == true)
+        #expect(error.errorDescription?.contains("模型不可用或不受支持") == true)
+    }
+
+    @Test func authentication401RemainsAnAuthenticationFailure() {
+        let error = AIProviderError.httpStatusDetail(
+            status: 401,
+            detail: #"{"error":{"type":"invalid_api_key","message":"Invalid API key"}}"#
+        )
+        #expect(error.failureKind == .authentication)
+        #expect(error.isTransient == false)
+        #expect(error.errorDescription?.contains("鉴权失败") == true)
+    }
+
     @Test func messagesProtocolIsDetectedByOpenAIProvider() async {
         #expect(OpenAICompatibleProvider.usesAnthropicMessagesAPI(apiPath: "/v1/messages"))
         let provider = makeProvider(baseURL: "https://example.com", apiPath: "/v1/messages")

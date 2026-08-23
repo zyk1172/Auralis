@@ -25,16 +25,23 @@ public enum SystemPromptBuilder {
         let memories = memorySummary(context.memories, language: language, goal: goal)
         let skills = skillSummary(context.skills, language: language)
         let capabilities = capabilitySummary(tools)
-        let protocolRule = nativeToolCalling
-            ? "需要调用工具时使用 Provider 原生 tool call，不输出 ACTION 文本。"
-            : "当前 Provider 使用文本兼容协议；需要调用工具时，每个调用单独输出 ACTION JSON。"
+        let protocolRule: String
+        if tools.isEmpty {
+            protocolRule = "当前 Provider 尚未通过 Auralis 工具能力验证。可以正常对话；涉及 Auralis 状态查询或操作时，明确说明工具暂不可用，不要输出 ACTION 文本。"
+        } else if nativeToolCalling {
+            protocolRule = "需要调用工具时使用 Provider 原生 tool call，不输出 ACTION 文本。"
+        } else {
+            protocolRule = "当前 Provider 使用文本兼容协议；需要调用工具时，每个调用单独输出 ACTION JSON。"
+        }
         let workflowRule = workflowInstruction.map {
             """
             ## 当前固定工作流
             \($0)
             """
         } ?? ""
-        let discoveryRule = workflowInstruction == nil
+        let discoveryRule = tools.isEmpty
+            ? "当前轮没有可用工具；不要臆造工具结果或将工具调用写成普通文本。"
+            : workflowInstruction == nil
             ? "工具首轮展示只是 shortlist；关键词和 Intent 不构成能力边界。需要的能力未在 schema 中时，先用 tool_search 按自然语言发现，再在下一轮使用返回的 canonical 工具。"
             : "当前任务由固定 Workflow 编排；Runtime 自动推进主链路。辅助工具仍可用于诊断、能力查询或补充读取，但不能替代主链路，也不要把工具搜索当作索引进度。"
 
@@ -186,7 +193,7 @@ public enum SystemPromptBuilder {
         // hidden in every case.
         let visible = tools.filter { $0.visibility == .model || $0.visibility == .skillOnly }
         if visible.isEmpty {
-            return "tool_search、capabilities_get、memory_search、memory_list、memory_save；其他已注册能力通过 tool_search 发现。"
+            return "（本轮未启用工具）"
         }
         let byNamespace = Dictionary(grouping: visible, by: \.namespace)
             .map { namespace, descriptors in

@@ -373,6 +373,9 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     public var supportsJSONMode: Bool
     public var supportsJSONSchema: Bool
     public var supportsToolCalling: Bool
+    /// 仅在同一 Base URL / path / model 的能力诊断确认模型目录可用后为 true。
+    /// 这不是用户配置，也不参与旧配置的语义推断。
+    public var hasVerifiedModelAvailability: Bool
     public var supportsParallelTools: Bool
     public var supportsToolChoice: Bool
     public var supportsStrictSchema: Bool
@@ -399,6 +402,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONMode: Bool = false,
         supportsJSONSchema: Bool = false,
         supportsToolCalling: Bool = false,
+        hasVerifiedModelAvailability: Bool = false,
         supportsParallelTools: Bool = true,
         supportsToolChoice: Bool = false,
         supportsStrictSchema: Bool = false,
@@ -424,6 +428,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.supportsJSONMode = supportsJSONMode
         self.supportsJSONSchema = supportsJSONSchema
         self.supportsToolCalling = supportsToolCalling
+        self.hasVerifiedModelAvailability = hasVerifiedModelAvailability
         self.supportsParallelTools = supportsParallelTools
         self.supportsToolChoice = supportsToolChoice
         self.supportsStrictSchema = supportsStrictSchema
@@ -439,7 +444,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         case id, name, baseURL, apiPath, credentialID, model, customHeaders
         case organization, project, temperature, maxTokens, maxContextTokens
         case timeout, usesStreaming, supportsJSONMode, supportsJSONSchema
-        case supportsToolCalling, supportsParallelTools, supportsToolChoice
+        case supportsToolCalling, hasVerifiedModelAvailability, supportsParallelTools, supportsToolChoice
         case supportsStrictSchema, supportsHostedWebSearch, supportsHostedWebFetch
         case supportsReasoningMetadata, supportsImageInput
     }
@@ -463,6 +468,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONMode = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false
         supportsJSONSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false
         supportsToolCalling = try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false
+        hasVerifiedModelAvailability = try container.decodeIfPresent(Bool.self, forKey: .hasVerifiedModelAvailability) ?? false
         supportsParallelTools = try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true
         // Arbitrary OpenAI-compatible gateways frequently accept but ignore
         // `tool_choice`.  Treat missing custom configuration as unsupported;
@@ -745,14 +751,65 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
     }
 }
 
+public enum AIProbeStatus: String, Codable, Hashable, Sendable {
+    case passed
+    case failed
+    case unavailable
+    case notTested
+}
+
+/// Provider connectivity is not a single boolean.  These stages intentionally
+/// distinguish an authenticated text endpoint from streaming and native tool
+/// compatibility so callers can keep ordinary chat available when tools fail.
+public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
+    public let modelCatalog: AIProbeStatus
+    public let modelAvailability: AIProbeStatus
+    public let textCompletion: AIProbeStatus
+    public let streaming: AIProbeStatus
+    public let nativeTools: AIProbeStatus
+    public let toolChoice: AIProbeStatus
+    public let details: [String]
+
+    public init(
+        modelCatalog: AIProbeStatus = .notTested,
+        modelAvailability: AIProbeStatus = .notTested,
+        textCompletion: AIProbeStatus = .notTested,
+        streaming: AIProbeStatus = .notTested,
+        nativeTools: AIProbeStatus = .notTested,
+        toolChoice: AIProbeStatus = .notTested,
+        details: [String] = []
+    ) {
+        self.modelCatalog = modelCatalog
+        self.modelAvailability = modelAvailability
+        self.textCompletion = textCompletion
+        self.streaming = streaming
+        self.nativeTools = nativeTools
+        self.toolChoice = toolChoice
+        self.details = details
+    }
+
+    public var supportsOrdinaryChat: Bool {
+        // 流式探测失败时 Provider 会以同一协议的非流式补全投影为事件流；
+        // 因此普通聊天只依赖文本补全，不应被 SSE 兼容性一并禁用。
+        textCompletion == .passed
+    }
+}
+
 public struct AIConnectionResult: Codable, Hashable, Sendable {
     public let latency: TimeInterval
     public let model: String
     public let message: String
-    public init(latency: TimeInterval, model: String, message: String) {
+    public let diagnostics: AIProviderDiagnostics?
+    public init(
+        latency: TimeInterval,
+        model: String,
+        message: String,
+        diagnostics: AIProviderDiagnostics? = nil
+    ) {
         self.latency = latency
         self.model = model
         self.message = message
+        self.diagnostics = diagnostics
     }
 }
 

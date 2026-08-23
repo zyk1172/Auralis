@@ -13,21 +13,22 @@ private final class ScenarioProvider: AIProvider, @unchecked Sendable {
     private var responses: [AICompletionResponse]
     private var recordedRequests: [AICompletionRequest] = []
 
-    let capabilities = ModelCapabilities(
-        maxContextTokens: 32_000,
-        maxOutputTokens: 4_096,
-        supportsToolCalling: true,
-        supportsParallelTools: true,
-        supportsToolChoice: true,
-        supportsStrictSchema: true,
-        supportsStreaming: true,
-        toolMode: .openAIChat
-    )
+    let capabilities: ModelCapabilities
 
-    var supportsToolCalling: Bool { true }
+    var supportsToolCalling: Bool { capabilities.supportsToolCalling }
 
-    init(_ responses: [AICompletionResponse]) {
+    init(_ responses: [AICompletionResponse], nativeToolCalling: Bool = true) {
         self.responses = responses
+        self.capabilities = ModelCapabilities(
+            maxContextTokens: 32_000,
+            maxOutputTokens: 4_096,
+            supportsToolCalling: nativeToolCalling,
+            supportsParallelTools: nativeToolCalling,
+            supportsToolChoice: nativeToolCalling,
+            supportsStrictSchema: nativeToolCalling,
+            supportsStreaming: true,
+            toolMode: nativeToolCalling ? .openAIChat : AIProviderToolMode.none
+        )
     }
 
     func testConnection() async -> AIConnectionResult {
@@ -301,6 +302,31 @@ func ordinaryConversationIsFirstClass() async throws {
     #expect(bridge.replacedQueues.isEmpty)
     #expect(await stateProbe.count() == 0)
     #expect(provider.requests().count == 1)
+}
+
+@Test("V2 production loop: native tools unavailable still permits ordinary chat")
+func ordinaryChatSurvivesUnavailableNativeTools() async throws {
+    let provider = ScenarioProvider([
+        scenarioResponse(content: "量子力学描述微观尺度的规律。")
+    ], nativeToolCalling: false)
+    let collector = ScenarioMessageCollector()
+
+    await ConversationEngine().run(
+        userText: "解释一下量子力学。",
+        provider: provider,
+        model: "scenario",
+        bridge: MockAgentBridge(),
+        catalog: try scenarioStore(),
+        context: ToolLoop.Context(),
+        intent: .conversation,
+        policy: .policy(for: .conversation),
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    #expect(await collector.containsText("量子力学"))
+    #expect(provider.requests().count == 1)
+    #expect(provider.requests().first?.tools?.isEmpty != false)
 }
 
 @Test("V2 provider failure retries the selected native protocol without ACTION or offline fallback")

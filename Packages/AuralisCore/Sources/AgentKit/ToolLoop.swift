@@ -278,6 +278,13 @@ public struct ToolLoop {
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
+        // A provider that has not passed native-tool diagnostics must remain a
+        // normal chat provider.  Do not advertise or parse a second textual
+        // tool protocol for it; that would make an unverified gateway appear
+        // to control Auralis.
+        if provider.capabilities.toolMode == .none {
+            selectedTools = []
+        }
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
         var conversation = [AIMessage(
             role: .system,
@@ -691,6 +698,12 @@ public struct ToolLoop {
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
+        if provider.capabilities.toolMode == .none {
+            await emit(AgentChatMessage(role: .assistant, messages: [.error(
+                "当前模型支持普通聊天，但尚未通过 Auralis 原生工具调用能力验证；请先在设置中运行能力诊断后再执行播放、队列、歌单或索引操作。"
+            )]))
+            return
+        }
         var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
         let skillSemantics = AgentRequestSemantics.analyze(
             userText,

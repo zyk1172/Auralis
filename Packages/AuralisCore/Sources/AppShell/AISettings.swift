@@ -148,12 +148,20 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 
     var supportsToolCalling: Bool {
-        true
+        // Endpoint shape only tells us how to encode a request.  It cannot
+        // prove that a particular model/gateway accepts native functions.
+        false
     }
 
     var isSupported: Bool {
         true
     }
+}
+
+private struct VerifiedProviderCapabilities: Codable, Sendable {
+    let fingerprint: String
+    let diagnostics: AIProviderDiagnostics
+    let checkedAt: Date
 }
 
 /// 设置页与 AI 助手共用的接口配置。普通字段存 UserDefaults，
@@ -177,6 +185,7 @@ struct AIConnectionSettings: Sendable {
         static let endpointMode = "auralis.ai.endpointMode"
         static let maxContextTokens = "auralis.ai.maxContextTokens"
         static let maxOutputTokens = "auralis.ai.maxOutputTokens"
+        static let verifiedCapabilities = "auralis.ai.verifiedProviderCapabilities"
     }
 
     static let defaultBaseURL = "https://api.openai.com"
@@ -185,6 +194,7 @@ struct AIConnectionSettings: Sendable {
     static let defaultMaxContextTokens = auralisDefaultMaxContextTokens
     static let defaultMaxOutputTokens = auralisDefaultMaxOutputTokens
     static let defaultTimeout = auralisDefaultRequestTimeout
+    private static let verifiedCapabilitiesTTL: TimeInterval = 24 * 60 * 60
 
     init(defaults: UserDefaults = .standard) {
         baseURL = defaults.string(forKey: Keys.baseURL) ?? Self.defaultBaseURL
@@ -265,6 +275,33 @@ struct AIConnectionSettings: Sendable {
         "\(effectiveEndpointMode.title) · \(effectiveAPIPath)"
     }
 
+    private var capabilityFingerprint: String {
+        [
+            normalizedBaseURL()?.absoluteString.lowercased() ?? baseURL.lowercased(),
+            effectiveAPIPath.lowercased(),
+            model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+        ].joined(separator: "|")
+    }
+
+    private var verifiedCapabilities: AIProviderDiagnostics? {
+        guard let data = UserDefaults.standard.data(forKey: Keys.verifiedCapabilities),
+              let saved = try? JSONDecoder().decode(VerifiedProviderCapabilities.self, from: data),
+              saved.fingerprint == capabilityFingerprint,
+              Date().timeIntervalSince(saved.checkedAt) <= Self.verifiedCapabilitiesTTL
+        else { return nil }
+        return saved.diagnostics
+    }
+
+    static func persistDiagnostics(_ diagnostics: AIProviderDiagnostics, for settings: AIConnectionSettings) {
+        let saved = VerifiedProviderCapabilities(
+            fingerprint: settings.capabilityFingerprint,
+            diagnostics: diagnostics,
+            checkedAt: .now
+        )
+        guard let data = try? JSONEncoder().encode(saved) else { return }
+        UserDefaults.standard.set(data, forKey: Keys.verifiedCapabilities)
+    }
+
     /// 校验未通过时的可读原因，便于设置页给出明确提示。
     var completenessError: String? {
         if normalizedBaseURL() == nil {
@@ -295,7 +332,10 @@ struct AIConnectionSettings: Sendable {
             maxTokens: maxOutputTokens,
             maxContextTokens: maxContextTokens,
             timeout: Self.defaultTimeout,
-            supportsToolCalling: effectiveEndpointMode.supportsToolCalling
+            usesStreaming: verifiedCapabilities?.streaming != .failed,
+            supportsToolCalling: verifiedCapabilities?.nativeTools == .passed,
+            hasVerifiedModelAvailability: verifiedCapabilities?.modelAvailability == .passed,
+            supportsToolChoice: verifiedCapabilities?.toolChoice == .passed
         )
         if effectiveEndpointMode == .anthropicMessages {
             return AnthropicMessagesProvider(configuration: configuration, credentialVault: credentialVault, session: session)

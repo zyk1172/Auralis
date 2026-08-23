@@ -16,7 +16,9 @@
 - Anthropic Messages：把 assistant `tool_use` 和同一轮多个 `tool_result` 编码为合法
   content blocks；并行结果只产生一个 user message。
 - `ModelCapabilities` 明确 tool mode、并行工具、tool choice、strict schema、reasoning
-  metadata 和 hosted web 能力，Runner 不再只看一个 `supportsToolCalling` 布尔值。
+  metadata 和 hosted web 能力，Runner 不再只看一个 `supportsToolCalling` 布尔值。协议类型是
+  编码选择而不是能力承诺：OpenAI-compatible Provider 必须先诊断模型目录、文本、流式、原生
+  工具和 `tool_choice`；工具探测失败不会关闭普通聊天。
 
 ## 工具发现与执行
 

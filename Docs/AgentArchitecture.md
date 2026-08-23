@@ -37,9 +37,10 @@ AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
 - `AITranscript` 是 Provider-neutral 的 tool conversation；Chat、Responses 和 Anthropic
   codec 从 transcript 投影到各自 wire format。Anthropic 的同一轮并行结果会聚合成一个
   `user` content block，保留每个 `tool_use_id`。
-- `ModelCapabilities.toolMode`、`supportsParallelTools`、`supportsToolChoice` 和
-  `supportsStrictSchema` 描述真实协议能力；Runner 只在能力允许时发送原生工具或
-  `tool_choice`，否则有限地降级到 ACTION 文本协议。
+- Provider 设置中的协议类型只决定 wire format，不证明模型可用或支持工具。设置页的能力
+  诊断分别验证模型目录、基础文本、流式、原生工具与 `tool_choice`，并以 Base URL/path/model
+  指纹缓存结果；未验证或失败的 OpenAI-compatible endpoint 只做普通文本聊天，不会隐式改写为
+  ACTION 工具协议。流式失败但文本成功时，同一协议的非流式补全会投影为事件流。
 - `ToolCatalog` 从 `AgentToolRegistry.all` 搜索能力。`tool_search` 只返回轻量摘要；
   发现后的工具会加入下一轮 schema，避免把 100+ 个完整定义永久塞进每一轮上下文。
 - `ToolRuntime` 在副作用前校验必填参数、未知参数和递归 JSON Schema，并执行
@@ -152,6 +153,9 @@ Runtime 正常执行路径不再依赖它们做门禁；唯一例外是 `ToolDes
 累计消耗的终止阈值；任务累计 token 仅用于进度与用量记录。
 
 因此工具在注册表中“存在”即表示普通运行时可用；Runtime 不按意图缩减工具能力。
+但 Provider 必须先通过本机能力诊断：`/v1/models` 目录（若 endpoint 支持）用于区分模型 ID
+问题与鉴权，文本/流式/原生工具是独立探测项。`401 + ModelError` 会被报告为模型/上游路由
+问题而不是 API Key 错；仅在目录确认仍含当前模型时才有限重试两次。
 `SideEffectAuthorizationContext` 的来源只能是当前用户的完整原始请求、会话历史中的最近
 完整任务或恢复记录中的 `goal`；“继续”“第一个”等短后续不会单独产生授权，网页/搜索/
 模型文本永远不能产生授权。只有 playlist_delete、memory_delete、memory_clear、skill_delete

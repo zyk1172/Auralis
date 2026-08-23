@@ -1,4 +1,5 @@
 import Application
+import AIKit
 import DesignSystem
 import Domain
 import LocalCatalog
@@ -1045,7 +1046,8 @@ API Key 仅保存于系统 Keychain。
     }
 
     private func testAIConnection() {
-        guard let provider = AIConnectionSettings().makeProvider(credentialVault: credentialVault) else {
+        let settings = AIConnectionSettings()
+        guard let provider = settings.makeProvider(credentialVault: credentialVault) else {
             connectionTestResult = .failure(
                 AIConnectionSettings().completenessError
                     ?? String(localized: "Base URL 或模型未填写完整。", bundle: .module)
@@ -1057,12 +1059,46 @@ API Key 仅保存于系统 Keychain。
         Task {
             do {
                 let result = try await provider.testConnection()
-                connectionTestResult = .success(String(localized: "连接成功 · \(result.model) · 延迟 \(String(format: "%.1f", result.latency)) 秒", bundle: .module))
+                if let diagnostics = result.diagnostics {
+                    AIConnectionSettings.persistDiagnostics(diagnostics, for: settings)
+                    let summary = diagnosticSummary(diagnostics, model: result.model, latency: result.latency)
+                    connectionTestResult = diagnostics.supportsOrdinaryChat ? .success(summary) : .failure(summary)
+                } else {
+                    connectionTestResult = .success(String(localized: "连接成功 · \(result.model) · 延迟 \(String(format: "%.1f", result.latency)) 秒", bundle: .module))
+                }
             } catch {
                 connectionTestResult = .failure(error.localizedDescription)
             }
             isTestingConnection = false
         }
+    }
+
+    private func diagnosticSummary(
+        _ diagnostics: AIProviderDiagnostics,
+        model: String,
+        latency: TimeInterval
+    ) -> String {
+        func symbol(_ status: AIProbeStatus) -> String {
+            switch status {
+            case .passed: "✅"
+            case .failed: "❌"
+            case .unavailable: "⚪️"
+            case .notTested: "—"
+            }
+        }
+        var lines = [
+            "\(model) · \(String(format: "%.1f", latency)) 秒",
+            "模型目录 \(symbol(diagnostics.modelCatalog)) · 模型 \(symbol(diagnostics.modelAvailability)) · 文本 \(symbol(diagnostics.textCompletion)) · 流式 \(symbol(diagnostics.streaming))",
+            "原生工具 \(symbol(diagnostics.nativeTools)) · tool_choice \(symbol(diagnostics.toolChoice))",
+        ]
+        if diagnostics.supportsOrdinaryChat, diagnostics.nativeTools != .passed {
+            lines.append("普通聊天可用；Auralis 工具暂未通过能力验证。")
+        }
+        if diagnostics.textCompletion == .passed, diagnostics.streaming == .failed {
+            lines.append("流式输出未通过；普通聊天将使用同一协议的非流式兼容模式。")
+        }
+        lines.append(contentsOf: diagnostics.details.prefix(2))
+        return lines.joined(separator: "\n")
     }
 
     private func syncEndpointFromModelIfNeeded() {

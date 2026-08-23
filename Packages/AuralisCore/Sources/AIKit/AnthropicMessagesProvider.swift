@@ -42,7 +42,7 @@ public struct AnthropicMessagesProvider: AIProvider {
             supportsHostedWebSearch: false,
             supportsHostedWebFetch: false,
             supportsReasoningMetadata: configuration.supportsReasoningMetadata,
-            toolMode: supportsToolCalling ? .anthropicMessages : .textualToolProtocol
+            toolMode: supportsToolCalling ? .anthropicMessages : AIProviderToolMode.none
         )
     }
 
@@ -54,11 +54,69 @@ public struct AnthropicMessagesProvider: AIProvider {
             temperature: 0,
             maxTokens: 32
         ))
+        var details: [String] = [String(localized: "Anthropic Messages 未定义通用 /models 目录，模型可用性由实际请求验证。", bundle: .module)]
+        let streaming = await probeStreaming()
+        details.append(contentsOf: streaming.details)
+        let tools = await probeNativeTools()
+        details.append(contentsOf: tools.details)
         return AIConnectionResult(
             latency: Date().timeIntervalSince(started),
             model: response.model,
-            message: response.content
+            message: response.content,
+            diagnostics: .init(
+                modelCatalog: .unavailable,
+                modelAvailability: .unavailable,
+                textCompletion: .passed,
+                streaming: streaming.status,
+                nativeTools: tools.native,
+                toolChoice: tools.toolChoice,
+                details: details
+            )
         )
+    }
+
+    private func probeStreaming() async -> (status: AIProbeStatus, details: [String]) {
+        do {
+            var completed = false
+            for try await event in stream(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: String(localized: "只回复 OK。", bundle: .module))],
+                temperature: 0,
+                maxTokens: 8
+            )) {
+                if case .completed = event { completed = true }
+            }
+            return completed
+                ? (.passed, [])
+                : (.failed, [String(localized: "流式请求没有完成事件。", bundle: .module)])
+        } catch {
+            return (.failed, [String(localized: "流式输出失败：\(error.localizedDescription)", bundle: .module)])
+        }
+    }
+
+    private func probeNativeTools() async -> (native: AIProbeStatus, toolChoice: AIProbeStatus, details: [String]) {
+        let name = "auralis_capability_probe"
+        let tool = AIToolDefinition(
+            name: name,
+            description: "Auralis connection capability probe. Call this function now with an empty object.",
+            parametersJSON: #"{"type":"object","properties":{},"additionalProperties":false}"#
+        )
+        do {
+            let response = try await complete(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: "Call auralis_capability_probe now. Do not answer with text.")],
+                temperature: 0,
+                maxTokens: 32,
+                tools: [tool],
+                toolChoice: .required
+            ))
+            if response.toolCalls?.contains(where: { $0.name == name }) == true {
+                return (.passed, .passed, [])
+            }
+            return (.failed, .unavailable, [String(localized: "端点接受工具 schema，但模型未返回测试工具调用。", bundle: .module)])
+        } catch {
+            return (.failed, .failed, [String(localized: "原生工具调用失败：\(error.localizedDescription)", bundle: .module)])
+        }
     }
 
     public func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {

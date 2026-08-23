@@ -23,15 +23,45 @@ public enum AIProviderError: Error, Equatable, Sendable {
     case malformedResponse(detail: String, retryable: Bool)
 }
 
+/// HTTP 状态码只是传输层信号；兼容网关经常把模型路由问题包装成 401，必须结合
+/// JSON 错误体才能给出可操作的结论。
+public enum AIProviderFailureKind: String, Codable, Hashable, Sendable {
+    case authentication
+    case modelRouting
+    case upstreamRouting
+    case rateLimited
+    case incompatibleRequest
+    case providerUnavailable
+    case unknown
+}
+
 public extension AIProviderError {
+    var failureKind: AIProviderFailureKind {
+        switch self {
+        case let .httpStatusDetail(status, detail):
+            AIProviderErrorClassifier.classify(status: status, detail: detail)
+        case let .httpStatus(status):
+            AIProviderErrorClassifier.classify(status: status, detail: "")
+        case .transport:
+            .upstreamRouting
+        default:
+            .unknown
+        }
+    }
+
+    var isModelRoutingFailure: Bool {
+        failureKind == .modelRouting
+    }
+
     /// 是否属于「瞬时故障」——值得再试一次，而不是配置或业务层面的确定性错误。
     /// 供 Provider 内部重试与上层（如 AgentRunner）判定是否补一次重试共用。
     var isTransient: Bool {
         switch self {
         case let .httpStatus(status):
             return status == 429 || (500...599).contains(status)
-        case let .httpStatusDetail(status, _):
+        case let .httpStatusDetail(status, detail):
             return status == 429 || (500...599).contains(status)
+                || AIProviderErrorClassifier.classify(status: status, detail: detail) == .upstreamRouting
         case .transport:
             return true
         case let .malformedResponse(_, retryable):
@@ -60,7 +90,7 @@ extension AIProviderError: LocalizedError {
         case let .httpStatus(status):
             return Self.httpStatusDescription(status)
         case let .httpStatusDetail(status, detail):
-            let summary = Self.httpStatusDescription(status)
+            let summary = Self.httpStatusDescription(status, detail: detail)
             return detail.isEmpty ? summary : "\(summary) 服务端详情：\(detail)"
         case let .malformedResponse(detail, retryable):
             return retryable
@@ -69,19 +99,72 @@ extension AIProviderError: LocalizedError {
         }
     }
 
-    private static func httpStatusDescription(_ status: Int) -> String {
+    private static func httpStatusDescription(_ status: Int, detail: String = "") -> String {
+        switch AIProviderErrorClassifier.classify(status: status, detail: detail) {
+        case .authentication:
+            return String(localized: "服务返回 HTTP \(status)：鉴权失败，请检查 API Key 或账户权限。", bundle: .module)
+        case .modelRouting:
+            return String(localized: "服务返回 HTTP \(status)：服务端报告当前模型不可用或不受支持（ModelError）。API Key 不一定有问题；请检查模型 ID、端点套餐或上游路由。", bundle: .module)
+        case .upstreamRouting:
+            return String(localized: "服务返回 HTTP \(status)：上游路由或网关暂时不可用，请稍后重试。", bundle: .module)
+        case .rateLimited:
+            return String(localized: "服务返回 HTTP 429：请求过于频繁被限流，已自动重试仍失败，请稍后重试。", bundle: .module)
+        case .incompatibleRequest:
+            return String(localized: "服务返回 HTTP \(status)：当前请求与该端点不兼容，请检查协议、模型或工具能力。", bundle: .module)
+        case .providerUnavailable:
+            return String(localized: "服务返回 HTTP \(status)：服务端或中转网关暂不可用（可能过载或维护中）。已自动重试仍失败，请稍后重试；若持续出现，请检查该 Base URL 对应服务的状态。", bundle: .module)
+        case .unknown:
+            break
+        }
         switch status {
-            case 401, 403:
-                String(localized: "服务返回 HTTP \(status)：API Key 无效或权限不足，请检查设置中的 Key。", bundle: .module)
             case 404:
-                String(localized: "服务返回 HTTP \(status)：接口路径错误，请检查 Base URL 是否已包含 /v1 等路径前缀。", bundle: .module)
-            case 429:
-                String(localized: "服务返回 HTTP 429：请求过于频繁被限流，已自动重试仍失败，请稍后重试。", bundle: .module)
-            case 500...599:
-                String(localized: "服务返回 HTTP \(status)：服务端或中转网关暂不可用（可能过载或维护中）。已自动重试仍失败，请稍后重试；若持续出现，请检查该 Base URL 对应服务的状态。", bundle: .module)
+                return String(localized: "服务返回 HTTP \(status)：接口路径错误，请检查 Base URL 是否已包含 /v1 等路径前缀。", bundle: .module)
             default:
-                String(localized: "服务返回 HTTP \(status)。", bundle: .module)
+                return String(localized: "服务返回 HTTP \(status)。", bundle: .module)
             }
+    }
+}
+
+private enum AIProviderErrorClassifier {
+    static func classify(status: Int, detail: String) -> AIProviderFailureKind {
+        let metadata = metadata(from: detail)
+        let type = metadata.type.lowercased()
+        let message = metadata.message.lowercased()
+        let combined = "\(type) \(message) \(detail.lowercased())"
+
+        if status == 429 { return .rateLimited }
+        if (500...599).contains(status) { return .providerUnavailable }
+        if status == 400 || status == 422 { return .incompatibleRequest }
+        if status == 401 || status == 403 {
+            if type.contains("modelerror")
+                || combined.contains("unsupported model")
+                || combined.contains("model not supported")
+                || combined.contains("不支持模型") {
+                return .modelRouting
+            }
+            if type.contains("auth")
+                || combined.contains("invalid api key")
+                || combined.contains("invalid_api_key")
+                || combined.contains("authentication") {
+                return .authentication
+            }
+            return .unknown
+        }
+        if combined.contains("upstream") || combined.contains("routing") {
+            return .upstreamRouting
+        }
+        return .unknown
+    }
+
+    private static func metadata(from detail: String) -> (type: String, message: String) {
+        guard let data = detail.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return ("", "") }
+        let error = object["error"] as? [String: Any] ?? object
+        return (
+            error["type"] as? String ?? error["code"] as? String ?? "",
+            error["message"] as? String ?? ""
+        )
     }
 }
 
@@ -130,24 +213,196 @@ public struct OpenAICompatibleProvider: AIProvider {
             // not a separate Auralis-style web_fetch contract.
             supportsHostedWebFetch: false,
             supportsReasoningMetadata: configuration.supportsReasoningMetadata,
-            toolMode: usesResponsesAPI ? .openAIResponses : (supportsToolCalling ? .openAIChat : .textualToolProtocol)
+            toolMode: usesResponsesAPI
+                ? (supportsToolCalling ? .openAIResponses : AIProviderToolMode.none)
+                : (supportsToolCalling ? .openAIChat : AIProviderToolMode.none)
         )
     }
 
     public func testConnection() async throws -> AIConnectionResult {
+        guard !usesAnthropicMessagesAPI else {
+            throw AIProviderError.unsupportedEndpointProtocol(configuration.apiPath)
+        }
         let started = Date()
-        let response = try await complete(
-            AICompletionRequest(
+        var details: [String] = []
+        let catalog = try await probeModelCatalog()
+        details.append(contentsOf: catalog.details)
+        guard catalog.modelAvailable else {
+            return AIConnectionResult(
+                latency: Date().timeIntervalSince(started),
                 model: configuration.model,
-                messages: [AIMessage(role: .user, content: String(localized: "用一句话确认连接正常。", bundle: .module))],
-                temperature: 0,
-                maxTokens: 32
+                message: String(localized: "当前模型未在该端点的模型目录中出现。", bundle: .module),
+                diagnostics: .init(
+                    modelCatalog: catalog.catalogStatus,
+                    modelAvailability: .failed,
+                    details: details
+                )
             )
-        )
+        }
+
+        let response: AICompletionResponse
+        do {
+            response = try await probeTextCompletion(modelWasVerified: catalog.catalogStatus == .passed)
+        } catch {
+            details.append(error.localizedDescription)
+            return AIConnectionResult(
+                latency: Date().timeIntervalSince(started),
+                model: configuration.model,
+                message: String(localized: "基础文本生成失败。", bundle: .module),
+                diagnostics: .init(
+                    modelCatalog: catalog.catalogStatus,
+                    modelAvailability: catalog.modelAvailabilityStatus,
+                    textCompletion: .failed,
+                    details: details
+                )
+            )
+        }
+
+        let streaming = await probeStreaming()
+        details.append(contentsOf: streaming.details)
+        let tools = await probeNativeTools()
+        details.append(contentsOf: tools.details)
         return AIConnectionResult(
             latency: Date().timeIntervalSince(started),
             model: response.model,
-            message: response.content
+            message: response.content,
+            diagnostics: .init(
+                modelCatalog: catalog.catalogStatus,
+                modelAvailability: catalog.modelAvailabilityStatus,
+                textCompletion: .passed,
+                streaming: streaming.status,
+                nativeTools: tools.native,
+                toolChoice: tools.toolChoice,
+                details: details
+            )
+        )
+    }
+
+    private func probeTextCompletion(modelWasVerified: Bool) async throws -> AICompletionResponse {
+        let request = AICompletionRequest(
+            model: configuration.model,
+            messages: [AIMessage(role: .user, content: String(localized: "用一句话确认连接正常。", bundle: .module))],
+            temperature: 0,
+            maxTokens: 32
+        )
+        var remainingModelRoutingRetries = modelWasVerified ? 2 : 0
+        while true {
+            do {
+                return try await complete(request)
+            } catch let error as AIProviderError where error.isModelRoutingFailure && remainingModelRoutingRetries > 0 {
+                let retryIndex = 3 - remainingModelRoutingRetries
+                remainingModelRoutingRetries -= 1
+                try await Self.sleepBackoff(attempt: retryIndex)
+            }
+        }
+    }
+
+    private func probeModelCatalog() async throws -> (
+        catalogStatus: AIProbeStatus,
+        modelAvailabilityStatus: AIProbeStatus,
+        modelAvailable: Bool,
+        details: [String]
+    ) {
+        do {
+            let models = try await fetchModelIDs()
+            let target = configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let available = models.contains(target)
+            if !available {
+                return (.passed, .failed, false, [String(localized: "模型目录可访问，但不包含 \(configuration.model)。", bundle: .module)])
+            }
+            return (.passed, .passed, available, [])
+        } catch let error as AIProviderError where error.failureKind == .authentication {
+            throw error
+        } catch {
+            let details = [String(localized: "模型目录未验证：\(error.localizedDescription)", bundle: .module)]
+            // `/models` is an optional compatibility endpoint.  Do not turn a
+            // text-capable provider into a false-negative merely because it
+            // omits catalog enumeration.
+            return (.unavailable, .unavailable, true, details)
+        }
+    }
+
+    private func probeStreaming() async -> (status: AIProbeStatus, details: [String]) {
+        do {
+            var completed = false
+            for try await event in stream(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: String(localized: "只回复 OK。", bundle: .module))],
+                temperature: 0,
+                maxTokens: 8
+            )) {
+                if case .completed = event { completed = true }
+            }
+            if completed { return (.passed, []) }
+            return (.failed, [String(localized: "流式请求没有完成事件。", bundle: .module)])
+        } catch {
+            return (.failed, [String(localized: "流式输出失败：\(error.localizedDescription)", bundle: .module)])
+        }
+    }
+
+    private func probeNativeTools() async -> (native: AIProbeStatus, toolChoice: AIProbeStatus, details: [String]) {
+        let probeName = "auralis_capability_probe"
+        let probe = AIToolDefinition(
+            name: probeName,
+            description: "Auralis connection capability probe. Call this function now with an empty object.",
+            parametersJSON: #"{"type":"object","properties":{},"additionalProperties":false}"#
+        )
+        do {
+            let response = try await complete(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: "Call auralis_capability_probe now. Do not answer with text.")],
+                temperature: 0,
+                maxTokens: 32,
+                tools: [probe],
+                toolChoice: .required
+            ))
+            if response.toolCalls?.contains(where: { $0.name == probeName }) == true {
+                return (.passed, .passed, [])
+            }
+            return (.failed, .unavailable, [String(localized: "端点接受工具 schema，但模型未返回测试工具调用。", bundle: .module)])
+        } catch {
+            let isToolChoiceFailure = (error as? AIProviderError)?.failureKind == .incompatibleRequest
+            return (
+                .failed,
+                isToolChoiceFailure ? .failed : .unavailable,
+                [String(localized: "原生工具调用失败：\(error.localizedDescription)", bundle: .module)]
+            )
+        }
+    }
+
+    private func fetchModelIDs() async throws -> Set<String> {
+        let (data, response) = try await session.data(for: makeModelsRequest())
+        try validate(response, body: data)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AIProviderError.malformedResponse(
+                detail: String(localized: "模型目录不是 JSON 对象。", bundle: .module),
+                retryable: false
+            )
+        }
+        let rows = (object["data"] as? [[String: Any]])
+            ?? (object["models"] as? [[String: Any]])
+            ?? []
+        let ids = Set(rows.compactMap { row in
+            (row["id"] as? String ?? row["name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        })
+        guard !ids.isEmpty else {
+            throw AIProviderError.malformedResponse(
+                detail: String(localized: "模型目录未返回任何模型 ID。", bundle: .module),
+                retryable: false
+            )
+        }
+        return ids
+    }
+
+    /// `401 + ModelError` 并不等价于鉴权失败。只有模型目录刚刚确认仍包含
+    /// 当前模型时，才把它视为上游路由抖动并作两次有限恢复；目录不存在、
+    /// 无法刷新或真正的 AuthError 都直接失败，避免掩盖错误配置。
+    private func modelCatalogStillContainsConfiguredModel() async -> Bool {
+        guard let models = try? await fetchModelIDs() else { return false }
+        return models.contains(
+            configuration.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         )
     }
 
@@ -180,6 +435,9 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     public func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        if !configuration.usesStreaming {
+            return nonStreamingProjection(request)
+        }
         if usesAnthropicMessagesAPI {
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: AIProviderError.unsupportedEndpointProtocol(configuration.apiPath))
@@ -196,6 +454,30 @@ public struct OpenAICompatibleProvider: AIProvider {
             return responsesStream(request)
         }
         return chatStream(request)
+    }
+
+    /// A diagnostic can establish that ordinary completion works while SSE is
+    /// rejected by a gateway.  Keep normal chat usable on that same protocol
+    /// by projecting a non-stream response into the neutral stream contract.
+    private func nonStreamingProjection(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let response = try await complete(request)
+                    continuation.yield(.started(model: response.model))
+                    if !response.content.isEmpty { continuation.yield(.delta(response.content)) }
+                    for toolCall in response.toolCalls ?? [] { continuation.yield(.toolCall(toolCall)) }
+                    if let citations = response.webCitations, !citations.isEmpty {
+                        continuation.yield(.webCitations(citations))
+                    }
+                    continuation.yield(.completed)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Chat Completions 流式（SSE 按 `choices[0].delta` 解析）。
@@ -455,7 +737,58 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// 流式请求：字节流本身无需二次解析，`transform` 原样透传。
     private func performRequestBytes(body: [String: Any]) async throws -> (URLSession.AsyncBytes, URLResponse) {
-        try await performRequest(body: body, run: { try await session.bytes(for: $0) }, transform: { ($0, $1) })
+        var attempt = 0
+        var verifiedModelRoutingRetries = 0
+        var modelCatalogStillAvailable: Bool?
+        var lastError: Error = AIProviderError.transport(String(localized: "请求失败", bundle: .module))
+        while attempt < Self.maxRetries {
+            do {
+                let request = try await makeRequest(body: body)
+                let (bytes, response) = try await session.bytes(for: request)
+                if let http = response as? HTTPURLResponse,
+                   !(200...299).contains(http.statusCode) {
+                    let errorBody = try await Self.errorBodyPreview(from: bytes)
+                    try validate(response, body: errorBody)
+                }
+                return (bytes, response)
+            } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    throw error
+                }
+                lastError = Self.mapError(error)
+                attempt += 1
+                if let providerError = lastError as? AIProviderError,
+                   providerError.isModelRoutingFailure,
+                   configuration.hasVerifiedModelAvailability {
+                    if modelCatalogStillAvailable == nil {
+                        modelCatalogStillAvailable = await modelCatalogStillContainsConfiguredModel()
+                    }
+                    if modelCatalogStillAvailable == true,
+                       verifiedModelRoutingRetries < 2,
+                       attempt < Self.maxRetries {
+                        verifiedModelRoutingRetries += 1
+                        try await Self.sleepBackoff(attempt: verifiedModelRoutingRetries, jitter: true)
+                        continue
+                    }
+                }
+                if attempt < Self.maxRetries, Self.isRetryable(lastError) {
+                    try await Self.sleepBackoff(attempt: attempt)
+                    continue
+                }
+                throw lastError
+            }
+        }
+        throw lastError
+    }
+
+    private static func errorBodyPreview(from bytes: URLSession.AsyncBytes) async throws -> Data {
+        var data = Data()
+        data.reserveCapacity(4_096)
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count >= 4_096 { break }
+        }
+        return data
     }
 
     /// 某些 NewAPI / 本地中转只实现了 OpenAI 请求体的一部分：常见表现是拒绝
@@ -482,6 +815,8 @@ public struct OpenAICompatibleProvider: AIProvider {
         transform: (Raw, URLResponse) throws -> Value
     ) async throws -> Value {
         var attempt = 0
+        var verifiedModelRoutingRetries = 0
+        var modelCatalogStillAvailable: Bool?
         var lastError: Error = AIProviderError.transport(String(localized: "请求失败", bundle: .module))
         while attempt < Self.maxRetries {
             do {
@@ -495,6 +830,20 @@ public struct OpenAICompatibleProvider: AIProvider {
                 }
                 lastError = Self.mapError(error)
                 attempt += 1
+                if let providerError = lastError as? AIProviderError,
+                   providerError.isModelRoutingFailure,
+                   configuration.hasVerifiedModelAvailability {
+                    if modelCatalogStillAvailable == nil {
+                        modelCatalogStillAvailable = await modelCatalogStillContainsConfiguredModel()
+                    }
+                    if modelCatalogStillAvailable == true,
+                       verifiedModelRoutingRetries < 2,
+                       attempt < Self.maxRetries {
+                        verifiedModelRoutingRetries += 1
+                        try await Self.sleepBackoff(attempt: verifiedModelRoutingRetries, jitter: true)
+                        continue
+                    }
+                }
                 if attempt < Self.maxRetries, Self.isRetryable(lastError) {
                     try await Self.sleepBackoff(attempt: attempt)
                     continue
@@ -587,6 +936,19 @@ public struct OpenAICompatibleProvider: AIProvider {
         return url
     }
 
+    private func modelsEndpoint() throws -> URL {
+        let basePath = configuration.baseURL.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .lowercased()
+        let component = basePath == "v1" || basePath.hasSuffix("/v1")
+            ? "models"
+            : "v1/models"
+        let url = configuration.baseURL.appendingPathComponent(component)
+        guard let scheme = url.scheme?.lowercased() else { throw AIProviderError.invalidEndpoint }
+        try Self.validate(scheme: scheme, host: url.host)
+        return url
+    }
+
     /// AI 接口 URL 安全策略：
     /// - https：允许（推荐，Ollama/LM Studio 等也支持 https 反代）；
     /// - http：只允许本机环回或私有局域网（Ollama 127.0.0.1:11434、LM Studio localhost 等），
@@ -665,8 +1027,9 @@ public struct OpenAICompatibleProvider: AIProvider {
         return AIProviderError.transport(error.localizedDescription)
     }
 
-    private static func sleepBackoff(attempt: Int) async throws {
-        let seconds = backoffBaseSeconds * pow(2.0, Double(attempt - 1))
+    private static func sleepBackoff(attempt: Int, jitter: Bool = false) async throws {
+        let base = backoffBaseSeconds * pow(2.0, Double(attempt - 1))
+        let seconds = base + (jitter ? Double.random(in: 0...0.2) : 0)
         try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
@@ -676,6 +1039,20 @@ public struct OpenAICompatibleProvider: AIProvider {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
 
+        try await applyCredentialsAndHeaders(to: &request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    private func makeModelsRequest() async throws -> URLRequest {
+        var request = URLRequest(url: try modelsEndpoint(), timeoutInterval: configuration.timeout)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        try await applyCredentialsAndHeaders(to: &request)
+        return request
+    }
+
+    private func applyCredentialsAndHeaders(to request: inout URLRequest) async throws {
         if let organization = configuration.organization, !organization.isEmpty {
             request.setValue(organization, forHTTPHeaderField: "OpenAI-Organization")
         }
@@ -701,9 +1078,6 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        return request
     }
 
     /// 请求体总入口：按 apiPath 自动选择 Responses 或 Chat Completions 格式。
@@ -726,7 +1100,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         if stream { body["stream"] = true }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
-            if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
+            if let toolChoice = request.toolChoice {
                 body["tool_choice"] = Self.encodeToolChoice(toolChoice, responses: false)
             }
         }
@@ -796,7 +1170,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             + Self.encodeResponsesHostedTools(hostedTools)
         if !encodedTools.isEmpty {
             body["tools"] = encodedTools
-            if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
+            if let toolChoice = request.toolChoice {
                 body["tool_choice"] = Self.encodeToolChoice(toolChoice, responses: true)
             }
         }
