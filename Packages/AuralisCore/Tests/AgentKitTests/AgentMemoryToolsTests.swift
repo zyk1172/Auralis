@@ -319,6 +319,33 @@ struct AgentSystemPromptTests {
         #expect(prompt.contains("夜跑歌单"))
     }
 
+    @Test("记忆与技能注入有上下文上限，剩余内容按需查询")
+    func memoryAndSkillContextIsBounded() {
+        let memories = (0..<40).map { index in
+            AgentMemoryEntry(
+                key: "无关记忆\(index)",
+                value: "内容\(index)",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let skills = (0..<20).map { index in
+            AgentSkillEntry(
+                name: "技能\(index)",
+                instructions: "执行步骤 \(index)",
+                createdAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let prompt = AgentRunner.systemPrompt(
+            context: AgentRunner.Context(memories: memories, skills: skills),
+            tools: [],
+            nativeToolCalling: true
+        )
+        #expect(prompt.contains("另有 24 条记忆未注入"))
+        #expect(prompt.contains("另有 12 个技能未注入"))
+        #expect(!prompt.contains("无关记忆0"))
+        #expect(prompt.contains("无关记忆39"))
+    }
+
     @Test("无记忆 / 无技能时给出占位文案")
     func emptyMemoryAndSkillPlaceholders() {
         let prompt = AgentRunner.systemPrompt(context: AgentRunner.Context(), tools: [], nativeToolCalling: false)

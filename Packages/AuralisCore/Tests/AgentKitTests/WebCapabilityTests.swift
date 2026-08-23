@@ -125,7 +125,9 @@ struct WebCapabilityTests {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [WebFixtureURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let service = DuckDuckGoInstantAnswerService(session: session, policy: policy())
+        let fetchScope = WebFetchURLScope()
+        await fetchScope.record([URL(string: "https://public.example/start")!])
+        let service = DuckDuckGoInstantAnswerService(session: session, policy: policy(), fetchScope: fetchScope)
         WebFixtureURLProtocol.handler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -152,7 +154,12 @@ struct WebCapabilityTests {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [WebFixtureURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let service = DuckDuckGoInstantAnswerService(session: session, policy: policy())
+        let fetchScope = WebFetchURLScope()
+        await fetchScope.record([
+            URL(string: "https://public.example/large")!,
+            URL(string: "https://public.example/image")!,
+        ])
+        let service = DuckDuckGoInstantAnswerService(session: session, policy: policy(), fetchScope: fetchScope)
 
         WebFixtureURLProtocol.handler = { request in
             let response = HTTPURLResponse(
@@ -190,6 +197,17 @@ struct WebCapabilityTests {
             Issue.record("content-type 策略返回了意外错误：\(error)")
         }
         WebFixtureURLProtocol.handler = nil
+    }
+
+    @Test("默认 web_fetch 只允许本轮搜索结果 URL")
+    func fetchRequiresSearchResultURL() async throws {
+        let service = DuckDuckGoInstantAnswerService(policy: policy())
+        do {
+            _ = try await service.fetch(url: URL(string: "https://public.example/not-searched")!)
+            Issue.record("未经过搜索的 URL 被默认 web_fetch 放行")
+        } catch let error as WebCapabilityError {
+            #expect(error == .fetchRequiresSearchResult)
+        }
     }
 
     @Test("外部工具结果带有统一不可信边界")

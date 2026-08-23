@@ -11,20 +11,19 @@ public struct ConversationEngine: Sendable {
     public static func isExplicitMusicCommand(_ text: String) -> Bool {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !value.isEmpty else { return false }
-        let musicMarkers = [
-            "歌曲", "音乐", "曲库", "歌手", "艺人", "专辑", "歌单", "播放列表", "队列", "歌词",
-            "song", "music", "artist", "album", "playlist", "queue", "track",
-        ]
-        let actionMarkers = [
+        let musicContext = [
+            "歌曲", "歌", "音乐", "曲库", "音乐库", "歌手", "艺人", "专辑", "歌单", "播放列表", "队列", "歌词", "收藏",
+            "song", "music", "artist", "album", "playlist", "queue", "track", "lyrics",
+        ].contains(where: value.contains)
+        let unambiguousMusicAction = [
             "播放", "暂停", "下一首", "上一首", "继续播放", "加入队列", "接下来播放", "替换队列",
-            "收藏", "喜欢", "评分", "推荐", "找歌", "搜索歌曲", "搜索音乐", "下载", "离线",
             "创建歌单", "新建歌单", "加入歌单", "加到歌单", "删除歌单", "清空队列", "保存队列",
-            "play", "pause", "next", "previous", "queue", "favorite", "recommend", "download",
-        ]
-        if actionMarkers.contains(where: value.contains) { return true }
-        return musicMarkers.contains(where: value.contains)
-            && ["查", "搜", "找", "看", "列", "获取", "显示", "查询", "什么", "which", "what", "show", "find", "search"]
-                .contains(where: value.contains)
+            "play", "pause", "next", "previous",
+        ].contains(where: value.contains)
+        let contextualMusicAction = [
+            "收藏", "喜欢", "评分", "推荐", "找歌", "搜索歌曲", "搜索音乐", "下载", "离线", "favorite", "recommend", "download",
+        ].contains(where: value.contains) && musicContext
+        return unambiguousMusicAction || contextualMusicAction
     }
 
     public static func allowsOfflineFallback(intent: AgentTaskIntent, userText: String) -> Bool {

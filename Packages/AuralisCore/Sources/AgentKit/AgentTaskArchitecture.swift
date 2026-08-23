@@ -521,33 +521,41 @@ public enum AgentIntentClassifier {
     private static func classifyDirect(_ text: String) -> AgentTaskIntent {
         let value = text.lowercased()
         func has(_ words: [String]) -> Bool { words.contains { value.contains($0) } }
+        let musicContext = has([
+            "歌曲", "歌", "音乐", "曲库", "音乐库", "歌手", "艺人", "专辑", "歌单", "播放列表",
+            "播放", "队列", "歌词", "收藏", "评分", "找歌", "playlist", "music", "track",
+            "album", "artist", "song", "queue", "lyrics", "playback",
+        ])
+        let memoryRequest = has(["记住", "记忆", "忘记", "我的名字", "我叫", "技能", "memory", "skill"])
+
+        // 入口默认是 generic conversation。通用词（推荐、下载、为什么、搜索）
+        // 不足以证明用户正在操作 Auralis；只有音乐/Auralis 上下文与明确动作
+        // 同时出现时，才创建 deterministic task。
+        if memoryRequest { return .memoryManagement }
         // “推荐索引”是资料库维护任务，不是普通音乐推荐；优先于 discovery 关键词。
         if has(["推荐索引", "索引 v2", "索引v2", "library_index_v2"]) { return .libraryManagement }
-        if has(["鉴赏", "赏析", "乐评", "大众评价", "appreciate"]) { return .musicAppreciation }
-        if has(["下载", "离线", "torrent", "moviepilot"]) { return .musicDownload }
-        // 新闻/网页与设备事实是通用对话的联网或系统工具需求；不要因为“查/看”
-        // 这样的动词把它们误路由成曲库搜索任务。Generic Chat 仍可通过
-        // tool_search 动态发现未首轮暴露的工具。
-        let musicMarkers = [
-            "歌曲", "音乐", "曲库", "歌手", "艺人", "专辑", "歌单", "播放", "队列",
-            "收藏", "评分", "找歌", "playlist", "music", "track", "album", "artist",
-        ]
-        if has(["新闻", "网页", "联网", "网上", "web", "internet", "news"]), !has(musicMarkers) {
-            return .conversation
+        if musicContext, has(["鉴赏", "赏析", "乐评", "大众评价", "appreciate"]) { return .musicAppreciation }
+        if musicContext, has(["下载", "离线", "download", "offline"]) || has(["torrent", "moviepilot", "音乐下载"]) {
+            return .musicDownload
         }
-        if has(["音频输出", "音频设备", "耳机", "设备状态", "系统设备", "网络状态", "存储状态"]) {
-            return .conversation
+        if has(["navidrome", "opensubsonic", "音乐服务器", "曲库同步", "同步音乐库", "切换服务器", "添加服务器", "删除服务器", "连接服务器"]) {
+            return .serverManagement
         }
-        if has(["诊断", "为什么", "错误", "失败", "日志", "卡住"]) { return .diagnostics }
-        if has(["播放状态", "当前播放状态", "正在播放状态"]) { return .diagnostics }
-        if has(["服务器", "同步", "连接", "navidrome", "nas"]) { return .serverManagement }
-        if has(["歌单", "playlist"]) { return .playlistManagement }
-        if has(["队列", "接下来播放", "替换队列", "清空队列"]) { return .queueManagement }
-        if has(["推荐", "相似", "发现", "随便听", "心情", "场景", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) { return .musicDiscovery }
-        if has(["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放"]) { return .playbackControl }
-        if has(["收藏", "评分", "资料库", "索引 v2", "索引v2"]) { return .libraryManagement }
-        if has(["记住", "记忆", "忘记", "技能", "memory", "skill"]) { return .memoryManagement }
-        if has(["找歌", "搜索", "查找", "哪首", "哪个专辑", "谁唱的"]) { return .librarySearch }
+        if musicContext, has(["歌单", "playlist"]) { return .playlistManagement }
+        if musicContext, has(["队列", "接下来播放", "替换队列", "清空队列"]) { return .queueManagement }
+        if musicContext, has(["推荐", "相似", "发现", "随便听", "心情", "场景", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) {
+            return .musicDiscovery
+        }
+        if musicContext, has(["收藏", "评分", "资料库", "索引 v2", "索引v2"]) { return .libraryManagement }
+        if musicContext, has(["诊断", "播放状态", "当前播放状态", "正在播放状态", "播放失败", "播放器故障", "音频流", "错误", "失败", "日志", "卡住"]) {
+            return .diagnostics
+        }
+        if musicContext, has(["找歌", "搜索", "查找", "查询", "搜索歌曲", "搜索音乐", "查找歌曲", "哪首", "哪个专辑", "谁唱的"]) {
+            return .librarySearch
+        }
+        if musicContext, has(["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放", "play", "pause", "next", "previous"]) {
+            return .playbackControl
+        }
         return .conversation
     }
 

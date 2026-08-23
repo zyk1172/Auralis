@@ -4,6 +4,12 @@ import Foundation
 /// and deterministic workflows. Detailed capability contracts live in
 /// ToolDescriptor / Workflow definitions, not in this prompt.
 public enum SystemPromptBuilder {
+    private static let maxMemoryEntries = 16
+    private static let maxCoreMemoryEntries = 5
+    private static let maxRelevantMemoryEntries = 8
+    private static let maxRecentMemoryEntries = 3
+    private static let maxSkillEntries = 8
+
     public static func build(
         context: ToolLoop.Context,
         tools: [ToolDescriptor],
@@ -110,7 +116,32 @@ public enum SystemPromptBuilder {
             let right = relevance(rhs, tokens: goalTokens)
             return left == right ? lhs.updatedAt > rhs.updatedAt : left > right
         }
-        return sorted.map { "- \($0.key)：\($0.value)" }.joined(separator: "\n")
+        let coreTerms = ["名字", "姓名", "喜欢", "偏好", "不喜欢", "服务器", "设备"]
+        let core = sorted.filter { entry in
+            coreTerms.contains { entry.key.lowercased().contains($0) }
+        }
+        let relevant = sorted.filter { relevance($0, tokens: goalTokens) > 0 }
+        let recent = entries.sorted { $0.updatedAt > $1.updatedAt }
+
+        var selected: [AgentMemoryEntry] = []
+        var selectedKeys = Set<String>()
+        func append(_ candidates: [AgentMemoryEntry], limit: Int) {
+            for entry in candidates where selected.count < maxMemoryEntries && selected.count < limit {
+                guard selectedKeys.insert(entry.key).inserted else { continue }
+                selected.append(entry)
+            }
+        }
+        append(core, limit: maxCoreMemoryEntries)
+        append(relevant, limit: maxCoreMemoryEntries + maxRelevantMemoryEntries)
+        append(recent, limit: maxCoreMemoryEntries + maxRelevantMemoryEntries + maxRecentMemoryEntries)
+        append(sorted, limit: maxMemoryEntries)
+
+        var lines = selected.map { "- \($0.key)：\($0.value)" }
+        let remaining = entries.count - selected.count
+        if remaining > 0 {
+            lines.append("- （另有 \(remaining) 条记忆未注入；需要时使用 memory_search 按问题查询。）")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func relevance(_ entry: AgentMemoryEntry, tokens: [String]) -> Int {
@@ -126,7 +157,13 @@ public enum SystemPromptBuilder {
                     ? "（目前沒有技能；需要時使用 skill_list 或 skill_read。）"
                     : "（还没有技能；需要时使用 skill_list 或 skill_read。）"
         }
-        return skills.map { "- 「\($0.name)」：\($0.summary)" }.joined(separator: "\n")
+        let selected = skills.sorted { $0.createdAt > $1.createdAt }.prefix(maxSkillEntries)
+        var lines = selected.map { "- 「\($0.name)」：\($0.summary)" }
+        let remaining = skills.count - selected.count
+        if remaining > 0 {
+            lines.append("- （另有 \(remaining) 个技能未注入；需要时使用 skill_list / skill_read 按需读取。）")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func capabilitySummary(_ tools: [ToolDescriptor]) -> String {

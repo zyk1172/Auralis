@@ -33,7 +33,8 @@ public struct ToolRuntime {
         externalMusicService: (any AgentExternalMusicService)? = nil,
         allowsLyrics: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
-        webService: (any AgentWebService)? = nil
+        webService: (any AgentWebService)? = nil,
+        authorizationContext: SideEffectAuthorizationContext? = nil
     ) async -> ToolResult {
         guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
             return ToolResult(
@@ -46,6 +47,16 @@ public struct ToolRuntime {
 
         do {
             try validate(call, descriptor: descriptor)
+            if let authorizationContext,
+               descriptor.permission != .readOnly,
+               !authorizationContext.allows(descriptor.sideEffectPolicy) {
+                return ToolResult(
+                    call: call,
+                    permission: descriptor.permission,
+                    success: false,
+                    summary: authorizationContext.denialReason(for: descriptor)
+                )
+            }
             return await AgentToolRegistry.execute(
                 call,
                 bridge: bridge,

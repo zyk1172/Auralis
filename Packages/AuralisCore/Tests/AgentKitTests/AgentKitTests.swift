@@ -20,6 +20,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     private(set) var createdPlaylistNames: [String] = []
     private(set) var replacedQueues: [[GlobalID]] = []
     private(set) var randomLimits: [Int] = []
+    private(set) var clearedQueueCount = 0
 
     /// 播放类工具的统一返回（默认 true；置 false 可模拟「目标不在目录」）。
     var playResult: Bool = true
@@ -69,7 +70,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return mutation("已替换队列") }
     func removeFromQueue(at index: Int) async -> AgentMutationResult { mutation("已移除队列歌曲") }
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { mutation("已调整队列顺序") }
-    func clearQueue() async -> AgentMutationResult { mutation("已清空队列") }
+    func clearQueue() async -> AgentMutationResult { clearedQueueCount += 1; return mutation("已清空队列") }
     func shuffleRemaining() async -> AgentMutationResult { mutation("已随机剩余队列") }
     func saveQueueAsPlaylist(name: String) async -> AgentMutationResult {
         createdPlaylistNames.append(name)
@@ -1091,9 +1092,9 @@ func streamingErrorDoesNotDegradeOrdinaryChatToMusicSearch() async {
         if case let .error(value) = item { return value }
         return nil
     }.joined(separator: "\n")
-    #expect(errors.contains("AI 服务暂时不可用"))
+    #expect(errors.contains("AI Provider 请求失败"))
     #expect(errors.contains("测试错误"))
-    #expect(errors.contains("未将请求改写为本地音乐搜索"))
+    #expect(!errors.contains("ACTION"))
     #expect(await collector.containsText("本地未找到匹配的歌曲") == false)
 }
 

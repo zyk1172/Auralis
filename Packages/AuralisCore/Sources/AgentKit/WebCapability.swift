@@ -71,6 +71,7 @@ public enum WebCapabilityError: Error, LocalizedError, Sendable, Equatable {
     case responseTooLarge
     case redirectLimitExceeded
     case unsupportedContentType(String)
+    case fetchRequiresSearchResult
 
     public var errorDescription: String? {
         switch self {
@@ -83,6 +84,7 @@ public enum WebCapabilityError: Error, LocalizedError, Sendable, Equatable {
         case .responseTooLarge: "网页内容过大，未读取"
         case .redirectLimitExceeded: "网页重定向次数过多，未读取"
         case let .unsupportedContentType(type): "网页内容类型不受支持：\(type)"
+        case .fetchRequiresSearchResult: "为避免 DNS rebinding，网页读取只允许使用本轮搜索结果中的 URL"
         }
     }
 }
@@ -221,20 +223,27 @@ public actor DuckDuckGoInstantAnswerService: AgentWebSearchBackend {
     private let configuration: URLSessionConfiguration
     private let userAgent: String
     private let policy: SafeWebURLPolicy
+    private let fetchScope: WebFetchURLScope
 
     public init(
         session: URLSession = .shared,
         userAgent: String = "Auralis/1.0",
-        policy: SafeWebURLPolicy = SafeWebURLPolicy()
+        policy: SafeWebURLPolicy = SafeWebURLPolicy(),
+        fetchScope: WebFetchURLScope = WebFetchURLScope()
     ) {
+        self.configuration = Self.configuration(from: session)
+        self.userAgent = userAgent
+        self.policy = policy
+        self.fetchScope = fetchScope
+    }
+
+    private static func configuration(from session: URLSession) -> URLSessionConfiguration {
         let configuration = session.configuration
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 20
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
-        self.configuration = configuration
-        self.userAgent = userAgent
-        self.policy = policy
+        return configuration
     }
 
     public func search(query: String, limit: Int = 5) async throws -> WebSearchResult {
@@ -273,10 +282,14 @@ public actor DuckDuckGoInstantAnswerService: AgentWebSearchBackend {
         }
 
         let sources = await validatedSources(candidates, limit: min(max(limit, 1), 10))
+        await fetchScope.record(sources.map(\.url))
         return WebSearchResult(query: query, sources: sources)
     }
 
     public func fetch(url: URL) async throws -> WebDocument {
+        guard await fetchScope.allows(url) else {
+            throw WebCapabilityError.fetchRequiresSearchResult
+        }
         try await policy.validateInitialURL(url)
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")

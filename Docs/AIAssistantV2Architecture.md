@@ -22,7 +22,8 @@
 
 `AgentToolRegistry.all` 是描述和执行的单一来源。`ToolCatalog` 对其按名称、命名空间、摘要
 和 tags 搜索，`tool_search` 返回轻量摘要；Runner 将发现到的 descriptor 加入下一轮 schema。
-完整工具定义不会永久常驻每轮请求。
+完整工具定义不会永久常驻每轮请求。普通聊天默认进入 generic loop；只有明确的
+Auralis/音乐操作或确定性 workflow 才进入任务状态路径。
 
 模型调用进入 `ToolRuntime` 后依次经过：必填/未知参数校验 → JSON Schema 基本形状校验 →
 注册表分流 → 真实 `AgentBridge`、`LocalCatalogStore`、系统服务或 `AgentWebService`。
@@ -38,16 +39,26 @@
 
 ## 对话、联网与记忆
 
-`ConversationEngine` 位于 `AgentRuntime` 和低层 `AgentRunner` 之间，统一维护 chat-first
-入口与离线降级规则：没有明确音乐命令时，Provider 不可用不会触发本地音乐搜索。
+普通聊天的生产链路是 `AgentCoordinator → ConversationEngine → ToolLoop → Provider / ToolRuntime`，
+不创建 `AgentTaskState`，也不经过 `CompletionEvaluator`。确定性任务才由
+`AgentCoordinator → AgentRuntime → ConversationEngine → ToolLoop → WorkflowEngine` 编排。
+`AgentRunner` 只保留弃用的 source-compatibility forwarding。入口默认是 generic conversation；
+“推荐 / 下载 / 为什么 / 搜索”等通用词只有和明确音乐/Auralis 上下文组合后才会进入 deterministic
+intent，避免把“推荐几本书”或“怎么下载 Python”改写成音乐任务。没有明确音乐命令时，Provider
+不可用不会触发本地音乐搜索。
 
 联网通过可替换的 `AgentWebService` 注入。默认 App 实现是受 HTTPS/私有地址/响应大小约束
-的 DuckDuckGo Instant Answer capability；生产环境可替换为自有后端或 Provider hosted tool。
+的 DuckDuckGo Instant Answer capability；默认 `web_fetch` 只接受本轮 `web_search` 已返回的
+URL，以降低 URLSession 二次解析造成的 DNS rebinding 风险。生产环境可替换为受控自有后端或
+Provider hosted tool；如需允许任意用户 URL，应由后端负责 IP pinning/proxy，而不能只依赖一次
+`getaddrinfo` 检查。
 `web_search` 结果为 `WebSource`，会进入 `AgentMessage.webSources`，UI 展示标题、域名、
 摘要与可点击 URL；`web_fetch` 返回带来源 URL 的受限正文。
 
-长期记忆仍由 `AgentMemoryService` 持有；`memory_search` 只回传与 query 匹配的条目，避免
-每轮把完整记忆库放进上下文。Skill 与 Memory 保持不同语义和不同工具集合。
+长期记忆仍由 `AgentMemoryStore` 持有；system prompt 每轮只注入有限的核心、相关和最近记忆，
+以及有限的 skill 摘要，剩余内容通过 `memory_search`、`skill_list` / `skill_read` 按需获取。
+外部网页结果带有 `externalUntrusted` trust level，且副作用 Runtime 只接受由原始用户请求
+推导出的 `SideEffectAuthorizationContext`，网页内容不能成为用户授权。
 
 ## 验证边界
 
@@ -65,5 +76,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 ```
 
 测试覆盖 transcript round-trip、Anthropic 并行结果聚合、Responses/Chat wire shape、工具
-发现、严格参数形状、普通聊天降级边界和已有播放器/推荐索引回归。未使用 Simulator；真实
-Provider、真实联网搜索和真实端到端 UI 仍需按环境做手工 smoke test。
+发现、严格参数形状、普通聊天路由/降级边界、外部数据副作用隔离、Web SSRF 与已有播放器/
+推荐索引回归。本地验证未启动或运行 Simulator；GitHub CI 另有 iOS Simulator SDK 编译 job，
+但不 boot Simulator 或运行 Simulator 测试。真实 Provider、真实联网搜索和真实端到端 UI 仍需
+按环境做手工 smoke test。

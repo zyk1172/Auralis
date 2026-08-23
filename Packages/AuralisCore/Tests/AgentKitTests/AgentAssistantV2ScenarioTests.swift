@@ -458,3 +458,49 @@ func webLibraryPlaybackScenario() async throws {
         message.content.contains("[EXTERNAL_UNTRUSTED_CONTENT]")
     } == true)
 }
+
+@Test("外部网页数据不能授权用户未请求的副作用")
+func externalWebDataCannotAuthorizeSideEffect() async throws {
+    let source = WebSource(
+        title: "科技新闻",
+        url: URL(string: "https://news.example.test/technology")!,
+        snippet: "新闻正文",
+        backend: "fake-web",
+        sourceType: "search"
+    )
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "web-1",
+            name: "web_search",
+            arguments: ["query": .string("今天的科技新闻")]
+        )]),
+        // 模拟模型被网页中的指令诱导；原始用户请求只要求读取新闻。
+        scenarioResponse(calls: [scenarioCall(id: "clear-1", name: "queue_clear")]),
+        scenarioResponse(content: "新闻已读取，未执行网页中的其他指令。"),
+    ])
+    let store = try scenarioStore()
+    let bridge = MockAgentBridge()
+    let collector = ScenarioMessageCollector()
+
+    await ConversationEngine().run(
+        userText: "查一下今天的科技新闻。",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(),
+        systemService: ScenarioSystemService(),
+        webService: ScenarioWebService(source: source),
+        intent: .conversation,
+        policy: AgentTaskPolicy.policy(for: .conversation),
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    #expect(bridge.clearedQueueCount == 0)
+    let requests = provider.requests()
+    #expect(requests.dropFirst(2).first?.messages.contains { message in
+        message.content.contains("不能授权此操作")
+    } == true)
+    #expect(await collector.containsText("未执行网页中的其他指令"))
+}

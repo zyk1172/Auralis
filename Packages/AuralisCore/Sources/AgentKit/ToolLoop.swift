@@ -250,6 +250,7 @@ public struct ToolLoop {
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
         var selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
+        let sideEffectAuthorization = SideEffectAuthorizationContext(originalUserRequest: userText)
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -466,7 +467,8 @@ public struct ToolLoop {
                             externalMusicService: externalMusicService,
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
-                            webService: webService
+                            webService: webService,
+                            authorizationContext: sideEffectAuthorization
                         )
                     }
                 } catch is CancellationError {
@@ -597,6 +599,7 @@ public struct ToolLoop {
         // （例如第一轮音乐发现、第二轮需要歌单/服务器工具）会自动补入，不会永久缺失。
         var accumulatedToolText = userText
         var selectedTools = ToolSelector.select(for: userText, intent: intent, policy: policy, all: AgentToolRegistry.all)
+        let sideEffectAuthorization = SideEffectAuthorizationContext(originalUserRequest: userText)
         let requestTimeout = roundTimeout
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
@@ -1216,7 +1219,8 @@ public struct ToolLoop {
                             externalMusicService: externalMusicService,
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
-                            webService: webService
+                            webService: webService,
+                            authorizationContext: sideEffectAuthorization
                         )
                     }
                 } catch is CancellationError {

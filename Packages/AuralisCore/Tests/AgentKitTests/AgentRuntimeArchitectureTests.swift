@@ -16,11 +16,19 @@ struct AgentRuntimeArchitectureTests {
         ("替换当前队列", AgentTaskIntent.queueManagement),
         ("推荐几首深夜音乐", AgentTaskIntent.musicDiscovery),
         ("暂停播放", AgentTaskIntent.playbackControl),
-        ("搜索周杰伦", AgentTaskIntent.librarySearch),
+        ("搜索周杰伦的歌曲", AgentTaskIntent.librarySearch),
         ("记住我喜欢爵士", AgentTaskIntent.memoryManagement),
     ])
     func intentClassification(input: String, expected: AgentTaskIntent) {
         #expect(AgentIntentClassifier.classify(input) == expected)
+    }
+
+    @Test("通用词不会把普通知识问题路由到音乐任务")
+    func genericWordsStayConversation() {
+        #expect(AgentIntentClassifier.classify("推荐几本人工智能方面的书") == .conversation)
+        #expect(AgentIntentClassifier.classify("怎么下载 Python 的 wheel 文件") == .conversation)
+        #expect(AgentIntentClassifier.classify("为什么 iPhone 充电的时候会发热") == .conversation)
+        #expect(AgentIntentClassifier.classify("搜索 Python 的官方文档") == .conversation)
     }
 
     @Test func conversationPolicyAuthorizesEveryRegisteredTool() {
