@@ -15,11 +15,13 @@ AgentCoordinator (@MainActor)
               ▼
       ┌───────┴────────┐
       ▼                ▼
-ConversationEngine   AgentRuntime (deterministic state)
+      ConversationEngine   AgentRuntime (deterministic state)
       │                │
       └───────┬────────┘
               ▼
           ToolLoop
+              │
+       Trusted Stateful Skill
               │
       Provider / ToolRuntime
               │
@@ -40,8 +42,8 @@ AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
   `tool_choice`，否则有限地降级到 ACTION 文本协议。
 - `ToolCatalog` 从 `AgentToolRegistry.all` 搜索能力。`tool_search` 只返回轻量摘要；
   发现后的工具会加入下一轮 schema，避免把 100+ 个完整定义永久塞进每一轮上下文。
-- `ToolRuntime` 在副作用前校验必填参数、未知参数和数组/数字/布尔 JSON 形状，并执行
-  `SideEffectAuthorizationContext` 的逐操作授权；注册表仍是
+- `ToolRuntime` 在副作用前校验必填参数、未知参数和递归 JSON Schema，并执行
+  `SideEffectAuthorizationContext` 的逐个 canonical operation 授权；注册表仍是
   工具描述、别名、权限、副作用、Evidence、联网和并行安全属性的单一来源。
 - Web 能力通过 `AgentWebService` 注入，`web_search` 返回 `WebSource`，UI 用可点击来源卡片
   展示；`web_fetch` 只返回脱敏正文和 URL。Provider 托管搜索能力与 App WebCapability
@@ -61,11 +63,13 @@ call and checks a least-privilege `SideEffectAuthorizationContext` derived from
 the user's original task. Irreversible deletion still has its separate UI
 confirmation gate.
 
-A user's explicit natural-language request authorizes the requested operation.
+A user's explicit natural-language request authorizes only the requested canonical operation(s).
 
 Intent is a routing hint, not a capability boundary.
 
-Normal registered music tools are allowed by default.
+Model-visible tools are discoverable from the canonical registry. Legacy aliases and
+skill-private transition tools are executable only through their compatibility or trusted
+stateful-skill paths; they are not ordinary model capabilities.
 
 The runtime does not impose cumulative tool-call limits on normal tasks.
 
@@ -79,21 +83,24 @@ User cancellation and per-request timeouts remain supported.
 
 ## 实现对照
 
-- `AgentTaskPolicy.authorizes(_:)` 恒返回 `true`（deprecated / diagnostics-only）：已注册工具
-  默认全部允许，不再按 Intent / ToolGroup / Permission / Risk / Scope 拒绝。
+- `AgentTaskPolicy.authorizes(_:)` 恒返回 `true`（deprecated / diagnostics-only）：Intent 不再
+  作为工具能力门禁。真正的副作用门禁在 `ToolRuntime`，按 `ToolDescriptor` 声明的
+  `ToolAuthorizationOperation` 与原始用户请求逐操作匹配；没有精确授权的写操作 fail closed。
 - `AgentTaskBudget` 只剩极端看门狗：`wallClockSeconds`（默认 60 分钟）与
   `maxModelRounds`（默认 1000，紧急防失控）。`maxNoProgressRounds` /
   `maxRepeatedToolPattern` 保留为诊断统计，不作为终止条件。
-- `ToolLoop` 不按 Intent 拦截已注册工具，也不因 `stopSearching` / 连续无新结果 /
-  重复工具模式终止任务；仅在注册表明确标记的不可逆删除工具前等待 UI 批准。
+- `ToolLoop` 不按 Intent 拦截普通模型工具，也不因 `stopSearching` / 连续无新结果 /
+  重复工具模式终止任务；仅在注册表明确标记的不可逆删除工具前等待 UI 批准。只有已
+  激活的可信 Stateful Skill 可以获得其私有状态转移工具。
 - `AgentRunner` 仅为旧调用方转发到 `ConversationEngine`，生产调用链不再经过它。
 - 单工具超时/异常回灌结构化失败结果，模型可换工具、换参数、换策略继续。
 - `queue_replace` 可用不同参数多次调用；相同工具 + 相同参数幂等复用。
 - 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认；风险确认
   只表示不可逆删除，不替代实体消歧。
-- `ToolSelector` 是纯 Schema 优化器：只有 `tool_search`、能力摘要和少量安全上下文工具
-  常驻；用户关键词、意图建议和已执行工具按需追加。旧式驼峰别名统一映射回 canonical
-  名称，不再重复暴露，执行兼容由注册表保留；模型需要新能力时可先调用 `tool_search`。
+- `ToolSelector` 是纯 Schema 优化器：只有 `tool_search`、能力摘要和与请求语义相关的
+  `.model` 工具常驻；泛化的“推荐/下载/搜索/为什么”不会单独注入音乐工具。已激活的
+  Stateful Skill 另外追加它拥有的工具。旧式驼峰别名统一映射回 canonical 名称，不再
+  重复暴露，执行兼容由注册表保留；模型需要新能力时可先调用 `tool_search`。
 
 ## 目标
 
@@ -199,9 +206,13 @@ Evidence 来源包括本地目录、播放状态、服务器、外部 API、用�
 `skill_list` / `skill_read` / `skill_delete` 管理本地可复用指令；`memory_search` 只查询
 相关长期记忆。模型的工具选择范围由 discovery 动态扩展，不是由 Intent 永久裁剪。
 
-推荐索引 V2 是普通目录工具服务。它的批次规则属于工具描述与工具结果，Runtime 的
-通用模型循环不解析索引摘要、不采用索引专属超时，也不维护索引专属轮次状态。
-原生工具调用直接把分类批次作为结构化 `items` 数组写回；旧版 `itemsJSON` 仍可读取。
+推荐索引 V2 是第一个可信 Stateful Skill，而不是一组可以被通用模型任意编排的目录写工具。
+`RecommendationIndexV2SkillRuntime` 自己持有批次 identity、状态、重试收缩、完成判定和
+checkpoint；固定链路是 `status → next_batch → model classification → write_batch →
+status`。`library_index_v2_next_batch` 与 `library_index_v2_write_batch` 是 `skillOnly`
+私有状态转移，不能被普通 `ToolCatalog.search`、`tool_search` 或 generic provider schema
+发现；`status`、`read`、`tag_catalog` 才是公开只读/目录工具。原生工具调用直接把分类批次
+作为结构化 `items` 数组写回；旧版 `itemsJSON` 仍可读取。
 V2 是结构化音乐分析索引：固定维度（情绪、场景、人声、质感、风格与
 energy/tempo/acousticness/danceability 数值）保持规范；此外开放语义标签
 （dimension="tag"）由 Agent 自主创建，不设数量上限，质量通过规范化、复用 canonical
@@ -210,8 +221,9 @@ energy/tempo/acousticness/danceability 数值）保持规范；此外开放语�
 ## 持久化、取消与重启
 
 `AgentCoordinator` 只把 Runtime event 映射为 UI。`AgentTaskStore` 持久化 Intent、Goal、
-预算、状态、token、工具步数、已完成动作和无进展计数。App 重启时仍在运行的任务标记
-为 interrupted；已完成副作用不会被自动重放。
+预算、状态、token、工具步数、已完成动作、无进展计数和可信 Stateful Skill 的 compact
+checkpoint。App 重启时仍在运行的任务标记为 interrupted；已完成副作用不会被自动重放，
+恢复时以真实 catalog status 为权威，并从 checkpoint 恢复批次/UI 上下文。
 
 取消从 Coordinator 传入结构化 Task，模型请求和工具执行遵循 Swift Task cancellation。
 任务失败按超时、认证、限流、瞬时网络、服务不可用、配置、响应兼容与永久错误分类，
@@ -225,9 +237,10 @@ token、cookie 和 authorization 参数在日志边界统一脱敏。歌词和�
 
 ## 自动验证
 
-`AgentRuntimeArchitectureTests` 覆盖 Intent、Policy/Scope、越权拒绝、预算、Evidence、
+`AgentRuntimeArchitectureTests` 覆盖 Intent、Policy/Scope、逐操作越权拒绝、预算、Evidence、
 上下文合法 tool-call 配对、失败分类、结构化 reducer、完成条件、显式 UI Intent、索引
-完成事实以及非固定数量队列工作集。该套件当前包含 42 个测试用例（参数化用例展开后）。
+完成事实以及非固定数量队列工作集；`AgentAssistantV2Tests` 还覆盖私有索引工具的
+skill-only 可见性、索引查询不启动构建和 Stateful Skill checkpoint 恢复。
 
 MANUAL-VERIFY: 使用真实 OpenAI 原生接口分别执行播放、歌曲鉴赏、完整索引和取消任务，
 确认 UI 事件映射、原生 tool_call_id 和首次隐私授权与自动测试一致。

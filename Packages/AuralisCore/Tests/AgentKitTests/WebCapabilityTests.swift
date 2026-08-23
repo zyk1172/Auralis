@@ -126,6 +126,7 @@ struct WebCapabilityTests {
         configuration.protocolClasses = [WebFixtureURLProtocol.self]
         let session = URLSession(configuration: configuration)
         let fetchScope = WebFetchURLScope()
+        await fetchScope.beginRun(UUID())
         await fetchScope.record([URL(string: "https://public.example/start")!])
         let service = DuckDuckGoInstantAnswerService(session: session, policy: policy(), fetchScope: fetchScope)
         WebFixtureURLProtocol.handler = { request in
@@ -155,6 +156,7 @@ struct WebCapabilityTests {
         configuration.protocolClasses = [WebFixtureURLProtocol.self]
         let session = URLSession(configuration: configuration)
         let fetchScope = WebFetchURLScope()
+        await fetchScope.beginRun(UUID())
         await fetchScope.record([
             URL(string: "https://public.example/large")!,
             URL(string: "https://public.example/image")!,
@@ -278,6 +280,11 @@ struct WebCapabilityTests {
         await scope.beginRun(secondRun)
         #expect(!(await scope.allows(firstURL)))
 
+        // A delayed result from the previous run must not repopulate the
+        // current scope after the run has changed.
+        await scope.record([firstURL], runID: firstRun)
+        #expect(!(await scope.allows(firstURL)))
+
         let backend = FixtureSearchBackend(capability: .configuredFullSearch, label: "hosted-citation")
         let router = WebCapabilityRouter(configuredFullSearch: backend, fetchScope: scope)
         await router.beginRun(secondRun)
@@ -287,7 +294,7 @@ struct WebCapabilityTests {
             snippet: "citation",
             backend: "provider-hosted",
             sourceType: "citation"
-        )])
+        )], runID: secondRun)
         _ = try await router.fetch(url: secondURL)
         #expect(!(await scope.allows(firstURL)))
         #expect(await scope.allows(secondURL))

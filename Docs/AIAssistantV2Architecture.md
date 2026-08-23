@@ -41,17 +41,19 @@ Auralis/音乐操作或确定性 workflow 才进入任务状态路径。
 
 普通聊天的生产链路是 `AgentCoordinator → ConversationEngine → ToolLoop → Provider / ToolRuntime`，
 不创建 `AgentTaskState`，也不经过 `CompletionEvaluator`。确定性任务才由
-`AgentCoordinator → AgentRuntime → ConversationEngine → ToolLoop → WorkflowEngine` 编排。
-`AgentRunner` 只保留弃用的 source-compatibility forwarding。入口默认是 generic conversation；
+`AgentCoordinator → AgentRuntime → ConversationEngine → ToolLoop → trusted Stateful Skill`
+编排；Recommendation Index V2 的 `RecommendationIndexV2SkillRuntime` 内部再驱动
+`RecommendationIndexWorkflow`。`AgentRunner` 只保留弃用的 source-compatibility forwarding。入口默认是 generic conversation；
 “推荐 / 下载 / 为什么 / 搜索”等通用词只有和明确音乐/Auralis 上下文组合后才会进入 deterministic
 intent，避免把“推荐几本书”或“怎么下载 Python”改写成音乐任务。没有明确音乐命令时，Provider
 不可用不会触发本地音乐搜索。
 
 联网通过可替换的 `AgentWebService` 注入。默认 App 实现是受 HTTPS/私有地址/响应大小约束
-的 DuckDuckGo Instant Answer capability；默认 `web_fetch` 只接受本轮 `web_search` 已返回的
-URL，以降低 URLSession 二次解析造成的 DNS rebinding 风险。生产环境可替换为受控自有后端或
-Provider hosted tool；如需允许任意用户 URL，应由后端负责 IP pinning/proxy，而不能只依赖一次
-`getaddrinfo` 检查。
+的 DuckDuckGo Instant Answer capability；默认 `web_fetch` 只接受当前 run 的 source registry
+已登记的 URL。登记来源包括本地 `web_search`、配置的 search backend 和 Provider hosted
+citations，以降低 URLSession 二次解析造成的 DNS rebinding 风险；旧 run 的迟到写入会被拒绝。
+生产环境可替换为受控自有后端或 Provider hosted tool；如需允许任意用户 URL，应由后端负责
+IP pinning/proxy，而不能只依赖一次 `getaddrinfo` 检查。
 `web_search` 结果为 `WebSource`，会进入 `AgentMessage.webSources`，UI 展示标题、域名、
 摘要与可点击 URL；`web_fetch` 返回带来源 URL 的受限正文。
 
@@ -77,6 +79,6 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 
 测试覆盖 transcript round-trip、Anthropic 并行结果聚合、Responses/Chat wire shape、工具
 发现、严格参数形状、普通聊天路由/降级边界、外部数据副作用隔离、Web SSRF 与已有播放器/
-推荐索引回归。本地验证未启动或运行 Simulator；GitHub CI 另有 iOS Simulator SDK 编译 job，
+推荐索引回归、Stateful Skill checkpoint 和 run-scoped WebSource。本地验证未启动或运行 Simulator；GitHub CI 另有 iOS Simulator SDK 编译 job，
 但不 boot Simulator 或运行 Simulator 测试。真实 Provider、真实联网搜索和真实端到端 UI 仍需
 按环境做手工 smoke test。

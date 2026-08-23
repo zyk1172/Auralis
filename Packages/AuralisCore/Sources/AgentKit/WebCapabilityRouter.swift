@@ -22,7 +22,7 @@ public protocol AgentWebSearchBackend: AgentWebService {
 /// or app-provided `AgentWebService` implementations remain source-compatible.
 public protocol AgentWebRunScopedService: AgentWebService {
     func beginRun(_ runID: UUID) async
-    func register(sources: [WebSource]) async
+    func register(sources: [WebSource], runID: UUID) async
 }
 
 /// Per-conversation capability scope for local web fetches. Search results are
@@ -39,16 +39,25 @@ public actor WebFetchURLScope {
         urls.removeAll(keepingCapacity: true)
     }
 
+    public func currentRunID() -> UUID? { activeRunID }
+
     public func record(_ urls: [URL]) {
+        guard activeRunID != nil else { return }
         self.urls.formUnion(urls.map { WebSource.canonicalURL($0).absoluteString })
     }
 
-    public func register(sources: [WebSource]) {
+    public func record(_ urls: [URL], runID: UUID) {
+        guard activeRunID == runID else { return }
+        record(urls)
+    }
+
+    public func register(sources: [WebSource], runID: UUID) {
+        guard activeRunID == runID else { return }
         record(sources.map(\.url))
     }
 
     public func allows(_ url: URL) -> Bool {
-        _ = activeRunID
+        guard activeRunID != nil else { return false }
         return urls.contains(WebSource.canonicalURL(url).absoluteString)
     }
 }
@@ -101,27 +110,28 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchBacke
         }
     }
 
-    public func register(sources: [WebSource]) async {
-        await fetchScope.register(sources: sources)
+    public func register(sources: [WebSource], runID: UUID) async {
+        await fetchScope.register(sources: sources, runID: runID)
         if let scoped = configuredFullSearch as? any AgentWebRunScopedService {
-            await scoped.register(sources: sources)
+            await scoped.register(sources: sources, runID: runID)
         }
         if let scoped = instantAnswerFallback as? any AgentWebRunScopedService {
-            await scoped.register(sources: sources)
+            await scoped.register(sources: sources, runID: runID)
         }
     }
 
     public func search(query: String, limit: Int) async throws -> WebSearchResult {
+        let runID = await fetchScope.currentRunID()
         if let configuredFullSearch {
             let result = try await configuredFullSearch.search(query: query, limit: limit)
-            await fetchScope.record(result.sources.map(\.url))
+            if let runID { await fetchScope.record(result.sources.map(\.url), runID: runID) }
             return result
         }
         guard let instantAnswerFallback else {
             throw WebCapabilityError.invalidResponse
         }
         let result = try await instantAnswerFallback.search(query: query, limit: limit)
-        await fetchScope.record(result.sources.map(\.url))
+        if let runID { await fetchScope.record(result.sources.map(\.url), runID: runID) }
         return result
     }
 

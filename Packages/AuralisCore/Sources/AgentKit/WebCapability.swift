@@ -241,8 +241,8 @@ public actor DuckDuckGoInstantAnswerService: AgentWebRunScopedService, AgentWebS
         await fetchScope.beginRun(runID)
     }
 
-    public func register(sources: [WebSource]) async {
-        await fetchScope.register(sources: sources)
+    public func register(sources: [WebSource], runID: UUID) async {
+        await fetchScope.register(sources: sources, runID: runID)
     }
 
     private static func configuration(from session: URLSession) -> URLSessionConfiguration {
@@ -257,6 +257,7 @@ public actor DuckDuckGoInstantAnswerService: AgentWebRunScopedService, AgentWebS
     public func search(query: String, limit: Int = 5) async throws -> WebSearchResult {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { throw WebCapabilityError.emptyQuery }
+        let runID = await fetchScope.currentRunID()
         var components = URLComponents(string: "https://api.duckduckgo.com/")
         components?.queryItems = [
             URLQueryItem(name: "q", value: query),
@@ -290,7 +291,7 @@ public actor DuckDuckGoInstantAnswerService: AgentWebRunScopedService, AgentWebS
         }
 
         let sources = await validatedSources(candidates, limit: min(max(limit, 1), 10))
-        await fetchScope.record(sources.map(\.url))
+        if let runID { await fetchScope.record(sources.map(\.url), runID: runID) }
         return WebSearchResult(query: query, sources: sources)
     }
 
