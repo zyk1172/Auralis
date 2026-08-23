@@ -844,7 +844,7 @@ public actor AgentRuntime {
         model: String,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
-        context: AgentRunner.Context,
+        context: ToolLoop.Context,
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
@@ -853,7 +853,7 @@ public actor AgentRuntime {
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
-        progress: @escaping @Sendable (AgentRunner.AgentProgress) async -> Void = { _ in },
+        progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
         let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)

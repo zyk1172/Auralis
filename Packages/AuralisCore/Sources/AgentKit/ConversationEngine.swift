@@ -44,7 +44,7 @@ public struct ConversationEngine: Sendable {
         model: String,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
-        context: AgentRunner.Context,
+        context: ToolLoop.Context,
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
@@ -52,14 +52,14 @@ public struct ConversationEngine: Sendable {
         intent: AgentTaskIntent? = nil,
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
-        toolTimeout: TimeInterval = AgentRunner.toolExecutionTimeout,
+        toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
-        progress: @escaping @Sendable (AgentRunner.AgentProgress) async -> Void = { _ in },
+        progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
-        await AgentRunner.run(
+        await ToolLoop.run(
             userText: userText,
             provider: provider,
             model: model,

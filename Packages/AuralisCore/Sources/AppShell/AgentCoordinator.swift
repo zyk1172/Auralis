@@ -448,7 +448,7 @@ public final class AgentCoordinator: ObservableObject {
             ? model.recentlyPlayedTracks.prefix(5).map(\.title)
             : []
         // 服务器名称 / 目录计数属于运行基础信息（隐私报告未禁此项），最简一致地保留。
-        let context = AgentRunner.Context(
+        let context = ToolLoop.Context(
             serverID: cat.activeServerID,
             serverName: cat.isConnected ? cat.account.displayName : nil,
             serverType: model.serverConnectionState.serverType,
@@ -630,7 +630,7 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     /// 更新任务进度（工具步骤 / 当前阶段 / token 用量）。
-    private func updateTaskProgress(_ progress: AgentRunner.AgentProgress, taskID: UUID, sessionID: UUID) async {
+    private func updateTaskProgress(_ progress: ToolLoop.AgentProgress, taskID: UUID, sessionID: UUID) async {
         taskStore.update(
             taskID,
             step: progress.currentStep,

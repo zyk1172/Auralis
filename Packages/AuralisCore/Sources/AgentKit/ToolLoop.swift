@@ -3,7 +3,7 @@ import Domain
 import Foundation
 import LocalCatalog
 
-/// 受控工具调用 Agent 的执行引擎（permissive direct execution）。
+/// 通用对话工具循环（permissive direct execution）。
 ///
 /// 流程：用户文本 →（可选 LLM 规划）→ 本地工具执行 → 结果回传 → UI 渲染。
 /// 设计准则：已注册的普通音乐工具默认全部允许；Intent 只是路由提示，不是能力边界；
@@ -12,7 +12,7 @@ import LocalCatalog
 /// 硬性约束：每一轮模型请求和每一次工具执行都有独立超时；支持取消与防循环。
 /// 单工具超时/失败回灌结构化结果让模型换策略继续，不终止整项任务；
 /// 不设正常任务累计工具调用上限；noProgress / repeatedToolPattern 只做诊断统计。
-public struct AgentRunner {
+public struct ToolLoop {
     /// 单个工具调用的最长执行时间。超过后取消该调用并结束整项 Agent 任务，
     /// 防止某个网络/系统服务工具卡住而让任务无限悬挂。
     public static let toolExecutionTimeout: TimeInterval = 3 * 60
@@ -140,7 +140,7 @@ public struct AgentRunner {
         intent: AgentTaskIntent? = nil,
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
-        toolTimeout: TimeInterval = AgentRunner.toolExecutionTimeout,
+        toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
