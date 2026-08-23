@@ -1887,20 +1887,34 @@ public final class AuralisAppModel: ObservableObject {
     /// 下一首播放：插入到当前歌曲之后（新队列项；重复歌曲不被移除）。
     public func playNext(globalID: GlobalID) {
         guard let track = track(for: globalID) else { return }
+        _ = playNext(tracks: [track])
+    }
+
+    /// 原子批量下一首：一次修改逻辑队列、一次重建/安装窗口、一次持久化与预加载调度。
+    /// 插入数组保持输入顺序，重复 Track 仍然创建独立 occurrence，且不改变当前 entry。
+    @discardableResult
+    public func playNext(tracks: [Track]) -> Bool {
+        guard !tracks.isEmpty else { return false }
         if largeLogicalContext != nil {
-            _ = mutateLargeLogicalQueue { items, currentToken in
+            let didMutate = mutateLargeLogicalQueue { items, currentToken in
                 guard let currentIndex = items.firstIndex(where: { $0.token == currentToken }) else { return }
                 let nextToken = (items.map(\.token).max() ?? -1) + 1
-                items.insert((token: nextToken, track: track), at: currentIndex + 1)
+                let inserted = tracks.enumerated().map { offset, track in
+                    (token: nextToken + offset, track: track)
+                }
+                items.insert(contentsOf: inserted, at: currentIndex + 1)
             }
+            guard didMutate else { return false }
             schedulePlaybackSessionPersistence()
             schedulePreparedNext()
-            return
+            return true
         }
-        queueStore.playNext(track, currentTrackID: queueIdentity(currentTrack))
+
+        queueStore.playNext(tracks, currentTrackID: queueIdentity(currentTrack))
         syncRemoteCommandCapabilities()
         schedulePlaybackSessionPersistence()
         schedulePreparedNext()
+        return true
     }
 
     public func selectAndPlay(_ track: Track) {

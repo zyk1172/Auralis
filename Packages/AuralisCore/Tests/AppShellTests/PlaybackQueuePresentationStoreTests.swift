@@ -28,6 +28,34 @@ struct PlaybackQueuePresentationStoreTests {
         GlobalID(serverID: serverID, remoteID: id)
     }
 
+    @Test("批量 playNext 保持顺序、重复 occurrence 和当前 entry")
+    func batchPlayNextPreservesOrderAndCurrentOccurrence() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("X"), track("D")], currentTrackID: gid("X"))
+        let currentEntryID = store.currentEntryID
+
+        store.playNext([track("A"), track("A"), track("B")], currentTrackID: gid("X"))
+
+        #expect(store.entries.map { $0.track.id.rawValue } == ["X", "A", "A", "B", "D"])
+        #expect(store.currentEntryID == currentEntryID)
+        #expect(store.currentIndex == 0)
+        #expect(store.entries[1].id != store.entries[2].id)
+    }
+
+    @Test("批量 playNext 可一次插入超过 500 首并保持输入顺序")
+    func batchPlayNextHandlesLargeBatch() {
+        let store = PlaybackQueuePresentationStore()
+        store.replace([track("X"), track("D")], currentTrackID: gid("X"))
+        let inserted = (0..<501).map { track("batch-\($0)") }
+
+        store.playNext(inserted, currentTrackID: gid("X"))
+
+        #expect(store.count == 503)
+        #expect(store.entries.first?.track.id.rawValue == "X")
+        #expect(store.entries.dropFirst().prefix(501).map { $0.track.id.rawValue } == inserted.map { $0.id.rawValue })
+        #expect(store.entries.last?.track.id.rawValue == "D")
+    }
+
     @Test("重复歌曲：play(entryID:) 播第二个 A，advanceForward 正确走到 C（下标不漂移）")
     func advanceFromSecondDuplicateIsIndexBased() {
         let store = PlaybackQueuePresentationStore()

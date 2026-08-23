@@ -65,6 +65,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult { mutation("已加入队列") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { mutation("已设为下一首") }
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult { mutation("已按顺序设为下一首") }
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return mutation("已替换队列") }
     func removeFromQueue(at index: Int) async -> AgentMutationResult { mutation("已移除队列歌曲") }
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { mutation("已调整队列顺序") }

@@ -180,6 +180,22 @@ public final class AuralisAgentBridge: AgentBridge {
         return .confirmed("已插入到当前歌曲之后")
     }
 
+    public func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult {
+        guard !globalIDs.isEmpty else { return .failed("没有要插入的歌曲") }
+
+        // 先完整解析，再触碰队列。这样即使最后一首 ID 无效，也不会留下
+        // “前几首已经插入”的部分 mutation。
+        let tracks = globalIDs.compactMap(resolveTrack)
+        guard tracks.count == globalIDs.count else {
+            return .failed("部分歌曲不存在，未插入队列")
+        }
+
+        guard model.playNext(tracks: tracks) else {
+            return .failed("当前队列没有可插入位置")
+        }
+        return .confirmed("已按顺序插入 \(tracks.count) 首到当前歌曲之后")
+    }
+
     public func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult {
         let tracks = globalIDs.compactMap { resolveTrack($0) }
         guard !tracks.isEmpty, tracks.count == globalIDs.count else { return .failed("部分歌曲不存在，未替换队列") }

@@ -67,6 +67,7 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult { .confirmed("ok") }
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return .confirmed("ok") }
     func removeFromQueue(at index: Int) async -> AgentMutationResult { .confirmed("ok") }
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }

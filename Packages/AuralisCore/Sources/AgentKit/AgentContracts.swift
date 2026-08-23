@@ -163,6 +163,9 @@ public protocol AgentBridge: Sendable {
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval)
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult
     func playNext(globalID: GlobalID) async -> AgentMutationResult
+    /// 原子地把多首歌曲按输入顺序插入当前歌曲之后。
+    /// 生产桥接必须在一次队列 mutation 中完成，不能由调用方逐首拼接。
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult
     func removeFromQueue(at index: Int) async -> AgentMutationResult
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult
@@ -209,6 +212,9 @@ public protocol AgentBridge: Sendable {
 public extension AgentBridge {
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
     func playServerTrack(globalID: GlobalID) async -> Bool { false }
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult {
+        .failed("播放器桥接未实现批量下一首")
+    }
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { .unknown }
     func pause() async -> AgentMutationResult { .failed("播放器桥接未实现暂停") }
     func resume() async -> AgentMutationResult { .failed("播放器桥接未实现继续播放") }

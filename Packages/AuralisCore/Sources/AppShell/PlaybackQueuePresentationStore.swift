@@ -238,11 +238,19 @@ public final class PlaybackQueuePresentationStore: ObservableObject {
 
     /// 下一首播放：插入到当前曲目之后（新 entry，不移除已存在的同名歌曲）。
     public func playNext(_ track: Track, currentTrackID: GlobalID?) {
+        playNext([track], currentTrackID: currentTrackID)
+    }
+
+    /// 原子批量插入到当前曲目之后。数组顺序就是队列顺序，重复歌曲保留为
+    /// 独立 QueueEntry；currentEntryID 在一次 mutation 内重建索引后继续指向
+    /// 原来的 occurrence。
+    public func playNext(_ tracks: [Track], currentTrackID: GlobalID?) {
+        guard !tracks.isEmpty else { return }
         mutate {
             let insertion = min((currentIndex ?? -1) + 1, entries.count)
-            let entry = QueueEntry(track: track)
-            entries.insert(entry, at: insertion)
-            persistenceTrackIDs.insert(track.id.rawValue, at: insertion)
+            let newEntries = tracks.map { QueueEntry(track: $0) }
+            entries.insert(contentsOf: newEntries, at: insertion)
+            persistenceTrackIDs.insert(contentsOf: tracks.map(\.id.rawValue), at: insertion)
             revision &+= 1
             rebuildIndexesImpl()
             updateCurrentIndexImpl(currentTrackID: currentTrackID)

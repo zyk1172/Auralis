@@ -992,21 +992,7 @@ public struct AgentToolkit {
             return mutationToolResult(call, descriptor, await bridge.playNext(globalID: gid))
         case "queue_play_next_many":
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            var completed = 0
-            for gid in gids {
-                let result = await bridge.playNext(globalID: gid)
-                guard result.state == .confirmed else {
-                    return ToolResult(
-                        call: call,
-                        permission: descriptor.permission,
-                        success: false,
-                        summary: "已插入 \(completed)/\(gids.count) 首；第 \(completed + 1) 首结果未知：\(result.summary)",
-                        hasIndeterminateSideEffect: result.state == .indeterminate
-                    )
-                }
-                completed += 1
-            }
-            return .ok(call, descriptor, "已确认按顺序插入 \(completed) 首")
+            return mutationToolResult(call, descriptor, await bridge.playNext(globalIDs: gids))
         case "queue_replace":
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
             return mutationToolResult(call, descriptor, await bridge.replaceQueue(globalIDs: gids))
