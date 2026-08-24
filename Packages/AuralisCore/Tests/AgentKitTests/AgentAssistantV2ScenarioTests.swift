@@ -198,6 +198,15 @@ private actor ScenarioMessageCollector {
         }
     }
 
+    func joinedText() -> String {
+        messages.flatMap { message in
+            message.messages.compactMap { item -> String? in
+                if case let .text(value) = item { return value }
+                return nil
+            }
+        }.joined(separator: "\n")
+    }
+
     func containsError(_ text: String) -> Bool {
         messages.contains { message in
             message.messages.contains { item in
@@ -252,6 +261,14 @@ private func seedScenario(_ store: LocalCatalogStore, tracks: [Track]) async thr
     try await store.completeSync(session, completedAt: .now)
 }
 
+private func seedScenarioArtists(_ store: LocalCatalogStore, serverID: ServerID) async throws {
+    let session = try await store.beginSync(serverID: serverID, mode: .full)
+    try await store.stageArtists([
+        Artist(id: "artist", serverID: serverID, name: "Billie Eilish", albumCount: 1)
+    ], session: session)
+    try await store.completeSync(session, completedAt: .now)
+}
+
 private func scenarioCall(
     id: String,
     name: String,
@@ -302,6 +319,143 @@ func ordinaryConversationIsFirstClass() async throws {
     #expect(bridge.replacedQueues.isEmpty)
     #expect(await stateProbe.count() == 0)
     #expect(provider.requests().count == 1)
+}
+
+@Test("Deterministic collection/status reads bypass planning and execute one canonical tool")
+func deterministicReadFastPathUsesExactlyOneTargetTool() async throws {
+    let cases: [(String, String, [String: AIJSONValue])] = [
+        ("列出我的歌单", "playlist_list", [:]),
+        ("当前正在播放什么", "playback_get_state", [:]),
+        ("播放队列里现在有哪些歌", "queue_get", [:]),
+        ("查看曲库统计", "library_get_summary", [:]),
+        ("列出艺术家", "library_get_artists", [:]),
+        ("列出专辑", "library_get_albums", [:]),
+        ("列出服务器", "server_list", [:]),
+    ]
+
+    for (userText, expectedTool, expectedArguments) in cases {
+        #expect(AgentRequestSemantics.analyze(userText).directReadCapability?.arguments == expectedArguments)
+        let runID = UUID()
+        let provider = ScenarioProvider([
+            scenarioResponse(content: "不应进入 provider 规划")
+        ])
+        let collector = ScenarioMessageCollector()
+        let catalog = try scenarioStore()
+        if expectedTool == "library_get_artists" {
+            try await seedScenarioArtists(catalog, serverID: "scenario-server")
+        }
+
+        await ConversationEngine().run(
+            userText: userText,
+            provider: provider,
+            model: "scenario",
+            bridge: MockAgentBridge(),
+            catalog: catalog,
+            context: expectedTool == "library_get_artists"
+                ? ToolLoop.Context(serverID: "scenario-server")
+                : ToolLoop.Context(),
+            systemService: expectedTool == "server_list" ? ScenarioSystemService() : nil,
+            runID: runID,
+            executionLease: ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1),
+            confirm: { _ in true },
+            emit: { message in await collector.append(message) }
+        )
+
+        #expect(provider.requests().isEmpty, "\(userText) 不应发起模型规划")
+        let metrics = await ToolMetricsCollector.shared.snapshot().filter { $0.runID == runID }
+        #expect(metrics.map(\.toolName) == [expectedTool], "\(userText) 应只执行 \(expectedTool)")
+        #expect(!(await collector.containsError("失败")), "\(userText) 的 direct tool 不应返回失败")
+        if expectedTool == "library_get_artists" {
+            #expect(await collector.containsText("共 1 位艺术家"))
+        }
+    }
+}
+
+@Test("Direct read fast path preserves an explicit list limit")
+func deterministicPlaylistListFastPathPreservesLimit() async throws {
+    let serverID: ServerID = "scenario-server"
+    let catalog = try scenarioStore()
+    for index in 0..<15 {
+        try await catalog.upsertPlaylist(
+            Playlist(
+                id: PlaylistID(rawValue: "playlist-\(index)"),
+                serverID: serverID,
+                name: "Playlist-\(index < 10 ? "0\(index)" : "\(index)")",
+                trackIDs: []
+            ),
+            serverID: serverID,
+            isReadOnly: false
+        )
+    }
+
+    let semantics = AgentRequestSemantics.analyze("列出前 10 个歌单")
+    #expect(semantics.directReadCapability?.toolName == "playlist_list")
+    #expect(semantics.directReadCapability?.arguments == ["limit": .number(10)])
+
+    let runID = UUID()
+    let provider = ScenarioProvider([scenarioResponse(content: "不应进入 provider 规划")])
+    let collector = ScenarioMessageCollector()
+    await ConversationEngine().run(
+        userText: "列出前 10 个歌单",
+        provider: provider,
+        model: "scenario",
+        bridge: MockAgentBridge(),
+        catalog: catalog,
+        context: ToolLoop.Context(serverID: serverID),
+        runID: runID,
+        executionLease: ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1),
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    #expect(provider.requests().isEmpty)
+    let metrics = await ToolMetricsCollector.shared.snapshot().filter { $0.runID == runID }
+    #expect(metrics.map(\.toolName) == ["playlist_list"])
+    let output = await collector.joinedText()
+    #expect(output.components(separatedBy: "Playlist-").count - 1 == 10)
+}
+
+@Test("Library summary counts distinct artist and album IDs")
+func librarySummaryUsesEntityIdentityInsteadOfDisplayNames() async throws {
+    let serverID: ServerID = "summary-server"
+    let tracks = [
+        Track(
+            id: "track-a",
+            serverID: serverID,
+            albumID: "album-a",
+            artistID: "artist-a",
+            title: "同名歌曲 A",
+            artistName: "同名艺术家",
+            albumTitle: "同名专辑",
+            duration: 180
+        ),
+        Track(
+            id: "track-b",
+            serverID: serverID,
+            albumID: "album-b",
+            artistID: "artist-b",
+            title: "同名歌曲 B",
+            artistName: "同名艺术家",
+            albumTitle: "同名专辑",
+            duration: 180
+        ),
+    ]
+    let catalog = try scenarioStore()
+    try await seedScenario(catalog, tracks: tracks)
+
+    let result = await ToolRuntime.execute(
+        ToolCall(name: "library_get_summary"),
+        bridge: MockAgentBridge(),
+        catalog: catalog,
+        serverID: serverID,
+        systemService: nil,
+        executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 1)
+    )
+
+    #expect(result.success)
+    #expect(result.summary.contains("2 首歌曲"))
+    #expect(result.summary.contains("2 位艺术家"))
+    #expect(result.summary.contains("2 张专辑"))
 }
 
 @Test("V2 production loop: native tools unavailable still permits ordinary chat")
@@ -681,6 +835,75 @@ func explicitPlaylistCreateDoesNotAskForConfirmation() async throws {
     #expect(await confirmation.count() == 0)
 }
 
+@Test("missing operation authorization is denied without a second confirmation path")
+func missingMutationOperationIsDeniedWithoutConfirmation() async throws {
+    let serverID: ServerID = "confirmation-server"
+    let playlistID = GlobalID(serverID: serverID, remoteID: "playlist")
+    let trackID = GlobalID(serverID: serverID, remoteID: "track")
+    let store = try scenarioStore()
+    try await seedScenario(
+        store,
+        tracks: [scenarioTrack(serverID: serverID, remoteID: "track", title: "测试歌曲")]
+    )
+    try await store.upsertPlaylist(
+        Playlist(id: "playlist", serverID: serverID, name: "Test", trackIDs: []),
+        serverID: serverID,
+        isReadOnly: false
+    )
+    let bridge = MockAgentBridge(activeServerID: serverID)
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "add-after-confirmation",
+            name: "playlist_add_songs",
+            arguments: [
+                "playlistID": .string(playlistID.description),
+                "trackIDs": .array([.string(trackID.description)]),
+            ]
+        )]),
+        scenarioResponse(content: "已加入歌单。"),
+    ])
+    let confirmation = ScenarioStateProbe()
+    let semantics = AgentRequestSemantics(
+        domain: .playlist,
+        operation: .mutate,
+        isMusicContext: true,
+        isContinuation: false
+    )
+    let lineage = ExecutionLineage(
+        sourceRequest: "处理歌单 Test",
+        authorization: SideEffectAuthorizationContext(
+            sourceRequest: "处理歌单 Test",
+            semantics: semantics
+        )
+    )
+
+    await ConversationEngine().run(
+        userText: "处理歌单 Test",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(serverID: serverID),
+        intent: .playlistManagement,
+        policy: .policy(for: .playlistManagement),
+        executionLineage: lineage,
+        runID: lineage.lineageID,
+        executionLease: ToolExecutionLease(
+            runID: lineage.lineageID,
+            sessionID: UUID(),
+            generation: 1
+        ),
+        confirm: { _ in
+            await confirmation.record()
+            return true
+        },
+        emit: { _ in }
+    )
+
+    #expect(await confirmation.count() == 0)
+    #expect(bridge.addedToPlaylist.isEmpty)
+}
+
 @Test("playlist list after failed create is read-only and cannot inherit mutation authority")
 func playlistListAfterFailedCreateIsReadOnly() async throws {
     let failedCreate = ExecutionLineage.newRequest(text: "创建一个空歌单 Test")
@@ -798,6 +1021,7 @@ func operationAuthorizationIsLeastPrivilege() {
     #expect(SideEffectAuthorizationContext(originalUserRequest: "我不喜欢这个网页的排版").allowedOperations.isEmpty)
     #expect(SideEffectAuthorizationContext(originalUserRequest: "C++ memory leak 是怎么产生的？").allowedOperations.isEmpty)
     #expect(SideEffectAuthorizationContext(originalUserRequest: "skill issue 是什么意思？").allowedOperations.isEmpty)
+    #expect(AgentRequestSemantics.analyze("把这些歌放进歌单 Test").requestedOperations.contains(.playlistAdd))
 }
 
 private actor MutationBoundaryGate {
@@ -949,5 +1173,5 @@ func readOnlyArtistCountCannotTriggerPlayback() async throws {
     #expect(bridge.serverPlayedTracks.isEmpty)
     #expect(bridge.replacedQueues.isEmpty)
     #expect(bridge.clearedQueueCount == 0)
-    #expect(await collector.containsText("1025 位歌手"))
+    #expect(await collector.containsText("1 位艺术家"))
 }

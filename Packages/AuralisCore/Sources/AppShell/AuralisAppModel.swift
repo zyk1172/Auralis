@@ -2732,12 +2732,24 @@ public final class AuralisAppModel: ObservableObject {
     /// 把歌曲追加到服务器歌单，成功后同步更新本地歌单缓存。
     @discardableResult
     public func addToPlaylist(_ playlist: Playlist, track: Track) async -> Bool {
+        await addTracksToPlaylist(playlist, tracks: [track])
+    }
+
+    /// 批量追加歌曲：一次连接器调用、一次本地目录更新和一次持久化。
+    /// 这是 Agent 与 UI 共用的批量提交边界，不能在上层逐首循环。
+    @discardableResult
+    public func addTracksToPlaylist(_ playlist: Playlist, tracks: [Track]) async -> Bool {
         // R06：readonly 歌单禁止修改（服务器权威，UI 也应隐藏编辑入口）。
         guard !playlist.isReadOnly else { return false }
-        let succeeded = await connector.addToPlaylist(serverID: playlist.serverID, playlistID: playlist.id, trackID: track.id)
+        guard !tracks.isEmpty else { return true }
+        let succeeded = await connector.addTracksToPlaylist(
+            serverID: playlist.serverID,
+            playlistID: playlist.id,
+            trackIDs: tracks.map(\.id)
+        )
         if succeeded,
            let index = catalog.playlists.firstIndex(where: { $0.id == playlist.id }) {
-            catalog.playlists[index].trackIDs.append(track.id)
+            catalog.playlists[index].trackIDs.append(contentsOf: tracks.map(\.id))
             catalog.playlists[index].modifiedAt = Date()
         }
         // 曲目关系写回 SQLite，保证 Agent/UI 的 getPlaylist 看到最新顺序。
@@ -2835,18 +2847,15 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 删除歌单（破坏性操作，调用方必须已完成确认）。
     @discardableResult
-    /// 复制歌单（副本命名「原名 副本」），逐首添加到服务器，失败返回 nil。
+    /// 复制歌单（副本命名「原名 副本」），批量追加到服务器，失败返回 nil。
     public func duplicatePlaylist(id: PlaylistID) async -> Playlist? {
         guard let source = catalog.playlists.first(where: { $0.id == id }) else { return nil }
         // R06：readonly 歌单不可作为修改来源，但允许复制其内容为普通副本。
-        guard let copy = await createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return nil }
         let byID = Dictionary(uniqueKeysWithValues: catalog.tracks.map { ($0.id, $0) })
-        var copied = 0
-        for trackID in source.trackIDs {
-            guard let track = byID[trackID] else { continue }
-            if await addToPlaylist(copy, track: track) { copied += 1 }
-        }
-        return copied == source.trackIDs.count ? copy : nil
+        let tracks = source.trackIDs.compactMap { byID[$0] }
+        guard tracks.count == source.trackIDs.count else { return nil }
+        guard let copy = await createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return nil }
+        return await addTracksToPlaylist(copy, tracks: tracks) ? copy : nil
     }
 
     public func deletePlaylist(id: PlaylistID) async -> Bool {
@@ -3365,10 +3374,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 把当前播放队列保存为服务器歌单；失败返回 false。
     public func saveQueueAsPlaylist(named name: String) async -> Bool {
         guard !queueStore.isEmpty, let playlist = await createPlaylist(named: name) else { return false }
-        for track in logicalQueueTracks {
-            _ = await addToPlaylist(playlist, track: track)
-        }
-        return true
+        return await addTracksToPlaylist(playlist, tracks: logicalQueueTracks)
     }
 
     /// 随机模式：从队列里随机挑一首尚未在本轮随机中播放过的非当前队列项。

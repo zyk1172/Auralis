@@ -4,8 +4,8 @@ import Foundation
 import LocalCatalog
 
 /// Agent 工具权限分级。
-/// 已注册工具不会因为权限分级而被拒绝；`requiresConfirmation` 只针对工具元数据
-/// 标出的不可逆高风险操作（例如删除歌单、清空记忆/技能）触发一次用户批准。
+/// 已注册工具不会因为权限分级而被拒绝；是否需要 UI 批准只由
+/// `ToolDescriptor.confirmationPolicy` 决定，不由权限等级推导。
 public enum ToolPermission: String, Codable, Sendable, Hashable {
     /// 只读：查询本地目录、当前播放状态等。
     case readOnly
@@ -195,6 +195,40 @@ public enum AgentSensitiveDataRedactor {
     }
 }
 
+public struct ToolFailureEnvelope: Codable, Sendable, Equatable, Hashable {
+    public enum Phase: String, Codable, Sendable, Equatable {
+        case discovery
+        case inputValidation
+        case entityResolution
+        case authorization
+        case resourceLease
+        case execution
+        case network
+        case outputValidation
+        case timeout
+    }
+
+    public let toolName: String
+    public let phase: Phase
+    public let code: String
+    public let retryable: Bool
+    public let safeDetails: [String: AIJSONValue]
+
+    public init(
+        toolName: String,
+        phase: Phase,
+        code: String,
+        retryable: Bool,
+        safeDetails: [String: AIJSONValue] = [:]
+    ) {
+        self.toolName = toolName
+        self.phase = phase
+        self.code = code
+        self.retryable = retryable
+        self.safeDetails = safeDetails
+    }
+}
+
 /// 工具执行结果。
 public struct ToolResult: Sendable {
     public let call: ToolCall
@@ -213,6 +247,10 @@ public struct ToolResult: Sendable {
     public let hasIndeterminateSideEffect: Bool
     /// 外部 Web 内容只能作为数据回灌 Provider，不能变成系统指令或用户授权。
     public let trustLevel: AIContentTrustLevel
+    /// Structured failure facts are kept separate from the localized summary
+    /// so the model/runtime can decide whether repair or retry is appropriate
+    /// without parsing user-facing prose.
+    public let failure: ToolFailureEnvelope?
 
     public init(
         call: ToolCall,
@@ -224,7 +262,8 @@ public struct ToolResult: Sendable {
         evidence: [AgentEvidence] = [],
         presentationRole: ToolPresentationRole = .none,
         hasIndeterminateSideEffect: Bool = false,
-        trustLevel: AIContentTrustLevel = .trustedTool
+        trustLevel: AIContentTrustLevel = .trustedTool,
+        failure: ToolFailureEnvelope? = nil
     ) {
         self.call = call
         self.permission = permission
@@ -236,6 +275,7 @@ public struct ToolResult: Sendable {
         self.presentationRole = presentationRole
         self.hasIndeterminateSideEffect = hasIndeterminateSideEffect
         self.trustLevel = trustLevel
+        self.failure = failure
     }
 }
 
@@ -389,16 +429,40 @@ public extension AgentBridge {
 /// 需要用户确认的待定操作。
 public struct PendingConfirmation: Codable, Sendable, Identifiable {
     public let id: UUID
+    /// Bind the approval to the originating run/session. Optional values keep
+    /// old persisted confirmations decodable during the migration.
+    public let runID: UUID?
+    public let sessionID: UUID?
+    public let toolCallID: String?
     public let toolName: String
     public let permission: ToolPermission
+    public let operation: ToolAuthorizationOperation?
+    public let reason: String?
     public let title: String
     public let detail: String
     public let call: ToolCall
 
-    public init(id: UUID = UUID(), toolName: String, permission: ToolPermission, title: String, detail: String, call: ToolCall) {
+    public init(
+        id: UUID = UUID(),
+        runID: UUID? = nil,
+        sessionID: UUID? = nil,
+        toolCallID: String? = nil,
+        toolName: String,
+        permission: ToolPermission,
+        operation: ToolAuthorizationOperation? = nil,
+        reason: String? = nil,
+        title: String,
+        detail: String,
+        call: ToolCall
+    ) {
         self.id = id
+        self.runID = runID
+        self.sessionID = sessionID
+        self.toolCallID = toolCallID
         self.toolName = toolName
         self.permission = permission
+        self.operation = operation
+        self.reason = reason
         self.title = title
         self.detail = detail
         self.call = call

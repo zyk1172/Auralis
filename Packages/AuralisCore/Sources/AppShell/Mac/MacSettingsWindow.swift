@@ -232,7 +232,7 @@ public struct MacSettingsWindow: View {
                     ProgressView(value: Double(status.indexedTracks), total: Double(max(status.totalTracks, 1)))
                         .tint(theme.colorTokens.accent.color)
                     LabeledContent(String(localized: "规则版本", bundle: .module), value: status.rulesVersion)
-                    LabeledContent(String(localized: "索引格式", bundle: .module), value: "V2 包 v\(LocalCatalogStore.recommendationIndexPackageFormatVersion)")
+                    LabeledContent(String(localized: "索引格式", bundle: .module), value: "索引包 v\(LocalCatalogStore.recommendationIndexPackageFormatVersion)")
                     HStack {
                         Button(status.pendingTracks == 0 ? String(localized: "检查并更新索引", bundle: .module) : String(localized: "开始/继续全量索引", bundle: .module)) {
                             model.startOrContinueRecommendationIndex()
@@ -302,7 +302,7 @@ public struct MacSettingsWindow: View {
             }
             Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text(String(localized: "将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
+            Text(String(localized: "将删除当前服务器的所有分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
         }
     }
 
@@ -361,7 +361,7 @@ public struct MacSettingsWindow: View {
         }
     }
 
-    /// 导出当前服务器的 V2 索引为 `.auralis-index-v2` 包；只导出已完成且元数据
+    /// 导出当前服务器的推荐索引为 `.auralis-index` 包；只导出已完成且元数据
     /// 匹配当前内容指纹的歌曲，不包含任何凭据、播放地址或私人播放数据。
     private func exportIndex() async {
         guard let serverID = model.catalog.activeServerID else { return }
@@ -378,8 +378,8 @@ public struct MacSettingsWindow: View {
         }
     }
 
-    /// 从用户选择的 `.auralis-index-v2` 文件导入到当前服务器；导入使用 SQLite
-    /// 事务并逐条统计，一首失败不会让整个文件失败。
+    /// 从用户选择的推荐索引文件导入到当前服务器；旧 `.auralis-index-v2` 文件由
+    /// FileDocument 兼容读取，导入使用 SQLite 事务并逐条统计。
     private func importIndex(from url: URL) async {
         guard let serverID = model.catalog.activeServerID else { return }
         let accessing = url.startAccessingSecurityScopedResource()

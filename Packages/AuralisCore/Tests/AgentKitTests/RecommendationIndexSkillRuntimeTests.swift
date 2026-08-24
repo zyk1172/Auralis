@@ -5,13 +5,50 @@ import Foundation
 import LocalCatalog
 import Testing
 
+private actor IndexExecutionGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markEntered() {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilReleased() async {
+        if released { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
-    enum FirstResponse { case valid, malformed }
+    enum FirstResponse: Equatable { case valid, malformed, malformedForever, transientFailures(Int) }
 
     private let lock = NSLock()
     private var firstResponse: FirstResponse
     private var didRespond = false
+    private var remainingTransientFailures: Int
     private var recorded: [AICompletionRequest] = []
+    private let gate: IndexExecutionGate?
 
     let capabilities = ModelCapabilities(
         maxContextTokens: 32_000,
@@ -28,20 +65,38 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
 
     var supportsToolCalling: Bool { true }
 
-    init(firstResponse: FirstResponse = .valid) {
+    init(firstResponse: FirstResponse = .valid, gate: IndexExecutionGate? = nil) {
         self.firstResponse = firstResponse
+        if case let .transientFailures(count) = firstResponse {
+            self.remainingTransientFailures = count
+        } else {
+            self.remainingTransientFailures = 0
+        }
+        self.gate = gate
     }
 
     func testConnection() async -> AIConnectionResult {
         AIConnectionResult(latency: 0, model: "closed-index", message: "ready")
     }
 
-    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+    func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        if let gate {
+            await gate.markEntered()
+            await gate.waitUntilReleased()
+        }
         let shouldReturnMalformed = lock.withLock {
             recorded.append(request)
-            let value = !didRespond && firstResponse == .malformed
+            let value = firstResponse == .malformedForever || (!didRespond && firstResponse == .malformed)
             didRespond = true
             return value
+        }
+        let shouldFailTransiently = lock.withLock {
+            guard remainingTransientFailures > 0 else { return false }
+            remainingTransientFailures -= 1
+            return true
+        }
+        if shouldFailTransiently {
+            throw AIProviderError.transport("temporary index test failure")
         }
         if shouldReturnMalformed {
             return AICompletionResponse(model: request.model, content: #"{"batchID":"truncated""#)
@@ -99,6 +154,36 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+@Test("A single-track malformed batch terminates instead of shrinking forever")
+func recommendationIndexStopsAtMinimumBatchSize() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 1)
+    let provider = ClosedIndexProvider(firstResponse: .malformedForever)
+    let events = ClosedIndexEvents()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
+    #expect(provider.requests().count == 1)
+    #expect(await events.kinds().contains(.failed))
+}
+
 private actor ClosedIndexMessages {
     private var values: [String] = []
 
@@ -113,6 +198,30 @@ private actor ClosedIndexMessages {
 
     func contains(_ needle: String) -> Bool {
         values.contains { $0.contains(needle) }
+    }
+}
+
+private actor ClosedIndexEvents {
+    private var values: [RecommendationIndexExecutionEvent] = []
+
+    func append(_ event: RecommendationIndexExecutionEvent) {
+        values.append(event)
+    }
+
+    func kinds() -> [RecommendationIndexExecutionEvent.Kind] {
+        values.map(\.kind)
+    }
+}
+
+private actor ClosedIndexStates {
+    private var values: [AgentTaskState] = []
+
+    func append(_ state: AgentTaskState) {
+        values.append(state)
+    }
+
+    func last() -> AgentTaskState? {
+        values.last
     }
 }
 
@@ -144,6 +253,7 @@ func recommendationIndexClosedTransformCommits() async throws {
     let (store, serverID) = try await closedIndexStore(trackCount: 3)
     let provider = ClosedIndexProvider()
     let messages = ClosedIndexMessages()
+    let events = ClosedIndexEvents()
     let runID = UUID()
     let lineage = ExecutionLineage.newRequest(text: "构建完整推荐索引")
     let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
@@ -161,7 +271,8 @@ func recommendationIndexClosedTransformCommits() async throws {
         runID: runID,
         executionLease: lease,
         confirm: { _ in true },
-        emit: { await messages.append($0) }
+        emit: { await messages.append($0) },
+        observeRecommendationIndex: { await events.append($0) }
     )
 
     let status = try await store.recommendationIndexStatus(serverID: serverID)
@@ -177,12 +288,30 @@ func recommendationIndexClosedTransformCommits() async throws {
         if case .jsonSchema = $0.outputFormat { return true }
         return false
     })
+    let eventKinds = await events.kinds()
+    for kind in [
+        .routeSelected,
+        .started,
+        .statusLoaded,
+        .batchPrepared,
+        .classificationStarted,
+        .classificationCompleted,
+        .commitStarted,
+        .commitCompleted,
+        .verifyStarted,
+        .verifyCompleted,
+        .completed,
+    ] as [RecommendationIndexExecutionEvent.Kind] {
+        #expect(eventKinds.contains(kind))
+    }
 }
 
-@Test("Malformed classification performs no stale commit and receives a new batch revision")
-func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
-    let (store, serverID) = try await closedIndexStore(trackCount: 9)
-    let provider = ClosedIndexProvider(firstResponse: .malformed)
+@Test("Recommendation Index stops after two commits without pending progress")
+func recommendationIndexStopsOnNoProgress() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 2)
+    let provider = ClosedIndexProvider()
+    let events = ClosedIndexEvents()
+    let states = ClosedIndexStates()
     let runID = UUID()
     let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
 
@@ -199,7 +328,111 @@ func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
         runID: runID,
         executionLease: lease,
         confirm: { _ in true },
-        emit: { _ in }
+        emit: { _ in },
+        state: { await states.append($0) },
+        observeRecommendationIndex: { event in
+            await events.append(event)
+            if event.kind == .commitCompleted {
+                // Simulate a durable writer that reports success but loses the
+                // state before Runtime verification. The guard must stop after
+                // two real commit/verify cycles rather than loop forever.
+                try? await store.clearRecommendationIndex(serverID: serverID)
+            }
+        }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 2)
+    #expect(provider.requests().count == 2)
+    let kinds = await events.kinds()
+    #expect(kinds.filter { $0 == .noProgress }.count == 2)
+    #expect(kinds.contains(.verifyStarted))
+    #expect(kinds.contains(.verifyCompleted))
+    #expect(kinds.contains(.failed))
+    #expect(await states.last()?.facts["recommendation.index.diagnostics"]?.contains("noProgress") == true)
+}
+
+@Test("Recommendation Index exposes live progress before the batch commit and completes after commit")
+func recommendationIndexPublishesLiveExecutionState() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 2)
+    let gate = IndexExecutionGate()
+    let provider = ClosedIndexProvider(gate: gate)
+    let registry = RecommendationIndexExecutionRegistry()
+    let runID = UUID()
+    let sessionID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: sessionID, generation: 1)
+
+    let task = Task {
+        await ConversationEngine().run(
+            userText: "构建完整推荐索引",
+            provider: provider,
+            model: "closed-index",
+            bridge: MockAgentBridge(activeServerID: serverID),
+            catalog: store,
+            context: .init(
+                serverID: serverID,
+                recommendationIndexExecutionRegistry: registry
+            ),
+            intent: .libraryManagement,
+            policy: .policy(for: .libraryManagement),
+            executionLineage: .newRequest(text: "构建完整推荐索引"),
+            runID: runID,
+            executionLease: lease,
+            confirm: { _ in true },
+            emit: { _ in }
+        )
+    }
+
+    await gate.waitUntilEntered()
+    let liveState = await registry.snapshot(serverID: serverID)
+    guard case let .running(snapshot) = liveState else {
+        Issue.record("expected a live Recommendation Index state while the provider is paused")
+        await gate.release()
+        await task.value
+        return
+    }
+    #expect(snapshot.runID == runID)
+    #expect(snapshot.sessionID == sessionID)
+    #expect(snapshot.phase == .classifyingBatch)
+    #expect(snapshot.currentBatchSize > 0)
+    #expect(liveState.userFacingSummary.contains("正在运行"))
+
+    await gate.release()
+    await task.value
+
+    let finalState = await registry.snapshot(serverID: serverID)
+    guard case let .completed(completedRunID, indexedTracks, totalTracks, _) = finalState else {
+        Issue.record("expected the live Recommendation Index state to complete")
+        return
+    }
+    #expect(completedRunID == runID)
+    #expect(indexedTracks == totalTracks)
+    #expect(totalTracks == 2)
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+}
+
+@Test("Malformed classification performs no stale commit and receives a new batch revision")
+func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 9)
+    let provider = ClosedIndexProvider(firstResponse: .malformed)
+    let events = ClosedIndexEvents()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
     )
 
     let requests = provider.requests()
@@ -211,6 +444,44 @@ func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
     #expect(firstJSON["batchID"] as? String != secondJSON["batchID"] as? String)
     #expect((firstJSON["revision"] as? NSNumber)?.uint64Value != (secondJSON["revision"] as? NSNumber)?.uint64Value)
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+    let eventKinds = await events.kinds()
+    #expect(eventKinds.contains(.classificationFailed))
+    #expect(eventKinds.contains(.retrying))
+}
+
+@Test("Recommendation Index retries transient classification failures without changing the closed protocol")
+func recommendationIndexRetriesTransientClassificationFailures() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 3)
+    let provider = ClosedIndexProvider(firstResponse: .transientFailures(2))
+    let events = ClosedIndexEvents()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+    #expect(provider.requests().count >= 3)
+    let eventKinds = await events.kinds()
+    #expect(eventKinds.filter { $0 == .retrying }.count == 2)
+    #expect(!eventKinds.contains(.failed))
+    #expect(provider.requests().allSatisfy { $0.tools?.isEmpty == true })
+    #expect(provider.requests().allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(provider.requests().allSatisfy { $0.toolChoice == nil })
 }
 
 @Test("Stale Recommendation Index envelope is rejected by batch identity")
@@ -246,6 +517,57 @@ func recommendationIndexRejectsStaleEnvelope() throws {
     )
     #expect(throws: RecommendationIndexValidationError.staleBatch) {
         try RecommendationIndexSkillRuntime.validate(stale, for: current)
+    }
+}
+
+@Test("Recommendation Index parser extracts fenced JSON and reports coverage diagnostics")
+func recommendationIndexParserDiagnosticsAreStructured() throws {
+    let first = CatalogTrackLine(
+        id: "server:one", title: "One", artist: "Artist", album: "Album", year: nil,
+        genres: [], language: nil, duration: 180, isFavorite: false, rating: nil,
+        playCount: 0, isDownloaded: false
+    )
+    let second = CatalogTrackLine(
+        id: "server:two", title: "Two", artist: "Artist", album: "Album", year: nil,
+        genres: [], language: nil, duration: 180, isFavorite: false, rating: nil,
+        playCount: 0, isDownloaded: false
+    )
+    let batch = RecommendationIndexPreparedBatch(
+        batchID: UUID(), revision: 3, checkpointGeneration: 2, mode: "full",
+        tracks: [first, second], pendingFixed: 2, pendingSemantic: 0
+    )
+    let valid = RecommendationIndexClassificationEnvelope(
+        batchID: batch.batchID,
+        revision: batch.revision,
+        mode: "full",
+        items: [.init(id: first.id, mode: "full"), .init(id: second.id, mode: "full")]
+    )
+    let validJSON = String(decoding: try JSONEncoder().encode(valid), as: UTF8.self)
+    let parsed = RecommendationIndexClassificationParser.parse(
+        "模型说明：\n```json\n\(validJSON)\n```\n",
+        for: batch
+    )
+    #expect(parsed == .success(valid))
+
+    let incomplete = RecommendationIndexClassificationEnvelope(
+        batchID: batch.batchID,
+        revision: batch.revision,
+        mode: "full",
+        items: [.init(id: first.id, mode: "full")]
+    )
+    let incompleteResult = RecommendationIndexClassificationParser.parse(
+        String(decoding: try JSONEncoder().encode(incomplete), as: UTF8.self),
+        for: batch
+    )
+    switch incompleteResult {
+    case .success:
+        #expect(Bool(false))
+    case let .failure(failure):
+        #expect(failure.stage == .trackCoverage)
+        #expect(failure.missingIDs == [second.id])
+        #expect(failure.batchSize == 2)
+        #expect(failure.rawLength > 0)
+        #expect(failure.compactSummary.contains("missing_ids=\(second.id)"))
     }
 }
 

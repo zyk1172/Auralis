@@ -238,6 +238,27 @@ func recommendationIndexRoundTrip() async throws {
     #expect(try await store.readRecommendationIndex(serverID: serverID, dimension: "texture", value: "钢琴").map(\.track.id) == [firstID])
 }
 
+@Test("Strict Recommendation Index writes reject an invalid item atomically")
+func strictRecommendationIndexWriteIsAtomic() async throws {
+    let store = try makeStore()
+    let serverID: ServerID = "strict-index"
+    try await seed(store, [
+        makeTrack(serverID: serverID, remoteID: "t1", title: "Valid"),
+        makeTrack(serverID: serverID, remoteID: "t2", title: "Invalid"),
+    ])
+    let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
+    let ids = batch.tracks.map(\.id)
+
+    await #expect(throws: RecommendationIndexWriteError.self) {
+        try await store.writeRecommendationIndex([
+            .init(id: ids[0], moods: ["平静"], energy: 3),
+            .init(id: ids[1], moods: ["not-a-canonical-mood"], energy: 3),
+        ], serverID: serverID, requireExact: true)
+    }
+    let status = try await store.recommendationIndexStatus(serverID: serverID)
+    #expect(status.pendingUniqueTracks == 2)
+}
+
 @Test("清空 Recommendation Index V2 只影响当前服务器，不删除歌曲")
 func clearRecommendationIndexIsScopedAndPreservesLibrary() async throws {
     let store = try makeStore()

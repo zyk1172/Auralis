@@ -12,9 +12,9 @@ public enum AgentWorkflowKind: String, Codable, CaseIterable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = raw == "recommendationIndexV2"
-            ? .recommendationIndex
-            : Self(rawValue: raw) ?? .generic
+        self = RecommendationIndexCompatibility.canonicalWorkflowKind(raw)
+            ?? Self(rawValue: raw)
+            ?? .generic
     }
 
     public func encode(to encoder: any Encoder) throws {

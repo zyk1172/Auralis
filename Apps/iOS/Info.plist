@@ -72,9 +72,29 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
+			<string>com.auralis.player.recommendation-index</string>
+			<key>UTTypeDescription</key>
+			<string>Auralis 推荐索引</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>auralis-index</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
 			<string>com.auralis.player.index-v2</string>
 			<key>UTTypeDescription</key>
-			<string>Auralis 推荐索引 V2</string>
+			<string>Auralis 旧版推荐索引</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.json</string>

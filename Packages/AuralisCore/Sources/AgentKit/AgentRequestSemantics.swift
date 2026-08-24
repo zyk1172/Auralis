@@ -1,3 +1,4 @@
+import AIKit
 import Foundation
 
 /// The single semantic result shared by routing, ranking and authorization.
@@ -21,6 +22,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         case download
         case memory
         case server
+        case customTool
     }
 
     public enum Operation: String, Codable, Sendable, Hashable {
@@ -28,6 +30,19 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         case read
         case mutate
         case discover
+    }
+
+    /// A high-confidence local read has one canonical entry point. This drives
+    /// both deterministic routing for the narrow read scenarios and schema
+    /// ranking for less specific follow-ups; ToolRuntime remains the executor.
+    public struct DirectReadCapability: Codable, Sendable, Hashable {
+        public let toolName: String
+        public let arguments: [String: AIJSONValue]
+
+        public init(toolName: String, arguments: [String: AIJSONValue] = [:]) {
+            self.toolName = toolName
+            self.arguments = arguments
+        }
     }
 
     public let domain: Domain
@@ -40,6 +55,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
     public let isMusicAppreciation: Bool
     public let requestedOperations: Set<ToolAuthorizationOperation>
     public let suggestedToolNamespaces: Set<String>
+    public let directReadCapability: DirectReadCapability?
 
     public var isReadOnly: Bool { operation == .read && requestedOperations.isEmpty }
     public var isExplicitMutation: Bool { operation == .mutate || !requestedOperations.isEmpty }
@@ -53,7 +69,8 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         isRecommendationIndexBuild: Bool = false,
         isMusicAppreciation: Bool = false,
         requestedOperations: Set<ToolAuthorizationOperation> = [],
-        suggestedToolNamespaces: Set<String> = []
+        suggestedToolNamespaces: Set<String> = [],
+        directReadCapability: DirectReadCapability? = nil
     ) {
         self.domain = domain
         self.operation = operation
@@ -65,6 +82,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         self.isMusicAppreciation = isMusicAppreciation
         self.requestedOperations = requestedOperations
         self.suggestedToolNamespaces = suggestedToolNamespaces
+        self.directReadCapability = directReadCapability
     }
 
     /// Analyze the current request. A short continuation inherits semantic
@@ -81,10 +99,11 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         let has = { (terms: [String]) in containsAny(value, terms) }
 
+        let quantityQuery = has(["有多少", "多少", "数量", "几位", "几张", "几首歌"])
         let query = has([
             "有哪些", "有什么", "哪些", "列表", "查看", "查询", "列出", "显示", "当前", "现在",
-            "状态", "是什么", "什么", "which", "what", "list", "current", "status",
-        ])
+            "状态", "统计", "概况", "是什么", "什么", "which", "what", "list", "current", "status",
+        ]) || quantityQuery
         let collectionQuery = has(["我的收藏", "收藏里面", "收藏的歌曲", "收藏曲目", "favorite tracks"])
 
         let hasSongQuantity = value.range(
@@ -92,7 +111,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             options: .regularExpression
         ) != nil || has(["几首"])
         let explicitMusicNouns = has([
-            "歌曲", "音乐", "曲库", "音乐库", "找歌", "歌手", "艺人", "专辑", "歌单", "播放列表", "播放队列", "队列", "正在播放", "当前播放", "收听", "听歌", "听了",
+            "歌曲", "音乐", "曲库", "音乐库", "找歌", "歌手", "艺人", "艺术家", "专辑", "歌单", "播放列表", "播放队列", "队列", "正在播放", "当前播放", "收听", "听歌", "听了",
             "这首歌", "首歌", "这些歌", "的歌", "什么歌", "哪些歌", "我的收藏", "收藏里面", "歌词",
             "playlist", "music", "song", "track", "album", "artist", "queue", "lyrics", "playback",
         ]) || hasSongQuantity
@@ -100,7 +119,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         // “播放列表/播放队列/播放状态” contain “播放” but are not
         // playback mutations. Keep the verb signal separate from nouns.
         let barePlaybackVerb = has(["播放"])
-            && !has(["播放列表", "播放队列", "播放状态", "正在播放什么", "当前播放什么"])
+            && !has(["播放列表", "播放队列", "播放状态", "正在播放什么", "当前播放什么", "最近播放", "最近听过", "播放历史"])
         let explicitPlaybackAction = has([
             "先放", "放一首", "放一组", "放几首", "直接放", "给我放", "暂停", "下一首", "上一首", "继续播放", "快进", "快退", "跳转", "循环播放",
             "随机播放", "play", "playback", "pause", "resume", "next track", "previous track",
@@ -111,10 +130,10 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "调整队列", "移动队列", "随机剩余队列", "换成", "换为", "queue_append", "queue_replace", "queue_clear",
         ])
         let explicitPlaylistAction = has([
-            "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单", "删除歌单",
+            "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单", "放到歌单", "放进歌单", "放入歌单", "收进歌单", "删除歌单",
             "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序", "复制歌单", "合并歌单",
             "playlist_create", "playlist_add", "playlist_delete", "playlist_rename",
-        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "添加", "删除", "重命名", "改名", "移除", "调整", "复制", "合并"]))
+        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "添加", "放到", "放进", "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并"]))
 
         let musicAnnotationTarget = has([
             "这首歌", "歌曲", "音乐", "专辑", "歌手", "艺人", "艺术家", "当前播放", "current track", "track", "song", "album", "artist",
@@ -160,6 +179,19 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         ])
         let explicitMemory = memorySave || memoryDelete || memoryRead
 
+        // Custom Tool management is deliberately opt-in. A generic mention
+        // of “tool” must not authorize a builder mutation; only the explicit
+        // builder/doctor vocabulary below enters this domain.
+        let customToolCreate = has(["创建自建工具", "创建自定义工具", "新建自建工具", "tool_builder_create", "工具构建"])
+        let customToolUpdate = has(["更新自建工具", "修改自建工具", "升级自建工具", "tool_builder_update"])
+        let customToolDelete = has(["删除自建工具", "删除自定义工具", "tool_builder_delete"])
+        let customToolEnable = has(["启用自建工具", "打开自建工具", "tool_builder_enable"])
+        let customToolDisable = has(["停用自建工具", "禁用自建工具", "tool_builder_disable"])
+        let customToolRepair = has(["修复自建工具", "修复自定义工具", "tool_repair"])
+        let customToolRead = has(["自建工具列表", "列出自建工具", "查看自建工具", "检查自建工具", "诊断工具", "tool_builder_list", "tool_builder_inspect", "tool_builder_validate", "tool_builder_test", "tool_diagnose"])
+        let explicitCustomTool = customToolCreate || customToolUpdate || customToolDelete
+            || customToolEnable || customToolDisable || customToolRepair || customToolRead
+
         let webContext = has([
             "网页", "文档", "新闻", "互联网", "联网", "网上", "官方文档", "web", "internet", "news", "online",
         ])
@@ -199,9 +231,68 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             || (downloadContext && explicitMusicNouns)
         let musicAppreciation = isMusicContext && has(["鉴赏", "赏析", "乐评", "大众评价", "appreciate"])
 
-        var requested = Set<ToolAuthorizationOperation>()
-
         let playbackQuery = query && has(["正在播放", "当前播放", "播放状态", "播放什么", "播放哪首", "now playing", "playback state"])
+        let librarySummaryQuery = has(["资料库统计", "曲库统计", "音乐库统计", "资料库概况", "曲库概况", "音乐库概况"])
+        let artistListQuery = has(["列出歌手", "歌手列表", "有哪些歌手", "艺人列表", "列出艺人", "有哪些艺人", "艺术家列表", "列出艺术家"])
+            || (has(["列出", "显示", "查看", "获取"]) && has(["歌手", "艺人", "艺术家"]))
+        let albumListQuery = has(["列出专辑", "专辑列表", "有哪些专辑", "album list", "list albums"])
+            || (has(["列出", "显示", "查看", "获取"]) && has(["专辑", "album"]))
+        let directReadTopicCount = [
+            has(["歌单", "播放列表", "playlist"]),
+            has(["播放队列", "队列", "queue"]),
+            playbackQuery,
+            collectionQuery,
+            has(["最近播放", "最近听过", "播放历史", "recent history"]),
+            quantityQuery && has(["歌曲", "歌手", "艺人", "专辑", "歌单", "曲库", "音乐库"]),
+            artistListQuery,
+            albumListQuery,
+            has(["服务器列表", "列出服务器", "有哪些服务器", "已连接服务器", "list servers", "server list"]),
+            librarySummaryQuery
+        ].filter { $0 }.count
+        let isCompoundReadRequest = directReadTopicCount > 1 || has([
+            "后检查", "后查看", "后查询", "后再", "然后", "并检查", "并查看", "并列出", "以及",
+            "同时", "再看看", "再查", "再查看", "再列出", "and then", "after that"
+        ])
+        let requestedLimit = Self.requestedLimit(in: current)
+        let directReadCapability: DirectReadCapability? = {
+            guard query, !isCompoundReadRequest else { return nil }
+            if has(["歌单", "播放列表", "playlist"]) && !explicitPlaylistAction {
+                return Self.directRead("playlist_list", limit: requestedLimit)
+            }
+            if has(["播放队列", "队列", "queue"]) && !explicitQueueAction {
+                return Self.directRead("queue_get")
+            }
+            if playbackQuery && !explicitPlaybackAction {
+                return Self.directRead("playback_get_state")
+            }
+            if collectionQuery {
+                return Self.directRead("library_get_starred")
+            }
+            if has(["最近播放", "最近听过", "播放历史", "recent history"])
+                && !explicitPlaybackAction {
+                return Self.directRead("library_get_recently_played", limit: requestedLimit)
+            }
+            if librarySummaryQuery {
+                return Self.directRead("library_get_summary")
+            }
+            if quantityQuery && has(["歌曲", "歌手", "艺人", "专辑", "歌单", "曲库", "音乐库"]) {
+                return Self.directRead("library_get_summary")
+            }
+            if artistListQuery
+                && !explicitPlaylistAction {
+                return Self.directRead("library_get_artists", limit: requestedLimit)
+            }
+            if albumListQuery && !explicitPlaylistAction {
+                return Self.directRead("library_get_albums", limit: requestedLimit)
+            }
+            if has(["服务器列表", "列出服务器", "有哪些服务器", "已连接服务器", "list servers", "server list"])
+                && !serverMutation {
+                return Self.directRead("server_list")
+            }
+            return nil
+        }()
+
+        var requested = Set<ToolAuthorizationOperation>()
         if explicitPlaybackAction && !playbackQuery {
             if has(["暂停", "pause"]) { requested.insert(.playbackPause) }
             else if has(["下一首", "上一首", "next track", "previous track"]) { requested.insert(.playbackNavigation) }
@@ -230,8 +321,8 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
                 || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建立"])) {
                 requested.insert(.playlistCreate)
             }
-            if has(["加入歌单", "加到歌单", "添加到歌单", "playlist_add"])
-                || (has(["歌单", "playlist", "播放列表"]) && has(["加入", "添加"])) {
+            if has(["加入歌单", "加到歌单", "添加到歌单", "放到歌单", "放进歌单", "放入歌单", "收进歌单", "playlist_add"])
+                || (has(["歌单", "playlist", "播放列表"]) && has(["加入", "添加", "放到", "放进", "放入", "收进"])) {
                 requested.insert(.playlistAdd)
             }
             // “创建一个 N 首歌单” explicitly contains both operations:
@@ -276,8 +367,18 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
+        if customToolCreate { requested.insert(.customToolCreate) }
+        if customToolUpdate { requested.insert(.customToolUpdate) }
+        if customToolEnable { requested.insert(.customToolEnable) }
+        if customToolDisable { requested.insert(.customToolDisable) }
+        if customToolDelete { requested.insert(.customToolDelete) }
+        if customToolRepair { requested.insert(.customToolRepair) }
+
         if explicitMemory {
             return Self(domain: .memory, operation: requested.isEmpty ? .read : .mutate, isMusicContext: isMusicContext, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["memory"])
+        }
+        if explicitCustomTool {
+            return Self(domain: .customTool, operation: requested.isEmpty ? .read : .mutate, isMusicContext: false, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["tool_builder"])
         }
         if webContext && !isMusicContext {
             return Self(domain: .web, operation: .read, isMusicContext: false, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["web"])
@@ -289,10 +390,10 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             return Self(domain: .musicLibrary, operation: indexBuild ? .mutate : .read, isMusicContext: true, isContinuation: continuation, isRecommendationIndex: true, isRecommendationIndexBuild: indexBuild, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
         }
         if serverContext {
-            return Self(domain: .server, operation: serverMutation ? .mutate : .read, isMusicContext: isMusicContext, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["server"])
+            return Self(domain: .server, operation: serverMutation ? .mutate : .read, isMusicContext: isMusicContext, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["server"], directReadCapability: directReadCapability)
         }
         if isMusicContext && (diagnosticContext || statisticsContext) {
-            return Self(domain: .diagnostics, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["catalog", "playback", "server"])
+            return Self(domain: .diagnostics, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["catalog", "playback", "server"], directReadCapability: directReadCapability)
         }
         if downloadContext && isMusicContext {
             return Self(domain: .download, operation: query ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["download", "server", "catalog"])
@@ -303,7 +404,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if recommendationRequest && !explicitPlaylistAction {
                 return Self(domain: .recommendation, operation: .discover, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["catalog", "playback", "playlist", "recommendation"])
             }
-            return Self(domain: .playlist, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["playlist", "catalog"])
+            return Self(domain: .playlist, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["playlist", "catalog"], directReadCapability: directReadCapability)
         }
 
         let queueContext = explicitMusicNouns && has(["队列", "queue", "接下来播放"])
@@ -311,14 +412,14 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             let namespaces = recommendationRequest
                 ? ["playback", "catalog", "recommendation"]
                 : ["playback"]
-            return Self(domain: .queue, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces))
+            return Self(domain: .queue, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces), directReadCapability: directReadCapability)
         }
 
         if explicitPlaybackAction || (explicitMusicNouns && has(["播放"])) {
             let namespaces = recommendationRequest
                 ? ["playback", "catalog", "recommendation"]
                 : ["playback", "catalog"]
-            return Self(domain: .playback, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces))
+            return Self(domain: .playback, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces), directReadCapability: directReadCapability)
         }
         if explicitAnnotationAction {
             return Self(domain: .musicLibrary, operation: .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["annotation", "catalog"])
@@ -328,7 +429,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         }
         if isMusicContext && (genericSearch || query || collectionQuery) {
             let namespaces = collectionQuery ? ["catalog", "server", "annotation"] : ["catalog", "server"]
-            return Self(domain: .musicLibrary, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces))
+            return Self(domain: .musicLibrary, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces), directReadCapability: directReadCapability)
         }
 
         // “搜索胡广生” does not prove either a local-music or public-web
@@ -351,6 +452,30 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
     private static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func directRead(_ toolName: String, limit: Int? = nil) -> DirectReadCapability {
+        let arguments = limit.map { ["limit": AIJSONValue.number(Double($0))] } ?? [:]
+        return DirectReadCapability(toolName: toolName, arguments: arguments)
+    }
+
+    /// Extract an explicit list size without making the direct-read route
+    /// depend on the model. Tool-specific maximums remain enforced by the
+    /// canonical executor.
+    private static func requestedLimit(in text: String) -> Int? {
+        let pattern = #"(?:前|最多|显示|列出|查看|获取|最近播放(?:的)?|最近听过(?:的)?)\s*(?:的\s*)?(\d{1,4})\s*(?:个|位|张|首|条|项)?|(?:^|[^\d])(\d{1,4})\s*(?:个|位|张|首|条|项)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
+        for index in 1..<match.numberOfRanges {
+            let capture = match.range(at: index)
+            guard capture.location != NSNotFound,
+                  let value = Int((text as NSString).substring(with: capture)),
+                  value > 0
+            else { continue }
+            return value
+        }
+        return nil
     }
 
     private static func isContinuation(_ value: String) -> Bool {

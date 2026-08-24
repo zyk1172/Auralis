@@ -117,9 +117,12 @@ public enum AgentHistoryPolicy {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
-        return [
-            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "确认", "好的，就这个",
-        ].contains(normalized)
+        if [
+            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "好的，就这个",
+        ].contains(normalized) {
+            return true
+        }
+        return false
     }
 
     private static func isShortFollowUp(_ text: String) -> Bool {

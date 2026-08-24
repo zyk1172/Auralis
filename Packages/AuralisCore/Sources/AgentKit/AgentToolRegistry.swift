@@ -39,7 +39,7 @@ public enum ToolSideEffectPolicy: String, Codable, Sendable, Hashable {
 /// Least-privilege operation names used by the side-effect boundary.  A broad
 /// `ToolSideEffectPolicy` remains as a compatibility fallback for descriptors
 /// that have not yet declared a more specific operation.
-public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable {
+public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable, CaseIterable {
     case playbackPlay
     case playbackPause
     case playbackNavigation
@@ -79,21 +79,42 @@ public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable {
     case memoryClear
     case skillCreate
     case skillDelete
+    case customToolCreate
+    case customToolUpdate
+    case customToolEnable
+    case customToolDisable
+    case customToolDelete
+    case customToolRepair
+}
+
+/// The authorization result is deliberately typed. A missing operation is
+/// never a textual hint for the model or the user to reinterpret as consent.
+/// The only interactive approval path is `ToolDescriptor.confirmationPolicy`.
+public enum ToolAuthorizationDecision: Sendable, Equatable {
+    case allowed
+    case denied(reason: String)
 }
 
 /// Authorization is derived once from the semantic result at the task/session
 /// boundary. External tool data is never added to this set, so a web page
 /// cannot authorize a later queue, playlist, download, server, playback or
-/// memory mutation. A short continuation is not a new authorization source.
+/// memory mutation. A short continuation is not a new authorization source;
+/// it may only inherit the already-created execution lineage.
 public struct SideEffectAuthorizationContext: Sendable, Hashable {
     public let originalUserRequest: String
     public let explicitlyRequestedEffects: Set<ToolSideEffectPolicy>
     public let allowedOperations: Set<ToolAuthorizationOperation>
+    public let allowedScopes: Set<MutationScope>
 
-    public init(originalUserRequest: String, semantics: AgentRequestSemantics? = nil) {
+    public init(
+        originalUserRequest: String,
+        semantics: AgentRequestSemantics? = nil
+    ) {
         self.originalUserRequest = originalUserRequest
-        let operations = (semantics ?? AgentRequestSemantics.analyze(originalUserRequest)).requestedOperations
+        let resolvedSemantics = semantics ?? AgentRequestSemantics.analyze(originalUserRequest)
+        let operations = resolvedSemantics.requestedOperations
         self.allowedOperations = operations
+        self.allowedScopes = Set(operations.compactMap(Self.scope(for:)))
         self.explicitlyRequestedEffects = Set(operations.compactMap(Self.effect(for:)))
     }
 
@@ -101,25 +122,84 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
         self.init(originalUserRequest: sourceRequest, semantics: semantics)
     }
 
+    private init(
+        originalUserRequest: String,
+        explicitlyRequestedEffects: Set<ToolSideEffectPolicy>,
+        allowedOperations: Set<ToolAuthorizationOperation>,
+        allowedScopes: Set<MutationScope>
+    ) {
+        self.originalUserRequest = originalUserRequest
+        self.explicitlyRequestedEffects = explicitlyRequestedEffects
+        self.allowedOperations = allowedOperations
+        self.allowedScopes = allowedScopes
+    }
+
+    /// A declarative Custom Tool may contain several canonical operations.
+    /// Children inherit only those exact operations. A scope is deliberately
+    /// not expanded into every operation in that scope: authorizing playlist
+    /// add must not authorize playlist rename/remove/delete.
+    public func granting(operations: Set<ToolAuthorizationOperation>) -> SideEffectAuthorizationContext {
+        guard !operations.isEmpty else { return self }
+        let scopes = Set(operations.compactMap(\.mutationScope))
+        let effects = explicitlyRequestedEffects.union(Set(operations.compactMap(Self.effect(for:))))
+        return SideEffectAuthorizationContext(
+            originalUserRequest: originalUserRequest,
+            explicitlyRequestedEffects: effects,
+            allowedOperations: allowedOperations.union(operations),
+            allowedScopes: allowedScopes.union(scopes)
+        )
+    }
+
+    /// Compatibility helper for older trusted callers. New custom-tool code
+    /// must use `granting(operations:)`; this method intentionally grants no
+    /// operations because a broad scope cannot prove least-privilege intent.
+    @available(*, deprecated, message: "Use granting(operations:) for exact operation authorization")
+    public func granting(scopes: Set<MutationScope>) -> SideEffectAuthorizationContext {
+        _ = scopes
+        return self
+    }
+
     public func allows(_ effect: ToolSideEffectPolicy) -> Bool {
         effect == .none || explicitlyRequestedEffects.contains(effect)
     }
 
-    public func allows(_ descriptor: ToolDescriptor) -> Bool {
+    public func allows(_ descriptor: ToolDescriptor, call: ToolCall? = nil) -> Bool {
         guard descriptor.permission != .readOnly else { return true }
+        if descriptor.customToolID != nil {
+            return !descriptor.derivedAuthorizationOperations.isEmpty
+                && descriptor.derivedAuthorizationOperations.isSubset(of: allowedOperations)
+        }
         if let operation = descriptor.authorizationOperation {
+            // Canonical tools must use their exact operation. A broad
+            // mutation scope is only a fallback for declarative/custom tools
+            // that do not have a canonical operation of their own; it must
+            // not turn "favorite this track" into permission to rate or
+            // re-index it.
             return allowedOperations.contains(operation)
         }
         // A model-visible write without an operation declaration is a broken
         // descriptor, not permission to fall back to a broad side-effect
-        // family. Legacy/internal compatibility descriptors may still use the
-        // historical family fallback while they are migrated.
+        // family. Legacy/internal compatibility descriptors and declarative
+        // custom tools may still use the scope fallback while they are
+        // migrated to canonical operations.
         guard descriptor.visibility != .model, descriptor.visibility != .skillOnly else { return false }
+        if let scope = descriptor.mutationScope {
+            return allowedScopes.contains(scope)
+        }
         return allows(descriptor.sideEffectPolicy)
     }
 
+    /// Resolves semantic authorization only. This method never asks for or
+    /// accepts user confirmation. Destructive approval is a separate,
+    /// descriptor-owned UI state handled by ToolLoop/Coordinator.
+    public func decision(for descriptor: ToolDescriptor, call: ToolCall? = nil) -> ToolAuthorizationDecision {
+        guard descriptor.permission != .readOnly else { return .allowed }
+        if allows(descriptor, call: call) { return .allowed }
+        return .denied(reason: denialReason(for: descriptor))
+    }
+
     public func denialReason(for descriptor: ToolDescriptor) -> String {
-        "工具 \(descriptor.name) 的副作用未由用户原始请求明确授权；网页、搜索结果和其他外部数据不能授权此操作。请先向用户确认具体操作。"
+        "工具 \(descriptor.name) 的副作用未由用户原始请求明确授权；网页、搜索结果和其他外部数据不能授权此操作。"
     }
 
     private static func effect(for operation: ToolAuthorizationOperation) -> ToolSideEffectPolicy? {
@@ -138,6 +218,56 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
             return .download
         case .memorySave, .memoryDelete, .memoryClear, .skillCreate, .skillDelete:
             return .memory
+        case .customToolCreate, .customToolUpdate, .customToolEnable, .customToolDisable,
+             .customToolDelete, .customToolRepair:
+            return .memory
+        }
+    }
+
+    private static func scope(for operation: ToolAuthorizationOperation) -> MutationScope? {
+        switch operation {
+        case .playbackPlay, .playbackPause, .playbackNavigation, .playbackSeek, .playbackMode, .playbackTimer:
+            return .playback
+        case .queueAppend, .queuePlayNext, .queueReplace, .queueClear, .queueRemove, .queueMove, .queueShuffle:
+            return .queue
+        case .playlistCreate, .playlistAdd, .playlistRemove, .playlistMove, .playlistRename, .playlistDuplicate, .playlistMerge, .playlistDelete, .playlistSaveQueue:
+            return .playlist
+        case .favoriteSet, .ratingSet, .dislikedSet, .recommendationIndexWrite:
+            return .annotation
+        case .serverSync, .serverSwitch, .serverRemove, .serverConfigure:
+            return .server
+        case .downloadSubmit, .downloadHistoryRemove, .downloadHistoryClean, .offlineDownload:
+            return .download
+        case .memorySave, .memoryDelete, .memoryClear, .skillCreate, .skillDelete:
+            return .memory
+        case .customToolCreate, .customToolUpdate, .customToolEnable, .customToolDisable,
+             .customToolDelete, .customToolRepair:
+            return .customTool
+        }
+    }
+
+}
+
+public extension ToolAuthorizationOperation {
+    var mutationScope: MutationScope? {
+        switch self {
+        case .playbackPlay, .playbackPause, .playbackNavigation, .playbackSeek, .playbackMode, .playbackTimer:
+            return .playback
+        case .queueAppend, .queuePlayNext, .queueReplace, .queueClear, .queueRemove, .queueMove, .queueShuffle:
+            return .queue
+        case .playlistCreate, .playlistAdd, .playlistRemove, .playlistMove, .playlistRename, .playlistDuplicate, .playlistMerge, .playlistDelete, .playlistSaveQueue:
+            return .playlist
+        case .favoriteSet, .ratingSet, .dislikedSet, .recommendationIndexWrite:
+            return .annotation
+        case .serverSync, .serverSwitch, .serverRemove, .serverConfigure:
+            return .server
+        case .downloadSubmit, .downloadHistoryRemove, .downloadHistoryClean, .offlineDownload:
+            return .download
+        case .memorySave, .memoryDelete, .memoryClear, .skillCreate, .skillDelete:
+            return .memory
+        case .customToolCreate, .customToolUpdate, .customToolEnable, .customToolDisable,
+             .customToolDelete, .customToolRepair:
+            return .customTool
         }
     }
 }
@@ -169,8 +299,8 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let namespace: String
     public let group: ToolGroup
     public let permission: ToolPermission
-    /// 仅对明确不可逆的高风险操作触发一次用户批准；普通可逆/可恢复工具仍直执行。
-    public let requiresConfirmation: Bool
+    /// Explicit approval is independent from mutation and authorization.
+    public let confirmationPolicy: ToolConfirmationPolicy
     public let summary: String
     public let parameters: [ToolParameter]
     public let cachePolicy: ToolCachePolicy
@@ -195,12 +325,24 @@ public struct ToolDescriptor: Sendable, Hashable {
     /// Built-in skill identifier required for a `.skillOnly` descriptor.
     /// User-authored prompt skills are never sufficient to unlock it.
     public let requiredSkillID: String?
+    /// Non-nil only for a descriptor materialized from a persisted declarative
+    /// Custom Tool manifest. These fields are derived by the registry and are
+    /// never accepted from the manifest as user-controlled risk claims.
+    public let customToolID: UUID?
+    public let customToolVersion: Int?
+    public let derivedMutationScopes: Set<MutationScope>
+    public let derivedMutationResources: Set<MutationResource>
+    public let derivedAuthorizationOperations: Set<ToolAuthorizationOperation>
+    public let derivedRisk: ToolRisk?
+    /// Canonical descriptors may declare reversibility explicitly. Custom
+    /// descriptors use `derivedRisk`; ordinary writes default to reversible.
+    public let declaredRisk: ToolRisk?
 
     public init(
         name: String,
         group: ToolGroup,
         permission: ToolPermission,
-        requiresConfirmation: Bool = false,
+        confirmationPolicy: ToolConfirmationPolicy = .none,
         summary: String,
         parameters: [ToolParameter] = [],
         cachePolicy: ToolCachePolicy? = nil,
@@ -218,13 +360,20 @@ public struct ToolDescriptor: Sendable, Hashable {
         networkAccess: Bool? = nil,
         aliases: [String] = [],
         visibility: ToolVisibility? = nil,
-        requiredSkillID: String? = nil
+        requiredSkillID: String? = nil,
+        customToolID: UUID? = nil,
+        customToolVersion: Int? = nil,
+        derivedMutationScopes: Set<MutationScope> = [],
+        derivedMutationResources: Set<MutationResource> = [],
+        derivedAuthorizationOperations: Set<ToolAuthorizationOperation> = [],
+        derivedRisk: ToolRisk? = nil,
+        declaredRisk: ToolRisk? = nil
     ) {
         self.name = name
         self.namespace = namespace ?? group.rawValue
         self.group = group
         self.permission = permission
-        self.requiresConfirmation = requiresConfirmation
+        self.confirmationPolicy = confirmationPolicy
         self.summary = summary
         self.parameters = parameters
         self.cachePolicy = cachePolicy ?? (permission == .readOnly ? .task : .none)
@@ -248,6 +397,13 @@ public struct ToolDescriptor: Sendable, Hashable {
         self.aliases = aliases
         self.visibility = visibility ?? Self.defaultVisibility(for: name)
         self.requiredSkillID = requiredSkillID
+        self.customToolID = customToolID
+        self.customToolVersion = customToolVersion
+        self.derivedMutationScopes = derivedMutationScopes
+        self.derivedMutationResources = derivedMutationResources
+        self.derivedAuthorizationOperations = derivedAuthorizationOperations
+        self.derivedRisk = derivedRisk
+        self.declaredRisk = declaredRisk
     }
 
     public func isVisible(toSkillID skillID: String? = nil) -> Bool {
@@ -390,6 +546,12 @@ public struct ToolDescriptor: Sendable, Hashable {
         case "memory_clear": return .memoryClear
         case "skill_create": return .skillCreate
         case "skill_delete": return .skillDelete
+        case "tool_builder_create": return .customToolCreate
+        case "tool_builder_update": return .customToolUpdate
+        case "tool_builder_enable": return .customToolEnable
+        case "tool_builder_disable": return .customToolDisable
+        case "tool_builder_delete": return .customToolDelete
+        case "tool_repair": return .customToolRepair
         default:
             // Keep descriptors in newly-added groups executable while the
             // request analyzer still supplies the broader effect fallback.
@@ -453,11 +615,11 @@ public enum AgentToolRegistry {
                 .init(name: "limit", required: false, description: "返回数量，默认 8，最多 50",
                       schemaJSON: #"{"type":"integer","minimum":1,"maximum":50}"#),
               ],
-              tags: ["discover", "capability", "schema", "工具发现"],
+              tags: ["core", "discover", "capability", "schema", "工具发现"],
               aliases: ["tools_list"]),
         .init(name: "capabilities_get", group: .catalog, permission: .readOnly,
               summary: "查询当前 Provider、原生工具、联网与主要 App 能力摘要",
-              tags: ["capability", "provider", "web", "能力"]),
+              tags: ["core", "capability", "provider", "web", "能力"]),
         .init(name: "memory_search", group: .memory, permission: .readOnly,
               summary: "按关键词搜索长期记忆，只返回与当前问题相关的记忆",
               parameters: [
@@ -474,6 +636,7 @@ public enum AgentToolRegistry {
                       schemaJSON: #"{"type":"integer","minimum":1,"maximum":10}"#),
               ],
               evidencePolicy: .externalAPI,
+              namespace: "web",
               tags: ["web", "search", "internet", "联网"]),
         .init(name: "web_fetch", group: .server, permission: .readOnly,
               summary: "读取本轮 web_search 已返回的 HTTPS 网页正文摘要；不会把凭据带入请求",
@@ -481,6 +644,7 @@ public enum AgentToolRegistry {
                 .init(name: "url", required: true, description: "本轮 web_search 返回的 HTTPS URL"),
               ],
               evidencePolicy: .externalAPI,
+              namespace: "web",
               tags: ["web", "fetch", "internet", "网页"]),
         .init(name: "library_resolve_entity", group: .catalog, permission: .readOnly,
               summary: "按自然语言解析歌曲、专辑、艺术家或歌单，并返回真实 Global ID",
@@ -615,15 +779,18 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "name", required: true, description: "新歌单名称"),
                            .init(name: "sourceIDs", required: true, description: "源歌单 GlobalPlaylistID 数组",
                                  schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)]),
-        .init(name: "playlist_delete", group: .playlist, permission: .destructive, requiresConfirmation: true, summary: "删除歌单（不可逆，需要用户批准）",
-              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "playlist_delete", group: .playlist, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除歌单不可逆，且不会自动生成恢复副本"),
+              summary: "删除歌单（不可逆，需要用户批准）",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")],
+              declaredRisk: .irreversibleDelete),
         .init(name: "rating_set", group: .annotation, permission: .reversible, summary: "设置单曲评分（value 0 表示清除）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID"),
                            .init(name: "value", required: true, description: "评分 1-5；0 表示清除评分",
                                  schemaJSON: #"{"type":"integer","minimum":0,"maximum":5}"#)]),
         .init(name: "server_switch", group: .server, permission: .reversible, summary: "切换服务器",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
-        .init(name: "server_remove", group: .server, permission: .destructive, summary: "删除服务器（仅本地清理）",
+        .init(name: "server_remove", group: .server, permission: .reversible, summary: "删除服务器（仅本地清理）",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
 
         // MARK: Playback
@@ -703,8 +870,11 @@ public enum AgentToolRegistry {
         .init(name: "mergePlaylists", group: .playlist, permission: .reversible, summary: "合并歌单",
               parameters: [.init(name: "sourceIDs", required: true, description: "逗号分隔的 GlobalPlaylistID"),
                            .init(name: "name", required: true, description: "新歌单名称")]),
-        .init(name: "deletePlaylist", group: .playlist, permission: .destructive, requiresConfirmation: true, summary: "删除歌单（不可逆，需要用户批准）",
-              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "deletePlaylist", group: .playlist, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除歌单不可逆，且不会自动生成恢复副本"),
+              summary: "删除歌单（不可逆，需要用户批准）",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")],
+              declaredRisk: .irreversibleDelete),
 
         // MARK: Annotation
         .init(name: "likeTrack", group: .annotation, permission: .reversible, summary: "收藏单曲",
@@ -739,13 +909,13 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
         .init(name: "refreshLibrary", group: .server, permission: .reversible, summary: "刷新本地目录"),
         .init(name: "getSyncStatus", group: .server, permission: .readOnly, summary: "获取同步状态"),
-        .init(name: "removeServer", group: .server, permission: .destructive, summary: "删除服务器（仅本地清理）",
+        .init(name: "removeServer", group: .server, permission: .reversible, summary: "删除服务器（仅本地清理）",
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
 
         // MARK: 第一阶段统一命名工具（v2 工具集）
 
         // App / 设备状态
-        .init(name: "app_get_context", group: .catalog, permission: .readOnly, summary: "获取 App 上下文（页面/服务器/当前歌曲/播放状态/网络）"),
+        .init(name: "app_get_context", group: .catalog, permission: .readOnly, summary: "获取 App 上下文（页面/服务器/当前歌曲/播放状态/网络）", tags: ["core", "context", "app"]),
         .init(name: "app_open_page", group: .catalog, permission: .readOnly, summary: "打开指定页面",
               parameters: [.init(name: "page", required: true, description: "首页/音乐库/搜索/AI助手/设置/当前播放/歌词/播放队列/下载管理/服务器管理")]),
         .init(name: "app_get_feature_status", group: .catalog, permission: .readOnly, summary: "查询后台播放/Siri/快捷指令/本地网络等能力状态"),
@@ -787,13 +957,13 @@ public enum AgentToolRegistry {
                 .init(name: "limit", required: false, description: "返回数量，默认 100，最多 500"),
               ], maxResultCharacters: ContextManager.maxIndexCharacters),
         .init(name: "library_index_status", group: .catalog, permission: .readOnly, summary: "查看推荐索引的总数、已完成和待分类数量",
-              maxResultCharacters: 24_000, aliases: [RecommendationIndexCompatibility.legacyStatusTool]),
+              maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "status", "read"], aliases: [RecommendationIndexCompatibility.legacyStatusTool]),
         .init(name: "library_index_read", group: .catalog, permission: .readOnly, summary: "读取已完成的推荐索引条目及分类标签，可按维度和标签筛选",
               parameters: [
                 .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability/tag"),
                 .init(name: "value", required: false, description: "要匹配的标签值，如 通勤、深夜、平静"),
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
-              ], maxResultCharacters: 24_000, aliases: [RecommendationIndexCompatibility.legacyReadTool]),
+              ], maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "read", "catalog"], aliases: [RecommendationIndexCompatibility.legacyReadTool]),
         .init(name: "recommendation_index_commit", group: .catalog, permission: .reversible,
               summary: "由 Recommendation Index Runtime 提交已验证的当前批次分类；模型不可见",
               parameters: [
@@ -832,8 +1002,17 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "albumID", required: true, description: "GlobalAlbumID")]),
         .init(name: "library_get_artist", group: .catalog, permission: .readOnly, summary: "获取艺术家详情",
               parameters: [.init(name: "artistID", required: true, description: "GlobalArtistID")]),
+        .init(name: "library_get_artists", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的艺术家",
+              parameters: [.init(name: "limit", required: false, description: "最多返回多少位艺术家，默认 100，最大 500")],
+              tags: ["catalog", "artists", "list", "read"]),
+        .init(name: "library_get_albums", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的专辑",
+              parameters: [.init(name: "limit", required: false, description: "最多返回多少张专辑，默认 100，最大 500")],
+              tags: ["catalog", "albums", "list", "read"]),
         .init(name: "library_get_playlist", group: .catalog, permission: .readOnly, summary: "获取歌单详情",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "playlist_list", group: .playlist, permission: .readOnly, summary: "列出当前音乐服务器的歌单（只读）",
+              parameters: [.init(name: "limit", required: false, description: "最多返回多少个歌单，默认 100，最大 100")],
+              tags: ["playlist", "list", "query", "read", "catalog"], aliases: ["listPlaylists"]),
         .init(name: "library_get_recently_added", group: .catalog, permission: .readOnly, summary: "获取最近添加的歌曲",
               parameters: [
                 .init(name: "days", required: false, description: "最近 N 天，默认 30"),
@@ -999,6 +1178,53 @@ public enum AgentToolRegistry {
         .init(name: "diagnostics_get_recent_errors", group: .catalog, permission: .readOnly, summary: "获取最近脱敏错误记录",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 20")]),
 
+        // MARK: Declarative Custom Tool builder / doctor
+        .init(name: "tool_builder_list", group: .memory, permission: .readOnly,
+              summary: "列出已保存的声明式自建工具及版本状态",
+              namespace: "tool_builder", tags: ["core", "custom", "tool_builder", "list"]),
+        .init(name: "tool_builder_inspect", group: .memory, permission: .readOnly,
+              summary: "查看自建工具的 manifest、schema 和当前版本",
+              parameters: [.init(name: "tool", required: true, description: "自建工具名称或 UUID")],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "inspect"]),
+        .init(name: "tool_builder_create", group: .memory, permission: .reversible,
+              summary: "创建一个声明式自建工具；只能组合已有 canonical 工具或安全网页读取",
+              parameters: [.init(name: "manifest", required: true, description: "CustomToolManifest JSON object", schemaJSON: #"{"type":"object","additionalProperties":true}"#)],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "create"]),
+        .init(name: "tool_builder_update", group: .memory, permission: .reversible,
+              summary: "更新自建工具并生成新版本；旧版本保留用于回滚",
+              parameters: [.init(name: "manifest", required: true, description: "CustomToolManifest JSON object", schemaJSON: #"{"type":"object","additionalProperties":true}"#)],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "update"]),
+        .init(name: "tool_builder_validate", group: .memory, permission: .readOnly,
+              summary: "校验自建工具 schema、子工具、绑定和派生权限",
+              parameters: [.init(name: "manifest", required: false, description: "待校验 manifest；省略时检查已保存工具", schemaJSON: #"{"type":"object","additionalProperties":true}"#), .init(name: "tool", required: false, description: "已保存工具名称")],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "validate"]),
+        .init(name: "tool_builder_test", group: .memory, permission: .readOnly,
+              summary: "对自建工具做不产生副作用的 dry-run，报告派生风险、scope 和步骤",
+              parameters: [.init(name: "tool", required: true, description: "自建工具名称")],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "dry-run"]),
+        .init(name: "tool_builder_enable", group: .memory, permission: .reversible,
+              summary: "启用一个已保存的自建工具",
+              parameters: [.init(name: "tool", required: true, description: "自建工具名称")],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "enable"]),
+        .init(name: "tool_builder_disable", group: .memory, permission: .reversible,
+              summary: "停用一个已保存的自建工具",
+              parameters: [.init(name: "tool", required: true, description: "自建工具名称")],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "disable"]),
+        .init(name: "tool_builder_delete", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除自建工具不可逆，且不会自动生成恢复副本"),
+              summary: "删除一个已保存的自建工具（不可逆，需要 UI 批准）",
+              parameters: [.init(name: "tool", required: true, description: "自建工具名称")],
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "delete"],
+              declaredRisk: .irreversibleDelete),
+        .init(name: "tool_diagnose", group: .catalog, permission: .readOnly,
+              summary: "诊断工具定义、参数 schema、执行器和最近一次结构化失败",
+              parameters: [.init(name: "toolName", required: true, description: "canonical 工具名")],
+              namespace: "tool_builder", tags: ["custom", "diagnostics", "tool_doctor"]),
+        .init(name: "tool_repair", group: .memory, permission: .reversible,
+              summary: "应用经过版本校验的自建工具修复 proposal；不能修改内建 Swift 工具",
+              parameters: [.init(name: "proposal", required: true, description: "ToolRepairProposal JSON object", schemaJSON: #"{"type":"object","additionalProperties":true}"#)],
+              namespace: "tool_builder", tags: ["custom", "tool_repair"]),
+
         // MARK: 记忆与技能
         .init(name: "memory_save", group: .memory, permission: .reversible, summary: "记住关于主人的一条信息（跨会话有效）",
               parameters: [
@@ -1006,9 +1232,14 @@ public enum AgentToolRegistry {
                 .init(name: "value", required: true, description: "要记住的内容"),
               ]),
         .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
-        .init(name: "memory_delete", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "删除一条记忆（不可逆，需要用户批准）",
-              parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")]),
-        .init(name: "memory_clear", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "清空全部记忆（不可逆，需要用户批准）"),
+        .init(name: "memory_delete", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除记忆不可逆，且不会自动生成恢复副本"),
+              summary: "删除一条记忆（不可逆，需要用户批准）",
+              parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")],
+              declaredRisk: .irreversibleDelete),
+        .init(name: "memory_clear", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "清空全部记忆不可逆，且不会自动生成恢复副本"),
+              summary: "清空全部记忆（不可逆，需要用户批准）", declaredRisk: .irreversibleDelete),
         .init(name: "skill_create", group: .memory, permission: .reversible, summary: "创建一段可复用指令（skill 文件），之后可读取使用",
               parameters: [
                 .init(name: "name", required: true, description: "技能名，简短英文或中文"),
@@ -1017,14 +1248,131 @@ public enum AgentToolRegistry {
         .init(name: "skill_list", group: .memory, permission: .readOnly, summary: "查看已创建的技能列表"),
         .init(name: "skill_read", group: .memory, permission: .readOnly, summary: "读取某个技能的完整指令",
               parameters: [.init(name: "name", required: true, description: "技能名")]),
-        .init(name: "skill_delete", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "删除一个技能（不可逆，需要用户批准）",
-              parameters: [.init(name: "name", required: true, description: "技能名")]),
+        .init(name: "skill_delete", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除技能不可逆，且不会自动生成恢复副本"),
+              summary: "删除一个技能（不可逆，需要用户批准）",
+              parameters: [.init(name: "name", required: true, description: "技能名")],
+              declaredRisk: .irreversibleDelete),
 
     ]
 
+    /// Canonical definition view. Metadata and executable behavior are now
+    /// published together. Existing built-in implementations are wrapped by
+    /// an explicit compatibility executor while domain executors migrate out
+    /// of `AgentToolkit`; new tools must provide a closure here rather than a
+    /// second selector or executor registry.
+    public static let definitions: [ToolDefinition] = all.map { descriptor in
+        let executorKind: ToolExecutorKind
+        if descriptor.requiredSkillID != nil || descriptor.name == "recommendation_index_commit" {
+            executorKind = .recommendationSkill
+        } else if descriptor.name == "tool_search" || descriptor.name == "capabilities_get" {
+            executorKind = .catalog
+        } else if descriptor.name == "web_search" || descriptor.name == "web_fetch" {
+            executorKind = .web
+        } else if SystemToolNames.contains(descriptor.name) {
+            executorKind = .systemService
+        } else if descriptor.visibility == .legacyOnly {
+            executorKind = .legacyCompatibility
+        } else {
+            executorKind = .agentBridge
+        }
+        return ToolDefinition(descriptor: descriptor, executorKind: executorKind) { context, call in
+            await Self.executeLegacy(call, descriptor: descriptor, context: context)
+        }
+    }
+
+    /// Resolve a canonical alias before a legacy descriptor with the same
+    /// exact name. This makes compatibility names such as `listPlaylists`
+    /// execute through the canonical `playlist_list` metadata and executor.
+    private static func canonicalAliasDescriptor(
+        for name: String,
+        in descriptors: [ToolDescriptor]
+    ) -> ToolDescriptor? {
+        descriptors.first {
+            $0.visibility != .legacyOnly && $0.aliases.contains(name)
+        }
+    }
+
     public static func descriptor(for name: String) -> ToolDescriptor? {
-        all.first { $0.name == name }
+        canonicalAliasDescriptor(for: name, in: all)
+            ?? all.first { $0.name == name }
             ?? all.first { $0.aliases.contains(name) }
+    }
+
+    public static func definition(for name: String) -> ToolDefinition? {
+        definitions.first {
+            $0.descriptor.visibility != .legacyOnly
+                && $0.descriptor.aliases.contains(name)
+        }
+        ?? definitions.first { $0.descriptor.name == name }
+        ?? definitions.first { $0.descriptor.aliases.contains(name) }
+    }
+
+    public static func coverageAudit() -> ToolCoverageAudit {
+        var issues: [ToolCoverageIssue] = []
+        var names = Set<String>()
+        var aliasOwners: [String: [String]] = [:]
+        let descriptors = definitions.map(\.descriptor)
+        let canonicalNames = Set(
+            descriptors
+                .filter { $0.visibility != .legacyOnly }
+                .map(\.name)
+        )
+        for definition in definitions {
+            let descriptor = definition.descriptor
+            if !names.insert(descriptor.name).inserted {
+                issues.append(.duplicateCanonicalName(descriptor.name))
+            }
+            if descriptor.permission != .readOnly {
+                if descriptor.visibility == .model, descriptor.authorizationOperation == nil {
+                    issues.append(.modelMutationMissingOperation(descriptor.name))
+                }
+                if descriptor.mutationScope == nil {
+                    issues.append(.modelMutationMissingScope(descriptor.name))
+                }
+            }
+            if descriptor.risk == .irreversibleDelete,
+               !descriptor.confirmationPolicy.requiresExplicitUserApproval {
+                issues.append(.irreversibleDeleteMissingApproval(descriptor.name))
+            }
+            switch definition.executorKind {
+            case .catalog, .web, .systemService, .agentBridge, .recommendationSkill, .legacyCompatibility:
+                break
+            }
+            for alias in descriptor.aliases {
+                if alias.isEmpty {
+                    issues.append(.emptyAlias(target: descriptor.name))
+                    continue
+                }
+                if !Self.isValidAlias(alias) {
+                    issues.append(.invalidAlias(alias: alias, target: descriptor.name))
+                }
+                // A legacy exact name is an allowed compatibility target;
+                // another canonical name is an accidental collision.
+                if alias == descriptor.name || canonicalNames.contains(alias) {
+                    issues.append(.aliasCanonicalConflict(alias: alias, target: descriptor.name))
+                }
+                aliasOwners[alias, default: []].append(descriptor.name)
+            }
+        }
+
+        for (alias, owners) in aliasOwners {
+            let uniqueOwners = Array(Set(owners)).sorted()
+            if owners.count > 1 {
+                issues.append(.duplicateAlias(alias: alias, targets: uniqueOwners))
+            }
+            guard let expected = uniqueOwners.first else { continue }
+            let actual = Self.descriptor(for: alias)?.name
+            if actual != expected {
+                issues.append(.aliasLookupMismatch(alias: alias, expected: expected, actual: actual))
+            }
+        }
+        return ToolCoverageAudit(issues: issues)
+    }
+
+    private static func isValidAlias(_ alias: String) -> Bool {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-.="))
+        return alias.unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
     /// 元数据查找与执行的唯一公开入口。调用方无需再判断系统工具或旧工具分支。
@@ -1038,26 +1386,130 @@ public enum AgentToolRegistry {
         allowsLyrics: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
         webService: (any AgentWebService)? = nil,
-        activeSkillID: String? = nil
+        activeSkillID: String? = nil,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
+        executionContext: ToolExecutorContext? = nil
     ) async -> ToolResult {
-        guard let descriptor = descriptor(for: incomingCall.name) else {
+        guard let definition = definition(for: incomingCall.name) else {
+            if let executionContext,
+               let customDescriptor = await executionContext.customToolRegistry.descriptor(named: incomingCall.name) {
+                return await executionContext.customToolRegistry.execute(
+                    incomingCall,
+                    descriptor: customDescriptor,
+                    context: executionContext
+                )
+            }
             return ToolResult(
                 call: incomingCall,
                 permission: .readOnly,
                 success: false,
-                summary: "未知工具：\(incomingCall.name)"
+                summary: "未知工具：\(incomingCall.name)",
+                failure: ToolFailureEnvelope(
+                    toolName: incomingCall.name,
+                    phase: .discovery,
+                    code: "unknown_tool",
+                    retryable: false
+                )
             )
         }
-        let call = incomingCall.name == descriptor.name
-            ? incomingCall
-            : ToolCall(name: descriptor.name, arguments: incomingCall.arguments)
+        let descriptor = definition.descriptor
+        // Canonical aliases own the resolved metadata. If the incoming name
+        // is also a retained legacy exact descriptor, keep that spelling in
+        // the result for source compatibility; the canonical descriptor still
+        // controls permission and execution.
+        let call: ToolCall = if all.contains(where: {
+            $0.name == incomingCall.name && $0.visibility == .legacyOnly
+        }) {
+            incomingCall
+        } else if incomingCall.name == descriptor.name {
+            incomingCall
+        } else {
+            ToolCall(name: descriptor.name, arguments: incomingCall.arguments)
+        }
+        let context = executionContext ?? ToolExecutorContext(
+            bridge: bridge,
+            catalog: catalog,
+            serverID: serverID,
+            systemService: systemService,
+            externalMusicService: externalMusicService,
+            allowsLyrics: allowsLyrics,
+            providerCapabilities: providerCapabilities,
+            webService: webService,
+            authorizationContext: nil,
+            activeSkillID: activeSkillID,
+            executionAuthority: nil,
+            executionLease: ToolExecutionLease(
+                runID: UUID(),
+                sessionID: UUID(),
+                generation: 0
+            ),
+            resourceLeaseRegistry: MutationResourceLeaseRegistry(),
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
+        )
+        return await definition.executor(context, call)
+    }
 
-        switch call.name {
+    /// Compatibility dispatcher for built-in tools. It is intentionally not
+    /// the public selection/execution API; `ToolDefinition.executor` is the
+    /// canonical entry point above. Keeping this method private to the
+    /// registry makes the migration auditable and prevents callers from
+    /// maintaining another switch of their own.
+    static func executeLegacy(
+        _ call: ToolCall,
+        descriptor: ToolDescriptor,
+        context: ToolExecutorContext
+    ) async -> ToolResult {
+        let providerCapabilities = context.providerCapabilities
+        let webService = context.webService
+        let systemService = context.systemService
+        let activeSkillID = context.activeSkillID
+        let externalMusicService = context.externalMusicService
+        let allowsLyrics = context.allowsLyrics
+        let bridge = context.bridge
+        let catalog = context.catalog
+        let serverID = context.serverID
+        let recommendationIndexExecutionRegistry = context.recommendationIndexExecutionRegistry
+        let incomingCall = call
+        let canonicalDescriptor = descriptor
+        // Metadata lookup gives a canonical descriptor precedence over a
+        // legacy exact descriptor with the same spelling. Preserve that
+        // legacy spelling in the actual call, however, so compatibility
+        // callers retain their result name while the canonical descriptor
+        // still supplies permission/schema/executor metadata.
+        let canonicalCall: ToolCall = if all.contains(where: {
+            $0.name == incomingCall.name && $0.visibility == .legacyOnly
+        }) {
+            incomingCall
+        } else if incomingCall.name == canonicalDescriptor.name {
+            incomingCall
+        } else {
+            ToolCall(name: canonicalDescriptor.name, arguments: incomingCall.arguments)
+        }
+
+        if canonicalDescriptor.customToolID != nil {
+            return await context.customToolRegistry.execute(
+                canonicalCall,
+                descriptor: canonicalDescriptor,
+                context: context
+            )
+        }
+        if canonicalCall.name.hasPrefix("tool_builder_")
+            || canonicalCall.name == "tool_diagnose"
+            || canonicalCall.name == "tool_repair" {
+            return await context.customToolRegistry.executeBuilder(
+                canonicalCall,
+                descriptor: canonicalDescriptor,
+                context: context
+            )
+        }
+
+        switch canonicalCall.name {
         case "tool_search":
-            let query = call.optionalString("query") ?? ""
-            let namespace = call.optionalString("namespace")
-            let limit = min(max(Int(call.optionalString("limit") ?? "8") ?? 8, 1), 50)
-            let entries = ToolCatalog().search(query: query, namespace: namespace, limit: limit, activeSkillID: activeSkillID)
+            let query = canonicalCall.optionalString("query") ?? ""
+            let namespace = canonicalCall.optionalString("namespace")
+            let limit = min(max(Int(canonicalCall.optionalString("limit") ?? "8") ?? 8, 1), 50)
+            let entries = ToolCatalog(descriptors: context.availableToolDescriptors)
+                .search(query: query, namespace: namespace, limit: limit, activeSkillID: activeSkillID)
             let text = entries.isEmpty
                 ? "未找到匹配工具。可以换一个能力描述、工具名或命名空间再搜索。"
                 : entries.map { entry in
@@ -1067,7 +1519,7 @@ public enum AgentToolRegistry {
                     ].compactMap { $0 }.joined(separator: " · ")
                     return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）"
                 }.joined(separator: "\n")
-            return .ok(call, descriptor, "发现 \(entries.count) 个工具", .text(text))
+            return .ok(canonicalCall, canonicalDescriptor, "发现 \(entries.count) 个工具", .text(text))
         case "capabilities_get":
             let capabilities = providerCapabilities ?? .conservative
             let mode = capabilities.toolMode.rawValue
@@ -1084,53 +1536,53 @@ public enum AgentToolRegistry {
                 "上下文约 \(capabilities.maxContextTokens) tokens · 输出约 \(capabilities.maxOutputTokens) tokens",
                 "联网能力：\(webText.isEmpty ? "未配置" : webText)",
             ].joined(separator: "\n")
-            return .ok(call, descriptor, "已读取当前能力摘要", .text(text))
+            return .ok(canonicalCall, canonicalDescriptor, "已读取当前能力摘要", .text(text))
         case "web_search":
             guard let webService else {
-                return .fail(call, descriptor, "联网能力未配置；当前 Provider 也没有托管搜索能力。")
+                return .fail(canonicalCall, canonicalDescriptor, "联网能力未配置；当前 Provider 也没有托管搜索能力。")
             }
             do {
-                let query = call.optionalString("query") ?? ""
-                let limit = min(max(Int(call.optionalString("limit") ?? "5") ?? 5, 1), 10)
+                let query = canonicalCall.optionalString("query") ?? ""
+                let limit = min(max(Int(canonicalCall.optionalString("limit") ?? "5") ?? 5, 1), 10)
                 let result = try await webService.search(query: query, limit: limit)
                 return .ok(
-                    call,
-                    descriptor,
+                    canonicalCall,
+                    canonicalDescriptor,
                     "联网搜索找到 \(result.sources.count) 个来源",
                     .webSources(result.sources),
                     trustLevel: .externalUntrusted
                 )
             } catch {
-                return .fail(call, descriptor, "联网搜索失败：\(error.localizedDescription)")
+                return .fail(canonicalCall, canonicalDescriptor, "联网搜索失败：\(error.localizedDescription)")
             }
         case "web_fetch":
             guard let webService else {
-                return .fail(call, descriptor, "网页读取能力未配置。")
+                return .fail(canonicalCall, canonicalDescriptor, "网页读取能力未配置。")
             }
-            guard let rawURL = call.optionalString("url"), let url = URL(string: rawURL) else {
-                return .fail(call, descriptor, "网页地址无效。")
+            guard let rawURL = canonicalCall.optionalString("url"), let url = URL(string: rawURL) else {
+                return .fail(canonicalCall, canonicalDescriptor, "网页地址无效。")
             }
             do {
                 let document = try await webService.fetch(url: url)
                 return .ok(
-                    call,
-                    descriptor,
+                    canonicalCall,
+                    canonicalDescriptor,
                     "已读取网页：\(document.source.title)",
                     .text("来源：\(document.source.title)\nURL：\(document.source.url.absoluteString)\n\n\(document.text)"),
                     trustLevel: .externalUntrusted
                 )
             } catch {
-                return .fail(call, descriptor, "网页读取失败：\(error.localizedDescription)")
+                return .fail(canonicalCall, canonicalDescriptor, "网页读取失败：\(error.localizedDescription)")
             }
         case "music_download_search", "music_download_submit", "music_download_status",
              "music_download_tasks", "music_download_history", "music_download_history_remove",
              "music_download_history_clean":
             guard let systemService, let legacyDescriptor = Self.descriptor(for: "music_download") else {
-                return .fail(call, descriptor, "音乐下载系统服务不可用。")
+                return .fail(canonicalCall, canonicalDescriptor, "音乐下载系统服务不可用。")
             }
-            var legacyArguments = call.arguments
+            var legacyArguments = canonicalCall.arguments
             let action: String
-            switch call.name {
+            switch canonicalCall.name {
             case "music_download_search": action = "search"
             case "music_download_submit": action = "download"
             case "music_download_status": action = "status"
@@ -1140,9 +1592,8 @@ public enum AgentToolRegistry {
             default: action = "history_clean"
             }
             legacyArguments["action"] = .string(action)
-            let legacyCall = ToolCall(name: "music_download", arguments: legacyArguments)
             return await SystemToolExecutor.execute(
-                legacyCall,
+                ToolCall(name: "music_download", arguments: legacyArguments),
                 descriptor: legacyDescriptor,
                 systemService: systemService,
                 allowsLyrics: allowsLyrics
@@ -1150,25 +1601,66 @@ public enum AgentToolRegistry {
         default:
             break
         }
-        if SystemToolNames.contains(call.name) {
+        if SystemToolNames.contains(canonicalCall.name) {
             guard let systemService else {
-                return ToolResult(call: call, permission: descriptor.permission, success: false, summary: "系统服务不可用：当前设备未提供该系统能力。")
+                return ToolResult(call: canonicalCall, permission: canonicalDescriptor.permission, success: false, summary: "系统服务不可用：当前设备未提供该系统能力。")
             }
             return await SystemToolExecutor.execute(
-                call,
-                descriptor: descriptor,
+                canonicalCall,
+                descriptor: canonicalDescriptor,
                 systemService: systemService,
                 allowsLyrics: allowsLyrics
             )
         }
         return await AgentToolkit.executeRegistered(
-            call,
-            descriptor: descriptor,
+            canonicalCall,
+            descriptor: canonicalDescriptor,
             bridge: bridge,
             catalog: catalog,
             serverID: serverID,
             externalMusicService: externalMusicService,
-            allowsLyrics: allowsLyrics
+            allowsLyrics: allowsLyrics,
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
+    }
+
+    /*
+     * The old implementation body was intentionally moved into the closure
+     * adapter above.  Keep the old source-level API below as a thin bridge for
+     * integrations compiled against the pre-definition registry.
+     */
+    public static func executeLegacy(
+        _ incomingCall: ToolCall,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        serverID: ServerID?,
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)? = nil,
+        allowsLyrics: Bool = false,
+        providerCapabilities: ModelCapabilities? = nil,
+        webService: (any AgentWebService)? = nil,
+        activeSkillID: String? = nil,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
+    ) async -> ToolResult {
+        guard let descriptor = descriptor(for: incomingCall.name) else {
+            return ToolResult(call: incomingCall, permission: .readOnly, success: false, summary: "未知工具：\(incomingCall.name)")
+        }
+        let context = ToolExecutorContext(
+            bridge: bridge,
+            catalog: catalog,
+            serverID: serverID,
+            systemService: systemService,
+            externalMusicService: externalMusicService,
+            allowsLyrics: allowsLyrics,
+            providerCapabilities: providerCapabilities,
+            webService: webService,
+            authorizationContext: nil,
+            activeSkillID: activeSkillID,
+            executionAuthority: nil,
+            executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 0),
+            resourceLeaseRegistry: MutationResourceLeaseRegistry(),
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
+        )
+        return await executeLegacy(incomingCall, descriptor: descriptor, context: context)
     }
 }

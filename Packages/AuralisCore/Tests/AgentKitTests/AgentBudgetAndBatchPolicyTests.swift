@@ -140,7 +140,7 @@ struct AgentBudgetAndBatchPolicyTests {
         )
     }
 
-    @Test("输出截断仍然会逐级缩小批次")
+    @Test("输出截断仍然会逐级缩小批次直到单项")
     func recommendationBatchCanRecoverFromTruncation() {
         var value = 100
 
@@ -158,14 +158,22 @@ struct AgentBudgetAndBatchPolicyTests {
 
         value = RecommendationIndexBatchPolicy
             .reducedLimit(from: value)
-        #expect(value == 8)
+        #expect(value == 6)
 
         value = RecommendationIndexBatchPolicy
             .reducedLimit(from: value)
-        #expect(value == 8)
+        #expect(value == 3)
+
+        value = RecommendationIndexBatchPolicy
+            .reducedLimit(from: value)
+        #expect(value == 1)
+
+        value = RecommendationIndexBatchPolicy
+            .reducedLimit(from: value)
+        #expect(value == 1)
     }
 
-    @Test("一万首即使缩到最小批次也不会撞 10000 轮看门狗")
+    @Test("一万首缩到单项批次时每批仍只有一次模型分类")
     func tenThousandTracksFitEmergencyWatchdog() {
         let totalTracks = 10_000
         let batchSize =
@@ -176,14 +184,13 @@ struct AgentBudgetAndBatchPolicyTests {
             (totalTracks + batchSize - 1)
             / batchSize
 
-        // 按最保守估算：
-        // 每批一次 next/classify + 一次 write/continue
+        // Recommendation Index 的 next / write / verify 都是 Runtime 内部
+        // primitive；每批只有一次封闭的模型分类请求。
         let estimatedModelRounds =
-            batches * 2
+            batches
 
-        #expect(batchSize == 8)
-        #expect(batches == 1_250)
-        #expect(estimatedModelRounds == 2_500)
-        #expect(estimatedModelRounds < 10_000)
+        #expect(batchSize == 1)
+        #expect(batches == 10_000)
+        #expect(estimatedModelRounds == 10_000)
     }
 }

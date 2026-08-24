@@ -156,7 +156,7 @@ public struct AgentTaskWorkingSet: Sendable {
     public static func isCacheable(_ tool: String) -> Bool { cacheableTools.contains(tool) }
     public static func isSearchTool(_ tool: String) -> Bool { searchTools.contains(tool) }
 
-    /// 旧工具名和 V2 工具名可能同时被模型看到；先归一成同一副作用语义，
+    /// 旧工具名和规范工具名可能同时从兼容输入层进入；先归一成同一副作用语义，
     /// 避免 `replaceQueue` 后又以 `queue_replace` 覆盖队列。
     private static func canonicalSideEffectTool(_ tool: String) -> String {
         switch tool {
@@ -180,6 +180,14 @@ public struct AgentTaskWorkingSet: Sendable {
             return "已跳过重复操作：相同的 \(canonical) 上次超时，服务端结果未知。为避免重复副作用，本次不会自动重试。"
         }
         return nil
+    }
+
+    /// Whether a blocked retry is caused by an unknown remote result rather
+    /// than a confirmed successful duplicate. The former must remain visible
+    /// to the user so they know why the operation was not retried.
+    public func isIndeterminateSideEffect(tool: String, args: [String: String]) -> Bool {
+        let canonical = Self.canonicalSideEffectTool(tool)
+        return indeterminateSideEffects.contains(Self.signature(tool: canonical, args: args))
     }
 
     /// 只在工具成功后登记，失败或超时不会错误地阻止用户的后续重试。

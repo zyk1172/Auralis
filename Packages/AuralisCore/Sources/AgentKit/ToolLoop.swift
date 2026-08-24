@@ -45,6 +45,17 @@ public struct ToolLoop {
         public let memories: [AgentMemoryEntry]
         /// 已创建的技能列表（由 skill_* 工具维护，注入提示词）。
         public let skills: [AgentSkillEntry]
+        /// Shared by runs owned by one application coordinator. Standalone
+        /// ToolLoop callers receive an isolated registry by default.
+        public let mutationResourceLeaseRegistry: MutationResourceLeaseRegistry
+        /// Authoritative live state for Recommendation Index runs. It is
+        /// coordinator-scoped so status queries can distinguish persisted
+        /// pending data from an actually running background task.
+        public let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
+        /// Persisted declarative tools are joined to the canonical model
+        /// catalog at the run boundary. Discovery and execution receive the
+        /// same registry snapshot for this run.
+        public let customToolRegistry: CustomToolRegistry
 
         public init(
             serverID: ServerID? = nil,
@@ -65,7 +76,10 @@ public struct ToolLoop {
             allowsLyrics: Bool = false,
             allowsHistory: Bool = false,
             memories: [AgentMemoryEntry] = [],
-            skills: [AgentSkillEntry] = []
+            skills: [AgentSkillEntry] = [],
+            mutationResourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry(),
+            recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
+            customToolRegistry: CustomToolRegistry = .shared
         ) {
             self.serverID = serverID
             self.serverName = serverName
@@ -86,21 +100,37 @@ public struct ToolLoop {
             self.allowsHistory = allowsHistory
             self.memories = memories
             self.skills = skills
+            self.mutationResourceLeaseRegistry = mutationResourceLeaseRegistry
+            self.recommendationIndexExecutionRegistry = recommendationIndexExecutionRegistry
+            self.customToolRegistry = customToolRegistry
         }
     }
 
     /// 任务进度快照（供 AgentTaskManager / UI 展示，不携带任何凭据）。
     public struct AgentProgress: Sendable {
+        public enum Activity: Sendable, Equatable {
+            case ordinary
+            case workflow(skillID: String, phase: String, detail: String)
+        }
+
         public let toolSteps: Int
         public let currentStep: String
         public let inputTokens: Int?
         public let outputTokens: Int?
+        public let activity: Activity
 
-        public init(toolSteps: Int, currentStep: String, inputTokens: Int? = nil, outputTokens: Int? = nil) {
+        public init(
+            toolSteps: Int,
+            currentStep: String,
+            inputTokens: Int? = nil,
+            outputTokens: Int? = nil,
+            activity: Activity = .ordinary
+        ) {
             self.toolSteps = toolSteps
             self.currentStep = currentStep
             self.inputTokens = inputTokens
             self.outputTokens = outputTokens
+            self.activity = activity
         }
     }
 
@@ -127,6 +157,10 @@ public struct ToolLoop {
         var stringArguments: [String: String] {
             ToolCall(name: name, arguments: arguments).stringArguments
         }
+    }
+
+    private static func parallelResultKey(for call: LoopToolCall, index: Int) -> String {
+        call.id ?? "parallel-\(index)"
     }
 
     private enum ToolArgumentParseResult {
@@ -164,7 +198,8 @@ public struct ToolLoop {
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
         progress: @escaping @Sendable (AgentProgress) async -> Void = { _ in },
-        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
+        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in },
+        observeRecommendationIndex: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
     ) async {
         if let scopedWebService = webService as? any AgentWebRunScopedService {
             await scopedWebService.beginRun(runID)
@@ -199,6 +234,15 @@ public struct ToolLoop {
         } else {
             resolvedExecutionLease = .revoked(runID: runID)
         }
+        // Materialize declarative tools once at the run boundary. The same
+        // snapshot is used by selector, provider schema, tool_search and
+        // ToolRuntime so discovery cannot advertise a different set than the
+        // executor can actually run.
+        var availableToolDescriptors = AgentToolRegistry.all
+        let customDescriptors = await context.customToolRegistry.modelDescriptors()
+        for descriptor in customDescriptors where !availableToolDescriptors.contains(where: { $0.name == descriptor.name }) {
+            availableToolDescriptors.append(descriptor)
+        }
         let workflowRoute = WorkflowEngine.route(
             intent: resolvedIntent,
             text: userText,
@@ -206,7 +250,75 @@ public struct ToolLoop {
             initialTaskState: initialTaskState,
             executionLineage: executionLineage
         )
-        if let provider, workflowRoute.kind == .recommendationIndex {
+        let providerName = provider.map { String(describing: type(of: $0)) }
+        // High-confidence, read-only collection/status queries are complete
+        // local requests. Execute the canonical descriptor once and return;
+        // neither provider planning nor tool_search is needed for these
+        // deterministic reads. Resumed workflows remain on their stateful
+        // route so a pending task cannot be accidentally short-circuited.
+        if workflowRoute.kind != .recommendationIndex,
+           let directReadCapability = requestSemantics.directReadCapability,
+           requestSemantics.isReadOnly,
+           initialTaskState == nil,
+           !requestSemantics.isMusicAppreciation,
+           let directDescriptor = descriptor(named: directReadCapability.toolName, in: availableToolDescriptors) {
+            await runDirectReadFastPath(
+                descriptor: directDescriptor,
+                arguments: directReadCapability.arguments,
+                providerCapabilities: provider?.capabilities,
+                bridge: bridge,
+                catalog: catalog,
+                context: context,
+                systemService: systemService,
+                externalMusicService: externalMusicService,
+                webService: webService,
+                authorizationContext: resolvedAuthorization,
+                runID: runID,
+                executionLease: resolvedExecutionLease,
+                toolTimeout: toolTimeout,
+                emit: emit,
+                progress: progress
+            )
+            return
+        }
+        if workflowRoute.kind == .recommendationIndex {
+            await observeRecommendationIndex(RecommendationIndexExecutionEvent(
+                kind: .routeSelected,
+                runID: resolvedExecutionLease.runID,
+                sessionID: resolvedExecutionLease.sessionID,
+                serverID: context.serverID,
+                phase: .readingStatus,
+                provider: providerName,
+                model: model,
+                message: provider == nil
+                    ? "RecommendationIndexSkillRuntime provider unavailable"
+                    : "RecommendationIndexSkillRuntime"
+            ))
+            guard let provider else {
+                var taskState = initialTaskState ?? AgentTaskState(
+                    intent: .libraryManagement,
+                    goal: userText
+                )
+                let message = "推荐索引需要可用的 AI Provider；当前没有发起离线音乐搜索或其他替代执行。"
+                taskState.status = .failed
+                taskState.completionState = .failed
+                taskState.errorState = message
+                taskState.errors.append(message)
+                taskState.pendingActions = []
+                await state(taskState)
+                await observeRecommendationIndex(RecommendationIndexExecutionEvent(
+                    kind: .failed,
+                    runID: resolvedExecutionLease.runID,
+                    sessionID: resolvedExecutionLease.sessionID,
+                    serverID: context.serverID,
+                    phase: .readingStatus,
+                    provider: providerName,
+                    model: model,
+                    message: message
+                ))
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                return
+            }
             await RecommendationIndexSkillRuntime.run(
                 userText: userText,
                 provider: provider,
@@ -220,10 +332,15 @@ public struct ToolLoop {
                 lineageID: executionLineage?.lineageID ?? UUID(),
                 executionLease: resolvedExecutionLease,
                 requestTimeout: roundTimeout,
+                resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                executionStateRegistry: context.recommendationIndexExecutionRegistry,
                 emit: emit,
                 log: log,
                 progress: progress,
-                state: state
+                state: state,
+                observe: observeRecommendationIndex,
+                providerName: providerName,
+                modelName: model
             )
             return
         }
@@ -243,6 +360,7 @@ public struct ToolLoop {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     webService: webService,
+                    availableToolDescriptors: availableToolDescriptors,
                     sideEffectAuthorization: resolvedAuthorization,
                     runID: runID,
                     executionLease: resolvedExecutionLease,
@@ -264,6 +382,7 @@ public struct ToolLoop {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     webService: webService,
+                    availableToolDescriptors: availableToolDescriptors,
                     intent: resolvedIntent,
                     policy: resolvedPolicy,
                     initialTaskState: initialTaskState,
@@ -286,6 +405,7 @@ public struct ToolLoop {
                 context: context,
                 sideEffectAuthorization: resolvedAuthorization,
                 executionLease: resolvedExecutionLease,
+                availableToolDescriptors: availableToolDescriptors,
                 emit: emit,
                 log: log
             )
@@ -294,6 +414,91 @@ public struct ToolLoop {
                 role: .assistant,
                 messages: [.error("AI 服务未配置或暂时不可用；这是普通聊天请求，不会改写为本地音乐库搜索。请先配置可用的 AI Provider。")]
             ))
+        }
+    }
+
+    /// Deterministic execution path for one high-confidence read. This is
+    /// intentionally separate from `runGenericChat`: the latter is a model
+    /// conversation loop and cannot guarantee that a simple request results
+    /// in exactly one target tool call.
+    private static func runDirectReadFastPath(
+        descriptor: ToolDescriptor,
+        arguments: [String: AIJSONValue],
+        providerCapabilities: ModelCapabilities?,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        context: Context,
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)?,
+        webService: (any AgentWebService)?,
+        authorizationContext: SideEffectAuthorizationContext,
+        runID: UUID,
+        executionLease: ToolExecutionLease,
+        toolTimeout: TimeInterval,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void,
+        progress: @escaping @Sendable (AgentProgress) async -> Void
+    ) async {
+        let call = ToolCall(name: descriptor.name, arguments: arguments)
+        await progress(AgentProgress(toolSteps: 1, currentStep: "读取 \(descriptor.summary)"))
+
+        let result: ToolResult
+        do {
+            result = try await withTimeout(
+                effectiveToolTimeout(descriptor, requested: toolTimeout)
+            ) {
+                await ToolRuntime.executeMeasured(
+                    call,
+                    bridge: bridge,
+                    catalog: catalog,
+                    serverID: context.serverID,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    allowsLyrics: context.allowsLyrics,
+                    providerCapabilities: providerCapabilities,
+                    webService: webService,
+                    authorizationContext: authorizationContext,
+                    executionLease: executionLease,
+                    resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                    recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                    customToolRegistry: context.customToolRegistry,
+                    availableToolDescriptors: [descriptor],
+                    runID: runID,
+                    callID: "direct-\(runID.uuidString)"
+                )
+            }
+        } catch is CancellationError {
+            await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+            return
+        } catch {
+            await emit(AgentChatMessage(
+                role: .assistant,
+                messages: [.error("读取 \(descriptor.summary) 失败：\(errorText(error))")]
+            ))
+            return
+        }
+
+        guard result.success else {
+            await emit(AgentChatMessage(
+                role: .assistant,
+                messages: [.error("读取 \(descriptor.summary) 失败：\(result.summary)")]
+            ))
+            return
+        }
+
+        var messages: [AgentMessage] = []
+        if let payload = result.payload {
+            messages.append(payload)
+            if case .text = payload {
+                // The text payload already contains the complete direct-read
+                // answer; avoid duplicating the compact result summary.
+            } else if !result.summary.isEmpty {
+                messages.append(.text(result.summary))
+            }
+        } else if !result.summary.isEmpty {
+            messages.append(.text(result.summary))
+        }
+        if !messages.isEmpty {
+            await emit(AgentChatMessage(role: .assistant, messages: messages))
         }
     }
 
@@ -314,6 +519,7 @@ public struct ToolLoop {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
+        availableToolDescriptors: [ToolDescriptor],
         sideEffectAuthorization: SideEffectAuthorizationContext,
         runID: UUID,
         executionLease: ToolExecutionLease,
@@ -323,7 +529,13 @@ public struct ToolLoop {
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
-        var selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
+        var selectedTools = ToolSelector.select(for: userText, all: availableToolDescriptors)
+        let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
+        let directReadToolName = AgentRequestSemantics.analyze(
+            userText,
+            historyText: historyText
+        ).directReadCapability?.toolName
+        let effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -487,11 +699,59 @@ public struct ToolLoop {
                 }
             }
 
+            var parallelResultsByID: [String: ToolResult] = [:]
+            let parallelEligible = provider.capabilities.supportsParallelTools
+                && calls.count > 1
+                && calls.allSatisfy { call in
+                    guard !call.malformedArguments,
+                          !Self.isSearchCapability(call.name),
+                          let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors)
+                    else { return false }
+                    return descriptor.permission == .readOnly
+                        && descriptor.parallelSafe
+                        && !descriptor.confirmationPolicy.requiresExplicitUserApproval
+                }
+            if parallelEligible {
+                let executorContext = ToolExecutorContext(
+                    bridge: bridge,
+                    catalog: catalog,
+                    serverID: context.serverID,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    allowsLyrics: context.allowsLyrics,
+                    providerCapabilities: provider.capabilities,
+                    webService: webService,
+                    authorizationContext: effectiveAuthorization,
+                    activeSkillID: nil,
+                    executionAuthority: nil,
+                    executionLease: executionLease,
+                    resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                    recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                    customToolRegistry: context.customToolRegistry,
+                    availableToolDescriptors: availableToolDescriptors
+                )
+                let structuredCalls = calls.map { call in
+                    call.usesTextProtocol
+                        ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
+                        : ToolCall(name: call.name, arguments: call.arguments)
+                }
+                let parallelResults = await ToolRuntime.executeReadOnlyParallel(
+                    structuredCalls,
+                    context: executorContext,
+                    providerAllowsParallel: true,
+                    runID: runID
+                )
+                for (index, call) in calls.enumerated() {
+                    parallelResultsByID[parallelResultKey(for: call, index: index)] = parallelResults[index]
+                }
+            }
+
             var resultMessages: [AIMessage] = []
-            for call in calls {
+            var successfulDirectReadResult: ToolResult?
+            for (index, call) in calls.enumerated() {
                 toolSteps += 1
                 await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
-                guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
+                guard let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors) else {
                     resultMessages.append(toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name)：失败 - 未知工具。请先使用 tool_search 发现可用的 canonical 工具。",
@@ -548,22 +808,43 @@ public struct ToolLoop {
                         continue
                     }
                 }
-                let pending = descriptor.requiresConfirmation
-                    ? pendingConfirmation(descriptor: descriptor, name: call.name, diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments))
-                    : nil
-                if let pending, !(await confirm(pending)) {
-                    let text = "（工具执行结果）\(call.name)：失败 - 用户未批准该操作。"
+                let executableCall = call.usesTextProtocol
+                    ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
+                    : ToolCall(name: call.name, arguments: call.arguments)
+                switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
+                case .allowed:
+                    break
+                case let .denied(reason):
+                    let text = "（工具执行结果）\(call.name)：失败 - \(reason)"
                     resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
                     continue
                 }
 
-                let executableCall = call.usesTextProtocol
-                    ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
-                    : ToolCall(name: call.name, arguments: call.arguments)
+                if descriptor.confirmationPolicy.requiresExplicitUserApproval {
+                    let pending = Self.pendingConfirmation(
+                        descriptor: descriptor,
+                        name: call.name,
+                        diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments),
+                        runID: runID,
+                        sessionID: executionLease.sessionID,
+                        toolCallID: call.id
+                    )
+                    await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
+                    guard await confirm(pending) else {
+                        let text = "（工具执行结果）\(call.name)：失败 - 用户未批准该操作。"
+                        resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
+                        continue
+                    }
+                }
+                let authorizationForCall = effectiveAuthorization
+                let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
                 let result: ToolResult
                 do {
-                    result = try await withTimeout(toolTimeout) {
-                        await ToolRuntime.execute(
+                    result = if let parallelResult = parallelResultsByID[parallelResultKey(for: call, index: index)] {
+                        parallelResult
+                    } else {
+                        try await withTimeout(effectiveToolTimeout) {
+                        await ToolRuntime.executeMeasured(
                             executableCall,
                             bridge: bridge,
                             catalog: catalog,
@@ -573,25 +854,41 @@ public struct ToolLoop {
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
-                            authorizationContext: sideEffectAuthorization,
-                            executionLease: executionLease
+                            authorizationContext: authorizationForCall,
+                            executionLease: executionLease,
+                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                            customToolRegistry: context.customToolRegistry,
+                            availableToolDescriptors: availableToolDescriptors,
+                            runID: runID,
+                            callID: call.id
                         )
+                        }
                     }
                 } catch is CancellationError {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                     return
                 } catch {
-                    let reason = error is AgentRunnerError
-                        ? "超时 - 工具执行超过限定时间，结果可能未知。"
-                        : errorText(error)
-                    if descriptor.permission != .readOnly, error is AgentRunnerError {
+                    let timeoutFailure = error is AgentRunnerError
+                        ? ToolRuntime.timeoutResult(call: executableCall, descriptor: descriptor)
+                        : nil
+                    let isTimeout = timeoutFailure != nil
+                    let reason = timeoutFailure?.summary ?? errorText(error)
+                    if descriptor.permission != .readOnly, isTimeout {
                         indeterminateSideEffects.insert(signature)
                     }
-                    let text = error is AgentRunnerError
-                        ? "（工具执行结果）\(call.name): 超时 - 工具执行超过限定时间，结果可能未知；为避免重复副作用不会自动重试。"
+                    let text: String
+                    if let timeoutFailure {
+                        let code = timeoutFailure.failure?.code ?? "tool_timeout"
+                        text = "（工具执行结果）\(call.name): 超时 - \(reason) [failure_code=\(code); indeterminate=\(timeoutFailure.hasIndeterminateSideEffect)]"
+                    } else {
+                        text = "（工具执行结果）\(call.name)：失败 - \(reason)"
+                    }
+                    let presentationText = timeoutFailure != nil
+                        ? "工具 \(call.name) 执行超时，结果可能未知；为避免重复副作用不会自动重试。"
                         : "（工具执行结果）\(call.name)：失败 - \(reason)"
                     resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text(text)]))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text(presentationText)]))
                     continue
                 }
 
@@ -601,6 +898,11 @@ public struct ToolLoop {
                 // can render title/domain/snippet/link without parsing prose.
                 if case let .webSources(sources)? = result.payload, !sources.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
+                }
+                if result.success,
+                   calls.count == 1,
+                   call.name == directReadToolName {
+                    successfulDirectReadResult = result
                 }
                 if let payload = result.payload {
                     let role = result.presentationRole == .none ? descriptor.defaultPresentationRole : result.presentationRole
@@ -669,8 +971,10 @@ public struct ToolLoop {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    let names = ToolCatalog().search(query: query, namespace: namespace, limit: limit).map(\.name)
-                    let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                    let names = ToolCatalog(descriptors: availableToolDescriptors)
+                        .search(query: query, namespace: namespace, limit: limit)
+                        .map(\.name)
+                    let byName = Dictionary(uniqueKeysWithValues: availableToolDescriptors.map { ($0.name, $0) })
                     var existing = Set(selectedTools.map(\.name))
                     for name in names where !existing.contains(name) {
                         if let tool = byName[name] {
@@ -681,6 +985,31 @@ public struct ToolLoop {
                 }
                 if result.success, descriptor.permission != .readOnly {
                     await log(AgentActionRecord(toolName: call.name, permission: descriptor.permission, summary: result.summary))
+                }
+            }
+
+            // A high-confidence local read is already a deterministic answer.
+            // Do not send the same result back through another open planning
+            // round: that is how simple requests such as “列出我的歌单” used
+            // to become tool_search → repeated lookup loops.  We still emit
+            // the structured payload (cards when present) and a compact
+            // summary, so this path does not trade away the normal UI result.
+            if let result = successfulDirectReadResult {
+                var directMessages: [AgentMessage] = []
+                if let payload = result.payload {
+                    switch payload {
+                    case .text:
+                        directMessages.append(payload)
+                    default:
+                        directMessages.append(payload)
+                        directMessages.append(.text(result.summary))
+                    }
+                } else if !result.summary.isEmpty {
+                    directMessages.append(.text(result.summary))
+                }
+                if !directMessages.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: directMessages))
+                    return
                 }
             }
 
@@ -726,6 +1055,7 @@ public struct ToolLoop {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
+        availableToolDescriptors: [ToolDescriptor],
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
@@ -745,6 +1075,7 @@ public struct ToolLoop {
         // （例如第一轮音乐发现、第二轮需要歌单/服务器工具）会自动补入，不会永久缺失。
         var accumulatedToolText = userText
         let requestTimeout = roundTimeout
+        let effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -771,7 +1102,7 @@ public struct ToolLoop {
             for: userText,
             intent: intent,
             policy: policy,
-            all: AgentToolRegistry.all,
+            all: availableToolDescriptors,
             activeSkillID: activeSkillID
         )
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
@@ -827,6 +1158,13 @@ public struct ToolLoop {
 
         var toolStepCount = 0
         var completionRepairAttempts = 0
+        // A successful mutation may already satisfy the current request. Keep
+        // a marker while processing the current provider turn so a legitimate
+        // second mutation with a different requested operation can still run;
+        // a repeated successful call can be finalized without asking the model
+        // to plan an unnecessary follow-up mutation.
+        var pendingMutationFinalization = false
+        var duplicateMutationFinalization = false
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
@@ -872,7 +1210,7 @@ public struct ToolLoop {
                 for: accumulatedToolText,
                 intent: intent,
                 policy: policy,
-                all: AgentToolRegistry.all,
+                all: availableToolDescriptors,
                 activeSkillID: activeSkillID
             )
             var merged = selectedTools
@@ -883,7 +1221,7 @@ public struct ToolLoop {
             }
             // TaskRequiredTools：本轮已实际执行过的工具永远保留在 schema 中。
             if !ws.perToolCounts.isEmpty {
-                let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all
+                let byName = Dictionary(uniqueKeysWithValues: availableToolDescriptors
                     .filter { $0.isVisible(toSkillID: activeSkillID) }
                     .map { ($0.name, $0) })
                 for name in ws.perToolCounts.keys where !haveNames.contains(name) {
@@ -1404,7 +1742,7 @@ public struct ToolLoop {
                 roundToolNames.insert(call.name)
                 if AgentTaskWorkingSet.isSearchTool(call.name) { roundSearchCalls += 1 }
 
-                guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
+                guard let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors) else {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "未知工具", reused: false))
                     toolMessages.append(Self.toolResultMessage(
                         callID: call.id,
@@ -1445,15 +1783,35 @@ public struct ToolLoop {
                 if descriptor.permission != .readOnly,
                    let reason = ws.sideEffectBlockReason(tool: call.name, args: stringArguments) {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复副作用", reused: true))
-                    // 这是一次真实的状态保护，而不是普通的模型内部提示：用户需要知道
-                    // 第二次修改没有发生，否则最终回答仍可能谎称队列再次被替换。
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text(reason)]))
+                    if pendingMutationFinalization,
+                       !ws.isIndeterminateSideEffect(tool: call.name, args: stringArguments) {
+                        // The provider has planned the exact mutation again
+                        // after a successful result.  Keep the idempotence
+                        // guard, but finish this request instead of feeding a
+                        // duplicate-operation message back into another open
+                        // planning turn.
+                        duplicateMutationFinalization = true
+                    }
+                    // A confirmed duplicate is an internal recovery detail,
+                    // but an indeterminate remote write remains user-visible:
+                    // the user must know that no automatic retry was made.
+                    if ws.isIndeterminateSideEffect(tool: call.name, args: stringArguments) {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text(reason)]))
+                    }
                     toolMessages.append(Self.toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name): 已跳过 - \(reason)",
                         native: nativeMode
                     ))
                     continue
+                }
+
+                // The previous successful mutation was only a candidate for
+                // finalization. A different write in this turn is a legitimate
+                // multi-step request, so let it run and keep the loop open.
+                if pendingMutationFinalization, descriptor.permission != .readOnly {
+                    pendingMutationFinalization = false
+                    duplicateMutationFinalization = false
                 }
 
                 // ② 任务级缓存：同一工具 + 规范化参数已执行过 → 直接复用结果。
@@ -1472,12 +1830,38 @@ public struct ToolLoop {
                     continue
                 }
 
-                if descriptor.requiresConfirmation {
-                    let signature = Self.confirmationSignature(name: call.name, args: stringArguments)
+                // ③ 执行工具（实际只执行一次；写入任务级缓存供后续复用）。
+                await progress(AgentProgress(
+                    toolSteps: toolStepCount,
+                    currentStep: "执行 \(call.name)"
+                ))
+                taskState.status = .waitingForTool
+                taskState.updatedAt = .now
+                await state(taskState)
+                let result: ToolResult
+                let executableCall = call.usesTextProtocol
+                    ? structuredToolCall(name: call.name, legacyArguments: stringArguments)
+                    : ToolCall(name: call.name, arguments: call.arguments)
+                let signature = Self.confirmationSignature(name: call.name, args: stringArguments)
+                switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
+                case .allowed:
+                    break
+                case let .denied(reason):
+                    let failureText = "（工具执行结果）\(call.name): 执行失败 - \(reason)"
+                    taskState.errors.append(failureText)
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "副作用授权拒绝", reused: false))
+                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
+                    continue
+                }
+
+                if descriptor.confirmationPolicy.requiresExplicitUserApproval {
                     let pending = Self.pendingConfirmation(
                         descriptor: descriptor,
                         name: call.name,
-                        diagnosticArgs: diagnosticArgs
+                        diagnosticArgs: diagnosticArgs,
+                        runID: runID,
+                        sessionID: executionLease.sessionID,
+                        toolCallID: call.id
                     )
                     if deniedConfirmationSignatures.contains(signature) {
                         let message = "用户尚未批准「\(descriptor.summary)」，本次未执行。"
@@ -1490,8 +1874,7 @@ public struct ToolLoop {
                         continue
                     }
                     await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
-                    let approved = await confirm(pending)
-                    guard approved else {
+                    guard await confirm(pending) else {
                         deniedConfirmationSignatures.insert(signature)
                         let message = "用户未批准「\(descriptor.summary)」，本次未执行。"
                         taskState.errors.append(message)
@@ -1509,22 +1892,12 @@ public struct ToolLoop {
                         continue
                     }
                 }
-
-                // ③ 执行工具（实际只执行一次；写入任务级缓存供后续复用）。
-                await progress(AgentProgress(
-                    toolSteps: toolStepCount,
-                    currentStep: "执行 \(call.name)"
-                ))
-                taskState.status = .waitingForTool
-                taskState.updatedAt = .now
-                await state(taskState)
-                let result: ToolResult
-                let executableCall = call.usesTextProtocol
-                    ? structuredToolCall(name: call.name, legacyArguments: stringArguments)
-                    : ToolCall(name: call.name, arguments: call.arguments)
+                let authorizationForCall = effectiveAuthorization
+                let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
+                let executionCallID = call.id
                 do {
-                    result = try await Self.withTimeout(toolTimeout) {
-                        await ToolRuntime.execute(
+                    result = try await Self.withTimeout(effectiveToolTimeout) {
+                        await ToolRuntime.executeMeasured(
                             executableCall,
                             bridge: bridge,
                             catalog: catalog,
@@ -1534,9 +1907,15 @@ public struct ToolLoop {
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
-                            authorizationContext: sideEffectAuthorization,
+                            authorizationContext: authorizationForCall,
                             activeSkillID: activeSkillID,
-                            executionLease: executionLease
+                            executionLease: executionLease,
+                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                            customToolRegistry: context.customToolRegistry,
+                            availableToolDescriptors: availableToolDescriptors,
+                            runID: runID,
+                            callID: executionCallID
                         )
                     }
                 } catch is CancellationError {
@@ -1558,11 +1937,13 @@ public struct ToolLoop {
                     // 单工具超时/异常只回灌结构化失败结果，不终止整项任务；模型可换工具/换参数继续。
                     let failureText: String
                     if error is AgentRunnerError {
+                        let timeoutFailure = ToolRuntime.timeoutResult(call: executableCall, descriptor: descriptor)
+                        let code = timeoutFailure.failure?.code ?? "tool_timeout"
                         if descriptor.permission != .readOnly {
                             ws.recordIndeterminateSideEffect(tool: call.name, args: stringArguments)
-                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，服务端结果未知。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
+                            failureText = "（工具执行结果）\(call.name): 超时 - \(timeoutFailure.summary) [failure_code=\(code); indeterminate=true]。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
                         } else {
-                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，可改用其他查询方式继续。"
+                            failureText = "（工具执行结果）\(call.name): 超时 - \(timeoutFailure.summary) [failure_code=\(code); indeterminate=false] 可改用其他查询方式继续。"
                         }
                     } else {
                         failureText = "（工具执行结果）\(call.name): 执行中断 - \(Self.errorText(error))"
@@ -1589,14 +1970,23 @@ public struct ToolLoop {
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
+                if result.success,
+                   descriptor.permission != .readOnly,
+                   Self.shouldFinalizeAfterMutation(
+                       policy: policy,
+                       state: taskState,
+                       authorization: effectiveAuthorization
+                   ) {
+                    pendingMutationFinalization = true
+                }
                 if result.success, call.name == "tool_search" {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    let discoveredNames = ToolCatalog()
+                    let discoveredNames = ToolCatalog(descriptors: availableToolDescriptors)
                         .search(query: query, namespace: namespace, limit: limit, activeSkillID: activeSkillID)
                         .map(\.name)
-                    let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                    let byName = Dictionary(uniqueKeysWithValues: availableToolDescriptors.map { ($0.name, $0) })
                     var existing = Set(selectedTools.map(\.name))
                     var addedDiscoveredTool = false
                     for name in discoveredNames where !existing.contains(name) {
@@ -1728,7 +2118,28 @@ public struct ToolLoop {
                 return
             }
 
-            // 普通任务在工具回灌后回到 auto；V2 分类阶段始终锁定唯一的
+            if pendingMutationFinalization, duplicateMutationFinalization {
+                // A successful, authorized mutation already satisfies the
+                // current request and the provider has planned the exact same
+                // call again. The working-set idempotence guard still protects
+                // the duplicate call; do not expose that recovery detail as a
+                // second user-visible operation.
+                _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
+                taskState.pendingActions = []
+                await state(taskState)
+                var finalMessages: [AgentMessage] = []
+                if let finalMessage = presentation.finalMessage() {
+                    finalMessages.append(finalMessage)
+                }
+                finalMessages.append(.text(Self.deterministicCompletionSummary(policy: policy, presentation: presentation)))
+                await emit(AgentChatMessage(
+                    role: .assistant,
+                    messages: finalMessages
+                ))
+                return
+            }
+
+            // 普通任务在工具回灌后回到 auto；封闭分类阶段始终锁定唯一的
             // write_batch，避免下一轮又回到旁路工具。
             if nativeMode, !nativeCalls.isEmpty {
                 toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
@@ -1943,6 +2354,32 @@ public struct ToolLoop {
         case .modelAnswer, .appreciationWithEvidence:
             return "已完成。"
         }
+    }
+
+    private static func shouldFinalizeAfterMutation(
+        policy: AgentTaskPolicy,
+        state: AgentTaskState,
+        authorization: SideEffectAuthorizationContext
+    ) -> Bool {
+        guard AgentCompletionEvaluator.factsSatisfied(state: state, policy: policy) else { return false }
+        guard policy.completion == .queueMutation
+            || policy.completion == .playlistMutation
+            || policy.completion == .playbackMutation
+        else { return false }
+
+        // Authorization is the complete semantic contract for the current
+        // request. Do not narrow it back to the classifier's first domain:
+        // “replace the queue and play it” authorizes both queueReplace and
+        // playbackPlay, so the queue mutation must not finalize the run early.
+        let requested = authorization.allowedOperations
+
+        let successful = Set(state.successfulToolNames.compactMap {
+            AgentToolRegistry.descriptor(for: $0)?.authorizationOperation
+        })
+        // A descriptor's operation is the final source of truth. The explicit
+        // request set may be empty in compatibility tests; in that case the
+        // already-established completion fact is sufficient.
+        return requested.isEmpty || requested.isSubset(of: successful)
     }
 
     private static func markWorkflowCompleted(state: inout AgentTaskState) {
@@ -2259,6 +2696,7 @@ public struct ToolLoop {
         context: Context,
         sideEffectAuthorization: SideEffectAuthorizationContext,
         executionLease: ToolExecutionLease,
+        availableToolDescriptors: [ToolDescriptor],
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in }
     ) async {
@@ -2272,6 +2710,9 @@ public struct ToolLoop {
                 catalog: catalog,
                 context: context,
                 sideEffectAuthorization: sideEffectAuthorization,
+                resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                availableToolDescriptors: availableToolDescriptors,
                 emit: emit,
                 log: log
             )
@@ -2284,6 +2725,9 @@ public struct ToolLoop {
         catalog: LocalCatalogStore,
         context: Context,
         sideEffectAuthorization: SideEffectAuthorizationContext,
+        resourceLeaseRegistry: MutationResourceLeaseRegistry,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry,
+        availableToolDescriptors: [ToolDescriptor],
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void
     ) async {
@@ -2295,14 +2739,20 @@ public struct ToolLoop {
         }
 
         func executeMutation(_ name: String, arguments: [String: AIJSONValue] = [:]) async -> ToolResult {
-            await ToolRuntime.execute(
+            await ToolRuntime.executeMeasured(
                 ToolCall(name: name, arguments: arguments),
                 bridge: bridge,
                 catalog: catalog,
                 serverID: context.serverID,
                 systemService: nil,
                 authorizationContext: sideEffectAuthorization,
-                executionLease: ToolExecutionContext.lease ?? .revoked()
+                executionLease: ToolExecutionContext.lease ?? .revoked(),
+                resourceLeaseRegistry: resourceLeaseRegistry,
+                recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
+                customToolRegistry: context.customToolRegistry,
+                availableToolDescriptors: availableToolDescriptors,
+                runID: ToolExecutionContext.lease?.runID,
+                callID: nil
             )
         }
 
@@ -2492,18 +2942,35 @@ public struct ToolLoop {
     private static func pendingConfirmation(
         descriptor: ToolDescriptor,
         name: String,
-        diagnosticArgs: [String: String]
+        diagnosticArgs: [String: String],
+        runID: UUID,
+        sessionID: UUID,
+        toolCallID: String?
     ) -> PendingConfirmation {
+        // PendingConfirmation is only a Runtime approval boundary for tools
+        // explicitly marked by the single confirmation policy. Reversible
+        // mutations do not enter this helper and must never invent a second
+        // confirmation protocol in natural language.
+        let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
         let detail: String
         if diagnosticArgs.isEmpty {
-            detail = "此操作不可逆，且不会自动生成恢复副本。"
+            detail = [descriptor.confirmationPolicy.reason, confirmationGuidance]
+                .compactMap { $0 }
+                .joined(separator: "\n")
         } else {
             let arguments = diagnosticArgs.keys.sorted().map { "\($0)=\(diagnosticArgs[$0] ?? "")" }.joined(separator: "、")
-            detail = "参数：\(arguments)\n此操作不可逆，且不会自动生成恢复副本。"
+            detail = [descriptor.confirmationPolicy.reason, "参数：\(arguments)", confirmationGuidance]
+                .compactMap { $0 }
+                .joined(separator: "\n")
         }
         return PendingConfirmation(
+            runID: runID,
+            sessionID: sessionID,
+            toolCallID: toolCallID,
             toolName: name,
             permission: descriptor.permission,
+            operation: descriptor.authorizationOperation,
+            reason: descriptor.confirmationPolicy.reason,
             title: descriptor.summary,
             detail: detail,
             call: ToolCall(name: name, rawArguments: diagnosticArgs)
@@ -2831,7 +3298,7 @@ public struct ToolLoop {
         8c. 候选足够时即可收尾：已获得用户要求的目标数量、或对应队列操作已由工具确认成功时，直接完成任务，不要继续无意义搜索。同一搜索重复多次没有新结果时，可以基于现有候选回答，或换一个搜索词/换一种策略继续；不要死磕同一条搜索。
         8d. 最终展示协议：搜索/推荐工具产生的是内部候选，不会直接展示给主人。当主人只要求「推荐给我看看」而没有播放/建歌单/改队列时，完成筛选后必须调用 result_present_tracks(trackIDs=[最终选中的真实 ID]) 一次；只能把真正打算推荐给主人的歌曲传入，不要把整个候选池传入。如果已经 queue_replace / playlist_add_songs 成功确定最终集合，不必再额外调用 result_present_tracks。多个同名/相似对象无法确定时，用 result_present_tracks(trackIDs=[候选], kind=\"disambiguation\") 列出候选供主人选择。
         8e. 最终回答文字：当 Runtime 会用歌曲卡片展示最终结果时，最终文字只做简短总结（如「已经为你选好 12 首适合开车提神的歌曲」），可以说明整体风格/筛选逻辑，最多举 2～3 首代表；不要逐首完整罗列 12 个歌名，避免与卡片重复。
-        9. 执行哲学：普通已注册工具不需要额外审批；但删除歌单、删除单条/清空全部记忆、删除技能文件等不可逆高风险操作必须等待运行时批准。清空队列、删除下载、删除服务器（仅本地清理）等不是同等级不可逆操作，用户明确要求且目标唯一时直接执行。不要擅自扩大用户指令范围；多个同名/相似对象无法确定时，先列出候选让主人选择目标，再执行。
+        9. 执行哲学：用户已经明确要求可逆修改时直接调用工具，不要自行发明确认流程；只有 Runtime 返回 PendingConfirmation 时才等待主人批准。删除歌单、删除单条/清空全部记忆、删除技能文件等不可逆高风险操作必须等待运行时批准。清空队列、删除下载、删除服务器（仅本地清理）等不是同等级不可逆操作，用户明确要求且目标唯一时直接执行。不要擅自扩大用户指令范围；多个同名/相似对象无法确定时，先列出候选让主人选择目标，再执行。
         10. 凭据（密码、Token、完整服务器地址）绝不出现在任何参数或回复中。
         10b. 添加 / 修改服务器（地址、账号、凭据）必须由用户在本机「设置 → 服务器」页完成：
             模型不负责填写或保存任何服务器凭据。addServer / updateServer 只是唤起设置页，
@@ -2865,40 +3332,6 @@ public struct ToolLoop {
             }
             .sorted()
         return grouped.joined(separator: "\n")
-
-        /*
-        let groups: [(String, [String])] = [
-            ("服务器与同步", ["server_get_current", "server_list", "server_test_connection", "server_get_capabilities", "server_sync_status", "server_sync_start", "server_search", "library_get_summary"]),
-            ("本地库查询", ["library_search", "library_get_song", "music_appreciate", "library_get_album", "library_get_artist", "library_get_playlist", "library_get_starred", "library_get_recently_played", "library_get_recently_added", "library_get_most_played", "library_get_random_songs", "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre"]),
-            ("播放控制", ["playback_play_song", "playback_play_album", "playback_play_artist", "playback_play_playlist", "playback_play_random", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat", "playback_set_speed", "playback_set_sleep_timer", "playback_cancel_sleep_timer", "playback_get_sleep_timer", "playback_get_state"]),
-            ("播放队列", ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]),
-            ("歌单与收藏", ["playlist_create", "playlist_add_songs", "favorite_set", "lyrics_get"]),
-            ("推荐与下载", ["recommend_by_mood", "recommend_by_constraints", "smart_queue_generate", "library_index_status", "library_index_read", "media_download_offline", "cache_get_status"]),
-            ("音乐下载（MoviePilot）", ["music_download"]),
-            ("维护与诊断", ["library_find_duplicates", "library_find_metadata_issues", "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable", "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution", "stats_get_listening_summary", "diagnostics_playback", "diagnostics_get_recent_errors", "diagnostics_export_report", "diagnostics_now_playing"]),
-            ("系统与设备", ["app_get_context", "app_open_page", "app_get_feature_status", "device_get_network_status", "device_get_audio_route", "device_get_storage_status", "ios_siri_get_status", "ios_shortcuts_list"]),
-            ("记忆与技能", ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]),
-            ("补充工具（无新式别名）", ["getLeastPlayed", "getDownloadedTracks", "removeFromQueue", "listPlaylists", "renamePlaylist", "removeTracksFromPlaylist", "reorderPlaylist", "duplicatePlaylist", "mergePlaylists", "deletePlaylist", "setRating", "clearRating", "switchServer", "removeServer", "addServer", "updateServer"]),
-        ]
-        let byName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
-        var lines: [String] = []
-        for (title, names) in groups {
-            let toolLines = names.compactMap { name -> String? in
-                guard let tool = byName[name] else { return nil }
-                if tool.parameters.isEmpty { return "\(tool.name)" }
-                let params = tool.parameters.map { "\($0.name)\($0.required ? "" : "?")" }.joined(separator: ",")
-                return "\(tool.name)(\(params))"
-            }
-            guard !toolLines.isEmpty else { continue }
-            lines.append("- \(title)：\(toolLines.joined(separator: "；"))")
-        }
-        let groupedNames = Set(groups.flatMap(\.1))
-        let others = tools.map(\.name).filter { !groupedNames.contains($0) }.sorted()
-        if !others.isEmpty {
-            lines.append("- 其他工具：\(others.joined(separator: "、"))")
-        }
-        return lines.joined(separator: "\n")
-        */
     }
 
     /// 把完整会话历史转成模型可用的消息列表。历史不再按固定轮数截断，
@@ -2906,6 +3339,16 @@ public struct ToolLoop {
     /// ContextManager 在发送前按 Provider 的真实上下文窗口执行。
     private static func convertHistory(_ history: [AgentChatMessage], currentUserText: String) -> [AIMessage] {
         AgentHistoryPolicy.modelMessages(from: history, for: currentUserText)
+    }
+
+    private static func descriptor(named name: String, in descriptors: [ToolDescriptor]) -> ToolDescriptor? {
+        descriptors.first { descriptor in
+            descriptor.name == name || descriptor.aliases.contains(name)
+        }
+    }
+
+    private static func effectiveToolTimeout(_ descriptor: ToolDescriptor, requested: TimeInterval) -> TimeInterval {
+        max(0.1, min(requested, descriptor.executionProfile.timeout))
     }
 
     private static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {

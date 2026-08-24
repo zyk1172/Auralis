@@ -199,6 +199,9 @@ public protocol ServerConnecting: Sendable {
     func downloadData(serverID: ServerID, trackID: TrackID) async -> Data?
     /// 把单曲追加到服务器歌单；成功返回 true。
     func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool
+    /// 一次请求把多首歌曲追加到服务器歌单；成功返回 true。
+    /// 生产连接器必须用单次 updatePlaylist，避免 N 次网络请求和部分持久化窗口。
+    func addTracksToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool
     /// 同步单曲收藏状态到服务器（star/unstar）。
     func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async -> Bool
     /// 用指定服务器构建一个资料库同步器；未连接时返回 nil。
@@ -285,6 +288,14 @@ public extension ServerConnecting {
     func downloadURL(serverID: ServerID, trackID: TrackID) async -> URL? { nil }
     func downloadData(serverID: ServerID, trackID: TrackID) async -> Data? { nil }
     func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }
+    func addTracksToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool {
+        // Batch mutation is an explicit connector contract.  A serial
+        // default silently turns one logical mutation into N network writes
+        // and can leave a partially updated playlist when item N fails.
+        // Concrete connectors must implement their native batch endpoint.
+        _ = (serverID, playlistID, trackIDs)
+        return false
+    }
     func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async -> Bool { false }
     func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) async -> LibrarySynchronizer? { nil }
     func restoreAccountFromBackup(_ account: ServerAccount, secret: String?) async throws {

@@ -140,7 +140,6 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
     public let scopes: Set<GrantedScope>
     public let allowedToolGroups: Set<ToolGroup>
     public let allowedPermissions: Set<ToolPermission>
-    public let requiresConfirmationForDestructive: Bool
     public let maxRisk: AgentRisk
     public let completion: AgentCompletionPredicate
     public let budget: AgentTaskBudget
@@ -232,7 +231,6 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         scopes: Set<GrantedScope>,
         allowedToolGroups: Set<ToolGroup>,
         allowedPermissions: Set<ToolPermission> = [.readOnly],
-        requiresConfirmationForDestructive: Bool = false,
         maxRisk: AgentRisk = .none,
         completion: AgentCompletionPredicate = .modelAnswer,
         budget: AgentTaskBudget = AgentTaskBudget()
@@ -241,7 +239,6 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         self.scopes = scopes
         self.allowedToolGroups = allowedToolGroups
         self.allowedPermissions = allowedPermissions
-        self.requiresConfirmationForDestructive = requiresConfirmationForDestructive
         self.maxRisk = maxRisk
         self.completion = completion
         self.budget = budget
@@ -494,7 +491,7 @@ public enum AgentFailureClassifier {
             case .missingCredential, .invalidEndpoint, .unsupportedEndpointProtocol, .insecureEndpoint:
                 return .invalidConfiguration
             case .outputTruncated:
-                // 由 V2 Runtime 缩批恢复；不能触发同一超大请求的通用网络重试。
+                // 由推荐索引 Runtime 缩批恢复；不能触发同一超大请求的通用网络重试。
                 return .permanent
             case let .httpStatus(status):
                 if status == 401 || status == 403 { return .authentication }
@@ -564,7 +561,7 @@ public enum AgentIntentClassifier {
             return .musicDiscovery
         case .musicLibrary:
             return .librarySearch
-        case .conversation, .web, .system, .memory, .download, .server, .diagnostics:
+        case .conversation, .web, .system, .memory, .download, .server, .diagnostics, .customTool:
             break
         }
         return .conversation
@@ -608,7 +605,6 @@ public enum AgentTaskPolicyResolver {
             scopes: base.scopes,
             allowedToolGroups: base.allowedToolGroups,
             allowedPermissions: base.allowedPermissions,
-            requiresConfirmationForDestructive: base.requiresConfirmationForDestructive,
             maxRisk: base.maxRisk,
             completion: .indexPendingCountIsZero,
             budget: budget
@@ -879,7 +875,8 @@ public actor AgentRuntime {
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
-        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
+        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in },
+        observeRecommendationIndex: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
     ) async {
         let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
         // AppShell 已经为任务记录解析过策略时必须复用同一份值，避免持久化预算/意图
@@ -916,7 +913,8 @@ public actor AgentRuntime {
             emit: emit,
             log: log,
             progress: progress,
-            state: state
+            state: state,
+            observeRecommendationIndex: observeRecommendationIndex
         )
     }
 }

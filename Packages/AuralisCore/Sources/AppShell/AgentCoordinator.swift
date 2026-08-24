@@ -3,6 +3,7 @@ import AgentKit
 import Domain
 import Foundation
 import LocalCatalog
+import Observability
 
 /// 首次外发确认的决策。
 public enum AIConsentDecision: Sendable {
@@ -62,15 +63,16 @@ public final class AgentCoordinator: ObservableObject {
     @Published public private(set) var pendingConsent: AIPrivacyConsentRequest?
     /// 当前待用户裁决的不可逆高风险 Agent 操作；普通工具不会进入此状态。
     @Published public private(set) var pendingOperationConfirmation: PendingConfirmation?
-    /// 无界面模式：来自 Siri / 快捷指令等系统入口时置为 true。
-    /// 普通工具调用与有界面模式一致，直接执行；不可逆高风险操作无界面可批准，默认拒绝。
-    public var headless = false
     /// 当前正在运行（或最近一次运行）的 Agent 任务；供 UI 展示步骤与状态。
     @Published public private(set) var activeTask: AgentTaskRecord?
     /// Exactly one transient activity belongs to the current run.  Streaming,
     /// tools, confirmation and Runtime retries update this value in place;
     /// they do not accumulate as independent presentation states.
     @Published public private(set) var runPresentationState: AssistantRunPresentationState?
+    /// A presentation snapshot of the coordinator-owned Recommendation Index
+    /// execution registry. Catalog counts describe persisted data only; this
+    /// property is the live-run fact exposed to the UI and system tools.
+    @Published public private(set) var recommendationIndexExecutionState: RecommendationIndexExecutionState = .idle
     /// 会话列表搜索词。
     @Published public var sessionQuery = "" { didSet { refreshSessionList() } }
     /// 是否在会话列表里显示已归档会话（默认隐藏）。
@@ -96,16 +98,39 @@ public final class AgentCoordinator: ObservableObject {
     private let externalMusicService: MusicEnrichmentService
     /// Provider 没有托管联网工具时使用的可替换 WebCapability 实现。
     private let webService: any AgentWebService
+    /// All runs owned by this coordinator share resource-level mutation
+    /// ownership; unrelated ToolLoop instances do not share this registry.
+    private let mutationResourceLeaseRegistry: MutationResourceLeaseRegistry
+    /// Authoritative live state for Recommendation Index runs. Unlike catalog
+    /// counts, this registry can prove whether a run is actually active.
+    private let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
     public let memoryStore: AgentMemoryStore
 
+    /// The active session's task is kept for compatibility with synchronous
+    /// callers; all live runs are owned by these per-run maps so switching
+    /// sessions does not cancel unrelated work.
+    private enum RunMode {
+        case interactive
+        case headless
+    }
+
     private var runTask: Task<Void, Never>?
+    private var runTasks: [UUID: Task<Void, Never>] = [:]
+    private var runSessions: [UUID: UUID] = [:]
+    private var runModes: [UUID: RunMode] = [:]
+    private var runLeases: [UUID: ToolExecutionLease] = [:]
+    private var runIDsBySession: [UUID: UUID] = [:]
     private var consentContinuation: CheckedContinuation<AIConsentDecision, Never>?
-    private var operationConfirmationContinuation: CheckedContinuation<Bool, Never>?
+    /// Destructive confirmations belong to the run that requested them.  A
+    /// single coordinator can keep a background run waiting while another
+    /// session is active; a global continuation would either block the wrong
+    /// session or let its UI answer the wrong run.
+    private var operationConfirmationContinuations: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private var operationConfirmations: [UUID: PendingConfirmation] = [:]
     /// 当前运行身份：任何迟到 callback 只要 runID 不匹配就丢弃，绝不污染新运行/新会话。
     var currentRunID: UUID?
-    /// 全局同时只允许一个 Run 持有真实副作用执行权。generation 单调递增，
-    /// 防止相同会话恢复后误接受上一代异步结果。
+    /// generation 单调递增，防止相同会话恢复后误接受上一代异步结果。
     private var executionGeneration: UInt64 = 0
     /// Internal so lifecycle regression tests can assert ownership directly;
     /// production callers cannot access it outside AppShell.
@@ -122,6 +147,7 @@ public final class AgentCoordinator: ObservableObject {
         var messageID: UUID?
     }
     private var streamingStates: [UUID: AgentStreamingState] = [:]
+    private var runPresentationStates: [UUID: AssistantRunPresentationState] = [:]
 
     /// 兼容旧调用方的默认上下文参考值；真实请求预算始终来自 Provider capabilities，
     /// 不在 Agent 层额外限制模型的 token 或上下文。
@@ -150,6 +176,8 @@ public final class AgentCoordinator: ObservableObject {
         self.webService = webService ?? WebCapabilityRouter(
             instantAnswerFallback: DuckDuckGoInstantAnswerService()
         )
+        self.mutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
+        self.recommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
@@ -227,12 +255,14 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     public func activate(_ id: UUID) async {
-        if activeSessionID != id {
-            let cancelledTask = revokeCurrentRun(markTaskCancelled: true)
-            if let cancelledTask { await cancelledTask.value }
-        }
         activeSessionID = id
         messages = await sessionStore.session(id)?.messages ?? []
+        let runID = runIDsBySession[id]
+        currentRunID = runID
+        runTask = runID.flatMap { runTasks[$0] }
+        currentExecutionLease = runID.flatMap { runLeases[$0] }
+        runPresentationState = runID.flatMap { runPresentationStates[$0] }
+        refreshActiveRunState()
     }
 
     public func rename(_ id: UUID, to title: String) async {
@@ -259,6 +289,10 @@ public final class AgentCoordinator: ObservableObject {
         if id == activeSessionID {
             let cancelledTask = revokeCurrentRun(markTaskCancelled: true)
             if let cancelledTask { await cancelledTask.value }
+        } else if let runID = runIDsBySession[id], let cancelledTask = revokeRun(runID) {
+            // Deleting a background session must revoke its mutation authority
+            // too; otherwise its late bridge call could outlive the session.
+            await cancelledTask.value
         }
         await sessionStore.delete(id)
         executionLineages[id] = nil
@@ -296,6 +330,11 @@ public final class AgentCoordinator: ObservableObject {
         if let active = activeSessionID, ids.contains(active) {
             let cancelledTask = revokeCurrentRun(markTaskCancelled: true)
             if let cancelledTask { await cancelledTask.value }
+        }
+        for id in ids where id != activeSessionID {
+            if let runID = runIDsBySession[id], let cancelledTask = revokeRun(runID) {
+                await cancelledTask.value
+            }
         }
         for id in ids { await sessionStore.delete(id) }
         for id in ids { executionLineages[id] = nil }
@@ -372,7 +411,15 @@ public final class AgentCoordinator: ObservableObject {
         intent explicitIntent: AgentTaskIntent? = nil
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isRunning else { return }
+        if let sessionID = activeSessionID,
+           pendingConfirmation(for: sessionID) != nil {
+            // A pending destructive approval is resolved only by its
+            // dedicated UI buttons. Natural-language text such as “确认” or
+            // “继续” must never become Runtime approval or resume the paused
+            // mutation with a different call.
+            return
+        }
+        guard !trimmed.isEmpty else { return }
         if let sessionID = activeSessionID {
             startRun(text: trimmed, provider: provider, explicitIntent: explicitIntent, sessionID: sessionID)
         } else {
@@ -386,8 +433,8 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     /// 无界面执行：发送一条消息并等待本轮运行结束，返回助手新增的文本回复。
-    /// 供 Siri / 快捷指令等系统入口调用（此时 headless 临时置为 true）。
-    /// 工具调用直接执行；调用结束恢复原值，不影响 App 内运行状态。
+    /// 供 Siri / 快捷指令等系统入口调用。无界面身份只绑定到本次 run，
+    /// 不会改变 Coordinator 上其他会话的确认能力。
     @discardableResult
     public func sendAndWait(
         _ text: String,
@@ -396,29 +443,33 @@ public final class AgentCoordinator: ObservableObject {
     ) async -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
-        // 确保存在活动会话：send() 在有会话时同步创建 runTask，便于直接等待。
+        // 确保存在活动会话。
         if activeSessionID == nil {
             _ = await newSession()
         }
-        let startCount = messages.count
-        let previousHeadless = headless
-        headless = true
-        defer { headless = previousHeadless }
-        send(trimmed, provider: provider, intent: explicitIntent)
-        if let task = runTask {
-            _ = await task.value
-        } else {
-            // send 走异步建会话路径（理论上不会发生，但保留兜底）：
-            // 短轮询等待 runTask 出现并完成，避免直接返回空结果。
-            for _ in 0..<50 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                if let task = runTask {
-                    _ = await task.value
-                    break
-                }
-            }
-        }
-        return Self.collectAssistantText(messages.dropFirst(startCount))
+        guard let sessionID = activeSessionID,
+              pendingConfirmation(for: sessionID) == nil,
+              runIDsBySession[sessionID] == nil
+        else { return "" }
+
+        // Capture both the session and its starting message count. The UI may
+        // switch to another session while this run is awaiting the provider;
+        // the return value must still come from the captured SessionStore row.
+        let startCount = await sessionStore.session(sessionID)?.messages.count ?? 0
+        startRun(
+            text: trimmed,
+            provider: provider,
+            explicitIntent: explicitIntent,
+            sessionID: sessionID,
+            mode: .headless
+        )
+        guard let startedRunID = runIDsBySession[sessionID],
+              let task = runTasks[startedRunID]
+        else { return "" }
+        _ = await task.value
+
+        let sessionMessages = await sessionStore.session(sessionID)?.messages ?? []
+        return Self.collectAssistantText(sessionMessages.dropFirst(startCount))
     }
 
     /// 无界面入口（Siri / 快捷指令）返回给系统调用方的最终文本长度上限。
@@ -454,10 +505,11 @@ public final class AgentCoordinator: ObservableObject {
         text: String,
         provider: (any AIProvider)?,
         explicitIntent: AgentTaskIntent?,
-        sessionID: UUID
+        sessionID: UUID,
+        mode: RunMode = .interactive
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isRunning else { return }
+        guard !trimmed.isEmpty, runIDsBySession[sessionID] == nil else { return }
 
         isRunning = true
         let aiSettings = AIConnectionSettings()
@@ -501,7 +553,9 @@ public final class AgentCoordinator: ObservableObject {
             allowsLyrics: permissions.allowsLyrics,
             allowsHistory: permissions.allowsPlaybackHistory,
             memories: memoryStore.memories,
-            skills: memoryStore.skills
+            skills: memoryStore.skills,
+            mutationResourceLeaseRegistry: mutationResourceLeaseRegistry,
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
         let bridge = self.bridge
         let catalog = self.catalog
@@ -512,17 +566,20 @@ public final class AgentCoordinator: ObservableObject {
         // before a newly-created Task gets its first executor turn; keeping the
         // identity outside the task makes that race harmless.
         let runID = UUID()
-        currentExecutionLease?.revoke()
         executionGeneration &+= 1
         let executionLease = ToolExecutionLease(
             runID: runID,
             sessionID: sessionID,
             generation: executionGeneration
         )
+        runSessions[runID] = sessionID
+        runModes[runID] = mode
+        runLeases[runID] = executionLease
+        runIDsBySession[sessionID] = runID
         currentExecutionLease = executionLease
         currentRunID = runID
         beginRunPresentation(runID: runID, sessionID: sessionID)
-        runTask = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
             // 用户在任务真正开始前点了停止：直接结束，不回任何消息。
             if Task.isCancelled {
@@ -563,7 +620,7 @@ public final class AgentCoordinator: ObservableObject {
                         modelName: modelName,
                         permissions: permissions
                     )
-                    switch await self.ensureConsentIfNeeded(consent) {
+                    switch await self.ensureConsentIfNeeded(consent, runID: runID) {
                     case .deny:
                         await self.receive(
                             AgentChatMessage(role: .user, messages: [.text(trimmed)]),
@@ -601,7 +658,11 @@ public final class AgentCoordinator: ObservableObject {
                     executionLease: executionLease,
                     confirm: { [weak self] pending in
                         guard let self else { return false }
-                        return await self.requestOperationConfirmation(pending)
+                        return await self.requestOperationConfirmation(
+                            pending,
+                            runID: runID,
+                            sessionID: sessionID
+                        )
                     },
                     emit: { [weak self] message in
                         await self?.receive(message, sessionID: sessionID, runID: runID)
@@ -610,7 +671,10 @@ public final class AgentCoordinator: ObservableObject {
                         await self?.record(record)
                     },
                     progress: { _ in },
-                    state: { _ in }
+                    state: { _ in },
+                    observeRecommendationIndex: { [weak self] event in
+                        await self?.observeRecommendationIndex(event, sessionID: sessionID, runID: runID)
+                    }
                 )
                 if self.activeSessionID == sessionID {
                     await self.summarizeActiveSession()
@@ -661,7 +725,6 @@ public final class AgentCoordinator: ObservableObject {
                     scopes: reconstructed.scopes,
                     allowedToolGroups: reconstructed.allowedToolGroups,
                     allowedPermissions: reconstructed.allowedPermissions,
-                    requiresConfirmationForDestructive: reconstructed.requiresConfirmationForDestructive,
                     maxRisk: reconstructed.maxRisk,
                     completion: reconstructed.completion,
                     budget: resumeRecord.budget ?? reconstructed.budget
@@ -701,7 +764,7 @@ public final class AgentCoordinator: ObservableObject {
                     modelName: modelName,
                     permissions: permissions
                 )
-                switch await self.ensureConsentIfNeeded(consent) {
+                switch await self.ensureConsentIfNeeded(consent, runID: runID) {
                 case .deny:
                     // 不发起网络请求，只回本地提示（用户消息回显 + 隐私说明）。
                     await self.receive(
@@ -743,7 +806,11 @@ public final class AgentCoordinator: ObservableObject {
                 executionLease: executionLease,
                 confirm: { [weak self] pending in
                     guard let self else { return false }
-                    return await self.requestOperationConfirmation(pending)
+                    return await self.requestOperationConfirmation(
+                        pending,
+                        runID: runID,
+                        sessionID: sessionID
+                    )
                 },
                 emit: { [weak self] message in
                     await self?.receive(message, sessionID: sessionID, runID: runID)
@@ -756,6 +823,9 @@ public final class AgentCoordinator: ObservableObject {
                 },
                 state: { [weak self] taskState in
                     await self?.updateTaskState(taskState, taskID: taskID, sessionID: sessionID, runID: runID)
+                },
+                observeRecommendationIndex: { [weak self] event in
+                    await self?.observeRecommendationIndex(event, sessionID: sessionID, runID: runID)
                 }
             )
             // 收尾顺序：先结算任务 → 再清理运行身份 → 最后才释放 isRunning。
@@ -769,6 +839,8 @@ public final class AgentCoordinator: ObservableObject {
             }
             self.finishOwnedRun(runID)
         }
+        runTasks[runID] = task
+        runTask = task
     }
 
     /// 更新任务进度（工具步骤 / 当前阶段 / token 用量）。
@@ -786,8 +858,114 @@ public final class AgentCoordinator: ObservableObject {
             outputTokens: progress.outputTokens ?? 0
         )
         // 只有属于当前活动会话的任务才更新 UI 进度，避免 Session A 的步骤显示在 B 界面。
-        if currentRunID == runID, activeSessionID == sessionID {
+        if ownsRun(runID, sessionID: sessionID), activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)
+        }
+        guard ownsRun(runID, sessionID: sessionID),
+              var presentation = runPresentationStates[runID],
+              presentation.sessionID == sessionID else { return }
+        if case let .workflow(skillID, phase, detail) = progress.activity {
+            presentation.phase = .workflow(skillID: skillID, phase: phase, detail: detail)
+            runPresentationStates[runID] = presentation
+            if activeSessionID == sessionID, currentRunID == runID {
+                runPresentationState = presentation
+            }
+        }
+    }
+
+    /// Project structured Recommendation Index observations into the one
+    /// transient presentation state owned by this run. The execution registry
+    /// remains authoritative; catalog counts are never used to infer that a
+    /// task is running.
+    private func observeRecommendationIndex(
+        _ event: RecommendationIndexExecutionEvent,
+        sessionID: UUID,
+        runID: UUID
+    ) async {
+        AuralisLog.artificialIntelligence.info(
+            "RECOMMENDATION_INDEX \(event.compactSummary, privacy: .public)"
+        )
+
+        guard ownsRun(runID, sessionID: sessionID),
+              event.runID == runID,
+              event.sessionID == sessionID else { return }
+
+        let eventServerID = event.serverID.map { ServerID(rawValue: $0) }
+        let snapshot = await recommendationIndexExecutionRegistry.snapshot(serverID: eventServerID)
+        recommendationIndexExecutionState = snapshot
+
+        guard var presentation = runPresentationStates[runID],
+              presentation.sessionID == sessionID else { return }
+
+        let detail = Self.recommendationIndexPresentationDetail(for: event)
+        switch event.kind {
+        case .retrying:
+            presentation.phase = .retrying(message: detail)
+        case .failed:
+            presentation.phase = .failed(message: detail)
+        case .cancelled:
+            presentation.phase = .failed(message: detail)
+        default:
+            presentation.phase = .workflow(
+                skillID: RecommendationIndexSkillRuntime.skillID,
+                phase: event.phase.rawValue,
+                detail: detail
+            )
+        }
+
+        runPresentationStates[runID] = presentation
+        if activeSessionID == sessionID, currentRunID == runID {
+            runPresentationState = presentation
+        }
+    }
+
+    private static func recommendationIndexPresentationDetail(
+        for event: RecommendationIndexExecutionEvent
+    ) -> String {
+        let total = event.totalTracks ?? 0
+        let indexed = event.indexedTracks ?? 0
+        let progress = total > 0 ? "\(indexed) / \(total)" : nil
+        let batch = event.batchSize > 0 ? "当前批次 \(event.batchSize) 首" : nil
+
+        switch event.kind {
+        case .routeSelected, .started:
+            return "正在启动推荐索引…"
+        case .statusLoaded:
+            if let progress { return "推荐索引：已完成 \(progress)，正在读取下一批" }
+            return "正在读取推荐索引状态…"
+        case .batchPrepared:
+            if let batch { return "推荐索引：已准备（\(batch)）" }
+            return "正在准备推荐索引批次…"
+        case .classificationStarted:
+            if let progress, let batch { return "推荐索引：正在分类（\(progress)，\(batch)）" }
+            if let batch { return "推荐索引：正在分类（\(batch)）" }
+            return "推荐索引：正在分类当前批次…"
+        case .classificationCompleted:
+            return "推荐索引：分类完成，准备写入…"
+        case .classificationFailed:
+            return "推荐索引：当前批次分类失败，准备重试…"
+        case .commitStarted:
+            if let batch { return "推荐索引：正在写入（\(batch)）" }
+            return "推荐索引：正在写入分类…"
+        case .commitCompleted:
+            return "推荐索引：分类已写入，准备核验…"
+        case .verifyStarted:
+            return "推荐索引：正在核验写入进度…"
+        case .verifyCompleted:
+            return "推荐索引：写入进度已核验，准备继续…"
+        case .noProgress:
+            return "推荐索引：连续提交未产生进度，已暂停以避免重复写入。"
+        case .retrying:
+            return "推荐索引正在重试当前批次…"
+        case .completed:
+            if let progress { return "推荐索引已完成（\(progress)）" }
+            return "推荐索引已完成"
+        case .cancelled:
+            return "推荐索引已取消"
+        case .failed:
+            return "推荐索引已暂停：模型请求或服务暂时失败。"
+        case .phaseChanged:
+            return event.message ?? "推荐索引正在处理…"
         }
     }
 
@@ -811,7 +989,7 @@ public final class AgentCoordinator: ObservableObject {
             noProgressRounds: state.progress.noProgressRounds,
             checkpointJSON: state.facts["recommendation.index.checkpoint"]
         )
-        if currentRunID == runID, activeSessionID == sessionID {
+        if ownsRun(runID, sessionID: sessionID), activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)
         }
     }
@@ -848,7 +1026,7 @@ public final class AgentCoordinator: ObservableObject {
         }
         taskStore.update(taskID, status: status, error: failure)
         // 只有属于当前活动会话的任务才更新 UI 任务状态，避免 A 的收尾污染 B 界面。
-        if currentRunID == runID, activeSessionID == sessionID {
+        if ownsRun(runID, sessionID: sessionID), activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)
         }
     }
@@ -859,18 +1037,37 @@ public final class AgentCoordinator: ObservableObject {
     /// Internal for the lifecycle regression test; callers can only release
     /// their own run identity.
     func finishOwnedRun(_ runID: UUID) {
-        guard currentRunID == runID else { return }
+        guard runSessions[runID] != nil || currentRunID == runID else { return }
+        let sessionID = runSessions[runID]
+        // A run that exits while waiting for approval must fail closed and
+        // release only its own continuation.  Never leave a confirmation
+        // belonging to a finished run visible in another session.
+        resolveOperationConfirmation(false, for: runID)
+        runLeases[runID]?.revoke()
         if currentExecutionLease?.runID == runID {
-            currentExecutionLease?.revoke()
             currentExecutionLease = nil
         }
-        currentRunID = nil
-        runTask = nil
+        runLeases[runID] = nil
+        runSessions[runID] = nil
+        runModes[runID] = nil
+        runTasks[runID] = nil
+        if let sessionID, runIDsBySession[sessionID] == runID {
+            runIDsBySession[sessionID] = nil
+        }
+        if currentRunID == runID {
+            currentRunID = nil
+            runTask = nil
+        }
         streamingStates[runID] = nil
+        runPresentationStates[runID] = nil
         if runPresentationState?.runID == runID {
             runPresentationState = nil
         }
-        isRunning = false
+        if case let .running(snapshot) = recommendationIndexExecutionState,
+           snapshot.runID == runID {
+            recommendationIndexExecutionState = .idle
+        }
+        refreshActiveRunState()
     }
 
     /// Establish the one transient phase row for a new owned run.  Kept
@@ -878,7 +1075,9 @@ public final class AgentCoordinator: ObservableObject {
     /// without needing to manufacture a live Provider request.
     func beginRunPresentation(runID: UUID, sessionID: UUID) {
         guard currentRunID == runID else { return }
-        runPresentationState = .init(runID: runID, sessionID: sessionID, phase: .thinking)
+        let presentation = AssistantRunPresentationState(runID: runID, sessionID: sessionID, phase: .thinking)
+        runPresentationStates[runID] = presentation
+        runPresentationState = presentation
     }
 
     private static func failureSummary(in messages: ArraySlice<AgentChatMessage>) -> String? {
@@ -904,27 +1103,75 @@ public final class AgentCoordinator: ObservableObject {
     /// session.
     @discardableResult
     private func revokeCurrentRun(markTaskCancelled: Bool) -> Task<Void, Never>? {
-        let cancelledTask = runTask
         let cancelledRunID = currentRunID
-        currentExecutionLease?.revoke()
-        currentExecutionLease = nil
-        cancelledTask?.cancel()
+        let cancelledTask = cancelledRunID.flatMap { revokeRun($0) }
         runTask = nil
         currentRunID = nil
-        if let cancelledRunID {
-            streamingStates[cancelledRunID] = nil
-            if runPresentationState?.runID == cancelledRunID {
-                runPresentationState = nil
-            }
-        }
+        currentExecutionLease = nil
         resolveConsent(.deny)
-        resolveOperationConfirmation(false)
-        isRunning = false
+        resolveOperationConfirmation(false, for: cancelledRunID)
+        refreshActiveRunState()
         if markTaskCancelled, let taskID = activeTask?.id {
             taskStore.update(taskID, status: .cancelled, error: String(localized: "用户取消。", bundle: .module))
             activeTask = nil
         }
         return cancelledTask
+    }
+
+    /// Revoke one registered run without touching another session's UI. This
+    /// is used when a background session is deleted and by the foreground
+    /// cancellation wrapper above.
+    @discardableResult
+    private func revokeRun(_ runID: UUID) -> Task<Void, Never>? {
+        guard runSessions[runID] != nil || currentRunID == runID else { return nil }
+        let task = runTasks[runID]
+        // Revoke the UI approval wait before cancelling the async task.  Task
+        // cancellation alone cannot resume a CheckedContinuation.
+        resolveOperationConfirmation(false, for: runID)
+        runLeases[runID]?.revoke()
+        task?.cancel()
+        let sessionID = runSessions[runID]
+        runTasks[runID] = nil
+        runSessions[runID] = nil
+        runModes[runID] = nil
+        runLeases[runID] = nil
+        if let sessionID, runIDsBySession[sessionID] == runID {
+            runIDsBySession[sessionID] = nil
+        }
+        streamingStates[runID] = nil
+        runPresentationStates[runID] = nil
+        if currentRunID == runID {
+            currentRunID = nil
+            runTask = nil
+            currentExecutionLease = nil
+            if runPresentationState?.runID == runID {
+                runPresentationState = nil
+            }
+        }
+        refreshActiveRunState()
+        return task
+    }
+
+    private func ownsRun(_ runID: UUID, sessionID: UUID) -> Bool {
+        runSessions[runID] == sessionID || (runSessions[runID] == nil && currentRunID == runID)
+    }
+
+    /// `isRunning` is a presentation property for the active session, not a
+    /// global count of background work. Session A may continue indexing while
+    /// Session B is idle and must not show A's spinner.
+    private func refreshActiveRunState() {
+        isRunning = activeSessionID.flatMap { runIDsBySession[$0] } != nil
+        let activeRunID = activeSessionID.flatMap { runIDsBySession[$0] }
+        pendingOperationConfirmation = activeRunID.flatMap { operationConfirmations[$0] }
+    }
+
+    /// The published property above is deliberately only a projection for
+    /// the active UI session. Runtime guards must resolve through the
+    /// session-to-run map so a background session can never block another
+    /// session's send or confirmation UI.
+    private func pendingConfirmation(for sessionID: UUID) -> PendingConfirmation? {
+        guard let runID = runIDsBySession[sessionID] else { return nil }
+        return operationConfirmations[runID]
     }
 
     /// 接收 Runner 发出的消息。
@@ -935,7 +1182,7 @@ public final class AgentCoordinator: ObservableObject {
     ///   气泡，则**原地替换**该气泡（同一位置，不另起一条），并持久化最终消息。
     ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     /// 接收 Runner 发出的消息。消息先绑定 sessionID + runID：
-    /// 1. 只有 currentRunID == runID 的 callback 才被接受（迟到/过期 callback 一律丢弃）；
+    /// 1. 只有仍登记在目标 session 的 run callback 才被接受（迟到/过期 callback 一律丢弃）；
     /// 2. 持久化永远写入目标 session 的 SessionStore；
     /// 3. 只有 activeSessionID == sessionID 时才更新当前屏幕的 `messages`。
     ///
@@ -945,7 +1192,7 @@ public final class AgentCoordinator: ObservableObject {
     ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     func receive(_ message: AgentChatMessage, sessionID: UUID, runID: UUID) async {
         // 过期 callback（旧 run 的迟到 token / 旧 run 的 final answer）→ 丢弃，不污染新运行。
-        guard currentRunID == runID else { return }
+        guard ownsRun(runID, sessionID: sessionID) else { return }
         let isActiveSession = activeSessionID == sessionID
 
         updateRunPresentation(for: message, sessionID: sessionID, runID: runID)
@@ -1012,26 +1259,29 @@ public final class AgentCoordinator: ObservableObject {
         sessionID: UUID,
         runID: UUID
     ) {
-        guard runPresentationState?.runID == runID,
-              runPresentationState?.sessionID == sessionID else { return }
+        guard var presentation = runPresentationStates[runID],
+              presentation.sessionID == sessionID else { return }
         if Self.streamingDeltaText(from: message) != nil {
-            runPresentationState?.phase = .streaming
-            return
-        }
-        guard let item = message.messages.last else { return }
-        switch item {
-        case let .toolProgress(step):
-            if step.contains("重试") {
-                runPresentationState?.phase = .retrying(message: step)
-            } else {
-                runPresentationState?.phase = .usingTool(name: step)
+            presentation.phase = .streaming
+        } else if let item = message.messages.last {
+            switch item {
+            case let .toolProgress(step):
+                if step.contains("重试") {
+                    presentation.phase = .retrying(message: step)
+                } else {
+                    presentation.phase = .usingTool(name: step)
+                }
+            case .confirmation:
+                presentation.phase = .waitingForConfirmation
+            case let .error(text):
+                presentation.phase = .failed(message: text)
+            default:
+                break
             }
-        case .confirmation:
-            runPresentationState?.phase = .waitingForConfirmation
-        case let .error(text):
-            runPresentationState?.phase = .failed(message: text)
-        default:
-            break
+        }
+        runPresentationStates[runID] = presentation
+        if activeSessionID == sessionID, currentRunID == runID {
+            runPresentationState = presentation
         }
     }
 
@@ -1097,11 +1347,14 @@ public final class AgentCoordinator: ObservableObject {
     /// 首次外发确认门槛：`auralis.ai.consentGiven` 已写入则直接放行；
     /// 未写入时挂起，等待 UI 决策（AssistantView 弹确认框）。
     /// 无界面模式（Siri / 快捷指令）没有可见确认框，按默认拒绝处理，不发起网络请求。
-    private func ensureConsentIfNeeded(_ request: AIPrivacyConsentRequest) async -> AIConsentDecision {
+    private func ensureConsentIfNeeded(
+        _ request: AIPrivacyConsentRequest,
+        runID: UUID
+    ) async -> AIConsentDecision {
         if UserDefaults.standard.bool(forKey: Self.consentGivenDefaultsKey) {
             return .allowAndRemember
         }
-        if headless { return .deny }
+        if runModes[runID] == .headless { return .deny }
         // 上一个确认还没结束时直接拒绝，避免弹窗互相覆盖。
         guard consentContinuation == nil else { return .deny }
         pendingConsent = request
@@ -1110,30 +1363,45 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
-    /// 高风险操作确认：仅由 ToolDescriptor.requiresConfirmation=true 的工具调用。
-    /// Siri / 快捷指令没有可见确认界面，默认拒绝该不可逆操作，但其它工具仍照常直执行。
-    private func requestOperationConfirmation(_ pending: PendingConfirmation) async -> Bool {
-        if headless || Task.isCancelled { return false }
-        guard operationConfirmationContinuation == nil else { return false }
-        pendingOperationConfirmation = pending
+    /// 运行时操作确认：不可逆工具以及需要补齐具体操作授权的调用都复用同一
+    /// PendingConfirmation 通道。确认属于具体 run/session；模型输出的“确认”、
+    /// “继续”等文本不会进入这里，也不能替代 Runtime 的批准。
+    func requestOperationConfirmation(
+        _ pending: PendingConfirmation,
+        runID: UUID,
+        sessionID: UUID
+    ) async -> Bool {
+        guard runModes[runID] == .interactive, !Task.isCancelled else { return false }
+        guard runSessions[runID] == sessionID,
+              pending.runID == nil || pending.runID == runID,
+              pending.sessionID == nil || pending.sessionID == sessionID,
+              runLeases[runID]?.isValidSnapshot == true else { return false }
+        guard operationConfirmationContinuations[runID] == nil else { return false }
+        operationConfirmations[runID] = pending
+        refreshActiveRunState()
         return await withCheckedContinuation { continuation in
-            operationConfirmationContinuation = continuation
+            operationConfirmationContinuations[runID] = continuation
         }
     }
 
-    public func approveOperationConfirmation() {
-        resolveOperationConfirmation(true)
-    }
-
     public func denyOperationConfirmation() {
-        resolveOperationConfirmation(false)
+        resolveOperationConfirmation(false, for: activeConfirmationRunID)
     }
 
-    private func resolveOperationConfirmation(_ approved: Bool) {
-        guard let continuation = operationConfirmationContinuation else { return }
-        operationConfirmationContinuation = nil
-        pendingOperationConfirmation = nil
-        continuation.resume(returning: approved)
+    public func approveOperationConfirmation() {
+        resolveOperationConfirmation(true, for: activeConfirmationRunID)
+    }
+
+    private var activeConfirmationRunID: UUID? {
+        activeSessionID.flatMap { runIDsBySession[$0] }
+    }
+
+    private func resolveOperationConfirmation(_ approved: Bool, for runID: UUID?) {
+        guard let runID else { return }
+        let continuation = operationConfirmationContinuations.removeValue(forKey: runID)
+        operationConfirmations[runID] = nil
+        refreshActiveRunState()
+        continuation?.resume(returning: approved)
     }
 
     public func approveConsent(remember: Bool) {

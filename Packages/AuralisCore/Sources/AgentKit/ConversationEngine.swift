@@ -48,7 +48,8 @@ public struct ConversationEngine: Sendable {
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
-        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
+        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in },
+        observeRecommendationIndex: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
     ) async {
         let resolvedLineage = executionLineage ?? Self.executionLineage(
             userText: userText,
@@ -79,7 +80,8 @@ public struct ConversationEngine: Sendable {
             emit: emit,
             log: log,
             progress: progress,
-            state: state
+            state: state,
+            observeRecommendationIndex: observeRecommendationIndex
         )
     }
 

@@ -39,7 +39,7 @@ struct HomeView: View {
             .frame(maxWidth: IOSLayoutMetrics.readableContentMaxWidth)
             .frame(maxWidth: .infinity)
         }
-        .reportsBottomDockScroll()
+        .reportsBottomDockScroll(source: .home)
         .background(ambientBackground)
     }
 

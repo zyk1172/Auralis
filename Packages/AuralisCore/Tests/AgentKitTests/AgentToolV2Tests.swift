@@ -721,8 +721,8 @@ struct QueueV2Tests {
         let bridge = MockAgentBridge(activeServerID: "s")
 
         // permissive direct execution：队列工具不再要求确认，且被视为可逆操作。
-        #expect(AgentToolRegistry.descriptor(for: "queue_replace")?.requiresConfirmation == false)
-        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.requiresConfirmation == false)
+        #expect(AgentToolRegistry.descriptor(for: "queue_replace")?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
+        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
         #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.permission == .reversible)
 
         let clear = await AgentToolkit.executeV2(

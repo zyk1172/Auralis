@@ -60,8 +60,8 @@ Runtime 在准备批次时按需读取已有 canonical 标签及使用次数，�
 
 `RecommendationIndexTransfer` 导出全部 tag 行（含 `dimension='tag'` 与 confidence）；
 导入时 `tag` 维度经规范化校验后还原。同服务器 + 同歌曲身份匹配后恢复固定与开放标签。
-`.auralis-index` 绝不包含密码 / token / URL / 歌词 / 历史 / 评分 / 路径；导入兼容旧
-`.auralis-index-v2`。
+`.auralis-index` 绝不包含密码 / token / URL / 歌词 / 历史 / 评分 / 路径；导入兼容历史
+`.auralis-index-v2` 文件。
 
 ## 测试
 

@@ -8,7 +8,7 @@
 
 - `AuralisAppModel` 播放 / 业务逻辑（repeat / shuffle / queue / seek / favorite / dislike / history）
 - `PlaybackStore` / `PlaybackEngine`（AVFoundationPlaybackEngine） / `SystemMediaIntegration`
-- `LocalCatalog` / `AgentKit` / Server services / Download services / Music enrichment / Recommendation V2
+- `LocalCatalog` / `AgentKit` / Server services / Download services / Music enrichment / Recommendation Index
 - `GlobalID` 语义（serverID + remoteID 双键），禁止退回 bare TrackID
 - `MacNavigationModel` / `MacSidebarDestination`（语义身份）/ `MacDetailRoute` / `MacEntityRouteID` / `MacNavigationTarget`
 - Window topology：主窗口 `WindowGroup`、同窗口 Expanded Player（`MacPlayerPresentationState`）、独立 MiniPlayer Window、`Settings` Scene

@@ -1,4 +1,4 @@
-# Auralis AI Assistant V2 实施说明
+# Auralis AI Assistant 实施说明
 
 ## 设计目标
 
@@ -24,8 +24,9 @@
 
 `AgentToolRegistry.all` 是描述和执行的单一来源。`ToolCatalog` 对其按名称、命名空间、摘要
 和 tags 搜索，`tool_search` 返回轻量摘要；Runner 将发现到的 descriptor 加入下一轮 schema。
-完整工具定义不会永久常驻每轮请求。普通聊天默认进入 generic loop；只有明确的
-Auralis/音乐操作或确定性 workflow 才进入任务状态路径。
+完整工具定义不会永久常驻每轮请求。普通聊天默认进入 generic loop；高确定性的歌单、播放状态、队列、资料库统计、艺术家/专辑
+和服务器列表请求由 ToolLoop 直接执行一次 canonical read，不进入 Provider 规划；只有明确的 Auralis/音乐操作或确定性 workflow
+才进入任务状态路径。
 
 模型调用进入 `ToolRuntime` 后依次经过：必填/未知参数校验 → JSON Schema 基本形状校验 →
 注册表分流 → 真实 `AgentBridge`、`LocalCatalogStore`、系统服务或 `AgentWebService`。
@@ -33,6 +34,7 @@ Auralis/音乐操作或确定性 workflow 才进入任务状态路径。
 
 已拆分的高频入口包括：
 
+- `playlist_list`、`library_get_artists`、`library_get_albums`、`library_get_summary`；
 - `library_resolve_entity`、`library_get_songs_batch`；
 - `queue_append_many`、`queue_play_next_many`；
 - `music_download_search`、`music_download_submit`、`music_download_status`、
@@ -41,8 +43,9 @@ Auralis/音乐操作或确定性 workflow 才进入任务状态路径。
 
 ## 对话、联网与记忆
 
-普通聊天的生产链路是 `AgentCoordinator → ConversationEngine → ToolLoop → Provider / ToolRuntime`，
-不创建 `AgentTaskState`，也不经过 `CompletionEvaluator`。确定性任务才由
+普通聊天的生产链路是 `AgentCoordinator → ConversationEngine → ToolLoop → Provider / ToolRuntime`；
+上述高确定性 read 在 ToolLoop 中直接执行，不创建 `AgentTaskState`，也不经过 Provider 规划。
+其它普通聊天不创建 `AgentTaskState`，也不经过 `CompletionEvaluator`。确定性任务才由
 `AgentCoordinator → AgentRuntime → ConversationEngine → ToolLoop → trusted Stateful Skill`
 编排；推荐索引的 `RecommendationIndexSkillRuntime` 在 Runtime 内部驱动
 `RecommendationIndexWorkflow`。分类请求是 `tools=[]` 的封闭 JSON transform，Runtime

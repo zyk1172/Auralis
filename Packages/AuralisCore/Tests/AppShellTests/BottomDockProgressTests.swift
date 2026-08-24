@@ -40,6 +40,35 @@ struct BottomDockProgressTests {
         #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: 40, collapseProgress: 1) == BottomDockLayoutMetrics.minimumBarHeight)
         #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: fullWidth, collapseProgress: 2) == 632)
     }
+
+    @Test("Home Chrome 只允许当前页面清理自己的滚动来源")
+    @MainActor
+    func homeChromeKeepsCurrentSourceOwnership() {
+        let chrome = HomeChromeState()
+
+        chrome.beginInteraction(source: .home)
+        #expect(chrome.activeSource == .home)
+
+        chrome.beginInteraction(source: .browseDetail)
+        #expect(chrome.activeSource == .browseDetail)
+
+        // 首页离场回调迟到时，不能清掉已经进入详情页的新来源。
+        chrome.endInteraction(source: .home)
+        #expect(chrome.activeSource == .browseDetail)
+
+        chrome.endInteraction(source: .browseDetail)
+        #expect(chrome.activeSource == nil)
+    }
+
+    @Test("Home Chrome 页面避让高度来自共享度量")
+    func homeChromeReservationUsesSharedMetrics() {
+        let metrics = BottomChromeMetrics.standard
+        #expect(metrics.reservedHeight(hasAccessory: false, collapseProgress: 0) == metrics.singleBarReservation)
+        #expect(metrics.reservedHeight(hasAccessory: true, collapseProgress: 0) == metrics.expandedReservation)
+        #expect(metrics.reservedHeight(hasAccessory: true, collapseProgress: 1) == metrics.singleBarReservation)
+        #expect(metrics.reservedHeight(hasAccessory: true, collapseProgress: 0.5) == (metrics.expandedReservation + metrics.singleBarReservation) / 2)
+        #expect(metrics.withSafeAreaBottom(34).safeAreaBottom == 34)
+    }
 }
 
 @Suite("播放页标题滚动判断")

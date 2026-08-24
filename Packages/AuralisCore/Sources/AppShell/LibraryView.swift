@@ -114,7 +114,7 @@ struct LibraryView: View {
                         }
                 }
                 .listStyle(.plain)
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .library)
             }
         }
     }
@@ -164,7 +164,7 @@ struct LibraryView: View {
                     }
                     .padding()
                 }
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .library)
             }
         }
     }
@@ -210,7 +210,7 @@ struct LibraryView: View {
                     }
                 }
                 .listStyle(.plain)
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .library)
             }
         }
     }
@@ -265,7 +265,7 @@ struct LibraryView: View {
                     }
                     .padding(AuralisSpacing.medium)
                 }
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .library)
             }
         }
         .task { model.refreshGenres() }
@@ -423,7 +423,7 @@ struct LibraryView: View {
                         Spacer().frame(height: AuralisSpacing.medium)
                     }
                 }
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .library)
             }
         }
         .task { await loadRecommendationCategories() }
@@ -581,7 +581,7 @@ struct LibraryView: View {
                     }
                     .padding()
                 }
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .library)
             }
         }
     }
@@ -612,7 +612,7 @@ struct LibraryView: View {
                         }
                 }
                 .listStyle(.plain)
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .library)
             }
         }
     }

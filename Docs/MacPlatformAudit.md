@@ -45,7 +45,7 @@ MacMusicShell
 - **Albums / Artists / Genres / Playlists**：响应式 Artwork Grid（`MacArtworkGridMetrics` 计算列数与 itemWidth），hover Play / More，右键菜单。
 - **Album / Artist / Genre / Playlist Detail**：主内容 `NavigationStack` 内 push，不使用通用 Browse Sheet。
 - **Search**：Sidebar 一级目的地 + Sidebar `.searchable`；结果分 歌曲/专辑/艺术家/歌单，全部 GlobalID 双键解析、可点击；`Command-F` 聚焦搜索。
-- **分类（Recommendation V2）**：Sidebar「分类」→ Dimension → Value → Track Table，复用现有 V2 索引。
+- **分类（推荐索引）**：Sidebar「分类」→ Dimension → Value → Track Table，复用现有推荐索引。
 - **不喜欢**：Sidebar「不喜欢」Smart Collection，可双击播放 / 右键取消不喜欢。
 
 ## 5. 播放器

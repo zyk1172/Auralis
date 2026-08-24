@@ -43,6 +43,14 @@ struct AssistantView: View {
     @Environment(\.bottomDockScrollCoordinator) private var bottomDockScroll: BottomDockScrollCoordinator?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var bottomChromeMetrics: BottomChromeMetrics {
+        bottomDockScroll?.metrics ?? .standard
+    }
+
+    private var bottomDockCollapseProgress: CGFloat {
+        bottomDockScroll?.collapseProgress ?? 0
+    }
+
     init(model: AuralisAppModel, theme: BuiltInTheme) {
         self.model = model
         self.theme = theme
@@ -129,18 +137,24 @@ struct AssistantView: View {
         } message: { consent in
             Text("\(consent.purpose)\n\(consent.fields.map { "· \($0)" }.joined(separator: "\n"))")
         }
-        // 不可逆 Agent 操作确认：只由 playlist_delete / memory_* / skill_delete
-        // 等工具元数据触发；清空队列、删下载、删服务器等仍保持直接执行。
+        // 运行时确认：不可逆工具或原始请求语义不足以覆盖某个具体修改时，
+        // 都通过同一个 PendingConfirmation 通道挂起；模型文本不会自行授予权限。
         .alert(
-            Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认不可逆操作", bundle: .module)),
+            Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认操作", bundle: .module)),
             isPresented: Binding(
                 get: { agent.pendingOperationConfirmation != nil },
                 set: { if !$0 { agent.denyOperationConfirmation() } }
             ),
             presenting: agent.pendingOperationConfirmation
         ) { _ in
-            Button(String(localized: "批准并执行", bundle: .module), role: .destructive) {
-                agent.approveOperationConfirmation()
+            if agent.pendingOperationConfirmation?.permission == .destructive {
+                Button(String(localized: "批准并执行", bundle: .module), role: .destructive) {
+                    agent.approveOperationConfirmation()
+                }
+            } else {
+                Button(String(localized: "批准并执行", bundle: .module)) {
+                    agent.approveOperationConfirmation()
+                }
             }
             Button(String(localized: "取消", bundle: .module), role: .cancel) {
                 agent.denyOperationConfirmation()
@@ -406,7 +420,7 @@ struct AssistantView: View {
                     // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
                     .onTapGesture { assistantInputFocused = false }
                 }
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .assistant)
                 // 向下拖动聊天列表时交互式收起键盘。
                 .scrollDismissesKeyboard(.immediately)
                 // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
@@ -438,7 +452,12 @@ struct AssistantView: View {
                 .frame(maxWidth: .infinity)
                 // 收拢态时输入栏进入底部导航栏的中间槽位；一旦获得输入焦点、键盘弹出，
                 // 必须立即恢复完整输入宽度，而不能继续沿用窄胶囊。
-                .padding(.horizontal, assistantInputFocused ? 0 : 64 * (bottomDockScroll?.collapseProgress ?? 0))
+                .padding(
+                    .horizontal,
+                    assistantInputFocused
+                        ? 0
+                        : (bottomChromeMetrics.dockHeight + bottomChromeMetrics.spacing) * bottomDockCollapseProgress
+                )
                 // 键盘关闭时：主菜单栏是独立的底部 overlay（忽略键盘），会覆盖在屏幕最底，
                 // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
                 // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
@@ -449,13 +468,15 @@ struct AssistantView: View {
                     .bottom,
                     assistantInputFocused
                         ? AuralisSpacing.small
-                        : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - (bottomDockScroll?.collapseProgress ?? 0))
+                        : bottomChromeMetrics.bottomPadding
+                            + (bottomChromeMetrics.spacing + bottomChromeMetrics.dockHeight)
+                            * (1 - bottomDockCollapseProgress)
                 )
                 // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
                 // 不再按拖动位移逐帧改变宽度，快滑和慢滑的视觉节奏完全一致。
                 .animation(
                     BottomDockMotion.animation(reduceMotion: reduceMotion),
-                    value: bottomDockScroll?.collapseProgress ?? 0
+                    value: bottomDockCollapseProgress
                 )
         }
         #else
@@ -602,7 +623,6 @@ struct AssistantView: View {
             // is active.  AgentTask remains useful for persisted deterministic
             // workflow diagnostics, but must not race a generic streaming run.
             Text(agent.runPresentationState?.phase.displayText
-                 ?? agent.activeTask?.currentStep
                  ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             Button(String(localized: "停止", bundle: .module)) { agent.cancel() }

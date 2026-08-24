@@ -24,7 +24,6 @@ struct SettingsView: View {
     @ObservedObject var themeStore: ThemeStore
     @AppStorage("auralis.ai.enabled") private var aiEnabled = true
     @State private var isEditingHomeLayout = false
-    @Environment(\.bottomDockReservedHeight) private var bottomDockReservedHeight
 
     private var theme: BuiltInTheme { themeStore.current }
 
@@ -94,11 +93,6 @@ struct SettingsView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        // 悬浮 Dock 不参与 NavigationStack 的安全区计算。为 Form 的末项预留同一高度，
-        // 滚到底时不会再被栏位遮挡。
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Color.clear.frame(height: bottomDockReservedHeight)
-        }
         .background(theme.colorTokens.background.color)
         .sheet(isPresented: $isEditingHomeLayout) {
             HomeLayoutEditView(model: model, theme: theme)

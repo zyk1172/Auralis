@@ -17,6 +17,10 @@ public enum RecommendationIndexCompatibility {
         value == legacySkillID ? RecommendationIndexSkill.id : value
     }
 
+    public static func canonicalWorkflowKind(_ value: String) -> AgentWorkflowKind? {
+        value == "recommendationIndexV2" ? .recommendationIndex : nil
+    }
+
     public static func isLegacyBuildMarker(_ text: String) -> Bool {
         let lower = text.lowercased()
         return lower.contains("索引 v2") || lower.contains("索引v2")
