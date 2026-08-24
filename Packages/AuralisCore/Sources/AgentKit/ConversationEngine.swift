@@ -40,7 +40,9 @@ public struct ConversationEngine: Sendable {
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
         authorizationContext: SideEffectAuthorizationContext? = nil,
+        executionLineage: ExecutionLineage? = nil,
         runID: UUID = UUID(),
+        executionLease: ToolExecutionLease? = nil,
         toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -48,10 +50,11 @@ public struct ConversationEngine: Sendable {
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
-        let resolvedAuthorization = authorizationContext ?? Self.authorizationContext(
+        let resolvedLineage = executionLineage ?? Self.executionLineage(
             userText: userText,
             history: history,
-            initialTaskState: initialTaskState
+            initialTaskState: initialTaskState,
+            authorizationContext: authorizationContext
         )
         await ToolLoop.run(
             userText: userText,
@@ -67,8 +70,10 @@ public struct ConversationEngine: Sendable {
             intent: intent,
             policy: policy,
             initialTaskState: initialTaskState,
-            authorizationContext: resolvedAuthorization,
+            authorizationContext: resolvedLineage.authorization,
+            executionLineage: resolvedLineage,
             runID: runID,
+            executionLease: executionLease,
             toolTimeout: toolTimeout,
             confirm: confirm,
             emit: emit,
@@ -82,29 +87,37 @@ public struct ConversationEngine: Sendable {
     /// continuation refers to the last substantive user request, while a
     /// persisted task goal wins for resume.  ToolLoop never derives consent
     /// from the current model-loop text.
-    private static func authorizationContext(
+    private static func executionLineage(
         userText: String,
         history: [AgentChatMessage],
-        initialTaskState: AgentTaskState?
-    ) -> SideEffectAuthorizationContext {
+        initialTaskState: AgentTaskState?,
+        authorizationContext: SideEffectAuthorizationContext?
+    ) -> ExecutionLineage {
+        if let authorizationContext {
+            return ExecutionLineage(
+                sourceRequest: authorizationContext.originalUserRequest,
+                authorization: authorizationContext
+            )
+        }
         if let goal = initialTaskState?.goal.trimmingCharacters(in: .whitespacesAndNewlines),
            !goal.isEmpty,
            goal.caseInsensitiveCompare(userText.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame {
-            return SideEffectAuthorizationContext(
-                sourceRequest: goal,
-                semantics: AgentRequestSemantics.analyze(goal)
+            return .resumedTask(
+                goal: goal,
+                taskID: initialTaskState?.id ?? UUID()
             )
         }
         let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
         if !historyText.isEmpty {
-            return SideEffectAuthorizationContext(
+            let authorization = SideEffectAuthorizationContext(
                 sourceRequest: historyText,
                 semantics: AgentRequestSemantics.analyze(historyText)
             )
+            return ExecutionLineage(
+                sourceRequest: historyText,
+                authorization: authorization
+            )
         }
-        return SideEffectAuthorizationContext(
-            sourceRequest: userText,
-            semantics: AgentRequestSemantics.analyze(userText)
-        )
+        return .newRequest(text: userText)
     }
 }

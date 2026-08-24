@@ -138,9 +138,8 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             && annotationAction
 
         let indexMarker = has([
-            "推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2",
-            "索引处理", "索引进度", "索引还剩", "索引分类", "索引完成", "索引了",
-        ])
+            "推荐索引", "索引处理", "索引进度", "索引还剩", "索引分类", "索引完成", "索引了",
+        ]) || RecommendationIndexCompatibility.isLegacyBuildMarker(value)
         let explicitIndexBuild = has([
             "开始构建", "启动构建", "开始索引", "启动索引", "构建推荐索引", "构建完整推荐索引", "建立索引", "重建索引", "重建推荐索引", "继续构建", "继续处理索引",
             "开始并一次性完成推荐索引", "一次性完成全部推荐索引", "开始分类剩余歌曲", "完成整个索引任务", "继续之前的推荐索引任务", "继续处理推荐索引",
@@ -355,11 +354,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
     }
 
     private static func isContinuation(_ value: String) -> Bool {
-        let normalized = value.trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
-        return [
-            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "这个", "播放它", "播放这个",
-            "加入队列", "加入播放队列", "把它播放", "选这个",
-        ].contains(normalized)
+        AgentHistoryPolicy.isExplicitContinuation(value)
     }
 
     private static func containsAny(_ value: String, _ terms: [String]) -> Bool {

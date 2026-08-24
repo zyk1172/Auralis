@@ -9,7 +9,7 @@ import Testing
 // MARK: - Test doubles
 
 /// Records every AgentBridge call so tests can assert on side effects without a real player/server.
-final class MockAgentBridge: AgentBridge, @unchecked Sendable {
+class MockAgentBridge: AgentBridge, @unchecked Sendable {
     let activeServerIDValue: ServerID?
     private(set) var playedTracks: [GlobalID] = []
     private(set) var serverPlayedTracks: [GlobalID] = []
@@ -180,6 +180,22 @@ private actor EmittedCollector {
         messages.contains { message in
             message.messages.contains { item in
                 if case let .text(text) = item { return text.contains(substring) }
+                return false
+            }
+        }
+    }
+    func containsError(_ substring: String) -> Bool {
+        messages.contains { message in
+            message.messages.contains { item in
+                if case let .error(text) = item { return text.contains(substring) }
+                return false
+            }
+        }
+    }
+    func containsAnyError() -> Bool {
+        messages.contains { message in
+            message.messages.contains { item in
+                if case .error = item { return true }
                 return false
             }
         }
@@ -678,7 +694,7 @@ func offlinePlay() async throws {
     )
     #expect(await bridge.playedTracks.contains(gid))
     #expect(await collector.containsText("开始播放"))
-    #expect(await log.containsTool("playTrack"))
+    #expect(await log.containsTool("playback_play_song"))
 }
 
 @Test("Offline degrade: no match does not play")
@@ -722,7 +738,7 @@ func offlineLike() async throws {
         log: { await log.add($0) }
     )
     #expect(await bridge.likedTracks.contains(gid))
-    #expect(await log.containsTool("likeTrack"))
+    #expect(await log.containsTool("favorite_set"))
 }
 
 @Test("Offline degrade: 创建歌单不会被通用歌单列表分支截走")
@@ -744,8 +760,8 @@ func offlineCreatePlaylist() async throws {
     #expect(await collector.containsText("已创建歌单"))
 }
 
-@Test("LLM failure degrades to local rules")
-func llmFailureDegrades() async throws {
+@Test("Provider failure does not silently switch an explicit music request to offline execution")
+func providerFailureDoesNotSwitchProtocol() async throws {
     let store = try makeStore()
     let track = makeTrack(serverID: "test-server", remoteID: "zz-1", title: "ZZPlayUnique")
     try await seed(store, [track])
@@ -762,10 +778,10 @@ func llmFailureDegrades() async throws {
         confirm: { _ in true },
         emit: { await collector.record($0) }
     )
-    #expect(await bridge.playedTracks.contains(gid))
-    // 故障降级后改为本地能力处理，但不再谎称「已切换到本地模式」。
-    #expect(await collector.containsText("AI 服务暂时不可用"))
-    #expect(await collector.containsText("本地能力"))
+    #expect(!(await bridge.playedTracks.contains(gid)))
+    // 同一任务必须保留 Provider 协议的语义；只有根本没有 Provider
+    // 时，才会进入显式的离线兼容路径。
+    #expect(await collector.containsAnyError())
 }
 
 // MARK: - Agent 主循环（多轮 Tool Calling）

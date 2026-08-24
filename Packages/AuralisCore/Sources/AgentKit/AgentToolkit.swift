@@ -318,6 +318,9 @@ public struct AgentToolkit {
         case "preference_set_disliked":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             let value = try boolParam(call, "value")
+            guard ToolExecutionContext.permitsMutationCommit else {
+                return .fail(call, descriptor, "所属 AI 运行已取消，未修改偏好")
+            }
             try await catalog.setDisliked(gid, value: value, source: "agent")
             return .ok(
                 call,
@@ -982,7 +985,10 @@ public struct AgentToolkit {
                         permission: descriptor.permission,
                         success: false,
                         summary: "已追加 \(completed)/\(gids.count) 首；第 \(completed + 1) 首结果未知：\(result.summary)",
-                        hasIndeterminateSideEffect: result.state == .indeterminate
+                        // Earlier confirmed appends cannot be rolled back here;
+                        // report partial mutation even if the failing bridge
+                        // response itself was a deterministic failure.
+                        hasIndeterminateSideEffect: completed > 0 || result.state == .indeterminate
                     )
                 }
                 completed += 1

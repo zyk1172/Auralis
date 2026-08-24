@@ -12,6 +12,8 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
     case invalidParameter(name: String, expected: String, value: String)
     case skillUnavailable(String)
     case modelWriteMissingAuthorizationOperation(String)
+    case mutationAuthorizationMissing(String)
+    case executionLeaseRevoked(String)
 
     public var errorDescription: String? {
         switch self {
@@ -21,7 +23,24 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
         case let .invalidParameter(name, expected, value): "参数 \(name) 应为 \(expected)，实际为：\(value)"
         case let .skillUnavailable(name): "工具 \(name) 只能由受信任的内置 Skill 执行"
         case let .modelWriteMissingAuthorizationOperation(name): "工具 \(name) 缺少副作用授权操作声明，已拒绝执行"
+        case let .mutationAuthorizationMissing(name): "工具 \(name) 缺少当前请求的副作用授权，已拒绝执行"
+        case let .executionLeaseRevoked(name): "工具 \(name) 所属运行已失效，未执行副作用"
         }
+    }
+}
+
+/// Capability granted by a trusted Runtime to one deterministic Skill.  It is
+/// independent from user-language authorization: an internal primitive needs
+/// both the originating lineage authorization and this scoped authority.
+public struct ToolExecutionAuthority: Sendable, Equatable {
+    public let skillID: String
+    public let lineageID: UUID
+    public let generation: UInt64
+
+    public init(skillID: String, lineageID: UUID, generation: UInt64) {
+        self.skillID = skillID
+        self.lineageID = lineageID
+        self.generation = generation
     }
 }
 
@@ -39,7 +58,9 @@ public struct ToolRuntime {
         providerCapabilities: ModelCapabilities? = nil,
         webService: (any AgentWebService)? = nil,
         authorizationContext: SideEffectAuthorizationContext? = nil,
-        activeSkillID: String? = nil
+        activeSkillID: String? = nil,
+        executionAuthority: ToolExecutionAuthority? = nil,
+        executionLease: ToolExecutionLease
     ) async -> ToolResult {
         guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
             return ToolResult(
@@ -54,9 +75,10 @@ public struct ToolRuntime {
             // Internal state-machine primitives are executable only by their
             // trusted built-in skill.  Visibility controls discovery; this is
             // the runtime enforcement boundary for direct/malformed calls.
-            if let requiredSkillID = descriptor.requiredSkillID,
-               requiredSkillID != activeSkillID {
-                throw ToolRuntimeError.skillUnavailable(call.name)
+            if let requiredSkillID = descriptor.requiredSkillID {
+                guard executionAuthority?.skillID == requiredSkillID else {
+                    throw ToolRuntimeError.skillUnavailable(call.name)
+                }
             }
             if descriptor.visibility == .model,
                descriptor.permission != .readOnly,
@@ -64,28 +86,36 @@ public struct ToolRuntime {
                 throw ToolRuntimeError.modelWriteMissingAuthorizationOperation(call.name)
             }
             try validate(call, descriptor: descriptor)
-            if let authorizationContext,
-               descriptor.permission != .readOnly,
-               !authorizationContext.allows(descriptor) {
-                return ToolResult(
-                    call: call,
-                    permission: descriptor.permission,
-                    success: false,
-                    summary: authorizationContext.denialReason(for: descriptor)
+            if descriptor.permission != .readOnly {
+                guard let authorizationContext else {
+                    throw ToolRuntimeError.mutationAuthorizationMissing(call.name)
+                }
+                guard authorizationContext.allows(descriptor) else {
+                    return ToolResult(
+                        call: call,
+                        permission: descriptor.permission,
+                        success: false,
+                        summary: authorizationContext.denialReason(for: descriptor)
+                    )
+                }
+                guard await executionLease.isValid() else {
+                    throw ToolRuntimeError.executionLeaseRevoked(call.name)
+                }
+            }
+            return await ToolExecutionContext.$lease.withValue(executionLease) {
+                await AgentToolRegistry.execute(
+                    call,
+                    bridge: bridge,
+                    catalog: catalog,
+                    serverID: serverID,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    allowsLyrics: allowsLyrics,
+                    providerCapabilities: providerCapabilities,
+                    webService: webService,
+                    activeSkillID: activeSkillID
                 )
             }
-            return await AgentToolRegistry.execute(
-                call,
-                bridge: bridge,
-                catalog: catalog,
-                serverID: serverID,
-                systemService: systemService,
-                externalMusicService: externalMusicService,
-                allowsLyrics: allowsLyrics,
-                providerCapabilities: providerCapabilities,
-                webService: webService,
-                activeSkillID: activeSkillID
-            )
         } catch {
             return ToolResult(
                 call: call,
@@ -99,19 +129,16 @@ public struct ToolRuntime {
     public static func validate(_ call: ToolCall, descriptor: ToolDescriptor) throws {
         let definitions = Dictionary(uniqueKeysWithValues: descriptor.parameters.map { ($0.name, $0) })
         for name in call.arguments.keys where definitions[name] == nil {
-            if call.name == "library_index_v2_write_batch", name == "itemsJSON" { continue }
             throw ToolRuntimeError.unknownParameter(name)
         }
         for parameter in descriptor.parameters where parameter.required {
             let value = call.arguments[parameter.name]
-                ?? (call.name == "library_index_v2_write_batch" && parameter.name == "items" ? call.arguments["itemsJSON"] : nil)
             guard let value, !isMissing(value) else {
                 throw ToolRuntimeError.missingParameter(parameter.name)
             }
         }
         for parameter in descriptor.parameters {
             let value = call.arguments[parameter.name]
-                ?? (call.name == "library_index_v2_write_batch" && parameter.name == "items" ? call.arguments["itemsJSON"] : nil)
             guard let value, let schemaJSON = parameter.schemaJSON else { continue }
             try validate(value: value, name: parameter.name, schemaJSON: schemaJSON)
         }

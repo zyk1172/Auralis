@@ -108,11 +108,36 @@ struct SessionIsolationTests {
         _ = await coordinator.newSession()
         let oldRun = UUID()
         let newRun = UUID()
+        let newLease = ToolExecutionLease(runID: newRun, sessionID: coordinator.activeSessionID!, generation: 2)
         coordinator.currentRunID = newRun
+        coordinator.currentExecutionLease = newLease
 
         coordinator.finishOwnedRun(oldRun)
 
         #expect(coordinator.currentRunID == newRun)
+        #expect(coordinator.currentExecutionLease === newLease)
+        #expect(await newLease.isValid())
+    }
+
+    @Test("切换会话先撤销旧 Run 的 mutation lease")
+    func sessionSwitchRevokesOldMutationLease() async throws {
+        let (model, coordinator) = makeCoordinator()
+        _ = model
+        let a = await coordinator.newSession()
+        let b = await coordinator.newSession()
+        await coordinator.activate(a)
+
+        let runID = UUID()
+        let lease = ToolExecutionLease(runID: runID, sessionID: a, generation: 1)
+        coordinator.currentRunID = runID
+        coordinator.currentExecutionLease = lease
+
+        await coordinator.activate(b)
+
+        #expect(!lease.isValidSnapshot)
+        #expect(coordinator.currentRunID == nil)
+        #expect(coordinator.currentExecutionLease == nil)
+        #expect(coordinator.activeSessionID == b)
     }
 
     @Test("TEST E/F：切换会话不污染 UI（activeSessionID 正确、消息按会话隔离）")

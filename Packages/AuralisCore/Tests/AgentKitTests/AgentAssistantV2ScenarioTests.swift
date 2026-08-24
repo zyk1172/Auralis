@@ -433,6 +433,8 @@ func parallelReadOnlyCallsKeepAssociations() async throws {
 
 @Test("V2 production loop: web result flows into library lookup and real playback")
 func webLibraryPlaybackScenario() async throws {
+    let runID = UUID()
+    let executionLease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
     let sourceURL = URL(string: "https://news.example.test/billie")!
     let source = WebSource(
         title: "Billie Eilish news",
@@ -480,6 +482,8 @@ func webLibraryPlaybackScenario() async throws {
         // provider/tool loop and does not lose web or music capabilities.
         intent: .conversation,
         policy: AgentTaskPolicy.policy(for: .conversation),
+        runID: runID,
+        executionLease: executionLease,
         confirm: { _ in true },
         emit: { message in await collector.append(message) }
     )
@@ -497,6 +501,8 @@ func webLibraryPlaybackScenario() async throws {
 
 @Test("外部网页数据不能授权用户未请求的副作用")
 func externalWebDataCannotAuthorizeSideEffect() async throws {
+    let runID = UUID()
+    let executionLease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
     let source = WebSource(
         title: "科技新闻",
         url: URL(string: "https://news.example.test/technology")!,
@@ -529,6 +535,8 @@ func externalWebDataCannotAuthorizeSideEffect() async throws {
         webService: ScenarioWebService(source: source),
         intent: .conversation,
         policy: AgentTaskPolicy.policy(for: .conversation),
+        runID: runID,
+        executionLease: executionLease,
         confirm: { _ in true },
         emit: { message in await collector.append(message) }
     )
@@ -543,6 +551,8 @@ func externalWebDataCannotAuthorizeSideEffect() async throws {
 
 @Test("continuation keeps the original side-effect authorization")
 func continuationKeepsOriginalAuthorization() async throws {
+    let runID = UUID()
+    let executionLease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
     let serverID: ServerID = "continuation-server"
     let track = scenarioTrack(serverID: serverID, remoteID: "sunset", title: "Sunset")
     let gid = GlobalID(serverID: serverID, remoteID: track.id.rawValue)
@@ -568,6 +578,8 @@ func continuationKeepsOriginalAuthorization() async throws {
         history: [AgentChatMessage(role: .user, messages: [.text("播放专辑里的 Sunset")])],
         intent: .playbackControl,
         policy: .policy(for: .playbackControl),
+        runID: runID,
+        executionLease: executionLease,
         confirm: { _ in true },
         emit: { _ in }
     )
@@ -577,6 +589,8 @@ func continuationKeepsOriginalAuthorization() async throws {
 
 @Test("persisted resume keeps the original side-effect authorization")
 func persistedResumeKeepsOriginalAuthorization() async throws {
+    let runID = UUID()
+    let executionLease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
     let serverID: ServerID = "persisted-resume-server"
     let track = scenarioTrack(serverID: serverID, remoteID: "sunset", title: "Sunset")
     let gid = GlobalID(serverID: serverID, remoteID: track.id.rawValue)
@@ -606,6 +620,8 @@ func persistedResumeKeepsOriginalAuthorization() async throws {
         intent: .playbackControl,
         policy: .policy(for: .playbackControl),
         initialTaskState: savedState,
+        runID: runID,
+        executionLease: executionLease,
         confirm: { _ in true },
         emit: { _ in }
     )
@@ -626,6 +642,82 @@ func readOnlyMusicQuestionsDoNotRequireMutation() {
     }
     #expect(AgentIntentClassifier.classify("我的收藏") == .librarySearch)
     #expect(AgentRequestSemantics.analyze("我的收藏").isReadOnly)
+}
+
+@Test("explicit reversible playlist create executes once without invented confirmation")
+func explicitPlaylistCreateDoesNotAskForConfirmation() async throws {
+    let runID = UUID()
+    let bridge = MockAgentBridge()
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "create-playlist",
+            name: "playlist_create",
+            arguments: ["name": .string("Test")]
+        )]),
+        scenarioResponse(content: "已创建空歌单 Test。"),
+    ])
+    let confirmation = ScenarioStateProbe()
+
+    await ConversationEngine().run(
+        userText: "创建一个空歌单 Test",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: try scenarioStore(),
+        context: ToolLoop.Context(),
+        intent: .playlistManagement,
+        policy: .policy(for: .playlistManagement),
+        executionLineage: .newRequest(text: "创建一个空歌单 Test"),
+        runID: runID,
+        executionLease: ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1),
+        confirm: { _ in
+            await confirmation.record()
+            return true
+        },
+        emit: { _ in }
+    )
+
+    #expect(bridge.createdPlaylistNames == ["Test"])
+    #expect(await confirmation.count() == 0)
+}
+
+@Test("playlist list after failed create is read-only and cannot inherit mutation authority")
+func playlistListAfterFailedCreateIsReadOnly() async throws {
+    let failedCreate = ExecutionLineage.newRequest(text: "创建一个空歌单 Test")
+    let listLineage = ExecutionLineageResolver.resolve(
+        currentUserText: "列出歌单",
+        previous: failedCreate
+    )
+    let bridge = MockAgentBridge()
+    let provider = ScenarioProvider([
+        // Even a confused model cannot reuse the previous create authority.
+        scenarioResponse(calls: [scenarioCall(
+            id: "stale-create",
+            name: "playlist_create",
+            arguments: ["name": .string("Test")]
+        )]),
+        scenarioResponse(content: "没有执行创建；当前歌单列表为空。"),
+    ])
+    let runID = UUID()
+
+    await ConversationEngine().run(
+        userText: "列出歌单",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: try scenarioStore(),
+        context: ToolLoop.Context(),
+        intent: .playlistQuery,
+        policy: .policy(for: .playlistQuery),
+        executionLineage: listLineage,
+        runID: runID,
+        executionLease: ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1),
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    #expect(bridge.createdPlaylistNames.isEmpty)
+    #expect(listLineage.authorization.allowedOperations.isEmpty)
 }
 
 @Test("generic shortlist does not leak music tools from broad words")
@@ -681,7 +773,7 @@ func genericSearchConvergesAfterNoNewResults() async throws {
 func operationAuthorizationIsLeastPrivilege() {
     let favorite = AgentToolRegistry.descriptor(for: "favorite_set")!
     let rating = AgentToolRegistry.descriptor(for: "rating_set")!
-    let index = AgentToolRegistry.descriptor(for: "library_index_v2_write_batch")!
+    let index = AgentToolRegistry.descriptor(for: "recommendation_index_commit")!
     let queueAppend = AgentToolRegistry.descriptor(for: "queue_append")!
     let queueReplace = AgentToolRegistry.descriptor(for: "queue_replace")!
     let playlistCreate = AgentToolRegistry.descriptor(for: "playlist_create")!
@@ -706,4 +798,156 @@ func operationAuthorizationIsLeastPrivilege() {
     #expect(SideEffectAuthorizationContext(originalUserRequest: "我不喜欢这个网页的排版").allowedOperations.isEmpty)
     #expect(SideEffectAuthorizationContext(originalUserRequest: "C++ memory leak 是怎么产生的？").allowedOperations.isEmpty)
     #expect(SideEffectAuthorizationContext(originalUserRequest: "skill issue 是什么意思？").allowedOperations.isEmpty)
+}
+
+private actor MutationBoundaryGate {
+    private var entered = false
+    private var entryWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func suspendAtBoundary() async {
+        entered = true
+        entryWaiter?.resume()
+        entryWaiter = nil
+        await withCheckedContinuation { continuation in
+            releaseWaiter = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { continuation in
+            entryWaiter = continuation
+        }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
+private actor MutationCommitProbe {
+    private var count = 0
+    func record() { count += 1 }
+    func value() -> Int { count }
+}
+
+private final class DelayedLeaseAwareBridge: MockAgentBridge, @unchecked Sendable {
+    let boundary = MutationBoundaryGate()
+    let commits = MutationCommitProbe()
+
+    override func playTrack(globalID: GlobalID) async -> Bool {
+        await boundary.suspendAtBoundary()
+        guard ToolExecutionContext.permitsMutationCommit else { return false }
+        await commits.record()
+        return true
+    }
+
+    override func playServerTrack(globalID: GlobalID) async -> Bool {
+        guard ToolExecutionContext.permitsMutationCommit else { return false }
+        await commits.record()
+        return true
+    }
+}
+
+@Test("revoked lease rejects an authorized mutation before executor entry")
+func revokedLeaseCannotExecuteMutation() async throws {
+    let serverID: ServerID = "revoked-lease"
+    let track = scenarioTrack(serverID: serverID, remoteID: "song", title: "Song")
+    let gid = GlobalID(serverID: serverID, remoteID: track.id.rawValue)
+    let store = try scenarioStore()
+    try await seedScenario(store, tracks: [track])
+    let bridge = MockAgentBridge(activeServerID: serverID)
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+    lease.revoke()
+
+    let result = await ToolRuntime.execute(
+        ToolCall(name: "playback_play_song", arguments: ["trackID": .string(gid.description)]),
+        bridge: bridge,
+        catalog: store,
+        serverID: serverID,
+        systemService: nil,
+        authorizationContext: SideEffectAuthorizationContext(originalUserRequest: "播放这首歌"),
+        executionLease: lease
+    )
+
+    #expect(!result.success)
+    #expect(result.summary.contains("运行已失效"))
+    #expect(bridge.playedTracks.isEmpty)
+    #expect(bridge.serverPlayedTracks.isEmpty)
+}
+
+@Test("lease is checked again after async preparation at the final commit boundary")
+func revokedLeaseCannotCommitAfterAwait() async throws {
+    let serverID: ServerID = "lease-toctou"
+    let track = scenarioTrack(serverID: serverID, remoteID: "song", title: "Song")
+    let gid = GlobalID(serverID: serverID, remoteID: track.id.rawValue)
+    let store = try scenarioStore()
+    try await seedScenario(store, tracks: [track])
+    let bridge = DelayedLeaseAwareBridge(activeServerID: serverID)
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 7)
+
+    let execution = Task {
+        await ToolRuntime.execute(
+            ToolCall(name: "playback_play_song", arguments: ["trackID": .string(gid.description)]),
+            bridge: bridge,
+            catalog: store,
+            serverID: serverID,
+            systemService: nil,
+            authorizationContext: SideEffectAuthorizationContext(originalUserRequest: "播放这首歌"),
+            executionLease: lease
+        )
+    }
+    await bridge.boundary.waitUntilEntered()
+    lease.revoke()
+    await bridge.boundary.release()
+    let result = await execution.value
+
+    #expect(!result.success)
+    #expect(await bridge.commits.value() == 0)
+}
+
+@Test("read-only request cannot mutate even when provider asks for playback")
+func readOnlyArtistCountCannotTriggerPlayback() async throws {
+    let serverID: ServerID = "read-only-invariant"
+    let track = scenarioTrack(serverID: serverID, remoteID: "wrong-song", title: "孤勇者 (Live)")
+    let gid = GlobalID(serverID: serverID, remoteID: track.id.rawValue)
+    let store = try scenarioStore()
+    try await seedScenario(store, tracks: [track])
+    let bridge = MockAgentBridge(activeServerID: serverID)
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "malicious-play",
+            name: "playback_play_song",
+            arguments: ["trackID": .string(gid.description)]
+        )]),
+        scenarioResponse(content: "当前音乐库共有 1025 位歌手。"),
+    ])
+    let collector = ScenarioMessageCollector()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "有多少歌手？",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(serverID: serverID, totalArtists: 1025),
+        intent: .librarySearch,
+        policy: .policy(for: .librarySearch),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    #expect(bridge.playedTracks.isEmpty)
+    #expect(bridge.serverPlayedTracks.isEmpty)
+    #expect(bridge.replacedQueues.isEmpty)
+    #expect(bridge.clearedQueueCount == 0)
+    #expect(await collector.containsText("1025 位歌手"))
 }

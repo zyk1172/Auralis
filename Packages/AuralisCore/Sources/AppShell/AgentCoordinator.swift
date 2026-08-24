@@ -100,6 +100,17 @@ public final class AgentCoordinator: ObservableObject {
     private var operationConfirmationContinuation: CheckedContinuation<Bool, Never>?
     /// 当前运行身份：任何迟到 callback 只要 runID 不匹配就丢弃，绝不污染新运行/新会话。
     var currentRunID: UUID?
+    /// 全局同时只允许一个 Run 持有真实副作用执行权。generation 单调递增，
+    /// 防止相同会话恢复后误接受上一代异步结果。
+    private var executionGeneration: UInt64 = 0
+    /// Internal so lifecycle regression tests can assert ownership directly;
+    /// production callers cannot access it outside AppShell.
+    var currentExecutionLease: ToolExecutionLease?
+    /// Conversation history is persisted by SessionStore; executable authority
+    /// is deliberately kept in this separate per-session lineage map.
+    /// A substantive user request replaces the entry instead of inheriting a
+    /// stale task completion or mutation authorization.
+    var executionLineages: [UUID: ExecutionLineage] = [:]
     /// 每个 Run 独立的流式状态（key = runID）。`.streaming` 增量累加进该 run 的气泡，
     /// 直到收到非流式消息（最终文本 / 工具进度 / 卡片等）把它原地定型为止。
     /// 用 runID 隔离后，Session A 的流式气泡永远不会与 Session B 共享。
@@ -212,6 +223,10 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     public func activate(_ id: UUID) async {
+        if activeSessionID != id {
+            let cancelledTask = revokeCurrentRun(markTaskCancelled: true)
+            if let cancelledTask { await cancelledTask.value }
+        }
         activeSessionID = id
         messages = await sessionStore.session(id)?.messages ?? []
     }
@@ -231,12 +246,18 @@ public final class AgentCoordinator: ObservableObject {
 
     public func clearMessages(_ id: UUID) async {
         await sessionStore.clearMessages(id)
+        executionLineages[id] = nil
         await reloadSessions()
         if id == activeSessionID { messages = [] }
     }
 
     public func delete(_ id: UUID) async {
+        if id == activeSessionID {
+            let cancelledTask = revokeCurrentRun(markTaskCancelled: true)
+            if let cancelledTask { await cancelledTask.value }
+        }
         await sessionStore.delete(id)
+        executionLineages[id] = nil
         await reloadSessions()
         if id == activeSessionID {
             if let next = sessions.first {
@@ -268,7 +289,12 @@ public final class AgentCoordinator: ObservableObject {
     /// 批量删除（会话管理页使用）。若包含当前会话，自动切换到下一个或新建。
     public func delete(_ ids: [UUID]) async {
         guard !ids.isEmpty else { return }
+        if let active = activeSessionID, ids.contains(active) {
+            let cancelledTask = revokeCurrentRun(markTaskCancelled: true)
+            if let cancelledTask { await cancelledTask.value }
+        }
         for id in ids { await sessionStore.delete(id) }
+        for id in ids { executionLineages[id] = nil }
         await reloadSessions()
         if let active = activeSessionID, ids.contains(active) {
             if let next = sessions.first {
@@ -482,6 +508,14 @@ public final class AgentCoordinator: ObservableObject {
         // before a newly-created Task gets its first executor turn; keeping the
         // identity outside the task makes that race harmless.
         let runID = UUID()
+        currentExecutionLease?.revoke()
+        executionGeneration &+= 1
+        let executionLease = ToolExecutionLease(
+            runID: runID,
+            sessionID: sessionID,
+            generation: executionGeneration
+        )
+        currentExecutionLease = executionLease
         currentRunID = runID
         runTask = Task { [weak self] in
             guard let self else { return }
@@ -492,18 +526,15 @@ public final class AgentCoordinator: ObservableObject {
             }
             // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
             let history = await self.sessionStore.session(sessionID)?.messages ?? []
+            let originUserMessageID = UUID()
             // “继续”可能连续出现多次（尤其是上一轮被 429/工具错误打断后）。
             // 只取最近一条完整任务指令，避免第二次“继续”把索引/批处理意图
             // 降级成 conversation，进而让索引工具从动态 schema 中消失。
             let historyText = AgentHistoryPolicy.relevantHistoryText(for: trimmed, in: history)
-            // Authorization follows the substantive user request.  A short
-            // continuation is not allowed to erase the operation the user
-            // already asked for.
-            let continuationAuthorization = SideEffectAuthorizationContext(
-                sourceRequest: historyText.isEmpty ? trimmed : historyText,
-                semantics: AgentRequestSemantics.analyze(
-                    historyText.isEmpty ? trimmed : historyText
-                )
+            var executionLineage = ExecutionLineageResolver.resolve(
+                currentUserText: trimmed,
+                originUserMessageID: originUserMessageID,
+                previous: self.executionLineages[sessionID]
             )
             let resolvedPolicy = AgentTaskPolicyResolver.resolve(
                 text: trimmed,
@@ -520,6 +551,7 @@ public final class AgentCoordinator: ObservableObject {
                 && requestSemantics.domain != .recommendation
                 && resolvedPolicy.completion != .appreciationWithEvidence
             if canUseGenericConversation {
+                self.executionLineages[sessionID] = executionLineage
                 if needsFirstSendConsent {
                     let consent = Self.consentRequest(
                         providerName: Self.providerDisplayName,
@@ -558,8 +590,10 @@ public final class AgentCoordinator: ObservableObject {
                     webService: webService,
                     intent: resolvedPolicy.intent,
                     policy: resolvedPolicy,
-                    authorizationContext: continuationAuthorization,
+                    authorizationContext: executionLineage.authorization,
+                    executionLineage: executionLineage,
                     runID: runID,
+                    executionLease: executionLease,
                     confirm: { [weak self] pending in
                         guard let self else { return false }
                         return await self.requestOperationConfirmation(pending)
@@ -591,6 +625,22 @@ public final class AgentCoordinator: ObservableObject {
                 budget: resolvedPolicy.budget
             )
             let taskID = taskRecord.id
+            if let resumeRecord, let savedGoal = resumeRecord.goal {
+                executionLineage = .resumedTask(
+                    goal: savedGoal,
+                    taskID: taskID,
+                    originUserMessageID: originUserMessageID,
+                    activeSkillID: "recommendation-index"
+                )
+            } else {
+                executionLineage = executionLineage.attaching(
+                    taskID: taskID,
+                    activeSkillID: requestSemantics.isRecommendationIndexBuild
+                        ? "recommendation-index"
+                        : nil
+                )
+            }
+            self.executionLineages[sessionID] = executionLineage
             let taskPolicy: AgentTaskPolicy
             if let resumeRecord,
                let savedIntent = resumeRecord.intent,
@@ -633,12 +683,6 @@ public final class AgentCoordinator: ObservableObject {
                 state.updatedAt = .now
                 return state
             }
-            let authorizationContext = SideEffectAuthorizationContext(
-                sourceRequest: resumeRecord?.goal ?? (historyText.isEmpty ? trimmed : historyText),
-                semantics: AgentRequestSemantics.analyze(
-                    resumeRecord?.goal ?? (historyText.isEmpty ? trimmed : historyText)
-                )
-            )
             if resumeRecord != nil {
                 self.taskStore.update(taskID, status: .running)
             }
@@ -688,8 +732,10 @@ public final class AgentCoordinator: ObservableObject {
                 externalMusicService: externalMusicService,
                 webService: webService,
                 initialTaskState: initialTaskState,
-                authorizationContext: authorizationContext,
+                authorizationContext: executionLineage.authorization,
+                executionLineage: executionLineage,
                 runID: runID,
+                executionLease: executionLease,
                 confirm: { [weak self] pending in
                     guard let self else { return false }
                     return await self.requestOperationConfirmation(pending)
@@ -809,6 +855,10 @@ public final class AgentCoordinator: ObservableObject {
     /// their own run identity.
     func finishOwnedRun(_ runID: UUID) {
         guard currentRunID == runID else { return }
+        if currentExecutionLease?.runID == runID {
+            currentExecutionLease?.revoke()
+            currentExecutionLease = nil
+        }
         currentRunID = nil
         runTask = nil
         streamingStates[runID] = nil
@@ -829,8 +879,20 @@ public final class AgentCoordinator: ObservableObject {
 
     /// 用户主动取消当前运行。
     public func cancel() {
+        _ = revokeCurrentRun(markTaskCancelled: true)
+    }
+
+    /// Revoke execution authority before requesting cooperative cancellation.
+    /// Returning the detached task lets session switches wait for all old
+    /// async frames to leave their mutation barriers before presenting the new
+    /// session.
+    @discardableResult
+    private func revokeCurrentRun(markTaskCancelled: Bool) -> Task<Void, Never>? {
+        let cancelledTask = runTask
         let cancelledRunID = currentRunID
-        runTask?.cancel()
+        currentExecutionLease?.revoke()
+        currentExecutionLease = nil
+        cancelledTask?.cancel()
         runTask = nil
         currentRunID = nil
         if let cancelledRunID {
@@ -839,10 +901,11 @@ public final class AgentCoordinator: ObservableObject {
         resolveConsent(.deny)
         resolveOperationConfirmation(false)
         isRunning = false
-        if let taskID = activeTask?.id {
+        if markTaskCancelled, let taskID = activeTask?.id {
             taskStore.update(taskID, status: .cancelled, error: String(localized: "用户取消。", bundle: .module))
             activeTask = nil
         }
+        return cancelledTask
     }
 
     /// 接收 Runner 发出的消息。

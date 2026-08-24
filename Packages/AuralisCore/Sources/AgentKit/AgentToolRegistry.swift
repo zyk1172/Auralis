@@ -293,7 +293,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         switch name {
         case "music_appreciate":
             return [.catalogRead, .externalRead]
-        case "library_index_v2_write_batch":
+        case "recommendation_index_commit":
             return [.catalogRead, .annotationWrite]
         case "media_download_offline":
             return [.catalogRead, .downloadWrite]
@@ -339,7 +339,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         case .server: .server
         case .download: .download
         case .memory: .memory
-        case .catalog: name == "library_index_v2_write_batch" ? .annotation : .none
+        case .catalog: name == "recommendation_index_commit" ? .annotation : .none
         }
     }
 
@@ -376,7 +376,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         case "likeTrack", "unlikeTrack", "favoriteAlbum", "unfavoriteAlbum", "favoriteArtist", "unfavoriteArtist", "favorite_set": return .favoriteSet
         case "setRating", "clearRating", "rating_set": return .ratingSet
         case "preference_set_disliked": return .dislikedSet
-        case "library_index_v2_write_batch": return .recommendationIndexWrite
+        case "recommendation_index_commit": return .recommendationIndexWrite
         case "server_sync_start": return .serverSync
         case "server_switch", "switchServer": return .serverSwitch
         case "server_remove", "removeServer": return .serverRemove
@@ -786,26 +786,25 @@ public enum AgentToolRegistry {
                 .init(name: "value", required: false, description: "分类值（如 周杰伦 / 中文 / 摇滚 / 2020）"),
                 .init(name: "limit", required: false, description: "返回数量，默认 100，最多 500"),
               ], maxResultCharacters: ContextManager.maxIndexCharacters),
-        .init(name: "library_index_v2_status", group: .catalog, permission: .readOnly, summary: "查看 AI 推荐索引 V2 的总数、已完成和待分类数；完整构建任务必须先调用本工具，并持续到 pending=0", maxResultCharacters: 24_000),
-        .init(name: "library_index_v2_read", group: .catalog, permission: .readOnly, summary: "读取已完成的 AI 推荐索引 V2 条目及全部分类标签，可按维度和标签筛选",
+        .init(name: "library_index_status", group: .catalog, permission: .readOnly, summary: "查看推荐索引的总数、已完成和待分类数量",
+              maxResultCharacters: 24_000, aliases: [RecommendationIndexCompatibility.legacyStatusTool]),
+        .init(name: "library_index_read", group: .catalog, permission: .readOnly, summary: "读取已完成的推荐索引条目及分类标签，可按维度和标签筛选",
               parameters: [
                 .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability/tag"),
                 .init(name: "value", required: false, description: "要匹配的标签值，如 通勤、深夜、平静"),
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
-              ], maxResultCharacters: 24_000),
-        .init(name: "library_index_v2_next_batch", group: .catalog, permission: .readOnly, summary: "取下一批待分类曲目元数据；由受信任的 Recommendation Index V2 Skill 内部调用；每个真实 ID 必须恰好分类一次，不能加入歌词、路径或播放地址",
-              parameters: [.init(name: "limit", required: false, description: "每批 1-100；Skill Runtime 会按模型输出预算选择安全分片")],
-              maxResultCharacters: ContextManager.maxIndexCharacters,
-              visibility: .internalOnly, requiredSkillID: "recommendation-index-v2"),
-        .init(name: "library_index_v2_write_batch", group: .catalog, permission: .reversible, summary: "写入刚刚由 library_index_v2_next_batch 返回的推荐索引分类；items 必须严格覆盖该批全部真实 ID 各一次。mode=full 写固定维度与可选开放 semanticTags；mode=semanticTagsOnly 只写 id、mode 和 semanticTags，不能伪造固定维度。开放 semanticTags 没有全局数量硬上限；写入成功后必须重新调用 next_batch 获取下一批，直到 pending=0",
-              parameters: [.init(
-                name: "items",
-                required: true,
-                description: "分类数组。full：id、固定维度、semanticTags 与 confidence；semanticTagsOnly：id、mode=semanticTagsOnly、semanticTags。semanticTags 仅限有音乐意义且有区分度的开放标签，优先复用 canonical 标签，词库不设全局硬上限。",
-                schemaJSON: Self.recommendationClassificationArraySchema
-              )],
+              ], maxResultCharacters: 24_000, aliases: [RecommendationIndexCompatibility.legacyReadTool]),
+        .init(name: "recommendation_index_commit", group: .catalog, permission: .reversible,
+              summary: "由 Recommendation Index Runtime 提交已验证的当前批次分类；模型不可见",
+              parameters: [
+                .init(name: "batchID", required: true, description: "Runtime 当前批次 ID"),
+                .init(name: "revision", required: true, description: "Runtime 当前批次修订号",
+                      schemaJSON: #"{"type":"integer","minimum":1}"#),
+                .init(name: "items", required: true, description: "Runtime 已验证的分类数组",
+                      schemaJSON: Self.recommendationClassificationArraySchema),
+              ],
               maxResultCharacters: 24_000,
-              visibility: .internalOnly, requiredSkillID: "recommendation-index-v2"),
+              visibility: .internalOnly, requiredSkillID: "recommendation-index"),
         .init(name: "library_select_tracks", group: .catalog, permission: .readOnly, summary: "集合查询：一次筛选语言/流派/艺术家/年代，按本地热度代理排序，返回候选歌曲清单（多首任务优先用这个，不要逐个歌手搜索）",
               parameters: [
                 .init(name: "languages", required: false, description: "语言数组，如 [\"中文\",\"粤语\"]",
@@ -825,13 +824,6 @@ public enum AgentToolRegistry {
                 .init(name: "sort", required: false, description: "popularityProxy/favorites/recentlyPlayed/title/random，默认 popularityProxy（recentlyAdded 由 library_get_recently_added 提供）"),
                 .init(name: "limit", required: false, description: "返回数量，默认 50，最多 100"),
               ]),
-        .init(name: "library_index_v2_tag_catalog", group: .catalog, permission: .readOnly, summary: "分页查看当前已有的开放语义标签词库及使用次数，便于构建 V2 时优先复用 canonical 标签（分页只是读取方式，不是标签数量限制）",
-              parameters: [
-                .init(name: "query", required: false, description: "可选：按标签名筛选"),
-                .init(name: "limit", required: false, description: "每页 1-100 条，默认 50"),
-                .init(name: "offset", required: false, description: "分页起始位置，默认 0，可无限向后翻页",
-                      schemaJSON: #"{"type":"integer","minimum":0}"#),
-              ], maxResultCharacters: 16_000),
         .init(name: "library_get_song", group: .catalog, permission: .readOnly, summary: "获取单曲详情（含格式/码率/收藏/评分/离线状态）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "music_appreciate", group: .catalog, permission: .readOnly, summary: "为正在播放或指定歌曲准备分层鉴赏证据：已核验元数据、私人播放数据与可用的外部大众评价；没有 Community Evidence 时明确标记不可用",

@@ -29,7 +29,9 @@ public enum AgentRunner {
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
         authorizationContext: SideEffectAuthorizationContext? = nil,
+        executionLineage: ExecutionLineage? = nil,
         runID: UUID = UUID(),
+        executionLease: ToolExecutionLease? = nil,
         toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -37,6 +39,15 @@ public enum AgentRunner {
         progress: @escaping @Sendable (AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
+        // Legacy callers have no session owner to mint a lease. Preserve
+        // source compatibility with a lease scoped to this one invocation;
+        // production AppShell always supplies the coordinator-owned lease.
+        let resolvedLease = executionLease ?? ToolExecutionLease(
+            runID: runID,
+            sessionID: runID,
+            generation: 1
+        )
+        defer { resolvedLease.revoke() }
         await ConversationEngine().run(
             userText: userText,
             provider: provider,
@@ -52,7 +63,9 @@ public enum AgentRunner {
             policy: policy,
             initialTaskState: initialTaskState,
             authorizationContext: authorizationContext,
+            executionLineage: executionLineage,
             runID: runID,
+            executionLease: resolvedLease,
             toolTimeout: toolTimeout,
             confirm: confirm,
             emit: emit,

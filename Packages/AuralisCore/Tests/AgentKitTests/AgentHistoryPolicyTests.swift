@@ -1,6 +1,7 @@
 import AgentKit
 import AIKit
 import Domain
+import Foundation
 import LocalCatalog
 import Testing
 
@@ -100,4 +101,47 @@ func repeatedContinuationKeepsSubstantiveTask() {
         AgentHistoryPolicy.relevantHistoryText(for: "继续", in: history)
             == "开始并一次性完成推荐索引 V2"
     )
+}
+
+@Test("新完整请求建立新的执行 lineage，不继承旧歌单修改")
+func substantiveRequestStartsNewExecutionLineage() {
+    let create = ExecutionLineage.newRequest(text: "创建一个空歌单 Test")
+    let list = ExecutionLineageResolver.resolve(
+        currentUserText: "列出歌单",
+        previous: create
+    )
+
+    #expect(list.lineageID != create.lineageID)
+    #expect(list.taskID == nil)
+    #expect(list.authorization.allowedOperations.isEmpty)
+    #expect(AgentRequestSemantics.analyze("列出歌单").isReadOnly)
+    #expect(AgentIntentClassifier.classify("列出歌单") == .playlistQuery)
+    #expect(AgentTaskPolicy.policy(for: .playlistQuery).completion == .modelAnswer)
+}
+
+@Test("严格短续写继承原执行 lineage 与最小授权")
+func explicitContinuationKeepsExecutionLineage() {
+    let original = ExecutionLineage.newRequest(text: "播放《Sunset》")
+        .attaching(taskID: UUID())
+    let continuation = ExecutionLineageResolver.resolve(
+        currentUserText: "第一个",
+        previous: original
+    )
+
+    #expect(continuation.lineageID == original.lineageID)
+    #expect(continuation.taskID == original.taskID)
+    #expect(continuation.authorization.allowedOperations == Set([ToolAuthorizationOperation.playbackPlay]))
+    #expect(continuation.originUserMessageID != original.originUserMessageID)
+}
+
+@Test("实体引用型操作是新请求而非旧任务 continuation")
+func entityReferenceMutationStartsNewLineage() {
+    let previous = ExecutionLineage.newRequest(text: "找到两个 Sunset 版本")
+    let play = ExecutionLineageResolver.resolve(
+        currentUserText: "播放它",
+        previous: previous
+    )
+
+    #expect(play.lineageID != previous.lineageID)
+    #expect(play.authorization.allowedOperations == Set([ToolAuthorizationOperation.playbackPlay]))
 }

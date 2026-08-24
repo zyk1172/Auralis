@@ -140,6 +140,7 @@ public struct SystemToolExecutor {
             case "memory_save":
                 let key = try require(call, "key")
                 let value = try require(call, "value")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let saved = await systemService.saveMemory(key: key, value: value)
                 return saved
                     ? .ok(call, descriptor, "已记住：\(key) = \(value)", .text("小猫记住了：\(key) = \(value)（下次会话也记得喵）"))
@@ -162,16 +163,19 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, "找到 \(memories.count) 条相关记忆", .text(text))
             case "memory_delete":
                 let key = try require(call, "key")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let deleted = await systemService.deleteMemory(key: key)
                 return deleted
                     ? .ok(call, descriptor, "已忘记：\(key)")
                     : .fail(call, descriptor, "没有找到要删除的记忆：\(key)")
             case "memory_clear":
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let count = await systemService.clearMemories()
                 return .ok(call, descriptor, "已清空 \(count) 条记忆", .text("全部记忆已清空（\(count) 条）。"))
             case "skill_create":
                 let name = try require(call, "name")
                 let instructions = try require(call, "instructions")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 if let entry = await systemService.createSkill(name: name, instructions: instructions) {
                     let text = "技能「\(entry.name)」已保存到本机 skill 文件，之后用 skill_read 读取完整指令即可使用。"
                     return .ok(call, descriptor, "已创建技能「\(entry.name)」", .text(text))
@@ -192,6 +196,7 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, "技能「\(entry.name)」", .text(entry.instructions))
             case "skill_delete":
                 let name = try require(call, "name")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let deleted = await systemService.deleteSkill(name: name)
                 return deleted
                     ? .ok(call, descriptor, "已删除技能：\(name)")
@@ -217,6 +222,7 @@ public struct SystemToolExecutor {
             case "media_download_offline":
                 let gid = try parseGlobalID(call, "trackID")
                 try await Self.requireActiveServerMatches(gid.serverID, systemService: systemService, call: call)
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let ok = await systemService.downloadOffline(trackID: TrackID(rawValue: gid.remoteID))
                 return ok ? .ok(call, descriptor, "已开始下载到离线缓存") : .fail(call, descriptor, "下载失败或已在下载")
             case "cache_get_status":
@@ -344,6 +350,7 @@ public struct SystemToolExecutor {
                     )
                     return Self.musicSearchResult(call, descriptor, result)
                 case "download":
+                    guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                     let result = await systemService.musicDownload(
                         ref: optionalParam(call, "ref"),
                         siteID: optionalIntParam(call, "site_id"),
@@ -367,8 +374,10 @@ public struct SystemToolExecutor {
                     guard let hash = optionalParam(call, "hash"), !hash.isEmpty else {
                         throw SystemToolError.missingParameter("hash")
                     }
+                    guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                     return Self.musicHistoryMutationResult(call, descriptor, await systemService.musicHistoryRemove(hash: hash))
                 case "history_clean":
+                    guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                     return Self.musicHistoryMutationResult(
                         call, descriptor,
                         await systemService.musicHistoryClean(
@@ -394,6 +403,14 @@ public struct SystemToolExecutor {
     }
 
     // MARK: - Helpers
+
+    private static var permitsMutationCommit: Bool {
+        ToolExecutionContext.permitsMutationCommit
+    }
+
+    private static func revokedMutation(_ call: ToolCall, _ descriptor: ToolDescriptor) -> ToolResult {
+        .fail(call, descriptor, "所属 AI 运行已取消，未执行操作")
+    }
 
     /// 系统服务只操作当前活动服务器：GlobalID 的 serverID 必须与活动服务器一致，
     /// 不能默默跨服务器把 remoteID 传给 service。

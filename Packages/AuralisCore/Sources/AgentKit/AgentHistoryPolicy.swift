@@ -22,7 +22,7 @@ public enum AgentHistoryPolicy {
     /// 返回最近一条完整的用户任务指令。
     ///
     /// 连续点击“继续”时，`latestUserText` 只能得到上一条“继续”，下一轮就会
-    /// 丢掉最初的任务意图（例如“构建推荐索引 V2”），导致动态工具列表退回普通
+    /// 丢掉最初的任务意图（例如“构建推荐索引”），导致动态工具列表退回普通
     /// 会话。错误、进度和确认消息本来就不是用户消息，因此这里只需跳过寒暄与短
     /// 后续指令，回溯到最近一条可用于恢复任务的完整指令。
     public static func latestSubstantiveUserText(in history: [AgentChatMessage]) -> String {
@@ -46,7 +46,7 @@ public enum AgentHistoryPolicy {
         for currentUserText: String,
         in history: [AgentChatMessage]
     ) -> String {
-        guard isShortFollowUp(currentUserText) else { return "" }
+        guard isExplicitContinuation(currentUserText) else { return "" }
         return latestSubstantiveUserText(in: history)
     }
 
@@ -108,15 +108,22 @@ public enum AgentHistoryPolicy {
         }
     }
 
-    private static func isShortFollowUp(_ text: String) -> Bool {
+    /// Deliberately narrow execution-continuation vocabulary.  Entity-bearing
+    /// commands such as “播放它” or “加入队列” are new requests: they may use
+    /// conversation history for reference resolution, but they create their
+    /// own authorization and completion lineage.
+    public static func isExplicitContinuation(_ text: String) -> Bool {
         let normalized = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
         return [
-            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "这个",
-            "播放它", "播放这个", "加入队列", "加入播放队列", "把它播放", "选这个",
+            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "确认", "好的，就这个",
         ].contains(normalized)
+    }
+
+    private static func isShortFollowUp(_ text: String) -> Bool {
+        isExplicitContinuation(text)
     }
 
     private static func isGreeting(_ text: String) -> Bool {

@@ -156,7 +156,9 @@ public struct ToolLoop {
         policy: AgentTaskPolicy? = nil,
         initialTaskState: AgentTaskState? = nil,
         authorizationContext: SideEffectAuthorizationContext? = nil,
+        executionLineage: ExecutionLineage? = nil,
         runID: UUID = UUID(),
+        executionLease: ToolExecutionLease? = nil,
         toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -168,7 +170,11 @@ public struct ToolLoop {
             await scopedWebService.beginRun(runID)
         }
         // 用户消息先回显
-        await emit(AgentChatMessage(role: .user, messages: [.text(userText)]))
+        await emit(AgentChatMessage(
+            id: executionLineage?.originUserMessageID ?? UUID(),
+            role: .user,
+            messages: [.text(userText)]
+        ))
 
         let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
         let requestSemantics = AgentRequestSemantics.analyze(userText, historyText: historyText)
@@ -181,8 +187,46 @@ public struct ToolLoop {
         // ConversationEngine/AgentCoordinator select this at the task
         // boundary. A direct low-level caller that omits it is fail-closed;
         // the ToolLoop must never turn its current text into consent.
-        let resolvedAuthorization = authorizationContext
+        let resolvedAuthorization = executionLineage?.authorization
+            ?? authorizationContext
             ?? SideEffectAuthorizationContext(originalUserRequest: "")
+        // Only AgentCoordinator can grant a live mutation capability. Direct
+        // compatibility callers remain able to use read-only tools but fail
+        // closed for every side effect.
+        let resolvedExecutionLease: ToolExecutionLease
+        if let executionLease, executionLease.runID == runID {
+            resolvedExecutionLease = executionLease
+        } else {
+            resolvedExecutionLease = .revoked(runID: runID)
+        }
+        let workflowRoute = WorkflowEngine.route(
+            intent: resolvedIntent,
+            text: userText,
+            semantics: requestSemantics,
+            initialTaskState: initialTaskState,
+            executionLineage: executionLineage
+        )
+        if let provider, workflowRoute.kind == .recommendationIndex {
+            await RecommendationIndexSkillRuntime.run(
+                userText: userText,
+                provider: provider,
+                model: model,
+                bridge: bridge,
+                catalog: catalog,
+                serverID: context.serverID,
+                policy: resolvedPolicy,
+                initialTaskState: initialTaskState,
+                authorizationContext: resolvedAuthorization,
+                lineageID: executionLineage?.lineageID ?? UUID(),
+                executionLease: resolvedExecutionLease,
+                requestTimeout: roundTimeout,
+                emit: emit,
+                log: log,
+                progress: progress,
+                state: state
+            )
+            return
+        }
         if let provider {
             if !requestSemantics.requiresSideEffect,
                requestSemantics.domain != .recommendation,
@@ -201,6 +245,7 @@ public struct ToolLoop {
                     webService: webService,
                     sideEffectAuthorization: resolvedAuthorization,
                     runID: runID,
+                    executionLease: resolvedExecutionLease,
                     toolTimeout: toolTimeout,
                     confirm: confirm,
                     emit: emit,
@@ -224,6 +269,7 @@ public struct ToolLoop {
                     initialTaskState: initialTaskState,
                     sideEffectAuthorization: resolvedAuthorization,
                     runID: runID,
+                    executionLease: resolvedExecutionLease,
                     toolTimeout: toolTimeout,
                     confirm: confirm,
                     emit: emit,
@@ -238,6 +284,8 @@ public struct ToolLoop {
                 bridge: bridge,
                 catalog: catalog,
                 context: context,
+                sideEffectAuthorization: resolvedAuthorization,
+                executionLease: resolvedExecutionLease,
                 emit: emit,
                 log: log
             )
@@ -268,6 +316,7 @@ public struct ToolLoop {
         webService: (any AgentWebService)?,
         sideEffectAuthorization: SideEffectAuthorizationContext,
         runID: UUID,
+        executionLease: ToolExecutionLease,
         toolTimeout: TimeInterval,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -524,7 +573,8 @@ public struct ToolLoop {
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
-                            authorizationContext: sideEffectAuthorization
+                            authorizationContext: sideEffectAuthorization,
+                            executionLease: executionLease
                         )
                     }
                 } catch is CancellationError {
@@ -681,6 +731,7 @@ public struct ToolLoop {
         initialTaskState: AgentTaskState?,
         sideEffectAuthorization: SideEffectAuthorizationContext,
         runID: UUID,
+        executionLease: ToolExecutionLease,
         toolTimeout: TimeInterval,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
@@ -966,23 +1017,10 @@ public struct ToolLoop {
                         continue
                     }
                     // Provider 协议在请求前已经确定。网络瞬时错误由
-                    // streamWithFallback/completeWithRetry 按同一协议重试；协议或
-                    // schema 错误不能偷偷切换成 ACTION。只有请求一开始就是文本
-                    // 协议时，才保留既有的显式音乐本地降级。
-                    if !nativeMode, ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText) {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.text("AI 服务暂时不可用（\(Self.errorText(error))），已切换到本地能力（音乐库）处理。")]))
-                        await runOffline(
-                            userText: userText,
-                            bridge: bridge,
-                            catalog: catalog,
-                            context: context,
-                            emit: emit,
-                            log: log
-                        )
-                    } else {
-                        let prefix = nativeMode ? "原生工具协议请求失败" : "AI 服务暂时不可用"
-                        await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；未切换到另一种工具协议，也未将请求改写为本地音乐搜索。")]))
-                    }
+                    // streamWithFallback/completeWithRetry 按同一协议重试；失败后
+                    // 不能在同一任务里改写成 ACTION 或本地音乐规则。
+                    let prefix = nativeMode ? "原生工具协议请求失败" : "AI 服务暂时不可用"
+                    await emit(AgentChatMessage(role: .assistant, messages: [.error("\(prefix)：\(Self.errorText(error))；未切换到另一种工具协议，也未将请求改写为本地音乐搜索。")]))
                     return
                 }
             }
@@ -1059,7 +1097,7 @@ public struct ToolLoop {
                 case let .retry(recovery):
                     skillOutputRepairAttempts += 1
                     if skillOutputRepairAttempts > 2 {
-                        let message = "Recommendation Index V2 分类输出连续无效，未执行未确认的写入。请检查当前 AI Provider 是否能稳定返回 JSON 后再继续。"
+                        let message = "推荐索引分类输出连续无效，未执行未确认的写入。请检查当前 AI Provider 是否能稳定返回 JSON 后再继续。"
                         taskState.errors.append(message)
                         taskState.errorState = message
                         taskState.status = .failed
@@ -1154,17 +1192,6 @@ public struct ToolLoop {
                nativeCalls.isEmpty,
                textActions.isEmpty,
                skillInternalCall == nil {
-                if !nativeMode, Self.canUseOfflineFallback(intent: intent, userText: userText) {
-                    await runOffline(
-                        userText: userText,
-                        bridge: bridge,
-                        catalog: catalog,
-                        context: context,
-                        emit: emit,
-                        log: log
-                    )
-                    return
-                }
                 let failure = nativeMode
                     ? "原生工具协议返回了空内容，未切换到 ACTION 或本地音乐搜索；请检查 Provider 的原生工具兼容性后重试。"
                     : "模型在 ACTION 协议下未返回可用内容，任务未完成。"
@@ -1508,7 +1535,8 @@ public struct ToolLoop {
                             providerCapabilities: provider.capabilities,
                             webService: webService,
                             authorizationContext: sideEffectAuthorization,
-                            activeSkillID: activeSkillID
+                            activeSkillID: activeSkillID,
+                            executionLease: executionLease
                         )
                     }
                 } catch is CancellationError {
@@ -1909,7 +1937,7 @@ public struct ToolLoop {
         case .playlistMutation:
             return "歌单操作已完成。"
         case .indexPendingCountIsZero:
-            return "推荐索引 V2 已完成。"
+            return "推荐索引已完成。"
         case .successfulToolResult:
             return "已根据真实工具结果完成。"
         case .modelAnswer, .appreciationWithEvidence:
@@ -2229,8 +2257,35 @@ public struct ToolLoop {
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         context: Context,
+        sideEffectAuthorization: SideEffectAuthorizationContext,
+        executionLease: ToolExecutionLease,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in }
+    ) async {
+        // Offline compatibility still executes within the same revocable run
+        // capability. Its remaining direct bridge calls are guarded again at
+        // the concrete AppShell commit boundary.
+        await ToolExecutionContext.$lease.withValue(executionLease) {
+            await runOfflineBody(
+                userText: userText,
+                bridge: bridge,
+                catalog: catalog,
+                context: context,
+                sideEffectAuthorization: sideEffectAuthorization,
+                emit: emit,
+                log: log
+            )
+        }
+    }
+
+    private static func runOfflineBody(
+        userText: String,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        context: Context,
+        sideEffectAuthorization: SideEffectAuthorizationContext,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void,
+        log: @escaping @Sendable (AgentActionRecord) async -> Void
     ) async {
         let text = userText.trimmingCharacters(in: .whitespaces)
         let lower = text.lowercased()
@@ -2239,13 +2294,29 @@ public struct ToolLoop {
             (try? await catalog.searchTracks(query: q, serverID: context.serverID)) ?? []
         }
 
+        func executeMutation(_ name: String, arguments: [String: AIJSONValue] = [:]) async -> ToolResult {
+            await ToolRuntime.execute(
+                ToolCall(name: name, arguments: arguments),
+                bridge: bridge,
+                catalog: catalog,
+                serverID: context.serverID,
+                systemService: nil,
+                authorizationContext: sideEffectAuthorization,
+                executionLease: ToolExecutionContext.lease ?? .revoked()
+            )
+        }
+
         if lower.contains("收藏") || lower.contains("喜欢") {
             if let q = extractQuery(text, markers: ["收藏", "喜欢"]) {
                 let hits = await search(q)
                 if let first = hits.first {
-                    let result = await bridge.likeTrack(globalID: first.globalID)
-                    if result.succeeded {
-                        await log(AgentActionRecord(toolName: "likeTrack", permission: .reversible, summary: result.summary))
+                    let result = await executeMutation("favorite_set", arguments: [
+                        "targetType": .string("song"),
+                        "targetID": .string(first.globalID.description),
+                        "value": .bool(true),
+                    ])
+                    if result.success {
+                        await log(AgentActionRecord(toolName: "favorite_set", permission: .reversible, summary: result.summary))
                         await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("已收藏：\(first.title)")]))
                     } else {
                         await emit(AgentChatMessage(role: .assistant, messages: [.text("收藏《\(first.title)》未确认：\(result.summary)")]))
@@ -2295,16 +2366,20 @@ public struct ToolLoop {
                 return
             }
             let name = playlistName.isEmpty ? "默认歌单" : playlistName
-            if let gid = await bridge.createPlaylist(name: name) {
-                let added = await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: [first.globalID])
-                if added.succeeded {
-                    await log(AgentActionRecord(toolName: "addTracksToPlaylist", permission: .reversible, summary: "把《\(first.title)》加入歌单「\(name)」"))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("已把《\(first.title)》加入歌单「\(name)」")]))
-                } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("加入歌单「\(name)」失败：\(added.summary)")]))
-                }
+            let playlists = (try? await catalog.listPlaylists(serverID: context.serverID)) ?? []
+            guard let playlist = playlists.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+                await emit(AgentChatMessage(role: .assistant, messages: [.text("没有找到歌单「\(name)」；本次请求只授权加入歌曲，不会擅自创建新歌单。")]))
+                return
+            }
+            let added = await executeMutation("playlist_add_songs", arguments: [
+                "playlistID": .string(playlist.globalID.description),
+                "trackIDs": .array([.string(first.globalID.description)]),
+            ])
+            if added.success {
+                await log(AgentActionRecord(toolName: "playlist_add_songs", permission: .reversible, summary: "把《\(first.title)》加入歌单「\(name)」"))
+                await emit(AgentChatMessage(role: .assistant, messages: [.text("已把《\(first.title)》加入歌单「\(name)」")]))
             } else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("创建歌单「\(name)」失败，请检查服务器。")]))
+                await emit(AgentChatMessage(role: .assistant, messages: [.text("加入歌单「\(name)」失败：\(added.summary)")]))
             }
             return
         }
@@ -2312,11 +2387,12 @@ public struct ToolLoop {
         // 创建歌单（LLM 不可用时本地规则直接完成）
         if lower.contains("创建歌单") || lower.contains("新建歌单") || lower.contains("建一个歌单") {
             let name = extractQuery(text, markers: ["创建歌单", "新建歌单", "建一个歌单", "叫", "名为"]) ?? "我的歌单"
-            if let gid = await bridge.createPlaylist(name: name) {
-                await log(AgentActionRecord(toolName: "createPlaylist", permission: .reversible, summary: "创建歌单「\(name)」"))
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("已创建歌单「\(name)」（\(gid.description)）")]))
+            let result = await executeMutation("playlist_create", arguments: ["name": .string(name)])
+            if result.success {
+                await log(AgentActionRecord(toolName: "playlist_create", permission: .reversible, summary: result.summary))
+                await emit(AgentChatMessage(role: .assistant, messages: [.text("已创建歌单「\(name)」")]))
             } else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("创建歌单失败，请检查服务器连接。")]))
+                await emit(AgentChatMessage(role: .assistant, messages: [.text("创建歌单失败：\(result.summary)")]))
             }
             return
         }
@@ -2335,8 +2411,15 @@ public struct ToolLoop {
             // AI 失败时仍从本地曲库选一首真实歌曲执行，避免错误地报告“未找到”。
             if lower.contains("播放一首") || lower.contains("随机播放") || lower.contains("随便播放") {
                 let all = (try? await catalog.allTrackSummaries(serverID: context.serverID)) ?? []
-                if let first = all.randomElement(), await bridge.playTrack(globalID: first.globalID) {
-                    await log(AgentActionRecord(toolName: "playTrack", permission: .reversible, summary: "随机播放《\(first.title)》"))
+                if let first = all.randomElement() {
+                    let result = await executeMutation("playback_play_song", arguments: [
+                        "trackID": .string(first.globalID.description),
+                    ])
+                    guard result.success else {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text("未能开始播放：\(result.summary)")]))
+                        return
+                    }
+                    await log(AgentActionRecord(toolName: "playback_play_song", permission: .reversible, summary: result.summary))
                     await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("开始播放：\(first.title)")]))
                 } else {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("曲库中没有可播放的歌曲。")]))
@@ -2346,11 +2429,14 @@ public struct ToolLoop {
             let q = extractQuery(text, markers: ["播放"]) ?? text
             let hits = await search(q)
             if let first = hits.first {
-                if await bridge.playTrack(globalID: first.globalID) {
-                    await log(AgentActionRecord(toolName: "playTrack", permission: .reversible, summary: "播放《\(first.title)》"))
+                let result = await executeMutation("playback_play_song", arguments: [
+                    "trackID": .string(first.globalID.description),
+                ])
+                if result.success {
+                    await log(AgentActionRecord(toolName: "playback_play_song", permission: .reversible, summary: result.summary))
                     await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("开始播放：\(first.title)")]))
                 } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("未能播放：未找到可播放的歌曲：\(q)")]))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text("未能播放：\(result.summary)")]))
                 }
             } else {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("未找到可播放的歌曲：\(q)")]))
@@ -2718,7 +2804,7 @@ public struct ToolLoop {
         5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首**候选**（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里筛选出用户要求的 N 首。注意：40～60 是内部候选池，不是给主人显示 40～60 首；最终展示只通过 result_present_tracks / 真实建队/建歌单副作用确定。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
         5e. 热门 = 本地热度代理（播放次数/收藏/评分/最近播放），不是互联网排行榜。library_select_tracks 的 popularityProxy 已按此排序；语言标签缺失时会按热度返回候选，请按歌曲名/艺术家判断语言后再挑选。
         5f. 推荐时不需要每次都先 catalog_index：只有确实需要了解曲库结构（流派/语言/年代构成）时才调用 library_get_catalog_index；能直接用 recommend_by_mood / recommend_by_constraints / library_select_tracks 得到候选时就先用它们。按用户需求只取相关分类；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
-        5f-1. 构建 Recommendation Index V2 时严格使用 status → library_index_v2_next_batch → library_index_v2_write_batch → next_batch → write_batch。每次成功写入后必须重新获取完整下一批；绝不能在没有刚取得的完整 metadata 时凭记忆连续调用 write_batch。若工具结果提示参数不完整或缩小批次，立即按给出的 limit 重新调用 next_batch，不要猜测或补造 items。
+        5f-1. 推荐索引构建由受控 Runtime 执行：模型只返回当前批次的分类数据，不能规划或调用内部准备、写入步骤。
         5e-0. 不喜欢（dislike）：用户说「我不喜欢这首」「这首以后不要给我推荐」「别再推荐这首歌」「把当前歌曲标记为不喜欢」时，调用 preference_set_disliked(trackID, value=true)；「取消不喜欢」调用 value=false。查询用 library_get_disliked。**不喜欢只影响自动推荐/随机/相似/智能队列/发现**；用户明确要「播放」「搜索」「打开专辑/歌单」某首不喜欢歌曲时，必须正常执行，不得以「你不喜欢」为由拒绝。所有自动推荐工具的返回候选已经由 Swift/SQLite 层排除了不喜欢歌曲，你不需要也不应该把不喜欢的歌塞回推荐。
         5f-0. 歌曲鉴赏：主人要求鉴赏/赏析/乐评/大众评价时，必须调用 music_appreciate。没有指定歌曲则省略 trackID，鉴赏当前播放曲目；指定歌曲时先 library_search 取得真实 trackID，再调用 music_appreciate。最终回答固定使用 `## 《歌名》鉴赏`，并按顺序分为 `### 【已核验事实】`、`### 【模型分析】`、`### 【我的私人数据】`、`### 【大众评价】`；可在模型分析中使用音乐结构、情绪、编曲、人声、风格和聆听细节的小标题，但不得混入事实段。只有工具返回真实 Community Evidence 才能描述大众评价；否则大众评价段必须逐字写“暂无可核验的大众评价数据。” 本机播放次数、收藏和个人评分只能放在“我的私人数据”，不能冒充大众反馈。不得编造调性、BPM、歌词、创作背景、平台评分、榜单、奖项、评论来源或引语。
         5g. 音乐下载（Music Download / MoviePilot）：这是「下载到服务器音乐目录」的离线补充能力，**不是播放的前置条件**。播放永远走服务器在线流播（见规则 3）。只有以下两种情况才用 music_download：① 用户明确要求「下载」某首歌/专辑；② 已用 server_search 确认服务器音乐库中确实不存在该资源（先说明该资源不在服务器上，再询问是否要下载）。
@@ -2738,7 +2824,7 @@ public struct ToolLoop {
         ## 对话与工具调用规则
         6. 你是有记忆的助手：结合本会话历史回答，不要重复询问已知信息。
         6b. 记忆 vs 技能：Memory 是主人长期信息（名字/偏好/喜欢的歌手等）；Skill 是可复用工作指令。用户问「你记得什么/你的记忆里有什么」→ 只调用 memory_list；用户问「你有哪些技能/skill 里有什么」→ 才调用 skill_list。两者不要混为一谈，也不要互相替代。
-        7. 一个请求不按累计工具次数截断；需要多步时（先搜索再播放、先拿清单再推荐，或构建索引 V2）可以连续调用，
+        7. 一个请求不按累计工具次数截断；需要多步时（先搜索再播放、先拿清单再推荐）可以连续调用，
            直到给出最终回答为止。每个模型轮次和每个工具仍受独立超时保护；单个工具失败或超时后，根据返回结果换工具/换参数继续，不要因为一个步骤失败就自行终止整个任务。
         8. 工具执行结果会以「（工具执行结果）工具名: 成功/失败 - 摘要；详情：歌曲清单」的形式回传给你，里面包含真实歌曲名与 GlobalID。拿到结果后：成功就据此给出自然语言总结；只有确实需要后续操作时才继续调用工具，不要重复调用已经成功的工具。
         8b. 禁止重复搜索：已经拿到某首歌的稳定 ID 后，后续操作必须直接使用该 ID（queue_replace / queue_append / playback_play_song），**禁止**再次按名称搜索同一首歌。同一查询（相同工具 + 相同参数）会被缓存，重复调用只返回缓存、不会得到新结果。
@@ -2787,7 +2873,7 @@ public struct ToolLoop {
             ("播放控制", ["playback_play_song", "playback_play_album", "playback_play_artist", "playback_play_playlist", "playback_play_random", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat", "playback_set_speed", "playback_set_sleep_timer", "playback_cancel_sleep_timer", "playback_get_sleep_timer", "playback_get_state"]),
             ("播放队列", ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]),
             ("歌单与收藏", ["playlist_create", "playlist_add_songs", "favorite_set", "lyrics_get"]),
-            ("推荐与下载", ["recommend_by_mood", "recommend_by_constraints", "smart_queue_generate", "library_index_v2_status", "library_index_v2_read", "library_index_v2_next_batch", "library_index_v2_write_batch", "media_download_offline", "cache_get_status"]),
+            ("推荐与下载", ["recommend_by_mood", "recommend_by_constraints", "smart_queue_generate", "library_index_status", "library_index_read", "media_download_offline", "cache_get_status"]),
             ("音乐下载（MoviePilot）", ["music_download"]),
             ("维护与诊断", ["library_find_duplicates", "library_find_metadata_issues", "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable", "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution", "stats_get_listening_summary", "diagnostics_playback", "diagnostics_get_recent_errors", "diagnostics_export_report", "diagnostics_now_playing"]),
             ("系统与设备", ["app_get_context", "app_open_page", "app_get_feature_status", "device_get_network_status", "device_get_audio_route", "device_get_storage_status", "ios_siri_get_status", "ios_shortcuts_list"]),

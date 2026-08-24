@@ -174,7 +174,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .musicDiscovery:
             return [
                 "library_search", "library_select_tracks", "library_get_catalog_index", "library_get_catalog_tracks",
-                "library_index_v2_read", "server_search", "recommend_by_mood", "recommend_by_constraints",
+                "library_index_read", "server_search", "recommend_by_mood", "recommend_by_constraints",
                 "result_present_tracks", "getSimilarTracks", "library_get_similar_songs",
             ]
         case .queueManagement:
@@ -201,7 +201,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
                 "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable",
                 "likeTrack", "unlikeTrack", "favoriteAlbum", "unfavoriteAlbum", "favoriteArtist", "unfavoriteArtist",
                 "setRating", "clearRating", "favorite_set", "rating_set", "preference_set_disliked",
-                "refreshLibrary", "server_sync_start", "library_index_v2_status", "library_index_v2_read", "library_index_v2_tag_catalog",
+                "refreshLibrary", "server_sync_start", "library_index_status", "library_index_read",
             ]
         case .serverManagement:
             return [
@@ -571,11 +571,7 @@ public enum AgentIntentClassifier {
     }
 
     private static func isContinuation(_ text: String) -> Bool {
-        let normalized = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
-        return ["继续", "继续吧", "第一个", "第一个吧", "就这个", "就它"].contains(normalized)
+        AgentHistoryPolicy.isExplicitContinuation(text)
     }
 }
 
@@ -621,7 +617,7 @@ public enum AgentTaskPolicyResolver {
 }
 
 /// Recommendation Index 的任务兼容规则只负责在任务创建边界选择恢复策略；真正的
-/// 批次状态、重试、checkpoint 和完成判定由 RecommendationIndexV2SkillRuntime 持有。
+/// 批次状态、重试、checkpoint 和完成判定由 RecommendationIndexSkillRuntime 持有。
 public enum RecommendationIndexTaskRules {
     public static func requiresCompleteBuild(text: String, historyText: String = "") -> Bool {
         AgentRequestSemantics.analyze(text, historyText: historyText).isRecommendationIndexBuild
@@ -718,9 +714,8 @@ public enum AgentTaskReducer {
 /// Runtime 层的确定性完成判定。LLM 的自然语言只是一份候选答案；任务事实未满足时，
 /// Runtime 要求继续或明确失败，不能把“看起来完成”当成真实完成。
 ///
-/// 普通聊天不会进入这里；Recommendation Index V2 的活动路径由
-/// `RecommendationIndexWorkflow` 持有自己的状态和完成判定。这里保留 index 分支，
-/// 仅用于旧任务记录和兼容调用方的恢复。
+/// 普通聊天不会进入这里；活动 Recommendation Index 路径由专用 Runtime 完整拥有。
+/// index 分支只读取历史 task facts，绝不再向模型下发 batch/commit 控制指令。
 public enum AgentCompletionEvaluator {
     /// 判断任务事实是否已经足够完成，不依赖模型是否又输出了一句客套话。
     /// 播放、搜索、队列、歌单等真实工具成功后，空 content 也不能覆盖成功事实。
@@ -801,17 +796,9 @@ public enum AgentCompletionEvaluator {
             let pendingFixed = state.facts["recommendation.index.pending"]
             let pendingSemantic = state.facts["recommendation.index.pendingSemantic"] ?? "0"
             satisfied = pendingFixed == "0" && pendingSemantic == "0"
-            if pendingFixed == nil {
-                continuation = "推荐索引完成事实尚未取得。请先调用 library_index_v2_status；只有真实工具结果显示固定分类与开放语义标签都无待处理项才能结束。"
-            } else if pendingFixed != "0" {
-                continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pendingFixed ?? "?") 首）。请调用 library_index_v2_next_batch 获取当前安全批次，写回后再次调用 next_batch；直到固定分类与开放标签都完成。"
-            } else if pendingSemantic != "0" {
-                continuation = "推荐索引固定分类已完成，但仍需为 \(pendingSemantic) 首歌曲补充开放语义标签。请继续调用 library_index_v2_next_batch（本批模式 semanticTagsOnly）并写回。"
-            } else if state.facts["recommendation.index.nextBatchAvailable"] == "true" {
-                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch 获取完整当前批次，分类后再调用 library_index_v2_write_batch。"
-            } else {
-                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch 获取当前安全批次并持续分类写回。"
-            }
+            continuation = pendingFixed == nil
+                ? "推荐索引尚未获得状态事实。"
+                : "推荐索引仍有待处理歌曲；专用 Runtime 会继续处理并核验。"
         case .appreciationWithEvidence:
             let metadataReady = state.facts["appreciation.metadata"] == "available"
             let lyricsResolved = state.facts["appreciation.lyrics"] != nil
@@ -885,7 +872,9 @@ public actor AgentRuntime {
         webService: (any AgentWebService)? = nil,
         initialTaskState: AgentTaskState? = nil,
         authorizationContext: SideEffectAuthorizationContext? = nil,
+        executionLineage: ExecutionLineage? = nil,
         runID: UUID = UUID(),
+        executionLease: ToolExecutionLease? = nil,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
@@ -920,7 +909,9 @@ public actor AgentRuntime {
             policy: policy,
             initialTaskState: taskState,
             authorizationContext: authorizationContext,
+            executionLineage: executionLineage,
             runID: runID,
+            executionLease: executionLease,
             confirm: confirm,
             emit: emit,
             log: log,

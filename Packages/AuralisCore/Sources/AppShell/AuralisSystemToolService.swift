@@ -46,6 +46,7 @@ public final class AuralisSystemToolService: AgentSystemService {
     }
 
     public func openPage(_ page: String) async -> Bool {
+        guard permitsMutationCommit else { return false }
         let normalized = page.lowercased()
         switch normalized {
         case "首页", "home":
@@ -250,6 +251,7 @@ public final class AuralisSystemToolService: AgentSystemService {
     public func downloadOffline(trackID: TrackID) async -> Bool {
         guard let track = model.catalog.tracks.first(where: { $0.id == trackID }) else { return false }
         guard !model.isDownloaded(track), !model.isDownloading(track) else { return false }
+        guard permitsMutationCommit else { return false }
         model.download(track)
         return true
     }
@@ -307,7 +309,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         let indexedCandidates: [Track]
         let indexTag = Self.recommendationIndexMoodAliases[mood] ?? mood
         if let serverID = model.catalog.activeAccount?.id,
-           let ids = try? await model.catalogCoordinator.store.recommendationIndexV2TrackIDs(serverID: serverID, query: indexTag) {
+           let ids = try? await model.catalogCoordinator.store.recommendationIndexTrackIDs(serverID: serverID, query: indexTag) {
             let wanted = Set(ids)
             indexedCandidates = model.catalog.tracks.filter {
                 wanted.contains(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))
@@ -643,6 +645,9 @@ public final class AuralisSystemToolService: AgentSystemService {
         guard let connection = await movipNoteConnection() else {
             return AgentMusicDownloadResult(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
         }
+        guard permitsMutationCommit else {
+            return AgentMusicDownloadResult(configured: true, message: String(localized: "所属 AI 运行已取消，未提交下载", bundle: .module))
+        }
         do {
             let data = try await MoviePilotClient().download(
                 connection,
@@ -728,6 +733,9 @@ public final class AuralisSystemToolService: AgentSystemService {
         guard let connection = await movipNoteConnection() else {
             return AgentMusicHistoryMutation(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
         }
+        guard permitsMutationCommit else {
+            return AgentMusicHistoryMutation(configured: true, message: String(localized: "所属 AI 运行已取消，未修改下载历史", bundle: .module))
+        }
         do {
             let result = try await MoviePilotClient().historyRemove(connection, hash: hash)
             return AgentMusicHistoryMutation(
@@ -743,6 +751,9 @@ public final class AuralisSystemToolService: AgentSystemService {
     public func musicHistoryClean(status: String?, keep: Int?, orphans: Bool?) async -> AgentMusicHistoryMutation {
         guard let connection = await movipNoteConnection() else {
             return AgentMusicHistoryMutation(configured: false, message: String(localized: "音乐下载（MoviePilot）未配置", bundle: .module))
+        }
+        guard permitsMutationCommit else {
+            return AgentMusicHistoryMutation(configured: true, message: String(localized: "所属 AI 运行已取消，未清理下载历史", bundle: .module))
         }
         do {
             let result = try await MoviePilotClient().historyClean(connection, status: status, keep: keep, orphans: orphans)
@@ -892,15 +903,18 @@ public final class AuralisSystemToolService: AgentSystemService {
     }
 
     public func saveMemory(key: String, value: String) async -> Bool {
-        memoryStore.saveMemory(key: key, value: value)
+        guard permitsMutationCommit else { return false }
+        return memoryStore.saveMemory(key: key, value: value)
     }
 
     public func deleteMemory(key: String) async -> Bool {
-        memoryStore.deleteMemory(key: key)
+        guard permitsMutationCommit else { return false }
+        return memoryStore.deleteMemory(key: key)
     }
 
     public func clearMemories() async -> Int {
-        memoryStore.clearMemory()
+        guard permitsMutationCommit else { return 0 }
+        return memoryStore.clearMemory()
     }
 
     public func agentSkills() async -> [AgentSkillEntry] {
@@ -908,7 +922,8 @@ public final class AuralisSystemToolService: AgentSystemService {
     }
 
     public func createSkill(name: String, instructions: String) async -> AgentSkillEntry? {
-        memoryStore.createSkill(name: name, instructions: instructions)
+        guard permitsMutationCommit else { return nil }
+        return memoryStore.createSkill(name: name, instructions: instructions)
     }
 
     public func readSkill(name: String) async -> AgentSkillEntry? {
@@ -916,6 +931,11 @@ public final class AuralisSystemToolService: AgentSystemService {
     }
 
     public func deleteSkill(name: String) async -> Bool {
-        memoryStore.deleteSkill(name: name)
+        guard permitsMutationCommit else { return false }
+        return memoryStore.deleteSkill(name: name)
+    }
+
+    private var permitsMutationCommit: Bool {
+        ToolExecutionContext.permitsMutationCommit
     }
 }
