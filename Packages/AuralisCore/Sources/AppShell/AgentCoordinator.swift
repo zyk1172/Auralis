@@ -119,7 +119,12 @@ public final class AgentCoordinator: ObservableObject {
     private var runLeases: [UUID: ToolExecutionLease] = [:]
     private var runIDsBySession: [UUID: UUID] = [:]
     private var consentContinuation: CheckedContinuation<AIConsentDecision, Never>?
-    private var operationConfirmationContinuation: CheckedContinuation<Bool, Never>?
+    /// Destructive confirmations belong to the run that requested them.  A
+    /// single coordinator can keep a background run waiting while another
+    /// session is active; a global continuation would either block the wrong
+    /// session or let its UI answer the wrong run.
+    private var operationConfirmationContinuations: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private var operationConfirmations: [UUID: PendingConfirmation] = [:]
     /// 当前运行身份：任何迟到 callback 只要 runID 不匹配就丢弃，绝不污染新运行/新会话。
     var currentRunID: UUID?
     /// generation 单调递增，防止相同会话恢复后误接受上一代异步结果。
@@ -645,7 +650,11 @@ public final class AgentCoordinator: ObservableObject {
                     executionLease: executionLease,
                     confirm: { [weak self] pending in
                         guard let self else { return false }
-                        return await self.requestOperationConfirmation(pending)
+                        return await self.requestOperationConfirmation(
+                            pending,
+                            runID: runID,
+                            sessionID: sessionID
+                        )
                     },
                     emit: { [weak self] message in
                         await self?.receive(message, sessionID: sessionID, runID: runID)
@@ -790,7 +799,11 @@ public final class AgentCoordinator: ObservableObject {
                 executionLease: executionLease,
                 confirm: { [weak self] pending in
                     guard let self else { return false }
-                    return await self.requestOperationConfirmation(pending)
+                    return await self.requestOperationConfirmation(
+                        pending,
+                        runID: runID,
+                        sessionID: sessionID
+                    )
                 },
                 emit: { [weak self] message in
                     await self?.receive(message, sessionID: sessionID, runID: runID)
@@ -929,6 +942,12 @@ public final class AgentCoordinator: ObservableObject {
             return "推荐索引：正在写入分类…"
         case .commitCompleted:
             return "推荐索引：分类已写入，准备核验…"
+        case .verifyStarted:
+            return "推荐索引：正在核验写入进度…"
+        case .verifyCompleted:
+            return "推荐索引：写入进度已核验，准备继续…"
+        case .noProgress:
+            return "推荐索引：连续提交未产生进度，已暂停以避免重复写入。"
         case .retrying:
             return "推荐索引正在重试当前批次…"
         case .completed:
@@ -1013,6 +1032,10 @@ public final class AgentCoordinator: ObservableObject {
     func finishOwnedRun(_ runID: UUID) {
         guard runSessions[runID] != nil || currentRunID == runID else { return }
         let sessionID = runSessions[runID]
+        // A run that exits while waiting for approval must fail closed and
+        // release only its own continuation.  Never leave a confirmation
+        // belonging to a finished run visible in another session.
+        resolveOperationConfirmation(false, for: runID)
         runLeases[runID]?.revoke()
         if currentExecutionLease?.runID == runID {
             currentExecutionLease = nil
@@ -1078,7 +1101,7 @@ public final class AgentCoordinator: ObservableObject {
         currentRunID = nil
         currentExecutionLease = nil
         resolveConsent(.deny)
-        resolveOperationConfirmation(false)
+        resolveOperationConfirmation(false, for: cancelledRunID)
         refreshActiveRunState()
         if markTaskCancelled, let taskID = activeTask?.id {
             taskStore.update(taskID, status: .cancelled, error: String(localized: "用户取消。", bundle: .module))
@@ -1094,6 +1117,9 @@ public final class AgentCoordinator: ObservableObject {
     private func revokeRun(_ runID: UUID) -> Task<Void, Never>? {
         guard runSessions[runID] != nil || currentRunID == runID else { return nil }
         let task = runTasks[runID]
+        // Revoke the UI approval wait before cancelling the async task.  Task
+        // cancellation alone cannot resume a CheckedContinuation.
+        resolveOperationConfirmation(false, for: runID)
         runLeases[runID]?.revoke()
         task?.cancel()
         let sessionID = runSessions[runID]
@@ -1126,6 +1152,8 @@ public final class AgentCoordinator: ObservableObject {
     /// Session B is idle and must not show A's spinner.
     private func refreshActiveRunState() {
         isRunning = activeSessionID.flatMap { runIDsBySession[$0] } != nil
+        let activeRunID = activeSessionID.flatMap { runIDsBySession[$0] }
+        pendingOperationConfirmation = activeRunID.flatMap { operationConfirmations[$0] }
     }
 
     /// 接收 Runner 发出的消息。
@@ -1315,29 +1343,42 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     /// 运行时操作确认：不可逆工具以及需要补齐具体操作授权的调用都复用同一
-    /// PendingConfirmation 通道。Siri / 快捷指令没有可见确认界面，默认拒绝。
-    private func requestOperationConfirmation(_ pending: PendingConfirmation) async -> Bool {
+    /// PendingConfirmation 通道。确认属于具体 run/session；模型输出的“确认”、
+    /// “继续”等文本不会进入这里，也不能替代 Runtime 的批准。
+    func requestOperationConfirmation(
+        _ pending: PendingConfirmation,
+        runID: UUID,
+        sessionID: UUID
+    ) async -> Bool {
         if headless || Task.isCancelled { return false }
-        guard operationConfirmationContinuation == nil else { return false }
-        pendingOperationConfirmation = pending
+        guard runSessions[runID] == sessionID,
+              runLeases[runID]?.isValidSnapshot == true else { return false }
+        guard operationConfirmationContinuations[runID] == nil else { return false }
+        operationConfirmations[runID] = pending
+        refreshActiveRunState()
         return await withCheckedContinuation { continuation in
-            operationConfirmationContinuation = continuation
+            operationConfirmationContinuations[runID] = continuation
         }
     }
 
-    public func approveOperationConfirmation() {
-        resolveOperationConfirmation(true)
-    }
-
     public func denyOperationConfirmation() {
-        resolveOperationConfirmation(false)
+        resolveOperationConfirmation(false, for: activeConfirmationRunID)
     }
 
-    private func resolveOperationConfirmation(_ approved: Bool) {
-        guard let continuation = operationConfirmationContinuation else { return }
-        operationConfirmationContinuation = nil
-        pendingOperationConfirmation = nil
-        continuation.resume(returning: approved)
+    public func approveOperationConfirmation() {
+        resolveOperationConfirmation(true, for: activeConfirmationRunID)
+    }
+
+    private var activeConfirmationRunID: UUID? {
+        activeSessionID.flatMap { runIDsBySession[$0] }
+    }
+
+    private func resolveOperationConfirmation(_ approved: Bool, for runID: UUID?) {
+        guard let runID else { return }
+        let continuation = operationConfirmationContinuations.removeValue(forKey: runID)
+        operationConfirmations[runID] = nil
+        refreshActiveRunState()
+        continuation?.resume(returning: approved)
     }
 
     public func approveConsent(remember: Bool) {

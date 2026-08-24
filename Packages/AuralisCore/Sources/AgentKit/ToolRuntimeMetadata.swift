@@ -126,7 +126,7 @@ public struct ToolExecutorContext: Sendable {
         )
     }
 
-    public func withAdditionalAuthorizationScopes(_ scopes: Set<MutationScope>) -> ToolExecutorContext {
+    public func withAdditionalAuthorizationOperations(_ operations: Set<ToolAuthorizationOperation>) -> ToolExecutorContext {
         ToolExecutorContext(
             bridge: bridge,
             catalog: catalog,
@@ -136,7 +136,7 @@ public struct ToolExecutorContext: Sendable {
             allowsLyrics: allowsLyrics,
             providerCapabilities: providerCapabilities,
             webService: webService,
-            authorizationContext: authorizationContext?.granting(scopes: scopes),
+            authorizationContext: authorizationContext?.granting(operations: operations),
             activeSkillID: activeSkillID,
             executionAuthority: executionAuthority,
             executionLease: executionLease,
@@ -145,6 +145,12 @@ public struct ToolExecutorContext: Sendable {
             customToolRegistry: customToolRegistry,
             availableToolDescriptors: availableToolDescriptors
         )
+    }
+
+    @available(*, deprecated, message: "Use withAdditionalAuthorizationOperations(_:)")
+    public func withAdditionalAuthorizationScopes(_ scopes: Set<MutationScope>) -> ToolExecutorContext {
+        _ = scopes
+        return self
     }
 
     /// Execute an existing built-in implementation while it is being migrated
@@ -231,6 +237,7 @@ public enum ToolCoverageIssue: Sendable, Equatable, Hashable {
     case aliasTargetMissing(alias: String, target: String)
     case modelMutationMissingOperation(String)
     case modelMutationMissingScope(String)
+    case destructiveMutationMissingApproval(String)
     case irreversibleDeleteMissingApproval(String)
     case missingExecutor(String)
 }

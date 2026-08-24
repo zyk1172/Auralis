@@ -12,6 +12,8 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
         public let phase: RecommendationIndexWorkflow.State
         public let batchID: UUID?
         public let batchRevision: UInt64?
+        public let batchMode: String?
+        public let batchTrackIDs: [String]
         public let attempt: Int
         public let totalTracks: Int
         public let indexedTracks: Int
@@ -29,6 +31,8 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
             phase: RecommendationIndexWorkflow.State,
             batchID: UUID? = nil,
             batchRevision: UInt64? = nil,
+            batchMode: String? = nil,
+            batchTrackIDs: [String] = [],
             attempt: Int = 0,
             totalTracks: Int = 0,
             indexedTracks: Int = 0,
@@ -45,6 +49,8 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
             self.phase = phase
             self.batchID = batchID
             self.batchRevision = batchRevision
+            self.batchMode = batchMode
+            self.batchTrackIDs = batchTrackIDs
             self.attempt = attempt
             self.totalTracks = totalTracks
             self.indexedTracks = indexedTracks
@@ -134,6 +140,8 @@ public actor RecommendationIndexExecutionRegistry {
         phase: RecommendationIndexWorkflow.State,
         batchID: UUID? = nil,
         batchRevision: UInt64? = nil,
+        batchMode: String? = nil,
+        batchTrackIDs: [String] = [],
         attempt: Int = 0,
         totalTracks: Int,
         indexedTracks: Int,
@@ -153,6 +161,8 @@ public actor RecommendationIndexExecutionRegistry {
             phase: phase,
             batchID: batchID,
             batchRevision: batchRevision,
+            batchMode: batchMode,
+            batchTrackIDs: batchTrackIDs,
             attempt: attempt,
             totalTracks: totalTracks,
             indexedTracks: indexedTracks,

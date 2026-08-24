@@ -235,13 +235,16 @@ public struct AgentToolkit {
             return mutationToolResult(call, descriptor, await bridge.clearQueue())
 
         // MARK: Playlist
-        case "listPlaylists":
+        case "listPlaylists", "playlist_list":
             let list = try await catalog.listPlaylists(serverID: serverID)
             if list.isEmpty {
                 return .ok(call, descriptor, "歌单 0 个", .text("当前没有歌单"))
             }
             // 名字后带 GlobalPlaylistID（格式「服务器ID:歌单ID」），供 playback_play_playlist 等直接使用。
-            let text = list.prefix(40).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
+            let limit = min(max((try? intParam(call, "limit")) ?? 100, 1), 100)
+            let text = list.prefix(limit).map {
+                "\($0.name)（id=\($0.globalID)，\($0.trackIDs.count) 首，\($0.isReadOnly ? "只读" : "可编辑")）"
+            }.joined(separator: "、")
             return .ok(call, descriptor, "歌单 \(list.count) 个", .text("共 \(list.count) 个歌单：\(text)"))
         case "getPlaylist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
@@ -430,6 +433,37 @@ public struct AgentToolkit {
             let favorites = try await catalog.getFavorites(serverID: serverID).count
             return .ok(call, descriptor, "\(tracks.count) 首歌曲、\(artists) 位艺术家、\(albums) 张专辑、\(favorites) 首收藏",
                        .text("\(tracks.count) 首歌曲 · \(artists) 位艺术家 · \(albums) 张专辑 · \(favorites) 首收藏"))
+        case "library_get_artists":
+            let limit = min(max((try? intParam(call, "limit")) ?? 100, 1), 500)
+            let artists = try await catalog.allArtists(serverID: serverID, limit: limit)
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            guard !artists.isEmpty else {
+                return .ok(call, descriptor, "艺术家 0 位", .text("当前资料库没有艺术家"))
+            }
+            let text = "共 \(artists.count) 位艺术家：" + artists.map {
+                "\($0.name)（id=\(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))，\($0.albumCount) 张专辑）"
+            }.joined(separator: "、")
+            return .ok(call, descriptor, "艺术家 \(artists.count) 位", .text(text))
+        case "library_get_albums":
+            let limit = min(max((try? intParam(call, "limit")) ?? 100, 1), 500)
+            let albums = try await catalog.allAlbums(serverID: serverID, limit: limit)
+                .sorted {
+                    let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+                    return titleOrder == .orderedSame
+                        ? $0.artistName.localizedCaseInsensitiveCompare($1.artistName) == .orderedAscending
+                        : titleOrder == .orderedAscending
+                }
+            let cards = albums.map {
+                AlbumCard(
+                    globalID: GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue),
+                    title: $0.title,
+                    artistName: $0.artistName
+                )
+            }
+            if cards.isEmpty {
+                return .ok(call, descriptor, "专辑 0 张", .text("当前资料库没有专辑"))
+            }
+            return .ok(call, descriptor, "专辑 \(albums.count) 张", .albumCards(cards))
         case "library_search":
             let query = try require(call, "query")
             let limit = (try? intParam(call, "limit")) ?? 30

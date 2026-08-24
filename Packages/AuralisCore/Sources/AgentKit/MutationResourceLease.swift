@@ -22,7 +22,12 @@ public enum MutationResource: String, Codable, Sendable, Hashable, CaseIterable 
 public actor MutationResourceLeaseRegistry {
     public static let shared = MutationResourceLeaseRegistry()
 
-    private var owners: [MutationResource: UUID] = [:]
+    private struct Ownership: Sendable {
+        let owner: UUID
+        var holdCount: Int
+    }
+
+    private var owners: [MutationResource: Ownership] = [:]
 
     public init() {}
 
@@ -31,11 +36,16 @@ public actor MutationResourceLeaseRegistry {
         owner: UUID
     ) -> Bool {
         guard !resources.isEmpty else { return true }
-        guard resources.allSatisfy({ owners[$0] == nil || owners[$0] == owner }) else {
+        guard resources.allSatisfy({ owners[$0]?.owner == nil || owners[$0]?.owner == owner }) else {
             return false
         }
         for resource in resources {
-            owners[resource] = owner
+            if var ownership = owners[resource], ownership.owner == owner {
+                ownership.holdCount += 1
+                owners[resource] = ownership
+            } else {
+                owners[resource] = Ownership(owner: owner, holdCount: 1)
+            }
         }
         return true
     }
@@ -44,20 +54,34 @@ public actor MutationResourceLeaseRegistry {
         _ resources: Set<MutationResource>,
         owner: UUID
     ) {
-        for resource in resources where owners[resource] == owner {
-            owners[resource] = nil
+        for resource in resources {
+            guard var ownership = owners[resource], ownership.owner == owner else { continue }
+            ownership.holdCount -= 1
+            if ownership.holdCount <= 0 {
+                owners[resource] = nil
+            } else {
+                owners[resource] = ownership
+            }
         }
     }
 
     public func owner(of resource: MutationResource) -> UUID? {
-        owners[resource]
+        owners[resource]?.owner
+    }
+
+    /// Number of active acquisitions held by `owner`. This is intentionally
+    /// exposed for diagnostics/tests only; callers must still release exactly
+    /// once for every successful acquisition.
+    public func holdCount(of resource: MutationResource, by owner: UUID) -> Int {
+        guard let ownership = owners[resource], ownership.owner == owner else { return 0 }
+        return ownership.holdCount
     }
 
     public func isHeld(
         _ resources: Set<MutationResource>,
         by owner: UUID
     ) -> Bool {
-        resources.allSatisfy { owners[$0] == owner }
+        resources.allSatisfy { owners[$0]?.owner == owner }
     }
 }
 

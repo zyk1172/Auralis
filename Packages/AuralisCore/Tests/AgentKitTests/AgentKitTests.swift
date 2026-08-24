@@ -1220,7 +1220,7 @@ func toolSelectorIsBounded() {
 func toolSelectorCoversFiveAcceptanceRequests() {
     let cases: [(String, Set<String>)] = [
         ("播放七里香。", ["library_search", "playback_play_song"]),
-        ("我有哪些歌单？", ["library_get_playlist"]),
+        ("我有哪些歌单？", ["playlist_list"]),
         ("从我的歌单随机推荐一首。", ["library_get_playlist", "recommend_by_constraints"]),
         ("挑选 20 首比较火的中文歌，列入清单，顺序播放。", ["library_select_tracks", "queue_replace"]),
         ("从深夜、伤感、女声三个标签里选 20 首，排除最近一周听过的，建立播放队列。", ["library_select_tracks", "queue_replace"]),
@@ -1239,7 +1239,7 @@ func toolSelectorCoversEightRequests() {
     let cases: [(String, String)] = [
         ("下一首。", "playback_next"),
         ("播放七里香。", "library_search"),
-        ("我有哪些歌单？", "library_get_playlist"),
+        ("我有哪些歌单？", "playlist_list"),
         ("从我的歌单随机推荐一首。", "recommend_by_constraints"),
         ("从收藏里面找五首最近没有听过的歌。", "library_get_starred"),
         ("从深夜、伤感、女声标签里面选十首并建立队列。", "library_get_tracks_by_genre"),
@@ -1253,10 +1253,10 @@ func toolSelectorCoversEightRequests() {
     }
 }
 
-// MARK: - 删除操作直接执行（permissive direct execution）
+// MARK: - 删除服务器是可逆的本地配置清理
 
-@Test("Delete server requires the Runtime confirmation gate")
-func deleteServerRequiresConfirmation() async throws {
+@Test("Delete server executes without an invented confirmation")
+func deleteServerExecutesWithoutInventedConfirmation() async throws {
     let store = try makeStore()
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
@@ -1273,9 +1273,10 @@ func deleteServerRequiresConfirmation() async throws {
         emit: { await collector.record($0) },
         log: { _ in }
     )
-    // 删除服务器是不可逆操作：用户原始请求不能绕过 Runtime 的确认门。
-    #expect(await bridge.removedServers.isEmpty)
-    #expect(await probe.calls == 1)
+    // 服务器删除只清理本地配置，属于可逆 mutation；不应引入第二套
+    // 自然语言确认协议。真正不可逆的工具仍由 Runtime confirmation gate 保护。
+    #expect(await bridge.removedServers.contains(ServerID(rawValue: "srv-x")))
+    #expect(await probe.calls == 0)
 }
 
 

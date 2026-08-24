@@ -387,6 +387,123 @@ func destructiveToolExecutesWithoutConfirmation() async throws {
     #expect(coordinator.actionRecords.contains { $0.toolName == "deletePlaylist" && $0.permission == .destructive })
 }
 
+@Test("运行时确认按会话隔离，不阻塞后台会话")
+@MainActor
+func operationConfirmationIsScopedToRunAndSession() async throws {
+    let playlistRemoteID = UUID().uuidString
+    let playlist = Playlist(
+        id: PlaylistID(rawValue: playlistRemoteID),
+        serverID: "test-server",
+        name: "待删除",
+        trackIDs: []
+    )
+    let connector = RecordingConnector(
+        result: makeResult(tracks: [makeTrack(remoteID: "remote-1", title: "Only")], playlists: [playlist])
+    )
+    let model = AuralisAppModel(connector: connector, storeURL: temporaryCatalogURL())
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+
+    let sessionA = await coordinator.newSession()
+    let sessionB = await coordinator.newSession()
+    await coordinator.activate(sessionA)
+    let gid = GlobalID(serverID: "test-server", remoteID: playlistRemoteID)
+    try await model.catalogCoordinator.store.upsertPlaylist(playlist, serverID: "test-server", isReadOnly: false)
+
+    let providerA = ScriptedAIProvider(
+        actionBatches: ["ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(gid.description)\"}}"],
+        closing: "删除完成。"
+    )
+    coordinator.send("删除歌单", provider: providerA)
+    for _ in 0..<500 {
+        if coordinator.pendingOperationConfirmation != nil { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(coordinator.pendingOperationConfirmation != nil)
+
+    // The pending confirmation belongs to A. Switching to B must hide it but
+    // must not cancel A's run or consume its continuation.
+    await coordinator.activate(sessionB)
+    #expect(coordinator.pendingOperationConfirmation == nil)
+    let providerB = MockAIProvider()
+    coordinator.send("你好", provider: providerB)
+    for _ in 0..<500 where coordinator.isRunning {
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(!coordinator.isRunning)
+
+    await coordinator.activate(sessionA)
+    #expect(coordinator.pendingOperationConfirmation != nil)
+    coordinator.approveOperationConfirmation()
+    for _ in 0..<500 where coordinator.isRunning {
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: playlistRemoteID)))
+}
+
+@Test("删除等待确认的会话会自动拒绝并清理确认")
+@MainActor
+func deletingSessionRejectsItsPendingConfirmation() async throws {
+    let playlistRemoteID = UUID().uuidString
+    let playlist = Playlist(
+        id: PlaylistID(rawValue: playlistRemoteID),
+        serverID: "test-server",
+        name: "待删除",
+        trackIDs: []
+    )
+    let connector = RecordingConnector(
+        result: makeResult(tracks: [makeTrack(remoteID: "remote-1", title: "Only")], playlists: [playlist])
+    )
+    let model = AuralisAppModel(connector: connector, storeURL: temporaryCatalogURL())
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+    let sessionA = await coordinator.newSession()
+    let sessionB = await coordinator.newSession()
+    await coordinator.activate(sessionA)
+    let gid = GlobalID(serverID: "test-server", remoteID: playlistRemoteID)
+    try await model.catalogCoordinator.store.upsertPlaylist(playlist, serverID: "test-server", isReadOnly: false)
+
+    let provider = ScriptedAIProvider(
+        actionBatches: ["ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(gid.description)\"}}"]
+    )
+    coordinator.send("删除歌单", provider: provider)
+    for _ in 0..<500 {
+        if coordinator.pendingOperationConfirmation != nil { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(coordinator.pendingOperationConfirmation != nil)
+
+    await coordinator.activate(sessionB)
+    await coordinator.delete(sessionA)
+    #expect(coordinator.activeSessionID == sessionB)
+    #expect(coordinator.pendingOperationConfirmation == nil)
+    #expect(!connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: playlistRemoteID)))
+}
+
 @Test("Coordinator 真实入口在 Provider 失败后可由继续恢复索引")
 @MainActor
 func recommendationIndexResumesThroughCoordinatorAfterProviderFailure() async throws {

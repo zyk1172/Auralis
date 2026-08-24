@@ -797,14 +797,14 @@ struct AgentPermissiveRuntimeTests {
         #expect(await probe.calls == 0)
     }
 
-    @Test("TEST18 拆分后的下载历史删除工具要求 Runtime 确认")
+    @Test("TEST18 拆分后的下载历史清理不发明确认协议")
     func removeDownloadDirectExecution() async throws {
         let removeTool = AgentToolRegistry.descriptor(for: "music_download_history_remove")
         let cleanTool = AgentToolRegistry.descriptor(for: "music_download_history_clean")
         #expect(removeTool != nil)
         #expect(cleanTool != nil)
-        #expect(removeTool?.requiresConfirmation == true)
-        #expect(cleanTool?.requiresConfirmation == true)
+        #expect(removeTool?.requiresConfirmation == false)
+        #expect(cleanTool?.requiresConfirmation == false)
     }
 
     // MARK: - TEST 19-22：conversation Intent 可调用写/播放/队列/推荐工具

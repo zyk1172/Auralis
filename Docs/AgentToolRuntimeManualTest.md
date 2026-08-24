@@ -23,10 +23,18 @@ swift test --package-path Packages/AuralisCore --no-parallel
 再分别验证：
 
 - `我有哪些歌单？`
+- `列出歌手`
+- `列出专辑`
+- `查看曲库统计`
+- `列出服务器`
 - `我的播放队列里现在有哪些歌？`
 - `现在正在播放什么？`
 
-这些请求只允许建立 read lineage，不得携带上一轮 mutation completion。
+预期：这些高确定性请求各自只执行一次对应的 canonical direct tool（分别是
+`playlist_list`、`library_get_artists`、`library_get_albums`、`library_get_summary`、
+`server_list`、`queue_get`、`playback_get_state`），不进入模型规划或 `tool_search`，
+也不得携带上一轮 mutation completion。空资料库或缺少系统服务时应返回结构化的真实失败/空结果，
+不能由模型自行补造数量或列表。
 
 ## 2. 可逆操作不要求模型自创确认口令
 
@@ -36,7 +44,9 @@ swift test --package-path Packages/AuralisCore --no-parallel
 
 发送：`删除歌单 Test`。
 
-预期：只有 Runtime 的 destructive confirmation 出现；在 UI 中回复 `确认`、`确定` 或 `可以` 应归一成批准，回复 `取消`、`不要` 或 `不` 应归一成拒绝。不要要求用户输入精确确认句。
+预期：只有 Runtime 的 destructive confirmation 出现；必须点击当前会话的 UI「批准」或「拒绝」按钮。
+聊天中的 `确认`、`确定`、`可以`、`继续`、`取消` 等自然语言不会被当作 Runtime approval，
+也不能由模型输出模拟批准。下载历史清理、服务器配置删除、队列/歌单成员调整等可逆管理操作不应弹出确认。
 
 ## 3. 会话与运行所有权
 
@@ -58,10 +68,13 @@ swift test --package-path Packages/AuralisCore --no-parallel
 1. 启动推荐索引并连续观察至少 10 个 batch。
 2. 进度中的 pending 数必须实际下降。
 3. 每个分类请求都应是封闭 model transform：`tools=[]`、没有 hosted tools、没有 `tool_search`。
-4. Runtime 自己执行 prepare、validate、commit、verify；模型不应看到 `next_batch`、`write_batch` 或 `tag_catalog`。
+4. Runtime 自己执行 prepare、validate、commit、verify；每次 commit 后重新读取真实 pending 数，
+模型不应看到 `next_batch`、`write_batch` 或 `tag_catalog`。
 5. 发生格式错误时 UI 只显示“当前批次正在重试”，详细 JSON/schema 原因进入 diagnostics/log，不应把 repair prompt 直接显示在聊天区。
 6. 中途重启后继续运行，旧 batch 的迟到结果不能写入新的 batch revision。
-7. 新 UI、日志和 Provider schema 不应出现 `V2`；旧数据库表名、migration ID 和兼容读取日志除外。
+7. 如果连续两次 commit 后 pending 没有下降，Runtime 必须以 `noProgress` diagnostics 失败并停止，
+不重复提交同一类批次。
+8. 新 UI、日志和 Provider schema 不应出现 `V2`；旧数据库表名、migration ID 和兼容读取日志除外。
 
 ## 5. 自建工具
 
@@ -86,6 +99,12 @@ swift test --package-path Packages/AuralisCore --no-parallel
 - tool choice / strict schema（若端点声明支持）。
 
 一次 EOF、超时、502/503、429 或不完整 SSE 只能记录 `degraded`，不能永久关闭协议声明的 streaming/tools 能力。只有服务端明确拒绝参数或协议时，才可以标记 `explicitlyRejected`。
+
+对当前配置的真实 Provider 至少完成一次 Recommendation Index smoke：使用真实模型完成一个小批次，
+确认分类请求没有 tools/hosted tools/tool choice，响应能通过 batchID、revision、mode、track coverage
+校验，并在 commit 后看到真实 pending 下降。记录 provider/model 和结果即可，不记录 API Key、Cookie、
+Authorization header 或含凭据的 URL；没有安全可用的 Provider 凭据时，明确标记为未执行，不得用 mock
+结果冒充真实 smoke。
 
 ## 7. 记录结果
 

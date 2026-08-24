@@ -186,6 +186,37 @@ extension LocalCatalogStore {
         return try decode(Track.self, payload)
     }
 
+    /// Resolves a set of GlobalIDs in one SQLite read. The returned order and
+    /// duplicate occurrences follow the input, so callers can use this for
+    /// playlist/queue operations without turning one logical batch into N
+    /// actor hops and N SQL statements.
+    public func getTracks(_ globalIDs: [GlobalID]) throws -> [Track] {
+        guard !globalIDs.isEmpty else { return [] }
+
+        let identifiers = globalIDs.map(\.description)
+        var byGlobalID: [String: Track] = [:]
+        var offset = 0
+        while offset < identifiers.count {
+            let end = min(offset + 500, identifiers.count)
+            let chunk = Array(identifiers[offset..<end])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let rows = try db.query(
+                "SELECT global_id, payload FROM tracks WHERE global_id IN (\(placeholders))",
+                chunk.map(SQLiteValue.text)
+            )
+            for row in rows {
+                guard let globalID = row["global_id"]?.string,
+                      let payload = row["payload"]?.string,
+                      let track = try? decode(Track.self, payload)
+                else { continue }
+                byGlobalID[globalID] = track
+            }
+            offset = end
+        }
+
+        return globalIDs.compactMap { byGlobalID[$0.description] }
+    }
+
     public func getAlbum(_ globalID: GlobalID) throws -> Album? {
         guard let payload = try albumPayload(globalID) else { return nil }
         return try decode(Album.self, payload)

@@ -135,36 +135,28 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
     }
 
     /// A declarative Custom Tool may contain several canonical operations.
-    /// Its children inherit only the scopes derived from those canonical
-    /// descriptors; this does not create an approval path or grant unrelated
-    /// resource families.
-    public func granting(scopes: Set<MutationScope>) -> SideEffectAuthorizationContext {
-        guard !scopes.isEmpty else { return self }
-        let operations = allowedOperations.union(
-            ToolAuthorizationOperation.allCases.filter { operation in
-                guard let scope = operation.mutationScope else { return false }
-                return scopes.contains(scope)
-            }
-        )
-        let effects = explicitlyRequestedEffects.union(
-            Set(scopes.compactMap { scope in
-                switch scope {
-                case .playback: return .playback
-                case .queue: return .queue
-                case .playlist: return .playlist
-                case .annotation, .customTool: return .annotation
-                case .server: return .server
-                case .download: return .download
-                case .memory: return .memory
-                }
-            })
-        )
+    /// Children inherit only those exact operations. A scope is deliberately
+    /// not expanded into every operation in that scope: authorizing playlist
+    /// add must not authorize playlist rename/remove/delete.
+    public func granting(operations: Set<ToolAuthorizationOperation>) -> SideEffectAuthorizationContext {
+        guard !operations.isEmpty else { return self }
+        let scopes = Set(operations.compactMap(\.mutationScope))
+        let effects = explicitlyRequestedEffects.union(Set(operations.compactMap(Self.effect(for:))))
         return SideEffectAuthorizationContext(
             originalUserRequest: originalUserRequest,
             explicitlyRequestedEffects: effects,
-            allowedOperations: operations,
+            allowedOperations: allowedOperations.union(operations),
             allowedScopes: allowedScopes.union(scopes)
         )
+    }
+
+    /// Compatibility helper for older trusted callers. New custom-tool code
+    /// must use `granting(operations:)`; this method intentionally grants no
+    /// operations because a broad scope cannot prove least-privilege intent.
+    @available(*, deprecated, message: "Use granting(operations:) for exact operation authorization")
+    public func granting(scopes: Set<MutationScope>) -> SideEffectAuthorizationContext {
+        _ = scopes
+        return self
     }
 
     public func allows(_ effect: ToolSideEffectPolicy) -> Bool {
@@ -174,8 +166,8 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
     public func allows(_ descriptor: ToolDescriptor, call: ToolCall? = nil) -> Bool {
         guard descriptor.permission != .readOnly else { return true }
         if descriptor.customToolID != nil {
-            return !descriptor.derivedMutationScopes.isEmpty
-                && descriptor.derivedMutationScopes.isSubset(of: allowedScopes)
+            return !descriptor.derivedAuthorizationOperations.isEmpty
+                && descriptor.derivedAuthorizationOperations.isSubset(of: allowedOperations)
         }
         if let operation = descriptor.authorizationOperation {
             // Canonical tools must use their exact operation. A broad
@@ -340,6 +332,7 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let customToolVersion: Int?
     public let derivedMutationScopes: Set<MutationScope>
     public let derivedMutationResources: Set<MutationResource>
+    public let derivedAuthorizationOperations: Set<ToolAuthorizationOperation>
     public let derivedRisk: ToolRisk?
 
     public init(
@@ -369,6 +362,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         customToolVersion: Int? = nil,
         derivedMutationScopes: Set<MutationScope> = [],
         derivedMutationResources: Set<MutationResource> = [],
+        derivedAuthorizationOperations: Set<ToolAuthorizationOperation> = [],
         derivedRisk: ToolRisk? = nil
     ) {
         self.name = name
@@ -403,6 +397,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         self.customToolVersion = customToolVersion
         self.derivedMutationScopes = derivedMutationScopes
         self.derivedMutationResources = derivedMutationResources
+        self.derivedAuthorizationOperations = derivedAuthorizationOperations
         self.derivedRisk = derivedRisk
     }
 
@@ -706,11 +701,11 @@ public enum AgentToolRegistry {
         .init(name: "music_download_history", group: .download, permission: .readOnly,
               summary: "查看音乐下载历史",
               tags: ["download", "history"]),
-        .init(name: "music_download_history_remove", group: .download, permission: .reversible, requiresConfirmation: true,
+        .init(name: "music_download_history_remove", group: .download, permission: .reversible,
               summary: "移除一条音乐下载历史记录",
               parameters: [.init(name: "hash", required: true, description: "下载任务 hash")],
               tags: ["download", "history", "remove"]),
-        .init(name: "music_download_history_clean", group: .download, permission: .reversible, requiresConfirmation: true,
+        .init(name: "music_download_history_clean", group: .download, permission: .reversible,
               summary: "按状态、保留数量或孤儿记录清理下载历史",
               parameters: [
                 .init(name: "status", required: false, description: "按状态清理"),
@@ -787,7 +782,7 @@ public enum AgentToolRegistry {
                                  schemaJSON: #"{"type":"integer","minimum":0,"maximum":5}"#)]),
         .init(name: "server_switch", group: .server, permission: .reversible, summary: "切换服务器",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
-        .init(name: "server_remove", group: .server, permission: .destructive, requiresConfirmation: true, summary: "删除服务器（仅本地清理）",
+        .init(name: "server_remove", group: .server, permission: .reversible, summary: "删除服务器（仅本地清理）",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
 
         // MARK: Playback
@@ -903,7 +898,7 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
         .init(name: "refreshLibrary", group: .server, permission: .reversible, summary: "刷新本地目录"),
         .init(name: "getSyncStatus", group: .server, permission: .readOnly, summary: "获取同步状态"),
-        .init(name: "removeServer", group: .server, permission: .destructive, requiresConfirmation: true, summary: "删除服务器（仅本地清理）",
+        .init(name: "removeServer", group: .server, permission: .reversible, summary: "删除服务器（仅本地清理）",
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
 
         // MARK: 第一阶段统一命名工具（v2 工具集）
@@ -996,8 +991,17 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "albumID", required: true, description: "GlobalAlbumID")]),
         .init(name: "library_get_artist", group: .catalog, permission: .readOnly, summary: "获取艺术家详情",
               parameters: [.init(name: "artistID", required: true, description: "GlobalArtistID")]),
+        .init(name: "library_get_artists", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的艺术家",
+              parameters: [.init(name: "limit", required: false, description: "最多返回多少位艺术家，默认 100，最大 500")],
+              tags: ["catalog", "artists", "list", "read"]),
+        .init(name: "library_get_albums", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的专辑",
+              parameters: [.init(name: "limit", required: false, description: "最多返回多少张专辑，默认 100，最大 500")],
+              tags: ["catalog", "albums", "list", "read"]),
         .init(name: "library_get_playlist", group: .catalog, permission: .readOnly, summary: "获取歌单详情",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "playlist_list", group: .playlist, permission: .readOnly, summary: "列出当前音乐服务器的歌单（只读）",
+              parameters: [.init(name: "limit", required: false, description: "最多返回多少个歌单，默认 100，最大 100")],
+              tags: ["playlist", "list", "query", "read", "catalog"], aliases: ["listPlaylists"]),
         .init(name: "library_get_recently_added", group: .catalog, permission: .readOnly, summary: "获取最近添加的歌曲",
               parameters: [
                 .init(name: "days", required: false, description: "最近 N 天，默认 30"),
@@ -1215,9 +1219,9 @@ public enum AgentToolRegistry {
                 .init(name: "value", required: true, description: "要记住的内容"),
               ]),
         .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
-        .init(name: "memory_delete", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "删除一条记忆（不可逆，需要用户批准）",
+        .init(name: "memory_delete", group: .memory, permission: .destructive, requiresConfirmation: true, summary: "删除一条记忆（不可逆，需要用户批准）",
               parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")]),
-        .init(name: "memory_clear", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "清空全部记忆（不可逆，需要用户批准）"),
+        .init(name: "memory_clear", group: .memory, permission: .destructive, requiresConfirmation: true, summary: "清空全部记忆（不可逆，需要用户批准）"),
         .init(name: "skill_create", group: .memory, permission: .reversible, summary: "创建一段可复用指令（skill 文件），之后可读取使用",
               parameters: [
                 .init(name: "name", required: true, description: "技能名，简短英文或中文"),
@@ -1226,7 +1230,7 @@ public enum AgentToolRegistry {
         .init(name: "skill_list", group: .memory, permission: .readOnly, summary: "查看已创建的技能列表"),
         .init(name: "skill_read", group: .memory, permission: .readOnly, summary: "读取某个技能的完整指令",
               parameters: [.init(name: "name", required: true, description: "技能名")]),
-        .init(name: "skill_delete", group: .memory, permission: .reversible, requiresConfirmation: true, summary: "删除一个技能（不可逆，需要用户批准）",
+        .init(name: "skill_delete", group: .memory, permission: .destructive, requiresConfirmation: true, summary: "删除一个技能（不可逆，需要用户批准）",
               parameters: [.init(name: "name", required: true, description: "技能名")]),
 
     ]
@@ -1284,6 +1288,9 @@ public enum AgentToolRegistry {
                     issues.append(.modelMutationMissingScope(descriptor.name))
                 }
             }
+            if descriptor.permission == .destructive, !descriptor.requiresConfirmation {
+                issues.append(.destructiveMutationMissingApproval(descriptor.name))
+            }
             if descriptor.risk == .irreversibleDelete, !descriptor.requiresConfirmation {
                 issues.append(.irreversibleDeleteMissingApproval(descriptor.name))
             }
@@ -1291,7 +1298,12 @@ public enum AgentToolRegistry {
             case .catalog, .web, .systemService, .agentBridge, .recommendationSkill, .legacyCompatibility:
                 break
             }
-            for alias in descriptor.aliases where Self.descriptor(for: alias)?.name != descriptor.name {
+            // Aliases are stored on the canonical descriptor itself.  Do not
+            // resolve them through the public runtime lookup here: a legacy
+            // descriptor may intentionally retain the same alias name for
+            // source compatibility, while the canonical model descriptor is
+            // still present in `definitions`.
+            for alias in descriptor.aliases where !definitions.contains(where: { $0.descriptor.name == descriptor.name }) {
                 issues.append(.aliasTargetMissing(alias: alias, target: descriptor.name))
             }
         }

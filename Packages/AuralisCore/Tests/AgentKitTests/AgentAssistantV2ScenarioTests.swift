@@ -252,6 +252,14 @@ private func seedScenario(_ store: LocalCatalogStore, tracks: [Track]) async thr
     try await store.completeSync(session, completedAt: .now)
 }
 
+private func seedScenarioArtists(_ store: LocalCatalogStore, serverID: ServerID) async throws {
+    let session = try await store.beginSync(serverID: serverID, mode: .full)
+    try await store.stageArtists([
+        Artist(id: "artist", serverID: serverID, name: "Billie Eilish", albumCount: 1)
+    ], session: session)
+    try await store.completeSync(session, completedAt: .now)
+}
+
 private func scenarioCall(
     id: String,
     name: String,
@@ -302,6 +310,55 @@ func ordinaryConversationIsFirstClass() async throws {
     #expect(bridge.replacedQueues.isEmpty)
     #expect(await stateProbe.count() == 0)
     #expect(provider.requests().count == 1)
+}
+
+@Test("Deterministic collection/status reads bypass planning and execute one canonical tool")
+func deterministicReadFastPathUsesExactlyOneTargetTool() async throws {
+    let cases: [(String, String)] = [
+        ("列出我的歌单", "playlist_list"),
+        ("当前正在播放什么", "playback_get_state"),
+        ("播放队列里现在有哪些歌", "queue_get"),
+        ("查看曲库统计", "library_get_summary"),
+        ("列出艺术家", "library_get_artists"),
+        ("列出专辑", "library_get_albums"),
+        ("列出服务器", "server_list"),
+    ]
+
+    for (userText, expectedTool) in cases {
+        let runID = UUID()
+        let provider = ScenarioProvider([
+            scenarioResponse(content: "不应进入 provider 规划")
+        ])
+        let collector = ScenarioMessageCollector()
+        let catalog = try scenarioStore()
+        if expectedTool == "library_get_artists" {
+            try await seedScenarioArtists(catalog, serverID: "scenario-server")
+        }
+
+        await ConversationEngine().run(
+            userText: userText,
+            provider: provider,
+            model: "scenario",
+            bridge: MockAgentBridge(),
+            catalog: catalog,
+            context: expectedTool == "library_get_artists"
+                ? ToolLoop.Context(serverID: "scenario-server")
+                : ToolLoop.Context(),
+            systemService: expectedTool == "server_list" ? ScenarioSystemService() : nil,
+            runID: runID,
+            executionLease: ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1),
+            confirm: { _ in true },
+            emit: { message in await collector.append(message) }
+        )
+
+        #expect(provider.requests().isEmpty, "\(userText) 不应发起模型规划")
+        let metrics = await ToolMetricsCollector.shared.snapshot().filter { $0.runID == runID }
+        #expect(metrics.map(\.toolName) == [expectedTool], "\(userText) 应只执行 \(expectedTool)")
+        #expect(!(await collector.containsError("失败")), "\(userText) 的 direct tool 不应返回失败")
+        if expectedTool == "library_get_artists" {
+            #expect(await collector.containsText("共 1 位艺术家"))
+        }
+    }
 }
 
 @Test("V2 production loop: native tools unavailable still permits ordinary chat")
@@ -1019,5 +1076,5 @@ func readOnlyArtistCountCannotTriggerPlayback() async throws {
     #expect(bridge.serverPlayedTracks.isEmpty)
     #expect(bridge.replacedQueues.isEmpty)
     #expect(bridge.clearedQueueCount == 0)
-    #expect(await collector.containsText("1025 位歌手"))
+    #expect(await collector.containsText("1 位艺术家"))
 }

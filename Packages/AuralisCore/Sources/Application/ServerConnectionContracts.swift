@@ -289,13 +289,12 @@ public extension ServerConnecting {
     func downloadData(serverID: ServerID, trackID: TrackID) async -> Data? { nil }
     func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool { false }
     func addTracksToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool {
-        guard !trackIDs.isEmpty else { return true }
-        for trackID in trackIDs {
-            guard await addToPlaylist(serverID: serverID, playlistID: playlistID, trackID: trackID) else {
-                return false
-            }
-        }
-        return true
+        // Batch mutation is an explicit connector contract.  A serial
+        // default silently turns one logical mutation into N network writes
+        // and can leave a partially updated playlist when item N fails.
+        // Concrete connectors must implement their native batch endpoint.
+        _ = (serverID, playlistID, trackIDs)
+        return false
     }
     func setFavorite(serverID: ServerID, trackID: TrackID, isFavorite: Bool) async -> Bool { false }
     func makeSynchronizer(serverID: ServerID, store: LocalCatalogStore) async -> LibrarySynchronizer? { nil }

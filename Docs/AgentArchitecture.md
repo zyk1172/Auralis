@@ -75,6 +75,9 @@ stateful-skill paths; they are not ordinary model capabilities.
 The runtime does not impose cumulative tool-call limits on normal tasks.
 
 No-progress counters and repeated-tool counters do not terminate normal tasks.
+The Recommendation Index Stateful Skill is the explicit exception: after each
+commit it re-reads the authoritative pending count and stops with a `noProgress`
+diagnostic after two commits without a positive delta.
 
 Ambiguous targets require entity disambiguation, not risk confirmation.
 
@@ -98,8 +101,10 @@ User cancellation and per-request timeouts remain supported.
 - `queue_replace` 可用不同参数多次调用；相同工具 + 相同参数幂等复用。
 - 对象歧义（多个同名歌单/曲目）通过实体解析与消歧处理，而不是风险确认；风险确认
   只表示不可逆删除，不替代实体消歧。
-- `ToolSelector` 是纯 Schema 优化器：只有 `tool_search`、能力摘要和与请求语义相关的
-  `.model` 工具常驻；泛化的“推荐/下载/搜索/为什么”不会单独注入音乐工具。已激活的
+- `ToolSelector` 仍负责 Schema 优化，但高确定性的歌单、播放状态、队列、资料库统计、
+  艺术家/专辑和服务器列表请求由 `ToolLoop` 在进入 Provider 前执行一次 canonical
+  direct tool；其它请求仍通过 `tool_search`、能力摘要和与请求语义相关的 `.model` 工具
+  发现。泛化的“推荐/下载/搜索/为什么”不会单独注入音乐工具。已激活的
   Stateful Skill 另外追加它拥有的工具。旧式驼峰别名统一映射回 canonical 名称，不再
   重复暴露，执行兼容由注册表保留；模型需要新能力时可先调用 `tool_search`。
 
@@ -146,7 +151,8 @@ Intent 产生 `AgentTaskPolicy`。Policy 只承担路由/诊断职责，不再�
 Runtime 正常执行路径不再依赖它们做门禁；唯一例外是 `ToolDescriptor.requiresConfirmation`
 对不可逆删除工具的精确声明。
 - wall-clock 与模型轮次只作极端看门狗；输入/输出 token 跟随 Provider / ModelCapabilities，
-  不在 Agent 层再加固定上限；无进展和重复模式只记录诊断。
+  不在 Agent 层再加固定上限；普通 ToolLoop 的无进展和重复模式只记录诊断，
+  Recommendation Index 的 commit/verify no-progress guard 除外。
 
 模型上下文与单次输出均由设置中的模型能力声明决定（支持 1M 上下文和 128K 输出等档位），
 请求前只按 Provider 能力为输出、工具 Schema 与协议字段预留空间。它们不是整项任务跨多轮

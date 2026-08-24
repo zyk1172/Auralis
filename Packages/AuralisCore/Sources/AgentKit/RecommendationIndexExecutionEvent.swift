@@ -16,6 +16,9 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
         case classificationFailed
         case commitStarted
         case commitCompleted
+        case verifyStarted
+        case verifyCompleted
+        case noProgress
         case retrying
         case completed
         case cancelled

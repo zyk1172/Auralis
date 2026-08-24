@@ -27,10 +27,81 @@ func mutationResourceLeasesAreScoped() async {
     #expect(await registry.owner(of: .playback) == nil)
 }
 
+@Test("Nested acquisition by one run is reference counted")
+func nestedMutationResourceLeasesDoNotReleaseParent() async {
+    let registry = MutationResourceLeaseRegistry()
+    let owner = UUID()
+
+    #expect(await registry.tryAcquire([.playlist], owner: owner))
+    #expect(await registry.tryAcquire([.playlist], owner: owner))
+    #expect(await registry.holdCount(of: .playlist, by: owner) == 2)
+
+    await registry.release([.playlist], owner: owner)
+    #expect(await registry.owner(of: .playlist) == owner)
+    #expect(await registry.holdCount(of: .playlist, by: owner) == 1)
+
+    await registry.release([.playlist], owner: owner)
+    #expect(await registry.owner(of: .playlist) == nil)
+}
+
 @Test("Canonical descriptors map to least-privilege mutation resources")
 func descriptorMutationResourcesMatchOperations() {
     #expect(AgentToolRegistry.descriptor(for: "playlist_add_songs")?.mutationResources == [.playlist])
     #expect(AgentToolRegistry.descriptor(for: "playback_play_song")?.mutationResources == [.playback])
     #expect(AgentToolRegistry.descriptor(for: "queue_replace")?.mutationResources == [.queue])
     #expect(AgentToolRegistry.descriptor(for: "recommendation_index_commit")?.mutationResources == [.recommendationIndex])
+}
+
+@Test("Playlist list is a read-only canonical model entry point")
+func playlistListIsCanonicalAndReadOnly() {
+    let descriptor = AgentToolRegistry.descriptor(for: "playlist_list")
+    #expect(descriptor?.permission == .readOnly)
+    #expect(descriptor?.requiresConfirmation == false)
+    #expect(descriptor?.visibility == .model)
+    let selected = ToolSelector.select(for: "列出我的歌单", all: AgentToolRegistry.all).map(\.name)
+    #expect(selected.contains("playlist_list"))
+    #expect(!selected.contains("library_get_playlist"))
+    #expect(AgentToolRegistry.descriptor(for: "listPlaylists")?.visibility == .legacyOnly)
+}
+
+@Test("Only irreversible deletion descriptors require confirmation")
+func confirmationIsLimitedToIrreversibleDeletion() {
+    for name in [
+        "music_download_history_remove",
+        "music_download_history_clean",
+        "server_remove",
+        "queue_clear",
+        "playlist_add_songs",
+        "playlist_remove_songs",
+    ] {
+        #expect(AgentToolRegistry.descriptor(for: name)?.requiresConfirmation == false, "\(name) should not require confirmation")
+    }
+    for name in ["playlist_delete", "memory_delete", "memory_clear", "skill_delete"] {
+        let descriptor = AgentToolRegistry.descriptor(for: name)
+        #expect(descriptor?.permission == .destructive, "\(name) should be destructive")
+        #expect(descriptor?.requiresConfirmation == true, "\(name) should require confirmation")
+    }
+}
+
+@Test("High-confidence local reads select one canonical tool without discovery")
+func highConfidenceReadsUseDirectCanonicalTools() {
+    let cases: [(String, String)] = [
+        ("有多少歌手", "library_get_summary"),
+        ("列出歌手", "library_get_artists"),
+        ("列出专辑", "library_get_albums"),
+        ("查看曲库统计", "library_get_summary"),
+        ("当前正在播放什么", "playback_get_state"),
+        ("我的播放队列里现在有哪些歌", "queue_get"),
+        ("我的收藏有哪些", "library_get_starred"),
+        ("列出服务器", "server_list"),
+    ]
+
+    for (text, expectedTool) in cases {
+        let semantics = AgentRequestSemantics.analyze(text)
+        #expect(semantics.directReadCapability?.toolName == expectedTool)
+        let selected = ToolSelector.select(for: text, all: AgentToolRegistry.all).map { $0.name }
+        #expect(selected == [expectedTool])
+        #expect(!selected.contains("tool_search"))
+        #expect(!selected.contains("library_search"))
+    }
 }

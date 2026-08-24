@@ -251,6 +251,35 @@ public struct ToolLoop {
             executionLineage: executionLineage
         )
         let providerName = provider.map { String(describing: type(of: $0)) }
+        // High-confidence, read-only collection/status queries are complete
+        // local requests. Execute the canonical descriptor once and return;
+        // neither provider planning nor tool_search is needed for these
+        // deterministic reads. Resumed workflows remain on their stateful
+        // route so a pending task cannot be accidentally short-circuited.
+        if workflowRoute.kind != .recommendationIndex,
+           let directReadCapability = requestSemantics.directReadCapability,
+           requestSemantics.isReadOnly,
+           initialTaskState == nil,
+           !requestSemantics.isMusicAppreciation,
+           let directDescriptor = descriptor(named: directReadCapability.toolName, in: availableToolDescriptors) {
+            await runDirectReadFastPath(
+                descriptor: directDescriptor,
+                providerCapabilities: provider?.capabilities,
+                bridge: bridge,
+                catalog: catalog,
+                context: context,
+                systemService: systemService,
+                externalMusicService: externalMusicService,
+                webService: webService,
+                authorizationContext: resolvedAuthorization,
+                runID: runID,
+                executionLease: resolvedExecutionLease,
+                toolTimeout: toolTimeout,
+                emit: emit,
+                progress: progress
+            )
+            return
+        }
         if workflowRoute.kind == .recommendationIndex {
             await observeRecommendationIndex(RecommendationIndexExecutionEvent(
                 kind: .routeSelected,
@@ -387,6 +416,90 @@ public struct ToolLoop {
         }
     }
 
+    /// Deterministic execution path for one high-confidence read. This is
+    /// intentionally separate from `runGenericChat`: the latter is a model
+    /// conversation loop and cannot guarantee that a simple request results
+    /// in exactly one target tool call.
+    private static func runDirectReadFastPath(
+        descriptor: ToolDescriptor,
+        providerCapabilities: ModelCapabilities?,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        context: Context,
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)?,
+        webService: (any AgentWebService)?,
+        authorizationContext: SideEffectAuthorizationContext,
+        runID: UUID,
+        executionLease: ToolExecutionLease,
+        toolTimeout: TimeInterval,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void,
+        progress: @escaping @Sendable (AgentProgress) async -> Void
+    ) async {
+        let call = ToolCall(name: descriptor.name)
+        await progress(AgentProgress(toolSteps: 1, currentStep: "读取 \(descriptor.summary)"))
+
+        let result: ToolResult
+        do {
+            result = try await withTimeout(
+                effectiveToolTimeout(descriptor, requested: toolTimeout)
+            ) {
+                await ToolRuntime.executeMeasured(
+                    call,
+                    bridge: bridge,
+                    catalog: catalog,
+                    serverID: context.serverID,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    allowsLyrics: context.allowsLyrics,
+                    providerCapabilities: providerCapabilities,
+                    webService: webService,
+                    authorizationContext: authorizationContext,
+                    executionLease: executionLease,
+                    resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                    recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                    customToolRegistry: context.customToolRegistry,
+                    availableToolDescriptors: [descriptor],
+                    runID: runID,
+                    callID: "direct-\(runID.uuidString)"
+                )
+            }
+        } catch is CancellationError {
+            await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
+            return
+        } catch {
+            await emit(AgentChatMessage(
+                role: .assistant,
+                messages: [.error("读取 \(descriptor.summary) 失败：\(errorText(error))")]
+            ))
+            return
+        }
+
+        guard result.success else {
+            await emit(AgentChatMessage(
+                role: .assistant,
+                messages: [.error("读取 \(descriptor.summary) 失败：\(result.summary)")]
+            ))
+            return
+        }
+
+        var messages: [AgentMessage] = []
+        if let payload = result.payload {
+            messages.append(payload)
+            if case .text = payload {
+                // The text payload already contains the complete direct-read
+                // answer; avoid duplicating the compact result summary.
+            } else if !result.summary.isEmpty {
+                messages.append(.text(result.summary))
+            }
+        } else if !result.summary.isEmpty {
+            messages.append(.text(result.summary))
+        }
+        if !messages.isEmpty {
+            await emit(AgentChatMessage(role: .assistant, messages: messages))
+        }
+    }
+
     // MARK: - Generic conversation loop
 
     /// A provider-first chat loop. It deliberately has no AgentTaskState,
@@ -415,6 +528,11 @@ public struct ToolLoop {
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
         var selectedTools = ToolSelector.select(for: userText, all: availableToolDescriptors)
+        let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
+        let directReadToolName = AgentRequestSemantics.analyze(
+            userText,
+            historyText: historyText
+        ).directReadCapability?.toolName
         let effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
@@ -627,6 +745,7 @@ public struct ToolLoop {
             }
 
             var resultMessages: [AIMessage] = []
+            var successfulDirectReadResult: ToolResult?
             for (index, call) in calls.enumerated() {
                 toolSteps += 1
                 await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
@@ -775,6 +894,11 @@ public struct ToolLoop {
                 if case let .webSources(sources)? = result.payload, !sources.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
+                if result.success,
+                   calls.count == 1,
+                   call.name == directReadToolName {
+                    successfulDirectReadResult = result
+                }
                 if let payload = result.payload {
                     let role = result.presentationRole == .none ? descriptor.defaultPresentationRole : result.presentationRole
                     switch (role, payload) {
@@ -856,6 +980,31 @@ public struct ToolLoop {
                 }
                 if result.success, descriptor.permission != .readOnly {
                     await log(AgentActionRecord(toolName: call.name, permission: descriptor.permission, summary: result.summary))
+                }
+            }
+
+            // A high-confidence local read is already a deterministic answer.
+            // Do not send the same result back through another open planning
+            // round: that is how simple requests such as “列出我的歌单” used
+            // to become tool_search → repeated lookup loops.  We still emit
+            // the structured payload (cards when present) and a compact
+            // summary, so this path does not trade away the normal UI result.
+            if let result = successfulDirectReadResult {
+                var directMessages: [AgentMessage] = []
+                if let payload = result.payload {
+                    switch payload {
+                    case .text:
+                        directMessages.append(payload)
+                    default:
+                        directMessages.append(payload)
+                        directMessages.append(.text(result.summary))
+                    }
+                } else if !result.summary.isEmpty {
+                    directMessages.append(.text(result.summary))
+                }
+                if !directMessages.isEmpty {
+                    await emit(AgentChatMessage(role: .assistant, messages: directMessages))
+                    return
                 }
             }
 
@@ -2788,9 +2937,11 @@ public struct ToolLoop {
         diagnosticArgs: [String: String],
         reason: String? = nil
     ) -> PendingConfirmation {
-        let confirmationGuidance = descriptor.permission == .destructive || descriptor.requiresConfirmation
-            ? "此操作不可逆，且不会自动生成恢复副本。"
-            : "这项具体修改需要主人批准后才能执行。"
+        // PendingConfirmation is only a Runtime approval boundary for tools
+        // explicitly marked requiresConfirmation.  Reversible mutations do
+        // not enter this helper and must never invent a second confirmation
+        // protocol in natural language.
+        let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
         let detail: String
         if diagnosticArgs.isEmpty {
             detail = [reason, confirmationGuidance]
@@ -3166,40 +3317,6 @@ public struct ToolLoop {
             }
             .sorted()
         return grouped.joined(separator: "\n")
-
-        /*
-        let groups: [(String, [String])] = [
-            ("服务器与同步", ["server_get_current", "server_list", "server_test_connection", "server_get_capabilities", "server_sync_status", "server_sync_start", "server_search", "library_get_summary"]),
-            ("本地库查询", ["library_search", "library_get_song", "music_appreciate", "library_get_album", "library_get_artist", "library_get_playlist", "library_get_starred", "library_get_recently_played", "library_get_recently_added", "library_get_most_played", "library_get_random_songs", "library_get_similar_songs", "library_get_genres", "library_get_tracks_by_genre"]),
-            ("播放控制", ["playback_play_song", "playback_play_album", "playback_play_artist", "playback_play_playlist", "playback_play_random", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat", "playback_set_speed", "playback_set_sleep_timer", "playback_cancel_sleep_timer", "playback_get_sleep_timer", "playback_get_state"]),
-            ("播放队列", ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]),
-            ("歌单与收藏", ["playlist_create", "playlist_add_songs", "favorite_set", "lyrics_get"]),
-            ("推荐与下载", ["recommend_by_mood", "recommend_by_constraints", "smart_queue_generate", "library_index_status", "library_index_read", "media_download_offline", "cache_get_status"]),
-            ("音乐下载（MoviePilot）", ["music_download"]),
-            ("维护与诊断", ["library_find_duplicates", "library_find_metadata_issues", "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable", "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution", "stats_get_listening_summary", "diagnostics_playback", "diagnostics_get_recent_errors", "diagnostics_export_report", "diagnostics_now_playing"]),
-            ("系统与设备", ["app_get_context", "app_open_page", "app_get_feature_status", "device_get_network_status", "device_get_audio_route", "device_get_storage_status", "ios_siri_get_status", "ios_shortcuts_list"]),
-            ("记忆与技能", ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]),
-            ("补充工具（无新式别名）", ["getLeastPlayed", "getDownloadedTracks", "removeFromQueue", "listPlaylists", "renamePlaylist", "removeTracksFromPlaylist", "reorderPlaylist", "duplicatePlaylist", "mergePlaylists", "deletePlaylist", "setRating", "clearRating", "switchServer", "removeServer", "addServer", "updateServer"]),
-        ]
-        let byName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
-        var lines: [String] = []
-        for (title, names) in groups {
-            let toolLines = names.compactMap { name -> String? in
-                guard let tool = byName[name] else { return nil }
-                if tool.parameters.isEmpty { return "\(tool.name)" }
-                let params = tool.parameters.map { "\($0.name)\($0.required ? "" : "?")" }.joined(separator: ",")
-                return "\(tool.name)(\(params))"
-            }
-            guard !toolLines.isEmpty else { continue }
-            lines.append("- \(title)：\(toolLines.joined(separator: "；"))")
-        }
-        let groupedNames = Set(groups.flatMap(\.1))
-        let others = tools.map(\.name).filter { !groupedNames.contains($0) }.sorted()
-        if !others.isEmpty {
-            lines.append("- 其他工具：\(others.joined(separator: "、"))")
-        }
-        return lines.joined(separator: "\n")
-        */
     }
 
     /// 把完整会话历史转成模型可用的消息列表。历史不再按固定轮数截断，

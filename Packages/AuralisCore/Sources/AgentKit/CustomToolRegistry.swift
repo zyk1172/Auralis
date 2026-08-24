@@ -194,6 +194,9 @@ public enum CustomToolValidationIssue: Codable, Sendable, Equatable, Hashable, L
 public struct CustomToolDerivedMetadata: Codable, Sendable, Equatable, Hashable {
     public let risk: ToolRisk
     public let scopes: Set<MutationScope>
+    /// Exact canonical operations performed by workflow children. Scopes are
+    /// retained for resource/risk reporting, but authorization uses this set.
+    public let operations: Set<ToolAuthorizationOperation>
     public let resources: Set<MutationResource>
     public let networkAccess: Bool
     public let idempotent: Bool
@@ -202,6 +205,7 @@ public struct CustomToolDerivedMetadata: Codable, Sendable, Equatable, Hashable 
     public init(
         risk: ToolRisk,
         scopes: Set<MutationScope>,
+        operations: Set<ToolAuthorizationOperation> = [],
         resources: Set<MutationResource>,
         networkAccess: Bool,
         idempotent: Bool,
@@ -209,6 +213,7 @@ public struct CustomToolDerivedMetadata: Codable, Sendable, Equatable, Hashable 
     ) {
         self.risk = risk
         self.scopes = scopes
+        self.operations = operations
         self.resources = resources
         self.networkAccess = networkAccess
         self.idempotent = idempotent
@@ -334,8 +339,10 @@ public actor CustomToolRegistry {
         let normalized = normalizedManifest(manifest, version: 1)
         let issues = validate(normalized)
         guard issues.isEmpty else { throw CustomToolRegistryError.invalid(issues) }
-        versions[normalized.id] = [normalized]
-        persist()
+        var nextVersions = versions
+        nextVersions[normalized.id] = [normalized]
+        try persist(nextVersions)
+        versions = nextVersions
         return normalized
     }
 
@@ -347,8 +354,10 @@ public actor CustomToolRegistry {
         let next = normalizedManifest(manifest, version: current.version + 1, createdAt: current.createdAt)
         let issues = validate(next)
         guard issues.isEmpty else { throw CustomToolRegistryError.invalid(issues) }
-        versions[manifest.id, default: []].append(next)
-        persist()
+        var nextVersions = versions
+        nextVersions[manifest.id, default: []].append(next)
+        try persist(nextVersions)
+        versions = nextVersions
         return next
     }
 
@@ -370,8 +379,10 @@ public actor CustomToolRegistry {
 
     public func delete(id: UUID) throws {
         guard versions[id] != nil else { throw CustomToolRegistryError.notFound(id) }
-        versions[id] = nil
-        persist()
+        var nextVersions = versions
+        nextVersions[id] = nil
+        try persist(nextVersions)
+        versions = nextVersions
     }
 
     public func derivedMetadata(for manifest: CustomToolManifest) -> CustomToolDerivedMetadata {
@@ -386,7 +397,7 @@ public actor CustomToolRegistry {
         guard let id = descriptor.customToolID, let manifest = manifest(id: id), manifest.enabled else {
             return Self.failure(call, descriptor, code: "custom_tool_unavailable", details: [:])
         }
-        let childContext = context.withAdditionalAuthorizationScopes(descriptor.derivedMutationScopes)
+        let childContext = context.withAdditionalAuthorizationOperations(descriptor.derivedAuthorizationOperations)
         switch manifest.implementation {
         case let .workflow(steps):
             var results: [ToolResult] = []
@@ -615,6 +626,7 @@ public actor CustomToolRegistry {
             customToolVersion: manifest.version,
             derivedMutationScopes: metadata.scopes,
             derivedMutationResources: metadata.resources,
+            derivedAuthorizationOperations: metadata.operations,
             derivedRisk: metadata.risk
         )
     }
@@ -622,6 +634,7 @@ public actor CustomToolRegistry {
     private static func derivedMetadata(_ manifest: CustomToolManifest) -> CustomToolDerivedMetadata {
         var risk: ToolRisk = .none
         var scopes = Set<MutationScope>()
+        var operations = Set<ToolAuthorizationOperation>()
         var resources = Set<MutationResource>()
         var network = false
         var idempotent = true
@@ -632,6 +645,9 @@ public actor CustomToolRegistry {
                 guard let descriptor = AgentToolRegistry.descriptor(for: step.tool) else { continue }
                 risk = maxRisk(risk, descriptor.risk)
                 scopes.formUnion(descriptor.mutationScopes)
+                if let operation = descriptor.authorizationOperation {
+                    operations.insert(operation)
+                }
                 resources.formUnion(descriptor.mutationResources)
                 network = network || descriptor.networkAccess
                 idempotent = idempotent && descriptor.idempotent
@@ -640,7 +656,7 @@ public actor CustomToolRegistry {
         case .httpRead:
             network = true
         }
-        return CustomToolDerivedMetadata(risk: risk, scopes: scopes, resources: resources, networkAccess: network, idempotent: idempotent, parallelSafe: parallel)
+        return CustomToolDerivedMetadata(risk: risk, scopes: scopes, operations: operations, resources: resources, networkAccess: network, idempotent: idempotent, parallelSafe: parallel)
     }
 
     private static func maxRisk(_ lhs: ToolRisk, _ rhs: ToolRisk) -> ToolRisk {
@@ -872,17 +888,17 @@ public actor CustomToolRegistry {
         return base.appendingPathComponent("Auralis", isDirectory: true).appendingPathComponent("custom-tools.json")
     }
 
-    private func persist() {
+    private func persist(_ state: [UUID: [CustomToolManifest]]) throws {
+        // A nil URL is the explicit in-memory/test configuration. A concrete
+        // URL, however, is a durability contract: encode/write failures must
+        // reach the caller before the actor swaps its in-memory state.
         guard let storageURL else { return }
         do {
             try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(StoredState(versions: versions))
+            let data = try JSONEncoder().encode(StoredState(versions: state))
             try data.write(to: storageURL, options: .atomic)
         } catch {
-            // Persistence failure is intentionally not allowed to turn a
-            // successful in-memory mutation into a false tool success. The
-            // caller receives the new version; diagnostics can inspect the
-            // process-local registry on the next call.
+            throw CustomToolRegistryError.persistenceFailed
         }
     }
 }
@@ -894,6 +910,7 @@ public enum CustomToolRegistryError: Error, LocalizedError, Sendable, Equatable 
     case staleVersion(UUID, Int)
     case replacementIDMismatch(expected: UUID, actual: UUID)
     case missing(String)
+    case persistenceFailed
 
     public var code: String {
         switch self {
@@ -903,6 +920,7 @@ public enum CustomToolRegistryError: Error, LocalizedError, Sendable, Equatable 
         case .staleVersion: return "custom_version_conflict"
         case .replacementIDMismatch: return "custom_repair_id_mismatch"
         case .missing: return "custom_argument_missing"
+        case .persistenceFailed: return "custom_persistence_failed"
         }
     }
 
@@ -914,6 +932,7 @@ public enum CustomToolRegistryError: Error, LocalizedError, Sendable, Equatable 
         case let .staleVersion(id, version): return "自建工具版本已变化：\(id.uuidString) 期望 v\(version)"
         case let .replacementIDMismatch(expected, actual): return "修复 proposal 的工具 ID 不匹配：期望 \(expected.uuidString)，实际 \(actual.uuidString)"
         case let .missing(name): return "缺少参数：\(name)"
+        case .persistenceFailed: return "自建工具未能安全保存；本次修改未生效。"
         }
     }
 }

@@ -43,6 +43,17 @@ public enum RecommendationIndex {
     }
 }
 
+/// Strict Runtime writes use this error to reject an entire batch before the
+/// catalog transaction starts. The legacy non-strict API intentionally keeps
+/// its historical behavior of ignoring unknown IDs for compatibility callers.
+public enum RecommendationIndexWriteError: Error, LocalizedError, Sendable, Equatable {
+    case invalidBatch
+
+    public var errorDescription: String? {
+        "推荐索引批次包含无法验证的分类，未写入任何数据"
+    }
+}
+
 /// V2 pending 统一语义：fixed / semantic 是两类工作集合，unique 是至少有一项工作未完成的
 /// 唯一歌曲数（新歌同时缺两类只计一次）。
 private struct RecommendationIndexPendingState {
@@ -309,7 +320,8 @@ extension LocalCatalogStore {
     public func writeRecommendationIndex(
         _ classifications: [RecommendationIndexClassification],
         serverID: ServerID?,
-        classifier: String = "configured-agent"
+        classifier: String = "configured-agent",
+        requireExact: Bool = false
     ) throws -> Int {
         let snapshot = try recommendationIndexSnapshot(serverID: serverID)
         let byID = Dictionary(uniqueKeysWithValues: snapshot.lines.map { ($0.id, $0) })
@@ -329,6 +341,12 @@ extension LocalCatalogStore {
                   !normalizedTags(item.styles, allowed: RecommendationIndex.styles).isEmpty
             else { return nil }
             return (item, line)
+        }
+        if requireExact,
+           classifications.count > 100 || valid.count != classifications.count {
+            // Do this check before opening the transaction. A malformed item
+            // must never allow the valid prefix to become a partial commit.
+            throw RecommendationIndexWriteError.invalidBatch
         }
         guard !valid.isEmpty else { return 0 }
 

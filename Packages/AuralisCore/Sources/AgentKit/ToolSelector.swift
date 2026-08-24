@@ -36,6 +36,7 @@ public enum ToolSelector {
         "replaceQueue": "queue_replace",
         "clearQueue": "queue_clear",
         "addTracksToPlaylist": "playlist_add_songs",
+        "listPlaylists": "playlist_list",
         "listServers": "server_list",
         "getActiveServer": "server_get_current",
         "testServerConnection": "server_test_connection",
@@ -132,7 +133,22 @@ public enum ToolSelector {
             }
         }
 
+        if let directReadCapability = semantics.directReadCapability {
+            append(visible.filter { $0.name == directReadCapability.toolName })
+            return selected
+        }
+
         append(visible.filter { $0.isCoreInfrastructure })
+
+        // High-confidence read queries have a single canonical entry point.
+        // This prevents a bare “列出歌单” from receiving detail/mutation
+        // adjacent schemas and avoids making the model rediscover a simple
+        // local read through tool_search.
+        if semantics.domain == .playlist, semantics.operation == .read {
+            append(visible.filter { $0.name == "playlist_list" })
+            return selected
+        }
+
         append(visible.filter { descriptor in
             matches(descriptor, semantics: semantics)
         })

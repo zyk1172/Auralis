@@ -5,7 +5,10 @@ import Foundation
 /// 这里只控制单次 function call 的规模，不限制整个索引规模。
 /// 全量任务的真实完成条件始终是 pending == 0。
 enum RecommendationIndexBatchPolicy {
-    static let minimumTracksPerBatch = 8
+    /// A malformed response must be recoverable down to one track. If a
+    /// single-track transform still fails, the Runtime terminates that batch
+    /// instead of looping forever.
+    static let minimumTracksPerBatch = 1
     static let fallbackTracksPerBatch = 16
 
     /// 原生 schema 已允许 maxItems=100，因此运行时上限与 schema 对齐。

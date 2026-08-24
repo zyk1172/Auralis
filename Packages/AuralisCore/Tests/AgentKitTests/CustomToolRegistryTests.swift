@@ -69,6 +69,50 @@ struct CustomToolRegistryTests {
         #expect(descriptor.risk == .irreversibleDelete)
         #expect(descriptor.mutationScopes == [.playlist])
         #expect(descriptor.mutationResources == [.playlist])
+        #expect(descriptor.derivedAuthorizationOperations == [.playlistDelete])
+    }
+
+    @Test("Custom Tool authorization is operation-level, not scope-level")
+    func customToolDoesNotExpandPlaylistAddIntoRename() async throws {
+        let registry = makeRegistry()
+        let manifest = CustomToolManifest(
+            name: "添加并改名歌单",
+            description: "组合两个歌单操作",
+            implementation: .workflow(steps: [
+                CustomToolStep(tool: "playlist_add_songs"),
+                CustomToolStep(tool: "playlist_rename"),
+            ])
+        )
+        let saved = try await registry.create(manifest)
+        let descriptor = try #require(await registry.descriptor(named: saved.canonicalToolName))
+        #expect(descriptor.derivedAuthorizationOperations == [.playlistAdd, .playlistRename])
+
+        let addOnly = SideEffectAuthorizationContext(originalUserRequest: "把歌曲加入歌单")
+        #expect(!addOnly.allows(descriptor))
+
+        let both = SideEffectAuthorizationContext(originalUserRequest: "把歌曲加入歌单并重命名歌单")
+        #expect(both.allows(descriptor))
+    }
+
+    @Test("Custom Tool persistence failure does not change in-memory state")
+    func persistenceFailureIsAtomic() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-custom-tool-directory-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let registry = CustomToolRegistry(storageURL: directory)
+        let manifest = CustomToolManifest(
+            name: "不会保存",
+            description: "写入目录路径应失败",
+            implementation: .httpRead(CustomHTTPReadToolDefinition(allowedHosts: ["example.com"]))
+        )
+
+        do {
+            _ = try await registry.create(manifest)
+            Issue.record("向目录路径写入时不应返回成功")
+        } catch let error as CustomToolRegistryError {
+            #expect(error == .persistenceFailed)
+        }
+        #expect(await registry.list().isEmpty)
     }
 
     @Test("Custom Tool updates retain history and rollback creates a new version")

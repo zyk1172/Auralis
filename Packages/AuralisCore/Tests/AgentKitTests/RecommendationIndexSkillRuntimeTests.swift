@@ -41,7 +41,7 @@ private actor IndexExecutionGate {
 }
 
 private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
-    enum FirstResponse: Equatable { case valid, malformed, transientFailures(Int) }
+    enum FirstResponse: Equatable { case valid, malformed, malformedForever, transientFailures(Int) }
 
     private let lock = NSLock()
     private var firstResponse: FirstResponse
@@ -86,7 +86,7 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
         }
         let shouldReturnMalformed = lock.withLock {
             recorded.append(request)
-            let value = !didRespond && firstResponse == .malformed
+            let value = firstResponse == .malformedForever || (!didRespond && firstResponse == .malformed)
             didRespond = true
             return value
         }
@@ -154,6 +154,36 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+@Test("A single-track malformed batch terminates instead of shrinking forever")
+func recommendationIndexStopsAtMinimumBatchSize() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 1)
+    let provider = ClosedIndexProvider(firstResponse: .malformedForever)
+    let events = ClosedIndexEvents()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
+    #expect(provider.requests().count == 1)
+    #expect(await events.kinds().contains(.failed))
+}
+
 private actor ClosedIndexMessages {
     private var values: [String] = []
 
@@ -180,6 +210,18 @@ private actor ClosedIndexEvents {
 
     func kinds() -> [RecommendationIndexExecutionEvent.Kind] {
         values.map(\.kind)
+    }
+}
+
+private actor ClosedIndexStates {
+    private var values: [AgentTaskState] = []
+
+    func append(_ state: AgentTaskState) {
+        values.append(state)
+    }
+
+    func last() -> AgentTaskState? {
+        values.last
     }
 }
 
@@ -256,10 +298,57 @@ func recommendationIndexClosedTransformCommits() async throws {
         .classificationCompleted,
         .commitStarted,
         .commitCompleted,
+        .verifyStarted,
+        .verifyCompleted,
         .completed,
     ] as [RecommendationIndexExecutionEvent.Kind] {
         #expect(eventKinds.contains(kind))
     }
+}
+
+@Test("Recommendation Index stops after two commits without pending progress")
+func recommendationIndexStopsOnNoProgress() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 2)
+    let provider = ClosedIndexProvider()
+    let events = ClosedIndexEvents()
+    let states = ClosedIndexStates()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        state: { await states.append($0) },
+        observeRecommendationIndex: { event in
+            await events.append(event)
+            if event.kind == .commitCompleted {
+                // Simulate a durable writer that reports success but loses the
+                // state before Runtime verification. The guard must stop after
+                // two real commit/verify cycles rather than loop forever.
+                try? await store.clearRecommendationIndex(serverID: serverID)
+            }
+        }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 2)
+    #expect(provider.requests().count == 2)
+    let kinds = await events.kinds()
+    #expect(kinds.filter { $0 == .noProgress }.count == 2)
+    #expect(kinds.contains(.verifyStarted))
+    #expect(kinds.contains(.verifyCompleted))
+    #expect(kinds.contains(.failed))
+    #expect(await states.last()?.facts["recommendation.index.diagnostics"]?.contains("noProgress") == true)
 }
 
 @Test("Recommendation Index exposes live progress before the batch commit and completes after commit")

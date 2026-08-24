@@ -68,11 +68,10 @@ public final class AuralisAgentBridge: AgentBridge {
 
     public func playPlaylist(globalID: GlobalID) async -> Bool {
         guard let playlist = await playlistValue(globalID) else { return false }
-        var tracks: [Track] = []
-        for trackID in playlist.trackIDs {
-            guard let track = await resolveTrackAnywhere(GlobalID(serverID: playlist.serverID, remoteID: trackID.rawValue)) else { continue }
-            tracks.append(track)
+        let trackGIDs = playlist.trackIDs.map {
+            GlobalID(serverID: playlist.serverID, remoteID: $0.rawValue)
         }
+        let tracks = await resolveTracksAnywhere(trackGIDs) ?? []
         guard !tracks.isEmpty else { return false }
         guard permitsMutationCommit else { return false }
         model.queue = tracks
@@ -287,12 +286,8 @@ public final class AuralisAgentBridge: AgentBridge {
             return .failed("歌单不存在，未添加歌曲")
         }
         guard !trackGIDs.isEmpty else { return .failed("没有要添加的歌曲") }
-        var tracks: [Track] = []
-        for gid in trackGIDs {
-            guard let track = await resolveTrackAnywhere(gid) else {
-                return .failed("存在不在本地目录的歌曲，未修改歌单")
-            }
-            tracks.append(track)
+        guard let tracks = await resolveTracksAnywhere(trackGIDs), tracks.count == trackGIDs.count else {
+            return .failed("存在不在本地目录的歌曲，未修改歌单")
         }
         guard permitsMutationCommit else { return revokedMutationResult }
         guard await model.addTracksToPlaylist(playlist, tracks: tracks) else {
@@ -317,12 +312,11 @@ public final class AuralisAgentBridge: AgentBridge {
 
     public func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult {
         guard let source = await playlistValue(playlistGID) else { return .failed("歌单不存在，未复制") }
-        var tracks: [Track] = []
-        for trackID in source.trackIDs {
-            guard let track = await resolveTrackAnywhere(GlobalID(serverID: source.serverID, remoteID: trackID.rawValue)) else {
-                return .failed("源歌单含未同步歌曲，未创建副本")
-            }
-            tracks.append(track)
+        let sourceTrackGIDs = source.trackIDs.map {
+            GlobalID(serverID: source.serverID, remoteID: $0.rawValue)
+        }
+        guard let tracks = await resolveTracksAnywhere(sourceTrackGIDs), tracks.count == sourceTrackGIDs.count else {
+            return .failed("源歌单含未同步歌曲，未创建副本")
         }
         guard permitsMutationCommit else { return revokedMutationResult }
         guard let copy = await model.createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return .failed("服务器未确认创建歌单副本") }
@@ -344,15 +338,15 @@ public final class AuralisAgentBridge: AgentBridge {
             sourcePlaylists.append(source)
         }
         var seen: Set<TrackID> = []
-        var tracks: [Track] = []
+        var trackGIDs: [GlobalID] = []
         for source in sourcePlaylists {
             for trackID in source.trackIDs where !seen.contains(trackID) {
                 seen.insert(trackID)
-                guard let track = await resolveTrackAnywhere(GlobalID(serverID: source.serverID, remoteID: trackID.rawValue)) else {
-                    return .failed("源歌单含未同步歌曲，未创建合并歌单")
-                }
-                tracks.append(track)
+                trackGIDs.append(GlobalID(serverID: source.serverID, remoteID: trackID.rawValue))
             }
+        }
+        guard let tracks = await resolveTracksAnywhere(trackGIDs), tracks.count == trackGIDs.count else {
+            return .failed("源歌单含未同步歌曲，未创建合并歌单")
         }
         guard permitsMutationCommit else { return revokedMutationResult }
         guard let target = await model.createPlaylist(named: name) else { return .failed("服务器未确认创建合并歌单") }
@@ -531,6 +525,28 @@ public final class AuralisAgentBridge: AgentBridge {
             return track
         }
         return try? await catalog.getTrack(globalID)
+    }
+
+    /// Resolves local tracks in memory first and then performs one batched
+    /// catalog lookup for misses. The input order and repeated occurrences
+    /// are preserved; a nil result means at least one ID was not resolvable.
+    private func resolveTracksAnywhere(_ globalIDs: [GlobalID]) async -> [Track]? {
+        guard !globalIDs.isEmpty else { return [] }
+
+        var byGlobalID: [String: Track] = [:]
+        for track in model.catalog.tracks {
+            byGlobalID[GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description] = track
+        }
+
+        let missing = globalIDs.filter { byGlobalID[$0.description] == nil }
+        if !missing.isEmpty, let fetched = try? await catalog.getTracks(missing) {
+            for track in fetched {
+                byGlobalID[GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description] = track
+            }
+        }
+
+        let resolved = globalIDs.compactMap { byGlobalID[$0.description] }
+        return resolved.count == globalIDs.count ? resolved : nil
     }
 
     // MARK: - Resolution
