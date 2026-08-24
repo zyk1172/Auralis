@@ -39,6 +39,10 @@ public final class LiveActivityManager {
 
     #if os(iOS)
     private var activityHandle: LiveActivityHandle?
+    /// `areActivitiesEnabled == false` is stable for this process. Do not keep
+    /// issuing Activity.request and filling device logs after the user disabled
+    /// Live Activities for this target.
+    private var activitiesDeniedForLifecycle = false
     #else
     private var activityHandle: Never?
     #endif
@@ -90,6 +94,12 @@ public final class LiveActivityManager {
 
     #if os(iOS)
     private func requestActivity(_ state: PlaybackActivityAttributes.ContentState) async {
+        guard !activitiesDeniedForLifecycle else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            activitiesDeniedForLifecycle = true
+            AuralisLog.playback.notice("Live Activity 已被用户禁用；本次启动不再重复请求")
+            return
+        }
         let attributes = PlaybackActivityAttributes(activityID: UUID().uuidString)
         let content = ActivityContent(state: state, staleDate: .now.addingTimeInterval(60))
         do {

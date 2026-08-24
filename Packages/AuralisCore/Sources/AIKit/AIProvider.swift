@@ -80,6 +80,55 @@ public enum AIHostedTool: String, Codable, Hashable, Sendable {
     case webFetch
 }
 
+/// Provider-neutral response format.  A workflow asks for structured data
+/// here; each Provider codec is responsible for projecting it onto its own
+/// wire protocol.  Keeping this separate from function tools prevents a
+/// deterministic transform from being modelled as a synthetic tool call.
+public enum AIOutputFormat: Codable, Hashable, Sendable {
+    case text
+    case jsonObject
+    case jsonSchema(name: String, schema: AIJSONValue, strict: Bool)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, name, schema, strict
+    }
+
+    private enum Kind: String, Codable {
+        case text, jsonObject, jsonSchema
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .text:
+            self = .text
+        case .jsonObject:
+            self = .jsonObject
+        case .jsonSchema:
+            self = .jsonSchema(
+                name: try container.decode(String.self, forKey: .name),
+                schema: try container.decode(AIJSONValue.self, forKey: .schema),
+                strict: try container.decodeIfPresent(Bool.self, forKey: .strict) ?? true
+            )
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text:
+            try container.encode(Kind.text, forKey: .kind)
+        case .jsonObject:
+            try container.encode(Kind.jsonObject, forKey: .kind)
+        case let .jsonSchema(name, schema, strict):
+            try container.encode(Kind.jsonSchema, forKey: .kind)
+            try container.encode(name, forKey: .name)
+            try container.encode(schema, forKey: .schema)
+            try container.encode(strict, forKey: .strict)
+        }
+    }
+}
+
 /// The protocol selected before a model run starts.  A run may use a
 /// controlled compatibility retry, but it never silently mixes wire formats
 /// inside one transcript.
@@ -645,9 +694,12 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
     public let toolChoice: AIToolChoice?
     /// Provider 原生托管工具。普通 function schema 不应承载这些工具。
     public let hostedTools: [AIHostedTool]?
+    /// Provider-neutral output contract.  Nil and `.text` both mean an
+    /// unconstrained natural-language response for compatibility.
+    public let outputFormat: AIOutputFormat?
 
     private enum CodingKeys: String, CodingKey {
-        case model, transcript, messages, temperature, maxTokens, tools, toolChoice, hostedTools
+        case model, transcript, messages, temperature, maxTokens, tools, toolChoice, hostedTools, outputFormat
     }
 
     public init(
@@ -657,7 +709,8 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         maxTokens: Int = auralisDefaultMaxOutputTokens,
         tools: [AIToolDefinition]? = nil,
         toolChoice: AIToolChoice? = nil,
-        hostedTools: [AIHostedTool]? = nil
+        hostedTools: [AIHostedTool]? = nil,
+        outputFormat: AIOutputFormat? = nil
     ) {
         self.model = model
         self.transcript = AITranscript(messages: messages)
@@ -666,6 +719,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.tools = tools
         self.toolChoice = toolChoice
         self.hostedTools = hostedTools
+        self.outputFormat = outputFormat
     }
 
     public init(
@@ -675,7 +729,8 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         maxTokens: Int = auralisDefaultMaxOutputTokens,
         tools: [AIToolDefinition]? = nil,
         toolChoice: AIToolChoice? = nil,
-        hostedTools: [AIHostedTool]? = nil
+        hostedTools: [AIHostedTool]? = nil,
+        outputFormat: AIOutputFormat? = nil
     ) {
         self.model = model
         self.transcript = transcript
@@ -684,6 +739,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.tools = tools
         self.toolChoice = toolChoice
         self.hostedTools = hostedTools
+        self.outputFormat = outputFormat
     }
 
     public init(from decoder: any Decoder) throws {
@@ -699,6 +755,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.tools = try container.decodeIfPresent([AIToolDefinition].self, forKey: .tools)
         self.toolChoice = try container.decodeIfPresent(AIToolChoice.self, forKey: .toolChoice)
         self.hostedTools = try container.decodeIfPresent([AIHostedTool].self, forKey: .hostedTools)
+        self.outputFormat = try container.decodeIfPresent(AIOutputFormat.self, forKey: .outputFormat)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -711,6 +768,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         try container.encodeIfPresent(tools, forKey: .tools)
         try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
         try container.encodeIfPresent(hostedTools, forKey: .hostedTools)
+        try container.encodeIfPresent(outputFormat, forKey: .outputFormat)
     }
 }
 
@@ -753,6 +811,11 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
 
 public enum AIProbeStatus: String, Codable, Hashable, Sendable {
     case passed
+    /// A transient observation failure. It is health telemetry only and must
+    /// never override a protocol's declared production capability.
+    case degraded
+    /// The endpoint explicitly rejected the requested capability. This is the
+    /// only negative probe result allowed to change effective configuration.
     case failed
     case unavailable
     case notTested
@@ -793,6 +856,12 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
         // 因此普通聊天只依赖文本补全，不应被 SSE 兼容性一并禁用。
         textCompletion == .passed
     }
+
+    /// Diagnostic probes are observations. A standard protocol declaration is
+    /// only overridden by an explicit server-side rejection, never by EOF,
+    /// timeout, 5xx or an incomplete streamed probe.
+    public var streamingExplicitlyRejected: Bool { streaming == .failed }
+    public var nativeToolsExplicitlyRejected: Bool { nativeTools == .failed }
 }
 
 public struct AIConnectionResult: Codable, Hashable, Sendable {

@@ -357,9 +357,9 @@ public struct OpenAICompatibleProvider: AIProvider {
                 if case .completed = event { completed = true }
             }
             if completed { return (.passed, []) }
-            return (.failed, [String(localized: "流式请求没有完成事件。", bundle: .module)])
+            return (.degraded, [String(localized: "流式请求没有完成事件；这是瞬时健康观测，不会关闭生产流式协议。", bundle: .module)])
         } catch {
-            return (.failed, [String(localized: "流式输出失败：\(error.localizedDescription)", bundle: .module)])
+            return (.degraded, [String(localized: "流式输出失败：\(error.localizedDescription)。这是瞬时健康观测，不会关闭生产流式协议。", bundle: .module)])
         }
     }
 
@@ -1169,6 +1169,9 @@ public struct OpenAICompatibleProvider: AIProvider {
             "max_tokens": request.maxTokens,
         ]
         if stream { body["stream"] = true }
+        if let output = Self.encodeChatOutputFormat(request.outputFormat) {
+            body["response_format"] = output
+        }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
             if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
@@ -1235,6 +1238,9 @@ public struct OpenAICompatibleProvider: AIProvider {
             "max_output_tokens": request.maxTokens,
         ]
         if stream { body["stream"] = true }
+        if let output = Self.encodeResponsesOutputFormat(request.outputFormat) {
+            body["text"] = ["format": output]
+        }
         let functionTools = request.tools ?? []
         let hostedTools = request.hostedTools ?? []
         let encodedTools = Self.encodeResponsesTools(functionTools)
@@ -1246,6 +1252,46 @@ public struct OpenAICompatibleProvider: AIProvider {
             }
         }
         return body
+    }
+
+    private static func encodeChatOutputFormat(_ format: AIOutputFormat?) -> [String: Any]? {
+        switch format {
+        case nil, .text:
+            return nil
+        case .jsonObject:
+            return ["type": "json_object"]
+        case let .jsonSchema(name, schema, strict):
+            guard let schemaObject = jsonObject(schema) else { return nil }
+            return [
+                "type": "json_schema",
+                "json_schema": [
+                    "name": name,
+                    "strict": strict,
+                    "schema": schemaObject,
+                ],
+            ]
+        }
+    }
+
+    private static func encodeResponsesOutputFormat(_ format: AIOutputFormat?) -> [String: Any]? {
+        switch format {
+        case nil, .text:
+            return nil
+        case .jsonObject:
+            return ["type": "json_object"]
+        case let .jsonSchema(name, schema, strict):
+            guard let schemaObject = jsonObject(schema) else { return nil }
+            return [
+                "type": "json_schema",
+                "name": name,
+                "strict": strict,
+                "schema": schemaObject,
+            ]
+        }
+    }
+
+    private static func jsonObject(_ value: AIJSONValue) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: value.jsonData)) as? [String: Any]
     }
 
     private static func encodeToolChoice(_ choice: AIToolChoice, responses: Bool) -> Any {

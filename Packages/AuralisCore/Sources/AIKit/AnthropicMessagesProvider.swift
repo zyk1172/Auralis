@@ -88,9 +88,9 @@ public struct AnthropicMessagesProvider: AIProvider {
             }
             return completed
                 ? (.passed, [])
-                : (.failed, [String(localized: "流式请求没有完成事件。", bundle: .module)])
+                : (.degraded, [String(localized: "流式请求没有完成事件；这是瞬时健康观测，不会关闭生产流式协议。", bundle: .module)])
         } catch {
-            return (.failed, [String(localized: "流式输出失败：\(error.localizedDescription)", bundle: .module)])
+            return (.degraded, [String(localized: "流式输出失败：\(error.localizedDescription)。这是瞬时健康观测，不会关闭生产流式协议。", bundle: .module)])
         }
     }
 
@@ -369,6 +369,24 @@ public struct AnthropicMessagesProvider: AIProvider {
         if !system.isEmpty { body["system"] = system.joined(separator: "\n\n") }
         if request.temperature >= 0 { body["temperature"] = request.temperature }
         if stream { body["stream"] = true }
+        switch request.outputFormat {
+        case nil, .text:
+            break
+        case .jsonObject:
+            // Anthropic Messages exposes schema-constrained JSON through
+            // output_config.format; it has no schema-free json_object mode.
+            throw AIProviderError.unsupportedEndpointProtocol("Anthropic Messages requires a JSON schema for structured output")
+        case let .jsonSchema(_, schema, _):
+            guard let object = try JSONSerialization.jsonObject(with: schema.jsonData) as? [String: Any] else {
+                throw AIProviderError.unsupportedEndpointProtocol("Structured output schema is not a JSON object")
+            }
+            body["output_config"] = [
+                "format": [
+                    "type": "json_schema",
+                    "schema": object,
+                ],
+            ]
+        }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = try tools.map { tool in
                 var item: [String: Any] = ["name": tool.name, "description": tool.description]

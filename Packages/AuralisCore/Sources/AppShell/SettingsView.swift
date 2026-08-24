@@ -653,6 +653,7 @@ struct AIProviderSettingsPage: View {
     @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
     @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
     @State private var endpointMode: AIEndpointMode = .chatCompletions
+    @State private var isApplyingEndpointConfiguration = false
     @State private var isConfiguringAPIKey = false
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
@@ -684,11 +685,8 @@ struct AIProviderSettingsPage: View {
                         .labelsHidden()
                         .pickerStyle(.menu)
                         .onChange(of: endpointMode) { _, newValue in
-                            aiEndpointModeRaw = newValue.rawValue
-                            AIConnectionSettings.clearPersistedDiagnostics()
-                            if let apiPath = newValue.apiPath {
-                                aiAPIPath = apiPath
-                            }
+                            guard !isApplyingEndpointConfiguration else { return }
+                            applyEndpointConfiguration(newValue)
                         }
                     }
                     if endpointMode == .custom {
@@ -809,7 +807,7 @@ struct AIProviderSettingsPage: View {
 支持 OpenAI Chat Completions、OpenAI Responses API，
 以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio
 和兼容 OpenAI 协议的中转服务。Anthropic Messages
-暂未实现；选择该协议时不会发送请求。
+也支持原生流式与工具调用；不同网关的能力诊断会单独显示。
 API Key 仅保存于系统 Keychain。
 """, bundle: .module))
                     .font(.caption)
@@ -894,11 +892,8 @@ API Key 仅保存于系统 Keychain。
                 .pickerStyle(.menu)
 #endif
                 .onChange(of: endpointMode) { _, newValue in
-                    aiEndpointModeRaw = newValue.rawValue
-                    AIConnectionSettings.clearPersistedDiagnostics()
-                    if let apiPath = newValue.apiPath {
-                        aiAPIPath = apiPath
-                    }
+                    guard !isApplyingEndpointConfiguration else { return }
+                    applyEndpointConfiguration(newValue)
                 }
                 if endpointMode == .custom {
                     TextField(String(localized: "API 路径", bundle: .module), text: $aiAPIPath, prompt: Text("/v1/chat/completions"))
@@ -1096,6 +1091,7 @@ API Key 仅保存于系统 Keychain。
         func symbol(_ status: AIProbeStatus) -> String {
             switch status {
             case .passed: "✅"
+            case .degraded: "⚠️"
             case .failed: "❌"
             case .unavailable: "⚪️"
             case .notTested: "—"
@@ -1109,8 +1105,10 @@ API Key 仅保存于系统 Keychain。
         if diagnostics.supportsOrdinaryChat, diagnostics.nativeTools != .passed {
             lines.append("普通聊天可用；Auralis 工具暂未通过能力验证。")
         }
-        if diagnostics.textCompletion == .passed, diagnostics.streaming == .failed {
-            lines.append("流式输出未通过；普通聊天将使用同一协议的非流式兼容模式。")
+        if diagnostics.textCompletion == .passed, diagnostics.streaming == .degraded {
+            lines.append("流式探测本次不稳定；生产仍按该协议使用流式输出。")
+        } else if diagnostics.textCompletion == .passed, diagnostics.streaming == .failed {
+            lines.append("服务端明确拒绝流式输出；普通聊天将使用同一协议的非流式模式。")
         }
         lines.append(contentsOf: diagnostics.details.prefix(2))
         return lines.joined(separator: "\n")
@@ -1121,11 +1119,23 @@ API Key 仅保存于系统 Keychain。
               let recommended = AIEndpointMode.recommended(baseURL: aiBaseURL, model: aiModel),
               recommended != endpointMode
         else { return }
-        endpointMode = recommended
-        aiEndpointModeRaw = recommended.rawValue
-        if let apiPath = recommended.apiPath {
-            aiAPIPath = apiPath
+        applyEndpointConfiguration(recommended)
+    }
+
+    /// Keep the model preset, protocol and path in one state transaction.
+    /// Independent `onChange` handlers used to bounce these bindings within a
+    /// single SwiftUI frame when a model preset selected a new protocol.
+    private func applyEndpointConfiguration(_ mode: AIEndpointMode) {
+        isApplyingEndpointConfiguration = true
+        defer { isApplyingEndpointConfiguration = false }
+        withTransaction(Transaction(animation: nil)) {
+            endpointMode = mode
+            aiEndpointModeRaw = mode.rawValue
+            if let apiPath = mode.apiPath {
+                aiAPIPath = apiPath
+            }
         }
+        AIConnectionSettings.clearPersistedDiagnostics()
     }
 
 
