@@ -412,7 +412,7 @@ struct AssistantView: View {
                     // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
                     .onTapGesture { assistantInputFocused = false }
                 }
-                .reportsBottomDockScroll()
+                .reportsBottomDockScroll(source: .assistant)
                 // 向下拖动聊天列表时交互式收起键盘。
                 .scrollDismissesKeyboard(.immediately)
                 // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。

@@ -456,7 +456,8 @@ public enum RecommendationIndexSkillRuntime {
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void,
-        state: @escaping @Sendable (AgentTaskState) async -> Void
+        state: @escaping @Sendable (AgentTaskState) async -> Void,
+        observe: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
     ) async {
         var taskState = initialTaskState ?? AgentTaskState(intent: .libraryManagement, goal: userText)
         let restored = decodeCheckpoint(taskState.facts["recommendation.index.checkpoint"])
@@ -477,12 +478,42 @@ public enum RecommendationIndexSkillRuntime {
         )
         let runID = executionLease.runID
         let sessionID = executionLease.sessionID
+        var classificationAttempt = 0
+
+        func emitObservation(
+            _ kind: RecommendationIndexExecutionEvent.Kind,
+            phase: RecommendationIndexWorkflow.State,
+            batch: RecommendationIndexPreparedBatch? = nil,
+            attempt: Int = classificationAttempt,
+            durationSince: Date? = nil,
+            message: String? = nil
+        ) async {
+            await observe(RecommendationIndexExecutionEvent(
+                kind: kind,
+                runID: runID,
+                sessionID: sessionID,
+                serverID: serverID,
+                phase: phase,
+                batchID: batch?.batchID,
+                batchRevision: batch?.revision,
+                batchSize: batch?.tracks.count ?? 0,
+                attempt: attempt,
+                totalTracks: latestStatus?.totalTracks,
+                indexedTracks: latestStatus?.indexedTracks,
+                pendingTracks: latestStatus?.pendingTracks,
+                pendingSemanticTracks: latestStatus?.pendingSemanticTagTracks,
+                durationMilliseconds: durationSince.map { max(0, Int(Date().timeIntervalSince($0) * 1_000)) },
+                message: message
+            ))
+        }
+
         guard await executionStateRegistry.begin(
             serverID: serverID,
             runID: runID,
             sessionID: sessionID
         ) else {
             let message = "推荐索引已在另一个运行中；当前没有启动新的索引任务。"
+            await emitObservation(.failed, phase: .readingStatus, message: message)
             taskState.status = .failed
             taskState.completionState = .failed
             taskState.errorState = message
@@ -516,6 +547,8 @@ public enum RecommendationIndexSkillRuntime {
                     return "推荐索引：已完成 \(status.indexedTracks) / \(status.totalTracks)，正在分类当前批次 \(currentBatch.tracks.count) 首"
                 }
                 return "正在分类推荐索引批次"
+            case .retrying:
+                return "推荐索引正在重试当前批次…"
             case .writingBatch:
                 return "正在保存推荐索引分类"
             case .verifying:
@@ -532,7 +565,8 @@ public enum RecommendationIndexSkillRuntime {
             phase: RecommendationIndexWorkflow.State,
             currentBatch: RecommendationIndexPreparedBatch? = nil,
             stoppedReason: String? = nil,
-            terminal: Bool = false
+            terminal: Bool = false,
+            attempt: Int = classificationAttempt
         ) async {
             if let status = latestStatus {
                 taskState.facts["recommendation.index.total"] = "\(status.totalTracks)"
@@ -586,14 +620,37 @@ public enum RecommendationIndexSkillRuntime {
                     runID: runID,
                     sessionID: sessionID,
                     phase: phase,
+                    batchID: currentBatch?.batchID,
+                    batchRevision: currentBatch?.revision,
+                    attempt: attempt,
                     totalTracks: latestStatus?.totalTracks ?? 0,
                     indexedTracks: latestStatus?.indexedTracks ?? 0,
                     pendingTracks: latestStatus?.pendingTracks ?? 0,
                     pendingSemanticTagTracks: latestStatus?.pendingSemanticTagTracks ?? 0,
                     currentBatchSize: currentBatch?.tracks.count ?? 0,
-                    processedThisRun: totalWrittenThisRun
+                    processedThisRun: totalWrittenThisRun,
+                    message: stoppedReason ?? detail
                 )
             }
+            let eventKind: RecommendationIndexExecutionEvent.Kind
+            if phase == .completed {
+                eventKind = .completed
+            } else if stoppedReason == "运行已取消" || stoppedReason?.contains("运行已失效") == true {
+                eventKind = .cancelled
+            } else if phase == .retrying {
+                eventKind = .retrying
+            } else if terminal {
+                eventKind = .failed
+            } else {
+                eventKind = .phaseChanged
+            }
+            await emitObservation(
+                eventKind,
+                phase: phase,
+                batch: currentBatch,
+                attempt: attempt,
+                message: stoppedReason ?? detail
+            )
             await state(taskState)
             await progress(ToolLoop.AgentProgress(
                 toolSteps: taskState.progress.toolCalls,
@@ -614,19 +671,28 @@ public enum RecommendationIndexSkillRuntime {
         // overlap on the Provider-error path.
         func fail(
             _ message: String,
-            phase: RecommendationIndexWorkflow.State
+            phase: RecommendationIndexWorkflow.State,
+            currentBatch: RecommendationIndexPreparedBatch? = nil,
+            attempt: Int = classificationAttempt
         ) async {
             taskState.status = .failed
             taskState.completionState = .failed
             taskState.errorState = message
             taskState.errors.append(message)
             taskState.pendingActions = []
-            await publish(phase: phase, stoppedReason: message, terminal: true)
+            await publish(
+                phase: phase,
+                currentBatch: currentBatch,
+                stoppedReason: message,
+                terminal: true,
+                attempt: attempt
+            )
             await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
         }
 
         taskState.status = .running
         taskState.pendingActions = ["正在读取推荐索引状态"]
+        await emitObservation(.started, phase: .readingStatus, message: skillID)
         await publish(phase: .readingStatus)
 
         while true {
@@ -673,6 +739,11 @@ public enum RecommendationIndexSkillRuntime {
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
                 return
             }
+            await emitObservation(
+                .statusLoaded,
+                phase: .readingStatus,
+                message: "pending=\(status.pendingTracks), pendingSemantic=\(status.pendingSemanticTagTracks)"
+            )
             if status.pendingTracks == 0, status.pendingSemanticTagTracks == 0 {
                 taskState.status = .completed
                 taskState.completed = true
@@ -719,6 +790,13 @@ public enum RecommendationIndexSkillRuntime {
                 continue
             }
 
+            await emitObservation(
+                .batchPrepared,
+                phase: .fetchingBatch,
+                batch: prepared,
+                message: "mode=\(prepared.mode)"
+            )
+
             taskState.status = .waitingForModel
             taskState.pendingActions = ["推荐索引：已完成 \(status.indexedTracks) / \(status.totalTracks)，正在分类当前批次 \(prepared.tracks.count) 首"]
             await publish(phase: .classifyingBatch, currentBatch: prepared)
@@ -731,6 +809,14 @@ public enum RecommendationIndexSkillRuntime {
 
             let envelope: RecommendationIndexClassificationEnvelope
             var classificationDiagnostics: RecommendationIndexClassificationDiagnostics?
+            classificationAttempt += 1
+            let classificationStartedAt = Date()
+            await emitObservation(
+                .classificationStarted,
+                phase: .classifyingBatch,
+                batch: prepared,
+                attempt: classificationAttempt
+            )
             do {
                 let request = try await classificationRequest(
                     provider: provider,
@@ -761,6 +847,13 @@ public enum RecommendationIndexSkillRuntime {
                 switch RecommendationIndexClassificationParser.parse(response.content, for: prepared) {
                 case let .success(decoded):
                     envelope = decoded
+                    await emitObservation(
+                        .classificationCompleted,
+                        phase: .classifyingBatch,
+                        batch: prepared,
+                        attempt: classificationAttempt,
+                        durationSince: classificationStartedAt
+                    )
                 case let .failure(diagnostic):
                     classificationDiagnostics = diagnostic
                     throw diagnostic
@@ -771,6 +864,15 @@ public enum RecommendationIndexSkillRuntime {
                 await publish(phase: .classifyingBatch, currentBatch: prepared, stoppedReason: "运行已取消", terminal: true)
                 return
             } catch {
+                await emitObservation(
+                    .classificationFailed,
+                    phase: .classifyingBatch,
+                    batch: prepared,
+                    attempt: classificationAttempt,
+                    durationSince: classificationStartedAt,
+                    message: (classificationDiagnostics ?? (error as? RecommendationIndexClassificationDiagnostics))?.compactSummary
+                        ?? error.localizedDescription
+                )
                 if isMalformedOrTruncated(error) {
                     preferredBatchSize = RecommendationIndexBatchPolicy.reducedLimit(from: prepared.tracks.count)
                     taskState.status = .waitingForModel
@@ -788,10 +890,11 @@ public enum RecommendationIndexSkillRuntime {
                     // Never persist the old batch as writable after a failed
                     // transform. The next prepare creates a new ID/revision.
                     await publish(
-                        phase: .fetchingBatch,
+                        phase: .retrying,
                         stoppedReason: classificationDiagnostics.map { "分类输出校验失败（\($0.stage.rawValue)），正在重试" }
                             ?? "分类输出校验失败，正在重试",
-                        terminal: false
+                        terminal: false,
+                        attempt: classificationAttempt
                     )
                     await progress(ToolLoop.AgentProgress(
                         toolSteps: taskState.progress.toolCalls,
@@ -799,11 +902,19 @@ public enum RecommendationIndexSkillRuntime {
                         inputTokens: taskState.progress.inputTokens,
                         outputTokens: taskState.progress.outputTokens
                     ))
+                    await publish(
+                        phase: .fetchingBatch,
+                        stoppedReason: "重新准备当前批次",
+                        terminal: false,
+                        attempt: classificationAttempt
+                    )
                     continue
                 }
                 await fail(
                     "推荐索引暂时无法继续：AI Provider 请求失败。\(error.localizedDescription)",
-                    phase: .classifyingBatch
+                    phase: .classifyingBatch,
+                    currentBatch: prepared,
+                    attempt: classificationAttempt
                 )
                 return
             }
@@ -835,7 +946,14 @@ public enum RecommendationIndexSkillRuntime {
             ])
             taskState.status = .waitingForTool
             taskState.pendingActions = ["正在保存推荐索引分类"]
-            await publish(phase: .writingBatch, currentBatch: prepared)
+            await publish(phase: .writingBatch, currentBatch: prepared, attempt: classificationAttempt)
+            let commitStartedAt = Date()
+            await emitObservation(
+                .commitStarted,
+                phase: .writingBatch,
+                batch: prepared,
+                attempt: classificationAttempt
+            )
             let result = await ToolRuntime.execute(
                 commitCall,
                 bridge: bridge,
@@ -854,10 +972,20 @@ public enum RecommendationIndexSkillRuntime {
             guard result.success else {
                 await fail(
                     "推荐索引写入失败：\(result.summary)",
-                    phase: .writingBatch
+                    phase: .writingBatch,
+                    currentBatch: prepared,
+                    attempt: classificationAttempt
                 )
                 return
             }
+            await emitObservation(
+                .commitCompleted,
+                phase: .writingBatch,
+                batch: prepared,
+                attempt: classificationAttempt,
+                durationSince: commitStartedAt,
+                message: result.summary
+            )
             totalWrittenThisRun += prepared.tracks.count
             taskState.successfulToolNames.append(commitCall.name)
             taskState.successfulToolCount += 1

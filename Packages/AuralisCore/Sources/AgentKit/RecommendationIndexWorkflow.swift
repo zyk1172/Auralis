@@ -8,6 +8,7 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
         case readingStatus
         case fetchingBatch
         case classifyingBatch
+        case retrying
         case writingBatch
         case verifying
         case completed

@@ -10,12 +10,16 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
         public let runID: UUID
         public let sessionID: UUID
         public let phase: RecommendationIndexWorkflow.State
+        public let batchID: UUID?
+        public let batchRevision: UInt64?
+        public let attempt: Int
         public let totalTracks: Int
         public let indexedTracks: Int
         public let pendingTracks: Int
         public let pendingSemanticTagTracks: Int
         public let currentBatchSize: Int
         public let processedThisRun: Int
+        public let message: String?
         public let startedAt: Date
         public let updatedAt: Date
 
@@ -23,24 +27,32 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
             runID: UUID,
             sessionID: UUID,
             phase: RecommendationIndexWorkflow.State,
+            batchID: UUID? = nil,
+            batchRevision: UInt64? = nil,
+            attempt: Int = 0,
             totalTracks: Int = 0,
             indexedTracks: Int = 0,
             pendingTracks: Int = 0,
             pendingSemanticTagTracks: Int = 0,
             currentBatchSize: Int = 0,
             processedThisRun: Int = 0,
+            message: String? = nil,
             startedAt: Date = .now,
             updatedAt: Date = .now
         ) {
             self.runID = runID
             self.sessionID = sessionID
             self.phase = phase
+            self.batchID = batchID
+            self.batchRevision = batchRevision
+            self.attempt = attempt
             self.totalTracks = totalTracks
             self.indexedTracks = indexedTracks
             self.pendingTracks = pendingTracks
             self.pendingSemanticTagTracks = pendingSemanticTagTracks
             self.currentBatchSize = currentBatchSize
             self.processedThisRun = processedThisRun
+            self.message = message
             self.startedAt = startedAt
             self.updatedAt = updatedAt
         }
@@ -62,10 +74,11 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
             return "当前没有推荐索引任务运行"
         case let .running(snapshot):
             let phase = Self.phaseText(snapshot.phase)
+            let attempt = snapshot.attempt > 0 ? "（第 \(snapshot.attempt) 次尝试）" : ""
             if snapshot.totalTracks > 0 {
-                return "索引任务正在运行：已完成 \(snapshot.indexedTracks) / \(snapshot.totalTracks)，\(phase)"
+                return "索引任务正在运行：已完成 \(snapshot.indexedTracks) / \(snapshot.totalTracks)，\(phase)\(attempt)"
             }
-            return "索引任务正在运行：\(phase)"
+            return "索引任务正在运行：\(phase)\(attempt)"
         case let .failed(_, message, _):
             return "最近一次推荐索引任务失败：\(message)"
         case let .completed(_, indexedTracks, totalTracks, _):
@@ -78,6 +91,7 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
         case .readingStatus: return "正在读取状态"
         case .fetchingBatch: return "正在准备批次"
         case .classifyingBatch: return "正在分类当前批次"
+        case .retrying: return "正在重试当前批次"
         case .writingBatch: return "正在保存分类"
         case .verifying: return "正在核验写入结果"
         case .completed: return "已完成"
@@ -118,12 +132,16 @@ public actor RecommendationIndexExecutionRegistry {
         runID: UUID,
         sessionID: UUID,
         phase: RecommendationIndexWorkflow.State,
+        batchID: UUID? = nil,
+        batchRevision: UInt64? = nil,
+        attempt: Int = 0,
         totalTracks: Int,
         indexedTracks: Int,
         pendingTracks: Int,
         pendingSemanticTagTracks: Int,
         currentBatchSize: Int,
-        processedThisRun: Int
+        processedThisRun: Int,
+        message: String? = nil
     ) {
         let key = Self.key(for: serverID)
         guard case let .running(previous) = states[key],
@@ -133,12 +151,16 @@ public actor RecommendationIndexExecutionRegistry {
             runID: runID,
             sessionID: sessionID,
             phase: phase,
+            batchID: batchID,
+            batchRevision: batchRevision,
+            attempt: attempt,
             totalTracks: totalTracks,
             indexedTracks: indexedTracks,
             pendingTracks: pendingTracks,
             pendingSemanticTagTracks: pendingSemanticTagTracks,
             currentBatchSize: currentBatchSize,
             processedThisRun: processedThisRun,
+            message: message,
             startedAt: previous.startedAt,
             updatedAt: .now
         ))

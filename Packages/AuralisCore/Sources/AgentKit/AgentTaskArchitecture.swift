@@ -879,7 +879,8 @@ public actor AgentRuntime {
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
-        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
+        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in },
+        observeRecommendationIndex: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
     ) async {
         let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
         // AppShell 已经为任务记录解析过策略时必须复用同一份值，避免持久化预算/意图
@@ -916,7 +917,8 @@ public actor AgentRuntime {
             emit: emit,
             log: log,
             progress: progress,
-            state: state
+            state: state,
+            observeRecommendationIndex: observeRecommendationIndex
         )
     }
 }

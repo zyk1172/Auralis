@@ -188,7 +188,8 @@ public struct ToolLoop {
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
         progress: @escaping @Sendable (AgentProgress) async -> Void = { _ in },
-        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
+        state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in },
+        observeRecommendationIndex: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
     ) async {
         if let scopedWebService = webService as? any AgentWebRunScopedService {
             await scopedWebService.beginRun(runID)
@@ -231,6 +232,14 @@ public struct ToolLoop {
             executionLineage: executionLineage
         )
         if let provider, workflowRoute.kind == .recommendationIndex {
+            await observeRecommendationIndex(RecommendationIndexExecutionEvent(
+                kind: .routeSelected,
+                runID: resolvedExecutionLease.runID,
+                sessionID: resolvedExecutionLease.sessionID,
+                serverID: context.serverID,
+                phase: .readingStatus,
+                message: "RecommendationIndexSkillRuntime"
+            ))
             await RecommendationIndexSkillRuntime.run(
                 userText: userText,
                 provider: provider,
@@ -249,7 +258,8 @@ public struct ToolLoop {
                 emit: emit,
                 log: log,
                 progress: progress,
-                state: state
+                state: state,
+                observe: observeRecommendationIndex
             )
             return
         }

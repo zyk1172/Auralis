@@ -43,18 +43,92 @@ enum BottomDockMotion {
     }
 }
 
-/// 首页 / 音乐库的滚动进度。类型保持跨平台可见，让共享页面和环境注入在 macOS
-/// 也能编译；只有 iOS 的 modifier 会真正向它报告滚动。
+/// Home shell 的底部悬浮控件度量。页面、Dock 和详情页都从这一个值计算避让空间，
+/// 不再各自复制一套 magic padding。
+struct BottomChromeMetrics: Equatable, Sendable {
+    static let standard = BottomChromeMetrics()
+
+    let miniPlayerHeight: CGFloat
+    let dockHeight: CGFloat
+    let spacing: CGFloat
+    let bottomPadding: CGFloat
+    let safeAreaBottom: CGFloat
+
+    init(
+        miniPlayerHeight: CGFloat = 56,
+        dockHeight: CGFloat = 56,
+        spacing: CGFloat = 8,
+        bottomPadding: CGFloat = 6,
+        safeAreaBottom: CGFloat = 0
+    ) {
+        self.miniPlayerHeight = miniPlayerHeight
+        self.dockHeight = dockHeight
+        self.spacing = spacing
+        self.bottomPadding = bottomPadding
+        self.safeAreaBottom = max(0, safeAreaBottom)
+    }
+
+    var singleBarReservation: CGFloat {
+        dockHeight + bottomPadding + safeAreaBottom
+    }
+
+    var expandedReservation: CGFloat {
+        miniPlayerHeight + spacing + singleBarReservation
+    }
+
+    func reservedHeight(hasAccessory: Bool, collapseProgress: CGFloat) -> CGFloat {
+        guard hasAccessory else { return singleBarReservation }
+        let progress = min(max(collapseProgress, 0), 1)
+        return expandedReservation + (singleBarReservation - expandedReservation) * progress
+    }
+
+    func withSafeAreaBottom(_ value: CGFloat) -> BottomChromeMetrics {
+        BottomChromeMetrics(
+            miniPlayerHeight: miniPlayerHeight,
+            dockHeight: dockHeight,
+            spacing: spacing,
+            bottomPadding: bottomPadding,
+            safeAreaBottom: value
+        )
+    }
+}
+
+enum HomeChromeScrollSource: String, Sendable, Equatable {
+    case home
+    case library
+    case assistant
+    case browseDetail
+}
+
+/// Home shell 的唯一底部 Chrome 状态。它同时承载 Dock 展开进度和当前滚动来源，
+/// 让首页、资料库、助手和二级详情页共享同一个滚动/避让控制器。
 @MainActor
-final class BottomDockScrollCoordinator: ObservableObject {
+final class HomeChromeState: ObservableObject {
     @Published private(set) var collapseProgress: CGFloat = 0
+    @Published private(set) var activeSource: HomeChromeScrollSource?
+    @Published private(set) var metrics: BottomChromeMetrics = .standard
+
+    func beginInteraction(source: HomeChromeScrollSource) {
+        activeSource = source
+    }
+
+    func endInteraction(source: HomeChromeScrollSource) {
+        guard activeSource == source else { return }
+        activeSource = nil
+    }
 
     func finishInteraction(translation: CGSize) {
         guard let terminal = BottomDockProgressReducer.terminalProgress(for: translation) else { return }
         setCollapseProgress(terminal)
     }
 
+    func finishInteraction(source: HomeChromeScrollSource, translation: CGSize) {
+        guard activeSource == source else { return }
+        finishInteraction(translation: translation)
+    }
+
     func reset() {
+        activeSource = nil
         setCollapseProgress(0)
     }
 
@@ -63,16 +137,31 @@ final class BottomDockScrollCoordinator: ObservableObject {
         guard BottomDockProgressReducer.shouldPublish(current: collapseProgress, next: clamped) else { return }
         collapseProgress = clamped
     }
+
+    func updateSafeAreaBottom(_ value: CGFloat) {
+        let next = metrics.withSafeAreaBottom(value)
+        guard next != metrics else { return }
+        metrics = next
+    }
 }
 
+/// 兼容既有页面和测试的名称；新的代码应使用 HomeChromeState。
+typealias BottomDockScrollCoordinator = HomeChromeState
+
 private struct BottomDockScrollCoordinatorEnvironmentKey: EnvironmentKey {
-    static let defaultValue: BottomDockScrollCoordinator? = nil
+    static let defaultValue: HomeChromeState? = nil
 }
 
 extension EnvironmentValues {
-    var bottomDockScrollCoordinator: BottomDockScrollCoordinator? {
+    var homeChromeState: HomeChromeState? {
         get { self[BottomDockScrollCoordinatorEnvironmentKey.self] }
         set { self[BottomDockScrollCoordinatorEnvironmentKey.self] = newValue }
+    }
+
+    /// 旧调用点兼容入口；与 homeChromeState 指向同一个对象。
+    var bottomDockScrollCoordinator: BottomDockScrollCoordinator? {
+        get { homeChromeState }
+        set { homeChromeState = newValue }
     }
 }
 
@@ -81,7 +170,7 @@ public struct AuralisRootView: View {
     @StateObject private var themeStore: ThemeStore
     /// 用 @State 只保持引用生命周期，不让每次滚动进度变化都使整个 AuralisRootView 失效。
     /// 真正需要重绘的 Dock 子视图会单独 @ObservedObject 订阅它。
-    @State private var bottomDockScroll = BottomDockScrollCoordinator()
+    @State private var homeChromeState = HomeChromeState()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.scenePhase) private var scenePhase
@@ -107,12 +196,13 @@ public struct AuralisRootView: View {
             // iPhone 与 iPad 始终使用同一个 iOS Shell（同一导航 / 同一 Bottom Dock）。
             // size class 只允许影响局部布局尺寸，绝不允许切换整套 UI 架构——
             // Stage Manager / 分屏改变 horizontalSizeClass 时不能替换 root Shell。
-            IOSMusicShell(model: model, themeStore: themeStore, bottomDockScroll: bottomDockScroll)
+            IOSMusicShell(model: model, themeStore: themeStore, homeChromeState: homeChromeState)
 #endif
         }
         .environmentObject(model)
-        .environmentObject(bottomDockScroll)
-        .environment(\.bottomDockScrollCoordinator, bottomDockScroll)
+        .environmentObject(homeChromeState)
+        .environment(\.homeChromeState, homeChromeState)
+        .environment(\.bottomDockScrollCoordinator, homeChromeState)
         .environment(\.artworkStore, model.artworkStore)
         .environmentObject(themeStore)
         .preferredColorScheme(themeStore.current.colorScheme)
@@ -189,17 +279,17 @@ enum BottomDockLayoutMetrics {
 #if os(iOS)
 /// 底部双层 Dock 两控件共享的可见高度（迷你播放条与主菜单栏完全一致）。
 /// 之前 72pt 太大、占用过多纵向空间，现统一收小到 56pt。
-let bottomBarHeight: CGFloat = 56
+let bottomBarHeight: CGFloat = BottomChromeMetrics.standard.dockHeight
 /// 两控件之间的固定间距（与 BottomDock 的 VStack spacing 同源）。
-let dockSpacing: CGFloat = 8
+let dockSpacing: CGFloat = BottomChromeMetrics.standard.spacing
 /// Dock 整体的底部内边距（与 BottomDock 的 .padding(.bottom) 同源）。
-let dockBottomPadding: CGFloat = 6
+let dockBottomPadding: CGFloat = BottomChromeMetrics.standard.bottomPadding
 
 
 private struct IOSMusicShell: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
-    let bottomDockScroll: BottomDockScrollCoordinator
+    let homeChromeState: HomeChromeState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -207,7 +297,7 @@ private struct IOSMusicShell: View {
             DockReservedSectionContent(
                 model: model,
                 themeStore: themeStore,
-                coordinator: bottomDockScroll,
+                coordinator: homeChromeState,
                 hasAccessory: hasDockAccessory
             )
                 // Destination 必须注册在 NavigationStack 的内容树内。此前把 modifier
@@ -244,7 +334,7 @@ private struct IOSMusicShell: View {
         }
         // 设置页没有底部附件；离开首页 / 音乐库 / AI 助手时回到完整导航态。
         .onChange(of: model.selectedSection) { _, _ in
-            bottomDockScroll.reset()
+            homeChromeState.reset()
         }
         .alert(String(localized: "播放失败", bundle: .module), isPresented: .init(
             get: { model.playbackError != nil },
@@ -297,7 +387,7 @@ private struct IOSMusicShell: View {
             model: model,
             theme: themeStore.current,
             accessory: collapsedDockAccessory,
-            coordinator: bottomDockScroll,
+            coordinator: homeChromeState,
             onExpand: { setDockPresentation(.expanded) },
             onAssistant: {
                 selectTopLevelSection(.assistant)
@@ -316,7 +406,7 @@ private struct IOSMusicShell: View {
 
     private func setDockPresentation(_ presentation: DockPresentation) {
         withAnimation(dockAnimation) {
-            bottomDockScroll.setCollapseProgress(presentation == .compact ? 1 : 0)
+            homeChromeState.setCollapseProgress(presentation == .compact ? 1 : 0)
         }
     }
 
@@ -325,7 +415,7 @@ private struct IOSMusicShell: View {
     /// “歌单/收藏详情里点音乐库/AI 助手跳不过去”；同时重置底部 Dock 的滚动进度。
     private func selectTopLevelSection(_ section: AppSection) {
         model.selectTopLevelSection(section)
-        bottomDockScroll.reset()
+        homeChromeState.reset()
     }
     /// 互斥呈现：服务器配置弹窗优先；正在播放 / 浏览详情不会与它同时弹出，
     /// 避免 UIKit "Attempt to present … which is already presenting …" 冲突导致卡顿。
@@ -356,7 +446,7 @@ private struct IOSMusicShell: View {
 private struct DockReservedSectionContent: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
-    @ObservedObject var coordinator: BottomDockScrollCoordinator
+    @ObservedObject var coordinator: HomeChromeState
     let hasAccessory: Bool
 
     var body: some View {
@@ -365,10 +455,10 @@ private struct DockReservedSectionContent: View {
     }
 
     private var reservedHeight: CGFloat {
-        let singleBar = bottomBarHeight + dockBottomPadding
-        guard hasAccessory else { return singleBar }
-        let expandedHeight = bottomBarHeight + dockSpacing + singleBar
-        return expandedHeight + (singleBar - expandedHeight) * coordinator.collapseProgress
+        coordinator.metrics.reservedHeight(
+            hasAccessory: hasAccessory,
+            collapseProgress: coordinator.collapseProgress
+        )
     }
 }
 
@@ -382,17 +472,32 @@ private enum DockPresentation: Equatable {
 struct BottomDockScrollReportingModifier: ViewModifier {
     /// 普通 Environment 值只传递引用，不会订阅 objectWillChange；滚动内容自身不应因
     /// Dock 的每次进度发布而重新计算。只有下方 ProgressHost 负责重绘。
-    @Environment(\.bottomDockScrollCoordinator) private var coordinator
+    @Environment(\.homeChromeState) private var coordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let source: HomeChromeScrollSource
+
+    init(source: HomeChromeScrollSource = .home) {
+        self.source = source
+    }
 
     func body(content: Content) -> some View {
         content
+            .onAppear {
+                coordinator?.beginInteraction(source: source)
+            }
+            .onDisappear {
+                coordinator?.endInteraction(source: source)
+            }
             .simultaneousGesture(
                 DragGesture(minimumDistance: BottomDockProgressReducer.minimumVerticalSwipeDistance)
+                    .onChanged { value in
+                        guard BottomDockProgressReducer.terminalProgress(for: value.translation) != nil else { return }
+                        coordinator?.beginInteraction(source: source)
+                    }
                     .onEnded { value in
                         guard BottomDockProgressReducer.terminalProgress(for: value.translation) != nil else { return }
                         withAnimation(BottomDockMotion.animation(reduceMotion: reduceMotion)) {
-                            coordinator?.finishInteraction(translation: value.translation)
+                            coordinator?.finishInteraction(source: source, translation: value.translation)
                         }
                     }
             )
@@ -424,8 +529,8 @@ private struct MorphingBottomDockProgressHost: View {
 }
 
 extension View {
-    func reportsBottomDockScroll() -> some View {
-        modifier(BottomDockScrollReportingModifier())
+    func reportsBottomDockScroll(source: HomeChromeScrollSource = .home) -> some View {
+        modifier(BottomDockScrollReportingModifier(source: source))
     }
 }
 
@@ -696,20 +801,19 @@ private struct CollapsedDock: View {
                     BottomGlassBarShell {
                         CompactMiniPlayerContent(model: model, theme: theme)
                     }
+                    .contentShape(Capsule())
+                    .onTapGesture {
+                        model.isNowPlayingPresented = true
+                    }
                 case .assistant:
                     // AI 页的中间区域由 AssistantView 的真实输入栏占用；
                     // 这里只保留与两端圆形入口等高的透明槽位，不能再叠一层玻璃。
                     Color.clear
+                        .allowsHitTesting(false)
                 }
             }
             .frame(maxWidth: .infinity)
             .frame(height: bottomBarHeight)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if accessory == .player {
-                    model.isNowPlayingPresented = true
-                }
-            }
             .accessibilityElement(children: accessory == .player ? .contain : .ignore)
 
             CircularDockButton(action: onAssistant) {
@@ -948,7 +1052,7 @@ private struct MainTabBarContent: View {
 #if !os(iOS)
 /// Dock 仅存在于紧凑 iOS 布局；其它平台保留同一调用点但不安装滚动监听。
 extension View {
-    func reportsBottomDockScroll() -> some View { self }
+    func reportsBottomDockScroll(source: HomeChromeScrollSource = .home) -> some View { self }
 }
 #endif
 
@@ -1044,6 +1148,7 @@ struct BrowseDetailSheet: View {
     @State private var categoryLoadError: String?
     @State private var isDeletingPlaylists = false
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var homeChromeState: HomeChromeState
 
     init(
         destination: BrowseDestination,
@@ -1181,6 +1286,20 @@ struct BrowseDetailSheet: View {
                 navigationContent
             }
         }
+        #if os(iOS)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showsCloseButton {
+                Color.clear.frame(height: 0)
+            } else {
+                Color.clear.frame(
+                    height: homeChromeState.metrics.reservedHeight(
+                        hasAccessory: true,
+                        collapseProgress: homeChromeState.collapseProgress
+                    )
+                )
+            }
+        }
+        #endif
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 480)
         #endif
@@ -1463,6 +1582,7 @@ struct BrowseDetailSheet: View {
             }
         }
         .listStyle(.plain)
+        .reportsBottomDockScroll(source: .browseDetail)
     }
 
     /// 歌单总览：点选进入歌单内的歌曲清单。
@@ -1495,6 +1615,7 @@ struct BrowseDetailSheet: View {
             }
         }
         .listStyle(.plain)
+        .reportsBottomDockScroll(source: .browseDetail)
         .confirmationDialog(
             playlistPendingDeletion.map { String(localized: "删除歌单「\($0.name)」？", bundle: .module) }
                 ?? String(localized: "删除歌单？", bundle: .module),
@@ -1605,6 +1726,7 @@ struct BrowseDetailSheet: View {
             .buttonStyle(HapticPlainButtonStyle())
         }
         .listStyle(.plain)
+        .reportsBottomDockScroll(source: .browseDetail)
     }
 
     /// 常听专辑列表：按真实播放次数降序，点选进入专辑详情。
@@ -1639,6 +1761,7 @@ struct BrowseDetailSheet: View {
             .buttonStyle(HapticPlainButtonStyle())
         }
         .listStyle(.plain)
+        .reportsBottomDockScroll(source: .browseDetail)
     }
 
     private func playAll() {
@@ -1705,6 +1828,7 @@ private struct PlaylistTracksView: View {
                     }
                 }
                 .listStyle(.plain)
+                .reportsBottomDockScroll(source: .browseDetail)
             }
         }
         .navigationTitle(playlist.name)

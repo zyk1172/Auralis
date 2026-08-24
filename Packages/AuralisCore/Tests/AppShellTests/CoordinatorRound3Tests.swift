@@ -5,6 +5,7 @@ import AppShell
 import Domain
 import Foundation
 import LocalCatalog
+import MusicLibrary
 import Testing
 
 // MARK: - Connectors
@@ -89,6 +90,7 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
 private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var completions = 0
+    private var observedBatchSizes: [Int] = []
 
     let capabilities = ModelCapabilities(
         maxContextTokens: 32_000,
@@ -127,6 +129,9 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
         else {
             throw AIProviderError.malformedResponse(detail: "测试分类输入无法解析", retryable: false)
         }
+        lock.withLock {
+            observedBatchSizes.append(tracks.count)
+        }
 
         let items = tracks.compactMap { track -> [String: Any]? in
             guard let id = track["id"] as? String else { return nil }
@@ -164,6 +169,10 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
 
     var completionCount: Int {
         lock.withLock { completions }
+    }
+
+    var batchSizes: [Int] {
+        lock.withLock { observedBatchSizes }
     }
 }
 
@@ -377,4 +386,75 @@ func recommendationIndexResumesThroughCoordinatorAfterProviderFailure() async th
     #expect(provider.completionCount == 2)
     #expect(coordinator.activeTask?.status == .completed)
     #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 0)
+}
+
+@Test("Coordinator 真实入口连续处理三批，并在 Provider 失败后继续完成索引")
+@MainActor
+func recommendationIndexProcessesThreeBatchesThroughCoordinator() async throws {
+    let tracks = (0..<20).map { index in
+        makeTrack(remoteID: "continuous-\(index)", title: "Continuous \(index)")
+    }
+    let catalogStore = try LocalCatalogStore(url: temporaryCatalogURL())
+    let model = AuralisAppModel(
+        connector: RestoringConnector(result: makeResult(tracks: tracks)),
+        catalogStore: catalogStore
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+    // `connect` starts the production catalog refresh in the background. Let
+    // its registration finish before this test creates a deterministic snapshot.
+    try? await Task.sleep(for: .milliseconds(50))
+
+    let provider = ResumeIndexProvider()
+    let sync = try await model.catalogCoordinator.store.beginSync(serverID: "test-server", mode: .full)
+    try await model.catalogCoordinator.store.stageTracks(tracks, session: sync)
+    try await model.catalogCoordinator.store.saveCheckpoint(
+        LibrarySyncCheckpoint(
+            sessionID: sync.id,
+            serverID: sync.serverID,
+            section: .tracks,
+            processedCount: tracks.count,
+            completedAt: .now
+        ),
+        session: sync
+    )
+    try await model.catalogCoordinator.store.completeSync(sync, completedAt: .now)
+    #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 20)
+
+    // 首次真实入口请求在 Provider 边界失败，不能被离线音乐搜索或其它协议接管。
+    coordinator.send("开始并一次性完成推荐索引", provider: provider)
+    for _ in 0..<500 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(!coordinator.isRunning)
+    #expect(coordinator.activeTask?.status == .failed)
+    #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 20)
+
+    // 短 continuation 恢复同一条 execution lineage；成功路径必须真实提交 8+8+4 三批。
+    coordinator.send("继续", provider: provider)
+    for _ in 0..<1_000 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    let finalStatus = try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server")
+    #expect(!coordinator.isRunning)
+    #expect(coordinator.activeTask?.status == .completed)
+    #expect(finalStatus.pendingUniqueTracks == 0)
+    #expect(finalStatus.pendingSemanticTagTracks == 0)
+    #expect(provider.completionCount == 4)
+    #expect(provider.batchSizes == [8, 8, 4])
 }

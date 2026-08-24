@@ -3,6 +3,7 @@ import AgentKit
 import Domain
 import Foundation
 import LocalCatalog
+import Observability
 
 /// 首次外发确认的决策。
 public enum AIConsentDecision: Sendable {
@@ -653,7 +654,10 @@ public final class AgentCoordinator: ObservableObject {
                         await self?.record(record)
                     },
                     progress: { _ in },
-                    state: { _ in }
+                    state: { _ in },
+                    observeRecommendationIndex: { event in
+                        AuralisLog.artificialIntelligence.info("RECOMMENDATION_INDEX \(event.compactSummary, privacy: .public)")
+                    }
                 )
                 if self.activeSessionID == sessionID {
                     await self.summarizeActiveSession()
@@ -799,6 +803,9 @@ public final class AgentCoordinator: ObservableObject {
                 },
                 state: { [weak self] taskState in
                     await self?.updateTaskState(taskState, taskID: taskID, sessionID: sessionID, runID: runID)
+                },
+                observeRecommendationIndex: { event in
+                    AuralisLog.artificialIntelligence.info("RECOMMENDATION_INDEX \(event.compactSummary, privacy: .public)")
                 }
             )
             // 收尾顺序：先结算任务 → 再清理运行身份 → 最后才释放 isRunning。

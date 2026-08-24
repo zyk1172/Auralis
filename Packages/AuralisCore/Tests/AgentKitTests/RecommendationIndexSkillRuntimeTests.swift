@@ -157,6 +157,18 @@ private actor ClosedIndexMessages {
     }
 }
 
+private actor ClosedIndexEvents {
+    private var values: [RecommendationIndexExecutionEvent] = []
+
+    func append(_ event: RecommendationIndexExecutionEvent) {
+        values.append(event)
+    }
+
+    func kinds() -> [RecommendationIndexExecutionEvent.Kind] {
+        values.map(\.kind)
+    }
+}
+
 private func closedIndexStore(trackCount: Int) async throws -> (LocalCatalogStore, ServerID) {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -185,6 +197,7 @@ func recommendationIndexClosedTransformCommits() async throws {
     let (store, serverID) = try await closedIndexStore(trackCount: 3)
     let provider = ClosedIndexProvider()
     let messages = ClosedIndexMessages()
+    let events = ClosedIndexEvents()
     let runID = UUID()
     let lineage = ExecutionLineage.newRequest(text: "构建完整推荐索引")
     let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
@@ -202,7 +215,8 @@ func recommendationIndexClosedTransformCommits() async throws {
         runID: runID,
         executionLease: lease,
         confirm: { _ in true },
-        emit: { await messages.append($0) }
+        emit: { await messages.append($0) },
+        observeRecommendationIndex: { await events.append($0) }
     )
 
     let status = try await store.recommendationIndexStatus(serverID: serverID)
@@ -218,6 +232,20 @@ func recommendationIndexClosedTransformCommits() async throws {
         if case .jsonSchema = $0.outputFormat { return true }
         return false
     })
+    let eventKinds = await events.kinds()
+    for kind in [
+        .routeSelected,
+        .started,
+        .statusLoaded,
+        .batchPrepared,
+        .classificationStarted,
+        .classificationCompleted,
+        .commitStarted,
+        .commitCompleted,
+        .completed,
+    ] as [RecommendationIndexExecutionEvent.Kind] {
+        #expect(eventKinds.contains(kind))
+    }
 }
 
 @Test("Recommendation Index exposes live progress before the batch commit and completes after commit")
@@ -283,6 +311,7 @@ func recommendationIndexPublishesLiveExecutionState() async throws {
 func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
     let (store, serverID) = try await closedIndexStore(trackCount: 9)
     let provider = ClosedIndexProvider(firstResponse: .malformed)
+    let events = ClosedIndexEvents()
     let runID = UUID()
     let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
 
@@ -299,7 +328,8 @@ func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
         runID: runID,
         executionLease: lease,
         confirm: { _ in true },
-        emit: { _ in }
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
     )
 
     let requests = provider.requests()
@@ -311,6 +341,9 @@ func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
     #expect(firstJSON["batchID"] as? String != secondJSON["batchID"] as? String)
     #expect((firstJSON["revision"] as? NSNumber)?.uint64Value != (secondJSON["revision"] as? NSNumber)?.uint64Value)
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+    let eventKinds = await events.kinds()
+    #expect(eventKinds.contains(.classificationFailed))
+    #expect(eventKinds.contains(.retrying))
 }
 
 @Test("Stale Recommendation Index envelope is rejected by batch identity")
