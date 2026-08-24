@@ -582,7 +582,7 @@ struct AgentPermissiveRuntimeTests {
             #"ACTION: {"tool":"queue_replace","args":{"trackIDs":"test-server:t2"}}"#,
         ], closing: "两次替换都完成。")
         await AgentRunner.run(
-            userText: "先放 A 再换成 B",
+            userText: "先把队列换成 A 再换成 B",
             provider: provider,
             model: "scripted-model",
             bridge: bridge,

@@ -72,7 +72,22 @@ private final class OrchestrationBridge: AgentBridge, @unchecked Sendable {
     var lyricsStateValue: AgentLyricsState = .unknown
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { lyricsStateValue }
     func currentTrack() -> Track? { nil }
-    func currentQueue() -> [Track] { [] }
+    // currentQueue 反映最近一次 replaceQueue 的结果（供 Skill 的队列验证读取）。
+    func currentQueue() -> [Track] {
+        guard let gids = replacedQueues.last else { return [] }
+        return gids.enumerated().map { index, gid in
+            Track(
+                id: TrackID(rawValue: gid.remoteID ?? "t\(index)"),
+                serverID: gid.serverID,
+                albumID: AlbumID(rawValue: "\(gid.remoteID ?? "t\(index)")-album"),
+                artistID: ArtistID(rawValue: "\(gid.remoteID ?? "t\(index)")-artist"),
+                title: "歌\(index)",
+                artistName: "周杰伦",
+                albumTitle: "专辑",
+                duration: 200
+            )
+        }
+    }
 
     private(set) var playedTracks: [GlobalID] = []
     private(set) var replacedQueues: [[GlobalID]] = []
@@ -383,19 +398,21 @@ struct AgentToolOrchestrationRegressionTests {
         #expect(mutations.contains("playback_pause"), "应暴露 playback_pause")
     }
 
-    @Test("C5 端到端：搜索→替换队列→播放，无确认、无 queue_clear")
+    @Test("C5 端到端：搜索→提交候选→Skill 替换队列→播放，无确认、无 queue_clear")
     func jayChouQueueReplacePlaysEndToEnd() async throws {
         let store = try orchestrationStore()
         try await seedOrchestration(store, tracks: (0..<10).map { orchestrationTrack(serverID: orchestrationServerID, remoteID: "t\($0)", title: "歌\($0)") })
         let bridge = OrchestrationBridge()
         let collector = OrchestrationCollector()
         let probe = OrchestrationConfirmProbe(approve: true)
-        let ids = (0..<3).map { "\(orchestrationServerID.rawValue):t\($0)" }
+        let ids = (0..<10).map { "\(orchestrationServerID.rawValue):t\($0)" }
+        // v2 架构：mutation 由 QueueReplacePlaybackSkill 接管；模型只负责
+        // 搜索 + result_present_tracks 提交最终候选，queue_replace/playback
+        // 由 Skill 内部固定调用 ToolRuntime（forcedSkillCall，不再消耗模型轮次）。
         let provider = OrchestrationProvider([
             orchestrationResponse(calls: [orchestrationCall(id: "c1", name: "library_search", arguments: ["query": .string("周杰伦")])]),
-            orchestrationResponse(calls: [orchestrationCall(id: "c2", name: "queue_replace", arguments: ["trackIDs": .array(ids.map(AIJSONValue.string))])]),
-            orchestrationResponse(calls: [orchestrationCall(id: "c3", name: "playback_play_song", arguments: ["trackID": .string("\(orchestrationServerID.rawValue):t0")])]),
-            orchestrationResponse(content: "已经用这 3 首替换队列并开始播放。"),
+            orchestrationResponse(calls: [orchestrationCall(id: "c2", name: "result_present_tracks", arguments: ["trackIDs": .array(ids.map(AIJSONValue.string))])]),
+            orchestrationResponse(content: "已经用这 10 首替换队列并开始播放。"),
         ])
         let runID = UUID()
         await ConversationEngine().run(
@@ -411,13 +428,14 @@ struct AgentToolOrchestrationRegressionTests {
             emit: { await collector.append($0) }
         )
         #expect(bridge.replacedQueues.count == 1)
-        #expect(bridge.replacedQueues.first?.count == 3)
+        #expect(bridge.replacedQueues.first?.count == 10)
         #expect(bridge.playedTracks.contains(GlobalID(serverID: orchestrationServerID, remoteID: "t0")))
         #expect(bridge.clearedQueueCount == 0, "队列复合任务不得触碰 queue_clear")
+        #expect(bridge.appendedQueues.isEmpty, "不得 fallback 到 queue_append")
         let probeCount = await probe.count()
         #expect(probeCount == 0, "可逆 mutation 不需要模型自创确认")
-        let textA = await collector.containsText("替换队列并开始播放")
-        let textB = await collector.containsText("队列操作已完成")
+        let textA = await collector.containsText("队列已替换并验证完成")
+        let textB = await collector.containsText("已开始播放")
         #expect(textA || textB)
     }
 
@@ -635,8 +653,11 @@ struct AgentToolOrchestrationRegressionTests {
         let bridge = OrchestrationBridge()
         let collector = OrchestrationCollector()
         let probe = OrchestrationConfirmProbe(approve: true)
+        // v2 架构：模型文字不制造确认状态由 Skill 接管保证——模型说“需要你确认”
+        // 的同时提交候选（result_present_tracks），Skill 直接执行 queue_replace，
+        // 不出现任何 confirmation。
         let provider = OrchestrationProvider([
-            orchestrationResponse(content: "替换队列需要你确认哦。", calls: [orchestrationCall(id: "n1", name: "queue_replace", arguments: ["trackIDs": .array([.string("\(orchestrationServerID.rawValue):t0")])])]),
+            orchestrationResponse(content: "替换队列需要你确认哦。", calls: [orchestrationCall(id: "n1", name: "result_present_tracks", arguments: ["trackIDs": .array([.string("\(orchestrationServerID.rawValue):t0")])])]),
             orchestrationResponse(content: "已替换完成。"),
         ])
         let runID = UUID()
