@@ -130,6 +130,19 @@ public enum AgentCompletionPredicate: Codable, Equatable, Sendable {
     case playbackMutation
     case indexPendingCountIsZero
     case appreciationWithEvidence
+
+    /// 诊断用稳定标识。
+    public var predicateName: String {
+        switch self {
+        case .modelAnswer: return "modelAnswer"
+        case .successfulToolResult: return "successfulToolResult"
+        case .queueMutation: return "queueMutation"
+        case .playlistMutation: return "playlistMutation"
+        case .playbackMutation: return "playbackMutation"
+        case .indexPendingCountIsZero: return "indexPendingCountIsZero"
+        case .appreciationWithEvidence: return "appreciationWithEvidence"
+        }
+    }
 }
 
 /// 每个任务的路由/诊断策略（intent、completion、budget 等）。
@@ -143,6 +156,9 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
     public let maxRisk: AgentRisk
     public let completion: AgentCompletionPredicate
     public let budget: AgentTaskBudget
+    /// 普通交互式 Agent 的行为收敛预算（模型轮次/总调用/相同参数/搜索/拒绝/畸形参数）。
+    /// 推荐索引走专用 Runtime，不经过普通循环；legacy `AgentRunner` 兼容面使用宽松预算。
+    public let convergence: AgentConvergencePolicy
 
     /// `.successfulToolResult` 的完成条件不是“任意工具成功”，而是当前任务
     /// 至少有一个与意图匹配的真实工具成功。这样 app_get_context、memory_list
@@ -233,7 +249,8 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         allowedPermissions: Set<ToolPermission> = [.readOnly],
         maxRisk: AgentRisk = .none,
         completion: AgentCompletionPredicate = .modelAnswer,
-        budget: AgentTaskBudget = AgentTaskBudget()
+        budget: AgentTaskBudget = AgentTaskBudget(),
+        convergence: AgentConvergencePolicy = .interactive
     ) {
         self.intent = intent
         self.scopes = scopes
@@ -242,6 +259,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         self.maxRisk = maxRisk
         self.completion = completion
         self.budget = budget
+        self.convergence = convergence
     }
 
     /// deprecated / diagnostics-only：permissive direct-execution runtime 不再用
@@ -268,29 +286,29 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .librarySearch:
             return .init(intent: intent, scopes: [.catalogRead, .serverRead], allowedToolGroups: [.catalog, .server], allowedPermissions: read, completion: .successfulToolResult)
         case .playbackControl:
-            return .init(intent: intent, scopes: [.catalogRead, .playbackWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: write, maxRisk: .medium, completion: .playbackMutation)
+            return .init(intent: intent, scopes: [.catalogRead, .playbackWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: write, maxRisk: .medium, completion: .playbackMutation, convergence: .compoundTask)
         case .playbackQuery:
             return .init(intent: intent, scopes: [.catalogRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback], allowedPermissions: read)
         case .musicDiscovery:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult, convergence: .compoundTask)
         case .queueManagement:
-            return .init(intent: intent, scopes: [.catalogRead, .playbackWrite, .queueWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: destructive, maxRisk: .high, completion: .queueMutation)
+            return .init(intent: intent, scopes: [.catalogRead, .playbackWrite, .queueWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: destructive, maxRisk: .high, completion: .queueMutation, convergence: .compoundTask)
         case .queueQuery:
             return .init(intent: intent, scopes: [.catalogRead], allowedToolGroups: [.catalog, .playback], allowedPermissions: read)
         case .playlistManagement:
-            return .init(intent: intent, scopes: [.catalogRead, .playlistWrite], allowedToolGroups: [.catalog, .playlist], allowedPermissions: destructive, maxRisk: .high, completion: .playlistMutation)
+            return .init(intent: intent, scopes: [.catalogRead, .playlistWrite], allowedToolGroups: [.catalog, .playlist], allowedPermissions: destructive, maxRisk: .high, completion: .playlistMutation, convergence: .compoundTask)
         case .playlistQuery:
             return .init(intent: intent, scopes: [.catalogRead], allowedToolGroups: [.catalog, .playlist], allowedPermissions: read)
         case .libraryManagement:
-            return .init(intent: intent, scopes: [.catalogRead, .annotationWrite], allowedToolGroups: [.catalog, .annotation], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .annotationWrite], allowedToolGroups: [.catalog, .annotation], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult, convergence: .compoundTask)
         case .serverManagement:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .serverWrite], allowedToolGroups: [.catalog, .server], allowedPermissions: destructive, maxRisk: .high, completion: .successfulToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .serverWrite], allowedToolGroups: [.catalog, .server], allowedPermissions: destructive, maxRisk: .high, completion: .successfulToolResult, convergence: .compoundTask)
         case .diagnostics:
             return .init(intent: intent, scopes: [.catalogRead, .serverRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback, .server], allowedPermissions: read, completion: .successfulToolResult)
         case .musicAppreciation:
             return .init(intent: intent, scopes: [.catalogRead, .externalRead], allowedToolGroups: [.catalog], allowedPermissions: read, completion: .appreciationWithEvidence)
         case .musicDownload:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .downloadWrite], allowedToolGroups: [.catalog, .server, .download], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .downloadWrite], allowedToolGroups: [.catalog, .server, .download], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult, convergence: .longRunning)
         case .memoryManagement:
             return .init(intent: intent, scopes: [.memoryRead, .memoryWrite], allowedToolGroups: [.memory], allowedPermissions: destructive, maxRisk: .high, completion: .successfulToolResult)
         }
@@ -383,6 +401,8 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
     public var successfulToolNames: [String]
     /// 真实成功执行的工具总数（Tool Success 是独立于 Evidence 的事实）。
     public var successfulToolCount: Int
+    /// 本次 run 的结构化诊断（不含凭据/敏感数据；用于排查不收敛等行为问题）。
+    public var diagnostics: AgentRunDiagnostics?
 
     public init(id: UUID = UUID(), intent: AgentTaskIntent, goal: String, startedAt: Date = .now) {
         self.id = id
@@ -406,6 +426,7 @@ public struct AgentTaskState: Codable, Identifiable, Sendable {
         self.repeatedToolPatternCount = 0
         self.successfulToolNames = []
         self.successfulToolCount = 0
+        self.diagnostics = nil
     }
 
     public mutating func recordProgress(action: String? = nil, at date: Date = .now) {
@@ -520,7 +541,20 @@ public enum AgentFailureClassifier {
 
 public enum AgentIntentClassifier {
     public static func classify(_ text: String, historyText: String = "") -> AgentTaskIntent {
-        let directIntent = classifyDirect(text)
+        classify(
+            text: text,
+            historyText: historyText,
+            precomputedSemantics: nil
+        )
+    }
+
+    /// 复用一次 turn 的共享 semantics，禁止各层独立重新分析同一段用户文本。
+    public static func classify(
+        text: String,
+        historyText: String = "",
+        precomputedSemantics: AgentRequestSemantics? = nil
+    ) -> AgentTaskIntent {
+        let directIntent = classifyDirect(text, precomputedSemantics: precomputedSemantics)
         guard !historyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               directIntent == .conversation,
               isContinuation(text)
@@ -533,8 +567,11 @@ public enum AgentIntentClassifier {
         return historyIntent == .conversation ? directIntent : historyIntent
     }
 
-    private static func classifyDirect(_ text: String) -> AgentTaskIntent {
-        let semantics = AgentRequestSemantics.analyze(text)
+    private static func classifyDirect(
+        _ text: String,
+        precomputedSemantics: AgentRequestSemantics? = nil
+    ) -> AgentTaskIntent {
+        let semantics = precomputedSemantics ?? AgentRequestSemantics.analyze(text)
 
         // Appreciation is a deterministic evidence workflow, so it is
         // checked before the shared playback/diagnostic domain mapping.
@@ -580,10 +617,32 @@ public enum AgentTaskPolicyResolver {
         historyText: String = "",
         explicitIntent: AgentTaskIntent? = nil
     ) -> AgentTaskPolicy {
-        let intent = explicitIntent ?? AgentIntentClassifier.classify(text, historyText: historyText)
+        resolve(
+            text: text,
+            historyText: historyText,
+            explicitIntent: explicitIntent,
+            precomputedSemantics: nil
+        )
+    }
+
+    public static func resolve(
+        text: String,
+        historyText: String = "",
+        explicitIntent: AgentTaskIntent? = nil,
+        precomputedSemantics: AgentRequestSemantics? = nil
+    ) -> AgentTaskPolicy {
+        let intent = explicitIntent ?? AgentIntentClassifier.classify(
+            text: text,
+            historyText: historyText,
+            precomputedSemantics: precomputedSemantics
+        )
         let base = AgentTaskPolicy.policy(for: intent)
         guard intent == .libraryManagement,
-              RecommendationIndexTaskRules.requiresCompleteBuild(text: text, historyText: historyText)
+              RecommendationIndexTaskRules.requiresCompleteBuild(
+                text: text,
+                historyText: historyText,
+                precomputedSemantics: precomputedSemantics
+              )
         else { return base }
 
         var budget = base.budget
@@ -607,7 +666,8 @@ public enum AgentTaskPolicyResolver {
             allowedPermissions: base.allowedPermissions,
             maxRisk: base.maxRisk,
             completion: .indexPendingCountIsZero,
-            budget: budget
+            budget: budget,
+            convergence: .longRunning
         )
     }
 }
@@ -616,7 +676,16 @@ public enum AgentTaskPolicyResolver {
 /// 批次状态、重试、checkpoint 和完成判定由 RecommendationIndexSkillRuntime 持有。
 public enum RecommendationIndexTaskRules {
     public static func requiresCompleteBuild(text: String, historyText: String = "") -> Bool {
-        AgentRequestSemantics.analyze(text, historyText: historyText).isRecommendationIndexBuild
+        requiresCompleteBuild(text: text, historyText: historyText, precomputedSemantics: nil)
+    }
+
+    public static func requiresCompleteBuild(
+        text: String,
+        historyText: String = "",
+        precomputedSemantics: AgentRequestSemantics? = nil
+    ) -> Bool {
+        let semantics = precomputedSemantics ?? AgentRequestSemantics.analyze(text, historyText: historyText)
+        return semantics.isRecommendationIndexBuild
     }
 }
 

@@ -126,14 +126,16 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         ]) || barePlaybackVerb
 
         let explicitQueueAction = has([
-            "加入队列", "放进队列", "放到队列", "接下来播放", "替换队列", "替换当前队列", "建立队列", "创建队列", "建立播放队列", "建立一个播放队列", "清空队列", "清空当前队列", "移出队列", "从队列移除",
+            "加入队列", "放进队列", "放到队列", "接下来播放", "替换队列", "替换当前队列", "替换到队列", "覆盖当前队列", "替换成", "把队列换成",
+            "建立队列", "创建队列", "建立播放队列", "建立一个播放队列", "清空队列", "清空当前队列", "移出队列", "从队列移除",
             "调整队列", "移动队列", "随机剩余队列", "换成", "换为", "queue_append", "queue_replace", "queue_clear",
         ])
         let explicitPlaylistAction = has([
             "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单", "放到歌单", "放进歌单", "放入歌单", "收进歌单", "删除歌单",
             "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序", "复制歌单", "合并歌单",
+            "保存当前队列为歌单", "保存队列为歌单", "把当前队列保存为歌单", "存为歌单", "保存成歌单", "保存队列", "save queue",
             "playlist_create", "playlist_add", "playlist_delete", "playlist_rename",
-        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "添加", "放到", "放进", "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并"]))
+        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "添加", "放到", "放进", "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并", "保存", "存为", "存成"]))
 
         let musicAnnotationTarget = has([
             "这首歌", "歌曲", "音乐", "专辑", "歌手", "艺人", "艺术家", "当前播放", "current track", "track", "song", "album", "artist",
@@ -275,7 +277,13 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if librarySummaryQuery {
                 return Self.directRead("library_get_summary")
             }
-            if quantityQuery && has(["歌曲", "歌手", "艺人", "专辑", "歌单", "曲库", "音乐库"]) {
+            // Direct Read Fast Path 只允许「高置信度、无歧义、无额外过滤条件」的
+            // 全局 aggregate。“有多少中文歌手 / 多少古典歌 / 多少无损歌曲”都带
+            // 限定/过滤条件，绝不能直接退化为曲库总体统计；这类请求进入普通模型
+            // 规划 + 真实查询能力（或如实说明当前字段无法可靠统计）。
+            if quantityQuery,
+               has(["歌曲", "歌手", "艺人", "专辑", "歌单", "曲库", "音乐库"]),
+               !Self.isQualifiedAggregateQuery(value) {
                 return Self.directRead("library_get_summary")
             }
             if artistListQuery
@@ -293,19 +301,26 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         }()
 
         var requested = Set<ToolAuthorizationOperation>()
+        // 同义表达 → canonical operation 的确定性编译。Task Compiler 不允许
+        // LLM 输出权限：这里只做 normalize verb + domain composition。
+        // “替换到队列 / 覆盖当前队列 / 用这些歌替换队列”与“替换队列”归一为 queueReplace。
+        let queueReplaceSynonyms = [
+            "替换队列", "替换当前队列", "替换到队列", "覆盖当前队列", "替换成",
+            "换成", "换为", "把队列换成", "用这些歌替换", "用这些歌曲替换", "replace queue", "queue_replace",
+        ]
         if explicitPlaybackAction && !playbackQuery {
             if has(["暂停", "pause"]) { requested.insert(.playbackPause) }
             else if has(["下一首", "上一首", "next track", "previous track"]) { requested.insert(.playbackNavigation) }
             else if has(["快进", "快退", "跳转", "seek"]) { requested.insert(.playbackSeek) }
             else if has(["循环", "随机播放", "shuffle", "repeat", "变速", "速度"]) { requested.insert(.playbackMode) }
             else { requested.insert(.playbackPlay) }
-            if has(["替换队列", "替换当前队列", "换成", "换为", "replace queue", "queue_replace"]) {
+            if has(queueReplaceSynonyms) {
                 requested.insert(.queueReplace)
             }
         }
 
         if explicitQueueAction {
-            if has(["替换队列", "替换当前队列", "建立队列", "创建队列", "建立播放队列", "建立一个播放队列", "换成", "换为", "queue_replace"]) {
+            if has(["建立队列", "创建队列", "建立播放队列", "建立一个播放队列"] + queueReplaceSynonyms) {
                 requested.insert(.queueReplace)
             }
             if has(["清空队列", "清空当前队列", "queue_clear", "clear queue"]) { requested.insert(.queueClear) }
@@ -314,6 +329,19 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if has(["随机剩余队列", "queue_shuffle_remaining", "shuffle remaining"]) { requested.insert(.queueShuffle) }
             if has(["接下来播放", "play next", "queue_play_next"]) { requested.insert(.queuePlayNext) }
             if has(["加入队列", "放进队列", "放到队列", "queue_append"]) { requested.insert(.queueAppend) }
+        }
+
+        // 复合意图编译：跨域组合操作。
+        // “替换到队列播放 / 用这些歌覆盖当前队列然后开始播放” → queueReplace + playbackPlay。
+        if requested.contains(.queueReplace),
+           has(["播放", "开始播放", "开播", "接着放", "放出来"]),
+           !requested.contains(.playbackPause),
+           !requested.contains(.playbackNavigation) {
+            requested.insert(.playbackPlay)
+        }
+        // “加入队列并播放下一首” → queueAppend + queuePlayNext。
+        if requested.contains(.queueAppend), has(["播放下一首", "接下来播放", "下一首播放"]) {
+            requested.insert(.queuePlayNext)
         }
 
         if explicitPlaylistAction {
@@ -338,7 +366,9 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if has(["调整歌单顺序", "移动歌单", "playlist_move"]) { requested.insert(.playlistMove) }
             if has(["复制歌单", "playlist_duplicate"]) { requested.insert(.playlistDuplicate) }
             if has(["合并歌单", "playlist_merge"]) { requested.insert(.playlistMerge) }
-            if has(["保存队列", "save queue"]) { requested.insert(.playlistSaveQueue) }
+            if has(["保存当前队列为歌单", "保存队列为歌单", "把当前队列保存为歌单", "存为歌单", "保存成歌单", "保存队列", "save queue"]) {
+                requested.insert(.playlistSaveQueue)
+            }
         }
 
         if explicitAnnotationAction {
@@ -452,6 +482,85 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
     private static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// 判定一个「数量 + 曲库名词」请求是否带有限定/过滤条件。
+    ///
+    /// 原则是结构化的，不是无限关键词黑名单：
+    /// 1. 数量词与聚合名词之间的片段必须为空（或只含量词/标点）——“有多少中文歌手”
+    ///    的数量词与“歌手”之间夹着“中文” → 限定；而“一共有多少歌手”之间为空 → 全局。
+    /// 2. 聚合名词前出现「X的」所有格（周杰伦的、2020年的、我的除外）→ 限定。
+    /// 3. 文本中出现 4 位年份、或 bounded 修饰词类别（语言/国别/性别/年代/格式/
+    ///    音质/流派/收藏状态）→ 限定。
+    ///
+    /// 允许仍走 Fast Path 的例子：
+    /// - “音乐库统计 / 曲库有多少首歌 / 一共有多少歌手 / 音乐库有多少张专辑”
+    /// 不允许直接 library_get_summary 的例子：
+    /// - “有多少中文歌手 / 有多少女歌手 / 有多少日本歌手 / 多少古典歌曲 /
+    ///   多少无损歌曲 / 有多少 2020 年后的专辑 / 多少周杰伦的歌”
+    static func isQualifiedAggregateQuery(_ value: String) -> Bool {
+        let aggregateNouns = ["歌曲", "歌手", "艺人", "艺术家", "专辑", "歌单", "曲库", "音乐库"]
+        let quantityMarkers = ["有多少", "多少", "数量", "几首", "几位", "几张", "几个", "几支", "几"]
+        // 数量词与名词之间允许出现的量词/助词。
+        let spanAllowlist = CharacterSet(charactersIn: "的个位张首条项支名左右多共总大概约以上下")
+
+        // 1) 所有格限定：X的歌曲/歌/专辑/歌手/艺人/艺术家/作品（X 不是通用指代）。
+        let possessivePattern = #"([^\s，。、！？!?；;：:]{1,8})的(?:歌曲|歌|专辑|歌手|艺人|艺术家|作品)"#
+        if let regex = try? NSRegularExpression(pattern: possessivePattern) {
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            let matches = regex.matches(in: value, range: range)
+            for match in matches where match.numberOfRanges > 1 {
+                let capture = match.range(at: 1)
+                guard capture.location != NSNotFound,
+                      let owner = Range(capture, in: value) else { continue }
+                let ownerText = String(value[owner])
+                let genericOwners = ["我的", "你的", "这个", "这些", "那个", "那些", "当前", "现在", "全部", "所有", "整个", "本地"]
+                guard !genericOwners.contains(ownerText) else { continue }
+                return true
+            }
+        }
+
+        // 2) 4 位年份（2020 年后的专辑 / 80 年代除外但年份数字是硬信号）。
+        if value.range(of: #"(?:19|20)\d{2}"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        // 3) bounded 修饰词类别：语言/国别/性别/年代/格式/音质/流派/收藏状态。
+        //    这是有限的类别词表，不是对具体艺人/歌手名的无限枚举。
+        let modifierCategories = [
+            "中文", "国语", "粤语", "闽南语", "英语", "英文", "日语", "日文", "韩语", "韩文",
+            "法语", "德语", "西班牙语", "意大利语", "俄语", "泰语", "华语", "外国",
+            "女", "男", "女性", "男性",
+            "古典", "流行", "摇滚", "爵士", "民谣", "电子", "说唱", "嘻哈", "重金属", "朋克",
+            "蓝调", "乡村", "轻音乐", "纯音乐", "民乐", "交响", "古风", "二次元", "动漫",
+            "无损", "高音质", "高清", "高品质", "低音质", "压缩", "flac", "ape", "wav", "mp3",
+            "原声", "现场", "翻唱", "重制", "remaster", "live", "cover", "acoustic",
+            "新歌", "老歌", "经典", "热门", "冷门", "小众", "早期", "早期作品",
+            "收藏", "喜欢的", "最近", "新添加", "新加入", "最常听",
+        ]
+        if modifierCategories.contains(where: value.contains) {
+            return true
+        }
+
+        // 4) 结构性 span 检查：数量词与聚合名词之间不能夹非量词内容。
+        //    “有多少中文歌手”：在“多少”与“歌手”之间是“中文” → 限定。
+        //    “曲库有多少首歌”：聚合名词“曲库”在数量词之前，span 为空 → 全局。
+        for marker in quantityMarkers {
+            guard let markerRange = value.range(of: marker) else { continue }
+            let afterMarker = value[markerRange.upperBound...]
+            for noun in aggregateNouns {
+                guard let nounRange = afterMarker.range(of: noun) else { continue }
+                let span = afterMarker[..<nounRange.lowerBound]
+                let significant = span.filter { character in
+                    !spanAllowlist.contains(character.unicodeScalars.first ?? " ") && !character.isWhitespace
+                }
+                if !significant.isEmpty {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     private static func directRead(_ toolName: String, limit: Int? = nil) -> DirectReadCapability {
