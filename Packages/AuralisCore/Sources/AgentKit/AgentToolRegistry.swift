@@ -418,6 +418,30 @@ public struct ToolDescriptor: Sendable, Hashable {
         }
     }
 
+    /// 统一的 schema exposure 授权判定（ToolSelector / ToolCatalog / ToolLoop 的
+    /// tool_search 扩展三处共用，避免 schema 层与 Runtime 出现两套授权语义）。
+    ///
+    /// - `permission == .readOnly`：始终可见；
+    /// - Custom Tool（`customToolID != nil`）：`derivedAuthorizationOperations`
+    ///   非空且 ⊆ allowedOperations（Custom Tool 没有单一 authorizationOperation，
+    ///   由多个 canonical operations 派生）；
+    /// - 普通 mutation：`authorizationOperation` 非 nil 且 ∈ allowedOperations；
+    /// - 其余（非只读且无 operation 的普通工具）：fail-closed `false`。
+    ///
+    /// `allowedOperations == nil` 表示 legacy 兼容调用方未提供授权 plan，不收紧。
+    public func isAuthorizedForModelExposure(
+        allowedOperations: Set<ToolAuthorizationOperation>?
+    ) -> Bool {
+        if permission == .readOnly { return true }
+        guard let allowedOperations else { return true }
+        if customToolID != nil {
+            return !derivedAuthorizationOperations.isEmpty
+                && derivedAuthorizationOperations.isSubset(of: allowedOperations)
+        }
+        guard let operation = authorizationOperation else { return false }
+        return allowedOperations.contains(operation)
+    }
+
     private static func defaultVisibility(for name: String) -> ToolVisibility {
         // These descriptors are retained as an execution/persistence
         // compatibility layer. Their canonical replacements are registered

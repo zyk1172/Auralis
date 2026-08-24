@@ -235,19 +235,18 @@ public enum ToolSelector {
         } ?? false
 
         // 最小权限暴露：production 路径携带 authorization plan 时（allowedOperations
-        // 非 nil，即使为空集合），mutation schema 只暴露获准的 canonical operation。
+        // 非 nil，即使为空集合），mutation schema 只暴露获准的 canonical operation
+        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 工具仍走
+        // 下方的 domain/语义过滤，不在此提前放行。
         // allowedOperations == [] 必须自然得到 0 个 mutation schema，绝不回落到旧的
         // intent/group 展开或 semantics 的 exactOperation 捷径（fail-closed）。
         // nil 仅表示 legacy 兼容调用方没有提供授权 plan，保持旧行为。
         // 模型仍可能通过 tool_search 发现其它工具，但 ToolRuntime 的 exact
         // authorization 才是最终边界。
-        if let allowedOperations {
-            if descriptor.permission != .readOnly {
-                guard let operation = descriptor.authorizationOperation,
-                      allowedOperations.contains(operation) else { return false }
-                return true
-            }
-        } else if exactOperation {
+        if allowedOperations != nil, descriptor.permission != .readOnly {
+            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
+        }
+        if exactOperation {
             // Explicitly named operations win ranking only for legacy callers
             // without an authorization plan; they never override Runtime
             // authorization.
@@ -350,13 +349,10 @@ public enum ToolSelector {
     ) -> Bool {
         guard descriptor.visibility == .model, descriptor.requiredSkillID == nil else { return false }
 
-        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入。
-        if descriptor.permission != .readOnly {
-            if let allowedOperations {
-                guard let operation = descriptor.authorizationOperation,
-                      allowedOperations.contains(operation) else { return false }
-                return true
-            }
+        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入
+        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 走 group 过滤。
+        if allowedOperations != nil, descriptor.permission != .readOnly {
+            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
         }
 
         switch descriptor.group {
@@ -384,13 +380,10 @@ public enum ToolSelector {
               intent != .conversation
         else { return false }
 
-        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入。
-        if descriptor.permission != .readOnly {
-            if let allowedOperations {
-                guard let operation = descriptor.authorizationOperation,
-                      allowedOperations.contains(operation) else { return false }
-                return true
-            }
+        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入
+        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 走意图过滤。
+        if allowedOperations != nil, descriptor.permission != .readOnly {
+            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
         }
 
         let name = descriptor.name.lowercased()

@@ -16,6 +16,42 @@ import LocalCatalog
 
 // MARK: - 公共 Skill 元数据
 
+/// 从用户文本确定性提取歌单名（由注册表在激活时编译进
+/// `BuiltInSkillActivationContext.compiledPlaylistName`，Skill 不自行解析）。
+/// 支持：
+/// - “创建一个通勤歌单” / “新建一个通勤歌单” / “建个通勤歌单”
+/// - “创建一个叫通勤的歌单” / “创建一个歌单叫通勤” / “创建歌单「通勤」”
+/// - “歌单叫通勤”
+public enum AgentSkillPlaylistNameParser {
+    public static func infer(from text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // 候选捕获：非空白、非标点、非引号的 1-16 字符连续段（非贪婪，
+        // 由后缀模式提供回溯锚点，避免把“通勤的”整段吃掉）。
+        let nameCapture = #"([^，。！？、\s「」『』\"'“”‘’]{1,16}?)"#
+        // 1) 显式“叫/命名为/名字是”：名字在动词后，优先级最高。
+        let explicitPattern = #"(?:歌单|播放列表)(?:的)?(?:名字是|叫|命名为|是)[「『\"'“”‘’]?"# + nameCapture + #"(?=$|[，。！？、\s「」『』"'“”‘’])"#
+        // 2) “创建一个(叫|命名为)X的歌单”：X 在歌单前（“的”作为可选连接词）。
+        let prefixPattern = #"(?:创建|新建|建|做一个?|搞个)(?:一个|个)?(?:叫|命名为|名字是)?[「『\"'“”‘’]?"# + nameCapture + #"(?:的)?(?:歌单|播放列表)"#
+        // 3) “创建歌单X” / “创建X歌单”：歌单紧跟创建动词。
+        let trailingPattern = #"(?:创建|新建|建|做一个?|搞个)(?:一个|个)?(?:歌单|播放列表)[「『\"'“”‘’]?"# + nameCapture + #"(?=$|[，。！？、\s「」『』"'“”‘’])"#
+        // 4) “X歌单”（X 是限定词，如“通勤歌单”）——兜底。
+        let barePattern = #"(?:创建|新建|建)(?:一个)?(?:叫|命名为)?[「『\"'“”‘’]?"# + nameCapture + #"(?:的)?歌单"#
+
+        let patterns = [explicitPattern, prefixPattern, trailingPattern, barePattern]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+                  let capture = Range(match.range(at: 1), in: trimmed) else { continue }
+            let name = String(trimmed[capture]).trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty, !name.contains("歌单"), !name.contains("播放列表") {
+                return name
+            }
+        }
+        return nil
+    }
+}
+
 public enum QueueReplacePlaybackSkill {
     public static let id = "builtin.queue_replace_playback"
     public static let name = "替换队列并播放"
@@ -200,9 +236,14 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
             var seen = Set<String>()
             let ids = cards.map(\.globalID.description).filter { seen.insert($0).inserted }
             guard !ids.isEmpty else { return .none }
-            // 用户要求 N 首 → 去重后只取前 N 首；模型给多了（如 58 首）必须硬约束到 N。
-            if let targetCount, targetCount > 0, ids.count > targetCount {
-                selectedTrackIDs = Array(ids.prefix(targetCount))
+            // 完整性检查必须在任何 mutation 之前：用户要求 N 首，候选不足时不得先
+            // 修改真实状态（队列/播放）再在验证阶段失败。
+            if let targetCount, targetCount > 0 {
+                guard ids.count >= targetCount else {
+                    return .fail("候选不足：只找到 \(ids.count) 首，用户要求 \(targetCount) 首；未执行任何队列/播放修改。")
+                }
+                // 用户要求 N 首 → 去重后只取前 N 首；模型给多了（如 58 首）必须硬约束到 N。
+                selectedTrackIDs = ids.count > targetCount ? Array(ids.prefix(targetCount)) : ids
             } else {
                 selectedTrackIDs = ids
             }
@@ -339,7 +380,8 @@ public struct BuiltInPlaylistBuildSkill: AgentStatefulSkill {
         PlaylistBuildSkillRuntime(
             checkpointJSON: checkpointJSON,
             userText: activation?.currentUserText ?? "",
-            targetCount: activation?.inferredTargetCount
+            targetCount: activation?.inferredTargetCount,
+            compiledPlaylistName: activation?.compiledPlaylistName
         )
     }
 }
@@ -417,9 +459,18 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
         return values
     }
 
-    init(checkpointJSON: String?, userText: String = "", targetCount: Int? = nil) {
+    init(
+        checkpointJSON: String?,
+        userText: String = "",
+        targetCount: Int? = nil,
+        compiledPlaylistName: String? = nil
+    ) {
         let checkpoint = PlaylistBuildCheckpoint.decode(checkpointJSON)
-        playlistName = checkpoint?.playlistName ?? Self.inferPlaylistName(from: userText)
+        // 歌单名来源优先级：checkpoint（resume）> activation 编译值（生产路径）>
+        // 兜底解析。生产路径不再依赖 Skill 自行 regex。
+        playlistName = checkpoint?.playlistName
+            ?? compiledPlaylistName
+            ?? Self.inferPlaylistName(from: userText)
         // 生产路径 activation 编译的 targetCount 优先；resume 时 checkpoint 值次之。
         self.targetCount = targetCount ?? checkpoint?.targetCount
         createdPlaylistID = checkpoint?.playlistID
@@ -529,9 +580,14 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             var seen = Set<String>()
             let ids = cards.map(\.globalID.description).filter { seen.insert($0).inserted }
             guard !ids.isEmpty else { return .none }
-            // 用户要求 N 首 → 去重后只取前 N 首；模型提交超量时必须硬约束。
-            if let targetCount, targetCount > 0, ids.count > targetCount {
-                selectedTrackIDs = Array(ids.prefix(targetCount))
+            // 完整性检查必须在任何 mutation 之前：候选不足时不得先创建歌单/加歌
+            // 再在验证阶段失败。
+            if let targetCount, targetCount > 0 {
+                guard ids.count >= targetCount else {
+                    return .fail("候选不足：只找到 \(ids.count) 首，用户要求 \(targetCount) 首；未创建歌单，未执行任何修改。")
+                }
+                // 用户要求 N 首 → 去重后只取前 N 首；模型提交超量时硬约束。
+                selectedTrackIDs = ids.count > targetCount ? Array(ids.prefix(targetCount)) : ids
             } else {
                 selectedTrackIDs = ids
             }
@@ -552,17 +608,19 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             transition(to: .verifyingPlaylist)
             return .none
         case "library_get_playlist", "getPlaylist":
-            // 目标状态确认：歌单可读 +（有数据时）数量与成员符合预期。
-            if case let .playlistProposal(name, tracks) = result.payload, !tracks.isEmpty {
-                let expected = max(targetCount ?? selectedTrackIDs.count, 0)
-                if tracks.count < expected {
-                    return .fail("歌单验证失败：歌单「\(name)」只有 \(tracks.count) 首，少于预期 \(expected) 首。")
-                }
-                let present = Set(tracks.map(\.globalID.description))
-                let missing = selectedTrackIDs.filter { !present.contains($0) }
-                if !missing.isEmpty {
-                    return .fail("歌单验证失败：有 \(missing.count) 首提交的歌曲未出现在歌单中。")
-                }
+            // 目标状态确认：payload 格式本身就是验证结果，空歌单也是结果。
+            // 有没有 tracks 不是“要不要验证”的条件——数量与成员必须符合预期。
+            guard case let .playlistProposal(name, tracks) = result.payload else {
+                return .fail("歌单验证失败：验证结果格式无效（\(result.summary)）。")
+            }
+            let expected = max(targetCount ?? selectedTrackIDs.count, 0)
+            guard tracks.count >= expected else {
+                return .fail("歌单验证失败：歌单「\(name)」只有 \(tracks.count) 首，少于预期 \(expected) 首。")
+            }
+            let present = Set(tracks.map(\.globalID.description))
+            let missing = selectedTrackIDs.filter { !present.contains($0) }
+            guard missing.isEmpty else {
+                return .fail("歌单验证失败：有 \(missing.count) 首提交的歌曲未出现在歌单中。")
             }
             transition(to: .completed)
             return .none

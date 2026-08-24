@@ -145,11 +145,9 @@ public struct ToolCatalog: Sendable {
             .map { descriptor in
                 let authorized: Bool?
                 if let authorizedOperations {
-                    if descriptor.permission == .readOnly {
-                        authorized = true
-                    } else {
-                        authorized = descriptor.authorizationOperation.map(authorizedOperations.contains)
-                    }
+                    authorized = descriptor.isAuthorizedForModelExposure(
+                        allowedOperations: authorizedOperations
+                    )
                 } else {
                     authorized = nil
                 }

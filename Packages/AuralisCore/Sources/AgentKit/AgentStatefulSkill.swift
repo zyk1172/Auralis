@@ -83,17 +83,22 @@ public struct BuiltInSkillActivationContext: Sendable {
     public let allowedOperations: Set<ToolAuthorizationOperation>
     /// 用户请求中明确要求的数量（“十首 / 20 首歌”），Skill 用它硬约束候选数量。
     public let inferredTargetCount: Int?
+    /// 从用户文本编译的歌单名（“创建一个通勤歌单” → “通勤”）。由共享 parser
+    /// 在激活时算好，Skill 不自行 regex 解析。
+    public let compiledPlaylistName: String?
 
     public init(
         currentUserText: String,
         semantics: AgentRequestSemantics,
         allowedOperations: Set<ToolAuthorizationOperation>,
-        inferredTargetCount: Int?
+        inferredTargetCount: Int?,
+        compiledPlaylistName: String? = nil
     ) {
         self.currentUserText = currentUserText
         self.semantics = semantics
         self.allowedOperations = allowedOperations
         self.inferredTargetCount = inferredTargetCount
+        self.compiledPlaylistName = compiledPlaylistName
     }
 }
 
@@ -163,7 +168,8 @@ public enum BuiltInStatefulSkillRegistry {
                     currentUserText: userText,
                     semantics: semantics,
                     allowedOperations: $0,
-                    inferredTargetCount: inferredTargetCount
+                    inferredTargetCount: inferredTargetCount,
+                    compiledPlaylistName: AgentSkillPlaylistNameParser.infer(from: userText)
                 )
             }
             return skill.makeRuntime(

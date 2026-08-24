@@ -148,6 +148,9 @@ public struct ToolLoop {
     /// the way into ToolRuntime; `stringArguments` exists only for legacy
     /// ledgers, diagnostics, and the ACTION compatibility codec.
     private struct LoopToolCall {
+        /// 调用的结构化来源。Skill 模式下只允许 `.skillForced` 执行 mutation；
+        /// 模型/provider 的 tool_call.id 属于不可信输入，绝不能作为权限来源。
+        let origin: LoopToolCallOrigin
         let id: String?
         let name: String
         var arguments: [String: AIJSONValue]
@@ -157,6 +160,13 @@ public struct ToolLoop {
         var stringArguments: [String: String] {
             ToolCall(name: name, arguments: arguments).stringArguments
         }
+    }
+
+    private enum LoopToolCallOrigin: Sendable, Equatable {
+        case providerNative
+        case textualAction
+        case skillForced
+        case skillGenerated
     }
 
     private static func parallelResultKey(for call: LoopToolCall, index: Int) -> String {
@@ -699,6 +709,7 @@ public struct ToolLoop {
                     switch parseArguments(native.arguments) {
                     case let .success(args):
                         LoopToolCall(
+                            origin: .providerNative,
                             id: native.id,
                             name: native.name,
                             arguments: args,
@@ -707,6 +718,7 @@ public struct ToolLoop {
                         )
                     case .malformed:
                         LoopToolCall(
+                            origin: .providerNative,
                             id: native.id,
                             name: native.name,
                             arguments: [:],
@@ -718,6 +730,7 @@ public struct ToolLoop {
             } else {
                 calls = textActions.enumerated().map {
                     LoopToolCall(
+                        origin: .textualAction,
                         id: "text-\($0.offset)",
                         name: $0.element.tool,
                         arguments: $0.element.args.mapValues(AIJSONValue.string),
@@ -1378,6 +1391,7 @@ public struct ToolLoop {
                 guard let activeSkill else { return nil }
                 guard case let .executeTool(name, arguments) = activeSkill.nextStep() else { return nil }
                 return LoopToolCall(
+                    origin: .skillForced,
                     id: "skill-\(toolStepCount + 1)-\(name)",
                     name: name,
                     arguments: arguments,
@@ -1546,6 +1560,7 @@ public struct ToolLoop {
                 case let .executeTool(name, arguments):
                     skillOutputRepairAttempts = 0
                     generatedSkillCall = LoopToolCall(
+                        origin: .skillGenerated,
                         id: "skill-output-\(toolStepCount + 1)-\(name)",
                         name: name,
                         arguments: arguments,
@@ -1786,6 +1801,7 @@ public struct ToolLoop {
                     switch Self.parseArguments(native.arguments) {
                     case let .success(args):
                         LoopToolCall(
+                            origin: .providerNative,
                             id: native.id,
                             name: native.name,
                             arguments: args,
@@ -1794,6 +1810,7 @@ public struct ToolLoop {
                         )
                     case .malformed:
                         LoopToolCall(
+                            origin: .providerNative,
                             id: native.id,
                             name: native.name,
                             arguments: [:],
@@ -1805,6 +1822,7 @@ public struct ToolLoop {
             } else {
                 calls = textActions.enumerated().map {
                     LoopToolCall(
+                        origin: .textualAction,
                         id: "text-\($0.offset)",
                         name: $0.element.tool,
                         arguments: $0.element.args.mapValues(AIJSONValue.string),
@@ -1887,12 +1905,13 @@ public struct ToolLoop {
                 }
 
                 // Fixed Skill 激活时模型面只有只读工具；若模型绕过 schema 硬调写操作
-                //（例如 playback_play_artist），一律拒绝——Skill 的 mutation 主路径由
-                // Skill 内部 forced call（id 前缀 skill-）固定调用，模型不得自行触发，
-                // 避免队列尚未按 Skill 完成就提前播放等破坏工作流的调用。
+                //（例如 playback_play_artist），一律拒绝。来源判定使用结构化
+                // LoopToolCallOrigin 而不是 tool_call.id 前缀——id 是模型/provider 输入，
+                // 可伪造（如 id = "skill-forged"）；Skill 的 mutation 主路径只允许
+                // origin == .skillForced 的 forced call 执行。
                 if activeSkill != nil,
                    descriptor.permission != .readOnly,
-                   !(call.id?.hasPrefix("skill-") ?? false) {
+                   call.origin != .skillForced {
                     let failureText = "（工具执行结果）\(call.name)：本任务由固定 Skill 编排，写操作由系统确定性执行；请只使用搜索/推荐/选择类工具收集候选。"
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Skill 模式拒绝模型直接写调用", reused: false))
@@ -2681,8 +2700,8 @@ public struct ToolLoop {
                 // Fixed Skill 激活时：即使 mutation 已授权（如 queueReplace 对应的
                 // queue_replace），也不作为模型可见 schema 补入——Skill 内部会固定调用。
                 if excludeAllMutations { continue }
-                guard let operation = tool.authorizationOperation,
-                      allowedOperations.contains(operation) else {
+                // 统一授权判定（含 Custom Tool 的 derivedAuthorizationOperations）。
+                guard tool.isAuthorizedForModelExposure(allowedOperations: allowedOperations) else {
                     // 能力存在但当前请求未授权：不进 schema，不诱导模型尝试。
                     continue
                 }
