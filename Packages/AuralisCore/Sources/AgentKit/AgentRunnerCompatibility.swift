@@ -64,6 +64,7 @@ public enum AgentRunner {
             initialTaskState: initialTaskState,
             authorizationContext: authorizationContext,
             executionLineage: executionLineage,
+            convergencePolicy: .legacyPermissive,
             runID: runID,
             executionLease: resolvedLease,
             toolTimeout: toolTimeout,
