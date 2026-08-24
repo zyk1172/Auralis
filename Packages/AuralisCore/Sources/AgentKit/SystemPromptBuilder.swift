@@ -44,6 +44,11 @@ public enum SystemPromptBuilder {
             : workflowInstruction == nil
             ? "工具首轮展示只是 shortlist；关键词和 Intent 不构成能力边界。需要的能力未在 schema 中时，先用 tool_search 按自然语言发现，再在下一轮使用返回的 canonical 工具。"
             : "当前任务由固定 Workflow 编排；Runtime 自动推进主链路。辅助工具仍可用于诊断、能力查询或补充读取，但不能替代主链路，也不要把工具搜索当作索引进度。"
+        // 文本兼容协议（无原生 function calling）必须提供本轮 shortlist 的
+        // 紧凑参数契约，否则模型无法稳定构造 ACTION 参数。
+        let actionContract = nativeToolCalling || tools.isEmpty
+            ? ""
+            : textualActionContract(tools)
 
         return """
         \(profile.personalityPrompt)
@@ -65,6 +70,8 @@ public enum SystemPromptBuilder {
         ## 工具能力
         \(capabilities)
 
+        \(actionContract)
+
         \(workflowRule)
 
         ## 通用规则
@@ -77,6 +84,53 @@ public enum SystemPromptBuilder {
         - Navidrome / OpenSubsonic 服务器是音乐资料和在线流媒体的真实来源；本地目录只是缓存。不要把本地没有误报为服务器不存在。
         - \(protocolRule)
         """
+    }
+
+    /// 文本 ACTION 协议的参数契约：只给本轮 selected tools 生成紧凑说明，
+    /// 复用 ToolParameter / schemaJSON，不维护第三套手写函数签名。
+    static func textualActionContract(_ tools: [ToolDescriptor]) -> String {
+        var lines: [String] = ["## ACTION 参数契约（仅本轮可用工具）"]
+        for tool in tools {
+            guard tool.visibility == .model || tool.visibility == .skillOnly else { continue }
+            lines.append("- \(tool.name)（\(tool.summary)）")
+            if tool.parameters.isEmpty {
+                lines.append("  参数：无")
+            } else {
+                for parameter in tool.parameters {
+                    let type = Self.parameterTypeLabel(parameter)
+                    let required = parameter.required ? "必填" : "可选"
+                    lines.append("  - \(parameter.name): \(type), \(required)（\(parameter.description)）")
+                }
+            }
+        }
+        lines.append("""
+        调用格式（每行一个，仅输出 ACTION 行）：
+        ACTION: {"tool":"queue_replace","args":{"trackIDs":["server:id1","server:id2"]}}
+        数组/布尔/数字参数按 JSON 类型传入，不要转义成字符串。
+        """)
+        return lines.joined(separator: "\n")
+    }
+
+    /// 由 JSON Schema type 生成人类可读的类型标签。
+    static func parameterTypeLabel(_ parameter: ToolParameter) -> String {
+        guard let schemaJSON = parameter.schemaJSON,
+              let data = schemaJSON.data(using: .utf8),
+              let schema = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = schema["type"] as? String else {
+            return "string"
+        }
+        switch type {
+        case "array":
+            if let items = schema["items"] as? [String: Any], let itemType = items["type"] as? String {
+                return "\(itemType)[]"
+            }
+            return "array"
+        case "boolean": return "boolean"
+        case "integer": return "integer"
+        case "number": return "number"
+        case "object": return "object"
+        default: return type
+        }
     }
 
     private static var currentLanguage: String {
