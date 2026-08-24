@@ -52,6 +52,10 @@ public struct ToolLoop {
         /// coordinator-scoped so status queries can distinguish persisted
         /// pending data from an actually running background task.
         public let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
+        /// Persisted declarative tools are joined to the canonical model
+        /// catalog at the run boundary. Discovery and execution receive the
+        /// same registry snapshot for this run.
+        public let customToolRegistry: CustomToolRegistry
 
         public init(
             serverID: ServerID? = nil,
@@ -74,7 +78,8 @@ public struct ToolLoop {
             memories: [AgentMemoryEntry] = [],
             skills: [AgentSkillEntry] = [],
             mutationResourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry(),
-            recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
+            recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
+            customToolRegistry: CustomToolRegistry = .shared
         ) {
             self.serverID = serverID
             self.serverName = serverName
@@ -97,6 +102,7 @@ public struct ToolLoop {
             self.skills = skills
             self.mutationResourceLeaseRegistry = mutationResourceLeaseRegistry
             self.recommendationIndexExecutionRegistry = recommendationIndexExecutionRegistry
+            self.customToolRegistry = customToolRegistry
         }
     }
 
@@ -151,6 +157,10 @@ public struct ToolLoop {
         var stringArguments: [String: String] {
             ToolCall(name: name, arguments: arguments).stringArguments
         }
+    }
+
+    private static func parallelResultKey(for call: LoopToolCall, index: Int) -> String {
+        call.id ?? "parallel-\(index)"
     }
 
     private enum ToolArgumentParseResult {
@@ -223,6 +233,15 @@ public struct ToolLoop {
             resolvedExecutionLease = executionLease
         } else {
             resolvedExecutionLease = .revoked(runID: runID)
+        }
+        // Materialize declarative tools once at the run boundary. The same
+        // snapshot is used by selector, provider schema, tool_search and
+        // ToolRuntime so discovery cannot advertise a different set than the
+        // executor can actually run.
+        var availableToolDescriptors = AgentToolRegistry.all
+        let customDescriptors = await context.customToolRegistry.modelDescriptors()
+        for descriptor in customDescriptors where !availableToolDescriptors.contains(where: { $0.name == descriptor.name }) {
+            availableToolDescriptors.append(descriptor)
         }
         let workflowRoute = WorkflowEngine.route(
             intent: resolvedIntent,
@@ -311,6 +330,7 @@ public struct ToolLoop {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     webService: webService,
+                    availableToolDescriptors: availableToolDescriptors,
                     sideEffectAuthorization: resolvedAuthorization,
                     runID: runID,
                     executionLease: resolvedExecutionLease,
@@ -332,6 +352,7 @@ public struct ToolLoop {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     webService: webService,
+                    availableToolDescriptors: availableToolDescriptors,
                     intent: resolvedIntent,
                     policy: resolvedPolicy,
                     initialTaskState: initialTaskState,
@@ -354,6 +375,7 @@ public struct ToolLoop {
                 context: context,
                 sideEffectAuthorization: resolvedAuthorization,
                 executionLease: resolvedExecutionLease,
+                availableToolDescriptors: availableToolDescriptors,
                 emit: emit,
                 log: log
             )
@@ -382,6 +404,7 @@ public struct ToolLoop {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
+        availableToolDescriptors: [ToolDescriptor],
         sideEffectAuthorization: SideEffectAuthorizationContext,
         runID: UUID,
         executionLease: ToolExecutionLease,
@@ -391,7 +414,7 @@ public struct ToolLoop {
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
-        var selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
+        var selectedTools = ToolSelector.select(for: userText, all: availableToolDescriptors)
         let effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
@@ -556,11 +579,58 @@ public struct ToolLoop {
                 }
             }
 
+            var parallelResultsByID: [String: ToolResult] = [:]
+            let parallelEligible = provider.capabilities.supportsParallelTools
+                && calls.count > 1
+                && calls.allSatisfy { call in
+                    guard !call.malformedArguments,
+                          !Self.isSearchCapability(call.name),
+                          let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors)
+                    else { return false }
+                    return descriptor.permission == .readOnly
+                        && descriptor.parallelSafe
+                        && !descriptor.requiresConfirmation
+                }
+            if parallelEligible {
+                let executorContext = ToolExecutorContext(
+                    bridge: bridge,
+                    catalog: catalog,
+                    serverID: context.serverID,
+                    systemService: systemService,
+                    externalMusicService: externalMusicService,
+                    allowsLyrics: context.allowsLyrics,
+                    providerCapabilities: provider.capabilities,
+                    webService: webService,
+                    authorizationContext: effectiveAuthorization,
+                    activeSkillID: nil,
+                    executionAuthority: nil,
+                    executionLease: executionLease,
+                    resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                    recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                    customToolRegistry: context.customToolRegistry,
+                    availableToolDescriptors: availableToolDescriptors
+                )
+                let structuredCalls = calls.map { call in
+                    call.usesTextProtocol
+                        ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
+                        : ToolCall(name: call.name, arguments: call.arguments)
+                }
+                let parallelResults = await ToolRuntime.executeReadOnlyParallel(
+                    structuredCalls,
+                    context: executorContext,
+                    providerAllowsParallel: true,
+                    runID: runID
+                )
+                for (index, call) in calls.enumerated() {
+                    parallelResultsByID[parallelResultKey(for: call, index: index)] = parallelResults[index]
+                }
+            }
+
             var resultMessages: [AIMessage] = []
-            for call in calls {
+            for (index, call) in calls.enumerated() {
                 toolSteps += 1
                 await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
-                guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
+                guard let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors) else {
                     resultMessages.append(toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name)：失败 - 未知工具。请先使用 tool_search 发现可用的 canonical 工具。",
@@ -646,8 +716,11 @@ public struct ToolLoop {
                 let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
                 let result: ToolResult
                 do {
-                    result = try await withTimeout(effectiveToolTimeout) {
-                        await ToolRuntime.execute(
+                    result = if let parallelResult = parallelResultsByID[parallelResultKey(for: call, index: index)] {
+                        parallelResult
+                    } else {
+                        try await withTimeout(effectiveToolTimeout) {
+                        await ToolRuntime.executeMeasured(
                             executableCall,
                             bridge: bridge,
                             catalog: catalog,
@@ -660,24 +733,38 @@ public struct ToolLoop {
                             authorizationContext: authorizationForCall,
                             executionLease: executionLease,
                             resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
-                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry
+                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                            customToolRegistry: context.customToolRegistry,
+                            availableToolDescriptors: availableToolDescriptors,
+                            runID: runID,
+                            callID: call.id
                         )
+                        }
                     }
                 } catch is CancellationError {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                     return
                 } catch {
-                    let reason = error is AgentRunnerError
-                        ? "超时 - 工具执行超过限定时间，结果可能未知。"
-                        : errorText(error)
-                    if descriptor.permission != .readOnly, error is AgentRunnerError {
+                    let timeoutFailure = error is AgentRunnerError
+                        ? ToolRuntime.timeoutResult(call: executableCall, descriptor: descriptor)
+                        : nil
+                    let isTimeout = timeoutFailure != nil
+                    let reason = timeoutFailure?.summary ?? errorText(error)
+                    if descriptor.permission != .readOnly, isTimeout {
                         indeterminateSideEffects.insert(signature)
                     }
-                    let text = error is AgentRunnerError
-                        ? "（工具执行结果）\(call.name): 超时 - 工具执行超过限定时间，结果可能未知；为避免重复副作用不会自动重试。"
+                    let text: String
+                    if let timeoutFailure {
+                        let code = timeoutFailure.failure?.code ?? "tool_timeout"
+                        text = "（工具执行结果）\(call.name): 超时 - \(reason) [failure_code=\(code); indeterminate=\(timeoutFailure.hasIndeterminateSideEffect)]"
+                    } else {
+                        text = "（工具执行结果）\(call.name)：失败 - \(reason)"
+                    }
+                    let presentationText = timeoutFailure != nil
+                        ? "工具 \(call.name) 执行超时，结果可能未知；为避免重复副作用不会自动重试。"
                         : "（工具执行结果）\(call.name)：失败 - \(reason)"
                     resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text(text)]))
+                    await emit(AgentChatMessage(role: .assistant, messages: [.text(presentationText)]))
                     continue
                 }
 
@@ -755,8 +842,10 @@ public struct ToolLoop {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    let names = ToolCatalog().search(query: query, namespace: namespace, limit: limit).map(\.name)
-                    let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                    let names = ToolCatalog(descriptors: availableToolDescriptors)
+                        .search(query: query, namespace: namespace, limit: limit)
+                        .map(\.name)
+                    let byName = Dictionary(uniqueKeysWithValues: availableToolDescriptors.map { ($0.name, $0) })
                     var existing = Set(selectedTools.map(\.name))
                     for name in names where !existing.contains(name) {
                         if let tool = byName[name] {
@@ -812,6 +901,7 @@ public struct ToolLoop {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
+        availableToolDescriptors: [ToolDescriptor],
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
@@ -858,7 +948,7 @@ public struct ToolLoop {
             for: userText,
             intent: intent,
             policy: policy,
-            all: AgentToolRegistry.all,
+            all: availableToolDescriptors,
             activeSkillID: activeSkillID
         )
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
@@ -966,7 +1056,7 @@ public struct ToolLoop {
                 for: accumulatedToolText,
                 intent: intent,
                 policy: policy,
-                all: AgentToolRegistry.all,
+                all: availableToolDescriptors,
                 activeSkillID: activeSkillID
             )
             var merged = selectedTools
@@ -977,7 +1067,7 @@ public struct ToolLoop {
             }
             // TaskRequiredTools：本轮已实际执行过的工具永远保留在 schema 中。
             if !ws.perToolCounts.isEmpty {
-                let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all
+                let byName = Dictionary(uniqueKeysWithValues: availableToolDescriptors
                     .filter { $0.isVisible(toSkillID: activeSkillID) }
                     .map { ($0.name, $0) })
                 for name in ws.perToolCounts.keys where !haveNames.contains(name) {
@@ -1498,7 +1588,7 @@ public struct ToolLoop {
                 roundToolNames.insert(call.name)
                 if AgentTaskWorkingSet.isSearchTool(call.name) { roundSearchCalls += 1 }
 
-                guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
+                guard let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors) else {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "未知工具", reused: false))
                     toolMessages.append(Self.toolResultMessage(
                         callID: call.id,
@@ -1647,9 +1737,10 @@ public struct ToolLoop {
                 }
                 let authorizationForCall = effectiveAuthorization
                 let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
+                let executionCallID = call.id
                 do {
                     result = try await Self.withTimeout(effectiveToolTimeout) {
-                        await ToolRuntime.execute(
+                        await ToolRuntime.executeMeasured(
                             executableCall,
                             bridge: bridge,
                             catalog: catalog,
@@ -1663,7 +1754,11 @@ public struct ToolLoop {
                             activeSkillID: activeSkillID,
                             executionLease: executionLease,
                             resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
-                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry
+                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                            customToolRegistry: context.customToolRegistry,
+                            availableToolDescriptors: availableToolDescriptors,
+                            runID: runID,
+                            callID: executionCallID
                         )
                     }
                 } catch is CancellationError {
@@ -1685,11 +1780,13 @@ public struct ToolLoop {
                     // 单工具超时/异常只回灌结构化失败结果，不终止整项任务；模型可换工具/换参数继续。
                     let failureText: String
                     if error is AgentRunnerError {
+                        let timeoutFailure = ToolRuntime.timeoutResult(call: executableCall, descriptor: descriptor)
+                        let code = timeoutFailure.failure?.code ?? "tool_timeout"
                         if descriptor.permission != .readOnly {
                             ws.recordIndeterminateSideEffect(tool: call.name, args: stringArguments)
-                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(effectiveToolTimeout)) 秒未完成，服务端结果未知。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
+                            failureText = "（工具执行结果）\(call.name): 超时 - \(timeoutFailure.summary) [failure_code=\(code); indeterminate=true]。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
                         } else {
-                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(effectiveToolTimeout)) 秒未完成，可改用其他查询方式继续。"
+                            failureText = "（工具执行结果）\(call.name): 超时 - \(timeoutFailure.summary) [failure_code=\(code); indeterminate=false] 可改用其他查询方式继续。"
                         }
                     } else {
                         failureText = "（工具执行结果）\(call.name): 执行中断 - \(Self.errorText(error))"
@@ -1729,10 +1826,10 @@ public struct ToolLoop {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    let discoveredNames = ToolCatalog()
+                    let discoveredNames = ToolCatalog(descriptors: availableToolDescriptors)
                         .search(query: query, namespace: namespace, limit: limit, activeSkillID: activeSkillID)
                         .map(\.name)
-                    let byName = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+                    let byName = Dictionary(uniqueKeysWithValues: availableToolDescriptors.map { ($0.name, $0) })
                     var existing = Set(selectedTools.map(\.name))
                     var addedDiscoveredTool = false
                     for name in discoveredNames where !existing.contains(name) {
@@ -2442,6 +2539,7 @@ public struct ToolLoop {
         context: Context,
         sideEffectAuthorization: SideEffectAuthorizationContext,
         executionLease: ToolExecutionLease,
+        availableToolDescriptors: [ToolDescriptor],
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in }
     ) async {
@@ -2457,6 +2555,7 @@ public struct ToolLoop {
                 sideEffectAuthorization: sideEffectAuthorization,
                 resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
                 recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
+                availableToolDescriptors: availableToolDescriptors,
                 emit: emit,
                 log: log
             )
@@ -2471,6 +2570,7 @@ public struct ToolLoop {
         sideEffectAuthorization: SideEffectAuthorizationContext,
         resourceLeaseRegistry: MutationResourceLeaseRegistry,
         recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry,
+        availableToolDescriptors: [ToolDescriptor],
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void
     ) async {
@@ -2482,7 +2582,7 @@ public struct ToolLoop {
         }
 
         func executeMutation(_ name: String, arguments: [String: AIJSONValue] = [:]) async -> ToolResult {
-            await ToolRuntime.execute(
+            await ToolRuntime.executeMeasured(
                 ToolCall(name: name, arguments: arguments),
                 bridge: bridge,
                 catalog: catalog,
@@ -2491,7 +2591,11 @@ public struct ToolLoop {
                 authorizationContext: sideEffectAuthorization,
                 executionLease: ToolExecutionContext.lease ?? .revoked(),
                 resourceLeaseRegistry: resourceLeaseRegistry,
-                recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
+                recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
+                customToolRegistry: context.customToolRegistry,
+                availableToolDescriptors: availableToolDescriptors,
+                runID: ToolExecutionContext.lease?.runID,
+                callID: nil
             )
         }
 
@@ -3103,6 +3207,12 @@ public struct ToolLoop {
     /// ContextManager 在发送前按 Provider 的真实上下文窗口执行。
     private static func convertHistory(_ history: [AgentChatMessage], currentUserText: String) -> [AIMessage] {
         AgentHistoryPolicy.modelMessages(from: history, for: currentUserText)
+    }
+
+    private static func descriptor(named name: String, in descriptors: [ToolDescriptor]) -> ToolDescriptor? {
+        descriptors.first { descriptor in
+            descriptor.name == name || descriptor.aliases.contains(name)
+        }
     }
 
     private static func effectiveToolTimeout(_ descriptor: ToolDescriptor, requested: TimeInterval) -> TimeInterval {

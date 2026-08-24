@@ -25,6 +25,32 @@ public struct ToolCatalogEntry: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// A derived capability inventory for diagnostics and the App's capability
+/// screen. It is intentionally computed from canonical descriptors, so adding
+/// a tool cannot silently create a second hand-maintained capability list.
+public struct ToolCapabilityCoverage: Codable, Hashable, Sendable, Identifiable {
+    public var id: String { namespace }
+    public let namespace: String
+    public let toolNames: [String]
+    public let readOnlyCount: Int
+    public let mutationCount: Int
+    public let networkCount: Int
+
+    public init(
+        namespace: String,
+        toolNames: [String],
+        readOnlyCount: Int,
+        mutationCount: Int,
+        networkCount: Int
+    ) {
+        self.namespace = namespace
+        self.toolNames = toolNames
+        self.readOnlyCount = readOnlyCount
+        self.mutationCount = mutationCount
+        self.networkCount = networkCount
+    }
+}
+
 /// The single searchable source of truth for registered tool capabilities.
 /// ToolSelector may rank a shortlist, but it must use this catalog for
 /// discovery and never invent a capability from keyword switches.
@@ -40,6 +66,24 @@ public struct ToolCatalog: Sendable {
         return descriptors.first { descriptor in
             descriptor.name.lowercased() == normalized
                 || descriptor.aliases.contains(where: { $0.lowercased() == normalized })
+        }
+    }
+
+    /// Returns only model-visible canonical capabilities. Legacy and
+    /// internal/skill-only descriptors stay executable through Runtime but do
+    /// not appear in the App-facing capability inventory.
+    public func capabilityCoverage() -> [ToolCapabilityCoverage] {
+        let grouped = Dictionary(grouping: descriptors.filter { $0.visibility == .model }, by: \.namespace)
+        return grouped.keys.sorted().compactMap { namespace in
+            guard let descriptors = grouped[namespace] else { return nil }
+            let names = descriptors.map(\.name).sorted()
+            return ToolCapabilityCoverage(
+                namespace: namespace,
+                toolNames: names,
+                readOnlyCount: descriptors.filter { $0.permission == .readOnly }.count,
+                mutationCount: descriptors.filter { $0.permission != .readOnly }.count,
+                networkCount: descriptors.filter(\.networkAccess).count
+            )
         }
     }
 

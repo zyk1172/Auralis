@@ -195,7 +195,7 @@ public enum AgentSensitiveDataRedactor {
     }
 }
 
-public struct ToolFailureEnvelope: Codable, Sendable, Equatable {
+public struct ToolFailureEnvelope: Codable, Sendable, Equatable, Hashable {
     public enum Phase: String, Codable, Sendable, Equatable {
         case discovery
         case inputValidation

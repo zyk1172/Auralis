@@ -21,6 +21,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         case download
         case memory
         case server
+        case customTool
     }
 
     public enum Operation: String, Codable, Sendable, Hashable {
@@ -81,10 +82,11 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         let has = { (terms: [String]) in containsAny(value, terms) }
 
+        let quantityQuery = has(["有多少", "多少", "数量", "几位", "几张", "几首歌"])
         let query = has([
             "有哪些", "有什么", "哪些", "列表", "查看", "查询", "列出", "显示", "当前", "现在",
             "状态", "是什么", "什么", "which", "what", "list", "current", "status",
-        ])
+        ]) || quantityQuery
         let collectionQuery = has(["我的收藏", "收藏里面", "收藏的歌曲", "收藏曲目", "favorite tracks"])
 
         let hasSongQuantity = value.range(
@@ -159,6 +161,19 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "你记得我", "我的名字是什么", "我叫什么",
         ])
         let explicitMemory = memorySave || memoryDelete || memoryRead
+
+        // Custom Tool management is deliberately opt-in. A generic mention
+        // of “tool” must not authorize a builder mutation; only the explicit
+        // builder/doctor vocabulary below enters this domain.
+        let customToolCreate = has(["创建自建工具", "创建自定义工具", "新建自建工具", "tool_builder_create", "工具构建"])
+        let customToolUpdate = has(["更新自建工具", "修改自建工具", "升级自建工具", "tool_builder_update"])
+        let customToolDelete = has(["删除自建工具", "删除自定义工具", "tool_builder_delete"])
+        let customToolEnable = has(["启用自建工具", "打开自建工具", "tool_builder_enable"])
+        let customToolDisable = has(["停用自建工具", "禁用自建工具", "tool_builder_disable"])
+        let customToolRepair = has(["修复自建工具", "修复自定义工具", "tool_repair"])
+        let customToolRead = has(["自建工具列表", "列出自建工具", "查看自建工具", "检查自建工具", "诊断工具", "tool_builder_list", "tool_builder_inspect", "tool_builder_validate", "tool_builder_test", "tool_diagnose"])
+        let explicitCustomTool = customToolCreate || customToolUpdate || customToolDelete
+            || customToolEnable || customToolDisable || customToolRepair || customToolRead
 
         let webContext = has([
             "网页", "文档", "新闻", "互联网", "联网", "网上", "官方文档", "web", "internet", "news", "online",
@@ -276,8 +291,18 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
+        if customToolCreate { requested.insert(.customToolCreate) }
+        if customToolUpdate { requested.insert(.customToolUpdate) }
+        if customToolEnable { requested.insert(.customToolEnable) }
+        if customToolDisable { requested.insert(.customToolDisable) }
+        if customToolDelete { requested.insert(.customToolDelete) }
+        if customToolRepair { requested.insert(.customToolRepair) }
+
         if explicitMemory {
             return Self(domain: .memory, operation: requested.isEmpty ? .read : .mutate, isMusicContext: isMusicContext, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["memory"])
+        }
+        if explicitCustomTool {
+            return Self(domain: .customTool, operation: requested.isEmpty ? .read : .mutate, isMusicContext: false, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["tool_builder"])
         }
         if webContext && !isMusicContext {
             return Self(domain: .web, operation: .read, isMusicContext: false, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["web"])

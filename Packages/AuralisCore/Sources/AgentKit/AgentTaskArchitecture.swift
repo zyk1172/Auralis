@@ -564,7 +564,7 @@ public enum AgentIntentClassifier {
             return .musicDiscovery
         case .musicLibrary:
             return .librarySearch
-        case .conversation, .web, .system, .memory, .download, .server, .diagnostics:
+        case .conversation, .web, .system, .memory, .download, .server, .diagnostics, .customTool:
             break
         }
         return .conversation

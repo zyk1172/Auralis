@@ -1,4 +1,7 @@
+import AIKit
+import Domain
 import Foundation
+import LocalCatalog
 
 /// The smallest authorization family a model request can explicitly open.
 /// This is distinct from a provider-visible namespace and from the resource
@@ -40,6 +43,124 @@ public enum ToolExecutionProfile: String, Codable, Sendable, Hashable, CaseItera
     }
 }
 
+/// Runtime dependencies passed to a canonical tool executor.  Keeping this
+/// value separate from the task-local `ToolExecutionContext` lets a
+/// `ToolDefinition` own both its metadata and its actual executable behavior
+/// without widening every AgentBridge method.
+public struct ToolExecutorContext: Sendable {
+    public let bridge: any AgentBridge
+    public let catalog: LocalCatalogStore
+    public let serverID: ServerID?
+    public let systemService: (any AgentSystemService)?
+    public let externalMusicService: (any AgentExternalMusicService)?
+    public let allowsLyrics: Bool
+    public let providerCapabilities: ModelCapabilities?
+    public let webService: (any AgentWebService)?
+    public let authorizationContext: SideEffectAuthorizationContext?
+    public let activeSkillID: String?
+    public let executionAuthority: ToolExecutionAuthority?
+    public let executionLease: ToolExecutionLease
+    public let resourceLeaseRegistry: MutationResourceLeaseRegistry
+    public let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
+    public let customToolRegistry: CustomToolRegistry
+    public let availableToolDescriptors: [ToolDescriptor]
+
+    public init(
+        bridge: any AgentBridge,
+        catalog: LocalCatalogStore,
+        serverID: ServerID?,
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)?,
+        allowsLyrics: Bool,
+        providerCapabilities: ModelCapabilities?,
+        webService: (any AgentWebService)?,
+        authorizationContext: SideEffectAuthorizationContext?,
+        activeSkillID: String?,
+        executionAuthority: ToolExecutionAuthority?,
+        executionLease: ToolExecutionLease,
+        resourceLeaseRegistry: MutationResourceLeaseRegistry,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry,
+        customToolRegistry: CustomToolRegistry = .shared,
+        availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all
+    ) {
+        self.bridge = bridge
+        self.catalog = catalog
+        self.serverID = serverID
+        self.systemService = systemService
+        self.externalMusicService = externalMusicService
+        self.allowsLyrics = allowsLyrics
+        self.providerCapabilities = providerCapabilities
+        self.webService = webService
+        self.authorizationContext = authorizationContext
+        self.activeSkillID = activeSkillID
+        self.executionAuthority = executionAuthority
+        self.executionLease = executionLease
+        self.resourceLeaseRegistry = resourceLeaseRegistry
+        self.recommendationIndexExecutionRegistry = recommendationIndexExecutionRegistry
+        self.customToolRegistry = customToolRegistry
+        self.availableToolDescriptors = availableToolDescriptors
+    }
+
+    /// Execute a child canonical call from a declarative tool.  The child
+    /// stays inside the same authorization, run lease and resource registry;
+    /// it cannot silently obtain a broader privilege than its parent.
+    public func executeChild(_ call: ToolCall) async -> ToolResult {
+        await ToolRuntime.execute(
+            call,
+            bridge: bridge,
+            catalog: catalog,
+            serverID: serverID,
+            systemService: systemService,
+            externalMusicService: externalMusicService,
+            allowsLyrics: allowsLyrics,
+            providerCapabilities: providerCapabilities,
+            webService: webService,
+            authorizationContext: authorizationContext,
+            activeSkillID: activeSkillID,
+            executionAuthority: executionAuthority,
+            executionLease: executionLease,
+            resourceLeaseRegistry: resourceLeaseRegistry,
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
+            customToolRegistry: customToolRegistry,
+            availableToolDescriptors: availableToolDescriptors
+        )
+    }
+
+    public func withAdditionalAuthorizationScopes(_ scopes: Set<MutationScope>) -> ToolExecutorContext {
+        ToolExecutorContext(
+            bridge: bridge,
+            catalog: catalog,
+            serverID: serverID,
+            systemService: systemService,
+            externalMusicService: externalMusicService,
+            allowsLyrics: allowsLyrics,
+            providerCapabilities: providerCapabilities,
+            webService: webService,
+            authorizationContext: authorizationContext?.granting(scopes: scopes),
+            activeSkillID: activeSkillID,
+            executionAuthority: executionAuthority,
+            executionLease: executionLease,
+            resourceLeaseRegistry: resourceLeaseRegistry,
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
+            customToolRegistry: customToolRegistry,
+            availableToolDescriptors: availableToolDescriptors
+        )
+    }
+
+    /// Execute an existing built-in implementation while it is being migrated
+    /// out of the compatibility dispatcher.  New tools should provide their
+    /// own closure instead of adding another switch case.
+    public func executeLegacy(_ call: ToolCall, descriptor: ToolDescriptor) async -> ToolResult {
+        await AgentToolRegistry.executeLegacy(
+            call,
+            descriptor: descriptor,
+            context: self
+        )
+    }
+}
+
+public typealias ToolDefinitionExecutor = @Sendable (ToolExecutorContext, ToolCall) async -> ToolResult
+
 /// Discovery metadata is derived from the canonical descriptor. ToolSelector
 /// may rank it, but it no longer needs a second registry of tool-name arrays.
 public struct ToolDiscoveryMetadata: Codable, Sendable, Hashable {
@@ -73,14 +194,35 @@ public enum ToolExecutorKind: String, Codable, Sendable, Hashable {
     case legacyCompatibility
 }
 
-public struct ToolDefinition: Sendable, Hashable, Identifiable {
+public struct ToolDefinition: Sendable, Identifiable {
     public var id: String { descriptor.name }
     public let descriptor: ToolDescriptor
-    public let executor: ToolExecutorKind
+    public let executorKind: ToolExecutorKind
+    public let executor: ToolDefinitionExecutor
 
-    public init(descriptor: ToolDescriptor, executor: ToolExecutorKind) {
+    public init(
+        descriptor: ToolDescriptor,
+        executorKind: ToolExecutorKind,
+        executor: @escaping ToolDefinitionExecutor
+    ) {
         self.descriptor = descriptor
+        self.executorKind = executorKind
         self.executor = executor
+    }
+
+    /// Compatibility initializer for metadata-only callers.  Registry
+    /// definitions use the closure initializer above; this fallback is kept
+    /// so old integrations fail explicitly rather than silently bypassing the
+    /// unified executor path.
+    public init(descriptor: ToolDescriptor, executor: ToolExecutorKind) {
+        self.init(descriptor: descriptor, executorKind: executor) { _, call in
+            ToolResult(
+                call: call,
+                permission: descriptor.permission,
+                success: false,
+                summary: "工具 \(descriptor.name) 尚未绑定执行器。"
+            )
+        }
     }
 }
 
@@ -111,6 +253,12 @@ extension ToolDescriptor {
     }
 
     public var mutationScope: MutationScope? {
+        if let operation = authorizationOperation, let scope = operation.mutationScope {
+            return scope
+        }
+        if let scope = derivedMutationScopes.first {
+            return scope
+        }
         guard permission != .readOnly else { return nil }
         switch sideEffectPolicy {
         case .none: return .customTool
@@ -125,8 +273,19 @@ extension ToolDescriptor {
     }
 
     public var risk: ToolRisk {
+        if let derivedRisk {
+            return derivedRisk
+        }
         if requiresConfirmation { return .irreversibleDelete }
         return permission == .readOnly ? .none : .reversibleMutation
+    }
+
+    public var mutationScopes: Set<MutationScope> {
+        if !derivedMutationScopes.isEmpty {
+            return derivedMutationScopes
+        }
+        guard let scope = mutationScope else { return [] }
+        return [scope]
     }
 
     public var executionProfile: ToolExecutionProfile {

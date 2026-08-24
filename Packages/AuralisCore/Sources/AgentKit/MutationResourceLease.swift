@@ -11,6 +11,7 @@ public enum MutationResource: String, Codable, Sendable, Hashable, CaseIterable 
     case server
     case memory
     case annotation
+    case customTool
 }
 
 /// Actor-isolated, non-reentrant resource ownership.
@@ -67,6 +68,9 @@ extension ToolDescriptor {
     /// resource serialization by choosing a different tool spelling.
     public var mutationResources: Set<MutationResource> {
         guard permission != .readOnly else { return [] }
+        if !derivedMutationResources.isEmpty {
+            return derivedMutationResources
+        }
         guard let operation = authorizationOperation else {
             return sideEffectPolicy.resourceFallback
         }
@@ -88,6 +92,9 @@ extension ToolDescriptor {
             return [.download]
         case .memorySave, .memoryDelete, .memoryClear, .skillCreate, .skillDelete:
             return [.memory]
+        case .customToolCreate, .customToolUpdate, .customToolEnable, .customToolDisable,
+             .customToolDelete, .customToolRepair:
+            return [.customTool]
         }
     }
 }

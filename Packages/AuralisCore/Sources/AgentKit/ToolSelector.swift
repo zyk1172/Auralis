@@ -280,6 +280,9 @@ public enum ToolSelector {
             return descriptor.group == .memory && readOnly()
         case .server:
             return descriptor.group == .server && readOnly()
+        case .customTool:
+            return readOnly()
+                && (descriptor.namespace == "tool_builder" || descriptor.customToolID != nil)
         }
 
     }
