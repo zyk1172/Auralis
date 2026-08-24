@@ -552,6 +552,54 @@ struct QueueReplacePlaybackSkillTests {
         let completed = await collector.containsText("队列已替换并开始播放")
         #expect(completed)
     }
+
+    @Test("N13 伪造 skill- 前缀 id 的模型 mutation 调用 → 仍被拒绝（来源判定不信任 tool_call.id）")
+    func forgedSkillPrefixIdStillRejected() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let bridge = SkillBridge()
+        let provider = SkillProvider([
+            // 模型伪造 id = "skill-forged"，冒充 Skill forced call。
+            skillResponse(calls: [skillCall(id: "skill-forged", name: "playback_play_artist", arguments: ["artistID": .string("\(skillServerID.rawValue):t0-artist")])]),
+            skillResponse(calls: [skillCall(id: "c1", name: "result_present_tracks", arguments: ["trackIDs": .array([.string("\(skillServerID.rawValue):t0")])])]),
+        ])
+        let collector = await Self.runQueueSkill(
+            userText: "替换队列并播放周杰伦",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+        // 来源判定基于结构化 origin（.providerNative），不是 id 前缀：
+        // 即使 id 是 skill-forged，模型调用仍然被拒绝，Skill 主路径正常完成。
+        #expect(bridge.playedTracks == [GlobalID(serverID: skillServerID, remoteID: "t0")],
+                "伪造 id 不得绕过 mutation 隔离，实际：\(bridge.playedTracks)")
+        #expect(bridge.replacedQueues.count == 1)
+        #expect(bridge.clearedQueueCount == 0)
+        let completed = await collector.containsText("队列已替换并开始播放")
+        #expect(completed)
+    }
+
+    @Test("N14 候选不足（要 10 首只交 3 首）→ 不发生任何队列 mutation")
+    func insufficientCandidatesBlockQueueMutation() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let bridge = SkillBridge()
+        let provider = SkillProvider([
+            skillResponse(calls: [skillCall(id: "c1", name: "result_present_tracks", arguments: ["trackIDs": .array([
+                .string("\(skillServerID.rawValue):t0"), .string("\(skillServerID.rawValue):t1"), .string("\(skillServerID.rawValue):t2"),
+            ])])]),
+        ])
+        let collector = await Self.runQueueSkill(
+            userText: "我要十首周杰伦的歌曲，替换到队列播放",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+        #expect(bridge.replacedQueues.isEmpty, "候选不足时不得先修改真实队列")
+        #expect(bridge.playedTracks.isEmpty)
+        let insufficient = await collector.containsError("候选不足")
+        #expect(insufficient)
+    }
 }
 
 // MARK: - O 系列：PlaylistBuildSkill
@@ -732,6 +780,90 @@ struct PlaylistBuildSkillTests {
         // 有歌单但无候选 → 回到候选收集（freeModelTurn），绝不 create / 空 add。
         #expect(step == .freeModelTurn)
     }
+
+    @Test("O8 候选不足（要 10 首只交 3 首）→ 不创建歌单、不发生任何 mutation")
+    func insufficientCandidatesBlockPlaylistMutation() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let bridge = SkillBridge()
+        let provider = SkillProvider([
+            skillResponse(calls: [skillCall(id: "c1", name: "result_present_tracks", arguments: ["trackIDs": .array([
+                .string("\(skillServerID.rawValue):t0"), .string("\(skillServerID.rawValue):t1"), .string("\(skillServerID.rawValue):t2"),
+            ])])]),
+        ])
+        let collector = await Self.runPlaylistSkill(
+            userText: "创建一个叫通勤的歌单并加入 10 首歌",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+        #expect(bridge.createdPlaylistNames.isEmpty, "候选不足时不得先创建歌单")
+        #expect(bridge.addedToPlaylist.isEmpty)
+        let insufficient = await collector.containsError("候选不足")
+        #expect(insufficient)
+    }
+
+    @Test("O9 空歌单（add 后读回 tracks 为空）→ 验证失败，不 completed")
+    func emptyPlaylistVerificationFails() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let bridge = SkillBridge()
+        // 创建歌单但 add 后不写回 store（模拟歌单实际为空）：library_get_playlist
+        // 返回空 tracks，空歌单本身就是验证结果，必须失败而不能跳过验证。
+        bridge.onPlaylistCreated = { name, gid in
+            Task {
+                try? await store.upsertPlaylist(
+                    Playlist(
+                        id: PlaylistID(rawValue: gid.remoteID),
+                        serverID: "v2",
+                        name: name,
+                        trackIDs: []
+                    ),
+                    serverID: "v2"
+                )
+            }
+        }
+        let ids = (0..<3).map { "\(skillServerID.rawValue):t\($0)" }
+        let provider = SkillProvider([
+            skillResponse(calls: [skillCall(id: "c1", name: "result_present_tracks", arguments: ["trackIDs": .array(ids.map(AIJSONValue.string))])]),
+        ])
+        let collector = await Self.runPlaylistSkill(
+            userText: "创建一个通勤歌单，加入这 3 首歌",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+        #expect(bridge.createdPlaylistNames.count == 1)
+        #expect(bridge.addedToPlaylist.count == 1)
+        let failed = await collector.containsError("歌单验证失败")
+        #expect(failed, "空歌单不得绕过验证直接 completed")
+    }
+
+    @Test("O10 playlistName 编译进 ActivationContext（多种自然说法）")
+    func playlistNameCompiledFromUserText() {
+        for (text, expected) in [
+            ("创建一个通勤歌单", "通勤"),
+            ("新建一个通勤歌单", "通勤"),
+            ("建个通勤歌单", "通勤"),
+            ("创建一个歌单叫通勤", "通勤"),
+            ("创建一个叫通勤的歌单", "通勤"),
+            ("创建歌单「通勤」", "通勤"),
+            ("歌单叫通勤", "通勤"),
+        ] {
+            #expect(AgentSkillPlaylistNameParser.infer(from: text) == expected, "「\(text)」应解析出「\(expected)」")
+        }
+        // 生产路径：ActivationContext 携带编译值，Runtime 直接消费。
+        let semantics = AgentRequestSemantics.analyze("新建一个通勤歌单，加入这 3 首歌")
+        let plan = AgentRequestPlan.build(userText: "新建一个通勤歌单，加入这 3 首歌", history: [])
+        let runtime = BuiltInPlaylistBuildSkill().makeRuntime(checkpointJSON: nil, activation: BuiltInSkillActivationContext(
+            currentUserText: "新建一个通勤歌单，加入这 3 首歌",
+            semantics: semantics,
+            allowedOperations: plan.authorization.allowedOperations,
+            inferredTargetCount: 3,
+            compiledPlaylistName: AgentSkillPlaylistNameParser.infer(from: "新建一个通勤歌单，加入这 3 首歌")
+        ))
+        #expect(runtime.facts["playlist.skill.playlistName"] == "通勤", "生产路径歌单名来自编译值，实际：\(runtime.facts["playlist.skill.playlistName"] ?? "nil")")
+    }
 }
 
 private final class NameBox: @unchecked Sendable {
@@ -747,4 +879,65 @@ private struct PlaylistBuildSkillCheckpointForTest: Codable {
     var targetCount: Int?
     var createdPlaylist: Bool
     var selectedTrackIDs: [String]?
+}
+
+// MARK: - Custom Tool schema exposure（P1-4 回归）
+
+@Suite("Custom Tool schema exposure")
+struct CustomToolExposureTests {
+
+    @Test("P11 mutation Custom Tool（derivedOperations ⊆ allowed）能进 production schema")
+    func customToolMutationExposedWhenAuthorized() {
+        let custom = ToolDescriptor(
+            name: "custom_queue_replace", group: .playback, permission: .reversible,
+            summary: "自建：替换播放队列",
+            tags: ["queue", "replace", "自建"],
+            customToolID: UUID(),
+            customToolVersion: 1,
+            derivedAuthorizationOperations: [.queueReplace]
+        )
+        let plan = AgentRequestPlan.build(userText: "替换当前队列", history: [])
+        #expect(plan.allowedOperations.contains(.queueReplace))
+        let selected = ToolSelector.select(plan: plan, all: [custom])
+        #expect(selected.contains { $0.name == "custom_queue_replace" },
+                "derivedAuthorizationOperations ⊆ allowed 的 mutation Custom Tool 必须可进 schema")
+    }
+
+    @Test("P12 未授权的 mutation Custom Tool 不进 schema；只读 Custom Tool 不受授权限制（domain 语义内）")
+    func customToolExposureFailClosed() {
+        let unauthorized = ToolDescriptor(
+            name: "custom_delete_playlist", group: .playlist, permission: .destructive,
+            summary: "自建：删除歌单",
+            tags: ["playlist", "delete"],
+            customToolID: UUID(),
+            customToolVersion: 1,
+            derivedAuthorizationOperations: [.playlistDelete]
+        )
+        // 只读 Custom Tool 仍走 domain 语义过滤（queue 域内可见），但不受授权限制。
+        let readOnly = ToolDescriptor(
+            name: "custom_queue_search", group: .catalog, permission: .readOnly,
+            summary: "自建：队列搜索",
+            tags: ["queue", "search"]
+        )
+        let plan = AgentRequestPlan.build(userText: "替换当前队列", history: [])
+        let selected = ToolSelector.select(plan: plan, all: [unauthorized, readOnly])
+        #expect(!selected.contains { $0.name == "custom_delete_playlist" }, "未授权 mutation Custom Tool 不得进 schema")
+        #expect(selected.contains { $0.name == "custom_queue_search" }, "只读 Custom Tool 在 domain 语义内始终可见")
+    }
+
+    @Test("P13 空授权（[]）下 mutation Custom Tool 也不进 schema（fail-closed 一致）")
+    func customToolExposureEmptyAuthorization() {
+        let custom = ToolDescriptor(
+            name: "custom_queue_replace", group: .playback, permission: .reversible,
+            summary: "自建：替换播放队列",
+            tags: ["queue", "replace"],
+            customToolID: UUID(),
+            customToolVersion: 1,
+            derivedAuthorizationOperations: [.queueReplace]
+        )
+        let plan = AgentRequestPlan.build(userText: "列出我的歌单", history: [])
+        #expect(plan.allowedOperations.isEmpty)
+        let selected = ToolSelector.select(plan: plan, all: [custom])
+        #expect(!selected.contains { $0.name == "custom_queue_replace" }, "空授权下 mutation Custom Tool 不得进 schema")
+    }
 }
