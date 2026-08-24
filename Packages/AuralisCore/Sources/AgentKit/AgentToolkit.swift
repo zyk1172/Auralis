@@ -62,7 +62,8 @@ public struct AgentToolkit {
         catalog: LocalCatalogStore,
         serverID: ServerID?,
         externalMusicService: (any AgentExternalMusicService)?,
-        allowsLyrics: Bool
+        allowsLyrics: Bool,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
     ) async -> ToolResult {
         do {
             return try await dispatch(
@@ -72,7 +73,8 @@ public struct AgentToolkit {
                 catalog: catalog,
                 serverID: serverID,
                 externalMusicService: externalMusicService,
-                allowsLyrics: allowsLyrics
+                allowsLyrics: allowsLyrics,
+                recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
             )
         } catch {
             return ToolResult(
@@ -93,14 +95,16 @@ public struct AgentToolkit {
         catalog: LocalCatalogStore,
         serverID: ServerID?,
         externalMusicService: (any AgentExternalMusicService)?,
-        allowsLyrics: Bool
+        allowsLyrics: Bool,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
     ) async throws -> ToolResult {
         if RecommendationIndexToolService.handles(call.name) {
             return try await RecommendationIndexToolService.execute(
                 call,
                 descriptor: descriptor,
                 catalog: catalog,
-                serverID: serverID
+                serverID: serverID,
+                executionRegistry: recommendationIndexExecutionRegistry
             )
         }
         switch call.name {

@@ -99,6 +99,9 @@ public final class AgentCoordinator: ObservableObject {
     /// All runs owned by this coordinator share resource-level mutation
     /// ownership; unrelated ToolLoop instances do not share this registry.
     private let mutationResourceLeaseRegistry: MutationResourceLeaseRegistry
+    /// Authoritative live state for Recommendation Index runs. Unlike catalog
+    /// counts, this registry can prove whether a run is actually active.
+    private let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
     public let memoryStore: AgentMemoryStore
 
@@ -161,6 +164,7 @@ public final class AgentCoordinator: ObservableObject {
             instantAnswerFallback: DuckDuckGoInstantAnswerService()
         )
         self.mutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
+        self.recommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
         self.actionLog = AgentActionLog(fileURL: dir.appendingPathComponent("agent-actions.json"))
         self.preferencesStore = PreferencesStore(fileURL: dir.appendingPathComponent("agent-preferences.json"))
@@ -537,7 +541,8 @@ public final class AgentCoordinator: ObservableObject {
             allowsHistory: permissions.allowsPlaybackHistory,
             memories: memoryStore.memories,
             skills: memoryStore.skills,
-            mutationResourceLeaseRegistry: mutationResourceLeaseRegistry
+            mutationResourceLeaseRegistry: mutationResourceLeaseRegistry,
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
         let bridge = self.bridge
         let catalog = self.catalog
@@ -828,6 +833,16 @@ public final class AgentCoordinator: ObservableObject {
         // 只有属于当前活动会话的任务才更新 UI 进度，避免 Session A 的步骤显示在 B 界面。
         if ownsRun(runID, sessionID: sessionID), activeSessionID == sessionID {
             activeTask = taskStore.record(taskID)
+        }
+        guard ownsRun(runID, sessionID: sessionID),
+              var presentation = runPresentationStates[runID],
+              presentation.sessionID == sessionID else { return }
+        if case let .workflow(skillID, phase, detail) = progress.activity {
+            presentation.phase = .workflow(skillID: skillID, phase: phase, detail: detail)
+            runPresentationStates[runID] = presentation
+            if activeSessionID == sessionID, currentRunID == runID {
+                runPresentationState = presentation
+            }
         }
     }
 
@@ -1198,8 +1213,8 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
-    /// 高风险操作确认：仅由 ToolDescriptor.requiresConfirmation=true 的工具调用。
-    /// Siri / 快捷指令没有可见确认界面，默认拒绝该不可逆操作，但其它工具仍照常直执行。
+    /// 运行时操作确认：不可逆工具以及需要补齐具体操作授权的调用都复用同一
+    /// PendingConfirmation 通道。Siri / 快捷指令没有可见确认界面，默认拒绝。
     private func requestOperationConfirmation(_ pending: PendingConfirmation) async -> Bool {
         if headless || Task.isCancelled { return false }
         guard operationConfirmationContinuation == nil else { return false }

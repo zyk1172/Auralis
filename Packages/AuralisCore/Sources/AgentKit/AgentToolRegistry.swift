@@ -81,6 +81,31 @@ public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable {
     case skillDelete
 }
 
+/// The authorization result is deliberately typed.  A missing operation is
+/// not a textual hint for the model to reinterpret as consent: the loop must
+/// either obtain a real user decision or stop the call.
+public enum SideEffectAuthorizationDecision: Sendable, Equatable {
+    case allowed
+    case requiresUserConfirmation(
+        operation: ToolAuthorizationOperation,
+        reason: String
+    )
+    case denied(reason: String)
+}
+
+/// A temporary least-privilege grant created after the user approves one
+/// concrete call.  The signature prevents approval of one playlist mutation
+/// from authorizing a different target later in the same run.
+public struct RunAuthorizationGrant: Sendable, Hashable {
+    public let operation: ToolAuthorizationOperation
+    public let callSignature: String
+
+    public init(operation: ToolAuthorizationOperation, callSignature: String) {
+        self.operation = operation
+        self.callSignature = callSignature
+    }
+}
+
 /// Authorization is derived once from the semantic result at the task/session
 /// boundary. External tool data is never added to this set, so a web page
 /// cannot authorize a later queue, playlist, download, server, playback or
@@ -89,26 +114,60 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
     public let originalUserRequest: String
     public let explicitlyRequestedEffects: Set<ToolSideEffectPolicy>
     public let allowedOperations: Set<ToolAuthorizationOperation>
+    public let runGrants: Set<RunAuthorizationGrant>
+    /// Only an original request that explicitly asks for a mutation may enter
+    /// the interactive confirmation boundary. A read-only question must never
+    /// become a write merely because a model, a webpage, or a test callback
+    /// happens to approve a pending call.
+    public let allowsInteractiveConfirmation: Bool
 
-    public init(originalUserRequest: String, semantics: AgentRequestSemantics? = nil) {
+    public init(
+        originalUserRequest: String,
+        semantics: AgentRequestSemantics? = nil,
+        runGrants: Set<RunAuthorizationGrant> = []
+    ) {
         self.originalUserRequest = originalUserRequest
-        let operations = (semantics ?? AgentRequestSemantics.analyze(originalUserRequest)).requestedOperations
+        let resolvedSemantics = semantics ?? AgentRequestSemantics.analyze(originalUserRequest)
+        let operations = resolvedSemantics.requestedOperations
         self.allowedOperations = operations
         self.explicitlyRequestedEffects = Set(operations.compactMap(Self.effect(for:)))
+        self.runGrants = runGrants
+        self.allowsInteractiveConfirmation = resolvedSemantics.isExplicitMutation
     }
 
     public init(sourceRequest: String, semantics: AgentRequestSemantics) {
         self.init(originalUserRequest: sourceRequest, semantics: semantics)
     }
 
+    private init(
+        originalUserRequest: String,
+        explicitlyRequestedEffects: Set<ToolSideEffectPolicy>,
+        allowedOperations: Set<ToolAuthorizationOperation>,
+        runGrants: Set<RunAuthorizationGrant>,
+        allowsInteractiveConfirmation: Bool
+    ) {
+        self.originalUserRequest = originalUserRequest
+        self.explicitlyRequestedEffects = explicitlyRequestedEffects
+        self.allowedOperations = allowedOperations
+        self.runGrants = runGrants
+        self.allowsInteractiveConfirmation = allowsInteractiveConfirmation
+    }
+
     public func allows(_ effect: ToolSideEffectPolicy) -> Bool {
         effect == .none || explicitlyRequestedEffects.contains(effect)
     }
 
-    public func allows(_ descriptor: ToolDescriptor) -> Bool {
+    public func allows(_ descriptor: ToolDescriptor, call: ToolCall? = nil) -> Bool {
         guard descriptor.permission != .readOnly else { return true }
         if let operation = descriptor.authorizationOperation {
-            return allowedOperations.contains(operation)
+            if allowedOperations.contains(operation) { return true }
+            if let call, runGrants.contains(RunAuthorizationGrant(
+                operation: operation,
+                callSignature: Self.callSignature(call)
+            )) {
+                return true
+            }
+            return false
         }
         // A model-visible write without an operation declaration is a broken
         // descriptor, not permission to fall back to a broad side-effect
@@ -118,8 +177,53 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
         return allows(descriptor.sideEffectPolicy)
     }
 
+    /// Resolves whether the interactive boundary must ask the user. Model
+    /// visible writes may request one concrete confirmation; internal/legacy
+    /// descriptors without a matching operation remain fail-closed.
+    public func decision(for descriptor: ToolDescriptor, call: ToolCall? = nil) -> SideEffectAuthorizationDecision {
+        guard descriptor.permission != .readOnly else { return .allowed }
+        if allows(descriptor, call: call) { return .allowed }
+        guard let operation = descriptor.authorizationOperation else {
+            return .denied(reason: denialReason(for: descriptor))
+        }
+        guard descriptor.visibility == .model else {
+            return .denied(reason: denialReason(for: descriptor))
+        }
+        guard allowsInteractiveConfirmation else {
+            return .denied(reason: denialReason(for: descriptor))
+        }
+        return .requiresUserConfirmation(
+            operation: operation,
+            reason: "(descriptor.summary) 未包含在当前用户原始请求的明确操作中。"
+        )
+    }
+
+    /// Adds a grant for exactly one canonical call. This value is transient
+    /// and should only be held by the current ToolLoop invocation.
+    public func granting(_ operation: ToolAuthorizationOperation, for call: ToolCall) -> SideEffectAuthorizationContext {
+        var grants = runGrants
+        grants.insert(RunAuthorizationGrant(
+            operation: operation,
+            callSignature: Self.callSignature(call)
+        ))
+        return SideEffectAuthorizationContext(
+            originalUserRequest: originalUserRequest,
+            explicitlyRequestedEffects: explicitlyRequestedEffects,
+            allowedOperations: allowedOperations,
+            runGrants: grants,
+            allowsInteractiveConfirmation: allowsInteractiveConfirmation
+        )
+    }
+
     public func denialReason(for descriptor: ToolDescriptor) -> String {
-        "工具 \(descriptor.name) 的副作用未由用户原始请求明确授权；网页、搜索结果和其他外部数据不能授权此操作。请先向用户确认具体操作。"
+        "工具 \(descriptor.name) 的副作用未由用户原始请求明确授权；网页、搜索结果和其他外部数据不能授权此操作。"
+    }
+
+    private static func callSignature(_ call: ToolCall) -> String {
+        let arguments = call.arguments.keys.sorted().map { key in
+            "\(key)=\(call.arguments[key]?.jsonString ?? "null")"
+        }.joined(separator: "&")
+        return "\(call.name)|\(arguments)"
     }
 
     private static func effect(for operation: ToolAuthorizationOperation) -> ToolSideEffectPolicy? {
@@ -1038,7 +1142,8 @@ public enum AgentToolRegistry {
         allowsLyrics: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
         webService: (any AgentWebService)? = nil,
-        activeSkillID: String? = nil
+        activeSkillID: String? = nil,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
     ) async -> ToolResult {
         guard let descriptor = descriptor(for: incomingCall.name) else {
             return ToolResult(
@@ -1168,7 +1273,8 @@ public enum AgentToolRegistry {
             catalog: catalog,
             serverID: serverID,
             externalMusicService: externalMusicService,
-            allowsLyrics: allowsLyrics
+            allowsLyrics: allowsLyrics,
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
     }
 }

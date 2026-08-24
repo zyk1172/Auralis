@@ -5,6 +5,41 @@ import Foundation
 import LocalCatalog
 import Testing
 
+private actor IndexExecutionGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markEntered() {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilReleased() async {
+        if released { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     enum FirstResponse { case valid, malformed }
 
@@ -12,6 +47,7 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     private var firstResponse: FirstResponse
     private var didRespond = false
     private var recorded: [AICompletionRequest] = []
+    private let gate: IndexExecutionGate?
 
     let capabilities = ModelCapabilities(
         maxContextTokens: 32_000,
@@ -28,8 +64,9 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
 
     var supportsToolCalling: Bool { true }
 
-    init(firstResponse: FirstResponse = .valid) {
+    init(firstResponse: FirstResponse = .valid, gate: IndexExecutionGate? = nil) {
         self.firstResponse = firstResponse
+        self.gate = gate
     }
 
     func testConnection() async -> AIConnectionResult {
@@ -37,6 +74,10 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     }
 
     func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        if let gate {
+            await gate.markEntered()
+            await gate.waitUntilReleased()
+        }
         let shouldReturnMalformed = lock.withLock {
             recorded.append(request)
             let value = !didRespond && firstResponse == .malformed
@@ -177,6 +218,65 @@ func recommendationIndexClosedTransformCommits() async throws {
         if case .jsonSchema = $0.outputFormat { return true }
         return false
     })
+}
+
+@Test("Recommendation Index exposes live progress before the batch commit and completes after commit")
+func recommendationIndexPublishesLiveExecutionState() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 2)
+    let gate = IndexExecutionGate()
+    let provider = ClosedIndexProvider(gate: gate)
+    let registry = RecommendationIndexExecutionRegistry()
+    let runID = UUID()
+    let sessionID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: sessionID, generation: 1)
+
+    let task = Task {
+        await ConversationEngine().run(
+            userText: "构建完整推荐索引",
+            provider: provider,
+            model: "closed-index",
+            bridge: MockAgentBridge(activeServerID: serverID),
+            catalog: store,
+            context: .init(
+                serverID: serverID,
+                recommendationIndexExecutionRegistry: registry
+            ),
+            intent: .libraryManagement,
+            policy: .policy(for: .libraryManagement),
+            executionLineage: .newRequest(text: "构建完整推荐索引"),
+            runID: runID,
+            executionLease: lease,
+            confirm: { _ in true },
+            emit: { _ in }
+        )
+    }
+
+    await gate.waitUntilEntered()
+    let liveState = await registry.snapshot(serverID: serverID)
+    guard case let .running(snapshot) = liveState else {
+        Issue.record("expected a live Recommendation Index state while the provider is paused")
+        await gate.release()
+        await task.value
+        return
+    }
+    #expect(snapshot.runID == runID)
+    #expect(snapshot.sessionID == sessionID)
+    #expect(snapshot.phase == .classifyingBatch)
+    #expect(snapshot.currentBatchSize > 0)
+    #expect(liveState.userFacingSummary.contains("正在运行"))
+
+    await gate.release()
+    await task.value
+
+    let finalState = await registry.snapshot(serverID: serverID)
+    guard case let .completed(completedRunID, indexedTracks, totalTracks, _) = finalState else {
+        Issue.record("expected the live Recommendation Index state to complete")
+        return
+    }
+    #expect(completedRunID == runID)
+    #expect(indexedTracks == totalTracks)
+    #expect(totalTracks == 2)
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
 }
 
 @Test("Malformed classification performs no stale commit and receives a new batch revision")

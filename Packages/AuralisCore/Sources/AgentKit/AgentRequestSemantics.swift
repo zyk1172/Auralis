@@ -111,10 +111,10 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "调整队列", "移动队列", "随机剩余队列", "换成", "换为", "queue_append", "queue_replace", "queue_clear",
         ])
         let explicitPlaylistAction = has([
-            "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单", "删除歌单",
+            "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单", "放到歌单", "放进歌单", "放入歌单", "收进歌单", "删除歌单",
             "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序", "复制歌单", "合并歌单",
             "playlist_create", "playlist_add", "playlist_delete", "playlist_rename",
-        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "添加", "删除", "重命名", "改名", "移除", "调整", "复制", "合并"]))
+        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "添加", "放到", "放进", "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并"]))
 
         let musicAnnotationTarget = has([
             "这首歌", "歌曲", "音乐", "专辑", "歌手", "艺人", "艺术家", "当前播放", "current track", "track", "song", "album", "artist",
@@ -230,8 +230,8 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
                 || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建立"])) {
                 requested.insert(.playlistCreate)
             }
-            if has(["加入歌单", "加到歌单", "添加到歌单", "playlist_add"])
-                || (has(["歌单", "playlist", "播放列表"]) && has(["加入", "添加"])) {
+            if has(["加入歌单", "加到歌单", "添加到歌单", "放到歌单", "放进歌单", "放入歌单", "收进歌单", "playlist_add"])
+                || (has(["歌单", "playlist", "播放列表"]) && has(["加入", "添加", "放到", "放进", "放入", "收进"])) {
                 requested.insert(.playlistAdd)
             }
             // “创建一个 N 首歌单” explicitly contains both operations:

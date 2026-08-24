@@ -9,6 +9,7 @@ public struct AssistantRunPresentationState: Equatable, Sendable {
         case thinking
         case streaming
         case usingTool(name: String)
+        case workflow(skillID: String, phase: String, detail: String)
         case waitingForConfirmation
         case retrying(message: String)
         case completed
@@ -22,6 +23,8 @@ public struct AssistantRunPresentationState: Equatable, Sendable {
                 "正在回复…"
             case let .usingTool(name):
                 name
+            case let .workflow(_, _, detail):
+                detail
             case .waitingForConfirmation:
                 "等待确认…"
             case let .retrying(message):

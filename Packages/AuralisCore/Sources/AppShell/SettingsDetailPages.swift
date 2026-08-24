@@ -189,7 +189,7 @@ struct AgentSettingsPage: View {
                     ProgressView(value: Double(status.indexedTracks), total: Double(max(status.totalTracks, 1)))
                         .tint(theme.colorTokens.accent.color)
                     LabeledContent(String(localized: "规则版本", bundle: .module), value: status.rulesVersion)
-                    LabeledContent(String(localized: "索引格式", bundle: .module), value: String(localized: "V2 包 v\(LocalCatalogStore.recommendationIndexPackageFormatVersion)", bundle: .module))
+                    LabeledContent(String(localized: "索引格式", bundle: .module), value: String(localized: "索引包 v\(LocalCatalogStore.recommendationIndexPackageFormatVersion)", bundle: .module))
                     Button {
                         model.startOrContinueRecommendationIndex()
                     } label: {
@@ -317,14 +317,14 @@ struct AgentSettingsPage: View {
             }
             Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text(String(localized: "将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
+            Text(String(localized: "将删除当前服务器的所有分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
         }
     }
 
     private var defaultIndexExportFilename: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return String(localized: "Auralis-推荐索引-V2-\(formatter.string(from: Date()))", bundle: .module)
+        return String(localized: "Auralis-推荐索引-\(formatter.string(from: Date()))", bundle: .module)
     }
 
     private var sceneBinding: Binding<String> {

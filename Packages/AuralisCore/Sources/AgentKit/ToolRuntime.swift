@@ -63,7 +63,8 @@ public struct ToolRuntime {
         activeSkillID: String? = nil,
         executionAuthority: ToolExecutionAuthority? = nil,
         executionLease: ToolExecutionLease,
-        resourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
+        resourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry(),
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
     ) async -> ToolResult {
         guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
             return ToolResult(
@@ -93,12 +94,26 @@ public struct ToolRuntime {
                 guard let authorizationContext else {
                     throw ToolRuntimeError.mutationAuthorizationMissing(call.name)
                 }
-                guard authorizationContext.allows(descriptor) else {
+                switch authorizationContext.decision(for: descriptor, call: call) {
+                case .allowed:
+                    break
+                case let .requiresUserConfirmation(_, reason):
+                    // The interactive ToolLoop normally resolves this before
+                    // Runtime execution. Direct/legacy callers have no UI
+                    // boundary, so fail closed without emitting a fake
+                    // confirmation instruction for the model to follow.
                     return ToolResult(
                         call: call,
                         permission: descriptor.permission,
                         success: false,
-                        summary: authorizationContext.denialReason(for: descriptor)
+                        summary: "需要用户确认后才能执行：\(reason)"
+                    )
+                case let .denied(reason):
+                    return ToolResult(
+                        call: call,
+                        permission: descriptor.permission,
+                        success: false,
+                        summary: reason
                     )
                 }
                 guard await executionLease.isValid() else {
@@ -129,7 +144,8 @@ public struct ToolRuntime {
                         allowsLyrics: allowsLyrics,
                         providerCapabilities: providerCapabilities,
                         webService: webService,
-                        activeSkillID: activeSkillID
+                        activeSkillID: activeSkillID,
+                        recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
                     )
                 }
                 await resourceLeaseRegistry.release(resources, owner: executionLease.runID)
@@ -146,7 +162,8 @@ public struct ToolRuntime {
                     allowsLyrics: allowsLyrics,
                     providerCapabilities: providerCapabilities,
                     webService: webService,
-                    activeSkillID: activeSkillID
+                    activeSkillID: activeSkillID,
+                    recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
                 )
             }
             return result

@@ -82,6 +82,91 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+/// First fails at the Provider boundary, then returns the exact closed
+/// Recommendation Index envelope requested by the Runtime.  This intentionally
+/// exercises AgentCoordinator/task-store resume instead of calling the skill
+/// directly.
+private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var completions = 0
+
+    let capabilities = ModelCapabilities(
+        maxContextTokens: 32_000,
+        maxOutputTokens: 4_096,
+        supportsToolCalling: true,
+        supportsParallelTools: true,
+        supportsToolChoice: true,
+        supportsStrictSchema: true,
+        supportsStreaming: true,
+        supportsJSONMode: true,
+        supportsJSONSchema: true,
+        toolMode: .openAIChat
+    )
+
+    var supportsToolCalling: Bool { true }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "resume-index", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        let count = lock.withLock {
+            completions += 1
+            return completions
+        }
+        guard count > 1 else {
+            throw AIProviderError.transport("模拟 Provider 中断")
+        }
+
+        guard let payload = request.messages.last?.content.data(using: .utf8),
+              let input = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let batchID = input["batchID"] as? String,
+              let revision = input["revision"] as? NSNumber,
+              let mode = input["mode"] as? String,
+              let tracks = input["tracks"] as? [[String: Any]]
+        else {
+            throw AIProviderError.malformedResponse(detail: "测试分类输入无法解析", retryable: false)
+        }
+
+        let items = tracks.compactMap { track -> [String: Any]? in
+            guard let id = track["id"] as? String else { return nil }
+            return [
+                "id": id,
+                "mode": mode,
+                "moods": ["平静"],
+                "scenes": ["深夜"],
+                "energy": 3,
+                "tempo": 2,
+                "acousticness": 4,
+                "danceability": 2,
+                "vocals": ["器乐"],
+                "textures": ["钢琴"],
+                "styles": ["轻音乐"],
+                "semanticTags": [["value": "夜行感", "confidence": 0.8]],
+                "confidence": 0.9,
+            ]
+        }
+        let response: [String: Any] = [
+            "batchID": batchID,
+            "revision": revision,
+            "mode": mode,
+            "items": items,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: response)
+        return AICompletionResponse(model: request.model, content: String(decoding: data, as: UTF8.self))
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    var completionCount: Int {
+        lock.withLock { completions }
+    }
+}
+
 // MARK: - Helpers
 
 private func makeAccount() -> ServerAccount {
@@ -239,4 +324,57 @@ func destructiveToolExecutesWithoutConfirmation() async throws {
     #expect((await connector.deletedPlaylistIDs).contains(PlaylistID(rawValue: playlistRemoteID)))
     #expect(!model.catalog.playlists.contains { $0.id.rawValue == playlistRemoteID })
     #expect(coordinator.actionRecords.contains { $0.toolName == "deletePlaylist" && $0.permission == .destructive })
+}
+
+@Test("Coordinator 真实入口在 Provider 失败后可由继续恢复索引")
+@MainActor
+func recommendationIndexResumesThroughCoordinatorAfterProviderFailure() async throws {
+    let track = makeTrack(remoteID: "resume-track", title: "Resume Track")
+    let model = AuralisAppModel(
+        connector: RestoringConnector(result: makeResult(tracks: [track])),
+        storeURL: temporaryCatalogURL()
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+
+    let provider = ResumeIndexProvider()
+    let sync = try await model.catalogCoordinator.store.beginSync(serverID: "test-server", mode: .full)
+    try await model.catalogCoordinator.store.stageTracks([track], session: sync)
+    try await model.catalogCoordinator.store.completeSync(sync, completedAt: .now)
+    let initialStatus = try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server")
+    let isIndexBuild = AgentRequestSemantics.analyze("开始并一次性完成推荐索引").isRecommendationIndexBuild
+    #expect(isIndexBuild)
+    #expect(initialStatus.pendingUniqueTracks == 1)
+    coordinator.send("开始并一次性完成推荐索引", provider: provider)
+    for _ in 0..<300 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(!coordinator.isRunning)
+    #expect(coordinator.activeTask?.status == .failed)
+    #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 1)
+
+    coordinator.send("继续", provider: provider)
+    for _ in 0..<600 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(!coordinator.isRunning)
+    #expect(provider.completionCount == 2)
+    #expect(coordinator.activeTask?.status == .completed)
+    #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 0)
 }

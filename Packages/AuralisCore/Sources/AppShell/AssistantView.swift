@@ -129,18 +129,24 @@ struct AssistantView: View {
         } message: { consent in
             Text("\(consent.purpose)\n\(consent.fields.map { "· \($0)" }.joined(separator: "\n"))")
         }
-        // 不可逆 Agent 操作确认：只由 playlist_delete / memory_* / skill_delete
-        // 等工具元数据触发；清空队列、删下载、删服务器等仍保持直接执行。
+        // 运行时确认：不可逆工具或原始请求语义不足以覆盖某个具体修改时，
+        // 都通过同一个 PendingConfirmation 通道挂起；模型文本不会自行授予权限。
         .alert(
-            Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认不可逆操作", bundle: .module)),
+            Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认操作", bundle: .module)),
             isPresented: Binding(
                 get: { agent.pendingOperationConfirmation != nil },
                 set: { if !$0 { agent.denyOperationConfirmation() } }
             ),
             presenting: agent.pendingOperationConfirmation
         ) { _ in
-            Button(String(localized: "批准并执行", bundle: .module), role: .destructive) {
-                agent.approveOperationConfirmation()
+            if agent.pendingOperationConfirmation?.permission == .destructive {
+                Button(String(localized: "批准并执行", bundle: .module), role: .destructive) {
+                    agent.approveOperationConfirmation()
+                }
+            } else {
+                Button(String(localized: "批准并执行", bundle: .module)) {
+                    agent.approveOperationConfirmation()
+                }
             }
             Button(String(localized: "取消", bundle: .module), role: .cancel) {
                 agent.denyOperationConfirmation()
@@ -602,7 +608,6 @@ struct AssistantView: View {
             // is active.  AgentTask remains useful for persisted deterministic
             // workflow diagnostics, but must not race a generic streaming run.
             Text(agent.runPresentationState?.phase.displayText
-                 ?? agent.activeTask?.currentStep
                  ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             Button(String(localized: "停止", bundle: .module)) { agent.cancel() }

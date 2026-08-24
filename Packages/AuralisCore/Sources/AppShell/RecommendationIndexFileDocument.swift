@@ -10,7 +10,7 @@ extension UTType {
     /// Pre-release exported files remain importable. New exports use the
     /// canonical identifier above.
     static var auralisLegacyRecommendationIndex: UTType {
-        UTType(exportedAs: "com.auralis.player.index-v2", conformingTo: .json)
+        UTType(importedAs: "com.auralis.player.index-v2", conformingTo: .json)
     }
 }
 

@@ -452,6 +452,7 @@ public enum RecommendationIndexSkillRuntime {
         executionLease: ToolExecutionLease,
         requestTimeout: TimeInterval,
         resourceLeaseRegistry: MutationResourceLeaseRegistry,
+        executionStateRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void,
@@ -474,11 +475,64 @@ public enum RecommendationIndexSkillRuntime {
             lineageID: lineageID,
             generation: generation
         )
+        let runID = executionLease.runID
+        let sessionID = executionLease.sessionID
+        guard await executionStateRegistry.begin(
+            serverID: serverID,
+            runID: runID,
+            sessionID: sessionID
+        ) else {
+            let message = "推荐索引已在另一个运行中；当前没有启动新的索引任务。"
+            taskState.status = .failed
+            taskState.completionState = .failed
+            taskState.errorState = message
+            taskState.errors.append(message)
+            taskState.pendingActions = []
+            await state(taskState)
+            await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+            return
+        }
+        var executionStateFinished = false
+        defer {
+            if !executionStateFinished {
+                Task {
+                    await executionStateRegistry.stop(serverID: serverID, runID: runID)
+                }
+            }
+        }
+
+        func phaseDetail(
+            _ phase: RecommendationIndexWorkflow.State,
+            status: RecommendationIndexStatus?,
+            currentBatch: RecommendationIndexPreparedBatch?
+        ) -> String {
+            switch phase {
+            case .readingStatus:
+                return "正在读取推荐索引状态"
+            case .fetchingBatch:
+                return "正在准备推荐索引批次"
+            case .classifyingBatch:
+                if let status, let currentBatch {
+                    return "推荐索引：已完成 \(status.indexedTracks) / \(status.totalTracks)，正在分类当前批次 \(currentBatch.tracks.count) 首"
+                }
+                return "正在分类推荐索引批次"
+            case .writingBatch:
+                return "正在保存推荐索引分类"
+            case .verifying:
+                return "正在核验推荐索引写入结果"
+            case .completed:
+                if let status {
+                    return "推荐索引已完成 \(status.indexedTracks) / \(status.totalTracks)"
+                }
+                return "推荐索引已完成"
+            }
+        }
 
         func publish(
             phase: RecommendationIndexWorkflow.State,
             currentBatch: RecommendationIndexPreparedBatch? = nil,
-            stoppedReason: String? = nil
+            stoppedReason: String? = nil,
+            terminal: Bool = false
         ) async {
             if let status = latestStatus {
                 taskState.facts["recommendation.index.total"] = "\(status.totalTracks)"
@@ -510,7 +564,65 @@ public enum RecommendationIndexSkillRuntime {
                 taskState.facts["recommendation.index.checkpoint"] = String(decoding: data, as: UTF8.self)
             }
             taskState.updatedAt = .now
+            let detail = phaseDetail(phase, status: latestStatus, currentBatch: currentBatch)
+            if phase == .completed, let status = latestStatus {
+                await executionStateRegistry.complete(
+                    serverID: serverID,
+                    runID: runID,
+                    totalTracks: status.totalTracks,
+                    indexedTracks: status.indexedTracks
+                )
+                executionStateFinished = true
+            } else if terminal, let stoppedReason {
+                if stoppedReason == "运行已取消" || stoppedReason.contains("运行已失效") {
+                    await executionStateRegistry.stop(serverID: serverID, runID: runID)
+                } else {
+                    await executionStateRegistry.fail(serverID: serverID, runID: runID, message: stoppedReason)
+                }
+                executionStateFinished = true
+            } else {
+                await executionStateRegistry.update(
+                    serverID: serverID,
+                    runID: runID,
+                    sessionID: sessionID,
+                    phase: phase,
+                    totalTracks: latestStatus?.totalTracks ?? 0,
+                    indexedTracks: latestStatus?.indexedTracks ?? 0,
+                    pendingTracks: latestStatus?.pendingTracks ?? 0,
+                    pendingSemanticTagTracks: latestStatus?.pendingSemanticTagTracks ?? 0,
+                    currentBatchSize: currentBatch?.tracks.count ?? 0,
+                    processedThisRun: totalWrittenThisRun
+                )
+            }
             await state(taskState)
+            await progress(ToolLoop.AgentProgress(
+                toolSteps: taskState.progress.toolCalls,
+                currentStep: detail,
+                inputTokens: taskState.progress.inputTokens,
+                outputTokens: taskState.progress.outputTokens,
+                activity: .workflow(
+                    skillID: skillID,
+                    phase: phase.rawValue,
+                    detail: detail
+                )
+            ))
+        }
+
+        // Keep failure-state mutation in the same local scope as `publish`.
+        // Passing `&taskState` to a helper while that helper also invokes the
+        // closure which captures `taskState` creates an async exclusivity
+        // overlap on the Provider-error path.
+        func fail(
+            _ message: String,
+            phase: RecommendationIndexWorkflow.State
+        ) async {
+            taskState.status = .failed
+            taskState.completionState = .failed
+            taskState.errorState = message
+            taskState.errors.append(message)
+            taskState.pendingActions = []
+            await publish(phase: phase, stoppedReason: message, terminal: true)
+            await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
         }
 
         taskState.status = .running
@@ -522,7 +634,7 @@ public enum RecommendationIndexSkillRuntime {
             if Task.isCancelled || !leaseValid {
                 taskState.status = .cancelled
                 taskState.pendingActions = []
-                await publish(phase: .readingStatus, stoppedReason: "运行已取消")
+                await publish(phase: .readingStatus, stoppedReason: "运行已取消", terminal: true)
                 return
             }
             if let violation = taskState.budgetViolation(policy: policy) {
@@ -532,7 +644,7 @@ public enum RecommendationIndexSkillRuntime {
                 taskState.errorState = message
                 taskState.errors.append(message)
                 taskState.pendingActions = []
-                await publish(phase: .readingStatus, stoppedReason: message)
+                await publish(phase: .readingStatus, stoppedReason: message, terminal: true)
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
                 return
             }
@@ -542,14 +654,25 @@ public enum RecommendationIndexSkillRuntime {
             } catch {
                 await fail(
                     "无法读取推荐索引状态：\(error.localizedDescription)",
-                    phase: .readingStatus,
-                    taskState: &taskState,
-                    publish: publish,
-                    emit: emit
+                    phase: .readingStatus
                 )
                 return
             }
-            guard let status = latestStatus else { return }
+            guard let status = latestStatus else {
+                let message = "无法读取推荐索引状态：目录尚未提供当前服务器的索引状态。"
+                taskState.status = .failed
+                taskState.completionState = .failed
+                taskState.errorState = message
+                taskState.errors.append(message)
+                taskState.pendingActions = []
+                await publish(
+                    phase: .readingStatus,
+                    stoppedReason: message,
+                    terminal: true
+                )
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                return
+            }
             if status.pendingTracks == 0, status.pendingSemanticTagTracks == 0 {
                 taskState.status = .completed
                 taskState.completed = true
@@ -583,10 +706,7 @@ public enum RecommendationIndexSkillRuntime {
             } catch {
                 await fail(
                     "无法准备推荐索引批次：\(error.localizedDescription)",
-                    phase: .fetchingBatch,
-                    taskState: &taskState,
-                    publish: publish,
-                    emit: emit
+                    phase: .fetchingBatch
                 )
                 return
             }
@@ -648,7 +768,7 @@ public enum RecommendationIndexSkillRuntime {
             } catch is CancellationError {
                 taskState.status = .cancelled
                 taskState.pendingActions = []
-                await publish(phase: .classifyingBatch, currentBatch: prepared, stoppedReason: "运行已取消")
+                await publish(phase: .classifyingBatch, currentBatch: prepared, stoppedReason: "运行已取消", terminal: true)
                 return
             } catch {
                 if isMalformedOrTruncated(error) {
@@ -670,7 +790,8 @@ public enum RecommendationIndexSkillRuntime {
                     await publish(
                         phase: .fetchingBatch,
                         stoppedReason: classificationDiagnostics.map { "分类输出校验失败（\($0.stage.rawValue)），正在重试" }
-                            ?? "分类输出校验失败，正在重试"
+                            ?? "分类输出校验失败，正在重试",
+                        terminal: false
                     )
                     await progress(ToolLoop.AgentProgress(
                         toolSteps: taskState.progress.toolCalls,
@@ -682,10 +803,7 @@ public enum RecommendationIndexSkillRuntime {
                 }
                 await fail(
                     "推荐索引暂时无法继续：AI Provider 请求失败。\(error.localizedDescription)",
-                    phase: .classifyingBatch,
-                    taskState: &taskState,
-                    publish: publish,
-                    emit: emit
+                    phase: .classifyingBatch
                 )
                 return
             }
@@ -694,7 +812,7 @@ public enum RecommendationIndexSkillRuntime {
             if Task.isCancelled || !leaseStillValid {
                 taskState.status = .cancelled
                 taskState.pendingActions = []
-                await publish(phase: .writingBatch, currentBatch: prepared, stoppedReason: "写入前运行已失效")
+                await publish(phase: .writingBatch, currentBatch: prepared, stoppedReason: "写入前运行已失效", terminal: true)
                 return
             }
 
@@ -706,10 +824,7 @@ public enum RecommendationIndexSkillRuntime {
                 // never reach the catalog as a partial write.
                 await fail(
                     "推荐索引分类结果无法编码，未写入任何数据。",
-                    phase: .writingBatch,
-                    taskState: &taskState,
-                    publish: publish,
-                    emit: emit
+                    phase: .writingBatch
                 )
                 return
             }
@@ -732,16 +847,14 @@ public enum RecommendationIndexSkillRuntime {
                 activeSkillID: skillID,
                 executionAuthority: authority,
                 executionLease: executionLease,
-                resourceLeaseRegistry: resourceLeaseRegistry
+                resourceLeaseRegistry: resourceLeaseRegistry,
+                recommendationIndexExecutionRegistry: executionStateRegistry
             )
             taskState.progress.toolCalls += 1
             guard result.success else {
                 await fail(
                     "推荐索引写入失败：\(result.summary)",
-                    phase: .writingBatch,
-                    taskState: &taskState,
-                    publish: publish,
-                    emit: emit
+                    phase: .writingBatch
                 )
                 return
             }
@@ -900,22 +1013,6 @@ public enum RecommendationIndexSkillRuntime {
         }
         guard best > 0 else { throw RecommendationIndexRuntimeError.emptyBatch }
         return Array(tracks.prefix(best))
-    }
-
-    private static func fail(
-        _ message: String,
-        phase: RecommendationIndexWorkflow.State,
-        taskState: inout AgentTaskState,
-        publish: (RecommendationIndexWorkflow.State, RecommendationIndexPreparedBatch?, String?) async -> Void,
-        emit: @escaping @Sendable (AgentChatMessage) async -> Void
-    ) async {
-        taskState.status = .failed
-        taskState.completionState = .failed
-        taskState.errorState = message
-        taskState.errors.append(message)
-        taskState.pendingActions = []
-        await publish(phase, nil, message)
-        await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
     }
 
     private static func trailingCount(_ action: String) -> Int? {

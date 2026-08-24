@@ -48,6 +48,10 @@ public struct ToolLoop {
         /// Shared by runs owned by one application coordinator. Standalone
         /// ToolLoop callers receive an isolated registry by default.
         public let mutationResourceLeaseRegistry: MutationResourceLeaseRegistry
+        /// Authoritative live state for Recommendation Index runs. It is
+        /// coordinator-scoped so status queries can distinguish persisted
+        /// pending data from an actually running background task.
+        public let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
 
         public init(
             serverID: ServerID? = nil,
@@ -69,7 +73,8 @@ public struct ToolLoop {
             allowsHistory: Bool = false,
             memories: [AgentMemoryEntry] = [],
             skills: [AgentSkillEntry] = [],
-            mutationResourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
+            mutationResourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry(),
+            recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
         ) {
             self.serverID = serverID
             self.serverName = serverName
@@ -91,21 +96,35 @@ public struct ToolLoop {
             self.memories = memories
             self.skills = skills
             self.mutationResourceLeaseRegistry = mutationResourceLeaseRegistry
+            self.recommendationIndexExecutionRegistry = recommendationIndexExecutionRegistry
         }
     }
 
     /// 任务进度快照（供 AgentTaskManager / UI 展示，不携带任何凭据）。
     public struct AgentProgress: Sendable {
+        public enum Activity: Sendable, Equatable {
+            case ordinary
+            case workflow(skillID: String, phase: String, detail: String)
+        }
+
         public let toolSteps: Int
         public let currentStep: String
         public let inputTokens: Int?
         public let outputTokens: Int?
+        public let activity: Activity
 
-        public init(toolSteps: Int, currentStep: String, inputTokens: Int? = nil, outputTokens: Int? = nil) {
+        public init(
+            toolSteps: Int,
+            currentStep: String,
+            inputTokens: Int? = nil,
+            outputTokens: Int? = nil,
+            activity: Activity = .ordinary
+        ) {
             self.toolSteps = toolSteps
             self.currentStep = currentStep
             self.inputTokens = inputTokens
             self.outputTokens = outputTokens
+            self.activity = activity
         }
     }
 
@@ -226,6 +245,7 @@ public struct ToolLoop {
                 executionLease: resolvedExecutionLease,
                 requestTimeout: roundTimeout,
                 resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                executionStateRegistry: context.recommendationIndexExecutionRegistry,
                 emit: emit,
                 log: log,
                 progress: progress,
@@ -330,6 +350,8 @@ public struct ToolLoop {
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
         var selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
+        var effectiveAuthorization = sideEffectAuthorization
+        var deniedAuthorizationSignatures = Set<String>()
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -554,18 +576,57 @@ public struct ToolLoop {
                         continue
                     }
                 }
-                let pending = descriptor.requiresConfirmation
-                    ? pendingConfirmation(descriptor: descriptor, name: call.name, diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments))
-                    : nil
-                if let pending, !(await confirm(pending)) {
-                    let text = "（工具执行结果）\(call.name)：失败 - 用户未批准该操作。"
+                let executableCall = call.usesTextProtocol
+                    ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
+                    : ToolCall(name: call.name, arguments: call.arguments)
+                var authorizationWasApproved = false
+                switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
+                case .allowed:
+                    break
+                case let .requiresUserConfirmation(operation, reason):
+                    if deniedAuthorizationSignatures.contains(signature) {
+                        resultMessages.append(toolResultMessage(
+                            callID: call.id,
+                            content: "（工具执行结果）\(call.name)：已跳过 - 用户未批准该操作。",
+                            native: nativeMode
+                        ))
+                        continue
+                    }
+                    let pending = pendingConfirmation(
+                        descriptor: descriptor,
+                        name: call.name,
+                        diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments),
+                        reason: reason
+                    )
+                    await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
+                    guard await confirm(pending) else {
+                        deniedAuthorizationSignatures.insert(signature)
+                        let text = "（工具执行结果）\(call.name)：失败 - 用户未批准该操作。"
+                        resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
+                        continue
+                    }
+                    effectiveAuthorization = effectiveAuthorization.granting(operation, for: executableCall)
+                    authorizationWasApproved = true
+                case let .denied(reason):
+                    let text = "（工具执行结果）\(call.name)：失败 - \(reason)"
                     resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
                     continue
                 }
 
-                let executableCall = call.usesTextProtocol
-                    ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
-                    : ToolCall(name: call.name, arguments: call.arguments)
+                if descriptor.requiresConfirmation, !authorizationWasApproved {
+                    let pending = pendingConfirmation(
+                        descriptor: descriptor,
+                        name: call.name,
+                        diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments)
+                    )
+                    await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
+                    guard await confirm(pending) else {
+                        let text = "（工具执行结果）\(call.name)：失败 - 用户未批准该操作。"
+                        resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
+                        continue
+                    }
+                }
+                let authorizationForCall = effectiveAuthorization
                 let result: ToolResult
                 do {
                     result = try await withTimeout(toolTimeout) {
@@ -579,9 +640,10 @@ public struct ToolLoop {
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
-                            authorizationContext: sideEffectAuthorization,
+                            authorizationContext: authorizationForCall,
                             executionLease: executionLease,
-                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry
+                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry
                         )
                     }
                 } catch is CancellationError {
@@ -752,6 +814,7 @@ public struct ToolLoop {
         // （例如第一轮音乐发现、第二轮需要歌单/服务器工具）会自动补入，不会永久缺失。
         var accumulatedToolText = userText
         let requestTimeout = roundTimeout
+        var effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -834,12 +897,13 @@ public struct ToolLoop {
 
         var toolStepCount = 0
         var completionRepairAttempts = 0
-        // A successful mutation may already satisfy the current request, but
-        // the next provider turn can still contain a legitimate second
-        // mutation with different arguments. Keep a pending finalization
-        // marker for one planning turn; an exact duplicate is suppressed and
-        // finalizes, while a new mutation clears the marker and proceeds.
+        // A successful mutation may already satisfy the current request. Keep
+        // a marker while processing the current provider turn so a legitimate
+        // second mutation with a different requested operation can still run;
+        // a repeated successful call can be finalized without asking the model
+        // to plan an unnecessary follow-up mutation.
         var pendingMutationFinalization = false
+        var duplicateMutationFinalization = false
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
@@ -852,6 +916,10 @@ public struct ToolLoop {
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
+        // A model-visible write not covered by the original operation graph
+        // gets one real confirmation. A rejection is remembered by call
+        // signature so the model cannot turn it into a textual consent loop.
+        var deniedAuthorizationSignatures = Set<String>()
         // A transient Provider failure may be recovered at the current skill
         // checkpoint. This is protocol-preserving recovery, not a tool-call or
         // model-capability limit.
@@ -1395,7 +1463,6 @@ public struct ToolLoop {
             var toolMessages: [AIMessage] = []
             var shouldCompactSkillTranscript = false
             var fixedSkillFailure: String?
-            var blockedDuplicateAfterCompletion = false
             // 本轮统计（用于合并工具轨迹展示）。
             var roundSearchCalls = 0
             var roundToolNames: Set<String> = []
@@ -1461,7 +1528,12 @@ public struct ToolLoop {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复副作用", reused: true))
                     if pendingMutationFinalization,
                        !ws.isIndeterminateSideEffect(tool: call.name, args: stringArguments) {
-                        blockedDuplicateAfterCompletion = true
+                        // The provider has planned the exact mutation again
+                        // after a successful result.  Keep the idempotence
+                        // guard, but finish this request instead of feeding a
+                        // duplicate-operation message back into another open
+                        // planning turn.
+                        duplicateMutationFinalization = true
                     }
                     // A confirmed duplicate is an internal recovery detail,
                     // but an indeterminate remote write remains user-visible:
@@ -1482,6 +1554,7 @@ public struct ToolLoop {
                 // multi-step request, so let it run and keep the loop open.
                 if pendingMutationFinalization, descriptor.permission != .readOnly {
                     pendingMutationFinalization = false
+                    duplicateMutationFinalization = false
                 }
 
                 // ② 任务级缓存：同一工具 + 规范化参数已执行过 → 直接复用结果。
@@ -1500,8 +1573,67 @@ public struct ToolLoop {
                     continue
                 }
 
-                if descriptor.requiresConfirmation {
-                    let signature = Self.confirmationSignature(name: call.name, args: stringArguments)
+                // ③ 执行工具（实际只执行一次；写入任务级缓存供后续复用）。
+                await progress(AgentProgress(
+                    toolSteps: toolStepCount,
+                    currentStep: "执行 \(call.name)"
+                ))
+                taskState.status = .waitingForTool
+                taskState.updatedAt = .now
+                await state(taskState)
+                let result: ToolResult
+                let executableCall = call.usesTextProtocol
+                    ? structuredToolCall(name: call.name, legacyArguments: stringArguments)
+                    : ToolCall(name: call.name, arguments: call.arguments)
+                let signature = Self.confirmationSignature(name: call.name, args: stringArguments)
+                var authorizationWasApproved = false
+                switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
+                case .allowed:
+                    break
+                case let .requiresUserConfirmation(operation, reason):
+                    if deniedAuthorizationSignatures.contains(signature) {
+                        let message = "用户尚未批准「\(descriptor.summary)」，本次未执行。"
+                        ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "重复调用仍未获批准", reused: true))
+                        toolMessages.append(Self.toolResultMessage(
+                            callID: call.id,
+                            content: "（工具执行结果）\(call.name): 已跳过 - \(message)",
+                            native: nativeMode
+                        ))
+                        continue
+                    }
+                    let pending = Self.pendingConfirmation(
+                        descriptor: descriptor,
+                        name: call.name,
+                        diagnosticArgs: diagnosticArgs,
+                        reason: reason
+                    )
+                    await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
+                    guard await confirm(pending) else {
+                        deniedAuthorizationSignatures.insert(signature)
+                        let message = "用户未批准「\(descriptor.summary)」，本次未执行。"
+                        taskState.errors.append(message)
+                        taskState.pendingActions = [message]
+                        taskState.status = .waitingForModel
+                        taskState.updatedAt = .now
+                        await state(taskState)
+                        toolMessages.append(Self.toolResultMessage(
+                            callID: call.id,
+                            content: "（工具执行结果）\(call.name): 已拒绝 - \(message)",
+                            native: nativeMode
+                        ))
+                        continue
+                    }
+                    effectiveAuthorization = effectiveAuthorization.granting(operation, for: executableCall)
+                    authorizationWasApproved = true
+                case let .denied(reason):
+                    let failureText = "（工具执行结果）\(call.name): 执行失败 - \(reason)"
+                    taskState.errors.append(failureText)
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "副作用授权拒绝", reused: false))
+                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
+                    continue
+                }
+
+                if descriptor.requiresConfirmation, !authorizationWasApproved {
                     let pending = Self.pendingConfirmation(
                         descriptor: descriptor,
                         name: call.name,
@@ -1518,8 +1650,7 @@ public struct ToolLoop {
                         continue
                     }
                     await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
-                    let approved = await confirm(pending)
-                    guard approved else {
+                    guard await confirm(pending) else {
                         deniedConfirmationSignatures.insert(signature)
                         let message = "用户未批准「\(descriptor.summary)」，本次未执行。"
                         taskState.errors.append(message)
@@ -1537,19 +1668,7 @@ public struct ToolLoop {
                         continue
                     }
                 }
-
-                // ③ 执行工具（实际只执行一次；写入任务级缓存供后续复用）。
-                await progress(AgentProgress(
-                    toolSteps: toolStepCount,
-                    currentStep: "执行 \(call.name)"
-                ))
-                taskState.status = .waitingForTool
-                taskState.updatedAt = .now
-                await state(taskState)
-                let result: ToolResult
-                let executableCall = call.usesTextProtocol
-                    ? structuredToolCall(name: call.name, legacyArguments: stringArguments)
-                    : ToolCall(name: call.name, arguments: call.arguments)
+                let authorizationForCall = effectiveAuthorization
                 do {
                     result = try await Self.withTimeout(toolTimeout) {
                         await ToolRuntime.execute(
@@ -1562,10 +1681,11 @@ public struct ToolLoop {
                             allowsLyrics: context.allowsLyrics,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
-                            authorizationContext: sideEffectAuthorization,
+                            authorizationContext: authorizationForCall,
                             activeSkillID: activeSkillID,
                             executionLease: executionLease,
-                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry
+                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                            recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry
                         )
                     }
                 } catch is CancellationError {
@@ -1623,7 +1743,7 @@ public struct ToolLoop {
                    Self.shouldFinalizeAfterMutation(
                        policy: policy,
                        state: taskState,
-                       authorization: sideEffectAuthorization
+                       authorization: effectiveAuthorization
                    ) {
                     pendingMutationFinalization = true
                 }
@@ -1766,12 +1886,12 @@ public struct ToolLoop {
                 return
             }
 
-            if pendingMutationFinalization && blockedDuplicateAfterCompletion {
-                // Once the Runtime has a successful, authorized mutation and
-                // the provider's only follow-up is the same mutation again,
-                // do not ask it to plan another open-ended turn. The working
-                // set idempotence guard remains the last line of defense, but
-                // this branch also makes the duplicate invisible to the user.
+            if pendingMutationFinalization, duplicateMutationFinalization {
+                // A successful, authorized mutation already satisfies the
+                // current request and the provider has planned the exact same
+                // call again. The working-set idempotence guard still protects
+                // the duplicate call; do not expose that recovery detail as a
+                // second user-visible operation.
                 _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
                 taskState.pendingActions = []
                 await state(taskState)
@@ -2358,6 +2478,7 @@ public struct ToolLoop {
                 context: context,
                 sideEffectAuthorization: sideEffectAuthorization,
                 resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
+                recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                 emit: emit,
                 log: log
             )
@@ -2371,6 +2492,7 @@ public struct ToolLoop {
         context: Context,
         sideEffectAuthorization: SideEffectAuthorizationContext,
         resourceLeaseRegistry: MutationResourceLeaseRegistry,
+        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void
     ) async {
@@ -2390,7 +2512,8 @@ public struct ToolLoop {
                 systemService: nil,
                 authorizationContext: sideEffectAuthorization,
                 executionLease: ToolExecutionContext.lease ?? .revoked(),
-                resourceLeaseRegistry: resourceLeaseRegistry
+                resourceLeaseRegistry: resourceLeaseRegistry,
+                recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
             )
         }
 
@@ -2580,14 +2703,22 @@ public struct ToolLoop {
     private static func pendingConfirmation(
         descriptor: ToolDescriptor,
         name: String,
-        diagnosticArgs: [String: String]
+        diagnosticArgs: [String: String],
+        reason: String? = nil
     ) -> PendingConfirmation {
+        let confirmationGuidance = descriptor.permission == .destructive || descriptor.requiresConfirmation
+            ? "此操作不可逆，且不会自动生成恢复副本。"
+            : "这项具体修改需要主人批准后才能执行。"
         let detail: String
         if diagnosticArgs.isEmpty {
-            detail = "此操作不可逆，且不会自动生成恢复副本。"
+            detail = [reason, confirmationGuidance]
+                .compactMap { $0 }
+                .joined(separator: "\n")
         } else {
             let arguments = diagnosticArgs.keys.sorted().map { "\($0)=\(diagnosticArgs[$0] ?? "")" }.joined(separator: "、")
-            detail = "参数：\(arguments)\n此操作不可逆，且不会自动生成恢复副本。"
+            detail = [reason, "参数：\(arguments)", confirmationGuidance]
+                .compactMap { $0 }
+                .joined(separator: "\n")
         }
         return PendingConfirmation(
             toolName: name,
@@ -2919,7 +3050,7 @@ public struct ToolLoop {
         8c. 候选足够时即可收尾：已获得用户要求的目标数量、或对应队列操作已由工具确认成功时，直接完成任务，不要继续无意义搜索。同一搜索重复多次没有新结果时，可以基于现有候选回答，或换一个搜索词/换一种策略继续；不要死磕同一条搜索。
         8d. 最终展示协议：搜索/推荐工具产生的是内部候选，不会直接展示给主人。当主人只要求「推荐给我看看」而没有播放/建歌单/改队列时，完成筛选后必须调用 result_present_tracks(trackIDs=[最终选中的真实 ID]) 一次；只能把真正打算推荐给主人的歌曲传入，不要把整个候选池传入。如果已经 queue_replace / playlist_add_songs 成功确定最终集合，不必再额外调用 result_present_tracks。多个同名/相似对象无法确定时，用 result_present_tracks(trackIDs=[候选], kind=\"disambiguation\") 列出候选供主人选择。
         8e. 最终回答文字：当 Runtime 会用歌曲卡片展示最终结果时，最终文字只做简短总结（如「已经为你选好 12 首适合开车提神的歌曲」），可以说明整体风格/筛选逻辑，最多举 2～3 首代表；不要逐首完整罗列 12 个歌名，避免与卡片重复。
-        9. 执行哲学：普通已注册工具不需要额外审批；但删除歌单、删除单条/清空全部记忆、删除技能文件等不可逆高风险操作必须等待运行时批准。清空队列、删除下载、删除服务器（仅本地清理）等不是同等级不可逆操作，用户明确要求且目标唯一时直接执行。不要擅自扩大用户指令范围；多个同名/相似对象无法确定时，先列出候选让主人选择目标，再执行。
+        9. 执行哲学：用户已经明确要求可逆修改时直接调用工具，不要自行发明确认流程；只有 Runtime 返回 PendingConfirmation 时才等待主人批准。删除歌单、删除单条/清空全部记忆、删除技能文件等不可逆高风险操作必须等待运行时批准。清空队列、删除下载、删除服务器（仅本地清理）等不是同等级不可逆操作，用户明确要求且目标唯一时直接执行。不要擅自扩大用户指令范围；多个同名/相似对象无法确定时，先列出候选让主人选择目标，再执行。
         10. 凭据（密码、Token、完整服务器地址）绝不出现在任何参数或回复中。
         10b. 添加 / 修改服务器（地址、账号、凭据）必须由用户在本机「设置 → 服务器」页完成：
             模型不负责填写或保存任何服务器凭据。addServer / updateServer 只是唤起设置页，

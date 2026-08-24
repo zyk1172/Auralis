@@ -681,6 +681,78 @@ func explicitPlaylistCreateDoesNotAskForConfirmation() async throws {
     #expect(await confirmation.count() == 0)
 }
 
+@Test("missing operation authorization enters the real pending confirmation boundary")
+func missingMutationOperationUsesPendingConfirmation() async throws {
+    let serverID: ServerID = "confirmation-server"
+    let playlistID = GlobalID(serverID: serverID, remoteID: "playlist")
+    let trackID = GlobalID(serverID: serverID, remoteID: "track")
+    let store = try scenarioStore()
+    try await seedScenario(
+        store,
+        tracks: [scenarioTrack(serverID: serverID, remoteID: "track", title: "测试歌曲")]
+    )
+    try await store.upsertPlaylist(
+        Playlist(id: "playlist", serverID: serverID, name: "Test", trackIDs: []),
+        serverID: serverID,
+        isReadOnly: false
+    )
+    let bridge = MockAgentBridge(activeServerID: serverID)
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "add-after-confirmation",
+            name: "playlist_add_songs",
+            arguments: [
+                "playlistID": .string(playlistID.description),
+                "trackIDs": .array([.string(trackID.description)]),
+            ]
+        )]),
+        scenarioResponse(content: "已加入歌单。"),
+    ])
+    let confirmation = ScenarioStateProbe()
+    let semantics = AgentRequestSemantics(
+        domain: .playlist,
+        operation: .mutate,
+        isMusicContext: true,
+        isContinuation: false
+    )
+    let lineage = ExecutionLineage(
+        sourceRequest: "处理歌单 Test",
+        authorization: SideEffectAuthorizationContext(
+            sourceRequest: "处理歌单 Test",
+            semantics: semantics
+        )
+    )
+
+    await ConversationEngine().run(
+        userText: "处理歌单 Test",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(serverID: serverID),
+        intent: .playlistManagement,
+        policy: .policy(for: .playlistManagement),
+        executionLineage: lineage,
+        runID: lineage.lineageID,
+        executionLease: ToolExecutionLease(
+            runID: lineage.lineageID,
+            sessionID: UUID(),
+            generation: 1
+        ),
+        confirm: { pending in
+            #expect(pending.toolName == "playlist_add_songs")
+            await confirmation.record()
+            return true
+        },
+        emit: { _ in }
+    )
+
+    #expect(await confirmation.count() == 1)
+    #expect(bridge.addedToPlaylist.count == 1)
+    #expect(bridge.addedToPlaylist.first?.0 == playlistID)
+    #expect(bridge.addedToPlaylist.first?.1 == [trackID])
+}
+
 @Test("playlist list after failed create is read-only and cannot inherit mutation authority")
 func playlistListAfterFailedCreateIsReadOnly() async throws {
     let failedCreate = ExecutionLineage.newRequest(text: "创建一个空歌单 Test")
@@ -798,6 +870,7 @@ func operationAuthorizationIsLeastPrivilege() {
     #expect(SideEffectAuthorizationContext(originalUserRequest: "我不喜欢这个网页的排版").allowedOperations.isEmpty)
     #expect(SideEffectAuthorizationContext(originalUserRequest: "C++ memory leak 是怎么产生的？").allowedOperations.isEmpty)
     #expect(SideEffectAuthorizationContext(originalUserRequest: "skill issue 是什么意思？").allowedOperations.isEmpty)
+    #expect(AgentRequestSemantics.analyze("把这些歌放进歌单 Test").requestedOperations.contains(.playlistAdd))
 }
 
 private actor MutationBoundaryGate {

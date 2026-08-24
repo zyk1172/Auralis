@@ -19,13 +19,15 @@ enum RecommendationIndexToolService {
         _ call: ToolCall,
         descriptor: ToolDescriptor,
         catalog: LocalCatalogStore,
-        serverID: ServerID?
+        serverID: ServerID?,
+        executionRegistry: RecommendationIndexExecutionRegistry
     ) async throws -> ToolResult {
         switch call.name {
         case "library_index_status":
             let status = try await catalog.recommendationIndexStatus(serverID: serverID)
-            let text = "推荐索引：共 \(status.totalTracks) 首；已完成固定分类 \(status.indexedTracks) 首；固定分类待处理 \(status.pendingTracks) 首；已处理语义标签 \(status.semanticProcessedTracks) 首；语义标签待处理 \(status.pendingSemanticTagTracks) 首。"
-            return .ok(call, descriptor, text, .text(text), facts: statusFacts(status))
+            let executionState = await executionRegistry.snapshot(serverID: serverID)
+            let text = "推荐索引数据：共 \(status.totalTracks) 首；已完成固定分类 \(status.indexedTracks) 首；固定分类待处理 \(status.pendingTracks) 首；已处理语义标签 \(status.semanticProcessedTracks) 首；语义标签待处理 \(status.pendingSemanticTagTracks) 首。\n执行状态：\(executionState.userFacingSummary)。"
+            return .ok(call, descriptor, text, .text(text), facts: statusFacts(status, executionState: executionState))
 
         case "library_index_read":
             let limit = min(max((try? call.int("limit")) ?? 50, 1), 100)
@@ -69,12 +71,13 @@ enum RecommendationIndexToolService {
                 return .fail(call, descriptor, "分类未完整写入，已停止当前索引运行")
             }
             let status = try await catalog.recommendationIndexStatus(serverID: serverID)
+            let executionState = await executionRegistry.snapshot(serverID: serverID)
             return .ok(
                 call,
                 descriptor,
                 "已写入 \(written) 首，仍待处理 \(status.pendingUniqueTracks) 首",
                 .text("推荐索引已写入 \(written) 首。"),
-                facts: statusFacts(status)
+                facts: statusFacts(status, executionState: executionState)
             )
 
         default:
@@ -93,8 +96,11 @@ enum RecommendationIndexToolService {
         return try? JSONDecoder().decode([RecommendationIndexClassification].self, from: value.jsonData)
     }
 
-    private static func statusFacts(_ status: RecommendationIndexStatus) -> [String: String] {
-        [
+    private static func statusFacts(
+        _ status: RecommendationIndexStatus,
+        executionState: RecommendationIndexExecutionState = .idle
+    ) -> [String: String] {
+        var facts = [
             "recommendation.index.total": "\(status.totalTracks)",
             "recommendation.index.indexed": "\(status.indexedTracks)",
             "recommendation.index.pending": "\(status.pendingTracks)",
@@ -102,5 +108,8 @@ enum RecommendationIndexToolService {
             "recommendation.index.pendingUnique": "\(status.pendingUniqueTracks)",
             "recommendation.index.nextBatchAvailable": status.pendingUniqueTracks > 0 ? "true" : "false",
         ]
+        facts["recommendation.index.executionState"] = executionState.isRunning ? "running" : "idle"
+        facts["recommendation.index.executionSummary"] = executionState.userFacingSummary
+        return facts
     }
 }
