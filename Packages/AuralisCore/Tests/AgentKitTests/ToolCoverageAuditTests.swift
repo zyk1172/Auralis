@@ -41,10 +41,10 @@ func canonicalAliasesResolveToTheirDeclaredTarget() {
 func toolRiskApprovalPolicyIsExplicit() {
     let irreversible = AgentToolRegistry.all.filter { $0.risk == .irreversibleDelete }
     #expect(!irreversible.isEmpty)
-    #expect(irreversible.allSatisfy { $0.requiresConfirmation })
+    #expect(irreversible.allSatisfy { $0.confirmationPolicy.requiresExplicitUserApproval })
 
     let reversible = AgentToolRegistry.all.filter { $0.risk == .reversibleMutation }
-    #expect(reversible.allSatisfy { !$0.requiresConfirmation })
+    #expect(reversible.allSatisfy { !$0.confirmationPolicy.requiresExplicitUserApproval })
 }
 
 @Test("Model-visible mutations declare a scope and operation")

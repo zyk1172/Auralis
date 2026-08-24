@@ -193,6 +193,9 @@ public enum CustomToolValidationIssue: Codable, Sendable, Equatable, Hashable, L
 
 public struct CustomToolDerivedMetadata: Codable, Sendable, Equatable, Hashable {
     public let risk: ToolRisk
+    /// Confirmation is inherited from exact child policy declarations, never
+    /// inferred from a broad risk/permission family.
+    public let confirmationPolicy: ToolConfirmationPolicy
     public let scopes: Set<MutationScope>
     /// Exact canonical operations performed by workflow children. Scopes are
     /// retained for resource/risk reporting, but authorization uses this set.
@@ -204,6 +207,7 @@ public struct CustomToolDerivedMetadata: Codable, Sendable, Equatable, Hashable 
 
     public init(
         risk: ToolRisk,
+        confirmationPolicy: ToolConfirmationPolicy = .none,
         scopes: Set<MutationScope>,
         operations: Set<ToolAuthorizationOperation> = [],
         resources: Set<MutationResource>,
@@ -212,6 +216,7 @@ public struct CustomToolDerivedMetadata: Codable, Sendable, Equatable, Hashable 
         parallelSafe: Bool
     ) {
         self.risk = risk
+        self.confirmationPolicy = confirmationPolicy
         self.scopes = scopes
         self.operations = operations
         self.resources = resources
@@ -609,7 +614,7 @@ public actor CustomToolRegistry {
             name: manifest.canonicalToolName,
             group: .catalog,
             permission: permission,
-            requiresConfirmation: metadata.risk == .irreversibleDelete,
+            confirmationPolicy: metadata.confirmationPolicy,
             summary: manifest.description,
             parameters: parameters,
             sideEffectPolicy: sideEffect,
@@ -633,6 +638,7 @@ public actor CustomToolRegistry {
 
     private static func derivedMetadata(_ manifest: CustomToolManifest) -> CustomToolDerivedMetadata {
         var risk: ToolRisk = .none
+        var confirmationPolicy: ToolConfirmationPolicy = .none
         var scopes = Set<MutationScope>()
         var operations = Set<ToolAuthorizationOperation>()
         var resources = Set<MutationResource>()
@@ -644,6 +650,10 @@ public actor CustomToolRegistry {
             for step in steps {
                 guard let descriptor = AgentToolRegistry.descriptor(for: step.tool) else { continue }
                 risk = maxRisk(risk, descriptor.risk)
+                confirmationPolicy = ToolConfirmationPolicy.mostRestrictive([
+                    confirmationPolicy,
+                    descriptor.confirmationPolicy,
+                ])
                 scopes.formUnion(descriptor.mutationScopes)
                 if let operation = descriptor.authorizationOperation {
                     operations.insert(operation)
@@ -656,7 +666,16 @@ public actor CustomToolRegistry {
         case .httpRead:
             network = true
         }
-        return CustomToolDerivedMetadata(risk: risk, scopes: scopes, operations: operations, resources: resources, networkAccess: network, idempotent: idempotent, parallelSafe: parallel)
+        return CustomToolDerivedMetadata(
+            risk: risk,
+            confirmationPolicy: confirmationPolicy,
+            scopes: scopes,
+            operations: operations,
+            resources: resources,
+            networkAccess: network,
+            idempotent: idempotent,
+            parallelSafe: parallel
+        )
     }
 
     private static func maxRisk(_ lhs: ToolRisk, _ rhs: ToolRisk) -> ToolRisk {

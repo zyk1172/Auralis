@@ -65,7 +65,7 @@ struct CustomToolRegistryTests {
         let saved = try await registry.create(manifest)
         let descriptor = try #require(await registry.descriptor(named: saved.canonicalToolName))
         #expect(descriptor.permission == .destructive)
-        #expect(descriptor.requiresConfirmation)
+        #expect(descriptor.confirmationPolicy.requiresExplicitUserApproval)
         #expect(descriptor.risk == .irreversibleDelete)
         #expect(descriptor.mutationScopes == [.playlist])
         #expect(descriptor.mutationResources == [.playlist])

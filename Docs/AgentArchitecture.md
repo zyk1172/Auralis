@@ -148,7 +148,7 @@ Intent 产生 `AgentTaskPolicy`。Policy 只承担路由/诊断职责，不再�
 - 日志与 UI 状态。
 
 `ToolGroup` / `ToolPermission` / `AgentRisk` / `GrantedScope` 保留为兼容与诊断元数据，
-Runtime 正常执行路径不再依赖它们做门禁；唯一例外是 `ToolDescriptor.requiresConfirmation`
+Runtime 正常执行路径不再依赖它们做门禁；唯一的 UI 批准门禁是 `ToolDescriptor.confirmationPolicy`
 对不可逆删除工具的精确声明。
 - wall-clock 与模型轮次只作极端看门狗；输入/输出 token 跟随 Provider / ModelCapabilities，
   不在 Agent 层再加固定上限；普通 ToolLoop 的无进展和重复模式只记录诊断，

@@ -372,7 +372,7 @@ public struct ToolRuntime {
             guard let descriptor else { return false }
             return descriptor.permission == .readOnly
                 && descriptor.parallelSafe
-                && !descriptor.requiresConfirmation
+                && !descriptor.confirmationPolicy.requiresExplicitUserApproval
         }) else {
             return await calls.asyncMap { call in
                 await executeMeasured(

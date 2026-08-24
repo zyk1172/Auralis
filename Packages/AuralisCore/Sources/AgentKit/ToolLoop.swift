@@ -709,7 +709,7 @@ public struct ToolLoop {
                     else { return false }
                     return descriptor.permission == .readOnly
                         && descriptor.parallelSafe
-                        && !descriptor.requiresConfirmation
+                        && !descriptor.confirmationPolicy.requiresExplicitUserApproval
                 }
             if parallelEligible {
                 let executorContext = ToolExecutorContext(
@@ -820,11 +820,14 @@ public struct ToolLoop {
                     continue
                 }
 
-                if descriptor.requiresConfirmation {
-                    let pending = pendingConfirmation(
+                if descriptor.confirmationPolicy.requiresExplicitUserApproval {
+                    let pending = Self.pendingConfirmation(
                         descriptor: descriptor,
                         name: call.name,
-                        diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments)
+                        diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments),
+                        runID: runID,
+                        sessionID: executionLease.sessionID,
+                        toolCallID: call.id
                     )
                     await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
                     guard await confirm(pending) else {
@@ -1851,11 +1854,14 @@ public struct ToolLoop {
                     continue
                 }
 
-                if descriptor.requiresConfirmation {
+                if descriptor.confirmationPolicy.requiresExplicitUserApproval {
                     let pending = Self.pendingConfirmation(
                         descriptor: descriptor,
                         name: call.name,
-                        diagnosticArgs: diagnosticArgs
+                        diagnosticArgs: diagnosticArgs,
+                        runID: runID,
+                        sessionID: executionLease.sessionID,
+                        toolCallID: call.id
                     )
                     if deniedConfirmationSignatures.contains(signature) {
                         let message = "用户尚未批准「\(descriptor.summary)」，本次未执行。"
@@ -2937,27 +2943,34 @@ public struct ToolLoop {
         descriptor: ToolDescriptor,
         name: String,
         diagnosticArgs: [String: String],
-        reason: String? = nil
+        runID: UUID,
+        sessionID: UUID,
+        toolCallID: String?
     ) -> PendingConfirmation {
         // PendingConfirmation is only a Runtime approval boundary for tools
-        // explicitly marked requiresConfirmation.  Reversible mutations do
-        // not enter this helper and must never invent a second confirmation
-        // protocol in natural language.
+        // explicitly marked by the single confirmation policy. Reversible
+        // mutations do not enter this helper and must never invent a second
+        // confirmation protocol in natural language.
         let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
         let detail: String
         if diagnosticArgs.isEmpty {
-            detail = [reason, confirmationGuidance]
+            detail = [descriptor.confirmationPolicy.reason, confirmationGuidance]
                 .compactMap { $0 }
                 .joined(separator: "\n")
         } else {
             let arguments = diagnosticArgs.keys.sorted().map { "\($0)=\(diagnosticArgs[$0] ?? "")" }.joined(separator: "、")
-            detail = [reason, "参数：\(arguments)", confirmationGuidance]
+            detail = [descriptor.confirmationPolicy.reason, "参数：\(arguments)", confirmationGuidance]
                 .compactMap { $0 }
                 .joined(separator: "\n")
         }
         return PendingConfirmation(
+            runID: runID,
+            sessionID: sessionID,
+            toolCallID: toolCallID,
             toolName: name,
             permission: descriptor.permission,
+            operation: descriptor.authorizationOperation,
+            reason: descriptor.confirmationPolicy.reason,
             title: descriptor.summary,
             detail: detail,
             call: ToolCall(name: name, rawArguments: diagnosticArgs)

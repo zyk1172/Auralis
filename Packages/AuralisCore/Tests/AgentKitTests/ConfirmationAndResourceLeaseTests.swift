@@ -56,7 +56,7 @@ func descriptorMutationResourcesMatchOperations() {
 func playlistListIsCanonicalAndReadOnly() {
     let descriptor = AgentToolRegistry.descriptor(for: "playlist_list")
     #expect(descriptor?.permission == .readOnly)
-    #expect(descriptor?.requiresConfirmation == false)
+    #expect(descriptor?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
     #expect(descriptor?.visibility == .model)
     let selected = ToolSelector.select(for: "列出我的歌单", all: AgentToolRegistry.all).map(\.name)
     #expect(selected.contains("playlist_list"))
@@ -75,12 +75,12 @@ func confirmationIsLimitedToIrreversibleDeletion() {
         "playlist_add_songs",
         "playlist_remove_songs",
     ] {
-        #expect(AgentToolRegistry.descriptor(for: name)?.requiresConfirmation == false, "\(name) should not require confirmation")
+        #expect(AgentToolRegistry.descriptor(for: name)?.confirmationPolicy == Optional(ToolConfirmationPolicy.none), "\(name) should not require confirmation")
     }
     for name in ["playlist_delete", "memory_delete", "memory_clear", "skill_delete"] {
         let descriptor = AgentToolRegistry.descriptor(for: name)
         #expect(descriptor?.permission == .destructive, "\(name) should be destructive")
-        #expect(descriptor?.requiresConfirmation == true, "\(name) should require confirmation")
+        #expect(descriptor?.confirmationPolicy.requiresExplicitUserApproval == true, "\(name) should require confirmation")
     }
 }
 

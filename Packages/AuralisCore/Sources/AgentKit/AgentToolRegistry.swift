@@ -89,7 +89,7 @@ public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable, Cas
 
 /// The authorization result is deliberately typed. A missing operation is
 /// never a textual hint for the model or the user to reinterpret as consent.
-/// The only interactive approval path is `ToolDescriptor.requiresConfirmation`.
+/// The only interactive approval path is `ToolDescriptor.confirmationPolicy`.
 public enum ToolAuthorizationDecision: Sendable, Equatable {
     case allowed
     case denied(reason: String)
@@ -299,8 +299,8 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let namespace: String
     public let group: ToolGroup
     public let permission: ToolPermission
-    /// 仅对明确不可逆的高风险操作触发一次用户批准；普通可逆/可恢复工具仍直执行。
-    public let requiresConfirmation: Bool
+    /// Explicit approval is independent from mutation and authorization.
+    public let confirmationPolicy: ToolConfirmationPolicy
     public let summary: String
     public let parameters: [ToolParameter]
     public let cachePolicy: ToolCachePolicy
@@ -334,12 +334,15 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let derivedMutationResources: Set<MutationResource>
     public let derivedAuthorizationOperations: Set<ToolAuthorizationOperation>
     public let derivedRisk: ToolRisk?
+    /// Canonical descriptors may declare reversibility explicitly. Custom
+    /// descriptors use `derivedRisk`; ordinary writes default to reversible.
+    public let declaredRisk: ToolRisk?
 
     public init(
         name: String,
         group: ToolGroup,
         permission: ToolPermission,
-        requiresConfirmation: Bool = false,
+        confirmationPolicy: ToolConfirmationPolicy = .none,
         summary: String,
         parameters: [ToolParameter] = [],
         cachePolicy: ToolCachePolicy? = nil,
@@ -363,13 +366,14 @@ public struct ToolDescriptor: Sendable, Hashable {
         derivedMutationScopes: Set<MutationScope> = [],
         derivedMutationResources: Set<MutationResource> = [],
         derivedAuthorizationOperations: Set<ToolAuthorizationOperation> = [],
-        derivedRisk: ToolRisk? = nil
+        derivedRisk: ToolRisk? = nil,
+        declaredRisk: ToolRisk? = nil
     ) {
         self.name = name
         self.namespace = namespace ?? group.rawValue
         self.group = group
         self.permission = permission
-        self.requiresConfirmation = requiresConfirmation
+        self.confirmationPolicy = confirmationPolicy
         self.summary = summary
         self.parameters = parameters
         self.cachePolicy = cachePolicy ?? (permission == .readOnly ? .task : .none)
@@ -399,6 +403,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         self.derivedMutationResources = derivedMutationResources
         self.derivedAuthorizationOperations = derivedAuthorizationOperations
         self.derivedRisk = derivedRisk
+        self.declaredRisk = declaredRisk
     }
 
     public func isVisible(toSkillID skillID: String? = nil) -> Bool {
@@ -774,8 +779,11 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "name", required: true, description: "新歌单名称"),
                            .init(name: "sourceIDs", required: true, description: "源歌单 GlobalPlaylistID 数组",
                                  schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)]),
-        .init(name: "playlist_delete", group: .playlist, permission: .destructive, requiresConfirmation: true, summary: "删除歌单（不可逆，需要用户批准）",
-              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "playlist_delete", group: .playlist, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除歌单不可逆，且不会自动生成恢复副本"),
+              summary: "删除歌单（不可逆，需要用户批准）",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")],
+              declaredRisk: .irreversibleDelete),
         .init(name: "rating_set", group: .annotation, permission: .reversible, summary: "设置单曲评分（value 0 表示清除）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID"),
                            .init(name: "value", required: true, description: "评分 1-5；0 表示清除评分",
@@ -862,8 +870,11 @@ public enum AgentToolRegistry {
         .init(name: "mergePlaylists", group: .playlist, permission: .reversible, summary: "合并歌单",
               parameters: [.init(name: "sourceIDs", required: true, description: "逗号分隔的 GlobalPlaylistID"),
                            .init(name: "name", required: true, description: "新歌单名称")]),
-        .init(name: "deletePlaylist", group: .playlist, permission: .destructive, requiresConfirmation: true, summary: "删除歌单（不可逆，需要用户批准）",
-              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
+        .init(name: "deletePlaylist", group: .playlist, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除歌单不可逆，且不会自动生成恢复副本"),
+              summary: "删除歌单（不可逆，需要用户批准）",
+              parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")],
+              declaredRisk: .irreversibleDelete),
 
         // MARK: Annotation
         .init(name: "likeTrack", group: .annotation, permission: .reversible, summary: "收藏单曲",
@@ -1199,10 +1210,12 @@ public enum AgentToolRegistry {
               summary: "停用一个已保存的自建工具",
               parameters: [.init(name: "tool", required: true, description: "自建工具名称")],
               namespace: "tool_builder", tags: ["custom", "tool_builder", "disable"]),
-        .init(name: "tool_builder_delete", group: .memory, permission: .destructive, requiresConfirmation: true,
+        .init(name: "tool_builder_delete", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除自建工具不可逆，且不会自动生成恢复副本"),
               summary: "删除一个已保存的自建工具（不可逆，需要 UI 批准）",
               parameters: [.init(name: "tool", required: true, description: "自建工具名称")],
-              namespace: "tool_builder", tags: ["custom", "tool_builder", "delete"]),
+              namespace: "tool_builder", tags: ["custom", "tool_builder", "delete"],
+              declaredRisk: .irreversibleDelete),
         .init(name: "tool_diagnose", group: .catalog, permission: .readOnly,
               summary: "诊断工具定义、参数 schema、执行器和最近一次结构化失败",
               parameters: [.init(name: "toolName", required: true, description: "canonical 工具名")],
@@ -1219,9 +1232,14 @@ public enum AgentToolRegistry {
                 .init(name: "value", required: true, description: "要记住的内容"),
               ]),
         .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
-        .init(name: "memory_delete", group: .memory, permission: .destructive, requiresConfirmation: true, summary: "删除一条记忆（不可逆，需要用户批准）",
-              parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")]),
-        .init(name: "memory_clear", group: .memory, permission: .destructive, requiresConfirmation: true, summary: "清空全部记忆（不可逆，需要用户批准）"),
+        .init(name: "memory_delete", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除记忆不可逆，且不会自动生成恢复副本"),
+              summary: "删除一条记忆（不可逆，需要用户批准）",
+              parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")],
+              declaredRisk: .irreversibleDelete),
+        .init(name: "memory_clear", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "清空全部记忆不可逆，且不会自动生成恢复副本"),
+              summary: "清空全部记忆（不可逆，需要用户批准）", declaredRisk: .irreversibleDelete),
         .init(name: "skill_create", group: .memory, permission: .reversible, summary: "创建一段可复用指令（skill 文件），之后可读取使用",
               parameters: [
                 .init(name: "name", required: true, description: "技能名，简短英文或中文"),
@@ -1230,8 +1248,11 @@ public enum AgentToolRegistry {
         .init(name: "skill_list", group: .memory, permission: .readOnly, summary: "查看已创建的技能列表"),
         .init(name: "skill_read", group: .memory, permission: .readOnly, summary: "读取某个技能的完整指令",
               parameters: [.init(name: "name", required: true, description: "技能名")]),
-        .init(name: "skill_delete", group: .memory, permission: .destructive, requiresConfirmation: true, summary: "删除一个技能（不可逆，需要用户批准）",
-              parameters: [.init(name: "name", required: true, description: "技能名")]),
+        .init(name: "skill_delete", group: .memory, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除技能不可逆，且不会自动生成恢复副本"),
+              summary: "删除一个技能（不可逆，需要用户批准）",
+              parameters: [.init(name: "name", required: true, description: "技能名")],
+              declaredRisk: .irreversibleDelete),
 
     ]
 
@@ -1310,10 +1331,8 @@ public enum AgentToolRegistry {
                     issues.append(.modelMutationMissingScope(descriptor.name))
                 }
             }
-            if descriptor.permission == .destructive, !descriptor.requiresConfirmation {
-                issues.append(.destructiveMutationMissingApproval(descriptor.name))
-            }
-            if descriptor.risk == .irreversibleDelete, !descriptor.requiresConfirmation {
+            if descriptor.risk == .irreversibleDelete,
+               !descriptor.confirmationPolicy.requiresExplicitUserApproval {
                 issues.append(.irreversibleDeleteMissingApproval(descriptor.name))
             }
             switch definition.executorKind {

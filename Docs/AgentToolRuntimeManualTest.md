@@ -85,7 +85,7 @@ swift test --package-path Packages/AuralisCore --no-parallel
 - 不允许 localhost、`.local`、IPv4/IPv6 字面量或 URL 用户名/密码；
 - 网页返回值保持 `externalUntrusted`，不能授予副作用授权。
 
-创建一个组合已有 canonical 工具的 workflow，确认风险、scope、resource、`requiresConfirmation` 和 `parallelSafe` 都由子工具派生。不能引用 legacy 工具，也不能嵌套另一个自建工具。
+创建一个组合已有 canonical 工具的 workflow，确认风险、scope、resource、精确的 `confirmationPolicy` 和 `parallelSafe` 都由子工具派生。普通可逆子操作保持 `.none`；只有明确不可逆的子工具才继承一次 UI 批准。不能引用 legacy 工具，也不能嵌套另一个自建工具。
 
 修改后应产生新版本；使用旧版本 rollback 后仍保留历史；过期版本或错误 tool ID 的 repair proposal 必须拒绝。
 

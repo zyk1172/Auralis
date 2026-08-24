@@ -25,6 +25,66 @@ public enum ToolRisk: String, Codable, Sendable, Hashable, CaseIterable {
     case irreversibleDelete
 }
 
+/// The only policy that can put a tool into the interactive approval path.
+/// Authorization answers "may this operation run?"; this policy answers the
+/// separate question "must a user explicitly approve it before it runs?".
+/// Ordinary mutations therefore remain `.none` even when they require an
+/// exact authorization operation.
+public enum ToolConfirmationPolicy: Codable, Sendable, Equatable, Hashable {
+    case none
+    case explicitUserApproval(reason: String)
+
+    public var requiresExplicitUserApproval: Bool {
+        if case .explicitUserApproval = self { return true }
+        return false
+    }
+
+    public var reason: String? {
+        if case let .explicitUserApproval(reason) = self { return reason }
+        return nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case reason
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .kind) {
+        case "none":
+            self = .none
+        case "explicitUserApproval":
+            self = .explicitUserApproval(reason: try container.decode(String.self, forKey: .reason))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unknown tool confirmation policy"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .none:
+            try container.encode("none", forKey: .kind)
+        case let .explicitUserApproval(reason):
+            try container.encode("explicitUserApproval", forKey: .kind)
+            try container.encode(reason, forKey: .reason)
+        }
+    }
+
+    /// A workflow inherits the strictest confirmation policy of its children.
+    /// This combines explicit policy declarations only; mutation, scope, and
+    /// risk metadata never implicitly create an approval request.
+    public static func mostRestrictive<S: Sequence>(_ policies: S) -> ToolConfirmationPolicy
+    where S.Element == ToolConfirmationPolicy {
+        policies.first(where: { $0.requiresExplicitUserApproval }) ?? .none
+    }
+}
+
 public enum ToolExecutionProfile: String, Codable, Sendable, Hashable, CaseIterable {
     case localFast
     case localHeavy
@@ -242,7 +302,6 @@ public enum ToolCoverageIssue: Sendable, Equatable, Hashable {
     case aliasLookupMismatch(alias: String, expected: String, actual: String?)
     case modelMutationMissingOperation(String)
     case modelMutationMissingScope(String)
-    case destructiveMutationMissingApproval(String)
     case irreversibleDeleteMissingApproval(String)
     case missingExecutor(String)
 }
@@ -288,7 +347,9 @@ extension ToolDescriptor {
         if let derivedRisk {
             return derivedRisk
         }
-        if requiresConfirmation { return .irreversibleDelete }
+        if let declaredRisk {
+            return declaredRisk
+        }
         return permission == .readOnly ? .none : .reversibleMutation
     }
 

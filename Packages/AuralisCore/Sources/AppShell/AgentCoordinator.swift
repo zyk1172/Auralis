@@ -411,7 +411,8 @@ public final class AgentCoordinator: ObservableObject {
         intent explicitIntent: AgentTaskIntent? = nil
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if pendingOperationConfirmation != nil {
+        if let sessionID = activeSessionID,
+           pendingConfirmation(for: sessionID) != nil {
             // A pending destructive approval is resolved only by its
             // dedicated UI buttons. Natural-language text such as “确认” or
             // “继续” must never become Runtime approval or resume the paused
@@ -447,7 +448,7 @@ public final class AgentCoordinator: ObservableObject {
             _ = await newSession()
         }
         guard let sessionID = activeSessionID,
-              pendingOperationConfirmation == nil,
+              pendingConfirmation(for: sessionID) == nil,
               runIDsBySession[sessionID] == nil
         else { return "" }
 
@@ -724,7 +725,6 @@ public final class AgentCoordinator: ObservableObject {
                     scopes: reconstructed.scopes,
                     allowedToolGroups: reconstructed.allowedToolGroups,
                     allowedPermissions: reconstructed.allowedPermissions,
-                    requiresConfirmationForDestructive: reconstructed.requiresConfirmationForDestructive,
                     maxRisk: reconstructed.maxRisk,
                     completion: reconstructed.completion,
                     budget: resumeRecord.budget ?? reconstructed.budget
@@ -1165,6 +1165,15 @@ public final class AgentCoordinator: ObservableObject {
         pendingOperationConfirmation = activeRunID.flatMap { operationConfirmations[$0] }
     }
 
+    /// The published property above is deliberately only a projection for
+    /// the active UI session. Runtime guards must resolve through the
+    /// session-to-run map so a background session can never block another
+    /// session's send or confirmation UI.
+    private func pendingConfirmation(for sessionID: UUID) -> PendingConfirmation? {
+        guard let runID = runIDsBySession[sessionID] else { return nil }
+        return operationConfirmations[runID]
+    }
+
     /// 接收 Runner 发出的消息。
     ///
     /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
@@ -1364,6 +1373,8 @@ public final class AgentCoordinator: ObservableObject {
     ) async -> Bool {
         guard runModes[runID] == .interactive, !Task.isCancelled else { return false }
         guard runSessions[runID] == sessionID,
+              pending.runID == nil || pending.runID == runID,
+              pending.sessionID == nil || pending.sessionID == sessionID,
               runLeases[runID]?.isValidSnapshot == true else { return false }
         guard operationConfirmationContinuations[runID] == nil else { return false }
         operationConfirmations[runID] = pending

@@ -140,7 +140,6 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
     public let scopes: Set<GrantedScope>
     public let allowedToolGroups: Set<ToolGroup>
     public let allowedPermissions: Set<ToolPermission>
-    public let requiresConfirmationForDestructive: Bool
     public let maxRisk: AgentRisk
     public let completion: AgentCompletionPredicate
     public let budget: AgentTaskBudget
@@ -232,7 +231,6 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         scopes: Set<GrantedScope>,
         allowedToolGroups: Set<ToolGroup>,
         allowedPermissions: Set<ToolPermission> = [.readOnly],
-        requiresConfirmationForDestructive: Bool = false,
         maxRisk: AgentRisk = .none,
         completion: AgentCompletionPredicate = .modelAnswer,
         budget: AgentTaskBudget = AgentTaskBudget()
@@ -241,7 +239,6 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         self.scopes = scopes
         self.allowedToolGroups = allowedToolGroups
         self.allowedPermissions = allowedPermissions
-        self.requiresConfirmationForDestructive = requiresConfirmationForDestructive
         self.maxRisk = maxRisk
         self.completion = completion
         self.budget = budget
@@ -608,7 +605,6 @@ public enum AgentTaskPolicyResolver {
             scopes: base.scopes,
             allowedToolGroups: base.allowedToolGroups,
             allowedPermissions: base.allowedPermissions,
-            requiresConfirmationForDestructive: base.requiresConfirmationForDestructive,
             maxRisk: base.maxRisk,
             completion: .indexPendingCountIsZero,
             budget: budget

@@ -4,8 +4,8 @@ import Foundation
 import LocalCatalog
 
 /// Agent 工具权限分级。
-/// 已注册工具不会因为权限分级而被拒绝；`requiresConfirmation` 只针对工具元数据
-/// 标出的不可逆高风险操作（例如删除歌单、清空记忆/技能）触发一次用户批准。
+/// 已注册工具不会因为权限分级而被拒绝；是否需要 UI 批准只由
+/// `ToolDescriptor.confirmationPolicy` 决定，不由权限等级推导。
 public enum ToolPermission: String, Codable, Sendable, Hashable {
     /// 只读：查询本地目录、当前播放状态等。
     case readOnly
@@ -429,16 +429,40 @@ public extension AgentBridge {
 /// 需要用户确认的待定操作。
 public struct PendingConfirmation: Codable, Sendable, Identifiable {
     public let id: UUID
+    /// Bind the approval to the originating run/session. Optional values keep
+    /// old persisted confirmations decodable during the migration.
+    public let runID: UUID?
+    public let sessionID: UUID?
+    public let toolCallID: String?
     public let toolName: String
     public let permission: ToolPermission
+    public let operation: ToolAuthorizationOperation?
+    public let reason: String?
     public let title: String
     public let detail: String
     public let call: ToolCall
 
-    public init(id: UUID = UUID(), toolName: String, permission: ToolPermission, title: String, detail: String, call: ToolCall) {
+    public init(
+        id: UUID = UUID(),
+        runID: UUID? = nil,
+        sessionID: UUID? = nil,
+        toolCallID: String? = nil,
+        toolName: String,
+        permission: ToolPermission,
+        operation: ToolAuthorizationOperation? = nil,
+        reason: String? = nil,
+        title: String,
+        detail: String,
+        call: ToolCall
+    ) {
         self.id = id
+        self.runID = runID
+        self.sessionID = sessionID
+        self.toolCallID = toolCallID
         self.toolName = toolName
         self.permission = permission
+        self.operation = operation
+        self.reason = reason
         self.title = title
         self.detail = detail
         self.call = call

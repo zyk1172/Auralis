@@ -803,8 +803,8 @@ struct AgentPermissiveRuntimeTests {
         let cleanTool = AgentToolRegistry.descriptor(for: "music_download_history_clean")
         #expect(removeTool != nil)
         #expect(cleanTool != nil)
-        #expect(removeTool?.requiresConfirmation == false)
-        #expect(cleanTool?.requiresConfirmation == false)
+        #expect(removeTool?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
+        #expect(cleanTool?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
     }
 
     // MARK: - TEST 19-22：conversation Intent 可调用写/播放/队列/推荐工具

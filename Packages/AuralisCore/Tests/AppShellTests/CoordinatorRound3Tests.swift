@@ -487,6 +487,108 @@ func operationConfirmationIsScopedToRunAndSession() async throws {
     #expect(connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: playlistRemoteID)))
 }
 
+@Test("两个交互会话可同时等待确认，并且只能批准各自的 run")
+@MainActor
+func simultaneousInteractiveConfirmationsRemainKeyedByRunAndSession() async throws {
+    let firstID = UUID().uuidString
+    let secondID = UUID().uuidString
+    let first = Playlist(
+        id: PlaylistID(rawValue: firstID),
+        serverID: "test-server",
+        name: "第一个待删除",
+        trackIDs: []
+    )
+    let second = Playlist(
+        id: PlaylistID(rawValue: secondID),
+        serverID: "test-server",
+        name: "第二个待删除",
+        trackIDs: []
+    )
+    let connector = RecordingConnector(
+        result: makeResult(
+            tracks: [makeTrack(remoteID: "remote-1", title: "Only")],
+            playlists: [first, second]
+        )
+    )
+    let model = AuralisAppModel(connector: connector, storeURL: temporaryCatalogURL())
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+
+    let sessionA = await coordinator.newSession()
+    let sessionB = await coordinator.newSession()
+    let firstGID = GlobalID(serverID: "test-server", remoteID: firstID)
+    let secondGID = GlobalID(serverID: "test-server", remoteID: secondID)
+    try await model.catalogCoordinator.store.upsertPlaylist(first, serverID: "test-server", isReadOnly: false)
+    try await model.catalogCoordinator.store.upsertPlaylist(second, serverID: "test-server", isReadOnly: false)
+
+    await coordinator.activate(sessionA)
+    coordinator.send(
+        "删除第一个歌单",
+        provider: ScriptedAIProvider(actionBatches: [
+            "ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(firstGID.description)\"}}"
+        ])
+    )
+    for _ in 0..<500 {
+        if coordinator.pendingOperationConfirmation != nil { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    let pendingA = try #require(coordinator.pendingOperationConfirmation)
+    #expect(pendingA.sessionID == sessionA)
+    #expect(pendingA.toolCallID == "text-0")
+    #expect(pendingA.operation == .playlistDelete)
+
+    // A remains suspended, but B must be able to start its own destructive
+    // run rather than being rejected by a global continuation/pending flag.
+    await coordinator.activate(sessionB)
+    coordinator.send(
+        "删除第二个歌单",
+        provider: ScriptedAIProvider(actionBatches: [
+            "ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(secondGID.description)\"}}"
+        ])
+    )
+    for _ in 0..<500 {
+        if coordinator.pendingOperationConfirmation?.sessionID == sessionB { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    let pendingB = try #require(coordinator.pendingOperationConfirmation)
+    #expect(pendingB.sessionID == sessionB)
+    #expect(pendingB.runID != pendingA.runID)
+    #expect(pendingB.call.optionalString("playlistID") == secondGID.description)
+
+    coordinator.approveOperationConfirmation()
+    for _ in 0..<500 where coordinator.isRunning {
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    // Switching back exposes A's original pending operation; approving B did
+    // not resume or approve A's continuation.
+    await coordinator.activate(sessionA)
+    let stillPendingA = try #require(coordinator.pendingOperationConfirmation)
+    #expect(stillPendingA.id == pendingA.id)
+    #expect(stillPendingA.sessionID == sessionA)
+    coordinator.approveOperationConfirmation()
+    for _ in 0..<500 where coordinator.isRunning {
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: firstID)))
+    #expect(connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: secondID)))
+}
+
 @Test("Headless mode is scoped per run and sendAndWait returns its captured session")
 @MainActor
 func headlessRunDoesNotSuppressInteractiveConfirmationOrLeakSessionText() async throws {
