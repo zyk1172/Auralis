@@ -66,6 +66,9 @@ private final class AnthropicMockURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+// AnthropicMockURLProtocol 使用进程内静态状态；同 suite 内测试必须串行，
+// 否则并行测试会互相覆盖 mock 响应。
+@Suite(.serialized)
 struct AnthropicMessagesProviderTests {
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
@@ -155,5 +158,52 @@ struct AnthropicMessagesProviderTests {
         #expect(blocks.count == 2)
         #expect(blocks.map { $0["type"] as? String } == ["tool_result", "tool_result"])
         #expect(blocks.map { $0["tool_use_id"] as? String } == ["call-1", "call-2"])
+    }
+
+    /// 并行 tool_use 的 id 与 content_block.index 顺序不一致时，必须按 index
+    /// 恢复原始顺序（index 0 = firstTool，index 1 = secondTool），不能按
+    /// tool_use.id 字典序（tool-a < tool-z）交换顺序。
+    @Test("K Anthropic 并行 tool call 按 content_block.index 恢复顺序")
+    func parallelToolCallsPreserveIndexOrder() async throws {
+        let sse = """
+        event: message_start
+        data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}
+
+        event: content_block_start
+        data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-z","name":"firstTool"}}
+
+        event: content_block_start
+        data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-a","name":"secondTool"}}
+
+        event: content_block_delta
+        data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}
+
+        event: content_block_delta
+        data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}
+
+        event: message_stop
+        data: {"type":"message_stop"}
+        """
+        AnthropicMockURLProtocol.reset(data: Data(sse.utf8))
+
+        let tool = AIToolDefinition(
+            name: "firstTool",
+            description: "第一个工具",
+            parametersJSON: #"{"type":"object","properties":{},"additionalProperties":false}"#
+        )
+        var received: [AIToolCall] = []
+        for try await event in makeProvider().stream(AICompletionRequest(
+            model: "claude-test",
+            messages: [AIMessage(role: .user, content: "并行调用")],
+            maxTokens: 256,
+            tools: [tool]
+        )) {
+            if case let .toolCall(call) = event {
+                received.append(call)
+            }
+        }
+        #expect(received.map(\.name) == ["firstTool", "secondTool"],
+                "必须按 content_block.index 恢复顺序，实际：\(received.map(\.name))")
+        #expect(received.map(\.id) == ["tool-z", "tool-a"])
     }
 }

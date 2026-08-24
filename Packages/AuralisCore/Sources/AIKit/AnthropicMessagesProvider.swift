@@ -231,7 +231,10 @@ public struct AnthropicMessagesProvider: AIProvider {
                                 outputTokens = usage["output_tokens"] as? Int ?? outputTokens
                             }
                         case "message_stop":
-                            for fragment in toolFragments.values.sorted(by: { $0.id < $1.id }) {
+                            // 必须按 content_block.index 恢复原始顺序，不能按
+                            // tool_use.id 字典序排序：id 不代表执行顺序。
+                            for index in toolFragments.keys.sorted() {
+                                guard let fragment = toolFragments[index] else { continue }
                                 continuation.yield(.toolCall(Self.decodeToolCall(
                                     id: fragment.id,
                                     name: fragment.name,
@@ -260,8 +263,10 @@ public struct AnthropicMessagesProvider: AIProvider {
                     }
                     for message in parser.finish() { consume(message) }
                     // 兼容没有 message_stop 的网关：不要让 Agent 永远等待。
+                    // 同样按 content_block.index 恢复原始顺序。
                     if !ended, !toolFragments.isEmpty {
-                        for fragment in toolFragments.values.sorted(by: { $0.id < $1.id }) {
+                        for index in toolFragments.keys.sorted() {
+                            guard let fragment = toolFragments[index] else { continue }
                             continuation.yield(.toolCall(Self.decodeToolCall(
                                 id: fragment.id,
                                 name: fragment.name,
