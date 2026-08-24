@@ -65,7 +65,14 @@ public struct BuiltInQueueReplacePlaybackSkill: AgentStatefulSkill {
     }
 
     public func makeRuntime(checkpointJSON: String?) -> any AgentStatefulSkillRuntime {
-        QueueReplacePlaybackSkillRuntime(checkpointJSON: checkpointJSON)
+        makeRuntime(checkpointJSON: checkpointJSON, activation: nil)
+    }
+
+    public func makeRuntime(
+        checkpointJSON: String?,
+        activation: BuiltInSkillActivationContext?
+    ) -> any AgentStatefulSkillRuntime {
+        QueueReplacePlaybackSkillRuntime(checkpointJSON: checkpointJSON, activation: activation)
     }
 }
 
@@ -113,9 +120,12 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
         ]
     }
 
-    init(checkpointJSON: String?) {
+    init(checkpointJSON: String?, activation: BuiltInSkillActivationContext? = nil) {
         // 短任务：不持久化 checkpoint；resume 语义由 Runtime facts（queue 真实状态）负责。
         _ = checkpointJSON
+        // 用户请求中的目标数量（“十首 → 10”）在激活时编译进来；模型即使提交超量
+        // 候选，Skill 也只取目标数量。
+        targetCount = activation?.inferredTargetCount
     }
 
     public func configure(maxOutputTokens: Int) {}
@@ -147,9 +157,11 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
                 arguments: ["trackID": .string(first)]
             )
         case .verifyingPlayback:
-            return .freeModelTurn
+            return .executeTool(name: "playback_get_state", arguments: [:])
         case .completed:
-            return .completed(message: "队列已替换并验证完成。")
+            return .completed(message: allowsPlayback
+                ? "队列已替换并开始播放，验证完成。"
+                : "队列已替换并验证完成。")
         }
     }
 
@@ -188,7 +200,12 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
             var seen = Set<String>()
             let ids = cards.map(\.globalID.description).filter { seen.insert($0).inserted }
             guard !ids.isEmpty else { return .none }
-            selectedTrackIDs = ids
+            // 用户要求 N 首 → 去重后只取前 N 首；模型给多了（如 58 首）必须硬约束到 N。
+            if let targetCount, targetCount > 0, ids.count > targetCount {
+                selectedTrackIDs = Array(ids.prefix(targetCount))
+            } else {
+                selectedTrackIDs = ids
+            }
             transition(to: .replacingQueue)
             return .none
         case "queue_replace", "replaceQueue":
@@ -196,11 +213,12 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
             transition(to: .verifyingQueue)
             return .none
         case "queue_get", "getCurrentQueue":
-            // 队列替换后的只读验证：queue_get 成功即队列状态可读；数量匹配作为硬校验。
+            // 队列替换后的只读验证：replace 是精确替换，队列数量必须等于提交数量。
+            // 数量可从 summary“队列 N 首”解析；解析不到时以工具成功为最低确认。
             if let count = Self.queueCount(from: result.summary) {
                 let expected = max(targetCount ?? selectedTrackIDs.count, 0)
-                if count < expected {
-                    return .fail("队列替换后验证失败：队列 \(count) 首，少于预期 \(expected) 首。")
+                if count != expected {
+                    return .fail("队列替换后验证失败：队列 \(count) 首，应为 \(expected) 首。")
                 }
             }
             if allowsPlayback, let first = selectedTrackIDs.first, !first.isEmpty {
@@ -210,6 +228,14 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
             }
             return .none
         case "playback_play_song", "playTrack":
+            // 播放已发起；进入 playback 状态验证（verifyingPlayback 不再是死状态）。
+            transition(to: .verifyingPlayback)
+            return .none
+        case "playback_get_state":
+            // 播放状态确认：当前必须有正在播放的歌曲。
+            if result.summary.contains("当前没有正在播放") {
+                return .fail("队列已替换成功，但播放状态验证失败：当前没有正在播放的歌曲。")
+            }
             transition(to: .completed)
             return .none
         default:
@@ -228,6 +254,9 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
         case "playback_play_song", "playTrack":
             // 队列已替换成功；播放失败属于 partial，不重复替换队列。
             return .fail("队列已替换成功，但开始播放失败：\(message)")
+        case "playback_get_state":
+            // 队列与播放已提交，但状态无法确认 → partial，不重复替换队列。
+            return .fail("队列已替换成功，但播放状态验证失败：\(message)")
         default:
             return .none
         }
@@ -300,16 +329,32 @@ public struct BuiltInPlaylistBuildSkill: AgentStatefulSkill {
     }
 
     public func makeRuntime(checkpointJSON: String?) -> any AgentStatefulSkillRuntime {
-        PlaylistBuildSkillRuntime(checkpointJSON: checkpointJSON)
+        makeRuntime(checkpointJSON: checkpointJSON, activation: nil)
+    }
+
+    public func makeRuntime(
+        checkpointJSON: String?,
+        activation: BuiltInSkillActivationContext?
+    ) -> any AgentStatefulSkillRuntime {
+        PlaylistBuildSkillRuntime(
+            checkpointJSON: checkpointJSON,
+            userText: activation?.currentUserText ?? "",
+            targetCount: activation?.inferredTargetCount
+        )
     }
 }
 
-/// PlaylistBuild 的可恢复 checkpoint（短任务也保留已创建歌单 ID，避免 resume 重复创建）。
+/// PlaylistBuild 的可恢复 checkpoint。恢复所必需的最小状态：已创建歌单 ID、
+/// 已选候选、已加歌标记、当前 phase。旧版本 checkpoint 缺少新字段时用
+/// decodeIfPresent 兼容回退。
 private struct PlaylistBuildCheckpoint: Codable {
     var playlistID: String?
     var playlistName: String
     var targetCount: Int?
     var createdPlaylist: Bool
+    var selectedTrackIDs: [String]?
+    var tracksAdded: Bool?
+    var phase: String?
 
     var jsonString: String? {
         guard let data = try? JSONEncoder().encode(self) else { return nil }
@@ -372,17 +417,35 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
         return values
     }
 
-    init(checkpointJSON: String?, userText: String = "") {
+    init(checkpointJSON: String?, userText: String = "", targetCount: Int? = nil) {
         let checkpoint = PlaylistBuildCheckpoint.decode(checkpointJSON)
         playlistName = checkpoint?.playlistName ?? Self.inferPlaylistName(from: userText)
-        targetCount = checkpoint?.targetCount
+        // 生产路径 activation 编译的 targetCount 优先；resume 时 checkpoint 值次之。
+        self.targetCount = targetCount ?? checkpoint?.targetCount
         createdPlaylistID = checkpoint?.playlistID
         playlistCreated = checkpoint?.createdPlaylist ?? false
-        if let createdPlaylistID, !createdPlaylistID.isEmpty {
-            // resume：已有真实歌单，从 addingTracks 继续，绝不重新 create。
-            phase = .addingTracks
-        } else {
-            phase = .collectingCandidates
+        tracksAdded = checkpoint?.tracksAdded ?? false
+        selectedTrackIDs = checkpoint?.selectedTrackIDs ?? []
+        // 完整恢复：按 checkpoint 保存的 phase + 状态推进，而不是无条件 addingTracks。
+        switch checkpoint?.phase {
+        case "verifyingPlaylist":
+            phase = createdPlaylistID != nil ? .verifyingPlaylist : .collectingCandidates
+        case "addingTracks", "creatingPlaylist":
+            // 已有真实歌单且有候选 → 继续加歌；有歌单但候选丢失（旧 checkpoint）
+            // → 回候选收集（保留歌单 ID，绝不重新 create）。
+            if createdPlaylistID != nil {
+                phase = selectedTrackIDs.isEmpty ? .collectingCandidates : .addingTracks
+            } else {
+                phase = .collectingCandidates
+            }
+        default:
+            // 旧版 checkpoint（无 phase 字段）：有歌单且有候选 → 继续加歌；
+            // 否则回候选收集。
+            if createdPlaylistID != nil, !selectedTrackIDs.isEmpty {
+                phase = .addingTracks
+            } else {
+                phase = .collectingCandidates
+            }
         }
     }
 
@@ -403,6 +466,12 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             )
         case .addingTracks:
             guard let playlistID = createdPlaylistID else {
+                phase = .collectingCandidates
+                return .freeModelTurn
+            }
+            guard !selectedTrackIDs.isEmpty else {
+                // 有歌单但没有候选（旧 checkpoint 恢复）→ 回候选收集，
+                // 绝不发出空 trackIDs 的 playlist_add_songs。
                 phase = .collectingCandidates
                 return .freeModelTurn
             }
@@ -460,7 +529,12 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             var seen = Set<String>()
             let ids = cards.map(\.globalID.description).filter { seen.insert($0).inserted }
             guard !ids.isEmpty else { return .none }
-            selectedTrackIDs = ids
+            // 用户要求 N 首 → 去重后只取前 N 首；模型提交超量时必须硬约束。
+            if let targetCount, targetCount > 0, ids.count > targetCount {
+                selectedTrackIDs = Array(ids.prefix(targetCount))
+            } else {
+                selectedTrackIDs = ids
+            }
             if createdPlaylistID != nil {
                 transition(to: .addingTracks)
             } else {
@@ -478,7 +552,18 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             transition(to: .verifyingPlaylist)
             return .none
         case "library_get_playlist", "getPlaylist":
-            // 只读验证成功（歌单可读）即完成。
+            // 目标状态确认：歌单可读 +（有数据时）数量与成员符合预期。
+            if case let .playlistProposal(name, tracks) = result.payload, !tracks.isEmpty {
+                let expected = max(targetCount ?? selectedTrackIDs.count, 0)
+                if tracks.count < expected {
+                    return .fail("歌单验证失败：歌单「\(name)」只有 \(tracks.count) 首，少于预期 \(expected) 首。")
+                }
+                let present = Set(tracks.map(\.globalID.description))
+                let missing = selectedTrackIDs.filter { !present.contains($0) }
+                if !missing.isEmpty {
+                    return .fail("歌单验证失败：有 \(missing.count) 首提交的歌曲未出现在歌单中。")
+                }
+            }
             transition(to: .completed)
             return .none
         default:
@@ -527,7 +612,10 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             playlistID: createdPlaylistID,
             playlistName: playlistName,
             targetCount: targetCount,
-            createdPlaylist: playlistCreated
+            createdPlaylist: playlistCreated,
+            selectedTrackIDs: selectedTrackIDs.isEmpty ? nil : selectedTrackIDs,
+            tracksAdded: tracksAdded,
+            phase: phase.label
         ).jsonString
     }
 

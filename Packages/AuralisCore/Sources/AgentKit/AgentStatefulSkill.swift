@@ -75,6 +75,28 @@ public extension AgentStatefulSkillRuntime {
     var requiredOperations: Set<ToolAuthorizationOperation> { [] }
 }
 
+/// Skill Runtime 初始化所需的确定性输入。一次 turn 的 AgentRequestPlan /
+/// Authorization 在此显式传给 Skill，禁止 Skill 重新解释用户文本或自行扩权。
+public struct BuiltInSkillActivationContext: Sendable {
+    public let currentUserText: String
+    public let semantics: AgentRequestSemantics
+    public let allowedOperations: Set<ToolAuthorizationOperation>
+    /// 用户请求中明确要求的数量（“十首 / 20 首歌”），Skill 用它硬约束候选数量。
+    public let inferredTargetCount: Int?
+
+    public init(
+        currentUserText: String,
+        semantics: AgentRequestSemantics,
+        allowedOperations: Set<ToolAuthorizationOperation>,
+        inferredTargetCount: Int?
+    ) {
+        self.currentUserText = currentUserText
+        self.semantics = semantics
+        self.allowedOperations = allowedOperations
+        self.inferredTargetCount = inferredTargetCount
+    }
+}
+
 public protocol AgentStatefulSkill: Sendable {
     var id: String { get }
     var name: String { get }
@@ -86,10 +108,17 @@ public protocol AgentStatefulSkill: Sendable {
 
     func canActivate(semantics: AgentRequestSemantics, userText: String, initialTaskState: AgentTaskState?) -> Bool
     func makeRuntime(checkpointJSON: String?) -> any AgentStatefulSkillRuntime
+    /// 带本轮 deterministic input 的 Runtime 构造。生产路径通过此入口把
+    /// userText / semantics / targetCount / authorization 传给 Skill；
+    /// 旧签名保留给兼容调用方。
+    func makeRuntime(checkpointJSON: String?, activation: BuiltInSkillActivationContext?) -> any AgentStatefulSkillRuntime
 }
 
 public extension AgentStatefulSkill {
     var requiredOperations: Set<ToolAuthorizationOperation> { [] }
+    func makeRuntime(checkpointJSON: String?, activation: BuiltInSkillActivationContext?) -> any AgentStatefulSkillRuntime {
+        makeRuntime(checkpointJSON: checkpointJSON)
+    }
 }
 
 /// Built-in fixed skills：稳定、多步骤、mutation 顺序确定的组合任务。
@@ -106,13 +135,40 @@ public enum BuiltInStatefulSkillRegistry {
         userText: String,
         initialTaskState: AgentTaskState?
     ) -> (any AgentStatefulSkillRuntime)? {
+        activate(
+            semantics: semantics,
+            userText: userText,
+            initialTaskState: initialTaskState,
+            allowedOperations: nil,
+            inferredTargetCount: nil
+        )
+    }
+
+    /// 生产路径：携带当前授权与用户请求中的目标数量，Skill Runtime 初始化即可
+    /// 拿到 playlistName / targetCount 等 deterministic parameters。
+    public static func activate(
+        semantics: AgentRequestSemantics,
+        userText: String,
+        initialTaskState: AgentTaskState?,
+        allowedOperations: Set<ToolAuthorizationOperation>?,
+        inferredTargetCount: Int?
+    ) -> (any AgentStatefulSkillRuntime)? {
         for skill in all where skill.canActivate(
             semantics: semantics,
             userText: userText,
             initialTaskState: initialTaskState
         ) {
+            let activation: BuiltInSkillActivationContext? = allowedOperations.map {
+                BuiltInSkillActivationContext(
+                    currentUserText: userText,
+                    semantics: semantics,
+                    allowedOperations: $0,
+                    inferredTargetCount: inferredTargetCount
+                )
+            }
             return skill.makeRuntime(
-                checkpointJSON: initialTaskState?.facts["builtin.skill.checkpoint"]
+                checkpointJSON: initialTaskState?.facts["builtin.skill.checkpoint"],
+                activation: activation
             )
         }
         return nil

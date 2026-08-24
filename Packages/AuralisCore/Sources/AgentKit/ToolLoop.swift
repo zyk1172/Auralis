@@ -1146,12 +1146,15 @@ public struct ToolLoop {
         diagnostics.completionPredicate = policy.completion.predicateName
         // Stateful Skill 激活复用同一份共享 semantics，不再独立分析。
         let skillSemantics = plan.semantics
+        let inferredTargetCount = AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
         var activeSkill: (any AgentStatefulSkillRuntime)?
         if enabledFixedSkills {
             activeSkill = BuiltInStatefulSkillRegistry.activate(
                 semantics: skillSemantics,
                 userText: userText,
-                initialTaskState: initialTaskState
+                initialTaskState: initialTaskState,
+                allowedOperations: effectiveAuthorization.allowedOperations,
+                inferredTargetCount: inferredTargetCount
             )
             // Skill 授权子集验证：Skill 只能消费用户原始请求已经明确授权的 operation。
             // requiredOperations ⊄ allowedOperations → 不激活（Skill 自己不能扩权），
@@ -1170,10 +1173,12 @@ public struct ToolLoop {
             all: availableToolDescriptors,
             activeSkillID: activeSkillID
         )
-        // Skill 激活后：Skill 主路径的 mutation 由 Skill 内部固定调用 ToolRuntime，
-        // 不暴露给模型选择（避免 queue_clear / queue_append 等破坏主路径的 alternatives）。
+        // Skill 激活后：模型面只保留只读工具（read/search/recommend/select +
+        // result_present_tracks + tool_search）。所有 mutation——包括授权操作对应的
+        // 其它同族工具（playback_play_artist/album/playlist/random 等）——都从模型
+        // schema 隐藏，由 Skill 内部 forced call 固定调用 ToolRuntime。
         if let activeSkill {
-            selectedTools.removeAll { activeSkill.ownedToolNames.contains($0.name) }
+            selectedTools.removeAll { $0.permission != .readOnly }
             diagnostics.activeSkillID = activeSkill.skillID
         }
         for tool in selectedTools { diagnostics.recordSelectedTool(tool.name) }
@@ -1324,10 +1329,11 @@ public struct ToolLoop {
                 merged.append(tool)
                 haveNames.insert(tool.name)
             }
-            // Skill 激活时：Skill-owned mutation 永不进入模型 schema（主路径由 Skill
-            // 内部固定调用 ToolRuntime），模型可见的只有 read/selection 工具。
-            if let activeSkill {
-                merged.removeAll { activeSkill.ownedToolNames.contains($0.name) }
+            // Skill 激活时：模型 schema 只保留只读工具（read/search/select +
+            // result_present_tracks + tool_search），所有 mutation 由 Skill 内部
+            // 固定调用 ToolRuntime，绝不把同族 mutation 作为 alternatives 暴露。
+            if activeSkill != nil {
+                merged.removeAll { $0.permission != .readOnly }
             }
             // TaskRequiredTools：本轮已实际执行过的工具永远保留在 schema 中。
             if !ws.perToolCounts.isEmpty {
@@ -1880,6 +1886,20 @@ public struct ToolLoop {
                     continue
                 }
 
+                // Fixed Skill 激活时模型面只有只读工具；若模型绕过 schema 硬调写操作
+                //（例如 playback_play_artist），一律拒绝——Skill 的 mutation 主路径由
+                // Skill 内部 forced call（id 前缀 skill-）固定调用，模型不得自行触发，
+                // 避免队列尚未按 Skill 完成就提前播放等破坏工作流的调用。
+                if activeSkill != nil,
+                   descriptor.permission != .readOnly,
+                   !(call.id?.hasPrefix("skill-") ?? false) {
+                    let failureText = "（工具执行结果）\(call.name)：本任务由固定 Skill 编排，写操作由系统确定性执行；请只使用搜索/推荐/选择类工具收集候选。"
+                    taskState.errors.append(failureText)
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Skill 模式拒绝模型直接写调用", reused: false))
+                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
+                    continue
+                }
+
                 if call.malformedArguments {
                     let failureText = "（工具执行结果）\(call.name): 参数 JSON 不完整或被截断，本次没有执行工具。"
                     taskState.errors.append(failureText)
@@ -2170,7 +2190,8 @@ public struct ToolLoop {
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
                         allowedOperations: effectiveAuthorization.allowedOperations,
-                        excludedNames: activeSkill?.ownedToolNames ?? []
+                        excludedNames: activeSkill?.ownedToolNames ?? [],
+                        excludeAllMutations: activeSkill != nil
                     )
                     let addedDiscoveredTool = !discoveredEntries.isEmpty
                     diagnostics.recordToolSearch(query: query, returned: discoveredEntries.map(\.name))
@@ -2641,7 +2662,8 @@ public struct ToolLoop {
         allDescriptors: [ToolDescriptor],
         current: inout [ToolDescriptor],
         allowedOperations: Set<ToolAuthorizationOperation>,
-        excludedNames: Set<String> = []
+        excludedNames: Set<String> = [],
+        excludeAllMutations: Bool = false
     ) -> [ToolCatalogEntry] {
         let catalog = ToolCatalog(descriptors: allDescriptors)
         let entries = catalog.search(
@@ -2656,6 +2678,9 @@ public struct ToolLoop {
             guard !existing.contains(entry.name), let tool = byName[entry.name] else { continue }
             if excludedNames.contains(tool.name) { continue }
             if tool.permission != .readOnly {
+                // Fixed Skill 激活时：即使 mutation 已授权（如 queueReplace 对应的
+                // queue_replace），也不作为模型可见 schema 补入——Skill 内部会固定调用。
+                if excludeAllMutations { continue }
                 guard let operation = tool.authorizationOperation,
                       allowedOperations.contains(operation) else {
                     // 能力存在但当前请求未授权：不进 schema，不诱导模型尝试。
