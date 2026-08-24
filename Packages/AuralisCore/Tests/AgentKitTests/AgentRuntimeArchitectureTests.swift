@@ -311,7 +311,7 @@ struct AgentRuntimeArchitectureTests {
     }
 
     @Test func fullIndexRequestUsesDeterministicCompletion() {
-        let policy = AgentTaskPolicyResolver.resolve(text: "一次性完成全部推荐索引 V2")
+        let policy = AgentTaskPolicyResolver.resolve(text: "一次性完成全部推荐索引")
         #expect(policy.intent == .libraryManagement)
         #expect(policy.completion == .indexPendingCountIsZero)
     }
@@ -319,7 +319,7 @@ struct AgentRuntimeArchitectureTests {
     @Test func continuationAfterErrorRestoresIndexPolicyAndTools() {
         let policy = AgentTaskPolicyResolver.resolve(
             text: "继续",
-            historyText: "开始并一次性完成推荐索引 V2"
+            historyText: "开始并一次性完成推荐索引"
         )
         #expect(policy.intent == .libraryManagement)
         #expect(policy.completion == .indexPendingCountIsZero)
@@ -329,16 +329,16 @@ struct AgentRuntimeArchitectureTests {
             intent: policy.intent,
             policy: policy,
             all: AgentToolRegistry.all,
-            activeSkillID: "recommendation-index-v2"
+            activeSkillID: "recommendation-index"
         )
         let names = Set(selected.map(\.name))
-        #expect(names.contains("library_index_v2_status"))
+        #expect(names.contains("library_index_status"))
         #expect(!names.contains("library_index_v2_next_batch"))
         #expect(!names.contains("library_index_v2_write_batch"))
     }
 
     @Test func indexStatusQuestionDoesNotStartFullBuild() {
-        let policy = AgentTaskPolicyResolver.resolve(text: "查看推荐索引 V2 状态")
+        let policy = AgentTaskPolicyResolver.resolve(text: "查看推荐索引状态")
         #expect(policy.completion == .successfulToolResult)
     }
 
@@ -357,7 +357,7 @@ struct AgentRuntimeArchitectureTests {
 
     @Test func taskReducerMergesFactsAndEvidence() {
         var state = AgentTaskState(intent: .librarySearch, goal: "find")
-        let descriptor = AgentToolRegistry.descriptor(for: "library_index_v2_status")!
+        let descriptor = AgentToolRegistry.descriptor(for: "library_index_status")!
         let call = ToolCall(name: descriptor.name)
         let result = ToolResult(
             call: call,

@@ -2325,10 +2325,10 @@ public final class AuralisAppModel: ObservableObject {
 
     /// 设置页的快捷入口：复用 Agent 已验证的“状态 → 分批分类 → 写回至 0”流程，
     /// 由 RecommendationIndexWorkflow 的索引任务约束保证不会在中途把自然语言回复误报为完成。
-    public func startOrContinueRecommendationIndexV2() {
+    public func startOrContinueRecommendationIndex() {
         selectTopLevelSection(.assistant)
         agentCoordinator.send(
-            "开始并一次性完成推荐索引 V2：先读取状态，持续分批分类并写回，直到待分类为 0。",
+            "开始并一次性完成推荐索引：持续分批分类并写回，直到待分类为 0。",
             intent: .libraryManagement
         )
     }
@@ -5026,7 +5026,7 @@ public enum BrowseDestination: Identifiable, Hashable, Sendable {
     case favorites
     case mostPlayed
     case genre(Genre)
-    case recommendationCategory(RecommendationIndexV2Category)
+    case recommendationCategory(RecommendationIndexCategory)
     case random
     case recentlyPlayed
     case recentlyAdded

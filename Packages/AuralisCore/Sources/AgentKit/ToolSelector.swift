@@ -25,12 +25,7 @@ public enum ToolSelector {
     ]
 
     static let recommendationIndexStatusNames: [String] = [
-        "library_index_v2_status", "library_index_v2_read", "library_index_v2_tag_catalog",
-    ]
-
-    static let recommendationIndexBuildNames: [String] = [
-        "library_index_v2_status", "library_index_v2_next_batch",
-        "library_index_v2_write_batch", "library_index_v2_tag_catalog",
+        "library_index_status", "library_index_read",
     ]
 
     static let playbackNames: [String] = [
@@ -218,10 +213,6 @@ public enum ToolSelector {
         }
         if semantics.isRecommendationIndex {
             names += recommendationIndexStatusNames
-            if semantics.isRecommendationIndexBuild,
-               activeSkillID == "recommendation-index-v2" {
-                names += recommendationIndexBuildNames
-            }
         }
 
         if semantics.domain == .playlist { names += playlistNames }
@@ -291,7 +282,7 @@ public enum ToolSelector {
         case .libraryManagement:
             intentNames = Set([
                 "library_get_summary", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked",
-                "library_index_v2_status", "library_index_v2_read", "library_index_v2_tag_catalog",
+                "library_index_status", "library_index_read",
             ])
         case .serverManagement:
             intentNames = Set(serverNames)

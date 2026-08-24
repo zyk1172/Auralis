@@ -42,16 +42,16 @@ private func semTagRows(_ store: LocalCatalogStore, _ id: String) async throws -
 }
 
 @Suite("V2 semantic tags")
-struct RecommendationIndexV2SemanticTagsTests {
+struct RecommendationIndexSemanticTagsTests {
     @Test("TEST1 3 semantic tags written")
     func threeSemanticTags() async throws {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        let written = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(
+        let written = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(
                 id: id, moods: ["平静"], energy: 3,
                 semanticTags: [
                     .init(value: "夜行感", confidence: 0.8),
@@ -71,11 +71,11 @@ struct RecommendationIndexV2SemanticTagsTests {
             let store = try semStore()
             let serverID: ServerID = "s1"
             try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-            let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+            let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
             let id = try #require(batch.tracks.first?.id)
-            let tags = (0..<count).map { RecommendationIndexV2SemanticTag(value: "标签\($0)", confidence: 0.5) }
-            let written = try await store.writeRecommendationIndexV2([
-                RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, semanticTags: tags)
+            let tags = (0..<count).map { RecommendationIndexSemanticTag(value: "标签\($0)", confidence: 0.5) }
+            let written = try await store.writeRecommendationIndex([
+                RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3, semanticTags: tags)
             ], serverID: serverID)
             #expect(written == 1)
             let stored = try await semTagRows(store, id).filter { $0.dimension == "tag" }
@@ -88,10 +88,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(
                 id: id, moods: ["平静"], energy: 3,
                 semanticTags: [
                     .init(value: "夜行感", confidence: 0.9),
@@ -112,14 +112,14 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], scenes: ["深夜"], energy: 3, styles: ["流行"], confidence: 0.9)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], scenes: ["深夜"], energy: 3, styles: ["流行"], confidence: 0.9)
         ], serverID: serverID)
         // 增量补开放标签：mode = semanticTagsOnly
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(
                 id: id, energy: 3,
                 semanticTags: [.init(value: "夜行感", confidence: 0.8)],
                 mode: "semanticTagsOnly"
@@ -138,10 +138,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
         // 建立 state（让 tag_catalog join 到 state）。
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
         ], serverID: serverID)
         // 直接插入 620 个不同标签。
         let db = try await store.db
@@ -155,7 +155,7 @@ struct RecommendationIndexV2SemanticTagsTests {
         var collected: [String] = []
         var offset = 0
         while true {
-            let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID, limit: 50, offset: offset)
+            let page = try await store.recommendationIndexTagCatalog(serverID: serverID, limit: 50, offset: offset)
             collected.append(contentsOf: page.items.map(\.value))
             guard let next = page.nextOffset else { break }
             offset = next
@@ -172,10 +172,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
         ], serverID: serverID)
         let db = try await store.db
         for index in 1...150 {
@@ -193,7 +193,7 @@ struct RecommendationIndexV2SemanticTagsTests {
         var collected: [String] = []
         var offset = 0
         while true {
-            let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID, query: "夜行", limit: 40, offset: offset)
+            let page = try await store.recommendationIndexTagCatalog(serverID: serverID, query: "夜行", limit: 40, offset: offset)
             collected.append(contentsOf: page.items.map(\.value))
             guard let next = page.nextOffset else { break }
             offset = next
@@ -208,11 +208,11 @@ struct RecommendationIndexV2SemanticTagsTests {
         // 100 首新歌：fixed=100, semantic=100, unique=100。
         let store1 = try semStore()
         try await semSeed(store1, (0..<100).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
-        let s1 = try await store1.recommendationIndexV2Status(serverID: serverID)
+        let s1 = try await store1.recommendationIndexStatus(serverID: serverID)
         #expect(s1.pendingTracks == 100)
         #expect(s1.pendingSemanticTagTracks == 100)
         #expect(s1.pendingUniqueTracks == 100)
-        let b1 = try await store1.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let b1 = try await store1.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         #expect(b1.mode == "full")
         #expect(b1.pendingFixedTracks == 100)
         #expect(b1.pendingSemanticTagTracks == 100)
@@ -221,35 +221,35 @@ struct RecommendationIndexV2SemanticTagsTests {
         // 固定完成、语义版本回退为 0：fixed=0, semantic=100, unique=100, mode=semanticTagsOnly。
         let store2 = try semStore()
         try await semSeed(store2, (0..<100).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
-        let batch2 = try await store2.nextRecommendationIndexV2Batch(serverID: serverID, limit: 100)
+        let batch2 = try await store2.nextRecommendationIndexBatch(serverID: serverID, limit: 100)
         let ids2 = batch2.tracks.map(\.id)
-        _ = try await store2.writeRecommendationIndexV2(
-            ids2.map { RecommendationIndexV2Classification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
+        _ = try await store2.writeRecommendationIndex(
+            ids2.map { RecommendationIndexClassification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
             serverID: serverID
         )
         try await store2.db.run("UPDATE recommendation_index_v2_state SET semantic_tag_rules_version = 0")
-        let s2 = try await store2.recommendationIndexV2Status(serverID: serverID)
+        let s2 = try await store2.recommendationIndexStatus(serverID: serverID)
         #expect(s2.pendingTracks == 0)
         #expect(s2.pendingSemanticTagTracks == 100)
         #expect(s2.pendingUniqueTracks == 100)
-        let b2 = try await store2.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let b2 = try await store2.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         #expect(b2.mode == "semanticTagsOnly")
 
         // 20 首 fixed pending + 100 首 semantic pending：unique=100，不是 120；mode=full。
         let store3 = try semStore()
         try await semSeed(store3, (0..<100).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
-        let batch3 = try await store3.nextRecommendationIndexV2Batch(serverID: serverID, limit: 80)
+        let batch3 = try await store3.nextRecommendationIndexBatch(serverID: serverID, limit: 80)
         let ids3 = batch3.tracks.map(\.id)
-        _ = try await store3.writeRecommendationIndexV2(
-            ids3.map { RecommendationIndexV2Classification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
+        _ = try await store3.writeRecommendationIndex(
+            ids3.map { RecommendationIndexClassification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
             serverID: serverID
         )
         try await store3.db.run("UPDATE recommendation_index_v2_state SET semantic_tag_rules_version = 0")
-        let s3 = try await store3.recommendationIndexV2Status(serverID: serverID)
+        let s3 = try await store3.recommendationIndexStatus(serverID: serverID)
         #expect(s3.pendingTracks == 20)
         #expect(s3.pendingSemanticTagTracks == 100)
         #expect(s3.pendingUniqueTracks == 100)
-        let b3 = try await store3.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let b3 = try await store3.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         #expect(b3.mode == "full")
         #expect(b3.pendingUniqueTracks == 100)
     }
@@ -260,10 +260,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let serverID: ServerID = "s1"
         // 11 首歌：Lo-fi ×8 / LO-FI ×2 / lo-fi ×1。
         try await semSeed(store, (0..<11).map { semTrack(serverID: serverID, remoteID: "t\($0)", title: "Song \($0)") })
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 20)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 20)
         let ids = batch.tracks.map(\.id)
-        _ = try await store.writeRecommendationIndexV2(
-            ids.map { RecommendationIndexV2Classification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
+        _ = try await store.writeRecommendationIndex(
+            ids.map { RecommendationIndexClassification(id: $0, moods: ["平静"], energy: 3, confidence: 0.8) },
             serverID: serverID
         )
         let db = try await store.db
@@ -296,10 +296,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3, confidence: 0.8)
         ], serverID: serverID)
         let db = try await store.db
         try db.run("INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', ?, ?)",
@@ -325,10 +325,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try LocalCatalogStore(url: storeURL)
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3,
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "Lo-fi", confidence: 0.8), .init(value: "LO-FI", confidence: 0.7)],
                 confidence: 0.8)
         ], serverID: serverID)
@@ -353,17 +353,17 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         try await semSeed(store, [semTrack(serverID: "serverA", remoteID: "a1", title: "Song A")])
         try await semSeed(store, [semTrack(serverID: "serverB", remoteID: "b1", title: "Song B")])
-        let batchA = try await store.nextRecommendationIndexV2Batch(serverID: "serverA", limit: 10)
+        let batchA = try await store.nextRecommendationIndexBatch(serverID: "serverA", limit: 10)
         let idA = try #require(batchA.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: idA, moods: ["平静"], energy: 3,
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: idA, moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "Lo-fi", confidence: 0.8)])
         ], serverID: "serverA")
         // 服务器 B 输出 LO-FI：vocabulary 应统一为 Lo-fi。
-        let batchB = try await store.nextRecommendationIndexV2Batch(serverID: "serverB", limit: 10)
+        let batchB = try await store.nextRecommendationIndexBatch(serverID: "serverB", limit: 10)
         let idB = try #require(batchB.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: idB, moods: ["平静"], energy: 3,
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: idB, moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "LO-FI", confidence: 0.7)])
         ], serverID: "serverB")
         let rowsB = try await store.db.query(
@@ -378,15 +378,15 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(
                 id: id, moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "夜行感", confidence: 0.8), .init(value: "公路感", confidence: 0.7)]
             )
         ], serverID: serverID)
-        let package = try await store.exportRecommendationIndexV2Package(serverID: serverID)
+        let package = try await store.exportRecommendationIndexPackage(serverID: serverID)
         #expect(package.trackCount == 1)
         let exportedTags = package.entries.first?.tags ?? []
         #expect(exportedTags.contains { $0.dimension == "tag" && $0.value == "夜行感" })
@@ -396,7 +396,7 @@ struct RecommendationIndexV2SemanticTagsTests {
         let other = try semStore()
         try await semSeed(other, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
         let data = try JSONEncoder().encode(package)
-        let stats = try await other.importRecommendationIndexV2Package(data: data, serverID: serverID)
+        let stats = try await other.importRecommendationIndexPackage(data: data, serverID: serverID)
         #expect(stats.imported == 1)
         let imported = try await semTagRows(other, id)
         #expect(imported.contains { $0.dimension == "tag" && $0.value == "夜行感" })
@@ -409,11 +409,11 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
         // 只写固定分类（旧索引场景：没有开放标签）。
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.9)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3, confidence: 0.9)
         ], serverID: serverID)
         // 模拟旧版本数据：语义标签规则版本回退为 0。
         try await store.db.run(
@@ -421,11 +421,11 @@ struct RecommendationIndexV2SemanticTagsTests {
             [.text(id)]
         )
         // 固定已完成但缺开放标签 → next_batch 必须是 semanticTagsOnly，且能取到这首歌。
-        let next = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let next = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         #expect(next.mode == "semanticTagsOnly")
         #expect(next.tracks.contains { $0.id == id })
         #expect(next.pendingTracks == 1)
-        let status = try await store.recommendationIndexV2Status(serverID: serverID)
+        let status = try await store.recommendationIndexStatus(serverID: serverID)
         #expect(status.pendingTracks == 0)
         #expect(status.pendingSemanticTagTracks == 1)
     }
@@ -435,10 +435,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Track 01")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.9)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3, confidence: 0.9)
         ], serverID: serverID)
         // 模拟旧数据。
         try await store.db.run(
@@ -446,14 +446,14 @@ struct RecommendationIndexV2SemanticTagsTests {
             [.text(id)]
         )
         // 语义批次：模型认为信息不足，返回 semanticTags=[]。
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, energy: 3, semanticTags: [], mode: "semanticTagsOnly")
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, energy: 3, semanticTags: [], mode: "semanticTagsOnly")
         ], serverID: serverID)
         // 即使 0 个标签，处理已完成 → 不再进入下一批。
-        let next = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let next = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         #expect(next.mode == "done")
         #expect(next.tracks.isEmpty)
-        let status = try await store.recommendationIndexV2Status(serverID: serverID)
+        let status = try await store.recommendationIndexStatus(serverID: serverID)
         #expect(status.semanticProcessedTracks == 1)
         #expect(status.pendingSemanticTagTracks == 0)
         #expect(status.semanticTaggedTracks == 0)
@@ -467,12 +467,12 @@ struct RecommendationIndexV2SemanticTagsTests {
             semTrack(serverID: serverID, remoteID: "t1", title: "Song A"),
             semTrack(serverID: serverID, remoteID: "t2", title: "Song B"),
         ])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let ids = batch.tracks.map(\.id)
         // 先建立 state + 固定分类（让 tag_catalog 能 join 到 state）。
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: ids[0], moods: ["平静"], energy: 3, confidence: 0.8),
-            RecommendationIndexV2Classification(id: ids[1], moods: ["平静"], energy: 3, confidence: 0.8),
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: ids[0], moods: ["平静"], energy: 3, confidence: 0.8),
+            RecommendationIndexClassification(id: ids[1], moods: ["平静"], energy: 3, confidence: 0.8),
         ], serverID: serverID)
         // 直接写入历史变体（模拟旧数据），不经过 canonical 写回路径。
         try await store.db.run(
@@ -487,12 +487,12 @@ struct RecommendationIndexV2SemanticTagsTests {
         try await store.db.run("DELETE FROM catalog_migrations")
         try await store.migrateRecommendationSemanticCanonicalIfNeeded()
         // 数据库内部已 canonical：tag_catalog 显示 2 首，且点进去能取到 2 首。
-        let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let page = try await store.recommendationIndexTagCatalog(serverID: serverID)
         let catalog = page.items
-        let lofi = catalog.filter { RecommendationIndexV2.semanticTagKey($0.value) == "lo-fi" }
+        let lofi = catalog.filter { RecommendationIndex.semanticTagKey($0.value) == "lo-fi" }
         #expect(lofi.count == 1)
         #expect(lofi.first?.trackCount == 2)
-        let tracks = try await store.recommendationIndexV2Tracks(serverID: serverID, dimension: "tag", value: lofi.first!.value)
+        let tracks = try await store.recommendationIndexTracks(serverID: serverID, dimension: "tag", value: lofi.first!.value)
         #expect(tracks.count == 2)
     }
 
@@ -502,18 +502,18 @@ struct RecommendationIndexV2SemanticTagsTests {
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
         // 未分类：full 批次。
-        let first = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let first = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         #expect(first.mode == "full")
         let id = try #require(first.tracks.first?.id)
         // full 写回（含开放标签）。
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(
                 id: id, moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "夜行感", confidence: 0.8)]
             )
         ], serverID: serverID)
         // 全部完成：下一批 mode=done 且无曲目。
-        let done = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let done = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         #expect(done.mode == "done")
         #expect(done.tracks.isEmpty)
         #expect(done.pendingTracks == 0)
@@ -527,17 +527,17 @@ struct RecommendationIndexV2SemanticTagsTests {
             semTrack(serverID: serverID, remoteID: "t1", title: "Song A"),
             semTrack(serverID: serverID, remoteID: "t2", title: "Song B"),
         ])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let ids = batch.tracks.map(\.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: ids[0], moods: ["平静"], energy: 3,
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: ids[0], moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "Lo-fi", confidence: 0.8)]),
-            RecommendationIndexV2Classification(id: ids[1], moods: ["平静"], energy: 3,
+            RecommendationIndexClassification(id: ids[1], moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "LO-FI", confidence: 0.7)]),
         ], serverID: serverID)
-        let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let page = try await store.recommendationIndexTagCatalog(serverID: serverID)
         let catalog = page.items
-        let lofi = catalog.filter { $0.dimension == "tag" && RecommendationIndexV2.semanticTagKey($0.value) == "lo-fi" }
+        let lofi = catalog.filter { $0.dimension == "tag" && RecommendationIndex.semanticTagKey($0.value) == "lo-fi" }
         #expect(lofi.count == 1)
         #expect(lofi.first?.trackCount == 2)
     }
@@ -547,10 +547,10 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3,
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3,
                 semanticTags: [.init(value: "夜行感", confidence: 0.8)])
         ], serverID: serverID)
         let rows = try await store.db.query(
@@ -558,7 +558,7 @@ struct RecommendationIndexV2SemanticTagsTests {
             [.text(id)]
         )
         let version = rows.first?["semantic_tag_rules_version"]?.int ?? 0
-        #expect(version == RecommendationIndexV2.semanticTagRulesVersion)
+        #expect(version == RecommendationIndex.semanticTagRulesVersion)
     }
 
     @Test("TEST8 旧固定索引升级后不丢失（tag_catalog 可读取）")
@@ -566,15 +566,15 @@ struct RecommendationIndexV2SemanticTagsTests {
         let store = try semStore()
         let serverID: ServerID = "s1"
         try await semSeed(store, [semTrack(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
         // 旧式只写固定维度。
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], energy: 3, confidence: 0.9)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], energy: 3, confidence: 0.9)
         ], serverID: serverID)
         // 升级：补开放标签。
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(
                 id: id, energy: 3,
                 semanticTags: [.init(value: "夜行感", confidence: 0.8)],
                 mode: "semanticTagsOnly"
@@ -584,7 +584,7 @@ struct RecommendationIndexV2SemanticTagsTests {
         let rows = try await semTagRows(store, id)
         #expect(rows.contains { $0.dimension == "mood" && $0.value == "平静" })
         // tag_catalog 可见。
-        let page = try await store.recommendationIndexV2TagCatalog(serverID: serverID)
+        let page = try await store.recommendationIndexTagCatalog(serverID: serverID)
         let catalog = page.items
         #expect(catalog.contains { $0.dimension == "tag" && $0.value == "夜行感" && $0.trackCount == 1 })
     }

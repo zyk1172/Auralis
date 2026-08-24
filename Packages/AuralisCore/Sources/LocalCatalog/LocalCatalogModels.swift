@@ -198,7 +198,7 @@ public struct CatalogTrackLine: Codable, Sendable, Hashable {
 
 /// 一条开放语义标签（AI 自建）：value 为规范化的中文/常见英文标签，confidence 为模型置信度。
 /// 标签数量没有硬上限；质量通过规范化、复用 canonical 与语义规则控制。
-public struct RecommendationIndexV2SemanticTag: Codable, Sendable, Hashable {
+public struct RecommendationIndexSemanticTag: Codable, Sendable, Hashable {
     public let value: String
     public let confidence: Double
 
@@ -208,9 +208,9 @@ public struct RecommendationIndexV2SemanticTag: Codable, Sendable, Hashable {
     }
 }
 
-/// 推荐索引 V2 由已配置的 Agent 模型写入的多维标签。
+/// 推荐索引由已配置的 Agent 模型生成、由 Runtime 写入的多维标签。
 /// 这些标签只基于曲目元数据，不保存歌词、文件路径或播放地址。
-public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
+public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
     public let id: String
     public let moods: [String]
     public let scenes: [String]
@@ -222,7 +222,7 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
     public let textures: [String]
     public let styles: [String]
     /// 开放语义标签（dimension = "tag"），不设数量上限。
-    public let semanticTags: [RecommendationIndexV2SemanticTag]
+    public let semanticTags: [RecommendationIndexSemanticTag]
     /// "full"=完整分类（固定维度 + 语义标签）；"semanticTagsOnly"=只补开放标签（不触碰旧固定维度）。
     public let mode: String
     public let confidence: Double
@@ -243,7 +243,7 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         vocals: [String] = [],
         textures: [String] = [],
         styles: [String] = [],
-        semanticTags: [RecommendationIndexV2SemanticTag] = [],
+        semanticTags: [RecommendationIndexSemanticTag] = [],
         mode: String = "full",
         confidence: Double = 0.5
     ) {
@@ -276,13 +276,13 @@ public struct RecommendationIndexV2Classification: Codable, Sendable, Hashable {
         vocals = try container.decodeIfPresent([String].self, forKey: .vocals) ?? []
         textures = try container.decodeIfPresent([String].self, forKey: .textures) ?? []
         styles = try container.decodeIfPresent([String].self, forKey: .styles) ?? []
-        semanticTags = try container.decodeIfPresent([RecommendationIndexV2SemanticTag].self, forKey: .semanticTags) ?? []
+        semanticTags = try container.decodeIfPresent([RecommendationIndexSemanticTag].self, forKey: .semanticTags) ?? []
         mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "full"
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
     }
 }
 
-public struct RecommendationIndexV2Status: Sendable, Hashable {
+public struct RecommendationIndexStatus: Sendable, Hashable {
     public let totalTracks: Int
     public let indexedTracks: Int
     public let pendingTracks: Int
@@ -302,7 +302,7 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
         indexedTracks: Int,
         pendingTracks: Int,
         rulesVersion: String,
-        semanticTagRulesVersion: Int = RecommendationIndexV2.semanticTagRulesVersion,
+        semanticTagRulesVersion: Int = RecommendationIndex.semanticTagRulesVersion,
         semanticTaggedTracks: Int = 0,
         semanticProcessedTracks: Int = 0,
         pendingSemanticTagTracks: Int = 0,
@@ -320,7 +320,7 @@ public struct RecommendationIndexV2Status: Sendable, Hashable {
     }
 }
 
-public struct RecommendationIndexV2Batch: Sendable, Hashable {
+public struct RecommendationIndexBatch: Sendable, Hashable {
     public let tracks: [CatalogTrackLine]
     /// 固定分类待处理歌曲数。
     public let pendingFixedTracks: Int
@@ -352,8 +352,8 @@ public struct RecommendationIndexV2Batch: Sendable, Hashable {
     }
 }
 
-/// 一条已完成的推荐索引 V2 记录。仅含本地元数据和分类标签，不含歌词、路径或播放地址。
-public struct RecommendationIndexV2IndexedTrack: Codable, Sendable, Hashable {
+/// 一条已完成的推荐索引记录。仅含本地元数据和分类标签，不含歌词、路径或播放地址。
+public struct RecommendationIndexIndexedTrack: Codable, Sendable, Hashable {
     public let track: CatalogTrackLine
     public let tags: [String: [String]]
     public let confidence: Double
@@ -365,8 +365,8 @@ public struct RecommendationIndexV2IndexedTrack: Codable, Sendable, Hashable {
     }
 }
 
-/// 推荐索引 V2 的一个可浏览分类（例如「场景 · 通勤」或「情绪 · 平静」）。
-public struct RecommendationIndexV2Category: Sendable, Hashable, Identifiable {
+/// 推荐索引的一个可浏览分类（例如「场景 · 通勤」或「情绪 · 平静」）。
+public struct RecommendationIndexCategory: Sendable, Hashable, Identifiable {
     public let dimension: String
     public let value: String
     public let trackCount: Int
@@ -381,13 +381,13 @@ public struct RecommendationIndexV2Category: Sendable, Hashable, Identifiable {
 }
 
 /// AI 标签（dimension='tag'）的一页结果：offset 游标分页，总量不受页大小限制。
-public struct RecommendationIndexV2TagPage: Sendable, Hashable {
-    public let items: [RecommendationIndexV2Category]
+public struct RecommendationIndexTagPage: Sendable, Hashable {
+    public let items: [RecommendationIndexCategory]
     /// 下一页起始 offset；nil 表示没有更多。
     public let nextOffset: Int?
     public let hasMore: Bool
 
-    public init(items: [RecommendationIndexV2Category], nextOffset: Int?, hasMore: Bool) {
+    public init(items: [RecommendationIndexCategory], nextOffset: Int?, hasMore: Bool) {
         self.items = items
         self.nextOffset = nextOffset
         self.hasMore = hasMore

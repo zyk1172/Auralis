@@ -6,23 +6,35 @@ import Foundation
 /// workflow-specific progress reporting.
 public enum AgentWorkflowKind: String, Codable, CaseIterable, Sendable {
     case generic
-    case recommendationIndexV2
+    case recommendationIndex
     case batchDownload
     case batchQueue
+
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = raw == "recommendationIndexV2"
+            ? .recommendationIndex
+            : Self(rawValue: raw) ?? .generic
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public struct AgentWorkflowRoute: Codable, Equatable, Sendable {
     public let kind: AgentWorkflowKind
-    public let usesRecommendationIndexV2: Bool
+    public let usesRecommendationIndex: Bool
     public let usesBatchTools: Bool
 
     public init(
         kind: AgentWorkflowKind,
-        usesRecommendationIndexV2: Bool = false,
+        usesRecommendationIndex: Bool = false,
         usesBatchTools: Bool = false
     ) {
         self.kind = kind
-        self.usesRecommendationIndexV2 = usesRecommendationIndexV2
+        self.usesRecommendationIndex = usesRecommendationIndex
         self.usesBatchTools = usesBatchTools
     }
 }
@@ -34,13 +46,24 @@ public enum WorkflowEngine {
         RecommendationIndexWorkflow(preferredBatchSize: preferredBatchSize)
     }
 
-    public static func route(intent: AgentTaskIntent, text: String) -> AgentWorkflowRoute {
+    public static func route(
+        intent: AgentTaskIntent,
+        text: String,
+        semantics: AgentRequestSemantics? = nil,
+        initialTaskState: AgentTaskState? = nil,
+        executionLineage: ExecutionLineage? = nil
+    ) -> AgentWorkflowRoute {
         let normalized = text.lowercased()
-        if intent == .libraryManagement,
-           RecommendationIndexTaskRules.requiresCompleteBuild(text: text) {
+        let analyzed = semantics ?? AgentRequestSemantics.analyze(text)
+        if RecommendationIndexSkillRuntime.shouldActivate(
+            semantics: analyzed,
+            userText: text,
+            initialTaskState: initialTaskState,
+            executionLineage: executionLineage
+        ) {
             return AgentWorkflowRoute(
-                kind: .recommendationIndexV2,
-                usesRecommendationIndexV2: true,
+                kind: .recommendationIndex,
+                usesRecommendationIndex: true,
                 usesBatchTools: true
             )
         }

@@ -208,7 +208,7 @@ func incrementalStagingIsAtomicAndReplacesAtCommit() async throws {
 }
 
 @Test("Recommendation Index V2 batches, validates, and reuses metadata classifications")
-func recommendationIndexV2RoundTrip() async throws {
+func recommendationIndexRoundTrip() async throws {
     let store = try makeStore()
     let serverID: ServerID = "v2"
     try await seed(store, [
@@ -216,30 +216,30 @@ func recommendationIndexV2RoundTrip() async throws {
         makeTrack(serverID: serverID, remoteID: "t2", title: "Morning Run"),
     ])
 
-    let initial = try await store.recommendationIndexV2Status(serverID: serverID)
+    let initial = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(initial.totalTracks == 2)
     #expect(initial.pendingTracks == 2)
 
-    let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 80)
+    let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 80)
     #expect(batch.tracks.count == 2)
     let firstID = try #require(batch.tracks.first?.id)
     let secondID = try #require(batch.tracks.last?.id)
-    let written = try await store.writeRecommendationIndexV2([
+    let written = try await store.writeRecommendationIndex([
         .init(id: firstID, moods: ["平静"], scenes: ["深夜"], energy: 1, vocals: ["器乐"], textures: ["钢琴"], styles: ["古典"], confidence: 0.92),
         .init(id: secondID, moods: ["明亮"], scenes: ["运动"], energy: 5, vocals: ["女声"], textures: ["电子"], confidence: 0.85),
         .init(id: "v2:not-a-track", moods: ["平静"], scenes: ["深夜"], energy: 1),
     ], serverID: serverID)
     #expect(written == 2)
 
-    let complete = try await store.recommendationIndexV2Status(serverID: serverID)
+    let complete = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(complete.indexedTracks == 2)
     #expect(complete.pendingTracks == 0)
-    #expect(try await store.recommendationIndexV2TrackIDs(serverID: serverID, query: "深夜").map(\.description) == [firstID])
-    #expect(try await store.readRecommendationIndexV2(serverID: serverID, dimension: "texture", value: "钢琴").map(\.track.id) == [firstID])
+    #expect(try await store.recommendationIndexTrackIDs(serverID: serverID, query: "深夜").map(\.description) == [firstID])
+    #expect(try await store.readRecommendationIndex(serverID: serverID, dimension: "texture", value: "钢琴").map(\.track.id) == [firstID])
 }
 
 @Test("清空 Recommendation Index V2 只影响当前服务器，不删除歌曲")
-func clearRecommendationIndexV2IsScopedAndPreservesLibrary() async throws {
+func clearRecommendationIndexIsScopedAndPreservesLibrary() async throws {
     let store = try makeStore()
     let alpha: ServerID = "clear-v2-alpha"
     let beta: ServerID = "clear-v2-beta"
@@ -250,29 +250,29 @@ func clearRecommendationIndexV2IsScopedAndPreservesLibrary() async throws {
     try await seed(store, [alphaTrack])
     try await seed(store, [betaTrack])
 
-    try await store.writeRecommendationIndexV2([
+    try await store.writeRecommendationIndex([
         .init(id: alphaID.description, moods: ["平静"], scenes: ["深夜"], semanticTags: [.init(value: "夜行", confidence: 0.9)], confidence: 0.9),
     ], serverID: alpha)
-    try await store.writeRecommendationIndexV2([
+    try await store.writeRecommendationIndex([
         .init(id: betaID.description, moods: ["明亮"], scenes: ["清晨"], semanticTags: [.init(value: "晨跑", confidence: 0.8)], confidence: 0.8),
     ], serverID: beta)
 
-    try await store.clearRecommendationIndexV2(serverID: alpha)
+    try await store.clearRecommendationIndex(serverID: alpha)
 
-    let alphaStatus = try await store.recommendationIndexV2Status(serverID: alpha)
+    let alphaStatus = try await store.recommendationIndexStatus(serverID: alpha)
     #expect(alphaStatus.totalTracks == 1)
     #expect(alphaStatus.indexedTracks == 0)
     #expect(alphaStatus.pendingTracks == 1)
-    #expect(try await store.recommendationIndexV2Categories(serverID: alpha).isEmpty)
+    #expect(try await store.recommendationIndexCategories(serverID: alpha).isEmpty)
     #expect(try await store.allTracks(serverID: alpha).map(\.id) == [alphaTrack.id])
 
-    let betaStatus = try await store.recommendationIndexV2Status(serverID: beta)
+    let betaStatus = try await store.recommendationIndexStatus(serverID: beta)
     #expect(betaStatus.indexedTracks == 1)
-    #expect(try await store.recommendationIndexV2TrackIDs(serverID: beta, query: "清晨") == [betaID])
+    #expect(try await store.recommendationIndexTrackIDs(serverID: beta, query: "清晨") == [betaID])
 }
 
 @Test("Recommendation Index V2 category detail has no 20,000-track ceiling")
-func recommendationIndexV2CategoryDetailExceedsTwentyThousandTracks() async throws {
+func recommendationIndexCategoryDetailExceedsTwentyThousandTracks() async throws {
     let store = try makeStore()
     let serverID: ServerID = "v2-large-library"
     let tracks = (0..<25_100).map {
@@ -282,7 +282,7 @@ func recommendationIndexV2CategoryDetailExceedsTwentyThousandTracks() async thro
 
     // 仅最后 100 首进入同一个分类；若快照或详情查询仍带 20,000 上限，它们会被静默遗漏。
     let classifications = tracks.suffix(100).map { track in
-        RecommendationIndexV2Classification(
+        RecommendationIndexClassification(
             id: GlobalID(serverID: track.serverID, remoteID: track.id.rawValue).description,
             moods: ["平静"],
             energy: 3,
@@ -292,9 +292,9 @@ func recommendationIndexV2CategoryDetailExceedsTwentyThousandTracks() async thro
             confidence: 0.9
         )
     }
-    #expect(try await store.writeRecommendationIndexV2(classifications, serverID: serverID) == 100)
+    #expect(try await store.writeRecommendationIndex(classifications, serverID: serverID) == 100)
 
-    let result = try await store.recommendationIndexV2Tracks(
+    let result = try await store.recommendationIndexTracks(
         serverID: serverID,
         dimension: "mood",
         value: "平静"

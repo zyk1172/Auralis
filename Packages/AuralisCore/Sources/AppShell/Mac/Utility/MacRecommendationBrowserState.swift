@@ -7,7 +7,7 @@ import LocalCatalog
 /// View 只保存渲染状态；此处集中处理数据替换、陈旧异步结果和表格选择的完整性约束。
 enum MacV2BrowserState {
     /// 分类页的视觉顺序以实际歌曲数为准；同数量时按稳定身份排序，保证刷新不跳动。
-    static func categoriesSortedByTrackCount(_ categories: [RecommendationIndexV2Category]) -> [RecommendationIndexV2Category] {
+    static func categoriesSortedByTrackCount(_ categories: [RecommendationIndexCategory]) -> [RecommendationIndexCategory] {
         categories.sorted { left, right in
             if left.trackCount != right.trackCount { return left.trackCount > right.trackCount }
             return left.id.localizedStandardCompare(right.id) == .orderedAscending

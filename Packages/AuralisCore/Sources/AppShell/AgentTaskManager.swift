@@ -120,8 +120,7 @@ public final class AgentTaskStore {
 
     private static func isRecommendationIndexGoal(_ goal: String?) -> Bool {
         let text = goal?.lowercased() ?? ""
-        let markers = ["推荐索引", "索引 v2", "索引v2", "library_index_v2", "index v2"]
-        return markers.contains(where: text.contains)
+        return text.contains("推荐索引") || RecommendationIndexCompatibility.isLegacyBuildMarker(text)
     }
 
     @discardableResult

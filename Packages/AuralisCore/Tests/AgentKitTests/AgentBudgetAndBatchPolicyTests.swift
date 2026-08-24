@@ -98,42 +98,42 @@ struct AgentBudgetAndBatchPolicyTests {
     @Test("Recommendation Index 根据输出能力扩大批次")
     func recommendationBatchScalesWithOutput() {
         #expect(
-            RecommendationIndexV2BatchPolicy
+            RecommendationIndexBatchPolicy
                 .recommendedLimit(
                     maxOutputTokens: 7_999
                 ) == 8
         )
 
         #expect(
-            RecommendationIndexV2BatchPolicy
+            RecommendationIndexBatchPolicy
                 .recommendedLimit(
                     maxOutputTokens: 8_000
                 ) == 16
         )
 
         #expect(
-            RecommendationIndexV2BatchPolicy
+            RecommendationIndexBatchPolicy
                 .recommendedLimit(
                     maxOutputTokens: 16_000
                 ) == 32
         )
 
         #expect(
-            RecommendationIndexV2BatchPolicy
+            RecommendationIndexBatchPolicy
                 .recommendedLimit(
                     maxOutputTokens: 32_000
                 ) == 64
         )
 
         #expect(
-            RecommendationIndexV2BatchPolicy
+            RecommendationIndexBatchPolicy
                 .recommendedLimit(
                     maxOutputTokens: 64_000
                 ) == 100
         )
 
         #expect(
-            RecommendationIndexV2BatchPolicy
+            RecommendationIndexBatchPolicy
                 .recommendedLimit(
                     maxOutputTokens: 100_000
                 ) == 100
@@ -144,23 +144,23 @@ struct AgentBudgetAndBatchPolicyTests {
     func recommendationBatchCanRecoverFromTruncation() {
         var value = 100
 
-        value = RecommendationIndexV2BatchPolicy
+        value = RecommendationIndexBatchPolicy
             .reducedLimit(from: value)
         #expect(value == 50)
 
-        value = RecommendationIndexV2BatchPolicy
+        value = RecommendationIndexBatchPolicy
             .reducedLimit(from: value)
         #expect(value == 25)
 
-        value = RecommendationIndexV2BatchPolicy
+        value = RecommendationIndexBatchPolicy
             .reducedLimit(from: value)
         #expect(value == 12)
 
-        value = RecommendationIndexV2BatchPolicy
+        value = RecommendationIndexBatchPolicy
             .reducedLimit(from: value)
         #expect(value == 8)
 
-        value = RecommendationIndexV2BatchPolicy
+        value = RecommendationIndexBatchPolicy
             .reducedLimit(from: value)
         #expect(value == 8)
     }
@@ -169,7 +169,7 @@ struct AgentBudgetAndBatchPolicyTests {
     func tenThousandTracksFitEmergencyWatchdog() {
         let totalTracks = 10_000
         let batchSize =
-            RecommendationIndexV2BatchPolicy
+            RecommendationIndexBatchPolicy
                 .minimumTracksPerBatch
 
         let batches =

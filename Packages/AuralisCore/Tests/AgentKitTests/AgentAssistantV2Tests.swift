@@ -67,11 +67,11 @@ struct AgentAssistantV2Tests {
         let start = AgentTaskPolicyResolver.resolve(text: "开始索引 V2")
         #expect(start.intent == .libraryManagement)
         #expect(start.completion == .indexPendingCountIsZero)
-        #expect(WorkflowEngine.route(intent: start.intent, text: "开始索引 V2").kind == .recommendationIndexV2)
+        #expect(WorkflowEngine.route(intent: start.intent, text: "开始索引 V2").kind == .recommendationIndex)
 
         let index = WorkflowEngine.route(intent: .libraryManagement, text: "重建推荐索引 V2，全部处理")
-        #expect(index.kind == .recommendationIndexV2)
-        #expect(index.usesRecommendationIndexV2)
+        #expect(index.kind == .recommendationIndex)
+        #expect(index.usesRecommendationIndex)
         #expect(index.usesBatchTools)
 
         let download = WorkflowEngine.route(intent: .musicDownload, text: "下载这张专辑")
@@ -109,7 +109,7 @@ struct AgentAssistantV2Tests {
 
     @Test("Recommendation Index private tools require the trusted skill")
     func recommendationIndexPrivateToolsRequireSkill() {
-        let ordinary = ToolSelector.select(for: "开始构建推荐索引 V2", all: AgentToolRegistry.all)
+        let ordinary = ToolSelector.select(for: "开始构建推荐索引", all: AgentToolRegistry.all)
         let ordinaryNames = Set(ordinary.map(\.name))
         #expect(!ordinaryNames.contains("library_index_v2_next_batch"))
         #expect(!ordinaryNames.contains("library_index_v2_write_batch"))
@@ -117,14 +117,14 @@ struct AgentAssistantV2Tests {
         #expect(!ToolCatalog().search(query: "library_index_v2_write_batch").contains { $0.name == "library_index_v2_write_batch" })
 
         let active = ToolSelector.select(
-            for: "开始构建推荐索引 V2",
+            for: "开始构建推荐索引",
             intent: .libraryManagement,
             policy: AgentTaskPolicy.policy(for: .libraryManagement),
             all: AgentToolRegistry.all,
-            activeSkillID: "recommendation-index-v2"
+            activeSkillID: "recommendation-index"
         )
         let activeNames = Set(active.map(\.name))
-        #expect(activeNames.contains("library_index_v2_status"))
+        #expect(activeNames.contains("library_index_status"))
         #expect(!activeNames.contains("library_index_v2_next_batch"))
         #expect(!activeNames.contains("library_index_v2_write_batch"))
     }

@@ -44,8 +44,10 @@ Auralis/音乐操作或确定性 workflow 才进入任务状态路径。
 普通聊天的生产链路是 `AgentCoordinator → ConversationEngine → ToolLoop → Provider / ToolRuntime`，
 不创建 `AgentTaskState`，也不经过 `CompletionEvaluator`。确定性任务才由
 `AgentCoordinator → AgentRuntime → ConversationEngine → ToolLoop → trusted Stateful Skill`
-编排；Recommendation Index V2 的 `RecommendationIndexV2SkillRuntime` 内部再驱动
-`RecommendationIndexWorkflow`。`AgentRunner` 只保留弃用的 source-compatibility forwarding。入口默认是 generic conversation；
+编排；推荐索引的 `RecommendationIndexSkillRuntime` 在 Runtime 内部驱动
+`RecommendationIndexWorkflow`。分类请求是 `tools=[]` 的封闭 JSON transform，Runtime
+准备批次、验证 `batchID/revision` 后自行提交写入。`AgentRunner` 只保留弃用的
+source-compatibility forwarding。入口默认是 generic conversation；
 “推荐 / 下载 / 为什么 / 搜索”等通用词只有和明确音乐/Auralis 上下文组合后才会进入 deterministic
 intent，避免把“推荐几本书”或“怎么下载 Python”改写成音乐任务。没有明确音乐命令时，Provider
 不可用不会触发本地音乐搜索。

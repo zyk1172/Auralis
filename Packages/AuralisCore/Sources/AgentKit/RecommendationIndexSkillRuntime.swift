@@ -1,0 +1,649 @@
+import AIKit
+import Domain
+import Foundation
+import LocalCatalog
+
+/// A batch owned by one Recommendation Index Runtime generation.  The model
+/// receives this identity as data and must echo it; only the Runtime can turn
+/// a matching envelope into a catalog commit.
+public struct RecommendationIndexPreparedBatch: Sendable, Equatable {
+    public let batchID: UUID
+    public let revision: UInt64
+    public let checkpointGeneration: UInt64
+    public let mode: String
+    public let tracks: [CatalogTrackLine]
+    public let pendingFixed: Int
+    public let pendingSemantic: Int
+
+    public init(
+        batchID: UUID,
+        revision: UInt64,
+        checkpointGeneration: UInt64,
+        mode: String,
+        tracks: [CatalogTrackLine],
+        pendingFixed: Int,
+        pendingSemantic: Int
+    ) {
+        self.batchID = batchID
+        self.revision = revision
+        self.checkpointGeneration = checkpointGeneration
+        self.mode = mode
+        self.tracks = tracks
+        self.pendingFixed = pendingFixed
+        self.pendingSemantic = pendingSemantic
+    }
+}
+
+/// The sole model-produced value in the closed Recommendation Index chain.
+/// It is data, not a request to execute a tool.
+public struct RecommendationIndexClassificationEnvelope: Codable, Sendable, Equatable {
+    public let batchID: UUID
+    public let revision: UInt64
+    public let mode: String
+    public let items: [RecommendationIndexClassification]
+
+    public init(
+        batchID: UUID,
+        revision: UInt64,
+        mode: String,
+        items: [RecommendationIndexClassification]
+    ) {
+        self.batchID = batchID
+        self.revision = revision
+        self.mode = mode
+        self.items = items
+    }
+}
+
+public enum RecommendationIndexValidationError: Error, LocalizedError, Equatable, Sendable {
+    case staleBatch
+    case wrongMode(expected: String, actual: String)
+    case duplicateIDs
+    case incompleteCoverage
+
+    public var errorDescription: String? {
+        switch self {
+        case .staleBatch: "分类结果不属于当前批次"
+        case let .wrongMode(expected, actual): "分类模式不匹配：需要 \(expected)，得到 \(actual)"
+        case .duplicateIDs: "分类结果包含重复歌曲 ID"
+        case .incompleteCoverage: "分类结果没有恰好覆盖当前批次"
+        }
+    }
+}
+
+/// Runtime-owned deterministic chain:
+/// status -> prepare(batch + tag snapshot) -> closed model transform ->
+/// validate identity/coverage -> ToolRuntime commit -> verify.
+public enum RecommendationIndexSkillRuntime {
+    public static let skillID = "recommendation-index"
+
+    private struct TagSnapshot: Codable, Sendable {
+        let value: String
+        let trackCount: Int
+    }
+
+    private struct ClassificationInput: Codable, Sendable {
+        let batchID: UUID
+        let revision: UInt64
+        let mode: String
+        let tracks: [CatalogTrackLine]
+        let canonicalTags: [TagSnapshot]
+    }
+
+    private static let outputSchema = try! AIJSONValue(jsonString: #"""
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "batchID": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 1},
+        "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string"},
+              "moods": {"type": "array", "items": {"type": "string"}},
+              "scenes": {"type": "array", "items": {"type": "string"}},
+              "energy": {"type": "integer", "minimum": 1, "maximum": 10},
+              "tempo": {"type": "integer", "minimum": 1, "maximum": 5},
+              "acousticness": {"type": "integer", "minimum": 1, "maximum": 5},
+              "danceability": {"type": "integer", "minimum": 1, "maximum": 5},
+              "vocals": {"type": "array", "items": {"type": "string"}},
+              "textures": {"type": "array", "items": {"type": "string"}},
+              "styles": {"type": "array", "items": {"type": "string"}},
+              "semanticTags": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "value": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+                  },
+                  "required": ["value", "confidence"]
+                }
+              },
+              "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "required": ["id", "mode"]
+          }
+        }
+      },
+      "required": ["batchID", "revision", "mode", "items"]
+    }
+    """#)
+
+    public static func shouldActivate(
+        semantics: AgentRequestSemantics,
+        userText: String,
+        initialTaskState: AgentTaskState?,
+        executionLineage: ExecutionLineage?
+    ) -> Bool {
+        if semantics.isRecommendationIndexBuild { return true }
+        if RecommendationIndexTaskRules.requiresCompleteBuild(text: userText) { return true }
+        if executionLineage?.activeSkillID == skillID { return true }
+        guard let initialTaskState else { return false }
+        return initialTaskState.intent == .libraryManagement
+            && RecommendationIndexTaskRules.requiresCompleteBuild(text: initialTaskState.goal)
+    }
+
+    public static func validate(
+        _ envelope: RecommendationIndexClassificationEnvelope,
+        for batch: RecommendationIndexPreparedBatch
+    ) throws {
+        guard envelope.batchID == batch.batchID,
+              envelope.revision == batch.revision else {
+            throw RecommendationIndexValidationError.staleBatch
+        }
+        guard envelope.mode == batch.mode else {
+            throw RecommendationIndexValidationError.wrongMode(expected: batch.mode, actual: envelope.mode)
+        }
+        let ids = envelope.items.map(\.id)
+        guard ids.count == Set(ids).count else {
+            throw RecommendationIndexValidationError.duplicateIDs
+        }
+        let expected = batch.tracks.map(\.id)
+        guard ids.count == expected.count, Set(ids) == Set(expected) else {
+            throw RecommendationIndexValidationError.incompleteCoverage
+        }
+        guard envelope.items.allSatisfy({ $0.mode == batch.mode }) else {
+            throw RecommendationIndexValidationError.wrongMode(
+                expected: batch.mode,
+                actual: envelope.items.first(where: { $0.mode != batch.mode })?.mode ?? ""
+            )
+        }
+    }
+
+    public static func run(
+        userText: String,
+        provider: any AIProvider,
+        model: String,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        serverID: ServerID?,
+        policy: AgentTaskPolicy,
+        initialTaskState: AgentTaskState?,
+        authorizationContext: SideEffectAuthorizationContext,
+        lineageID: UUID,
+        executionLease: ToolExecutionLease,
+        requestTimeout: TimeInterval,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void,
+        log: @escaping @Sendable (AgentActionRecord) async -> Void,
+        progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void,
+        state: @escaping @Sendable (AgentTaskState) async -> Void
+    ) async {
+        var taskState = initialTaskState ?? AgentTaskState(intent: .libraryManagement, goal: userText)
+        let restored = decodeCheckpoint(taskState.facts["recommendation.index.checkpoint"])
+        let generation = (restored?.checkpointGeneration ?? 0) &+ 1
+        var revision = restored?.currentBatchRevision ?? 0
+        var preferredBatchSize = RecommendationIndexBatchPolicy.recommendedLimit(
+            maxOutputTokens: provider.capabilities.maxOutputTokens
+        )
+        if let restored {
+            preferredBatchSize = min(preferredBatchSize, max(1, restored.preferredBatchSize))
+        }
+        var totalWrittenThisRun = 0
+        var latestStatus: RecommendationIndexStatus?
+        let authority = ToolExecutionAuthority(
+            skillID: skillID,
+            lineageID: lineageID,
+            generation: generation
+        )
+
+        func publish(
+            phase: RecommendationIndexWorkflow.State,
+            currentBatch: RecommendationIndexPreparedBatch? = nil,
+            stoppedReason: String? = nil
+        ) async {
+            if let status = latestStatus {
+                taskState.facts["recommendation.index.total"] = "\(status.totalTracks)"
+                taskState.facts["recommendation.index.indexed"] = "\(status.indexedTracks)"
+                taskState.facts["recommendation.index.pending"] = "\(status.pendingTracks)"
+                taskState.facts["recommendation.index.pendingSemantic"] = "\(status.pendingSemanticTagTracks)"
+            }
+            taskState.facts["recommendation.index.skillID"] = skillID
+            taskState.facts["recommendation.index.currentBatchIDs"] = currentBatch?.tracks.map(\.id).joined(separator: ",") ?? ""
+            taskState.facts["recommendation.index.currentBatchMode"] = currentBatch?.mode ?? ""
+            let checkpoint = RecommendationIndexCheckpoint(
+                checkpointGeneration: generation,
+                currentBatchID: currentBatch?.batchID,
+                currentBatchRevision: currentBatch?.revision ?? revision,
+                total: latestStatus?.totalTracks ?? restored?.total ?? 0,
+                indexed: latestStatus?.indexedTracks ?? restored?.indexed ?? 0,
+                pending: latestStatus?.pendingTracks ?? restored?.pending ?? 0,
+                pendingSemantic: latestStatus?.pendingSemanticTagTracks ?? restored?.pendingSemantic ?? 0,
+                totalWrittenThisRun: totalWrittenThisRun,
+                lastSuccessfulBatchCount: taskState.completedActions.last.flatMap(Self.trailingCount) ?? 0,
+                currentBatchIDs: currentBatch?.tracks.map(\.id) ?? [],
+                currentBatchMode: currentBatch?.mode,
+                preferredBatchSize: preferredBatchSize,
+                status: phase,
+                stoppedReason: stoppedReason,
+                updatedAt: .now
+            )
+            if let data = try? JSONEncoder().encode(checkpoint) {
+                taskState.facts["recommendation.index.checkpoint"] = String(decoding: data, as: UTF8.self)
+            }
+            taskState.updatedAt = .now
+            await state(taskState)
+        }
+
+        taskState.status = .running
+        taskState.pendingActions = ["正在读取推荐索引状态"]
+        await publish(phase: .readingStatus)
+
+        while true {
+            let leaseValid = await executionLease.isValid()
+            if Task.isCancelled || !leaseValid {
+                taskState.status = .cancelled
+                taskState.pendingActions = []
+                await publish(phase: .readingStatus, stoppedReason: "运行已取消")
+                return
+            }
+            if let violation = taskState.budgetViolation(policy: policy) {
+                let message = violation.localizedDescription
+                taskState.status = .failed
+                taskState.completionState = .failed
+                taskState.errorState = message
+                taskState.errors.append(message)
+                taskState.pendingActions = []
+                await publish(phase: .readingStatus, stoppedReason: message)
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                return
+            }
+
+            do {
+                latestStatus = try await catalog.recommendationIndexStatus(serverID: serverID)
+            } catch {
+                await fail(
+                    "无法读取推荐索引状态：\(error.localizedDescription)",
+                    phase: .readingStatus,
+                    taskState: &taskState,
+                    publish: publish,
+                    emit: emit
+                )
+                return
+            }
+            guard let status = latestStatus else { return }
+            if status.pendingTracks == 0, status.pendingSemanticTagTracks == 0 {
+                taskState.status = .completed
+                taskState.completed = true
+                taskState.completionState = .satisfied
+                taskState.pendingActions = []
+                taskState.errorState = nil
+                taskState.recordProgress(action: "推荐索引已完成")
+                await publish(phase: .completed)
+                await progress(ToolLoop.AgentProgress(
+                    toolSteps: taskState.progress.toolCalls,
+                    currentStep: "推荐索引已完成 \(status.indexedTracks) / \(status.totalTracks)",
+                    inputTokens: taskState.progress.inputTokens,
+                    outputTokens: taskState.progress.outputTokens
+                ))
+                await emit(AgentChatMessage(
+                    role: .assistant,
+                    messages: [.text("推荐索引已完成，共处理 \(status.indexedTracks) / \(status.totalTracks) 首歌曲。")]
+                ))
+                return
+            }
+
+            let prepared: RecommendationIndexPreparedBatch
+            do {
+                prepared = try await prepareBatch(
+                    catalog: catalog,
+                    serverID: serverID,
+                    limit: preferredBatchSize,
+                    generation: generation,
+                    revision: &revision
+                )
+            } catch {
+                await fail(
+                    "无法准备推荐索引批次：\(error.localizedDescription)",
+                    phase: .fetchingBatch,
+                    taskState: &taskState,
+                    publish: publish,
+                    emit: emit
+                )
+                return
+            }
+            if prepared.tracks.isEmpty {
+                // Status and next-batch are separate snapshots. Re-read the
+                // authoritative status instead of letting the model infer
+                // completion from an empty payload.
+                taskState.pendingActions = ["正在核验推荐索引状态"]
+                await publish(phase: .verifying)
+                continue
+            }
+
+            taskState.status = .waitingForModel
+            taskState.pendingActions = ["推荐索引：已完成 \(status.indexedTracks) / \(status.totalTracks)，正在分类当前批次 \(prepared.tracks.count) 首"]
+            await publish(phase: .classifyingBatch, currentBatch: prepared)
+            await progress(ToolLoop.AgentProgress(
+                toolSteps: taskState.progress.toolCalls,
+                currentStep: taskState.pendingActions[0],
+                inputTokens: taskState.progress.inputTokens,
+                outputTokens: taskState.progress.outputTokens
+            ))
+
+            let envelope: RecommendationIndexClassificationEnvelope
+            do {
+                let request = try await classificationRequest(
+                    provider: provider,
+                    model: model,
+                    batch: prepared,
+                    catalog: catalog,
+                    serverID: serverID
+                )
+                // Hard invariant: this model turn is a closed transform.
+                precondition(request.tools?.isEmpty == true)
+                precondition(request.hostedTools?.isEmpty == true)
+                precondition(request.toolChoice == nil)
+                let response = try await complete(provider, request: request, timeout: requestTimeout)
+                taskState.progress.modelRounds += 1
+                taskState.progress.inputTokens += response.inputTokens ?? 0
+                taskState.progress.outputTokens += response.outputTokens ?? 0
+                guard response.toolCalls?.isEmpty != false,
+                      let decoded = decodeEnvelope(response.content) else {
+                    throw RecommendationIndexRuntimeError.malformedClassification
+                }
+                try validate(decoded, for: prepared)
+                envelope = decoded
+            } catch is CancellationError {
+                taskState.status = .cancelled
+                taskState.pendingActions = []
+                await publish(phase: .classifyingBatch, currentBatch: prepared, stoppedReason: "运行已取消")
+                return
+            } catch {
+                if isMalformedOrTruncated(error) {
+                    preferredBatchSize = RecommendationIndexBatchPolicy.reducedLimit(from: prepared.tracks.count)
+                    taskState.status = .waitingForModel
+                    taskState.pendingActions = ["推荐索引正在重试当前批次…"]
+                    // Never persist the old batch as writable after a failed
+                    // transform. The next prepare creates a new ID/revision.
+                    await publish(
+                        phase: .fetchingBatch,
+                        stoppedReason: "分类输出校验失败：\(error.localizedDescription)"
+                    )
+                    await progress(ToolLoop.AgentProgress(
+                        toolSteps: taskState.progress.toolCalls,
+                        currentStep: "推荐索引正在重试当前批次…",
+                        inputTokens: taskState.progress.inputTokens,
+                        outputTokens: taskState.progress.outputTokens
+                    ))
+                    continue
+                }
+                await fail(
+                    "推荐索引暂时无法继续：AI Provider 请求失败。\(error.localizedDescription)",
+                    phase: .classifyingBatch,
+                    taskState: &taskState,
+                    publish: publish,
+                    emit: emit
+                )
+                return
+            }
+
+            let leaseStillValid = await executionLease.isValid()
+            if Task.isCancelled || !leaseStillValid {
+                taskState.status = .cancelled
+                taskState.pendingActions = []
+                await publish(phase: .writingBatch, currentBatch: prepared, stoppedReason: "写入前运行已失效")
+                return
+            }
+
+            let arguments: AIJSONValue
+            do {
+                arguments = try AIJSONValue(jsonData: JSONEncoder().encode(envelope.items))
+            } catch {
+                // This can only indicate an internal encoding defect; it must
+                // never reach the catalog as a partial write.
+                await fail(
+                    "推荐索引分类结果无法编码，未写入任何数据。",
+                    phase: .writingBatch,
+                    taskState: &taskState,
+                    publish: publish,
+                    emit: emit
+                )
+                return
+            }
+            let commitCall = ToolCall(name: "recommendation_index_commit", arguments: [
+                "batchID": .string(prepared.batchID.uuidString),
+                "revision": .number(Double(prepared.revision)),
+                "items": arguments,
+            ])
+            taskState.status = .waitingForTool
+            taskState.pendingActions = ["正在保存推荐索引分类"]
+            await publish(phase: .writingBatch, currentBatch: prepared)
+            let result = await ToolRuntime.execute(
+                commitCall,
+                bridge: bridge,
+                catalog: catalog,
+                serverID: serverID,
+                systemService: nil,
+                providerCapabilities: provider.capabilities,
+                authorizationContext: authorizationContext,
+                activeSkillID: skillID,
+                executionAuthority: authority,
+                executionLease: executionLease
+            )
+            taskState.progress.toolCalls += 1
+            guard result.success else {
+                await fail(
+                    "推荐索引写入失败：\(result.summary)",
+                    phase: .writingBatch,
+                    taskState: &taskState,
+                    publish: publish,
+                    emit: emit
+                )
+                return
+            }
+            totalWrittenThisRun += prepared.tracks.count
+            taskState.successfulToolNames.append(commitCall.name)
+            taskState.successfulToolCount += 1
+            taskState.pendingActions = ["正在核验推荐索引写入结果"]
+            taskState.recordProgress(action: "推荐索引写入 \(prepared.tracks.count) 首")
+            await log(AgentActionRecord(
+                toolName: commitCall.name,
+                permission: .reversible,
+                summary: result.summary
+            ))
+            await publish(phase: .verifying)
+        }
+    }
+
+    private enum RecommendationIndexRuntimeError: Error, LocalizedError {
+        case malformedClassification
+        case emptyBatch
+
+        var errorDescription: String? {
+            switch self {
+            case .malformedClassification: "模型未返回完整分类对象"
+            case .emptyBatch: "当前索引批次为空"
+            }
+        }
+    }
+
+    private static func prepareBatch(
+        catalog: LocalCatalogStore,
+        serverID: ServerID?,
+        limit: Int,
+        generation: UInt64,
+        revision: inout UInt64
+    ) async throws -> RecommendationIndexPreparedBatch {
+        let batch = try await catalog.nextRecommendationIndexBatch(serverID: serverID, limit: limit)
+        let tracks = try fitBatchToPayloadBudget(batch.tracks)
+        revision &+= 1
+        return RecommendationIndexPreparedBatch(
+            batchID: UUID(),
+            revision: revision,
+            checkpointGeneration: generation,
+            mode: batch.mode,
+            tracks: tracks,
+            pendingFixed: batch.pendingFixedTracks,
+            pendingSemantic: batch.pendingSemanticTagTracks
+        )
+    }
+
+    private static func classificationRequest(
+        provider: any AIProvider,
+        model: String,
+        batch: RecommendationIndexPreparedBatch,
+        catalog: LocalCatalogStore,
+        serverID: ServerID?
+    ) async throws -> AICompletionRequest {
+        let page = try await catalog.recommendationIndexTagCatalog(
+            serverID: serverID,
+            limit: 100,
+            offset: 0
+        )
+        let input = ClassificationInput(
+            batchID: batch.batchID,
+            revision: batch.revision,
+            mode: batch.mode,
+            tracks: batch.tracks,
+            canonicalTags: page.items.map { TagSnapshot(value: $0.value, trackCount: $0.trackCount) }
+        )
+        let payload = String(decoding: try JSONEncoder().encode(input), as: UTF8.self)
+        let modeInstruction = batch.mode == "semanticTagsOnly"
+            ? "本批仅补充开放 semanticTags；每项 mode 必须为 semanticTagsOnly。"
+            : "本批执行完整音乐属性分类；每项 mode 必须为 full。"
+        let system = """
+        你是推荐索引的封闭式分类转换器。只根据输入的歌曲元数据分类，不调用工具，不执行写入，不补充输入中不存在的歌曲。
+        返回且只返回一个 JSON 对象，必须原样回传 batchID、revision、mode，并让 items 恰好覆盖输入 tracks 的每个 id 一次且不得重复。
+        固定维度为 moods、scenes、energy(1-10)、tempo/acousticness/danceability(1-5)、vocals、textures、styles；semanticTags 使用有音乐意义且有区分度的规范标签，优先复用 canonicalTags，不使用歌曲名、艺术家名、专辑名或 ID 作为标签。
+        \(modeInstruction)
+        """
+        let outputFormat: AIOutputFormat?
+        if provider.capabilities.supportsJSONSchema {
+            outputFormat = .jsonSchema(
+                name: "recommendation_index_classification",
+                schema: outputSchema,
+                strict: true
+            )
+        } else if provider.capabilities.supportsJSONMode {
+            outputFormat = .jsonObject
+        } else {
+            outputFormat = nil
+        }
+        return AICompletionRequest(
+            model: model,
+            messages: [
+                AIMessage(role: .system, content: system),
+                AIMessage(role: .user, content: payload),
+            ],
+            temperature: 0.1,
+            maxTokens: provider.capabilities.maxOutputTokens,
+            tools: [],
+            toolChoice: nil,
+            hostedTools: [],
+            outputFormat: outputFormat
+        )
+    }
+
+    private static func complete(
+        _ provider: any AIProvider,
+        request: AICompletionRequest,
+        timeout: TimeInterval
+    ) async throws -> AICompletionResponse {
+        try await withThrowingTaskGroup(of: AICompletionResponse.self) { group in
+            group.addTask { try await provider.complete(request) }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw AIProviderError.transport("请求超时")
+            }
+            guard let value = try await group.next() else {
+                throw AIProviderError.transport("请求未返回结果")
+            }
+            group.cancelAll()
+            return value
+        }
+    }
+
+    private static func decodeEnvelope(_ text: String) -> RecommendationIndexClassificationEnvelope? {
+        let cleaned = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```JSON", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = cleaned.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(RecommendationIndexClassificationEnvelope.self, from: data)
+    }
+
+    private static func decodeCheckpoint(_ raw: String?) -> RecommendationIndexCheckpoint? {
+        guard let raw, let data = raw.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(RecommendationIndexCheckpoint.self, from: data)
+    }
+
+    private static func isMalformedOrTruncated(_ error: Error) -> Bool {
+        if error is RecommendationIndexValidationError || error is RecommendationIndexRuntimeError {
+            return true
+        }
+        guard let providerError = error as? AIProviderError else { return false }
+        if case .outputTruncated = providerError { return true }
+        return false
+    }
+
+    private static func fitBatchToPayloadBudget(_ tracks: [CatalogTrackLine]) throws -> [CatalogTrackLine] {
+        guard !tracks.isEmpty else { return [] }
+        let encoder = JSONEncoder()
+        var low = 1
+        var high = tracks.count
+        var best = 0
+        while low <= high {
+            let middle = (low + high) / 2
+            if try encoder.encode(Array(tracks.prefix(middle))).count <= RecommendationIndexBatchPolicy.safePayloadBytes {
+                best = middle
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        guard best > 0 else { throw RecommendationIndexRuntimeError.emptyBatch }
+        return Array(tracks.prefix(best))
+    }
+
+    private static func fail(
+        _ message: String,
+        phase: RecommendationIndexWorkflow.State,
+        taskState: inout AgentTaskState,
+        publish: (RecommendationIndexWorkflow.State, RecommendationIndexPreparedBatch?, String?) async -> Void,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void
+    ) async {
+        taskState.status = .failed
+        taskState.completionState = .failed
+        taskState.errorState = message
+        taskState.errors.append(message)
+        taskState.pendingActions = []
+        await publish(phase, nil, message)
+        await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+    }
+
+    private static func trailingCount(_ action: String) -> Int? {
+        action.split(separator: " ").compactMap { Int($0) }.last
+    }
+}

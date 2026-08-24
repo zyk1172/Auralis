@@ -1151,7 +1151,7 @@ struct BrowseDetailSheet: View {
         }
     }
 
-    private func categoryDisplayName(_ category: RecommendationIndexV2Category) -> String {
+    private func categoryDisplayName(_ category: RecommendationIndexCategory) -> String {
         let dimension: String
         switch category.dimension {
         case "mood": dimension = String(localized: "情绪", bundle: .module)
@@ -1319,12 +1319,12 @@ struct BrowseDetailSheet: View {
         }
     }
 
-    private func loadRecommendationCategoryTracks(_ category: RecommendationIndexV2Category) {
+    private func loadRecommendationCategoryTracks(_ category: RecommendationIndexCategory) {
         guard categoryTracks == nil, categoryLoadError == nil else { return }
         categoryTracks = []
         Task {
             do {
-                let tracks = try await model.catalogCoordinator.store.recommendationIndexV2Tracks(
+                let tracks = try await model.catalogCoordinator.store.recommendationIndexTracks(
                     serverID: model.catalog.activeAccount?.id,
                     dimension: category.dimension,
                     value: category.value

@@ -288,33 +288,31 @@ struct AgentSystemPromptTests {
     }
 
     @Test("索引内部工具不会进入文本协议提示词")
-    func recommendationIndexV2InternalToolsAreHidden() {
+    func recommendationIndexInternalToolsAreHidden() {
         let selected = ToolSelector.select(
-            for: "构建推荐索引 V2",
+            for: "构建推荐索引",
             intent: .libraryManagement,
             policy: AgentTaskPolicy.policy(for: .libraryManagement),
             all: AgentToolRegistry.all,
-            activeSkillID: "recommendation-index-v2"
+            activeSkillID: "recommendation-index"
         )
         let prompt = AgentRunner.systemPrompt(context: AgentRunner.Context(), tools: selected, nativeToolCalling: false)
-        #expect(prompt.contains("library_index_v2_status"))
-        #expect(!prompt.contains("library_index_v2_next_batch"))
-        #expect(!prompt.contains("library_index_v2_write_batch"))
+        #expect(prompt.contains("library_index_status"))
+        #expect(!prompt.contains("recommendation_index_commit"))
     }
 
     @Test("索引任务的后续短指令只保留公开状态工具")
-    func recommendationIndexV2InternalToolsRemainHiddenForContinuation() {
+    func recommendationIndexInternalToolsRemainHiddenForContinuation() {
         let selected = ToolSelector.select(
             for: "继续",
             intent: .libraryManagement,
             policy: AgentTaskPolicy.policy(for: .libraryManagement),
             all: AgentToolRegistry.all,
-            activeSkillID: "recommendation-index-v2"
+            activeSkillID: "recommendation-index"
         )
         let names = Set(selected.map(\.name))
-        #expect(names.contains("library_index_v2_status"))
-        #expect(!names.contains("library_index_v2_next_batch"))
-        #expect(!names.contains("library_index_v2_write_batch"))
+        #expect(names.contains("library_index_status"))
+        #expect(!names.contains("recommendation_index_commit"))
     }
 
     @Test("记忆与技能注入：列出已存记忆与技能名")

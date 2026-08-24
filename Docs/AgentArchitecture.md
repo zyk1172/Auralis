@@ -156,9 +156,10 @@ Runtime 正常执行路径不再依赖它们做门禁；唯一例外是 `ToolDes
 但 Provider 必须先通过本机能力诊断：`/v1/models` 目录（若 endpoint 支持）用于区分模型 ID
 问题与鉴权，文本/流式/原生工具是独立探测项。`401 + ModelError` 会被报告为模型/上游路由
 问题而不是 API Key 错；仅在目录确认仍含当前模型时才有限重试两次。
-`SideEffectAuthorizationContext` 的来源只能是当前用户的完整原始请求、会话历史中的最近
-完整任务或恢复记录中的 `goal`；“继续”“第一个”等短后续不会单独产生授权，网页/搜索/
-模型文本永远不能产生授权。只有 playlist_delete、memory_delete、memory_clear、skill_delete
+`ExecutionLineage` 与 conversation history 分离：完整新请求一律新建 lineage、completion、
+authorization 和 mutation lease；只有“继续”“第一个”等严格短后续可安全继承上一 lineage。
+`SideEffectAuthorizationContext` 的来源只能是 lineage 的原始用户请求或恢复记录中的 `goal`；
+网页/搜索/模型文本永远不能产生授权。只有 playlist_delete、memory_delete、memory_clear、skill_delete
 会在副作用执行前等待用户批准，拒绝会跳过桥接层并把结构化失败回灌给模型。
 
 ## 任务状态与 Evidence
@@ -210,17 +211,16 @@ Evidence 来源包括本地目录、播放状态、服务器、外部 API、用�
 `skill_list` / `skill_read` / `skill_delete` 管理本地可复用指令；`memory_search` 只查询
 相关长期记忆。模型的工具选择范围由 discovery 动态扩展，不是由 Intent 永久裁剪。
 
-推荐索引 V2 是第一个可信 Stateful Skill，而不是一组可以被通用模型任意编排的目录写工具。
-`RecommendationIndexV2SkillRuntime` 自己持有批次 identity、状态、重试收缩、完成判定和
-checkpoint；固定链路是 `status → next_batch → model classification → write_batch →
-status`。`library_index_v2_next_batch` 与 `library_index_v2_write_batch` 是 `skillOnly`
-私有状态转移，不能被普通 `ToolCatalog.search`、`tool_search` 或 generic provider schema
-发现；`status`、`read`、`tag_catalog` 才是公开只读/目录工具。原生工具调用直接把分类批次
-作为结构化 `items` 数组写回；旧版 `itemsJSON` 仍可读取。
-V2 是结构化音乐分析索引：固定维度（情绪、场景、人声、质感、风格与
+推荐索引是可信 Stateful Skill，而不是一组可以被通用模型任意编排的目录写工具。
+`RecommendationIndexSkillRuntime` 自己持有批次 identity/revision、状态、重试收缩、完成判定和
+checkpoint generation；固定链路是 `status → prepareBatch → model classification → validate →
+commit → verify`。模型仅可调用 `library_index_status`、`library_index_read`；分类请求没有
+tools/hosted tools，内部 prepare/commit primitive 不会被 `ToolCatalog.search`、`tool_search` 或
+generic provider schema 发现。Runtime 在 exact IDs、batchID、revision、mode 都匹配后才写入。
+这是结构化音乐分析索引：固定维度（情绪、场景、人声、质感、风格与
 energy/tempo/acousticness/danceability 数值）保持规范；此外开放语义标签
 （dimension="tag"）由 Agent 自主创建，不设数量上限，质量通过规范化、复用 canonical
-与语义规则控制。详见 `Docs/RecommendationIndexV2.md`。
+与语义规则控制。详见 `Docs/RecommendationIndex.md`。
 
 ## 持久化、取消与重启
 

@@ -325,13 +325,17 @@ private func seedV2(_ store: LocalCatalogStore, _ tracks: [Track]) async throws 
 
 // MARK: - v2 工具执行
 
-@Test("模拟器路径：文本 Agent 能读取、分类并写回推荐索引 V2")
-func recommendationIndexV2TextAgentRoundTrip() async throws {
+#if false
+// Superseded by RecommendationIndexSkillRuntimeTests. These legacy model-tool
+// fixtures intentionally lack Runtime-generated batch identity and must not
+// exercise the retired public batch/write protocol.
+@Test("legacy Recommendation Index model-tool path")
+func recommendationIndexTextAgentRoundTrip() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "test-server"
     try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "v2-index-1", title: "Night Piano")])
     let gid = GlobalID(serverID: serverID, remoteID: "v2-index-1")
-    let classification = RecommendationIndexV2Classification(
+    let classification = RecommendationIndexClassification(
         id: gid.description,
         moods: ["平静"], scenes: ["深夜"], energy: 2,
         tempo: 2, acousticness: 5, danceability: 1,
@@ -354,15 +358,15 @@ func recommendationIndexV2TextAgentRoundTrip() async throws {
         confirm: { _ in true },
         emit: { await collector.record($0) }
     )
-    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    let status = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(status.indexedTracks == 1)
     #expect(status.pendingTracks == 0)
-    #expect(try await store.recommendationIndexV2TrackIDs(serverID: serverID, query: "深夜") == [gid])
+    #expect(try await store.recommendationIndexTrackIDs(serverID: serverID, query: "深夜") == [gid])
     #expect(await collector.contains("推荐索引 V2 已完成"))
 }
 
 @Test("原生工具调用可用结构化数组写入 V2（固定维度）")
-func recommendationIndexV2NativeStructuredWrite() async throws {
+func recommendationIndexNativeStructuredWrite() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "native-index-server"
     try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "native-1", title: "Chamber Night")])
@@ -399,9 +403,9 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
         emit: { await collector.record($0) }
     )
 
-    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    let status = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(status.pendingTracks == 0)
-    let fixed = try await store.readRecommendationIndexV2(serverID: serverID, dimension: "texture", value: "弦乐")
+    let fixed = try await store.readRecommendationIndex(serverID: serverID, dimension: "texture", value: "弦乐")
     #expect(fixed.map(\.track.id) == [gid.description])
     #expect(await collector.contains("tool_search") == false)
     #expect(provider.requests().first?.toolChoice == .auto)
@@ -418,7 +422,7 @@ func recommendationIndexV2NativeStructuredWrite() async throws {
 }
 
 @Test("模型重复调用内部 write_batch 时受控失败且不会写入")
-func recommendationIndexV2RejectsModelOwnedWriteCalls() async throws {
+func recommendationIndexRejectsModelOwnedWriteCalls() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "malformed-index-server"
     try await seedV2(store, [makeV2Track(serverID: serverID, remoteID: "malformed-1", title: "Recover Me")])
@@ -439,7 +443,7 @@ func recommendationIndexV2RejectsModelOwnedWriteCalls() async throws {
         context: .init(serverID: serverID, currentTrackTitle: nil, queueCount: 0),
         confirm: { _ in true }, emit: { await collector.record($0) }
     )
-    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    let status = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(status.pendingUniqueTracks == 1)
     #expect(await collector.contains("模型尝试调用 Runtime 内部步骤"))
     #expect(await collector.contains("连续无效"))
@@ -454,7 +458,7 @@ func recommendationIndexV2RejectsModelOwnedWriteCalls() async throws {
 }
 
 @Test("V2 原生 Provider 500 后从工作流检查点恢复，不重复已写入批次")
-func recommendationIndexV2TransientProviderFailureRecovers() async throws {
+func recommendationIndexTransientProviderFailureRecovers() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "transient-provider-index-server"
     let tracks = (0..<8).map {
@@ -462,8 +466,8 @@ func recommendationIndexV2TransientProviderFailureRecovers() async throws {
     }
     try await seedV2(store, tracks)
 
-    func classification(for id: String) -> RecommendationIndexV2Classification {
-        RecommendationIndexV2Classification(
+    func classification(for id: String) -> RecommendationIndexClassification {
+        RecommendationIndexClassification(
             id: id,
             moods: ["平静"], scenes: ["深夜"], energy: 2,
             tempo: 2, acousticness: 5, danceability: 1,
@@ -491,22 +495,24 @@ func recommendationIndexV2TransientProviderFailureRecovers() async throws {
         emit: { await collector.record($0) }
     )
 
-    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    let status = try await store.recommendationIndexStatus(serverID: serverID)
     let didResumeOnSameProtocol = await collector.contains("保持原协议恢复")
     #expect(status.pendingUniqueTracks == 0)
     #expect(didResumeOnSameProtocol)
     #expect(provider.requests().count >= 4) // 两次同协议 500 重试 + 两个恢复后的分类回合
 }
 
-@Test("1000 首 V2 分片在一次模拟截断后仍可从 pending 完成")
-func recommendationIndexV2ThousandTrackRecovery() async throws {
+#endif
+
+@Test("1000 首 Recommendation Index 分片在一次模拟截断后仍可从 pending 完成")
+func recommendationIndexThousandTrackRecovery() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "thousand-index-server"
     try await seedV2(store, (0..<1_000).map { makeV2Track(serverID: serverID, remoteID: "track-\($0)", title: "Track \($0)") })
     var limit = 24
     var batchNumber = 0
     while true {
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: limit)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: limit)
         if batch.tracks.isEmpty { break }
         batchNumber += 1
         // 第七批模拟 function arguments 被截断：不写库、缩批，再从 pending 重取。
@@ -515,16 +521,16 @@ func recommendationIndexV2ThousandTrackRecovery() async throws {
             continue
         }
         let items = batch.tracks.map {
-            RecommendationIndexV2Classification(
+            RecommendationIndexClassification(
                 id: $0.id, moods: ["平静"], scenes: ["深夜"], energy: 3,
                 tempo: 2, acousticness: 4, danceability: 2, vocals: ["器乐"],
                 textures: ["钢琴"], styles: ["轻音乐"],
                 semanticTags: [.init(value: "夜行感", confidence: 0.8)], confidence: 0.9
             )
         }
-        #expect(try await store.writeRecommendationIndexV2(items, serverID: serverID) == items.count)
+        #expect(try await store.writeRecommendationIndex(items, serverID: serverID) == items.count)
     }
-    let status = try await store.recommendationIndexV2Status(serverID: serverID)
+    let status = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(status.pendingTracks == 0)
     #expect(status.pendingSemanticTagTracks == 0)
     #expect(status.pendingUniqueTracks == 0)

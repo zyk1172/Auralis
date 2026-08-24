@@ -12,8 +12,8 @@ struct MacV2CategoriesView: View {
     let theme: BuiltInTheme
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
-    @State private var categories: [RecommendationIndexV2Category] = []
-    @State private var aiTags: [RecommendationIndexV2Category] = []
+    @State private var categories: [RecommendationIndexCategory] = []
+    @State private var aiTags: [RecommendationIndexCategory] = []
     @State private var isLoading = true
     @State private var tagQuery = ""
     @State private var tagNextOffset: Int? = 0
@@ -31,7 +31,7 @@ struct MacV2CategoriesView: View {
                 ContentUnavailableView(
                     String(localized: "还没有分类", bundle: .module),
                     systemImage: "square.grid.2x2",
-                    description: Text(String(localized: "在设置 → AI 与公开数据中完成推荐索引 V2 后，这里会按歌曲数量展示分类。", bundle: .module))
+                    description: Text(String(localized: "在设置 → AI 与公开数据中完成推荐索引后，这里会按歌曲数量展示分类。", bundle: .module))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -55,7 +55,7 @@ struct MacV2CategoriesView: View {
     }
 
     @ViewBuilder
-    private func categoryCard(_ category: RecommendationIndexV2Category) -> some View {
+    private func categoryCard(_ category: RecommendationIndexCategory) -> some View {
         Button {
             onNavigate(.detail(.recommendationCategory(category)))
         } label: {
@@ -139,9 +139,9 @@ struct MacV2CategoriesView: View {
             return
         }
         isLoading = true
-        let fixedCategories = (try? await model.catalogCoordinator.store.recommendationIndexV2Categories(
+        let fixedCategories = (try? await model.catalogCoordinator.store.recommendationIndexCategories(
             serverID: serverID,
-            dimensions: RecommendationIndexV2.fixedDimensions
+            dimensions: RecommendationIndex.fixedDimensions
         )) ?? []
         guard model.catalog.activeServerID == serverID, !Task.isCancelled else { return }
         categories = MacV2BrowserState.categoriesSortedByTrackCount(fixedCategories)
@@ -160,12 +160,12 @@ struct MacV2CategoriesView: View {
             return
         }
         let query = tagQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let page = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
+        let page = (try? await model.catalogCoordinator.store.recommendationIndexTagCatalog(
             serverID: serverID,
             query: query.isEmpty ? nil : query,
             limit: Self.tagPageSize,
             offset: offset
-        )) ?? RecommendationIndexV2TagPage(items: [], nextOffset: nil, hasMore: false)
+        )) ?? RecommendationIndexTagPage(items: [], nextOffset: nil, hasMore: false)
         guard model.catalog.activeServerID == serverID, !Task.isCancelled else { return }
         var merged = reset ? page.items : aiTags + page.items
         var seen = Set<String>()
@@ -185,7 +185,7 @@ struct MacV2CategoriesView: View {
 /// 单个分类的歌曲页。ArtworkStore 在此处重新显式注入，避免导航/布局重建后
 /// ArtworkView 从缺失的 SwiftUI 环境读取对象而触发主线程断言。
 struct MacV2CategoryTracksView: View {
-    let category: RecommendationIndexV2Category
+    let category: RecommendationIndexCategory
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
@@ -244,7 +244,7 @@ struct MacV2CategoryTracksView: View {
         isLoading = true
         loadError = nil
         do {
-            let loaded = try await model.catalogCoordinator.store.recommendationIndexV2Tracks(
+            let loaded = try await model.catalogCoordinator.store.recommendationIndexTracks(
                 serverID: serverID,
                 dimension: category.dimension,
                 value: category.value
@@ -270,7 +270,7 @@ struct MacV2CategoryTracksView: View {
     }
 }
 
-extension RecommendationIndexV2Category {
+extension RecommendationIndexCategory {
     var macCategoryTitle: String {
         let dimension: String
         switch self.dimension {

@@ -52,9 +52,9 @@ struct MacV2BrowserStateTests {
     @Test("分类按歌曲数量降序，数量相同保持稳定顺序")
     func categoriesAreSortedByTrackCount() {
         let categories = [
-            RecommendationIndexV2Category(dimension: "scene", value: "通勤", trackCount: 3),
-            RecommendationIndexV2Category(dimension: "mood", value: "明亮", trackCount: 9),
-            RecommendationIndexV2Category(dimension: "mood", value: "平静", trackCount: 3),
+            RecommendationIndexCategory(dimension: "scene", value: "通勤", trackCount: 3),
+            RecommendationIndexCategory(dimension: "mood", value: "明亮", trackCount: 9),
+            RecommendationIndexCategory(dimension: "mood", value: "平静", trackCount: 3),
         ]
 
         #expect(MacV2BrowserState.categoriesSortedByTrackCount(categories).map(\.id) == [

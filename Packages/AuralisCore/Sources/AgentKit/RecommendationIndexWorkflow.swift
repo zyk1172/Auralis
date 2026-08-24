@@ -1,12 +1,8 @@
-import AIKit
 import Foundation
-import LocalCatalog
 
-/// Deterministic state machine for Recommendation Index V2.
-///
-/// The model still decides how to classify a returned batch, but it cannot
-/// decide whether the workflow is complete. Completion is based on status
-/// facts reported by the catalog after each write.
+/// Runtime-owned state presentation for Recommendation Index. The closed Skill
+/// owns preparation, classification validation and commit; this value no longer
+/// exposes model-controlled write instructions.
 public struct RecommendationIndexWorkflow: Sendable, Equatable {
     public enum State: String, Codable, Sendable, Equatable {
         case readingStatus
@@ -45,7 +41,7 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     public var hasCurrentBatch: Bool { !currentBatchIDs.isEmpty }
 
     public mutating func configure(maxOutputTokens: Int) {
-        preferredBatchSize = RecommendationIndexV2BatchPolicy.recommendedLimit(
+        preferredBatchSize = RecommendationIndexBatchPolicy.recommendedLimit(
             maxOutputTokens: maxOutputTokens
         )
     }
@@ -107,67 +103,6 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
         currentBatchMode = nil
         state = .verifying
         return state
-    }
-
-    /// Validate the batch identity before the write reaches ToolRuntime or the
-    /// catalog. This is workflow state, not a generic working-set concern.
-    public func writeIssue(arguments: [String: AIJSONValue]) -> String? {
-        guard let value = arguments["items"] ?? arguments["itemsJSON"] else {
-            return "缺少必填 items"
-        }
-        let raw: String
-        if case let .string(string) = value {
-            raw = string
-        } else {
-            raw = value.jsonString
-        }
-        let cleaned = raw
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = cleaned.data(using: .utf8),
-              let items = try? JSONDecoder().decode([RecommendationIndexV2Classification].self, from: data)
-        else {
-            return "items 不是完整的结构化 JSON 数组"
-        }
-        guard !currentBatchIDs.isEmpty else {
-            return "没有刚刚由 library_index_v2_next_batch 返回的当前批次"
-        }
-        let ids = items.map(\.id)
-        guard ids.count == Set(ids).count,
-              Set(ids) == Set(currentBatchIDs),
-              ids.count == currentBatchIDs.count
-        else {
-            return "items 必须恰好覆盖当前批次的每个真实 ID 一次"
-        }
-        if currentBatchMode == "semanticTagsOnly",
-           items.contains(where: { $0.mode != "semanticTagsOnly" }) {
-            return "当前批次为 semanticTagsOnly，每项必须使用 mode=semanticTagsOnly"
-        }
-        if currentBatchMode == "full",
-           items.contains(where: { $0.mode == "semanticTagsOnly" }) {
-            return "当前批次为 full，不能伪装成 semanticTagsOnly"
-        }
-        return nil
-    }
-
-    /// The model may provide prose, but it cannot declare this workflow done.
-    /// The decision is based solely on the facts observed by this state machine.
-    public func completionDecision(repairAttempts: Int) -> AgentModelAnswerDecision {
-        guard !isCompleted else { return .accept }
-
-        let continuation: String
-        if pending == 0, pendingSemantic == 0 {
-            continuation = "推荐索引的最终核验尚未完成；Runtime 将继续执行 library_index_v2_status，只有确认固定分类与开放语义标签都为 0 后才会结束。"
-        } else if pending > 0 {
-            continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pending) 首）。Runtime 将自动执行 library_index_v2_next_batch；请只对刚返回的当前批次调用 library_index_v2_write_batch，直到固定分类与开放标签都完成。"
-        } else {
-            continuation = "推荐索引固定分类已完成，但仍需为 \(pendingSemantic) 首歌曲补充开放语义标签。Runtime 将自动执行 library_index_v2_next_batch（本批模式 semanticTagsOnly）；请只对当前批次调用 library_index_v2_write_batch。"
-        }
-        if repairAttempts == 0 {
-            return .continueTask(continuation)
-        }
-        return .fail("任务没有满足确定性完成条件：\(continuation)")
     }
 
     public mutating func beginVerification() {
