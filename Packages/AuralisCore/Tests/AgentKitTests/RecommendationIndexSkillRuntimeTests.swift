@@ -249,6 +249,57 @@ func recommendationIndexRejectsStaleEnvelope() throws {
     }
 }
 
+@Test("Recommendation Index parser extracts fenced JSON and reports coverage diagnostics")
+func recommendationIndexParserDiagnosticsAreStructured() throws {
+    let first = CatalogTrackLine(
+        id: "server:one", title: "One", artist: "Artist", album: "Album", year: nil,
+        genres: [], language: nil, duration: 180, isFavorite: false, rating: nil,
+        playCount: 0, isDownloaded: false
+    )
+    let second = CatalogTrackLine(
+        id: "server:two", title: "Two", artist: "Artist", album: "Album", year: nil,
+        genres: [], language: nil, duration: 180, isFavorite: false, rating: nil,
+        playCount: 0, isDownloaded: false
+    )
+    let batch = RecommendationIndexPreparedBatch(
+        batchID: UUID(), revision: 3, checkpointGeneration: 2, mode: "full",
+        tracks: [first, second], pendingFixed: 2, pendingSemantic: 0
+    )
+    let valid = RecommendationIndexClassificationEnvelope(
+        batchID: batch.batchID,
+        revision: batch.revision,
+        mode: "full",
+        items: [.init(id: first.id, mode: "full"), .init(id: second.id, mode: "full")]
+    )
+    let validJSON = String(decoding: try JSONEncoder().encode(valid), as: UTF8.self)
+    let parsed = RecommendationIndexClassificationParser.parse(
+        "模型说明：\n```json\n\(validJSON)\n```\n",
+        for: batch
+    )
+    #expect(parsed == .success(valid))
+
+    let incomplete = RecommendationIndexClassificationEnvelope(
+        batchID: batch.batchID,
+        revision: batch.revision,
+        mode: "full",
+        items: [.init(id: first.id, mode: "full")]
+    )
+    let incompleteResult = RecommendationIndexClassificationParser.parse(
+        String(decoding: try JSONEncoder().encode(incomplete), as: UTF8.self),
+        for: batch
+    )
+    switch incompleteResult {
+    case .success:
+        #expect(Bool(false))
+    case let .failure(failure):
+        #expect(failure.stage == .trackCoverage)
+        #expect(failure.missingIDs == [second.id])
+        #expect(failure.batchSize == 2)
+        #expect(failure.rawLength > 0)
+        #expect(failure.compactSummary.contains("missing_ids=\(second.id)"))
+    }
+}
+
 @Test("Old Recommendation Index checkpoint decodes with fail-closed generation defaults")
 func oldRecommendationIndexCheckpointMigrates() throws {
     let old = #"{"total":20,"indexed":8,"pending":12,"pendingSemantic":12,"totalWrittenThisRun":8,"lastSuccessfulBatchCount":8,"currentBatchIDs":["s:1"],"currentBatchMode":"full","preferredBatchSize":8,"status":"classifyingBatch","updatedAt":0}"#

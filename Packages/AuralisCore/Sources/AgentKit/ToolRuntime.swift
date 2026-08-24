@@ -14,6 +14,7 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
     case modelWriteMissingAuthorizationOperation(String)
     case mutationAuthorizationMissing(String)
     case executionLeaseRevoked(String)
+    case mutationResourceBusy(String)
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +26,7 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
         case let .modelWriteMissingAuthorizationOperation(name): "工具 \(name) 缺少副作用授权操作声明，已拒绝执行"
         case let .mutationAuthorizationMissing(name): "工具 \(name) 缺少当前请求的副作用授权，已拒绝执行"
         case let .executionLeaseRevoked(name): "工具 \(name) 所属运行已失效，未执行副作用"
+        case let .mutationResourceBusy(resource): "资源 \(resource) 正被另一个运行修改，当前操作未执行"
         }
     }
 }
@@ -60,7 +62,8 @@ public struct ToolRuntime {
         authorizationContext: SideEffectAuthorizationContext? = nil,
         activeSkillID: String? = nil,
         executionAuthority: ToolExecutionAuthority? = nil,
-        executionLease: ToolExecutionLease
+        executionLease: ToolExecutionLease,
+        resourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
     ) async -> ToolResult {
         guard let descriptor = AgentToolRegistry.descriptor(for: call.name) else {
             return ToolResult(
@@ -102,7 +105,37 @@ public struct ToolRuntime {
                     throw ToolRuntimeError.executionLeaseRevoked(call.name)
                 }
             }
-            return await ToolExecutionContext.$lease.withValue(executionLease) {
+            let resources = descriptor.mutationResources
+            if !resources.isEmpty {
+                guard await resourceLeaseRegistry.tryAcquire(resources, owner: executionLease.runID) else {
+                    let resource = resources.map(\.rawValue).sorted().joined(separator: ", ")
+                    throw ToolRuntimeError.mutationResourceBusy(resource)
+                }
+                // The registry acquisition itself suspends. Re-check after it
+                // and immediately before entering the executor so a revoked
+                // run cannot use a resource acquired just before cancellation.
+                guard await executionLease.isValid() else {
+                    await resourceLeaseRegistry.release(resources, owner: executionLease.runID)
+                    throw ToolRuntimeError.executionLeaseRevoked(call.name)
+                }
+                let result = await ToolExecutionContext.$lease.withValue(executionLease) {
+                    await AgentToolRegistry.execute(
+                        call,
+                        bridge: bridge,
+                        catalog: catalog,
+                        serverID: serverID,
+                        systemService: systemService,
+                        externalMusicService: externalMusicService,
+                        allowsLyrics: allowsLyrics,
+                        providerCapabilities: providerCapabilities,
+                        webService: webService,
+                        activeSkillID: activeSkillID
+                    )
+                }
+                await resourceLeaseRegistry.release(resources, owner: executionLease.runID)
+                return result
+            }
+            let result = await ToolExecutionContext.$lease.withValue(executionLease) {
                 await AgentToolRegistry.execute(
                     call,
                     bridge: bridge,
@@ -116,12 +149,15 @@ public struct ToolRuntime {
                     activeSkillID: activeSkillID
                 )
             }
+            return result
         } catch {
             return ToolResult(
                 call: call,
                 permission: descriptor.permission,
                 success: false,
-                summary: "参数校验失败：\(error.localizedDescription)"
+                summary: error is ToolRuntimeError
+                    ? error.localizedDescription
+                    : "工具执行失败：\(error.localizedDescription)"
             )
         }
     }

@@ -151,8 +151,8 @@ struct SessionIsolationTests {
         #expect(await newLease.isValid())
     }
 
-    @Test("切换会话先撤销旧 Run 的 mutation lease")
-    func sessionSwitchRevokesOldMutationLease() async throws {
+    @Test("切换会话不撤销后台 Run 的 mutation lease")
+    func sessionSwitchPreservesBackgroundMutationLease() async throws {
         let (model, coordinator) = makeCoordinator()
         _ = model
         let a = await coordinator.newSession()
@@ -166,7 +166,7 @@ struct SessionIsolationTests {
 
         await coordinator.activate(b)
 
-        #expect(!lease.isValidSnapshot)
+        #expect(lease.isValidSnapshot)
         #expect(coordinator.currentRunID == nil)
         #expect(coordinator.currentExecutionLease == nil)
         #expect(coordinator.activeSessionID == b)

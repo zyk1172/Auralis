@@ -71,6 +71,264 @@ public enum RecommendationIndexValidationError: Error, LocalizedError, Equatable
     }
 }
 
+public enum RecommendationIndexClassificationFailureStage: String, Codable, Sendable {
+    case providerOutput
+    case jsonExtraction
+    case codableDecode
+    case batchIdentity
+    case revision
+    case trackCoverage
+    case mode
+}
+
+/// Redacted, structured diagnostics for a failed closed classification turn.
+/// Raw model output is intentionally not persisted or shown in the chat UI.
+public struct RecommendationIndexClassificationDiagnostics: Error, LocalizedError, Codable, Sendable, Equatable {
+    public let stage: RecommendationIndexClassificationFailureStage
+    public let batchSize: Int
+    public let rawLength: Int
+    public let jsonFound: Bool
+    public let message: String
+    public let expectedBatchID: UUID?
+    public let receivedBatchID: UUID?
+    public let expectedRevision: UInt64?
+    public let receivedRevision: UInt64?
+    public let missingIDs: [String]
+    public let extraIDs: [String]
+    public let duplicateIDs: [String]
+
+    public init(
+        stage: RecommendationIndexClassificationFailureStage,
+        batchSize: Int,
+        rawLength: Int,
+        jsonFound: Bool,
+        message: String,
+        expectedBatchID: UUID? = nil,
+        receivedBatchID: UUID? = nil,
+        expectedRevision: UInt64? = nil,
+        receivedRevision: UInt64? = nil,
+        missingIDs: [String] = [],
+        extraIDs: [String] = [],
+        duplicateIDs: [String] = []
+    ) {
+        self.stage = stage
+        self.batchSize = batchSize
+        self.rawLength = rawLength
+        self.jsonFound = jsonFound
+        self.message = message
+        self.expectedBatchID = expectedBatchID
+        self.receivedBatchID = receivedBatchID
+        self.expectedRevision = expectedRevision
+        self.receivedRevision = receivedRevision
+        self.missingIDs = Array(missingIDs.prefix(20))
+        self.extraIDs = Array(extraIDs.prefix(20))
+        self.duplicateIDs = Array(duplicateIDs.prefix(20))
+    }
+
+    public var errorDescription: String? {
+        "\(stage.rawValue): \(message)"
+    }
+
+    public var compactSummary: String {
+        var parts = [
+            "stage=\(stage.rawValue)",
+            "batch_size=\(batchSize)",
+            "raw_length=\(rawLength)",
+            "json_found=\(jsonFound)",
+            "error=\(message)",
+        ]
+        if let expectedBatchID, let receivedBatchID {
+            parts.append("expected_batch_id=\(expectedBatchID.uuidString), received_batch_id=\(receivedBatchID.uuidString)")
+        }
+        if let expectedRevision, let receivedRevision {
+            parts.append("expected_revision=\(expectedRevision), received_revision=\(receivedRevision)")
+        }
+        if !missingIDs.isEmpty { parts.append("missing_ids=\(missingIDs.joined(separator: ","))") }
+        if !extraIDs.isEmpty { parts.append("extra_ids=\(extraIDs.joined(separator: ","))") }
+        if !duplicateIDs.isEmpty { parts.append("duplicate_ids=\(duplicateIDs.joined(separator: ","))") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// Provider-neutral parser for the only model-produced value in the index
+/// workflow. Keeping this separate makes wire incompatibilities diagnosable
+/// without coupling the Runtime to a provider's response type.
+public enum RecommendationIndexClassificationParser {
+    public static func parse(
+        _ text: String,
+        for batch: RecommendationIndexPreparedBatch
+    ) -> Result<RecommendationIndexClassificationEnvelope, RecommendationIndexClassificationDiagnostics> {
+        let rawLength = text.utf8.count
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failure(.init(
+                stage: .providerOutput,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: false,
+                message: "模型返回空内容"
+            ))
+        }
+        guard let json = extractJSONObject(from: text) else {
+            return .failure(.init(
+                stage: .jsonExtraction,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: false,
+                message: "未找到完整 JSON 对象"
+            ))
+        }
+        guard let data = json.data(using: .utf8) else {
+            return .failure(.init(
+                stage: .jsonExtraction,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "JSON 文本无法编码"
+            ))
+        }
+        guard (try? AIJSONValue(jsonData: data)) != nil else {
+            return .failure(.init(
+                stage: .jsonExtraction,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "JSON 语法无效"
+            ))
+        }
+        let envelope: RecommendationIndexClassificationEnvelope
+        do {
+            envelope = try JSONDecoder().decode(RecommendationIndexClassificationEnvelope.self, from: data)
+        } catch {
+            return .failure(.init(
+                stage: .codableDecode,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: decodingMessage(error)
+            ))
+        }
+
+        if envelope.batchID != batch.batchID {
+            return .failure(.init(
+                stage: .batchIdentity,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "batchID 不属于当前批次",
+                expectedBatchID: batch.batchID,
+                receivedBatchID: envelope.batchID,
+                expectedRevision: batch.revision,
+                receivedRevision: envelope.revision
+            ))
+        }
+        if envelope.revision != batch.revision {
+            return .failure(.init(
+                stage: .revision,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "revision 不属于当前批次",
+                expectedBatchID: batch.batchID,
+                receivedBatchID: envelope.batchID,
+                expectedRevision: batch.revision,
+                receivedRevision: envelope.revision
+            ))
+        }
+        if envelope.mode != batch.mode || envelope.items.contains(where: { $0.mode != batch.mode }) {
+            return .failure(.init(
+                stage: .mode,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "分类 mode 与当前批次不一致"
+            ))
+        }
+
+        let actualIDs = envelope.items.map(\.id)
+        let expectedIDs = batch.tracks.map(\.id)
+        let duplicateIDs = Dictionary(grouping: actualIDs, by: { $0 })
+            .filter { $0.value.count > 1 }
+            .map(\.key)
+            .sorted()
+        let expectedSet = Set(expectedIDs)
+        let actualSet = Set(actualIDs)
+        let missingIDs = expectedSet.subtracting(actualSet).sorted()
+        let extraIDs = actualSet.subtracting(expectedSet).sorted()
+        if !duplicateIDs.isEmpty || actualIDs.count != expectedIDs.count || !missingIDs.isEmpty || !extraIDs.isEmpty {
+            return .failure(.init(
+                stage: .trackCoverage,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "items 没有恰好覆盖当前批次的每个 ID",
+                missingIDs: missingIDs,
+                extraIDs: extraIDs,
+                duplicateIDs: duplicateIDs
+            ))
+        }
+        return .success(envelope)
+    }
+
+    private static func extractJSONObject(from text: String) -> String? {
+        let source = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```JSON", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let start = source.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for index in source[start...].indices {
+            let character = source[index]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            if character == "\"" {
+                inString = true
+            } else if character == "{" {
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+                if depth == 0 {
+                    return String(source[start...index])
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func decodingMessage(_ error: Error) -> String {
+        switch error {
+        case let DecodingError.keyNotFound(key, context):
+            return "缺少字段 \"\(codingPath(context.codingPath + [key]))\""
+        case let DecodingError.typeMismatch(_, context): return "字段类型不匹配：\(context.codingPath.map(\.stringValue).joined(separator: "."))"
+        case let DecodingError.valueNotFound(_, context): return "字段为空：\(context.codingPath.map(\.stringValue).joined(separator: "."))"
+        case let DecodingError.dataCorrupted(context): return "字段数据损坏：\(context.codingPath.map(\.stringValue).joined(separator: "."))"
+        default: return "Codable 解码失败"
+        }
+    }
+
+    private static func codingPath(_ path: [CodingKey]) -> String {
+        path.reduce(into: "") { result, key in
+            if let index = key.intValue {
+                result += "[\(index)]"
+            } else if result.isEmpty {
+                result = key.stringValue
+            } else {
+                result += ".\(key.stringValue)"
+            }
+        }
+    }
+}
+
 /// Runtime-owned deterministic chain:
 /// status -> prepare(batch + tag snapshot) -> closed model transform ->
 /// validate identity/coverage -> ToolRuntime commit -> verify.
@@ -193,6 +451,7 @@ public enum RecommendationIndexSkillRuntime {
         lineageID: UUID,
         executionLease: ToolExecutionLease,
         requestTimeout: TimeInterval,
+        resourceLeaseRegistry: MutationResourceLeaseRegistry,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void,
@@ -351,6 +610,7 @@ public enum RecommendationIndexSkillRuntime {
             ))
 
             let envelope: RecommendationIndexClassificationEnvelope
+            var classificationDiagnostics: RecommendationIndexClassificationDiagnostics?
             do {
                 let request = try await classificationRequest(
                     provider: provider,
@@ -367,12 +627,24 @@ public enum RecommendationIndexSkillRuntime {
                 taskState.progress.modelRounds += 1
                 taskState.progress.inputTokens += response.inputTokens ?? 0
                 taskState.progress.outputTokens += response.outputTokens ?? 0
-                guard response.toolCalls?.isEmpty != false,
-                      let decoded = decodeEnvelope(response.content) else {
-                    throw RecommendationIndexRuntimeError.malformedClassification
+                guard response.toolCalls?.isEmpty != false else {
+                    let diagnostic = RecommendationIndexClassificationDiagnostics(
+                        stage: .providerOutput,
+                        batchSize: prepared.tracks.count,
+                        rawLength: response.content.utf8.count,
+                        jsonFound: false,
+                        message: "封闭分类阶段返回了工具调用"
+                    )
+                    classificationDiagnostics = diagnostic
+                    throw diagnostic
                 }
-                try validate(decoded, for: prepared)
-                envelope = decoded
+                switch RecommendationIndexClassificationParser.parse(response.content, for: prepared) {
+                case let .success(decoded):
+                    envelope = decoded
+                case let .failure(diagnostic):
+                    classificationDiagnostics = diagnostic
+                    throw diagnostic
+                }
             } catch is CancellationError {
                 taskState.status = .cancelled
                 taskState.pendingActions = []
@@ -383,11 +655,22 @@ public enum RecommendationIndexSkillRuntime {
                     preferredBatchSize = RecommendationIndexBatchPolicy.reducedLimit(from: prepared.tracks.count)
                     taskState.status = .waitingForModel
                     taskState.pendingActions = ["推荐索引正在重试当前批次…"]
+                    if let diagnostic = classificationDiagnostics ?? (error as? RecommendationIndexClassificationDiagnostics) {
+                        if let data = try? JSONEncoder().encode(diagnostic) {
+                            taskState.facts["recommendation.index.classification.failure"] = String(decoding: data, as: UTF8.self)
+                        }
+                        await log(AgentActionRecord(
+                            toolName: "recommendation_index_classification",
+                            permission: .readOnly,
+                            summary: diagnostic.compactSummary
+                        ))
+                    }
                     // Never persist the old batch as writable after a failed
                     // transform. The next prepare creates a new ID/revision.
                     await publish(
                         phase: .fetchingBatch,
-                        stoppedReason: "分类输出校验失败：\(error.localizedDescription)"
+                        stoppedReason: classificationDiagnostics.map { "分类输出校验失败（\($0.stage.rawValue)），正在重试" }
+                            ?? "分类输出校验失败，正在重试"
                     )
                     await progress(ToolLoop.AgentProgress(
                         toolSteps: taskState.progress.toolCalls,
@@ -448,7 +731,8 @@ public enum RecommendationIndexSkillRuntime {
                 authorizationContext: authorizationContext,
                 activeSkillID: skillID,
                 executionAuthority: authority,
-                executionLease: executionLease
+                executionLease: executionLease,
+                resourceLeaseRegistry: resourceLeaseRegistry
             )
             taskState.progress.toolCalls += 1
             guard result.success else {
@@ -583,24 +867,15 @@ public enum RecommendationIndexSkillRuntime {
         }
     }
 
-    private static func decodeEnvelope(_ text: String) -> RecommendationIndexClassificationEnvelope? {
-        let cleaned = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```JSON", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = cleaned.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(RecommendationIndexClassificationEnvelope.self, from: data)
-    }
-
     private static func decodeCheckpoint(_ raw: String?) -> RecommendationIndexCheckpoint? {
         guard let raw, let data = raw.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(RecommendationIndexCheckpoint.self, from: data)
     }
 
     private static func isMalformedOrTruncated(_ error: Error) -> Bool {
-        if error is RecommendationIndexValidationError || error is RecommendationIndexRuntimeError {
+        if error is RecommendationIndexValidationError
+            || error is RecommendationIndexClassificationDiagnostics
+            || error is RecommendationIndexRuntimeError {
             return true
         }
         guard let providerError = error as? AIProviderError else { return false }

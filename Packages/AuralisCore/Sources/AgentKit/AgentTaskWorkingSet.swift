@@ -182,6 +182,14 @@ public struct AgentTaskWorkingSet: Sendable {
         return nil
     }
 
+    /// Whether a blocked retry is caused by an unknown remote result rather
+    /// than a confirmed successful duplicate. The former must remain visible
+    /// to the user so they know why the operation was not retried.
+    public func isIndeterminateSideEffect(tool: String, args: [String: String]) -> Bool {
+        let canonical = Self.canonicalSideEffectTool(tool)
+        return indeterminateSideEffects.contains(Self.signature(tool: canonical, args: args))
+    }
+
     /// 只在工具成功后登记，失败或超时不会错误地阻止用户的后续重试。
     public mutating func recordSuccessfulSideEffect(tool: String, args: [String: String], summary: String) {
         let canonical = Self.canonicalSideEffectTool(tool)

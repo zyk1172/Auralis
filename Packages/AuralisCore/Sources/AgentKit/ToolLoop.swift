@@ -45,6 +45,9 @@ public struct ToolLoop {
         public let memories: [AgentMemoryEntry]
         /// 已创建的技能列表（由 skill_* 工具维护，注入提示词）。
         public let skills: [AgentSkillEntry]
+        /// Shared by runs owned by one application coordinator. Standalone
+        /// ToolLoop callers receive an isolated registry by default.
+        public let mutationResourceLeaseRegistry: MutationResourceLeaseRegistry
 
         public init(
             serverID: ServerID? = nil,
@@ -65,7 +68,8 @@ public struct ToolLoop {
             allowsLyrics: Bool = false,
             allowsHistory: Bool = false,
             memories: [AgentMemoryEntry] = [],
-            skills: [AgentSkillEntry] = []
+            skills: [AgentSkillEntry] = [],
+            mutationResourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
         ) {
             self.serverID = serverID
             self.serverName = serverName
@@ -86,6 +90,7 @@ public struct ToolLoop {
             self.allowsHistory = allowsHistory
             self.memories = memories
             self.skills = skills
+            self.mutationResourceLeaseRegistry = mutationResourceLeaseRegistry
         }
     }
 
@@ -220,6 +225,7 @@ public struct ToolLoop {
                 lineageID: executionLineage?.lineageID ?? UUID(),
                 executionLease: resolvedExecutionLease,
                 requestTimeout: roundTimeout,
+                resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
                 emit: emit,
                 log: log,
                 progress: progress,
@@ -574,7 +580,8 @@ public struct ToolLoop {
                             providerCapabilities: provider.capabilities,
                             webService: webService,
                             authorizationContext: sideEffectAuthorization,
-                            executionLease: executionLease
+                            executionLease: executionLease,
+                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry
                         )
                     }
                 } catch is CancellationError {
@@ -827,6 +834,12 @@ public struct ToolLoop {
 
         var toolStepCount = 0
         var completionRepairAttempts = 0
+        // A successful mutation may already satisfy the current request, but
+        // the next provider turn can still contain a legitimate second
+        // mutation with different arguments. Keep a pending finalization
+        // marker for one planning turn; an exact duplicate is suppressed and
+        // finalizes, while a new mutation clears the marker and proceeds.
+        var pendingMutationFinalization = false
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
@@ -1382,6 +1395,7 @@ public struct ToolLoop {
             var toolMessages: [AIMessage] = []
             var shouldCompactSkillTranscript = false
             var fixedSkillFailure: String?
+            var blockedDuplicateAfterCompletion = false
             // 本轮统计（用于合并工具轨迹展示）。
             var roundSearchCalls = 0
             var roundToolNames: Set<String> = []
@@ -1445,15 +1459,29 @@ public struct ToolLoop {
                 if descriptor.permission != .readOnly,
                    let reason = ws.sideEffectBlockReason(tool: call.name, args: stringArguments) {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "已拦截重复副作用", reused: true))
-                    // 这是一次真实的状态保护，而不是普通的模型内部提示：用户需要知道
-                    // 第二次修改没有发生，否则最终回答仍可能谎称队列再次被替换。
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text(reason)]))
+                    if pendingMutationFinalization,
+                       !ws.isIndeterminateSideEffect(tool: call.name, args: stringArguments) {
+                        blockedDuplicateAfterCompletion = true
+                    }
+                    // A confirmed duplicate is an internal recovery detail,
+                    // but an indeterminate remote write remains user-visible:
+                    // the user must know that no automatic retry was made.
+                    if ws.isIndeterminateSideEffect(tool: call.name, args: stringArguments) {
+                        await emit(AgentChatMessage(role: .assistant, messages: [.text(reason)]))
+                    }
                     toolMessages.append(Self.toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name): 已跳过 - \(reason)",
                         native: nativeMode
                     ))
                     continue
+                }
+
+                // The previous successful mutation was only a candidate for
+                // finalization. A different write in this turn is a legitimate
+                // multi-step request, so let it run and keep the loop open.
+                if pendingMutationFinalization, descriptor.permission != .readOnly {
+                    pendingMutationFinalization = false
                 }
 
                 // ② 任务级缓存：同一工具 + 规范化参数已执行过 → 直接复用结果。
@@ -1536,7 +1564,8 @@ public struct ToolLoop {
                             webService: webService,
                             authorizationContext: sideEffectAuthorization,
                             activeSkillID: activeSkillID,
-                            executionLease: executionLease
+                            executionLease: executionLease,
+                            resourceLeaseRegistry: context.mutationResourceLeaseRegistry
                         )
                     }
                 } catch is CancellationError {
@@ -1589,6 +1618,15 @@ public struct ToolLoop {
                     await emit(AgentChatMessage(role: .assistant, messages: [.webSources(sources)]))
                 }
                 let madeProgress = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &taskState)
+                if result.success,
+                   descriptor.permission != .readOnly,
+                   Self.shouldFinalizeAfterMutation(
+                       policy: policy,
+                       state: taskState,
+                       authorization: sideEffectAuthorization
+                   ) {
+                    pendingMutationFinalization = true
+                }
                 if result.success, call.name == "tool_search" {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
@@ -1725,6 +1763,27 @@ public struct ToolLoop {
                 taskState.updatedAt = .now
                 await state(taskState)
                 await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                return
+            }
+
+            if pendingMutationFinalization && blockedDuplicateAfterCompletion {
+                // Once the Runtime has a successful, authorized mutation and
+                // the provider's only follow-up is the same mutation again,
+                // do not ask it to plan another open-ended turn. The working
+                // set idempotence guard remains the last line of defense, but
+                // this branch also makes the duplicate invisible to the user.
+                _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
+                taskState.pendingActions = []
+                await state(taskState)
+                var finalMessages: [AgentMessage] = []
+                if let finalMessage = presentation.finalMessage() {
+                    finalMessages.append(finalMessage)
+                }
+                finalMessages.append(.text(Self.deterministicCompletionSummary(policy: policy, presentation: presentation)))
+                await emit(AgentChatMessage(
+                    role: .assistant,
+                    messages: finalMessages
+                ))
                 return
             }
 
@@ -1943,6 +2002,32 @@ public struct ToolLoop {
         case .modelAnswer, .appreciationWithEvidence:
             return "已完成。"
         }
+    }
+
+    private static func shouldFinalizeAfterMutation(
+        policy: AgentTaskPolicy,
+        state: AgentTaskState,
+        authorization: SideEffectAuthorizationContext
+    ) -> Bool {
+        guard AgentCompletionEvaluator.factsSatisfied(state: state, policy: policy) else { return false }
+        guard policy.completion == .queueMutation
+            || policy.completion == .playlistMutation
+            || policy.completion == .playbackMutation
+        else { return false }
+
+        // Authorization is the complete semantic contract for the current
+        // request. Do not narrow it back to the classifier's first domain:
+        // “replace the queue and play it” authorizes both queueReplace and
+        // playbackPlay, so the queue mutation must not finalize the run early.
+        let requested = authorization.allowedOperations
+
+        let successful = Set(state.successfulToolNames.compactMap {
+            AgentToolRegistry.descriptor(for: $0)?.authorizationOperation
+        })
+        // A descriptor's operation is the final source of truth. The explicit
+        // request set may be empty in compatibility tests; in that case the
+        // already-established completion fact is sufficient.
+        return requested.isEmpty || requested.isSubset(of: successful)
     }
 
     private static func markWorkflowCompleted(state: inout AgentTaskState) {
@@ -2272,6 +2357,7 @@ public struct ToolLoop {
                 catalog: catalog,
                 context: context,
                 sideEffectAuthorization: sideEffectAuthorization,
+                resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
                 emit: emit,
                 log: log
             )
@@ -2284,6 +2370,7 @@ public struct ToolLoop {
         catalog: LocalCatalogStore,
         context: Context,
         sideEffectAuthorization: SideEffectAuthorizationContext,
+        resourceLeaseRegistry: MutationResourceLeaseRegistry,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void
     ) async {
@@ -2302,7 +2389,8 @@ public struct ToolLoop {
                 serverID: context.serverID,
                 systemService: nil,
                 authorizationContext: sideEffectAuthorization,
-                executionLease: ToolExecutionContext.lease ?? .revoked()
+                executionLease: ToolExecutionContext.lease ?? .revoked(),
+                resourceLeaseRegistry: resourceLeaseRegistry
             )
         }
 
