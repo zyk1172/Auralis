@@ -559,7 +559,7 @@ extension LocalCatalogStore {
     }
 
     func recommendationIndexSnapshot(serverID: ServerID?) throws -> (lines: [CatalogTrackLine], states: [String: RecommendationIndexStoredState]) {
-        // 分类写入也必须看到完整资料库；否则第 20,000 首之后的歌曲永远不会进入 V2 索引。
+        // 分类写入也必须看到完整资料库；否则第 20,000 首之后的歌曲永远不会进入推荐索引。
         let tracks = try allTracks(serverID: serverID)
         let popularity = try popularityScores(serverID: serverID)
         let favorites = Set(try getFavorites(serverID: serverID).map(\.globalID))
@@ -595,7 +595,7 @@ extension LocalCatalogStore {
         return (lines, states)
     }
 
-    /// 旧 V2 索引迁移：source_hash_version 缺失或低于当前版本时，按当前歌曲内容
+    /// 历史索引迁移：source_hash_version 缺失或低于当前版本时，按当前歌曲内容
     /// 重新计算 content hash 并原地更新。只有歌曲仍存在且 tags 完整时才迁移；
     /// track 不存在 / tags 损坏的条目保持原样，会自然进入 pending。
     private func migrateStaleContentHash(
@@ -755,7 +755,7 @@ extension LocalCatalogStore {
     }
 }
 
-/// 一条已入库的 V2 索引状态：内容 hash + hash 算法版本 + 语义标签规则版本。
+/// 一条已入库的推荐索引状态：内容 hash + hash 算法版本 + 语义标签规则版本。
 struct RecommendationIndexStoredState {
     var hash: String
     var hashVersion: Int

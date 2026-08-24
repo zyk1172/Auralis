@@ -49,8 +49,8 @@ AgentRunner → AgentToolRegistry → LocalCatalog / AgentBridge / SystemService
 
 ## 3. Agent 已删除的旧架构债务
 
-- Runner 中索引 V2 专属循环/超时/摘要解析已移除，索引成为普通
-  `RecommendationIndexToolService`；是否完成只看 `pending == 0` 结构化事实。
+- Runner 中推荐索引专属循环/超时/摘要解析已移除，索引由独立 Stateful Skill Runtime
+  管理；是否完成只看 `pending == 0` 结构化事实。
 - 工具执行不再由 Runner、Toolkit 和 Registry 分别维护路由；Toolkit 旧入口只转发到
   Registry，系统工具也经统一 executor。
 - 通用任务状态从只服务歌曲候选的 WorkingSet 中拆出；WorkingSet 不再硬编码 20 首。
@@ -73,7 +73,7 @@ AgentRunner → AgentToolRegistry → LocalCatalog / AgentBridge / SystemService
 | 成功副作用去重、工具失败后继续与缺失系统能力 | 是 | 通过 |
 | Task reducer、Evidence 与 Completion Predicate | 是 | 通过 |
 | 上下文合法 tool-call 配对及隐私脱敏 | 是 | 通过 |
-| 索引 V2 只有 pending=0 才完成 | 是 | 通过 |
+| 推荐索引只有 pending=0 才完成 | 是 | 通过 |
 | 歌曲鉴赏四段格式和无社区证据回退 | 是 | 通过 |
 
 真实模型端点仍需按第 15 节执行真机测试，不能由 fixture 替代。
@@ -296,7 +296,7 @@ Completion Predicate 会验证元数据、歌词和大众评价的 available/una
 | 37 | error fallback | 已验证 | 网络/限流/认证/服务/解码分类；无数据不伪造，播放不被外部数据阻断。 |
 | 38 | dead code | 已验证 | 临时 debug、重复 Runner 分支和本轮替代路径已清理。 |
 | 39 | duplicate abstractions | 已验证/残留 P3 | Tool 执行单路径；AppModel/Toolkit 仅留不保存双状态的兼容转发。 |
-| 40 | stale Recommendation Index | 已验证 | V2 保留为有效工具服务，无 Runtime 特殊分支，以 pending 事实完成。 |
+| 40 | stale Recommendation Index | 已验证 | 推荐索引保留为有效工具服务，无 Runtime 特殊分支，以 pending 事实完成。 |
 
 ## 最终自动验证记录
 

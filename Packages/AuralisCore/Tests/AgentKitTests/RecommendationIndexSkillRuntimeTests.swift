@@ -41,11 +41,12 @@ private actor IndexExecutionGate {
 }
 
 private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
-    enum FirstResponse { case valid, malformed }
+    enum FirstResponse: Equatable { case valid, malformed, transientFailures(Int) }
 
     private let lock = NSLock()
     private var firstResponse: FirstResponse
     private var didRespond = false
+    private var remainingTransientFailures: Int
     private var recorded: [AICompletionRequest] = []
     private let gate: IndexExecutionGate?
 
@@ -66,6 +67,11 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
 
     init(firstResponse: FirstResponse = .valid, gate: IndexExecutionGate? = nil) {
         self.firstResponse = firstResponse
+        if case let .transientFailures(count) = firstResponse {
+            self.remainingTransientFailures = count
+        } else {
+            self.remainingTransientFailures = 0
+        }
         self.gate = gate
     }
 
@@ -73,7 +79,7 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
         AIConnectionResult(latency: 0, model: "closed-index", message: "ready")
     }
 
-    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+    func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
         if let gate {
             await gate.markEntered()
             await gate.waitUntilReleased()
@@ -83,6 +89,14 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
             let value = !didRespond && firstResponse == .malformed
             didRespond = true
             return value
+        }
+        let shouldFailTransiently = lock.withLock {
+            guard remainingTransientFailures > 0 else { return false }
+            remainingTransientFailures -= 1
+            return true
+        }
+        if shouldFailTransiently {
+            throw AIProviderError.transport("temporary index test failure")
         }
         if shouldReturnMalformed {
             return AICompletionResponse(model: request.model, content: #"{"batchID":"truncated""#)
@@ -344,6 +358,41 @@ func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
     let eventKinds = await events.kinds()
     #expect(eventKinds.contains(.classificationFailed))
     #expect(eventKinds.contains(.retrying))
+}
+
+@Test("Recommendation Index retries transient classification failures without changing the closed protocol")
+func recommendationIndexRetriesTransientClassificationFailures() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 3)
+    let provider = ClosedIndexProvider(firstResponse: .transientFailures(2))
+    let events = ClosedIndexEvents()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+    #expect(provider.requests().count >= 3)
+    let eventKinds = await events.kinds()
+    #expect(eventKinds.filter { $0 == .retrying }.count == 2)
+    #expect(!eventKinds.contains(.failed))
+    #expect(provider.requests().allSatisfy { $0.tools?.isEmpty == true })
+    #expect(provider.requests().allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(provider.requests().allSatisfy { $0.toolChoice == nil })
 }
 
 @Test("Stale Recommendation Index envelope is rejected by batch identity")

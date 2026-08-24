@@ -457,7 +457,9 @@ public enum RecommendationIndexSkillRuntime {
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void,
         state: @escaping @Sendable (AgentTaskState) async -> Void,
-        observe: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
+        observe: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in },
+        providerName: String? = nil,
+        modelName: String? = nil
     ) async {
         var taskState = initialTaskState ?? AgentTaskState(intent: .libraryManagement, goal: userText)
         let restored = decodeCheckpoint(taskState.facts["recommendation.index.checkpoint"])
@@ -479,6 +481,7 @@ public enum RecommendationIndexSkillRuntime {
         let runID = executionLease.runID
         let sessionID = executionLease.sessionID
         var classificationAttempt = 0
+        var transientClassificationRetries = 0
 
         func emitObservation(
             _ kind: RecommendationIndexExecutionEvent.Kind,
@@ -503,6 +506,8 @@ public enum RecommendationIndexSkillRuntime {
                 pendingTracks: latestStatus?.pendingTracks,
                 pendingSemanticTracks: latestStatus?.pendingSemanticTagTracks,
                 durationMilliseconds: durationSince.map { max(0, Int(Date().timeIntervalSince($0) * 1_000)) },
+                provider: providerName,
+                model: modelName,
                 message: message
             ))
         }
@@ -847,6 +852,7 @@ public enum RecommendationIndexSkillRuntime {
                 switch RecommendationIndexClassificationParser.parse(response.content, for: prepared) {
                 case let .success(decoded):
                     envelope = decoded
+                    transientClassificationRetries = 0
                     await emitObservation(
                         .classificationCompleted,
                         phase: .classifyingBatch,
@@ -908,6 +914,38 @@ public enum RecommendationIndexSkillRuntime {
                         terminal: false,
                         attempt: classificationAttempt
                     )
+                    continue
+                }
+                if isTransientClassificationFailure(error), transientClassificationRetries < 2 {
+                    transientClassificationRetries += 1
+                    taskState.status = .waitingForModel
+                    taskState.pendingActions = ["推荐索引正在重试模型请求…"]
+                    let retryMessage = "分类请求暂时失败，正在重试（第 \(transientClassificationRetries) 次）"
+                    await publish(
+                        phase: .retrying,
+                        currentBatch: prepared,
+                        stoppedReason: retryMessage,
+                        terminal: false,
+                        attempt: classificationAttempt
+                    )
+                    do {
+                        let delay = UInt64(800 * (1 << (transientClassificationRetries - 1))) * 1_000_000
+                        try await Task.sleep(nanoseconds: delay)
+                    } catch {
+                        taskState.status = .cancelled
+                        taskState.pendingActions = []
+                        await publish(
+                            phase: .classifyingBatch,
+                            currentBatch: prepared,
+                            stoppedReason: "运行已取消",
+                            terminal: true,
+                            attempt: classificationAttempt
+                        )
+                        return
+                    }
+                    // The next outer iteration re-reads status and prepares a
+                    // fresh batch identity. No uncommitted model output is
+                    // ever reused after a transport failure.
                     continue
                 }
                 await fail(
@@ -1122,6 +1160,11 @@ public enum RecommendationIndexSkillRuntime {
         guard let providerError = error as? AIProviderError else { return false }
         if case .outputTruncated = providerError { return true }
         return false
+    }
+
+    private static func isTransientClassificationFailure(_ error: Error) -> Bool {
+        guard let providerError = error as? AIProviderError else { return false }
+        return providerError.isTransient
     }
 
     private static func fitBatchToPayloadBudget(_ tracks: [CatalogTrackLine]) throws -> [CatalogTrackLine] {

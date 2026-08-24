@@ -296,9 +296,7 @@ private struct IOSMusicShell: View {
         NavigationStack {
             DockReservedSectionContent(
                 model: model,
-                themeStore: themeStore,
-                coordinator: homeChromeState,
-                hasAccessory: hasDockAccessory
+                themeStore: themeStore
             )
                 // Destination 必须注册在 NavigationStack 的内容树内。此前把 modifier
                 // 挂在 NavigationStack 外层，状态虽已写入，但 SwiftUI 不会执行导航，
@@ -320,6 +318,12 @@ private struct IOSMusicShell: View {
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
         .id(model.selectedSection)
+        // 这是整个 NavigationStack（包括歌单/专辑/艺术家详情）的唯一底部避让源。
+        // 之前把 inset 放在 SectionContent 与详情页各自一层，二级页面会叠加
+        // 两次安全区；现在由共享 Home chrome 在根容器一次性保留真实 Dock 高度。
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: dockReservedHeight)
+        }
         .overlay(alignment: .bottom) {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -371,6 +375,14 @@ private struct IOSMusicShell: View {
 
     private var hasDockAccessory: Bool {
         showsPlaybackAccessory || showsAssistantAccessory
+    }
+
+    private var dockReservedHeight: CGFloat {
+        guard hasDockAccessory else { return 0 }
+        return homeChromeState.metrics.reservedHeight(
+            hasAccessory: true,
+            collapseProgress: homeChromeState.collapseProgress
+        )
     }
 
     private var collapsedDockAccessory: CollapsedDockAccessory? {
@@ -446,19 +458,9 @@ private struct IOSMusicShell: View {
 private struct DockReservedSectionContent: View {
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
-    @ObservedObject var coordinator: HomeChromeState
-    let hasAccessory: Bool
 
     var body: some View {
         SectionContent(section: model.selectedSection, model: model, themeStore: themeStore)
-            .environment(\.bottomDockReservedHeight, reservedHeight)
-    }
-
-    private var reservedHeight: CGFloat {
-        coordinator.metrics.reservedHeight(
-            hasAccessory: hasAccessory,
-            collapseProgress: coordinator.collapseProgress
-        )
     }
 }
 
@@ -579,12 +581,14 @@ private struct MorphingBottomDock: View {
                         .scaleEffect(x: 1 - 0.16 * chromeFade, y: 1, anchor: .center)
                         .position(x: playerCenterX, y: navCenterY)
                         .opacity(1 - chromeFade)
+                        .allowsHitTesting(false)
 
                     // 迷你播放器只有一个实例：从上层下降并持续缩短，最后抵达三件套的中间。
                     if accessory == .player {
                         ZStack {
                             MorphingGlassCapsule { Color.clear }
                                 .frame(width: max(playerWidth, bottomBarHeight), height: bottomBarHeight)
+                                .allowsHitTesting(false)
                             MiniPlayerContent(
                                 model: model,
                                 theme: theme,
@@ -1060,16 +1064,8 @@ private struct SectionContent: View {
     let section: AppSection
     @ObservedObject var model: AuralisAppModel
     @ObservedObject var themeStore: ThemeStore
-    @Environment(\.bottomDockReservedHeight) private var reservedHeight
-
     var body: some View {
         page
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                // 助手页由 AssistantView 自己管理输入框 + 主菜单栏的避让，这里不重复预留。
-                if section != .assistant {
-                    Color.clear.frame(height: reservedHeight)
-                }
-            }
     }
 
     @ViewBuilder
@@ -1148,7 +1144,6 @@ struct BrowseDetailSheet: View {
     @State private var categoryLoadError: String?
     @State private var isDeletingPlaylists = false
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var homeChromeState: HomeChromeState
 
     init(
         destination: BrowseDestination,
@@ -1286,20 +1281,6 @@ struct BrowseDetailSheet: View {
                 navigationContent
             }
         }
-        #if os(iOS)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showsCloseButton {
-                Color.clear.frame(height: 0)
-            } else {
-                Color.clear.frame(
-                    height: homeChromeState.metrics.reservedHeight(
-                        hasAccessory: true,
-                        collapseProgress: homeChromeState.collapseProgress
-                    )
-                )
-            }
-        }
-        #endif
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 480)
         #endif

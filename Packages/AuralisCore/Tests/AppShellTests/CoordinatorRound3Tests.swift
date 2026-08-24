@@ -83,6 +83,41 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+private actor CoordinatorIndexGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markEntered() {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilReleased() async {
+        if released { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
 /// First fails at the Provider boundary, then returns the exact closed
 /// Recommendation Index envelope requested by the Runtime.  This intentionally
 /// exercises AgentCoordinator/task-store resume instead of calling the skill
@@ -91,6 +126,11 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var completions = 0
     private var observedBatchSizes: [Int] = []
+    private let pauseGate: CoordinatorIndexGate?
+
+    init(pauseGate: CoordinatorIndexGate? = nil) {
+        self.pauseGate = pauseGate
+    }
 
     let capabilities = ModelCapabilities(
         maxContextTokens: 32_000,
@@ -117,7 +157,16 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
             return completions
         }
         guard count > 1 else {
-            throw AIProviderError.transport("模拟 Provider 中断")
+            // Keep this production-path resume fixture deterministic: the
+            // first attempt is a non-retryable provider boundary failure;
+            // transient transport recovery is covered by the Skill runtime
+            // tests separately.
+            throw AIProviderError.httpStatusDetail(status: 401, detail: "AuthError: invalid api key (test fixture)")
+        }
+
+        if let pauseGate {
+            await pauseGate.markEntered()
+            await pauseGate.waitUntilReleased()
         }
 
         guard let payload = request.messages.last?.content.data(using: .utf8),
@@ -329,6 +378,9 @@ func destructiveToolExecutesWithoutConfirmation() async throws {
             coordinator.approveOperationConfirmation()
         }
         if !coordinator.isRunning { break }
+        // The production run owns a detached async task; a yield-only loop
+        // can exhaust before it gets scheduled when the whole package runs.
+        try? await Task.sleep(for: .milliseconds(5))
     }
     #expect((await connector.deletedPlaylistIDs).contains(PlaylistID(rawValue: playlistRemoteID)))
     #expect(!model.catalog.playlists.contains { $0.id.rawValue == playlistRemoteID })
@@ -385,6 +437,74 @@ func recommendationIndexResumesThroughCoordinatorAfterProviderFailure() async th
     #expect(!coordinator.isRunning)
     #expect(provider.completionCount == 2)
     #expect(coordinator.activeTask?.status == .completed)
+    #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 0)
+}
+
+@Test("Coordinator projects the live Recommendation Index phase into the run presentation")
+@MainActor
+func recommendationIndexLivePhaseReachesCoordinatorPresentation() async throws {
+    let track = makeTrack(remoteID: "live-index-track", title: "Live Index Track")
+    let model = AuralisAppModel(
+        connector: RestoringConnector(result: makeResult(tracks: [track])),
+        storeURL: temporaryCatalogURL()
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+
+    let sync = try await model.catalogCoordinator.store.beginSync(serverID: "test-server", mode: .full)
+    try await model.catalogCoordinator.store.stageTracks([track], session: sync)
+    try await model.catalogCoordinator.store.completeSync(sync, completedAt: .now)
+
+    let gate = CoordinatorIndexGate()
+    let provider = ResumeIndexProvider(pauseGate: gate)
+    coordinator.send("开始并一次性完成推荐索引", provider: provider)
+    for _ in 0..<300 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(!coordinator.isRunning)
+
+    coordinator.send("继续", provider: provider)
+    await gate.waitUntilEntered()
+    for _ in 0..<100 {
+        if coordinator.recommendationIndexExecutionState.isRunning { break }
+        await Task.yield()
+    }
+
+    guard case let .running(snapshot) = coordinator.recommendationIndexExecutionState else {
+        Issue.record("expected Coordinator to expose a live Recommendation Index run")
+        await gate.release()
+        return
+    }
+    #expect(snapshot.phase == .classifyingBatch)
+    #expect(snapshot.currentBatchSize == 1)
+    #expect(snapshot.pendingTracks == 1)
+    guard case let .workflow(skillID, phase, _) = coordinator.runPresentationState?.phase else {
+        Issue.record("expected the active run presentation to show the workflow phase")
+        await gate.release()
+        return
+    }
+    #expect(skillID == RecommendationIndexSkillRuntime.skillID)
+    #expect(phase == RecommendationIndexWorkflow.State.classifyingBatch.rawValue)
+
+    await gate.release()
+    for _ in 0..<600 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(!coordinator.isRunning)
     #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 0)
 }
 

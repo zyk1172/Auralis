@@ -1,8 +1,8 @@
 # Auralis Agent 架构
 
-## AI Assistant V2 当前实现
+## AI Assistant 当前实现
 
-V2 的入口是聊天，而不是一个先把用户请求硬分进音乐意图的路由器。`AgentIntentClassifier`
+当前实现的入口是聊天，而不是一个先把用户请求硬分进音乐意图的路由器。`AgentIntentClassifier`
 只产出排序、完成条件和诊断提示；真正的能力来自注册表与运行时。普通知识聊天在 Provider
 缺失或失败时不会被改写为本地音乐搜索，只有明确的音乐操作/查询才允许使用离线音乐能力。
 
@@ -32,7 +32,7 @@ AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
 完成条件的任务才经过 `AgentRuntime → ConversationEngine`。`AgentRunner` 已不再是生产
 循环，只保留 deprecated 的 source-compatible forwarding façade。
 
-关键 V2 边界：
+关键架构边界：
 
 - `AITranscript` 是 Provider-neutral 的 tool conversation；Chat、Responses 和 Anthropic
   codec 从 transcript 投影到各自 wire format。Anthropic 的同一轮并行结果会聚合成一个

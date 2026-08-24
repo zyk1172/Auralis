@@ -257,15 +257,11 @@ public final class AuralisAgentBridge: AgentBridge {
         guard !tracks.isEmpty else { return .failed("队列为空，未创建歌单") }
         guard permitsMutationCommit else { return revokedMutationResult }
         guard let playlist = await model.createPlaylist(named: name) else { return .failed("服务器未确认创建歌单") }
-        var added = 0
-        for track in tracks {
-            guard permitsMutationCommit else {
-                return .indeterminate("歌单已创建，但运行已取消；请核验已写入曲目，系统不会自动重试")
-            }
-            if await model.addToPlaylist(playlist, track: track) { added += 1 }
+        guard permitsMutationCommit else {
+            return .indeterminate("歌单已创建，但运行已取消；请核验已写入曲目，系统不会自动重试")
         }
-        guard added == tracks.count else {
-            return .indeterminate("歌单「\(playlist.name)」已创建，但仅写入 \(added)/\(tracks.count) 首；请先核验，系统不会自动重试")
+        guard await model.addTracksToPlaylist(playlist, tracks: tracks) else {
+            return .indeterminate("歌单「\(playlist.name)」已创建，但服务器未确认写入曲目；请先核验，系统不会自动重试")
         }
         return .confirmed("已保存队列为歌单：\(playlist.name)")
     }
@@ -290,6 +286,7 @@ public final class AuralisAgentBridge: AgentBridge {
         guard let playlist = await playlistValue(playlistGID) else {
             return .failed("歌单不存在，未添加歌曲")
         }
+        guard !trackGIDs.isEmpty else { return .failed("没有要添加的歌曲") }
         var tracks: [Track] = []
         for gid in trackGIDs {
             guard let track = await resolveTrackAnywhere(gid) else {
@@ -297,20 +294,11 @@ public final class AuralisAgentBridge: AgentBridge {
             }
             tracks.append(track)
         }
-        var added = 0
-        for track in tracks {
-            guard permitsMutationCommit else {
-                return added == 0 ? revokedMutationResult : .indeterminate("已添加 \(added)/\(tracks.count) 首后运行被取消；请核验歌单")
-            }
-            if await model.addToPlaylist(playlist, track: track) { added += 1 }
-        }
-        guard added == tracks.count else {
-            if added > 0 {
-                return .indeterminate("已添加 \(added)/\(tracks.count) 首；部分写入已发生，请先核验歌单，系统不会自动重试")
-            }
+        guard permitsMutationCommit else { return revokedMutationResult }
+        guard await model.addTracksToPlaylist(playlist, tracks: tracks) else {
             return .failed("服务器未确认添加歌曲，未报告成功")
         }
-        return .confirmed("已添加 \(added) 首")
+        return .confirmed("已添加 \(tracks.count) 首")
     }
 
     public func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult {
@@ -338,15 +326,11 @@ public final class AuralisAgentBridge: AgentBridge {
         }
         guard permitsMutationCommit else { return revokedMutationResult }
         guard let copy = await model.createPlaylist(named: String(localized: "\(source.name) 副本", bundle: .module)) else { return .failed("服务器未确认创建歌单副本") }
-        var added = 0
-        for track in tracks {
-            guard permitsMutationCommit else {
-                return .indeterminate("歌单副本已创建，但运行已取消；请核验已复制曲目")
-            }
-            if await model.addToPlaylist(copy, track: track) { added += 1 }
+        guard permitsMutationCommit else {
+            return .indeterminate("歌单副本已创建，但运行已取消；请核验已复制曲目")
         }
-        guard added == tracks.count else {
-            return .indeterminate("副本「\(copy.name)」已创建，但仅复制 \(added)/\(tracks.count) 首；请先核验，系统不会自动重试")
+        guard await model.addTracksToPlaylist(copy, tracks: tracks) else {
+            return .indeterminate("副本「\(copy.name)」已创建，但服务器未确认批量写入曲目；请先核验，系统不会自动重试")
         }
         return .confirmed("已复制歌单")
     }
@@ -372,15 +356,11 @@ public final class AuralisAgentBridge: AgentBridge {
         }
         guard permitsMutationCommit else { return revokedMutationResult }
         guard let target = await model.createPlaylist(named: name) else { return .failed("服务器未确认创建合并歌单") }
-        var added = 0
-        for track in tracks {
-            guard permitsMutationCommit else {
-                return .indeterminate("合并歌单已创建，但运行已取消；请核验已写入曲目")
-            }
-            if await model.addToPlaylist(target, track: track) { added += 1 }
+        guard permitsMutationCommit else {
+            return .indeterminate("合并歌单已创建，但运行已取消；请核验已写入曲目")
         }
-        guard tracks.count == added else {
-            return .indeterminate("合并歌单「\(target.name)」已创建，但仅写入 \(added)/\(tracks.count) 首；请先核验，系统不会自动重试")
+        guard await model.addTracksToPlaylist(target, tracks: tracks) else {
+            return .indeterminate("合并歌单「\(target.name)」已创建，但服务器未确认批量写入曲目；请先核验，系统不会自动重试")
         }
         return .confirmed("已合并歌单")
     }

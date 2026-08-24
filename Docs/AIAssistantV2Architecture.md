@@ -1,4 +1,4 @@
-# Auralis AI Assistant V2 实施说明
+# Auralis AI Assistant 实施说明
 
 ## 设计目标
 

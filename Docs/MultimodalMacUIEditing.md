@@ -55,7 +55,7 @@ Annotation → Component → File → Token/View → Architecture Impact
 - 修改 `MacNavigationModel` / `MacSidebarDestination` 语义身份 / `GlobalID` 双键。
 - 把实体对象塞进 NavigationPath、用 name 当身份、用 Sheet 代替正常 detail 导航。
 - 内容层大面积 `glassEffect`。
-- 触碰播放 / 数据 / Agent / V2 / 下载 / Music enrichment 业务层（除非用户明确说“修播放功能 Bug”）。
+- 触碰播放 / 数据 / Agent / 推荐索引 / 下载 / Music enrichment 业务层（除非用户明确说“修播放功能 Bug”）。
 
 ## 6. 修改后最小回归（每次图片 patch 必跑）
 

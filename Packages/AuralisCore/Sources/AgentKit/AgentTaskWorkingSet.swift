@@ -156,7 +156,7 @@ public struct AgentTaskWorkingSet: Sendable {
     public static func isCacheable(_ tool: String) -> Bool { cacheableTools.contains(tool) }
     public static func isSearchTool(_ tool: String) -> Bool { searchTools.contains(tool) }
 
-    /// 旧工具名和 V2 工具名可能同时被模型看到；先归一成同一副作用语义，
+    /// 旧工具名和规范工具名可能同时从兼容输入层进入；先归一成同一副作用语义，
     /// 避免 `replaceQueue` 后又以 `queue_replace` 覆盖队列。
     private static func canonicalSideEffectTool(_ tool: String) -> String {
         switch tool {

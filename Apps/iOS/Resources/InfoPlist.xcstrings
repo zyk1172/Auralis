@@ -1,18 +1,18 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
-    "Auralis 推荐索引 V2" : {
+    "Auralis 推荐索引" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis Recommendation Index V2"
+            "value" : "Auralis Recommendation Index"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis 推薦索引 V2"
+            "value" : "Auralis 推薦索引"
           }
         }
       }

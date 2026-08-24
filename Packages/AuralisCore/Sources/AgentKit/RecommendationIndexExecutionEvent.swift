@@ -36,6 +36,10 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
     public let pendingTracks: Int?
     public let pendingSemanticTracks: Int?
     public let durationMilliseconds: Int?
+    /// Provider identity is diagnostic metadata only; credentials and base
+    /// URLs are intentionally excluded.
+    public let provider: String?
+    public let model: String?
     public let message: String?
 
     public init(
@@ -53,6 +57,8 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
         pendingTracks: Int? = nil,
         pendingSemanticTracks: Int? = nil,
         durationMilliseconds: Int? = nil,
+        provider: String? = nil,
+        model: String? = nil,
         message: String? = nil
     ) {
         self.kind = kind
@@ -69,6 +75,8 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
         self.pendingTracks = pendingTracks
         self.pendingSemanticTracks = pendingSemanticTracks
         self.durationMilliseconds = durationMilliseconds
+        self.provider = provider
+        self.model = model
         self.message = message
     }
 
@@ -91,6 +99,8 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
         if let pendingTracks { fields.append("pending=\(pendingTracks)") }
         if let pendingSemanticTracks { fields.append("pending_semantic=\(pendingSemanticTracks)") }
         if let durationMilliseconds { fields.append("duration_ms=\(durationMilliseconds)") }
+        if let provider { fields.append("provider=\(provider)") }
+        if let model { fields.append("model=\(model)") }
         if let message {
             let clipped = String(message.prefix(240)).replacingOccurrences(of: "\n", with: " ")
             fields.append("message=\(clipped)")

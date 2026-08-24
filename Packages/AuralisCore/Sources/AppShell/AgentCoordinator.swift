@@ -72,6 +72,10 @@ public final class AgentCoordinator: ObservableObject {
     /// tools, confirmation and Runtime retries update this value in place;
     /// they do not accumulate as independent presentation states.
     @Published public private(set) var runPresentationState: AssistantRunPresentationState?
+    /// A presentation snapshot of the coordinator-owned Recommendation Index
+    /// execution registry. Catalog counts describe persisted data only; this
+    /// property is the live-run fact exposed to the UI and system tools.
+    @Published public private(set) var recommendationIndexExecutionState: RecommendationIndexExecutionState = .idle
     /// 会话列表搜索词。
     @Published public var sessionQuery = "" { didSet { refreshSessionList() } }
     /// 是否在会话列表里显示已归档会话（默认隐藏）。
@@ -400,14 +404,10 @@ public final class AgentCoordinator: ObservableObject {
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if pendingOperationConfirmation != nil {
-            switch AgentConfirmationDecision.parse(trimmed) {
-            case .confirm:
-                approveOperationConfirmation()
-            case .reject:
-                denyOperationConfirmation()
-            case .unknown:
-                break
-            }
+            // A pending destructive approval is resolved only by its
+            // dedicated UI buttons. Natural-language text such as “确认” or
+            // “继续” must never become Runtime approval or resume the paused
+            // mutation with a different call.
             return
         }
         guard !trimmed.isEmpty else { return }
@@ -655,8 +655,8 @@ public final class AgentCoordinator: ObservableObject {
                     },
                     progress: { _ in },
                     state: { _ in },
-                    observeRecommendationIndex: { event in
-                        AuralisLog.artificialIntelligence.info("RECOMMENDATION_INDEX \(event.compactSummary, privacy: .public)")
+                    observeRecommendationIndex: { [weak self] event in
+                        await self?.observeRecommendationIndex(event, sessionID: sessionID, runID: runID)
                     }
                 )
                 if self.activeSessionID == sessionID {
@@ -804,8 +804,8 @@ public final class AgentCoordinator: ObservableObject {
                 state: { [weak self] taskState in
                     await self?.updateTaskState(taskState, taskID: taskID, sessionID: sessionID, runID: runID)
                 },
-                observeRecommendationIndex: { event in
-                    AuralisLog.artificialIntelligence.info("RECOMMENDATION_INDEX \(event.compactSummary, privacy: .public)")
+                observeRecommendationIndex: { [weak self] event in
+                    await self?.observeRecommendationIndex(event, sessionID: sessionID, runID: runID)
                 }
             )
             // 收尾顺序：先结算任务 → 再清理运行身份 → 最后才释放 isRunning。
@@ -850,6 +850,96 @@ public final class AgentCoordinator: ObservableObject {
             if activeSessionID == sessionID, currentRunID == runID {
                 runPresentationState = presentation
             }
+        }
+    }
+
+    /// Project structured Recommendation Index observations into the one
+    /// transient presentation state owned by this run. The execution registry
+    /// remains authoritative; catalog counts are never used to infer that a
+    /// task is running.
+    private func observeRecommendationIndex(
+        _ event: RecommendationIndexExecutionEvent,
+        sessionID: UUID,
+        runID: UUID
+    ) async {
+        AuralisLog.artificialIntelligence.info(
+            "RECOMMENDATION_INDEX \(event.compactSummary, privacy: .public)"
+        )
+
+        guard ownsRun(runID, sessionID: sessionID),
+              event.runID == runID,
+              event.sessionID == sessionID else { return }
+
+        let eventServerID = event.serverID.map { ServerID(rawValue: $0) }
+        let snapshot = await recommendationIndexExecutionRegistry.snapshot(serverID: eventServerID)
+        recommendationIndexExecutionState = snapshot
+
+        guard var presentation = runPresentationStates[runID],
+              presentation.sessionID == sessionID else { return }
+
+        let detail = Self.recommendationIndexPresentationDetail(for: event)
+        switch event.kind {
+        case .retrying:
+            presentation.phase = .retrying(message: detail)
+        case .failed:
+            presentation.phase = .failed(message: detail)
+        case .cancelled:
+            presentation.phase = .failed(message: detail)
+        default:
+            presentation.phase = .workflow(
+                skillID: RecommendationIndexSkillRuntime.skillID,
+                phase: event.phase.rawValue,
+                detail: detail
+            )
+        }
+
+        runPresentationStates[runID] = presentation
+        if activeSessionID == sessionID, currentRunID == runID {
+            runPresentationState = presentation
+        }
+    }
+
+    private static func recommendationIndexPresentationDetail(
+        for event: RecommendationIndexExecutionEvent
+    ) -> String {
+        let total = event.totalTracks ?? 0
+        let indexed = event.indexedTracks ?? 0
+        let progress = total > 0 ? "\(indexed) / \(total)" : nil
+        let batch = event.batchSize > 0 ? "当前批次 \(event.batchSize) 首" : nil
+
+        switch event.kind {
+        case .routeSelected, .started:
+            return "正在启动推荐索引…"
+        case .statusLoaded:
+            if let progress { return "推荐索引：已完成 \(progress)，正在读取下一批" }
+            return "正在读取推荐索引状态…"
+        case .batchPrepared:
+            if let batch { return "推荐索引：已准备（\(batch)）" }
+            return "正在准备推荐索引批次…"
+        case .classificationStarted:
+            if let progress, let batch { return "推荐索引：正在分类（\(progress)，\(batch)）" }
+            if let batch { return "推荐索引：正在分类（\(batch)）" }
+            return "推荐索引：正在分类当前批次…"
+        case .classificationCompleted:
+            return "推荐索引：分类完成，准备写入…"
+        case .classificationFailed:
+            return "推荐索引：当前批次分类失败，准备重试…"
+        case .commitStarted:
+            if let batch { return "推荐索引：正在写入（\(batch)）" }
+            return "推荐索引：正在写入分类…"
+        case .commitCompleted:
+            return "推荐索引：分类已写入，准备核验…"
+        case .retrying:
+            return "推荐索引正在重试当前批次…"
+        case .completed:
+            if let progress { return "推荐索引已完成（\(progress)）" }
+            return "推荐索引已完成"
+        case .cancelled:
+            return "推荐索引已取消"
+        case .failed:
+            return "推荐索引已暂停：模型请求或服务暂时失败。"
+        case .phaseChanged:
+            return event.message ?? "推荐索引正在处理…"
         }
     }
 
@@ -941,6 +1031,10 @@ public final class AgentCoordinator: ObservableObject {
         runPresentationStates[runID] = nil
         if runPresentationState?.runID == runID {
             runPresentationState = nil
+        }
+        if case let .running(snapshot) = recommendationIndexExecutionState,
+           snapshot.runID == runID {
+            recommendationIndexExecutionState = .idle
         }
         refreshActiveRunState()
     }
@@ -1237,22 +1331,6 @@ public final class AgentCoordinator: ObservableObject {
 
     public func denyOperationConfirmation() {
         resolveOperationConfirmation(false)
-    }
-
-    /// Handles a short natural-language answer to the Runtime confirmation
-    /// prompt.  Full sentences are intentionally not accepted as approval.
-    @discardableResult
-    public func submitOperationConfirmation(_ text: String) -> Bool {
-        switch AgentConfirmationDecision.parse(text) {
-        case .confirm:
-            approveOperationConfirmation()
-            return true
-        case .reject:
-            denyOperationConfirmation()
-            return true
-        case .unknown:
-            return false
-        }
     }
 
     private func resolveOperationConfirmation(_ approved: Bool) {

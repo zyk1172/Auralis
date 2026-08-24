@@ -681,8 +681,8 @@ func explicitPlaylistCreateDoesNotAskForConfirmation() async throws {
     #expect(await confirmation.count() == 0)
 }
 
-@Test("missing operation authorization enters the real pending confirmation boundary")
-func missingMutationOperationUsesPendingConfirmation() async throws {
+@Test("missing operation authorization is denied without a second confirmation path")
+func missingMutationOperationIsDeniedWithoutConfirmation() async throws {
     let serverID: ServerID = "confirmation-server"
     let playlistID = GlobalID(serverID: serverID, remoteID: "playlist")
     let trackID = GlobalID(serverID: serverID, remoteID: "track")
@@ -739,18 +739,15 @@ func missingMutationOperationUsesPendingConfirmation() async throws {
             sessionID: UUID(),
             generation: 1
         ),
-        confirm: { pending in
-            #expect(pending.toolName == "playlist_add_songs")
+        confirm: { _ in
             await confirmation.record()
             return true
         },
         emit: { _ in }
     )
 
-    #expect(await confirmation.count() == 1)
-    #expect(bridge.addedToPlaylist.count == 1)
-    #expect(bridge.addedToPlaylist.first?.0 == playlistID)
-    #expect(bridge.addedToPlaylist.first?.1 == [trackID])
+    #expect(await confirmation.count() == 0)
+    #expect(bridge.addedToPlaylist.isEmpty)
 }
 
 @Test("playlist list after failed create is read-only and cannot inherit mutation authority")

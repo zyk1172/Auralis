@@ -7,7 +7,7 @@ import ThemeEngine
 
 /// macOS 的分类浏览与 iOS 一致：所有分类直接平铺为卡片，而不是先选维度、再选分类。
 /// 点击卡片后才推入歌曲页，避免在 HSplitView 中重建带选择状态的两层 List。
-struct MacV2CategoriesView: View {
+struct MacRecommendationCategoriesView: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
@@ -144,7 +144,7 @@ struct MacV2CategoriesView: View {
             dimensions: RecommendationIndex.fixedDimensions
         )) ?? []
         guard model.catalog.activeServerID == serverID, !Task.isCancelled else { return }
-        categories = MacV2BrowserState.categoriesSortedByTrackCount(fixedCategories)
+        categories = RecommendationBrowserState.categoriesSortedByTrackCount(fixedCategories)
         isLoading = false
         await loadTagPage(reset: true)
     }
@@ -170,7 +170,7 @@ struct MacV2CategoriesView: View {
         var merged = reset ? page.items : aiTags + page.items
         var seen = Set<String>()
         merged = merged.filter { seen.insert($0.id).inserted }
-        aiTags = MacV2BrowserState.categoriesSortedByTrackCount(merged)
+        aiTags = RecommendationBrowserState.categoriesSortedByTrackCount(merged)
         tagNextOffset = page.nextOffset
         isLoadingMoreTags = false
     }
@@ -184,7 +184,7 @@ struct MacV2CategoriesView: View {
 
 /// 单个分类的歌曲页。ArtworkStore 在此处重新显式注入，避免导航/布局重建后
 /// ArtworkView 从缺失的 SwiftUI 环境读取对象而触发主线程断言。
-struct MacV2CategoryTracksView: View {
+struct MacRecommendationCategoryTracksView: View {
     let category: RecommendationIndexCategory
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -252,7 +252,7 @@ struct MacV2CategoryTracksView: View {
             guard model.catalog.activeServerID == serverID, !Task.isCancelled else { return }
             tracks = loaded
             tracksRevision &+= 1
-            selection = MacV2BrowserState.cleanedSelection(
+            selection = RecommendationBrowserState.cleanedSelection(
                 selection,
                 validTrackIDs: Set(loaded.map(\.macGlobalID))
             )

@@ -118,14 +118,11 @@ public enum AgentHistoryPolicy {
             .lowercased()
             .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
         if [
-            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "确认", "好的，就这个",
+            "继续", "继续吧", "第一个", "第一个吧", "就这个", "就它", "好的，就这个",
         ].contains(normalized) {
             return true
         }
-        // A pending Runtime confirmation is a short continuation too.  The
-        // parser is exact and bounded; a sentence containing one of these
-        // words is not treated as approval and starts a normal request.
-        return AgentConfirmationDecision.parse(normalized) == .confirm
+        return false
     }
 
     private static func isShortFollowUp(_ text: String) -> Bool {

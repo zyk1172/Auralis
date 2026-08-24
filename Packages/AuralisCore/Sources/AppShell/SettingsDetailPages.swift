@@ -34,15 +34,11 @@ private struct SettingsDetailForm<Content: View>: View {
     let title: String
     let theme: BuiltInTheme
     @ViewBuilder let content: Content
-    @Environment(\.bottomDockReservedHeight) private var bottomDockReservedHeight
 
     var body: some View {
         Form { content }
             .navigationTitle(title)
             .scrollContentBackground(.hidden)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                Color.clear.frame(height: bottomDockReservedHeight)
-            }
             .background(theme.colorTokens.background.color)
     }
 }
@@ -390,7 +386,7 @@ struct AgentSettingsPage: View {
         }
     }
 
-    /// 导出当前服务器的 V2 索引为 `.auralis-index-v2` 包；只导出已完成且元数据
+    /// 导出当前服务器的推荐索引为 `.auralis-index` 包；只导出已完成且元数据
     /// 匹配当前内容指纹的歌曲，不包含任何凭据、播放地址或私人播放数据。
     private func exportIndex() async {
         guard let serverID = model.catalog.activeServerID else { return }
@@ -407,8 +403,8 @@ struct AgentSettingsPage: View {
         }
     }
 
-    /// 从用户选择的 `.auralis-index-v2` 文件导入到当前服务器；导入使用 SQLite
-    /// 事务并逐条统计，一首失败不会让整个文件失败。
+    /// 从用户选择的推荐索引文件导入到当前服务器；旧 `.auralis-index-v2` 文件由
+    /// FileDocument 兼容读取，导入使用 SQLite 事务并逐条统计。
     private func importIndex(from url: URL) async {
         guard let serverID = model.catalog.activeServerID else { return }
         let accessing = url.startAccessingSecurityScopedResource()

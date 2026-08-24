@@ -403,7 +403,7 @@ public struct MacMusicShell: View {
         case .playlists:
             MacPlaylistListView(model: model, theme: theme, onNavigate: navigate)
         case .categories:
-            MacV2CategoriesView(model: model, theme: theme, onNavigate: navigate)
+            MacRecommendationCategoriesView(model: model, theme: theme, onNavigate: navigate)
         case .assistant:
             AssistantView(model: model, theme: theme)
         case nil:
@@ -440,7 +440,7 @@ public struct MacMusicShell: View {
                 ContentUnavailableView(String(localized: "流派不可用", bundle: .module), systemImage: "music.quarternote.3", description: Text(String(localized: "这个流派不在当前资料库中。", bundle: .module)))
             }
         case let .recommendationCategory(category):
-            MacV2CategoryTracksView(category: category, model: model, theme: theme, onNavigate: navigate)
+            MacRecommendationCategoryTracksView(category: category, model: model, theme: theme, onNavigate: navigate)
         }
     }
 

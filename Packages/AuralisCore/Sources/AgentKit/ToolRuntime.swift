@@ -71,7 +71,13 @@ public struct ToolRuntime {
                 call: call,
                 permission: .readOnly,
                 success: false,
-                summary: ToolRuntimeError.unknownTool(call.name).localizedDescription
+                summary: ToolRuntimeError.unknownTool(call.name).localizedDescription,
+                failure: ToolFailureEnvelope(
+                    toolName: call.name,
+                    phase: .discovery,
+                    code: "unknown_tool",
+                    retryable: false
+                )
             )
         }
 
@@ -97,23 +103,18 @@ public struct ToolRuntime {
                 switch authorizationContext.decision(for: descriptor, call: call) {
                 case .allowed:
                     break
-                case let .requiresUserConfirmation(_, reason):
-                    // The interactive ToolLoop normally resolves this before
-                    // Runtime execution. Direct/legacy callers have no UI
-                    // boundary, so fail closed without emitting a fake
-                    // confirmation instruction for the model to follow.
-                    return ToolResult(
-                        call: call,
-                        permission: descriptor.permission,
-                        success: false,
-                        summary: "需要用户确认后才能执行：\(reason)"
-                    )
                 case let .denied(reason):
                     return ToolResult(
                         call: call,
                         permission: descriptor.permission,
                         success: false,
-                        summary: reason
+                        summary: reason,
+                        failure: ToolFailureEnvelope(
+                            toolName: descriptor.name,
+                            phase: .authorization,
+                            code: "mutation_authorization_denied",
+                            retryable: false
+                        )
                     )
                 }
                 guard await executionLease.isValid() else {
@@ -168,13 +169,14 @@ public struct ToolRuntime {
             }
             return result
         } catch {
+            let runtimeError = error as? ToolRuntimeError
             return ToolResult(
                 call: call,
                 permission: descriptor.permission,
                 success: false,
-                summary: error is ToolRuntimeError
-                    ? error.localizedDescription
-                    : "工具执行失败：\(error.localizedDescription)"
+                summary: runtimeError.map { $0.localizedDescription }
+                    ?? "工具执行失败：\(error.localizedDescription)",
+                failure: failureEnvelope(for: runtimeError, toolName: descriptor.name)
             )
         }
     }
@@ -195,6 +197,39 @@ public struct ToolRuntime {
             guard let value, let schemaJSON = parameter.schemaJSON else { continue }
             try validate(value: value, name: parameter.name, schemaJSON: schemaJSON)
         }
+    }
+
+    private static func failureEnvelope(
+        for error: ToolRuntimeError?,
+        toolName: String
+    ) -> ToolFailureEnvelope {
+        let phase: ToolFailureEnvelope.Phase
+        let code: String
+        let retryable: Bool
+        switch error {
+        case .unknownTool:
+            phase = .discovery; code = "unknown_tool"; retryable = false
+        case .missingParameter, .unknownParameter, .invalidParameter:
+            phase = .inputValidation; code = "invalid_arguments"; retryable = false
+        case .skillUnavailable:
+            phase = .authorization; code = "skill_unavailable"; retryable = false
+        case .modelWriteMissingAuthorizationOperation:
+            phase = .authorization; code = "missing_authorization_operation"; retryable = false
+        case .mutationAuthorizationMissing:
+            phase = .authorization; code = "missing_authorization_context"; retryable = false
+        case .executionLeaseRevoked:
+            phase = .resourceLease; code = "execution_lease_revoked"; retryable = false
+        case .mutationResourceBusy:
+            phase = .resourceLease; code = "mutation_resource_busy"; retryable = true
+        case nil:
+            phase = .execution; code = "tool_execution_failed"; retryable = false
+        }
+        return ToolFailureEnvelope(
+            toolName: toolName,
+            phase: phase,
+            code: code,
+            retryable: retryable
+        )
     }
 
     private static func isMissing(_ value: AIJSONValue) -> Bool {

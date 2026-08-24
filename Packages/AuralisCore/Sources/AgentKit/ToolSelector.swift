@@ -1,114 +1,17 @@
 import AIKit
 import Foundation
 
-/// 动态工具加载：Schema 优化器，只决定“这次把哪些工具的 JSON Schema 给模型”，
-/// 绝不决定 Agent 能否完成任务：它只优化当前轮的 model schema；已注册工具的
-/// 执行仍统一经过 ToolRuntime，受精确副作用授权或受信任 Stateful Skill 约束。
+/// Schema shortlist ranking derived from the canonical ToolDescriptor catalog.
 ///
-/// 规则：CommonSafeTools ∪ IntentSuggestedTools ∪ KeywordSuggestedTools ∪
-/// TaskRequiredTools（纯加法）。任务进行中由 ToolLoop 每轮用「用户原文 + 模型
-/// 已输出文本 + 已执行工具」重新展开，第一轮没选中的工具不会永久缺失。
-///
-/// 选择结果同时驱动：
-/// 1) 原生 function calling 的 `tools` 请求体；
-/// 2) 系统提示词中的工具清单。
-///
-/// 旧式驼峰别名（searchTracks、playTrack 等）仍注册、可执行，但在此处统一映射回
-/// 新式 canonical 名称，避免同一语义的重复 schema 同时暴露给模型。
+/// This type is deliberately not a second registry.  Group, namespace, tags,
+/// permission and canonical authorization operation are the only metadata
+/// used to rank a first-round shortlist.  A model-visible tool that is not
+/// shortlisted remains discoverable through tool_search and executable through
+/// ToolRuntime.
 public enum ToolSelector {
-    // MARK: - 工具组（新式名称为主，含无新式替代的旧式名称）
-
-    /// 仅保留跨意图都安全且体积很小的工具。大部分工具由意图和用户关键词按需加入；
-    /// 把完整音乐库、播放、歌单和索引 Schema 常驻会显著降低小模型的工具选择准确率。
-    static let coreNames: [String] = [
-        "tool_search", "capabilities_get", "app_get_context",
-    ]
-
-    static let recommendationIndexStatusNames: [String] = [
-        "library_index_status", "library_index_read",
-    ]
-
-    static let playbackNames: [String] = [
-        "library_search", "server_search", "playback_get_state",
-        "playback_play_song", "playback_play_album", "playback_play_artist",
-        "playback_play_playlist", "playback_play_random", "playback_pause",
-        "playback_resume", "playback_next", "playback_previous", "playback_seek",
-    ]
-
-    static let queueNames: [String] = [
-        "queue_get", "queue_append", "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear",
-        "queue_remove", "queue_move", "queue_shuffle_remaining",
-    ]
-
-    /// 歌单相关。
-    static let playlistNames: [String] = [
-        "library_search",
-        "listPlaylists", "library_get_playlist",
-        "playlist_create", "playlist_add_songs", "addTracksToPlaylist", "removeTracksFromPlaylist",
-        "queue_save_as_playlist", "favorite_set",
-    ]
-
-    /// 收藏 / 评分 / 不喜欢相关。
-    static let annotationNames: [String] = [
-        "getFavorites", "library_get_starred",
-        "likeTrack", "unlikeTrack",
-        "favoriteAlbum", "favoriteArtist",
-        "setRating", "clearRating",
-        "preference_set_disliked", "library_get_disliked",
-    ]
-
-    /// 服务器 / 同步相关。
-    static let serverNames: [String] = [
-        "server_get_current", "server_list",
-        "server_test_connection", "server_get_capabilities",
-        "server_sync_status", "server_sync_start",
-        "server_search", "removeServer",
-    ]
-
-    /// App / 系统 / 设备状态。它们属于真实能力查询，不应只因为没有“搜索/播放”
-    /// 关键词而被动态 schema 隐藏。
-    static let appDeviceNames: [String] = [
-        "app_get_context", "app_open_page", "app_get_feature_status",
-        "device_get_network_status", "device_get_audio_route", "device_get_storage_status",
-        "ios_siri_get_status", "ios_shortcuts_list",
-    ]
-
-    static let statsNames: [String] = [
-        "stats_get_top_items", "stats_get_format_distribution", "stats_get_storage_distribution",
-        "library_get_recently_added", "library_get_most_played",
-        "stats_get_listening_summary",
-    ]
-
-    static let catalogMaintenanceNames: [String] = [
-        "library_find_duplicates", "library_find_metadata_issues", "library_find_broken_artwork",
-        "library_find_stale_cache", "library_find_unplayable", "cache_get_status",
-    ]
-
-    /// 推荐 / 随机相关。
-    static let recommendationNames: [String] = [
-        "library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks",
-        "recommend_by_mood", "recommend_by_constraints",
-        "smart_queue_generate",
-        "library_get_random_songs", "library_get_most_played",
-        "library_get_recently_played", "library_get_similar_songs",
-        "library_get_genres", "library_get_tracks_by_genre",
-        "music_get_public_evidence",
-        "result_present_tracks", "queue_replace", "queue_append",
-    ]
-
-    /// 诊断 / 维护 / 统计相关。
-    static let diagnosticsNames: [String] = [
-        "diagnostics_playback", "diagnostics_now_playing",
-        "diagnostics_get_recent_errors", "diagnostics_export_report",
-        "library_find_duplicates", "library_find_metadata_issues",
-        "library_find_unplayable", "stats_get_listening_summary",
-        "device_get_audio_route", "app_get_context",
-        "cache_get_status",
-    ]
-
-    /// 旧式别名 → 新式 canonical 名称（执行兼容由注册表保留，schema 只暴露 canonical）。
-    /// 只在两个工具语义完全等价时映射；无新式替代的旧工具（deletePlaylist、
-    /// removeTracksFromPlaylist、setRating、removeServer 等）不在映射中。
+    /// Legacy aliases are an input-compatibility map, not model-visible tools.
+    /// Keeping this map here is intentional: it is the one compatibility
+    /// boundary used when deduplicating old names into canonical schemas.
     static let canonicalAliases: [String: String] = [
         "searchTracks": "library_search",
         "searchAlbums": "library_search",
@@ -157,7 +60,6 @@ public enum ToolSelector {
         "removeServer": "server_remove",
     ]
 
-    /// 把旧别名映射为 canonical 并按首次出现顺序去重。
     static func resolvedNames(_ names: [String]) -> [String] {
         var seen = Set<String>()
         return names
@@ -165,88 +67,34 @@ public enum ToolSelector {
             .filter { seen.insert($0).inserted }
     }
 
-    /// 按用户请求选择工具集（去重保序；旧别名映射回 canonical）。
     public static func select(for userText: String, all: [ToolDescriptor]) -> [ToolDescriptor] {
-        select(for: userText, all: all, allowAmbiguousContinuation: true, activeSkillID: nil)
+        select(
+            for: userText,
+            all: all,
+            allowAmbiguousContinuation: true,
+            activeSkillID: nil
+        )
     }
 
-    /// Runtime 已经有结构化意图时，不把“继续”这种短词擅自解释成索引任务。
-    /// 旧式无上下文调用方仍由上面的公开重载保留兼容行为。
     private static func select(
         for userText: String,
         all: [ToolDescriptor],
         allowAmbiguousContinuation: Bool,
         activeSkillID: String?
     ) -> [ToolDescriptor] {
-        let semantics = AgentRequestSemantics.analyze(userText)
-        var names = coreNames
-
-        // A catalog summary is useful for an explicit Auralis request, but it
-        // is not a generic-chat tool merely because the user said "推荐" or
-        // "搜索".
-        if semantics.isMusicContext {
-            names += ["library_get_summary"]
-        }
-
-        if semantics.domain == .playback {
-            names += playbackNames
-        }
-        if semantics.domain == .queue {
-            names += queueNames
-        }
-        if semantics.domain == .musicLibrary {
-            names += ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
-        }
-        if semantics.domain == .conversation,
-           semantics.suggestedToolNamespaces.contains("catalog"),
-           semantics.suggestedToolNamespaces.contains("web") {
-            names += ["library_search", "library_resolve_entity", "web_search"]
-        }
-        if semantics.suggestedToolNamespaces.contains("annotation") {
-            names += annotationNames
-        }
-        if semantics.suggestedToolNamespaces.contains("playlist") {
-            names += playlistNames
-        }
-        if semantics.suggestedToolNamespaces.contains("recommendation") {
-            names += recommendationNames
-        }
-        if semantics.isRecommendationIndex {
-            names += recommendationIndexStatusNames
-        }
-
-        if semantics.domain == .playlist { names += playlistNames }
-        if semantics.requestedOperations.contains(where: { [.favoriteSet, .ratingSet, .dislikedSet].contains($0) }) { names += annotationNames }
-        if semantics.domain == .server { names += serverNames }
-        if semantics.domain == .recommendation {
-            names += recommendationNames
-        }
-        if semantics.domain == .system {
-            names += appDeviceNames
-        }
-        if semantics.domain == .diagnostics {
-            names += statsNames
-        }
-        if semantics.domain == .diagnostics {
-            names += diagnosticsNames + catalogMaintenanceNames
-        }
-        if semantics.isMusicContext, semantics.suggestedToolNamespaces.contains("catalog") { names += ["lyrics_get"] }
-        if semantics.domain == .download { names += ["media_download_offline", "getDownloadedTracks"] }
-        if semantics.domain == .web { names += ["web_search", "web_fetch"] }
-        if semantics.domain == .memory {
-            names += ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
-        }
-        if let activeSkillID {
-            names += all.filter { $0.requiredSkillID == activeSkillID }.map(\.name)
-        }
-
-        let unique = Self.resolvedNames(names)
-        let byName = Dictionary(uniqueKeysWithValues: all.filter { $0.isVisible(toSkillID: activeSkillID) }.map { ($0.name, $0) })
-        return unique.compactMap { byName[$0] }
+        _ = allowAmbiguousContinuation
+        let historyText = ""
+        let semantics = AgentRequestSemantics.analyze(userText, historyText: historyText)
+        return shortlist(
+            semantics: semantics,
+            intent: nil,
+            all: all,
+            activeSkillID: activeSkillID
+        )
     }
 
-    /// 意图感知选择：KeywordSuggested ∪ IntentSuggested ∪ TaskRequired，纯加法。
-    /// 意图只是路由提示，不再裁剪能力；不会把任何 model 工具按 policy 过滤掉。
+    /// Intent-aware overload retained for compatibility. Intent contributes a
+    /// ranking hint only; the descriptor catalog still supplies every name.
     public static func select(
         for userText: String,
         intent: AgentTaskIntent,
@@ -254,73 +102,273 @@ public enum ToolSelector {
         all: [ToolDescriptor],
         activeSkillID: String? = nil
     ) -> [ToolDescriptor] {
-        let selected = select(for: userText, all: all, allowAmbiguousContinuation: false, activeSkillID: activeSkillID)
-        let intentNames: Set<String>
-        switch intent {
-        case .conversation:
-            // Generic conversation starts from the compact core set.  A
-            // model-visible tool is added by explicit semantics or
-            // tool_search, never merely because the caller supplied the
-            // compatibility `.conversation` intent.
-            intentNames = []
-        case .librarySearch:
-            intentNames = ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
-        case .playbackControl:
-            intentNames = ["playback_get_state", "playback_play_song", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat"]
-        case .playbackQuery:
-            intentNames = ["playback_get_state", "diagnostics_now_playing", "getCurrentTrack", "getCurrentQueue"]
-        case .musicDiscovery:
-            intentNames = ["library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks", "recommend_by_mood", "recommend_by_constraints", "library_get_similar_songs", "queue_replace", "queue_append", "playback_play_song", "playback_play_playlist", "favorite_set", "preference_set_disliked", "lyrics_get", "result_present_tracks"]
-        case .queueManagement:
-            intentNames = ["queue_get", "queue_append", "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
-        case .queueQuery:
-            intentNames = ["queue_get", "getCurrentQueue"]
-        case .playlistManagement:
-            intentNames = ["library_search", "library_get_song", "listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
-        case .playlistQuery:
-            intentNames = ["listPlaylists", "library_get_playlist", "getPlaylist"]
-        case .libraryManagement:
-            intentNames = Set([
-                "library_get_summary", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked",
-                "library_index_status", "library_index_read",
-            ])
-        case .serverManagement:
-            intentNames = Set(serverNames)
-        case .diagnostics:
-            intentNames = Set(diagnosticsNames + appDeviceNames + statsNames + catalogMaintenanceNames + serverNames)
-        case .musicAppreciation:
-            intentNames = ["library_search", "library_get_song", "music_appreciate", "music_get_public_evidence"]
-        case .musicDownload:
-            intentNames = ["library_search", "server_search", "music_download_search", "music_download_submit", "music_download_status", "music_download_tasks", "music_download_history", "music_download_history_remove", "music_download_history_clean", "media_download_offline", "getDownloadedTracks"]
-        case .memoryManagement:
-            intentNames = ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
-        }
-        let names = selected.map(\.name) + intentNames.sorted()
-        let skillNames = activeSkillID.map { skillID in
-            all.filter { $0.requiredSkillID == skillID }.map(\.name)
-        } ?? []
-        let unique = Self.resolvedNames(names)
-        let allNames = Self.resolvedNames(unique + skillNames)
-        let byName = Dictionary(uniqueKeysWithValues: all.filter { $0.isVisible(toSkillID: activeSkillID) }.map { ($0.name, $0) })
-        return allNames.compactMap { byName[$0] }
+        _ = policy
+        let semantics = AgentRequestSemantics.analyze(userText)
+        return shortlist(
+            semantics: semantics,
+            intent: intent,
+            all: all,
+            activeSkillID: activeSkillID
+        )
     }
 
-    /// 把选中的工具描述转为原生 function calling 定义。
+    private static func shortlist(
+        semantics: AgentRequestSemantics,
+        intent: AgentTaskIntent?,
+        all: [ToolDescriptor],
+        activeSkillID: String?
+    ) -> [ToolDescriptor] {
+        let visible = all.filter { $0.isVisible(toSkillID: activeSkillID) }
+        var selected: [ToolDescriptor] = []
+        var selectedNames = Set<String>()
+
+        func append(_ descriptors: [ToolDescriptor]) {
+            for descriptor in descriptors {
+                let canonical = canonicalAliases[descriptor.name] ?? descriptor.name
+                guard canonical == descriptor.name, selectedNames.insert(canonical).inserted else {
+                    continue
+                }
+                selected.append(descriptor)
+            }
+        }
+
+        append(visible.filter { $0.isCoreInfrastructure })
+        append(visible.filter { descriptor in
+            matches(descriptor, semantics: semantics)
+        })
+
+        // A discovery request often contains a playback verb (for example
+        // “给我放一组适合通勤的歌”).  Keep the semantic domain as the source
+        // of truth, but add the catalog/queue/annotation capabilities that a
+        // music-discovery workflow may need.  This is descriptor metadata,
+        // not a second name registry; Runtime authorization still decides
+        // whether a mutation is executable.
+        if semantics.isMusicContext,
+           semantics.suggestedToolNamespaces.contains("recommendation") {
+            append(visible.filter { descriptor in
+                discoveryExpansionMatches(descriptor)
+            })
+        }
+
+        // A legacy classifier can still provide a useful ranking hint while
+        // the semantic analyzer remains conservative.  It must never broaden
+        // ordinary conversation or non-music requests.
+        if let intent {
+            append(visible.filter { descriptor in
+                intentMatches(descriptor, intent: intent, semantics: semantics)
+            })
+        }
+
+        // Stateful control tools are never surfaced; only status/read are
+        // model-visible. Skill-only descriptors are included only when the
+        // active skill explicitly owns them.
+        if semantics.isRecommendationIndex || intent == .libraryManagement {
+            append(visible.filter { descriptor in
+                descriptor.tags.contains { $0.lowercased().contains("recommendation-index") }
+                    || descriptor.name == "library_index_status"
+                    || descriptor.name == "library_index_read"
+            })
+        }
+
+        if let activeSkillID {
+            append(visible.filter { $0.requiredSkillID == activeSkillID })
+        }
+
+        return selected
+    }
+
+    private static func matches(
+        _ descriptor: ToolDescriptor,
+        semantics: AgentRequestSemantics
+    ) -> Bool {
+        guard descriptor.visibility == .model else { return false }
+        guard descriptor.name != "tool_search" else { return false }
+        guard descriptor.requiredSkillID == nil else { return false }
+
+        let metadata = descriptor.discoveryMetadata
+        let tags = Set(descriptor.tags.map { $0.lowercased() })
+        let name = descriptor.name.lowercased()
+        let isReadRequest = semantics.operation == .read || semantics.operation == .discover
+        let exactOperation = descriptor.authorizationOperation.map {
+            semantics.requestedOperations.contains($0)
+        } ?? false
+
+        // Explicitly named operations always win ranking, but never override
+        // Runtime authorization.
+        if exactOperation { return true }
+
+        func has(_ values: String...) -> Bool {
+            values.contains { value in
+                let lower = value.lowercased()
+                return name.contains(lower)
+                    || tags.contains(where: { $0.contains(lower) })
+                    || metadata.capabilities.contains(where: { $0.lowercased().contains(lower) })
+            }
+        }
+
+        func readOnly(_ value: Bool = isReadRequest) -> Bool {
+            !value || descriptor.permission == .readOnly
+        }
+
+        let domain = semantics.domain
+        switch domain {
+        case .conversation:
+            // Generic chat starts compact. For an ambiguous “search” request,
+            // expose both search entrances, with web ranked by its metadata.
+            guard semantics.suggestedToolNamespaces.contains("web")
+                || semantics.suggestedToolNamespaces.contains("catalog") else {
+                return false
+            }
+            return descriptor.permission == .readOnly && has("search", "resolve", "web")
+
+        case .web:
+            // Public-web requests must not surface local library search just
+            // because both descriptors contain the word "search". The
+            // catalog entrance remains available through tool_search when a
+            // user explicitly asks for a local-library lookup.
+            return descriptor.permission == .readOnly
+                && descriptor.group == .server
+                && has("web", "search", "fetch")
+
+        case .system:
+            return descriptor.permission == .readOnly
+                && (descriptor.group == .catalog || has("device", "app", "network", "storage", "siri", "shortcut"))
+
+        case .musicLibrary:
+            if descriptor.group == .catalog || descriptor.group == .server {
+                return readOnly()
+                    && (descriptor.permission == .readOnly || exactOperation)
+            }
+            return false
+
+        case .playback:
+            if descriptor.group == .playback {
+                return readOnly()
+            }
+            return descriptor.permission == .readOnly && has("search", "resolve", "current", "now playing")
+
+        case .queue:
+            if descriptor.group == .playback || has("queue") {
+                return readOnly() && (descriptor.group == .playback || descriptor.permission == .readOnly)
+            }
+            return false
+
+        case .playlist:
+            if descriptor.group == .playlist || has("playlist") {
+                return readOnly()
+            }
+            return descriptor.permission == .readOnly && has("search", "resolve")
+
+        case .recommendation:
+            // Recommendation is a read/discovery hint. Mutations only enter
+            // through an exact explicit operation above.
+            return descriptor.permission == .readOnly
+                && (descriptor.group == .catalog
+                    || descriptor.group == .playback
+                    || has("recommend", "similar", "random", "mood", "constraint"))
+
+        case .diagnostics:
+            return descriptor.permission == .readOnly
+                && (has("diagnostic", "error", "cache", "duplicate", "metadata", "unplayable", "storage", "stats")
+                    || descriptor.group == .catalog)
+
+        case .download:
+            return (descriptor.group == .download || has("download", "offline"))
+                && readOnly()
+
+        case .memory:
+            return descriptor.group == .memory && readOnly()
+        case .server:
+            return descriptor.group == .server && readOnly()
+        }
+
+    }
+
+    private static func discoveryExpansionMatches(_ descriptor: ToolDescriptor) -> Bool {
+        guard descriptor.visibility == .model, descriptor.requiredSkillID == nil else { return false }
+
+        switch descriptor.group {
+        case .catalog, .annotation:
+            return true
+        case .playback:
+            // Queue and playback descriptors are grouped together in the
+            // canonical registry. Read-only state is always useful; mutation
+            // schemas are discoverable for explicit music workflows and are
+            // still protected by ToolRuntime's operation-level authorization.
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func intentMatches(
+        _ descriptor: ToolDescriptor,
+        intent: AgentTaskIntent,
+        semantics: AgentRequestSemantics
+    ) -> Bool {
+        guard descriptor.visibility == .model,
+              descriptor.requiredSkillID == nil,
+              intent != .conversation
+        else { return false }
+
+        let name = descriptor.name.lowercased()
+        let tags = descriptor.tags.map { $0.lowercased() }
+        func has(_ terms: String...) -> Bool {
+            terms.contains { term in
+                let value = term.lowercased()
+                return name.contains(value) || tags.contains(where: { $0.contains(value) })
+            }
+        }
+
+        switch intent {
+        case .librarySearch:
+            return descriptor.permission == .readOnly && (descriptor.group == .catalog || has("search", "resolve", "catalog"))
+        case .playbackControl:
+            return descriptor.group == .playback
+        case .playbackQuery:
+            return descriptor.permission == .readOnly && (descriptor.group == .playback || has("playback", "current", "queue"))
+        case .musicDiscovery:
+            return discoveryExpansionMatches(descriptor)
+        case .queueManagement, .queueQuery:
+            return descriptor.group == .playback || (descriptor.permission == .readOnly && has("queue", "genre", "select", "catalog"))
+        case .playlistManagement, .playlistQuery:
+            return descriptor.group == .playlist || (descriptor.permission == .readOnly && has("playlist", "search", "catalog"))
+        case .libraryManagement:
+            return descriptor.group == .catalog && descriptor.permission == .readOnly
+        case .serverManagement:
+            return descriptor.group == .server
+        case .diagnostics:
+            return descriptor.permission == .readOnly && (descriptor.group == .catalog || has("diagnostic", "error", "cache", "stats"))
+        case .musicAppreciation:
+            return descriptor.permission == .readOnly && (descriptor.group == .catalog || has("music", "evidence", "search"))
+        case .musicDownload:
+            return descriptor.group == .download || has("download", "offline", "server")
+        case .memoryManagement:
+            return descriptor.group == .memory
+        case .conversation:
+            return false
+        }
+    }
+
     public static func toolDefinitions(from descriptors: [ToolDescriptor]) -> [AIToolDefinition] {
         toolDefinitions(from: descriptors, strict: false)
     }
 
-    /// Provider capabilities decide whether strict schema is emitted; the
-    /// descriptor itself remains provider-neutral.
-    public static func toolDefinitions(from descriptors: [ToolDescriptor], strict: Bool, activeSkillID: String? = nil) -> [AIToolDefinition] {
-        descriptors.filter { $0.isVisible(toSkillID: activeSkillID) }.map { descriptor in
-            AIToolDefinition(
-                name: descriptor.name,
-                description: descriptor.summary,
-                parametersJSON: Self.parametersJSON(for: descriptor),
-                strict: strict
-            )
-        }
+    public static func toolDefinitions(
+        from descriptors: [ToolDescriptor],
+        strict: Bool,
+        activeSkillID: String? = nil
+    ) -> [AIToolDefinition] {
+        descriptors
+            .filter { $0.isVisible(toSkillID: activeSkillID) }
+            .map { descriptor in
+                AIToolDefinition(
+                    name: descriptor.name,
+                    description: descriptor.summary,
+                    parametersJSON: Self.parametersJSON(for: descriptor),
+                    strict: strict
+                )
+            }
     }
 
     /// 由 ToolParameter 生成最小 JSON Schema。
@@ -333,18 +381,19 @@ public enum ToolSelector {
                 schema["description"] = parameter.description
                 properties[parameter.name] = schema
             } else {
-                properties[parameter.name] = ["type": "string", "description": parameter.description]
+                properties[parameter.name] = [
+                    "type": "string",
+                    "description": parameter.description,
+                ]
             }
         }
-        let required = descriptor.parameters.filter(\.required).map(\.name)
         let schema: [String: Any] = [
             "type": "object",
             "properties": properties,
-            "required": required,
+            "required": descriptor.parameters.filter { $0.required }.map { $0.name },
             "additionalProperties": false,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: schema) else { return nil }
         return String(data: data, encoding: .utf8)
     }
-
 }

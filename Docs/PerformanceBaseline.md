@@ -100,7 +100,7 @@ hitch 数、网络请求数、异常 retain 类型、trace 文件名。第一次
 ### 本轮已实施的结构性修复（代码可确认，非测量数字）
 
 - 生产进程只有一个 `LocalCatalogStore`：`ApplicationComposition.makeRuntimeDependencies()` 在
-  composition root 创建一次，Connector / CatalogCoordinator / Agent / 搜索 / V2 / 补全共用同一个
+  composition root 创建一次，Connector / CatalogCoordinator / Agent / 搜索 / 推荐索引 / 补全共用同一个
   actor；不再存在「Connector 一个 store、Coordinator 另一个 store」的 split-brain fallback。
 - `SQLiteDatabase.init` 不再每次打开都同步执行 `PRAGMA quick_check`；改为
   `LocalCatalogStore.verifyIntegrityIfDue()` 的持久化时间策略（默认 7 天一次、后台执行、目录可用
@@ -141,7 +141,7 @@ library.json 字节 / LAN 或 WAN / 冷启动或热启动。
 
 1. Time Profiler：启动 → 首页首次可交互 → `serverConnectionState == .connected`；把每个
    `StartupPerformanceTrace` phase 的 duration 与 Instruments 时间线对齐，明确“慢在哪一段”。
-2. SwiftUI Instrument：Songs 10k+ / Albums / Artists / V2 / 大流派 / Home 滚动。
+2. SwiftUI Instrument：Songs 10k+ / Albums / Artists / 推荐索引 / 大流派 / Home 滚动。
 3. Core Animation：Expanded Player blur、窗口 resize、play/pause、歌词打开。
 4. Allocations：展开/收起播放器 20 次、页面切换 30 次、服务器重连。
 

@@ -231,15 +231,45 @@ public struct ToolLoop {
             initialTaskState: initialTaskState,
             executionLineage: executionLineage
         )
-        if let provider, workflowRoute.kind == .recommendationIndex {
+        let providerName = provider.map { String(describing: type(of: $0)) }
+        if workflowRoute.kind == .recommendationIndex {
             await observeRecommendationIndex(RecommendationIndexExecutionEvent(
                 kind: .routeSelected,
                 runID: resolvedExecutionLease.runID,
                 sessionID: resolvedExecutionLease.sessionID,
                 serverID: context.serverID,
                 phase: .readingStatus,
-                message: "RecommendationIndexSkillRuntime"
+                provider: providerName,
+                model: model,
+                message: provider == nil
+                    ? "RecommendationIndexSkillRuntime provider unavailable"
+                    : "RecommendationIndexSkillRuntime"
             ))
+            guard let provider else {
+                var taskState = initialTaskState ?? AgentTaskState(
+                    intent: .libraryManagement,
+                    goal: userText
+                )
+                let message = "推荐索引需要可用的 AI Provider；当前没有发起离线音乐搜索或其他替代执行。"
+                taskState.status = .failed
+                taskState.completionState = .failed
+                taskState.errorState = message
+                taskState.errors.append(message)
+                taskState.pendingActions = []
+                await state(taskState)
+                await observeRecommendationIndex(RecommendationIndexExecutionEvent(
+                    kind: .failed,
+                    runID: resolvedExecutionLease.runID,
+                    sessionID: resolvedExecutionLease.sessionID,
+                    serverID: context.serverID,
+                    phase: .readingStatus,
+                    provider: providerName,
+                    model: model,
+                    message: message
+                ))
+                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                return
+            }
             await RecommendationIndexSkillRuntime.run(
                 userText: userText,
                 provider: provider,
@@ -259,7 +289,9 @@ public struct ToolLoop {
                 log: log,
                 progress: progress,
                 state: state,
-                observe: observeRecommendationIndex
+                observe: observeRecommendationIndex,
+                providerName: providerName,
+                modelName: model
             )
             return
         }
@@ -360,8 +392,7 @@ public struct ToolLoop {
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
         var selectedTools = ToolSelector.select(for: userText, all: AgentToolRegistry.all)
-        var effectiveAuthorization = sideEffectAuthorization
-        var deniedAuthorizationSignatures = Set<String>()
+        let effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -589,41 +620,16 @@ public struct ToolLoop {
                 let executableCall = call.usesTextProtocol
                     ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
                     : ToolCall(name: call.name, arguments: call.arguments)
-                var authorizationWasApproved = false
                 switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
                 case .allowed:
                     break
-                case let .requiresUserConfirmation(operation, reason):
-                    if deniedAuthorizationSignatures.contains(signature) {
-                        resultMessages.append(toolResultMessage(
-                            callID: call.id,
-                            content: "（工具执行结果）\(call.name)：已跳过 - 用户未批准该操作。",
-                            native: nativeMode
-                        ))
-                        continue
-                    }
-                    let pending = pendingConfirmation(
-                        descriptor: descriptor,
-                        name: call.name,
-                        diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments),
-                        reason: reason
-                    )
-                    await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
-                    guard await confirm(pending) else {
-                        deniedAuthorizationSignatures.insert(signature)
-                        let text = "（工具执行结果）\(call.name)：失败 - 用户未批准该操作。"
-                        resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
-                        continue
-                    }
-                    effectiveAuthorization = effectiveAuthorization.granting(operation, for: executableCall)
-                    authorizationWasApproved = true
                 case let .denied(reason):
                     let text = "（工具执行结果）\(call.name)：失败 - \(reason)"
                     resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
                     continue
                 }
 
-                if descriptor.requiresConfirmation, !authorizationWasApproved {
+                if descriptor.requiresConfirmation {
                     let pending = pendingConfirmation(
                         descriptor: descriptor,
                         name: call.name,
@@ -637,9 +643,10 @@ public struct ToolLoop {
                     }
                 }
                 let authorizationForCall = effectiveAuthorization
+                let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
                 let result: ToolResult
                 do {
-                    result = try await withTimeout(toolTimeout) {
+                    result = try await withTimeout(effectiveToolTimeout) {
                         await ToolRuntime.execute(
                             executableCall,
                             bridge: bridge,
@@ -824,7 +831,7 @@ public struct ToolLoop {
         // （例如第一轮音乐发现、第二轮需要歌单/服务器工具）会自动补入，不会永久缺失。
         var accumulatedToolText = userText
         let requestTimeout = roundTimeout
-        var effectiveAuthorization = sideEffectAuthorization
+        let effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -926,10 +933,6 @@ public struct ToolLoop {
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
-        // A model-visible write not covered by the original operation graph
-        // gets one real confirmation. A rejection is remembered by call
-        // signature so the model cannot turn it into a textual consent loop.
-        var deniedAuthorizationSignatures = Set<String>()
         // A transient Provider failure may be recovered at the current skill
         // checkpoint. This is protocol-preserving recovery, not a tool-call or
         // model-capability limit.
@@ -1596,45 +1599,9 @@ public struct ToolLoop {
                     ? structuredToolCall(name: call.name, legacyArguments: stringArguments)
                     : ToolCall(name: call.name, arguments: call.arguments)
                 let signature = Self.confirmationSignature(name: call.name, args: stringArguments)
-                var authorizationWasApproved = false
                 switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
                 case .allowed:
                     break
-                case let .requiresUserConfirmation(operation, reason):
-                    if deniedAuthorizationSignatures.contains(signature) {
-                        let message = "用户尚未批准「\(descriptor.summary)」，本次未执行。"
-                        ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "重复调用仍未获批准", reused: true))
-                        toolMessages.append(Self.toolResultMessage(
-                            callID: call.id,
-                            content: "（工具执行结果）\(call.name): 已跳过 - \(message)",
-                            native: nativeMode
-                        ))
-                        continue
-                    }
-                    let pending = Self.pendingConfirmation(
-                        descriptor: descriptor,
-                        name: call.name,
-                        diagnosticArgs: diagnosticArgs,
-                        reason: reason
-                    )
-                    await emit(AgentChatMessage(role: .assistant, messages: [.confirmation(pending)]))
-                    guard await confirm(pending) else {
-                        deniedAuthorizationSignatures.insert(signature)
-                        let message = "用户未批准「\(descriptor.summary)」，本次未执行。"
-                        taskState.errors.append(message)
-                        taskState.pendingActions = [message]
-                        taskState.status = .waitingForModel
-                        taskState.updatedAt = .now
-                        await state(taskState)
-                        toolMessages.append(Self.toolResultMessage(
-                            callID: call.id,
-                            content: "（工具执行结果）\(call.name): 已拒绝 - \(message)",
-                            native: nativeMode
-                        ))
-                        continue
-                    }
-                    effectiveAuthorization = effectiveAuthorization.granting(operation, for: executableCall)
-                    authorizationWasApproved = true
                 case let .denied(reason):
                     let failureText = "（工具执行结果）\(call.name): 执行失败 - \(reason)"
                     taskState.errors.append(failureText)
@@ -1643,7 +1610,7 @@ public struct ToolLoop {
                     continue
                 }
 
-                if descriptor.requiresConfirmation, !authorizationWasApproved {
+                if descriptor.requiresConfirmation {
                     let pending = Self.pendingConfirmation(
                         descriptor: descriptor,
                         name: call.name,
@@ -1679,8 +1646,9 @@ public struct ToolLoop {
                     }
                 }
                 let authorizationForCall = effectiveAuthorization
+                let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
                 do {
-                    result = try await Self.withTimeout(toolTimeout) {
+                    result = try await Self.withTimeout(effectiveToolTimeout) {
                         await ToolRuntime.execute(
                             executableCall,
                             bridge: bridge,
@@ -1719,9 +1687,9 @@ public struct ToolLoop {
                     if error is AgentRunnerError {
                         if descriptor.permission != .readOnly {
                             ws.recordIndeterminateSideEffect(tool: call.name, args: stringArguments)
-                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，服务端结果未知。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
+                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(effectiveToolTimeout)) 秒未完成，服务端结果未知。为避免重复副作用，禁止自动以相同参数重试；请改用查询工具核验结果或让用户确认后再处理。"
                         } else {
-                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(toolTimeout)) 秒未完成，可改用其他查询方式继续。"
+                            failureText = "（工具执行结果）\(call.name): 超时 - 工具超过 \(Int(effectiveToolTimeout)) 秒未完成，可改用其他查询方式继续。"
                         }
                     } else {
                         failureText = "（工具执行结果）\(call.name): 执行中断 - \(Self.errorText(error))"
@@ -1917,7 +1885,7 @@ public struct ToolLoop {
                 return
             }
 
-            // 普通任务在工具回灌后回到 auto；V2 分类阶段始终锁定唯一的
+            // 普通任务在工具回灌后回到 auto；封闭分类阶段始终锁定唯一的
             // write_batch，避免下一轮又回到旁路工具。
             if nativeMode, !nativeCalls.isEmpty {
                 toolChoice = provider.capabilities.supportsToolChoice ? .auto : nil
@@ -3135,6 +3103,10 @@ public struct ToolLoop {
     /// ContextManager 在发送前按 Provider 的真实上下文窗口执行。
     private static func convertHistory(_ history: [AgentChatMessage], currentUserText: String) -> [AIMessage] {
         AgentHistoryPolicy.modelMessages(from: history, for: currentUserText)
+    }
+
+    private static func effectiveToolTimeout(_ descriptor: ToolDescriptor, requested: TimeInterval) -> TimeInterval {
+        max(0.1, min(requested, descriptor.executionProfile.timeout))
     }
 
     private static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {

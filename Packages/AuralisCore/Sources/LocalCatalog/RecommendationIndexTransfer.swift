@@ -2,7 +2,8 @@ import Domain
 import Foundation
 import MusicLibrary
 
-/// V2 索引跨设备传输格式（`.auralis-index-v2`，初版为 JSON）。
+/// 推荐索引跨设备传输格式（`.auralis-index`，初版为 JSON）。旧 `.auralis-index-v2`
+/// 仅作为导入兼容格式保留。
 ///
 /// 只包含音乐内容分类派生数据。**绝不包含**：服务器密码 / token / API Key / NAS URL /
 /// IP / Stream URL / Download URL / Keychain 引用 / 歌词 / 播放历史 / 个人评分 /
@@ -200,7 +201,7 @@ extension LocalCatalogStore {
         )
     }
 
-    /// 导入外部 V2 索引包。外部 JSON 一律视为不可信输入：
+    /// 导入外部推荐索引包。外部 JSON 一律视为不可信输入：
     /// 限制文件大小、条目数量、标签数量、字符串长度与 confidence 范围；
     /// dimension 必须进入现有 allowlist（或通过自建维度格式校验）；
     /// 所有 SQLite 写入使用 parameter binding。

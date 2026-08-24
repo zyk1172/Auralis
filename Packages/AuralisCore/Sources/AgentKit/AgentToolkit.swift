@@ -420,7 +420,7 @@ public struct AgentToolkit {
             let sid = try requireServerID(call, "serverID")
             return mutationToolResult(call, descriptor, await bridge.removeServer(serverID: sid))
 
-        // MARK: v2 统一命名工具（第一阶段）
+        // MARK: 规范命名工具
 
         // 本地库查询
         case "library_get_summary":
@@ -1045,7 +1045,7 @@ public struct AgentToolkit {
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
             return mutationToolResult(call, descriptor, await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids))
 
-        // MARK: v2 服务器工具
+        // MARK: 规范服务器工具
 
         case "server_list":
             let servers = await bridge.listServers()

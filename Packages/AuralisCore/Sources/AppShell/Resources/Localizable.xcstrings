@@ -1475,18 +1475,18 @@
         }
       }
     },
-    "Auralis-推荐索引-V2-%@" : {
+    "Auralis-推荐索引-%@" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis-Recommendation-Index-V2-%@"
+            "value" : "Auralis-Recommendation-Index-%@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis-推薦索引-V2-%@"
+            "value" : "Auralis-推薦索引-%@"
           }
         }
       }
@@ -1928,18 +1928,18 @@
         }
       }
     },
-    "V2 包 v%lld" : {
+    "索引包 v%lld" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "V2 Package v%lld"
+            "value" : "Index Package v%lld"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "V2 套件 v%lld"
+            "value" : "索引套件 v%lld"
           }
         }
       }
@@ -5592,18 +5592,18 @@
         }
       }
     },
-    "在设置 → AI 与公开数据中完成推荐索引 V2 后，这里会按歌曲数量展示分类。" : {
+    "在设置 → AI 与公开数据中完成推荐索引后，这里会按歌曲数量展示分类。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After completing the Recommendation Index V2 in Settings → AI & Public Data, categories will appear here with song counts."
+            "value" : "After completing the Recommendation Index in Settings → AI & Public Data, categories will appear here with song counts."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在設定 → AI 與公開資料中完成推薦索引 V2 後，這裡會按歌曲數量顯示分類。"
+            "value" : "在設定 → AI 與公開資料中完成推薦索引後，這裡會按歌曲數量顯示分類。"
           }
         }
       }
@@ -6344,18 +6344,18 @@
         }
       }
     },
-    "将删除当前服务器的所有 V2 分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
+    "将删除当前服务器的所有推荐索引分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This deletes all V2 categories and AI tags for the current server. Your music library, downloads, playback history, and indexes of other servers are unaffected; you can restart indexing later."
+            "value" : "This deletes all Recommendation Index categories and AI tags for the current server. Your music library, downloads, playback history, and indexes of other servers are unaffected; you can restart indexing later."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將刪除目前伺服器的所有 V2 分類與 AI 標籤。音樂庫、下載、播放記錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
+            "value" : "將刪除目前伺服器的所有推薦索引分類與 AI 標籤。音樂庫、下載、播放記錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
           }
         }
       }
@@ -7272,18 +7272,18 @@
         }
       }
     },
-    "当前服务器的推荐索引 V2 已清空，可重新开始索引。" : {
+    "当前服务器的推荐索引已清空，可重新开始索引。" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recommendation index V2 for the current server has been cleared. You can restart indexing."
+            "value" : "The Recommendation Index for the current server has been cleared. You can restart indexing."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目前伺服器的推薦索引 V2 已清空，可重新開始索引。"
+            "value" : "目前伺服器的推薦索引已清空，可重新開始索引。"
           }
         }
       }
@@ -8127,18 +8127,18 @@
         }
       }
     },
-    "推荐索引 V2" : {
+    "推荐索引" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recommendation Index V2"
+            "value" : "Recommendation Index"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "推薦索引 V2"
+            "value" : "推薦索引"
           }
         }
       }
@@ -11880,18 +11880,18 @@
         }
       }
     },
-    "清空本机推荐索引 V2？" : {
+    "清空本机推荐索引？" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear local Recommendation Index V2?"
+            "value" : "Clear local Recommendation Index?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清空本機推薦索引 V2？"
+            "value" : "清空本機推薦索引？"
           }
         }
       }

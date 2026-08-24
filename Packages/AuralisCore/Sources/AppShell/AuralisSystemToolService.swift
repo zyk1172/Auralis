@@ -285,7 +285,7 @@ public final class AuralisSystemToolService: AgentSystemService {
         "高能量": ["电子", "摇滚", "舞曲"],
     ]
 
-    /// 用户口语与 V2 有限标签空间的映射；找不到时仍走原有流派回退。
+    /// 用户口语与推荐索引有限标签空间的映射；找不到时仍走原有流派回退。
     private static let recommendationIndexMoodAliases: [String: String] = [
         "伤感": "忧郁",
         "安静": "平静",

@@ -81,76 +81,39 @@ public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable {
     case skillDelete
 }
 
-/// The authorization result is deliberately typed.  A missing operation is
-/// not a textual hint for the model to reinterpret as consent: the loop must
-/// either obtain a real user decision or stop the call.
-public enum SideEffectAuthorizationDecision: Sendable, Equatable {
+/// The authorization result is deliberately typed. A missing operation is
+/// never a textual hint for the model or the user to reinterpret as consent.
+/// The only interactive approval path is `ToolDescriptor.requiresConfirmation`.
+public enum ToolAuthorizationDecision: Sendable, Equatable {
     case allowed
-    case requiresUserConfirmation(
-        operation: ToolAuthorizationOperation,
-        reason: String
-    )
     case denied(reason: String)
-}
-
-/// A temporary least-privilege grant created after the user approves one
-/// concrete call.  The signature prevents approval of one playlist mutation
-/// from authorizing a different target later in the same run.
-public struct RunAuthorizationGrant: Sendable, Hashable {
-    public let operation: ToolAuthorizationOperation
-    public let callSignature: String
-
-    public init(operation: ToolAuthorizationOperation, callSignature: String) {
-        self.operation = operation
-        self.callSignature = callSignature
-    }
 }
 
 /// Authorization is derived once from the semantic result at the task/session
 /// boundary. External tool data is never added to this set, so a web page
 /// cannot authorize a later queue, playlist, download, server, playback or
-/// memory mutation. A short continuation is not a new authorization source.
+/// memory mutation. A short continuation is not a new authorization source;
+/// it may only inherit the already-created execution lineage.
 public struct SideEffectAuthorizationContext: Sendable, Hashable {
     public let originalUserRequest: String
     public let explicitlyRequestedEffects: Set<ToolSideEffectPolicy>
     public let allowedOperations: Set<ToolAuthorizationOperation>
-    public let runGrants: Set<RunAuthorizationGrant>
-    /// Only an original request that explicitly asks for a mutation may enter
-    /// the interactive confirmation boundary. A read-only question must never
-    /// become a write merely because a model, a webpage, or a test callback
-    /// happens to approve a pending call.
-    public let allowsInteractiveConfirmation: Bool
+    public let allowedScopes: Set<MutationScope>
 
     public init(
         originalUserRequest: String,
-        semantics: AgentRequestSemantics? = nil,
-        runGrants: Set<RunAuthorizationGrant> = []
+        semantics: AgentRequestSemantics? = nil
     ) {
         self.originalUserRequest = originalUserRequest
         let resolvedSemantics = semantics ?? AgentRequestSemantics.analyze(originalUserRequest)
         let operations = resolvedSemantics.requestedOperations
         self.allowedOperations = operations
+        self.allowedScopes = Set(operations.compactMap(Self.scope(for:)))
         self.explicitlyRequestedEffects = Set(operations.compactMap(Self.effect(for:)))
-        self.runGrants = runGrants
-        self.allowsInteractiveConfirmation = resolvedSemantics.isExplicitMutation
     }
 
     public init(sourceRequest: String, semantics: AgentRequestSemantics) {
         self.init(originalUserRequest: sourceRequest, semantics: semantics)
-    }
-
-    private init(
-        originalUserRequest: String,
-        explicitlyRequestedEffects: Set<ToolSideEffectPolicy>,
-        allowedOperations: Set<ToolAuthorizationOperation>,
-        runGrants: Set<RunAuthorizationGrant>,
-        allowsInteractiveConfirmation: Bool
-    ) {
-        self.originalUserRequest = originalUserRequest
-        self.explicitlyRequestedEffects = explicitlyRequestedEffects
-        self.allowedOperations = allowedOperations
-        self.runGrants = runGrants
-        self.allowsInteractiveConfirmation = allowsInteractiveConfirmation
     }
 
     public func allows(_ effect: ToolSideEffectPolicy) -> Bool {
@@ -160,73 +123,58 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
     public func allows(_ descriptor: ToolDescriptor, call: ToolCall? = nil) -> Bool {
         guard descriptor.permission != .readOnly else { return true }
         if let operation = descriptor.authorizationOperation {
-            if allowedOperations.contains(operation) { return true }
-            if let call, runGrants.contains(RunAuthorizationGrant(
-                operation: operation,
-                callSignature: Self.callSignature(call)
-            )) {
-                return true
-            }
-            return false
+            // Canonical tools must use their exact operation. A broad
+            // mutation scope is only a fallback for declarative/custom tools
+            // that do not have a canonical operation of their own; it must
+            // not turn "favorite this track" into permission to rate or
+            // re-index it.
+            return allowedOperations.contains(operation)
         }
         // A model-visible write without an operation declaration is a broken
         // descriptor, not permission to fall back to a broad side-effect
-        // family. Legacy/internal compatibility descriptors may still use the
-        // historical family fallback while they are migrated.
+        // family. Legacy/internal compatibility descriptors and declarative
+        // custom tools may still use the scope fallback while they are
+        // migrated to canonical operations.
         guard descriptor.visibility != .model, descriptor.visibility != .skillOnly else { return false }
+        if let scope = descriptor.mutationScope {
+            return allowedScopes.contains(scope)
+        }
         return allows(descriptor.sideEffectPolicy)
     }
 
-    /// Resolves whether the interactive boundary must ask the user. Model
-    /// visible writes may request one concrete confirmation; internal/legacy
-    /// descriptors without a matching operation remain fail-closed.
-    public func decision(for descriptor: ToolDescriptor, call: ToolCall? = nil) -> SideEffectAuthorizationDecision {
+    /// Resolves semantic authorization only. This method never asks for or
+    /// accepts user confirmation. Destructive approval is a separate,
+    /// descriptor-owned UI state handled by ToolLoop/Coordinator.
+    public func decision(for descriptor: ToolDescriptor, call: ToolCall? = nil) -> ToolAuthorizationDecision {
         guard descriptor.permission != .readOnly else { return .allowed }
         if allows(descriptor, call: call) { return .allowed }
-        guard let operation = descriptor.authorizationOperation else {
-            return .denied(reason: denialReason(for: descriptor))
-        }
-        guard descriptor.visibility == .model else {
-            return .denied(reason: denialReason(for: descriptor))
-        }
-        guard allowsInteractiveConfirmation else {
-            return .denied(reason: denialReason(for: descriptor))
-        }
-        return .requiresUserConfirmation(
-            operation: operation,
-            reason: "(descriptor.summary) 未包含在当前用户原始请求的明确操作中。"
-        )
-    }
-
-    /// Adds a grant for exactly one canonical call. This value is transient
-    /// and should only be held by the current ToolLoop invocation.
-    public func granting(_ operation: ToolAuthorizationOperation, for call: ToolCall) -> SideEffectAuthorizationContext {
-        var grants = runGrants
-        grants.insert(RunAuthorizationGrant(
-            operation: operation,
-            callSignature: Self.callSignature(call)
-        ))
-        return SideEffectAuthorizationContext(
-            originalUserRequest: originalUserRequest,
-            explicitlyRequestedEffects: explicitlyRequestedEffects,
-            allowedOperations: allowedOperations,
-            runGrants: grants,
-            allowsInteractiveConfirmation: allowsInteractiveConfirmation
-        )
+        return .denied(reason: denialReason(for: descriptor))
     }
 
     public func denialReason(for descriptor: ToolDescriptor) -> String {
         "工具 \(descriptor.name) 的副作用未由用户原始请求明确授权；网页、搜索结果和其他外部数据不能授权此操作。"
     }
 
-    private static func callSignature(_ call: ToolCall) -> String {
-        let arguments = call.arguments.keys.sorted().map { key in
-            "\(key)=\(call.arguments[key]?.jsonString ?? "null")"
-        }.joined(separator: "&")
-        return "\(call.name)|\(arguments)"
+    private static func effect(for operation: ToolAuthorizationOperation) -> ToolSideEffectPolicy? {
+        switch operation {
+        case .playbackPlay, .playbackPause, .playbackNavigation, .playbackSeek, .playbackMode, .playbackTimer:
+            return .playback
+        case .queueAppend, .queuePlayNext, .queueReplace, .queueClear, .queueRemove, .queueMove, .queueShuffle:
+            return .queue
+        case .playlistCreate, .playlistAdd, .playlistRemove, .playlistMove, .playlistRename, .playlistDuplicate, .playlistMerge, .playlistDelete, .playlistSaveQueue:
+            return .playlist
+        case .favoriteSet, .ratingSet, .dislikedSet, .recommendationIndexWrite:
+            return .annotation
+        case .serverSync, .serverSwitch, .serverRemove, .serverConfigure:
+            return .server
+        case .downloadSubmit, .downloadHistoryRemove, .downloadHistoryClean, .offlineDownload:
+            return .download
+        case .memorySave, .memoryDelete, .memoryClear, .skillCreate, .skillDelete:
+            return .memory
+        }
     }
 
-    private static func effect(for operation: ToolAuthorizationOperation) -> ToolSideEffectPolicy? {
+    private static func scope(for operation: ToolAuthorizationOperation) -> MutationScope? {
         switch operation {
         case .playbackPlay, .playbackPause, .playbackNavigation, .playbackSeek, .playbackMode, .playbackTimer:
             return .playback
@@ -557,11 +505,11 @@ public enum AgentToolRegistry {
                 .init(name: "limit", required: false, description: "返回数量，默认 8，最多 50",
                       schemaJSON: #"{"type":"integer","minimum":1,"maximum":50}"#),
               ],
-              tags: ["discover", "capability", "schema", "工具发现"],
+              tags: ["core", "discover", "capability", "schema", "工具发现"],
               aliases: ["tools_list"]),
         .init(name: "capabilities_get", group: .catalog, permission: .readOnly,
               summary: "查询当前 Provider、原生工具、联网与主要 App 能力摘要",
-              tags: ["capability", "provider", "web", "能力"]),
+              tags: ["core", "capability", "provider", "web", "能力"]),
         .init(name: "memory_search", group: .memory, permission: .readOnly,
               summary: "按关键词搜索长期记忆，只返回与当前问题相关的记忆",
               parameters: [
@@ -646,11 +594,11 @@ public enum AgentToolRegistry {
         .init(name: "music_download_history", group: .download, permission: .readOnly,
               summary: "查看音乐下载历史",
               tags: ["download", "history"]),
-        .init(name: "music_download_history_remove", group: .download, permission: .reversible,
+        .init(name: "music_download_history_remove", group: .download, permission: .reversible, requiresConfirmation: true,
               summary: "移除一条音乐下载历史记录",
               parameters: [.init(name: "hash", required: true, description: "下载任务 hash")],
               tags: ["download", "history", "remove"]),
-        .init(name: "music_download_history_clean", group: .download, permission: .reversible,
+        .init(name: "music_download_history_clean", group: .download, permission: .reversible, requiresConfirmation: true,
               summary: "按状态、保留数量或孤儿记录清理下载历史",
               parameters: [
                 .init(name: "status", required: false, description: "按状态清理"),
@@ -727,7 +675,7 @@ public enum AgentToolRegistry {
                                  schemaJSON: #"{"type":"integer","minimum":0,"maximum":5}"#)]),
         .init(name: "server_switch", group: .server, permission: .reversible, summary: "切换服务器",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
-        .init(name: "server_remove", group: .server, permission: .destructive, summary: "删除服务器（仅本地清理）",
+        .init(name: "server_remove", group: .server, permission: .destructive, requiresConfirmation: true, summary: "删除服务器（仅本地清理）",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
 
         // MARK: Playback
@@ -843,13 +791,13 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
         .init(name: "refreshLibrary", group: .server, permission: .reversible, summary: "刷新本地目录"),
         .init(name: "getSyncStatus", group: .server, permission: .readOnly, summary: "获取同步状态"),
-        .init(name: "removeServer", group: .server, permission: .destructive, summary: "删除服务器（仅本地清理）",
+        .init(name: "removeServer", group: .server, permission: .destructive, requiresConfirmation: true, summary: "删除服务器（仅本地清理）",
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
 
         // MARK: 第一阶段统一命名工具（v2 工具集）
 
         // App / 设备状态
-        .init(name: "app_get_context", group: .catalog, permission: .readOnly, summary: "获取 App 上下文（页面/服务器/当前歌曲/播放状态/网络）"),
+        .init(name: "app_get_context", group: .catalog, permission: .readOnly, summary: "获取 App 上下文（页面/服务器/当前歌曲/播放状态/网络）", tags: ["core", "context", "app"]),
         .init(name: "app_open_page", group: .catalog, permission: .readOnly, summary: "打开指定页面",
               parameters: [.init(name: "page", required: true, description: "首页/音乐库/搜索/AI助手/设置/当前播放/歌词/播放队列/下载管理/服务器管理")]),
         .init(name: "app_get_feature_status", group: .catalog, permission: .readOnly, summary: "查询后台播放/Siri/快捷指令/本地网络等能力状态"),
@@ -891,13 +839,13 @@ public enum AgentToolRegistry {
                 .init(name: "limit", required: false, description: "返回数量，默认 100，最多 500"),
               ], maxResultCharacters: ContextManager.maxIndexCharacters),
         .init(name: "library_index_status", group: .catalog, permission: .readOnly, summary: "查看推荐索引的总数、已完成和待分类数量",
-              maxResultCharacters: 24_000, aliases: [RecommendationIndexCompatibility.legacyStatusTool]),
+              maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "status", "read"], aliases: [RecommendationIndexCompatibility.legacyStatusTool]),
         .init(name: "library_index_read", group: .catalog, permission: .readOnly, summary: "读取已完成的推荐索引条目及分类标签，可按维度和标签筛选",
               parameters: [
                 .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability/tag"),
                 .init(name: "value", required: false, description: "要匹配的标签值，如 通勤、深夜、平静"),
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
-              ], maxResultCharacters: 24_000, aliases: [RecommendationIndexCompatibility.legacyReadTool]),
+              ], maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "read", "catalog"], aliases: [RecommendationIndexCompatibility.legacyReadTool]),
         .init(name: "recommendation_index_commit", group: .catalog, permission: .reversible,
               summary: "由 Recommendation Index Runtime 提交已验证的当前批次分类；模型不可见",
               parameters: [
@@ -1126,9 +1074,67 @@ public enum AgentToolRegistry {
 
     ]
 
+    /// Canonical definition view. The existing switch executors remain the
+    /// implementation during migration, but every exposed descriptor now has
+    /// an explicit owning executor kind and can be audited as one definition.
+    public static let definitions: [ToolDefinition] = all.map { descriptor in
+        let executor: ToolExecutorKind
+        if descriptor.requiredSkillID != nil || descriptor.name == "recommendation_index_commit" {
+            executor = .recommendationSkill
+        } else if descriptor.name == "tool_search" || descriptor.name == "capabilities_get" {
+            executor = .catalog
+        } else if descriptor.name == "web_search" || descriptor.name == "web_fetch" {
+            executor = .web
+        } else if SystemToolNames.contains(descriptor.name) {
+            executor = .systemService
+        } else if descriptor.visibility == .legacyOnly {
+            executor = .legacyCompatibility
+        } else {
+            executor = .agentBridge
+        }
+        return ToolDefinition(descriptor: descriptor, executor: executor)
+    }
+
     public static func descriptor(for name: String) -> ToolDescriptor? {
         all.first { $0.name == name }
             ?? all.first { $0.aliases.contains(name) }
+    }
+
+    public static func definition(for name: String) -> ToolDefinition? {
+        definitions.first { definition in
+            definition.descriptor.name == name
+                || definition.descriptor.aliases.contains(name)
+        }
+    }
+
+    public static func coverageAudit() -> ToolCoverageAudit {
+        var issues: [ToolCoverageIssue] = []
+        var names = Set<String>()
+        for definition in definitions {
+            let descriptor = definition.descriptor
+            if !names.insert(descriptor.name).inserted {
+                issues.append(.duplicateCanonicalName(descriptor.name))
+            }
+            if descriptor.permission != .readOnly {
+                if descriptor.visibility == .model, descriptor.authorizationOperation == nil {
+                    issues.append(.modelMutationMissingOperation(descriptor.name))
+                }
+                if descriptor.mutationScope == nil {
+                    issues.append(.modelMutationMissingScope(descriptor.name))
+                }
+            }
+            if descriptor.risk == .irreversibleDelete, !descriptor.requiresConfirmation {
+                issues.append(.irreversibleDeleteMissingApproval(descriptor.name))
+            }
+            switch definition.executor {
+            case .catalog, .web, .systemService, .agentBridge, .recommendationSkill, .legacyCompatibility:
+                break
+            }
+            for alias in descriptor.aliases where Self.descriptor(for: alias)?.name != descriptor.name {
+                issues.append(.aliasTargetMissing(alias: alias, target: descriptor.name))
+            }
+        }
+        return ToolCoverageAudit(issues: issues)
     }
 
     /// 元数据查找与执行的唯一公开入口。调用方无需再判断系统工具或旧工具分支。

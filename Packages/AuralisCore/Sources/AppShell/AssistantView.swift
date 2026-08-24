@@ -43,6 +43,14 @@ struct AssistantView: View {
     @Environment(\.bottomDockScrollCoordinator) private var bottomDockScroll: BottomDockScrollCoordinator?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var bottomChromeMetrics: BottomChromeMetrics {
+        bottomDockScroll?.metrics ?? .standard
+    }
+
+    private var bottomDockCollapseProgress: CGFloat {
+        bottomDockScroll?.collapseProgress ?? 0
+    }
+
     init(model: AuralisAppModel, theme: BuiltInTheme) {
         self.model = model
         self.theme = theme
@@ -444,7 +452,12 @@ struct AssistantView: View {
                 .frame(maxWidth: .infinity)
                 // 收拢态时输入栏进入底部导航栏的中间槽位；一旦获得输入焦点、键盘弹出，
                 // 必须立即恢复完整输入宽度，而不能继续沿用窄胶囊。
-                .padding(.horizontal, assistantInputFocused ? 0 : 64 * (bottomDockScroll?.collapseProgress ?? 0))
+                .padding(
+                    .horizontal,
+                    assistantInputFocused
+                        ? 0
+                        : (bottomChromeMetrics.dockHeight + bottomChromeMetrics.spacing) * bottomDockCollapseProgress
+                )
                 // 键盘关闭时：主菜单栏是独立的底部 overlay（忽略键盘），会覆盖在屏幕最底，
                 // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
                 // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
@@ -455,13 +468,15 @@ struct AssistantView: View {
                     .bottom,
                     assistantInputFocused
                         ? AuralisSpacing.small
-                        : dockBottomPadding + (dockSpacing + bottomBarHeight) * (1 - (bottomDockScroll?.collapseProgress ?? 0))
+                        : bottomChromeMetrics.bottomPadding
+                            + (bottomChromeMetrics.spacing + bottomChromeMetrics.dockHeight)
+                            * (1 - bottomDockCollapseProgress)
                 )
                 // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
                 // 不再按拖动位移逐帧改变宽度，快滑和慢滑的视觉节奏完全一致。
                 .animation(
                     BottomDockMotion.animation(reduceMotion: reduceMotion),
-                    value: bottomDockScroll?.collapseProgress ?? 0
+                    value: bottomDockCollapseProgress
                 )
         }
         #else

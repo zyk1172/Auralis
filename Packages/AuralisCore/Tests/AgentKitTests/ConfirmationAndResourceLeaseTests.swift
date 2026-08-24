@@ -2,13 +2,11 @@ import AgentKit
 import Foundation
 import Testing
 
-@Test("Runtime confirmation accepts short approve/reject decisions only")
-func confirmationDecisionNormalizationIsBounded() {
-    #expect(AgentConfirmationDecision.parse("确认") == .confirm)
-    #expect(AgentConfirmationDecision.parse(" OK！ ") == .confirm)
-    #expect(AgentConfirmationDecision.parse("确定把 12 首歌加入歌单") == .unknown)
-    #expect(AgentConfirmationDecision.parse("取消") == .reject)
-    #expect(AgentConfirmationDecision.parse("不要执行") == .unknown)
+@Test("Natural-language confirmation is not an execution continuation")
+func naturalLanguageConfirmationDoesNotAuthorizeRuntime() {
+    #expect(!AgentHistoryPolicy.isExplicitContinuation("确认"))
+    #expect(!AgentHistoryPolicy.isExplicitContinuation("确定"))
+    #expect(AgentHistoryPolicy.isExplicitContinuation("继续"))
 }
 
 @Test("Mutation resources serialize conflicts but allow unrelated work")

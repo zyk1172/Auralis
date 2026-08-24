@@ -586,9 +586,17 @@ public actor ProductionServerConnector: ServerConnecting {
 
     /// 把单曲追加到服务器歌单（updatePlaylist 的 songIdToAdd）。
     public func addToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackID: TrackID) async -> Bool {
+        await addTracksToPlaylist(serverID: serverID, playlistID: playlistID, trackIDs: [trackID])
+    }
+
+    /// 批量追加歌曲：一次 updatePlaylist 请求、一次缓存刷新。
+    /// 不要在这里退化为逐首调用，否则 Agent 的批量歌单操作会产生
+    /// N 次网络请求和 N 次持久化窗口。
+    public func addTracksToPlaylist(serverID: ServerID, playlistID: PlaylistID, trackIDs: [TrackID]) async -> Bool {
         guard let client = clients[serverID] else { return false }
+        guard !trackIDs.isEmpty else { return true }
         do {
-            try await client.updatePlaylist(id: playlistID, appendTrackIDs: [trackID])
+            try await client.updatePlaylist(id: playlistID, appendTrackIDs: trackIDs)
             // 写操作成功后把服务器最新歌单列表落盘，冷启动即与服务器一致。
             await refreshCachedPlaylists(serverID: serverID, client: client)
             return true

@@ -1255,12 +1255,11 @@ func toolSelectorCoversEightRequests() {
 
 // MARK: - 删除操作直接执行（permissive direct execution）
 
-@Test("Delete server executes directly without runtime confirmation")
-func deleteServerExecutesDirectly() async throws {
+@Test("Delete server requires the Runtime confirmation gate")
+func deleteServerRequiresConfirmation() async throws {
     let store = try makeStore()
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
-    let log = ActionRecorder()
     let provider = ScriptedAIProvider(actionBatches: ["ACTION: {\"tool\":\"removeServer\",\"args\":{\"serverID\":\"srv-x\"}}"])
     let probe = ConfirmationProbe(policy: false)
     await AgentRunner.run(
@@ -1272,13 +1271,11 @@ func deleteServerExecutesDirectly() async throws {
         context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
         confirm: { await probe.decide($0) },
         emit: { await collector.record($0) },
-        log: { await log.add($0) }
+        log: { _ in }
     )
-    // 用户明确要求 + 目标唯一 → 直接执行，不再向用户索取二次确认。
-    #expect(await bridge.removedServers.contains("srv-x"))
-    #expect(await probe.calls == 0)
-    let records = await log.records
-    #expect(records.contains { $0.toolName == "removeServer" && $0.permission == .destructive })
+    // 删除服务器是不可逆操作：用户原始请求不能绕过 Runtime 的确认门。
+    #expect(await bridge.removedServers.isEmpty)
+    #expect(await probe.calls == 1)
 }
 
 

@@ -494,7 +494,7 @@ public enum AgentFailureClassifier {
             case .missingCredential, .invalidEndpoint, .unsupportedEndpointProtocol, .insecureEndpoint:
                 return .invalidConfiguration
             case .outputTruncated:
-                // 由 V2 Runtime 缩批恢复；不能触发同一超大请求的通用网络重试。
+                // 由推荐索引 Runtime 缩批恢复；不能触发同一超大请求的通用网络重试。
                 return .permanent
             case let .httpStatus(status):
                 if status == 401 || status == 403 { return .authentication }
