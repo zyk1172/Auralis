@@ -61,7 +61,8 @@ func playlistListIsCanonicalAndReadOnly() {
     let selected = ToolSelector.select(for: "列出我的歌单", all: AgentToolRegistry.all).map(\.name)
     #expect(selected.contains("playlist_list"))
     #expect(!selected.contains("library_get_playlist"))
-    #expect(AgentToolRegistry.descriptor(for: "listPlaylists")?.visibility == .legacyOnly)
+    #expect(AgentToolRegistry.descriptor(for: "listPlaylists")?.name == "playlist_list")
+    #expect(AgentToolRegistry.all.first(where: { $0.name == "listPlaylists" })?.visibility == .legacyOnly)
 }
 
 @Test("Only irreversible deletion descriptors require confirmation")
@@ -103,5 +104,21 @@ func highConfidenceReadsUseDirectCanonicalTools() {
         #expect(selected == [expectedTool])
         #expect(!selected.contains("tool_search"))
         #expect(!selected.contains("library_search"))
+    }
+}
+
+@Test("Direct-read semantics retain explicit list limits")
+func directReadSemanticsCarryRequestedLimits() {
+    let cases: [(String, String, Int)] = [
+        ("列出前 10 个歌单", "playlist_list", 10),
+        ("列出 20 位艺术家", "library_get_artists", 20),
+        ("显示前 30 张专辑", "library_get_albums", 30),
+        ("列出最近播放的 5 首", "library_get_recently_played", 5),
+    ]
+
+    for (text, toolName, limit) in cases {
+        let capability = AgentRequestSemantics.analyze(text).directReadCapability
+        #expect(capability?.toolName == toolName)
+        #expect(capability?.arguments == ["limit": .number(Double(limit))])
     }
 }

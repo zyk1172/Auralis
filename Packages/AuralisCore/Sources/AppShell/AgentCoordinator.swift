@@ -63,9 +63,6 @@ public final class AgentCoordinator: ObservableObject {
     @Published public private(set) var pendingConsent: AIPrivacyConsentRequest?
     /// 当前待用户裁决的不可逆高风险 Agent 操作；普通工具不会进入此状态。
     @Published public private(set) var pendingOperationConfirmation: PendingConfirmation?
-    /// 无界面模式：来自 Siri / 快捷指令等系统入口时置为 true。
-    /// 普通工具调用与有界面模式一致，直接执行；不可逆高风险操作无界面可批准，默认拒绝。
-    public var headless = false
     /// 当前正在运行（或最近一次运行）的 Agent 任务；供 UI 展示步骤与状态。
     @Published public private(set) var activeTask: AgentTaskRecord?
     /// Exactly one transient activity belongs to the current run.  Streaming,
@@ -113,9 +110,15 @@ public final class AgentCoordinator: ObservableObject {
     /// The active session's task is kept for compatibility with synchronous
     /// callers; all live runs are owned by these per-run maps so switching
     /// sessions does not cancel unrelated work.
+    private enum RunMode {
+        case interactive
+        case headless
+    }
+
     private var runTask: Task<Void, Never>?
     private var runTasks: [UUID: Task<Void, Never>] = [:]
     private var runSessions: [UUID: UUID] = [:]
+    private var runModes: [UUID: RunMode] = [:]
     private var runLeases: [UUID: ToolExecutionLease] = [:]
     private var runIDsBySession: [UUID: UUID] = [:]
     private var consentContinuation: CheckedContinuation<AIConsentDecision, Never>?
@@ -429,8 +432,8 @@ public final class AgentCoordinator: ObservableObject {
     }
 
     /// 无界面执行：发送一条消息并等待本轮运行结束，返回助手新增的文本回复。
-    /// 供 Siri / 快捷指令等系统入口调用（此时 headless 临时置为 true）。
-    /// 工具调用直接执行；调用结束恢复原值，不影响 App 内运行状态。
+    /// 供 Siri / 快捷指令等系统入口调用。无界面身份只绑定到本次 run，
+    /// 不会改变 Coordinator 上其他会话的确认能力。
     @discardableResult
     public func sendAndWait(
         _ text: String,
@@ -439,31 +442,33 @@ public final class AgentCoordinator: ObservableObject {
     ) async -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
-        // 确保存在活动会话：send() 在有会话时同步创建 runTask，便于直接等待。
+        // 确保存在活动会话。
         if activeSessionID == nil {
             _ = await newSession()
         }
-        let startCount = messages.count
-        let previousHeadless = headless
-        headless = true
-        defer { headless = previousHeadless }
-        let sessionID = activeSessionID
-        send(trimmed, provider: provider, intent: explicitIntent)
-        let startedRunID = sessionID.flatMap { runIDsBySession[$0] }
-        if let task = startedRunID.flatMap({ runTasks[$0] }) {
-            _ = await task.value
-        } else {
-            // send 走异步建会话路径（理论上不会发生，但保留兜底）：
-            // 短轮询等待 runTask 出现并完成，避免直接返回空结果。
-            for _ in 0..<50 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                if let task = sessionID.flatMap({ runIDsBySession[$0] }).flatMap({ runTasks[$0] }) {
-                    _ = await task.value
-                    break
-                }
-            }
-        }
-        return Self.collectAssistantText(messages.dropFirst(startCount))
+        guard let sessionID = activeSessionID,
+              pendingOperationConfirmation == nil,
+              runIDsBySession[sessionID] == nil
+        else { return "" }
+
+        // Capture both the session and its starting message count. The UI may
+        // switch to another session while this run is awaiting the provider;
+        // the return value must still come from the captured SessionStore row.
+        let startCount = await sessionStore.session(sessionID)?.messages.count ?? 0
+        startRun(
+            text: trimmed,
+            provider: provider,
+            explicitIntent: explicitIntent,
+            sessionID: sessionID,
+            mode: .headless
+        )
+        guard let startedRunID = runIDsBySession[sessionID],
+              let task = runTasks[startedRunID]
+        else { return "" }
+        _ = await task.value
+
+        let sessionMessages = await sessionStore.session(sessionID)?.messages ?? []
+        return Self.collectAssistantText(sessionMessages.dropFirst(startCount))
     }
 
     /// 无界面入口（Siri / 快捷指令）返回给系统调用方的最终文本长度上限。
@@ -499,7 +504,8 @@ public final class AgentCoordinator: ObservableObject {
         text: String,
         provider: (any AIProvider)?,
         explicitIntent: AgentTaskIntent?,
-        sessionID: UUID
+        sessionID: UUID,
+        mode: RunMode = .interactive
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, runIDsBySession[sessionID] == nil else { return }
@@ -566,6 +572,7 @@ public final class AgentCoordinator: ObservableObject {
             generation: executionGeneration
         )
         runSessions[runID] = sessionID
+        runModes[runID] = mode
         runLeases[runID] = executionLease
         runIDsBySession[sessionID] = runID
         currentExecutionLease = executionLease
@@ -612,7 +619,7 @@ public final class AgentCoordinator: ObservableObject {
                         modelName: modelName,
                         permissions: permissions
                     )
-                    switch await self.ensureConsentIfNeeded(consent) {
+                    switch await self.ensureConsentIfNeeded(consent, runID: runID) {
                     case .deny:
                         await self.receive(
                             AgentChatMessage(role: .user, messages: [.text(trimmed)]),
@@ -757,7 +764,7 @@ public final class AgentCoordinator: ObservableObject {
                     modelName: modelName,
                     permissions: permissions
                 )
-                switch await self.ensureConsentIfNeeded(consent) {
+                switch await self.ensureConsentIfNeeded(consent, runID: runID) {
                 case .deny:
                     // 不发起网络请求，只回本地提示（用户消息回显 + 隐私说明）。
                     await self.receive(
@@ -1042,6 +1049,7 @@ public final class AgentCoordinator: ObservableObject {
         }
         runLeases[runID] = nil
         runSessions[runID] = nil
+        runModes[runID] = nil
         runTasks[runID] = nil
         if let sessionID, runIDsBySession[sessionID] == runID {
             runIDsBySession[sessionID] = nil
@@ -1125,6 +1133,7 @@ public final class AgentCoordinator: ObservableObject {
         let sessionID = runSessions[runID]
         runTasks[runID] = nil
         runSessions[runID] = nil
+        runModes[runID] = nil
         runLeases[runID] = nil
         if let sessionID, runIDsBySession[sessionID] == runID {
             runIDsBySession[sessionID] = nil
@@ -1329,11 +1338,14 @@ public final class AgentCoordinator: ObservableObject {
     /// 首次外发确认门槛：`auralis.ai.consentGiven` 已写入则直接放行；
     /// 未写入时挂起，等待 UI 决策（AssistantView 弹确认框）。
     /// 无界面模式（Siri / 快捷指令）没有可见确认框，按默认拒绝处理，不发起网络请求。
-    private func ensureConsentIfNeeded(_ request: AIPrivacyConsentRequest) async -> AIConsentDecision {
+    private func ensureConsentIfNeeded(
+        _ request: AIPrivacyConsentRequest,
+        runID: UUID
+    ) async -> AIConsentDecision {
         if UserDefaults.standard.bool(forKey: Self.consentGivenDefaultsKey) {
             return .allowAndRemember
         }
-        if headless { return .deny }
+        if runModes[runID] == .headless { return .deny }
         // 上一个确认还没结束时直接拒绝，避免弹窗互相覆盖。
         guard consentContinuation == nil else { return .deny }
         pendingConsent = request
@@ -1350,7 +1362,7 @@ public final class AgentCoordinator: ObservableObject {
         runID: UUID,
         sessionID: UUID
     ) async -> Bool {
-        if headless || Task.isCancelled { return false }
+        guard runModes[runID] == .interactive, !Task.isCancelled else { return false }
         guard runSessions[runID] == sessionID,
               runLeases[runID]?.isValidSnapshot == true else { return false }
         guard operationConfirmationContinuations[runID] == nil else { return false }

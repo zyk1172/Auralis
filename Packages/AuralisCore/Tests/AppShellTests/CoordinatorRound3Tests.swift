@@ -83,6 +83,39 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+/// Holds a headless conversation at the Provider boundary so another session
+/// can exercise an interactive destructive confirmation concurrently.
+private final class BlockingAIProvider: AIProvider, @unchecked Sendable {
+    let capabilities = ModelCapabilities(
+        supportsToolCalling: false,
+        supportsStreaming: false,
+        toolMode: .textualToolProtocol
+    )
+    private let gate: CoordinatorIndexGate
+    private let content: String
+
+    init(gate: CoordinatorIndexGate, content: String) {
+        self.gate = gate
+        self.content = content
+    }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "blocking", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        await gate.markEntered()
+        await gate.waitUntilReleased()
+        return AICompletionResponse(model: request.model, content: content)
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+}
+
 private actor CoordinatorIndexGate {
     private var entered = false
     private var released = false
@@ -452,6 +485,78 @@ func operationConfirmationIsScopedToRunAndSession() async throws {
         try? await Task.sleep(for: .milliseconds(5))
     }
     #expect(connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: playlistRemoteID)))
+}
+
+@Test("Headless mode is scoped per run and sendAndWait returns its captured session")
+@MainActor
+func headlessRunDoesNotSuppressInteractiveConfirmationOrLeakSessionText() async throws {
+    let playlistRemoteID = UUID().uuidString
+    let playlist = Playlist(
+        id: PlaylistID(rawValue: playlistRemoteID),
+        serverID: "test-server",
+        name: "待删除",
+        trackIDs: []
+    )
+    let connector = RecordingConnector(
+        result: makeResult(tracks: [makeTrack(remoteID: "remote-1", title: "Only")], playlists: [playlist])
+    )
+    let model = AuralisAppModel(connector: connector, storeURL: temporaryCatalogURL())
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+
+    let sessionA = await coordinator.newSession()
+    let sessionB = await coordinator.newSession()
+    let gid = GlobalID(serverID: "test-server", remoteID: playlistRemoteID)
+    try await model.catalogCoordinator.store.upsertPlaylist(playlist, serverID: "test-server", isReadOnly: false)
+
+    await coordinator.activate(sessionA)
+    let gate = CoordinatorIndexGate()
+    let headlessTask = Task { @MainActor in
+        await coordinator.sendAndWait(
+            "讲一个需要等待的长故事",
+            provider: BlockingAIProvider(gate: gate, content: "A 会话的无界面结果")
+        )
+    }
+    await gate.waitUntilEntered()
+
+    // A is headless and still blocked at the Provider. B must nevertheless
+    // reach its own interactive destructive confirmation.
+    await coordinator.activate(sessionB)
+    let providerB = ScriptedAIProvider(
+        actionBatches: ["ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(gid.description)\"}}"],
+        closing: "B 会话删除完成。"
+    )
+    coordinator.send("删除歌单", provider: providerB)
+    for _ in 0..<500 {
+        if coordinator.pendingOperationConfirmation != nil { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(coordinator.pendingOperationConfirmation != nil)
+
+    coordinator.approveOperationConfirmation()
+    for _ in 0..<500 where coordinator.isRunning {
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: playlistRemoteID)))
+
+    // Keep the UI on B while A completes. sendAndWait must read A's
+    // SessionStore messages rather than the currently published B messages.
+    await coordinator.activate(sessionB)
+    await gate.release()
+    let reply = await headlessTask.value
+    #expect(reply == "A 会话的无界面结果")
 }
 
 @Test("删除等待确认的会话会自动拒绝并清理确认")

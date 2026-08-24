@@ -1,3 +1,4 @@
+import AIKit
 import Foundation
 
 /// The single semantic result shared by routing, ranking and authorization.
@@ -34,29 +35,13 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
     /// A high-confidence local read has one canonical entry point. This drives
     /// both deterministic routing for the narrow read scenarios and schema
     /// ranking for less specific follow-ups; ToolRuntime remains the executor.
-    public enum DirectReadCapability: String, Codable, Sendable, Hashable {
-        case librarySummary
-        case catalogArtists
-        case catalogAlbums
-        case playlistList
-        case playbackState
-        case queueGet
-        case favorites
-        case recentHistory
-        case serverList
+    public struct DirectReadCapability: Codable, Sendable, Hashable {
+        public let toolName: String
+        public let arguments: [String: AIJSONValue]
 
-        public var toolName: String {
-            switch self {
-            case .librarySummary: "library_get_summary"
-            case .catalogArtists: "library_get_artists"
-            case .catalogAlbums: "library_get_albums"
-            case .playlistList: "playlist_list"
-            case .playbackState: "playback_get_state"
-            case .queueGet: "queue_get"
-            case .favorites: "library_get_starred"
-            case .recentHistory: "library_get_recently_played"
-            case .serverList: "server_list"
-            }
+        public init(toolName: String, arguments: [String: AIJSONValue] = [:]) {
+            self.toolName = toolName
+            self.arguments = arguments
         }
     }
 
@@ -134,7 +119,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         // “播放列表/播放队列/播放状态” contain “播放” but are not
         // playback mutations. Keep the verb signal separate from nouns.
         let barePlaybackVerb = has(["播放"])
-            && !has(["播放列表", "播放队列", "播放状态", "正在播放什么", "当前播放什么"])
+            && !has(["播放列表", "播放队列", "播放状态", "正在播放什么", "当前播放什么", "最近播放", "最近听过", "播放历史"])
         let explicitPlaybackAction = has([
             "先放", "放一首", "放一组", "放几首", "直接放", "给我放", "暂停", "下一首", "上一首", "继续播放", "快进", "快退", "跳转", "循环播放",
             "随机播放", "play", "playback", "pause", "resume", "next track", "previous track",
@@ -249,7 +234,9 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let playbackQuery = query && has(["正在播放", "当前播放", "播放状态", "播放什么", "播放哪首", "now playing", "playback state"])
         let librarySummaryQuery = has(["资料库统计", "曲库统计", "音乐库统计", "资料库概况", "曲库概况", "音乐库概况"])
         let artistListQuery = has(["列出歌手", "歌手列表", "有哪些歌手", "艺人列表", "列出艺人", "有哪些艺人", "艺术家列表", "列出艺术家"])
+            || (has(["列出", "显示", "查看", "获取"]) && has(["歌手", "艺人", "艺术家"]))
         let albumListQuery = has(["列出专辑", "专辑列表", "有哪些专辑", "album list", "list albums"])
+            || (has(["列出", "显示", "查看", "获取"]) && has(["专辑", "album"]))
         let directReadTopicCount = [
             has(["歌单", "播放列表", "playlist"]),
             has(["播放队列", "队列", "queue"]),
@@ -266,40 +253,41 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "后检查", "后查看", "后查询", "后再", "然后", "并检查", "并查看", "并列出", "以及",
             "同时", "再看看", "再查", "再查看", "再列出", "and then", "after that"
         ])
+        let requestedLimit = Self.requestedLimit(in: current)
         let directReadCapability: DirectReadCapability? = {
             guard query, !isCompoundReadRequest else { return nil }
             if has(["歌单", "播放列表", "playlist"]) && !explicitPlaylistAction {
-                return .playlistList
+                return Self.directRead("playlist_list", limit: requestedLimit)
             }
             if has(["播放队列", "队列", "queue"]) && !explicitQueueAction {
-                return .queueGet
+                return Self.directRead("queue_get")
             }
             if playbackQuery && !explicitPlaybackAction {
-                return .playbackState
+                return Self.directRead("playback_get_state")
             }
             if collectionQuery {
-                return .favorites
+                return Self.directRead("library_get_starred")
             }
             if has(["最近播放", "最近听过", "播放历史", "recent history"])
                 && !explicitPlaybackAction {
-                return .recentHistory
+                return Self.directRead("library_get_recently_played", limit: requestedLimit)
             }
             if librarySummaryQuery {
-                return .librarySummary
+                return Self.directRead("library_get_summary")
             }
             if quantityQuery && has(["歌曲", "歌手", "艺人", "专辑", "歌单", "曲库", "音乐库"]) {
-                return .librarySummary
+                return Self.directRead("library_get_summary")
             }
             if artistListQuery
                 && !explicitPlaylistAction {
-                return .catalogArtists
+                return Self.directRead("library_get_artists", limit: requestedLimit)
             }
             if albumListQuery && !explicitPlaylistAction {
-                return .catalogAlbums
+                return Self.directRead("library_get_albums", limit: requestedLimit)
             }
             if has(["服务器列表", "列出服务器", "有哪些服务器", "已连接服务器", "list servers", "server list"])
                 && !serverMutation {
-                return .serverList
+                return Self.directRead("server_list")
             }
             return nil
         }()
@@ -464,6 +452,30 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
     private static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func directRead(_ toolName: String, limit: Int? = nil) -> DirectReadCapability {
+        let arguments = limit.map { ["limit": AIJSONValue.number(Double($0))] } ?? [:]
+        return DirectReadCapability(toolName: toolName, arguments: arguments)
+    }
+
+    /// Extract an explicit list size without making the direct-read route
+    /// depend on the model. Tool-specific maximums remain enforced by the
+    /// canonical executor.
+    private static func requestedLimit(in text: String) -> Int? {
+        let pattern = #"(?:前|最多|显示|列出|查看|获取|最近播放(?:的)?|最近听过(?:的)?)\s*(?:的\s*)?(\d{1,4})\s*(?:个|位|张|首|条|项)?|(?:^|[^\d])(\d{1,4})\s*(?:个|位|张|首|条|项)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
+        for index in 1..<match.numberOfRanges {
+            let capture = match.range(at: index)
+            guard capture.location != NSNotFound,
+                  let value = Int((text as NSString).substring(with: capture)),
+                  value > 0
+            else { continue }
+            return value
+        }
+        return nil
     }
 
     private static func isContinuation(_ value: String) -> Bool {

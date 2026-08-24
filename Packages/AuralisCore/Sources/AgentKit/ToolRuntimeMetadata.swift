@@ -235,6 +235,11 @@ public struct ToolDefinition: Sendable, Identifiable {
 public enum ToolCoverageIssue: Sendable, Equatable, Hashable {
     case duplicateCanonicalName(String)
     case aliasTargetMissing(alias: String, target: String)
+    case emptyAlias(target: String)
+    case invalidAlias(alias: String, target: String)
+    case aliasCanonicalConflict(alias: String, target: String)
+    case duplicateAlias(alias: String, targets: [String])
+    case aliasLookupMismatch(alias: String, expected: String, actual: String?)
     case modelMutationMissingOperation(String)
     case modelMutationMissingScope(String)
     case destructiveMutationMissingApproval(String)

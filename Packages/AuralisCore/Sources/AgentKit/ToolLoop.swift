@@ -264,6 +264,7 @@ public struct ToolLoop {
            let directDescriptor = descriptor(named: directReadCapability.toolName, in: availableToolDescriptors) {
             await runDirectReadFastPath(
                 descriptor: directDescriptor,
+                arguments: directReadCapability.arguments,
                 providerCapabilities: provider?.capabilities,
                 bridge: bridge,
                 catalog: catalog,
@@ -422,6 +423,7 @@ public struct ToolLoop {
     /// in exactly one target tool call.
     private static func runDirectReadFastPath(
         descriptor: ToolDescriptor,
+        arguments: [String: AIJSONValue],
         providerCapabilities: ModelCapabilities?,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
@@ -436,7 +438,7 @@ public struct ToolLoop {
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
-        let call = ToolCall(name: descriptor.name)
+        let call = ToolCall(name: descriptor.name, arguments: arguments)
         await progress(AgentProgress(toolSteps: 1, currentStep: "读取 \(descriptor.summary)"))
 
         let result: ToolResult

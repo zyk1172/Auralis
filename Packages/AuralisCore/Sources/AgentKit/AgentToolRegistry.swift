@@ -1260,21 +1260,43 @@ public enum AgentToolRegistry {
         }
     }
 
+    /// Resolve a canonical alias before a legacy descriptor with the same
+    /// exact name. This makes compatibility names such as `listPlaylists`
+    /// execute through the canonical `playlist_list` metadata and executor.
+    private static func canonicalAliasDescriptor(
+        for name: String,
+        in descriptors: [ToolDescriptor]
+    ) -> ToolDescriptor? {
+        descriptors.first {
+            $0.visibility != .legacyOnly && $0.aliases.contains(name)
+        }
+    }
+
     public static func descriptor(for name: String) -> ToolDescriptor? {
-        all.first { $0.name == name }
+        canonicalAliasDescriptor(for: name, in: all)
+            ?? all.first { $0.name == name }
             ?? all.first { $0.aliases.contains(name) }
     }
 
     public static func definition(for name: String) -> ToolDefinition? {
-        definitions.first { definition in
-            definition.descriptor.name == name
-                || definition.descriptor.aliases.contains(name)
+        definitions.first {
+            $0.descriptor.visibility != .legacyOnly
+                && $0.descriptor.aliases.contains(name)
         }
+        ?? definitions.first { $0.descriptor.name == name }
+        ?? definitions.first { $0.descriptor.aliases.contains(name) }
     }
 
     public static func coverageAudit() -> ToolCoverageAudit {
         var issues: [ToolCoverageIssue] = []
         var names = Set<String>()
+        var aliasOwners: [String: [String]] = [:]
+        let descriptors = definitions.map(\.descriptor)
+        let canonicalNames = Set(
+            descriptors
+                .filter { $0.visibility != .legacyOnly }
+                .map(\.name)
+        )
         for definition in definitions {
             let descriptor = definition.descriptor
             if !names.insert(descriptor.name).inserted {
@@ -1298,16 +1320,40 @@ public enum AgentToolRegistry {
             case .catalog, .web, .systemService, .agentBridge, .recommendationSkill, .legacyCompatibility:
                 break
             }
-            // Aliases are stored on the canonical descriptor itself.  Do not
-            // resolve them through the public runtime lookup here: a legacy
-            // descriptor may intentionally retain the same alias name for
-            // source compatibility, while the canonical model descriptor is
-            // still present in `definitions`.
-            for alias in descriptor.aliases where !definitions.contains(where: { $0.descriptor.name == descriptor.name }) {
-                issues.append(.aliasTargetMissing(alias: alias, target: descriptor.name))
+            for alias in descriptor.aliases {
+                if alias.isEmpty {
+                    issues.append(.emptyAlias(target: descriptor.name))
+                    continue
+                }
+                if !Self.isValidAlias(alias) {
+                    issues.append(.invalidAlias(alias: alias, target: descriptor.name))
+                }
+                // A legacy exact name is an allowed compatibility target;
+                // another canonical name is an accidental collision.
+                if alias == descriptor.name || canonicalNames.contains(alias) {
+                    issues.append(.aliasCanonicalConflict(alias: alias, target: descriptor.name))
+                }
+                aliasOwners[alias, default: []].append(descriptor.name)
+            }
+        }
+
+        for (alias, owners) in aliasOwners {
+            let uniqueOwners = Array(Set(owners)).sorted()
+            if owners.count > 1 {
+                issues.append(.duplicateAlias(alias: alias, targets: uniqueOwners))
+            }
+            guard let expected = uniqueOwners.first else { continue }
+            let actual = Self.descriptor(for: alias)?.name
+            if actual != expected {
+                issues.append(.aliasLookupMismatch(alias: alias, expected: expected, actual: actual))
             }
         }
         return ToolCoverageAudit(issues: issues)
+    }
+
+    private static func isValidAlias(_ alias: String) -> Bool {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-.="))
+        return alias.unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
     /// 元数据查找与执行的唯一公开入口。调用方无需再判断系统工具或旧工具分支。
@@ -1348,9 +1394,19 @@ public enum AgentToolRegistry {
             )
         }
         let descriptor = definition.descriptor
-        let call = incomingCall.name == descriptor.name
-            ? incomingCall
-            : ToolCall(name: descriptor.name, arguments: incomingCall.arguments)
+        // Canonical aliases own the resolved metadata. If the incoming name
+        // is also a retained legacy exact descriptor, keep that spelling in
+        // the result for source compatibility; the canonical descriptor still
+        // controls permission and execution.
+        let call: ToolCall = if all.contains(where: {
+            $0.name == incomingCall.name && $0.visibility == .legacyOnly
+        }) {
+            incomingCall
+        } else if incomingCall.name == descriptor.name {
+            incomingCall
+        } else {
+            ToolCall(name: descriptor.name, arguments: incomingCall.arguments)
+        }
         let context = executionContext ?? ToolExecutorContext(
             bridge: bridge,
             catalog: catalog,
@@ -1396,9 +1452,20 @@ public enum AgentToolRegistry {
         let recommendationIndexExecutionRegistry = context.recommendationIndexExecutionRegistry
         let incomingCall = call
         let canonicalDescriptor = descriptor
-        let canonicalCall = incomingCall.name == canonicalDescriptor.name
-            ? incomingCall
-            : ToolCall(name: canonicalDescriptor.name, arguments: incomingCall.arguments)
+        // Metadata lookup gives a canonical descriptor precedence over a
+        // legacy exact descriptor with the same spelling. Preserve that
+        // legacy spelling in the actual call, however, so compatibility
+        // callers retain their result name while the canonical descriptor
+        // still supplies permission/schema/executor metadata.
+        let canonicalCall: ToolCall = if all.contains(where: {
+            $0.name == incomingCall.name && $0.visibility == .legacyOnly
+        }) {
+            incomingCall
+        } else if incomingCall.name == canonicalDescriptor.name {
+            incomingCall
+        } else {
+            ToolCall(name: canonicalDescriptor.name, arguments: incomingCall.arguments)
+        }
 
         if canonicalDescriptor.customToolID != nil {
             return await context.customToolRegistry.execute(

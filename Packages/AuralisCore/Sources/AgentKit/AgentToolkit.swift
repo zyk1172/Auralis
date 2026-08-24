@@ -427,12 +427,14 @@ public struct AgentToolkit {
 
         // 本地库查询
         case "library_get_summary":
-            let tracks = try await catalog.allTrackSummaries(serverID: serverID)
-            let artists = Set(tracks.map(\.artistName)).count
-            let albums = Set(tracks.map(\.albumTitle)).count
+            // CatalogIndex is the authoritative entity-count source. Its
+            // aggregation keys are Global IDs, so same-named artists or
+            // albums remain distinct entities instead of being merged by
+            // display text.
+            let index = try await catalog.makeCatalogIndex(serverID: serverID)
             let favorites = try await catalog.getFavorites(serverID: serverID).count
-            return .ok(call, descriptor, "\(tracks.count) 首歌曲、\(artists) 位艺术家、\(albums) 张专辑、\(favorites) 首收藏",
-                       .text("\(tracks.count) 首歌曲 · \(artists) 位艺术家 · \(albums) 张专辑 · \(favorites) 首收藏"))
+            return .ok(call, descriptor, "\(index.songCount) 首歌曲、\(index.artistCount) 位艺术家、\(index.albumCount) 张专辑、\(favorites) 首收藏",
+                       .text("\(index.songCount) 首歌曲 · \(index.artistCount) 位艺术家 · \(index.albumCount) 张专辑 · \(favorites) 首收藏"))
         case "library_get_artists":
             let limit = min(max((try? intParam(call, "limit")) ?? 100, 1), 500)
             let artists = try await catalog.allArtists(serverID: serverID, limit: limit)
@@ -1206,6 +1208,9 @@ public struct AgentToolkit {
     }
 
     private static func intParam(_ call: ToolCall, _ key: String) throws -> Int {
+        if let value = try? call.int(key) {
+            return value
+        }
         let raw = try require(call, key)
         guard let value = Int(raw) else { throw AgentToolError.invalidParameter(key, raw) }
         return value

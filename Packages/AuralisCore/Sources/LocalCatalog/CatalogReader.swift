@@ -873,8 +873,10 @@ extension LocalCatalogStore {
         var langAgg: [String: Int] = [:]
         var yearAgg: [Int: Int] = [:]
         for track in tracks {
-            let aKey = normalized(track.artistName)
-            let albumKey = "\(aKey)|\(normalized(track.albumTitle))"
+            // Entity identity is the server-qualified remote ID. Display
+            // names are presentation only and may legitimately collide.
+            let aKey = GlobalID(serverID: track.serverID, remoteID: track.artistID.rawValue).description
+            let albumKey = GlobalID(serverID: track.serverID, remoteID: track.albumID.rawValue).description
             if artistAgg[aKey] == nil {
                 artistAgg[aKey] = (name: track.artistName, albums: [], songs: 0)
             }
