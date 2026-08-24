@@ -1,11 +1,16 @@
 import AIKit
 import Foundation
 
-/// Generic extension point retained for future trusted workflows. The
-/// Recommendation Index no longer uses this model/tool adapter: its dedicated
-/// Runtime owns preparation, the closed transform and commit directly.
+/// Generic extension point retained for trusted workflows. The Recommendation
+/// Index uses its dedicated Runtime directly; fixed multi-step mutation skills
+/// (QueueReplacePlayback / PlaylistBuild) use this adapter so their internal
+/// canonical tool calls still flow through ToolRuntime's authorization,
+/// validation, lease and confirmation path inside `runWithLLM`.
 public enum AgentSkillStep: Sendable, Equatable {
+    /// Skill 强制执行的 canonical tool call（跳过模型 turn，直接走 ToolRuntime）。
     case executeTool(name: String, arguments: [String: AIJSONValue])
+    /// 候选收集阶段：模型自由调用 read / selection 工具，Skill 不强制任何调用。
+    case freeModelTurn
     case modelOutput(AgentSkillOutputContract)
     case completed(message: String)
 }
@@ -46,8 +51,12 @@ public protocol AgentStatefulSkillRuntime: AnyObject, Sendable {
     var isCompleted: Bool { get }
     var instructions: String { get }
     var facts: [String: String] { get }
+    /// 激活该 Skill 所必需的最小授权操作（与 Skill 定义一致，供授权子集验证）。
+    var requiredOperations: Set<ToolAuthorizationOperation> { get }
 
     func configure(maxOutputTokens: Int)
+    /// 消费当前 run 的授权（只读验证用；Skill 不得自行扩权）。
+    func configure(authorization: SideEffectAuthorizationContext)
     func nextStep() -> AgentSkillStep
     func consumeModelOutput(_ text: String, contract: AgentSkillOutputContract) -> AgentSkillModelOutput
     func prepareToolCall(name: String, arguments: [String: AIJSONValue]) -> [String: AIJSONValue]
@@ -61,28 +70,52 @@ public protocol AgentStatefulSkillRuntime: AnyObject, Sendable {
     func checkpointJSON() -> String?
 }
 
+public extension AgentStatefulSkillRuntime {
+    func configure(authorization: SideEffectAuthorizationContext) {}
+    var requiredOperations: Set<ToolAuthorizationOperation> { [] }
+}
+
 public protocol AgentStatefulSkill: Sendable {
     var id: String { get }
     var name: String { get }
     var instructions: String { get }
     var privateToolNames: Set<String> { get }
+    /// Skill 激活所必须的最小授权操作集合。runWithLLM 激活后必须验证
+    /// requiredOperations ⊆ 当前 allowedOperations，否则不激活。
+    var requiredOperations: Set<ToolAuthorizationOperation> { get }
 
     func canActivate(semantics: AgentRequestSemantics, userText: String, initialTaskState: AgentTaskState?) -> Bool
     func makeRuntime(checkpointJSON: String?) -> any AgentStatefulSkillRuntime
 }
 
-/// No built-in workflow is projected through the generic model/tool adapter.
-/// Deterministic workflows are routed by `WorkflowEngine` to their dedicated
-/// Runtime before the ordinary tool loop starts.
+public extension AgentStatefulSkill {
+    var requiredOperations: Set<ToolAuthorizationOperation> { [] }
+}
+
+/// Built-in fixed skills：稳定、多步骤、mutation 顺序确定的组合任务。
+/// 激活由 `canActivate`（语义触发）+ runWithLLM 的授权子集验证（授权确认）
+/// 双重决定；Skill-owned mutation 对模型隐藏，由 Skill 内部固定调用 ToolRuntime。
 public enum BuiltInStatefulSkillRegistry {
-    public static let all: [any AgentStatefulSkill] = []
+    public static let all: [any AgentStatefulSkill] = [
+        BuiltInQueueReplacePlaybackSkill(),
+        BuiltInPlaylistBuildSkill(),
+    ]
 
     public static func activate(
         semantics: AgentRequestSemantics,
         userText: String,
         initialTaskState: AgentTaskState?
     ) -> (any AgentStatefulSkillRuntime)? {
-        nil
+        for skill in all where skill.canActivate(
+            semantics: semantics,
+            userText: userText,
+            initialTaskState: initialTaskState
+        ) {
+            return skill.makeRuntime(
+                checkpointJSON: initialTaskState?.facts["builtin.skill.checkpoint"]
+            )
+        }
+        return nil
     }
 }
 
