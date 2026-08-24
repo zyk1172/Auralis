@@ -193,6 +193,7 @@ public struct ToolLoop {
         executionLineage: ExecutionLineage? = nil,
         requestPlan: AgentRequestPlan? = nil,
         convergencePolicy: AgentConvergencePolicy? = nil,
+        enabledFixedSkills: Bool = true,
         runID: UUID = UUID(),
         executionLease: ToolExecutionLease? = nil,
         toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
@@ -410,6 +411,7 @@ public struct ToolLoop {
                     policy: resolvedPolicy,
                     initialTaskState: initialTaskState,
                     sideEffectAuthorization: resolvedAuthorization,
+                    enabledFixedSkills: enabledFixedSkills,
                     runID: runID,
                     executionLease: resolvedExecutionLease,
                     toolTimeout: toolTimeout,
@@ -593,8 +595,6 @@ public struct ToolLoop {
         // It stops a backend that keeps returning no new evidence while all
         // unrelated tools and ordinary conversation remain available.
         var searchEvidenceByTool: [String: Set<String>] = [:]
-        var searchNoNewEvidenceStreak: [String: Int] = [:]
-        var exhaustedSearchTools = Set<String>()
         // Generic chat has no task completion evaluator, but read-only music
         // results still need the same buffered UI presentation contract as
         // deterministic tasks: collect cards during tool turns and emit them
@@ -806,8 +806,10 @@ public struct ToolLoop {
                     ))
                     continue
                 }
+                // malformed streak 只对“真正连续”的畸形调用生效。
+                convergence.recordValidCall()
                 let signature = confirmationSignature(name: call.name, args: call.stringArguments)
-                if exhaustedSearchTools.contains(call.name) {
+                if convergence.exhaustedSearchTools.contains(call.name) {
                     resultMessages.append(toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name)：本轮该搜索能力连续没有提供新证据，已停止继续搜索；请基于已有结果直接回答，并如实说明没有找到的部分。",
@@ -980,22 +982,24 @@ public struct ToolLoop {
                     resultText = "（工具执行结果）lyrics_get：成功 - 歌词已按隐私设置隐藏。"
                 }
                 resultText = ContextManager.truncateToolResult(resultText, limit: descriptor.maxResultCharacters)
-                if result.success,
-                   Self.isSearchCapability(call.name),
-                   let evidence = Self.searchEvidenceIDs(from: result.payload) {
-                    let known = searchEvidenceByTool[call.name, default: []]
-                    let newEvidence = evidence.subtracting(known)
-                    searchEvidenceByTool[call.name, default: []].formUnion(evidence)
-                    if newEvidence.isEmpty {
-                        let streak = (searchNoNewEvidenceStreak[call.name] ?? 0) + 1
-                        searchNoNewEvidenceStreak[call.name] = streak
-                        if streak >= 3 {
-                            exhaustedSearchTools.insert(call.name)
-                            selectedTools.removeAll { $0.name == call.name }
-                            resultText += "\n（搜索收敛）\(call.name) 已连续 \(streak) 次没有提供新证据，本轮不再暴露该搜索能力。请直接根据已有事实回答；若没有结果，请明确说明。"
-                        }
-                    } else {
-                        searchNoNewEvidenceStreak[call.name] = 0
+                // 搜索收敛（generic chat 与 deterministic task 共用同一 tracker）：
+                // 结果返回后判定是否产生新 evidence，按工具独立累计 streak，达阈值移除工具。
+                // 失败/空结果也视为“没有新证据”，防止反复失败不收敛。
+                if Self.isSearchCapability(call.name) {
+                    var foundNewEvidence = false
+                    if result.success, let evidence = Self.searchEvidenceIDs(from: result.payload) {
+                        let known = searchEvidenceByTool[call.name, default: []]
+                        foundNewEvidence = !evidence.isSubset(of: known)
+                        searchEvidenceByTool[call.name, default: []].formUnion(evidence)
+                    }
+                    let exhausted = convergence.recordSearchOutcome(
+                        toolName: call.name,
+                        foundNewEvidence: foundNewEvidence,
+                        policy: convergencePolicy
+                    )
+                    if exhausted {
+                        selectedTools.removeAll { $0.name == call.name }
+                        resultText += "\n（搜索收敛）\(call.name) 已连续 \(convergencePolicy.maxSameToolNoNewEvidence) 次没有提供新证据，本轮不再暴露该搜索能力。请直接根据已有事实回答；若没有结果，请明确说明。"
                     }
                 }
                 if descriptor.permission == .readOnly, descriptor.cachePolicy == .task, result.success {
@@ -1107,6 +1111,7 @@ public struct ToolLoop {
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
         sideEffectAuthorization: SideEffectAuthorizationContext,
+        enabledFixedSkills: Bool,
         runID: UUID,
         executionLease: ToolExecutionLease,
         toolTimeout: TimeInterval,
@@ -1131,21 +1136,47 @@ public struct ToolLoop {
             return
         }
         var taskState = initialTaskState ?? AgentTaskState(intent: intent, goal: userText)
+        // 结构化诊断：只记行为事实，不含凭据/敏感数据。
+        var diagnostics = AgentRunDiagnostics(runID: runID)
+        diagnostics.intent = intent.rawValue
+        diagnostics.semanticDomain = plan.semantics.domain.rawValue
+        diagnostics.semanticOperation = plan.semantics.operation.rawValue
+        diagnostics.requestedOperations = plan.semantics.requestedOperations.map(\.rawValue).sorted()
+        diagnostics.allowedOperations = effectiveAuthorization.allowedOperations.map(\.rawValue).sorted()
+        diagnostics.completionPredicate = policy.completion.predicateName
         // Stateful Skill 激活复用同一份共享 semantics，不再独立分析。
         let skillSemantics = plan.semantics
-        let activeSkill = BuiltInStatefulSkillRegistry.activate(
-            semantics: skillSemantics,
-            userText: userText,
-            initialTaskState: initialTaskState
-        )
+        var activeSkill: (any AgentStatefulSkillRuntime)?
+        if enabledFixedSkills {
+            activeSkill = BuiltInStatefulSkillRegistry.activate(
+                semantics: skillSemantics,
+                userText: userText,
+                initialTaskState: initialTaskState
+            )
+            // Skill 授权子集验证：Skill 只能消费用户原始请求已经明确授权的 operation。
+            // requiredOperations ⊄ allowedOperations → 不激活（Skill 自己不能扩权），
+            // 走普通 loop；Runtime 仍会对任何 mutation 做 exact authorization。
+            if let skill = activeSkill,
+               !skill.requiredOperations.isSubset(of: effectiveAuthorization.allowedOperations) {
+                activeSkill = nil
+            }
+        }
         let activeSkillID = activeSkill?.skillID
         activeSkill?.configure(maxOutputTokens: provider.capabilities.maxOutputTokens)
+        activeSkill?.configure(authorization: effectiveAuthorization)
         Self.mergeSkillFacts(activeSkill, into: &taskState)
         var selectedTools = ToolSelector.select(
             plan: plan,
             all: availableToolDescriptors,
             activeSkillID: activeSkillID
         )
+        // Skill 激活后：Skill 主路径的 mutation 由 Skill 内部固定调用 ToolRuntime，
+        // 不暴露给模型选择（避免 queue_clear / queue_append 等破坏主路径的 alternatives）。
+        if let activeSkill {
+            selectedTools.removeAll { activeSkill.ownedToolNames.contains($0.name) }
+            diagnostics.activeSkillID = activeSkill.skillID
+        }
+        for tool in selectedTools { diagnostics.recordSelectedTool(tool.name) }
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
         var toolDefinitions = nativeMode
             ? ToolSelector.toolDefinitions(
@@ -1232,15 +1263,6 @@ public struct ToolLoop {
         // Mutation / deterministic 任务的模型正文是 provisional：完成条件满足前
         // 不实时上屏，避免“已经替换好了”在真实副作用成功前误导用户。
         let buffersProvisionalText = Self.policyRequiresToolExecution(policy)
-        // 结构化诊断：只记行为事实，不含凭据/敏感数据。
-        var diagnostics = AgentRunDiagnostics(runID: runID)
-        diagnostics.intent = intent.rawValue
-        diagnostics.semanticDomain = plan.semantics.domain.rawValue
-        diagnostics.semanticOperation = plan.semantics.operation.rawValue
-        diagnostics.requestedOperations = plan.semantics.requestedOperations.map(\.rawValue).sorted()
-        diagnostics.allowedOperations = effectiveAuthorization.allowedOperations.map(\.rawValue).sorted()
-        diagnostics.completionPredicate = policy.completion.predicateName
-        for tool in selectedTools { diagnostics.recordSelectedTool(tool.name) }
 
         while true {
             if Task.isCancelled {
@@ -1252,6 +1274,19 @@ public struct ToolLoop {
                 return
             }
             convergence.recordModelRound()
+            // Skill 阶段诊断：从 Skill facts 同步（不含凭据/敏感数据）。
+            if let activeSkill {
+                diagnostics.skillPhase = activeSkill.facts["queue.skill.phase"]
+                    ?? activeSkill.facts["playlist.skill.phase"]
+                diagnostics.skillTransitionCount = Int(
+                    activeSkill.facts["queue.skill.transitions"]
+                        ?? activeSkill.facts["playlist.skill.transitions"]
+                        ?? ""
+                ) ?? 0
+                if activeSkill.isCompleted {
+                    diagnostics.skillCompletionResult = "completed"
+                }
+            }
             taskState.diagnostics = diagnostics
             if let stopReason = convergence.stopReason(under: policy.convergence) {
                 let message = stopReason.userMessage
@@ -1288,6 +1323,11 @@ public struct ToolLoop {
             for tool in expanded where !haveNames.contains(tool.name) {
                 merged.append(tool)
                 haveNames.insert(tool.name)
+            }
+            // Skill 激活时：Skill-owned mutation 永不进入模型 schema（主路径由 Skill
+            // 内部固定调用 ToolRuntime），模型可见的只有 read/selection 工具。
+            if let activeSkill {
+                merged.removeAll { activeSkill.ownedToolNames.contains($0.name) }
             }
             // TaskRequiredTools：本轮已实际执行过的工具永远保留在 schema 中。
             if !ws.perToolCounts.isEmpty {
@@ -1857,6 +1897,9 @@ public struct ToolLoop {
                     }
                     continue
                 }
+                // malformed streak 只对“真正连续”的畸形调用生效：
+                // 任意合法 ToolCall 都清零该 streak。
+                convergence.recordValidCall()
 
                 if let activeSkill,
                    activeSkill.ownedToolNames.contains(call.name),
@@ -1919,6 +1962,15 @@ public struct ToolLoop {
                     var text = cachedText
                     if AgentTaskWorkingSet.isSearchTool(call.name) {
                         _ = ws.observeCandidates([])
+                        // 缓存命中 = 同一搜索再次请求但没有任何新结果：计入收敛 streak。
+                        let exhausted = convergence.recordSearchOutcome(
+                            toolName: call.name,
+                            foundNewEvidence: false,
+                            policy: policy.convergence
+                        )
+                        if exhausted {
+                            selectedTools.removeAll { $0.name == call.name }
+                        }
                         if ws.noNewResultsStreak >= AgentTaskWorkingSet.noNewResultsLimit {
                             text += "\n（提示）同一搜索已执行 \(ws.noNewResultsStreak) 次且没有新结果，当前已获得 \(ws.uniqueSongIDs.count) 首唯一候选。可以基于现有候选回答，或换一个搜索词/换一种策略继续。"
                         }
@@ -2007,13 +2059,9 @@ public struct ToolLoop {
                 let authorizationForCall = effectiveAuthorization
                 let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
                 let executionCallID = call.id
-                // 真正执行：identical streak / 搜索无新证据只在执行处累计。
-                convergence.recordToolCall(
-                    signature: convergenceSignature,
-                    executed: true,
-                    isSearch: AgentTaskWorkingSet.isSearchTool(call.name),
-                    foundNewEvidence: false
-                )
+                // 真正执行：identical signature streak 只在执行处累计；
+                // totalToolCalls 已在调用层 recordTotalCall() 计过一次，这里不再计。
+                convergence.recordToolExecution(signature: convergenceSignature)
                 do {
                     result = try await Self.withTimeout(effectiveToolTimeout) {
                         await ToolRuntime.executeMeasured(
@@ -2121,7 +2169,8 @@ public struct ToolLoop {
                         limit: limit,
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
-                        allowedOperations: effectiveAuthorization.allowedOperations
+                        allowedOperations: effectiveAuthorization.allowedOperations,
+                        excludedNames: activeSkill?.ownedToolNames ?? []
                     )
                     let addedDiscoveredTool = !discoveredEntries.isEmpty
                     diagnostics.recordToolSearch(query: query, returned: discoveredEntries.map(\.name))
@@ -2144,8 +2193,10 @@ public struct ToolLoop {
                         return
                     }
                 }
-                if let activeSkill,
-                   activeSkill.ownedToolNames.contains(call.name) {
+                // Skill 需要消费所有工具结果（不只 owned mutation）：
+                // read / selection 工具（如 result_present_tracks）是候选提交信号，
+                // Skill 据此推进状态机；owned mutation 结果用于确定性验证。
+                if let activeSkill {
                     switch activeSkill.consumeToolResult(name: call.name, result: result) {
                     case .compactTranscript:
                         shouldCompactSkillTranscript = true
@@ -2221,12 +2272,31 @@ public struct ToolLoop {
                 }
 
                 // ④ 更新工作集：先观察候选（决定是否触发停止搜索），再缓存最终结果。
-                if let payload = result.payload, case let .trackCards(cards) = payload {
-                    let ids = cards.map(\.globalID)
-                    let noNew = ws.observeCandidates(ids)
-                    // 连续多次无新结果 → 信息性提示（不终止任务，模型可换策略）。
-                    if noNew, ws.noNewResultsStreak >= AgentTaskWorkingSet.noNewResultsLimit {
-                        resultText += "\n（提示）搜索已连续 \(ws.noNewResultsStreak) 次没有新结果，当前已获得 \(ws.uniqueSongIDs.count) 首唯一候选。可以基于现有候选回答，或换一个搜索词/换一种策略继续。"
+                // 搜索收敛：结果返回后再判定是否产生新 evidence（working set 候选指纹
+                // before/after 对比），按工具独立累计 streak；达阈值从 schema 移除。
+                if AgentTaskWorkingSet.isSearchTool(call.name) {
+                    var foundNewEvidence = false
+                    if let payload = result.payload, case let .trackCards(cards) = payload {
+                        let noNew = ws.observeCandidates(cards.map(\.globalID))
+                        foundNewEvidence = !noNew
+                    }
+                    let exhausted = convergence.recordSearchOutcome(
+                        toolName: call.name,
+                        foundNewEvidence: foundNewEvidence,
+                        policy: policy.convergence
+                    )
+                    if exhausted {
+                        selectedTools.removeAll { $0.name == call.name }
+                        if nativeMode {
+                            toolDefinitions = ToolSelector.toolDefinitions(
+                                from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
+                                strict: provider.capabilities.supportsStrictSchema,
+                                activeSkillID: activeSkillID
+                            )
+                        }
+                        resultText += "\n（搜索收敛）\(call.name) 已连续 \(policy.convergence.maxSameToolNoNewEvidence) 次没有提供新证据，本轮不再暴露该搜索能力。请直接根据已有事实回答；若没有结果，请明确说明。"
+                    } else if !foundNewEvidence, (convergence.searchNoNewEvidenceStreakByTool[call.name] ?? 0) >= 2 {
+                        resultText += "\n（提示）该搜索已连续没有新结果，当前已获得 \(ws.uniqueSongIDs.count) 首唯一候选。可以基于现有候选回答，或换一个搜索词继续。"
                     }
                 }
                 if AgentTaskWorkingSet.isSearchTool(call.name) == false, AgentTaskWorkingSet.queueWritingTools.contains(call.name) {
@@ -2560,6 +2630,8 @@ public struct ToolLoop {
     /// 授权边界：mutation 只能以「获准的 canonical operation」进入 schema；
     /// 未授权 mutation 不会作为“当前可执行能力”暴露，避免诱导模型反复尝试后
     /// 被 Runtime 拒绝。只读工具不受限（ToolRuntime 仍是最终执行边界）。
+    /// Skill 激活时，Skill-owned mutation（excludedNames）也不进入 schema——
+    /// 主路径由 Skill 内部固定调用。
     /// 返回完整搜索结果（含 authorized 标记），调用方可以附加提示文本。
     @discardableResult
     private static func expandToolsFromSearch(
@@ -2568,7 +2640,8 @@ public struct ToolLoop {
         limit: Int,
         allDescriptors: [ToolDescriptor],
         current: inout [ToolDescriptor],
-        allowedOperations: Set<ToolAuthorizationOperation>
+        allowedOperations: Set<ToolAuthorizationOperation>,
+        excludedNames: Set<String> = []
     ) -> [ToolCatalogEntry] {
         let catalog = ToolCatalog(descriptors: allDescriptors)
         let entries = catalog.search(
@@ -2581,6 +2654,7 @@ public struct ToolLoop {
         var existing = Set(current.map(\.name))
         for entry in entries {
             guard !existing.contains(entry.name), let tool = byName[entry.name] else { continue }
+            if excludedNames.contains(tool.name) { continue }
             if tool.permission != .readOnly {
                 guard let operation = tool.authorizationOperation,
                       allowedOperations.contains(operation) else {

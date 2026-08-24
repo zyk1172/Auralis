@@ -137,9 +137,10 @@ public struct AgentConvergenceTracker: Sendable {
     public private(set) var toolSearchCount = 0
     public private(set) var consecutiveAuthorizationDenials = 0
     public private(set) var consecutiveMalformedCalls = 0
-    public private(set) var sameToolNoNewEvidenceStreak = 0
     public private(set) var lastSignature: String?
-    /// 最后一条被硬停止的搜索工具名（用于把已收敛工具从 schema 移除）。
+    /// 每个搜索工具独立的“连续无新证据”streak（不同工具互不污染）。
+    public private(set) var searchNoNewEvidenceStreakByTool: [String: Int] = [:]
+    /// 已达到收敛阈值的搜索工具名（从 schema 移除，避免模型反复尝试）。
     public private(set) var exhaustedSearchTools: Set<String> = []
 
     public init() {}
@@ -148,34 +149,48 @@ public struct AgentConvergenceTracker: Sendable {
         modelRounds += 1
     }
 
-    /// 记录一次工具调用（含缓存命中与幂等跳过；缓存命中不增加 identical streak）。
-    public mutating func recordToolCall(
-        signature: String,
-        executed: Bool,
-        isSearch: Bool,
-        foundNewEvidence: Bool
-    ) {
-        totalToolCalls += 1
-        if executed {
-            if lastSignature == signature {
-                identicalToolCallStreak += 1
-            } else {
-                identicalToolCallStreak = 1
-            }
-            lastSignature = signature
-        }
-        if isSearch {
-            if foundNewEvidence {
-                sameToolNoNewEvidenceStreak = 0
-            } else {
-                sameToolNoNewEvidenceStreak += 1
-            }
-        }
-    }
-
-    /// 只累计总调用数（被幂等/缓存拦截的重复调用也算总账，但不计入 identical streak）。
+    /// 每收到一个模型 ToolCall 调用一次：只累计总调用数。
+    /// 幂等/缓存拦截的重复调用也算总账，但不计入 identical streak。
     public mutating func recordTotalCall() {
         totalToolCalls += 1
+    }
+
+    /// 真正执行工具后调用：只负责 identical signature streak，不再修改 totalToolCalls
+    /// （避免一次真实执行被统计两次）。
+    public mutating func recordToolExecution(signature: String) {
+        if lastSignature == signature {
+            identicalToolCallStreak += 1
+        } else {
+            identicalToolCallStreak = 1
+        }
+        lastSignature = signature
+    }
+
+    /// 搜索工具结果返回后调用：按工具名独立累计 no-new-evidence。
+    /// 产生新 evidence → 重置该工具 streak；无新 → 累计。
+    /// 返回 true 表示该工具已达到收敛阈值（调用方应从 schema 移除该工具）。
+    @discardableResult
+    public mutating func recordSearchOutcome(
+        toolName: String,
+        foundNewEvidence: Bool,
+        policy: AgentConvergencePolicy
+    ) -> Bool {
+        if foundNewEvidence {
+            searchNoNewEvidenceStreakByTool[toolName] = 0
+        } else {
+            let streak = (searchNoNewEvidenceStreakByTool[toolName] ?? 0) + 1
+            searchNoNewEvidenceStreakByTool[toolName] = streak
+            if streak >= policy.maxSameToolNoNewEvidence {
+                exhaustedSearchTools.insert(toolName)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 该搜索工具是否已达到收敛阈值（应停止使用该工具 / 触发任务停止）。
+    public func isSearchExhausted(_ toolName: String, under policy: AgentConvergencePolicy) -> Bool {
+        (searchNoNewEvidenceStreakByTool[toolName] ?? 0) >= policy.maxSameToolNoNewEvidence
     }
 
     public mutating func recordToolSearch() {
@@ -194,6 +209,7 @@ public struct AgentConvergenceTracker: Sendable {
         consecutiveMalformedCalls += 1
     }
 
+    /// 合法 ToolCall 后必须调用：malformed streak 只对“真正连续”的畸形调用生效。
     public mutating func recordValidCall() {
         consecutiveMalformedCalls = 0
     }
@@ -204,14 +220,6 @@ public struct AgentConvergenceTracker: Sendable {
 
     public mutating func recordNoProgress() {
         noProgressStreak += 1
-    }
-
-    /// 搜索工具连续无新证据达到上限 → 从 schema 移除该工具并记录。
-    public mutating func markSearchExhausted(_ toolName: String) -> Bool {
-        guard sameToolNoNewEvidenceStreak >= 3 else { return false }
-        exhaustedSearchTools.insert(toolName)
-        sameToolNoNewEvidenceStreak = 0
-        return true
     }
 
     /// 返回第一个命中的停止原因；nil 表示可以继续。
@@ -226,6 +234,10 @@ public struct AgentConvergenceTracker: Sendable {
         }
         if consecutiveMalformedCalls >= policy.maxConsecutiveMalformedCalls {
             return .repeatedMalformedCall
+        }
+        // 任一搜索工具连续无新证据达到阈值 → 停止该搜索路径（可诊断原因）。
+        if searchNoNewEvidenceStreakByTool.values.contains(where: { $0 >= policy.maxSameToolNoNewEvidence }) {
+            return .noNewEvidence
         }
         return nil
     }

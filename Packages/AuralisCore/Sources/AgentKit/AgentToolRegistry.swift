@@ -1510,8 +1510,18 @@ public enum AgentToolRegistry {
             let query = canonicalCall.optionalString("query") ?? ""
             let namespace = canonicalCall.optionalString("namespace")
             let limit = min(max(Int(canonicalCall.optionalString("limit") ?? "8") ?? 8, 1), 50)
+            // 授权感知：当前 run 的 allowedOperations 传入检索，mutation 结果携带
+            // authorized 标记（能力存在但当前请求未授权 = false），模型能直接看到，
+            // 而不是只在下一轮 schema 阶段被悄悄过滤。
+            let authorizedOperations = context.authorizationContext?.allowedOperations
             let entries = ToolCatalog(descriptors: context.availableToolDescriptors)
-                .search(query: query, namespace: namespace, limit: limit, activeSkillID: activeSkillID)
+                .search(
+                    query: query,
+                    namespace: namespace,
+                    limit: limit,
+                    activeSkillID: activeSkillID,
+                    authorizedOperations: authorizedOperations
+                )
             let text = entries.isEmpty
                 ? "未找到匹配工具。可以换一个能力描述、工具名或命名空间再搜索。"
                 : entries.map { entry in
@@ -1519,7 +1529,13 @@ public enum AgentToolRegistry {
                         entry.sideEffect == .none ? "只读" : "会改变状态",
                         entry.networkAccess ? "联网" : nil,
                     ].compactMap { $0 }.joined(separator: " · ")
-                    return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）"
+                    let authFlag: String
+                    if let authorized = entry.authorized {
+                        authFlag = authorized ? "当前请求已授权" : "当前请求未授权（不要调用，Runtime 会拒绝）"
+                    } else {
+                        authFlag = ""
+                    }
+                    return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）\(authFlag.isEmpty ? "" : "；\(authFlag)")"
                 }.joined(separator: "\n")
             return .ok(canonicalCall, canonicalDescriptor, "发现 \(entries.count) 个工具", .text(text))
         case "capabilities_get":

@@ -65,6 +65,9 @@ public enum AgentRunner {
             authorizationContext: authorizationContext,
             executionLineage: executionLineage,
             convergencePolicy: .legacyPermissive,
+            // Legacy 兼容面保持历史契约：模型可以自由调用原子工具，
+            // 不激活固定 Skill（与 convergence 宽松预算一致）。
+            enabledFixedSkills: false,
             runID: runID,
             executionLease: resolvedLease,
             toolTimeout: toolTimeout,

@@ -24,6 +24,12 @@ public struct AgentRunDiagnostics: Codable, Sendable, Equatable {
     public var convergenceStopReason: String?
     public var completionPredicate: String?
     public var completionResult: String?
+    /// Built-in Skill 诊断：为什么激活、处于哪个阶段、发生了多少次状态迁移、
+    /// 最终结果如何。
+    public var activeSkillID: String?
+    public var skillPhase: String?
+    public var skillTransitionCount: Int
+    public var skillCompletionResult: String?
 
     public init(runID: UUID = UUID()) {
         self.runID = runID
@@ -45,6 +51,10 @@ public struct AgentRunDiagnostics: Codable, Sendable, Equatable {
         self.convergenceStopReason = nil
         self.completionPredicate = nil
         self.completionResult = nil
+        self.activeSkillID = nil
+        self.skillPhase = nil
+        self.skillTransitionCount = 0
+        self.skillCompletionResult = nil
     }
 
     public mutating func recordSelectedTool(_ name: String) {
