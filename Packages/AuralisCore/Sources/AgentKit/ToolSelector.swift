@@ -234,20 +234,24 @@ public enum ToolSelector {
             semantics.requestedOperations.contains($0)
         } ?? false
 
-        // Explicitly named operations always win ranking, but never override
-        // Runtime authorization.
-        if exactOperation { return true }
-
-        // 最小权限暴露：production 路径携带 authorization plan 时，mutation
-        // schema 只暴露获准的 canonical operation。模型仍可能通过 tool_search
-        // 发现其它工具，但 ToolRuntime 的 exact authorization 才是最终边界；
-        // 首轮 schema 不再给模型一堆无权执行的写工具去试错。
-        if descriptor.permission != .readOnly {
-            if let allowedOperations, !allowedOperations.isEmpty {
+        // 最小权限暴露：production 路径携带 authorization plan 时（allowedOperations
+        // 非 nil，即使为空集合），mutation schema 只暴露获准的 canonical operation。
+        // allowedOperations == [] 必须自然得到 0 个 mutation schema，绝不回落到旧的
+        // intent/group 展开或 semantics 的 exactOperation 捷径（fail-closed）。
+        // nil 仅表示 legacy 兼容调用方没有提供授权 plan，保持旧行为。
+        // 模型仍可能通过 tool_search 发现其它工具，但 ToolRuntime 的 exact
+        // authorization 才是最终边界。
+        if let allowedOperations {
+            if descriptor.permission != .readOnly {
                 guard let operation = descriptor.authorizationOperation,
                       allowedOperations.contains(operation) else { return false }
                 return true
             }
+        } else if exactOperation {
+            // Explicitly named operations win ranking only for legacy callers
+            // without an authorization plan; they never override Runtime
+            // authorization.
+            return true
         }
 
         func has(_ values: String...) -> Bool {
@@ -346,9 +350,9 @@ public enum ToolSelector {
     ) -> Bool {
         guard descriptor.visibility == .model, descriptor.requiredSkillID == nil else { return false }
 
-        // 带 authorization plan 时，mutation 只按获准 operation 补入。
+        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入。
         if descriptor.permission != .readOnly {
-            if let allowedOperations, !allowedOperations.isEmpty {
+            if let allowedOperations {
                 guard let operation = descriptor.authorizationOperation,
                       allowedOperations.contains(operation) else { return false }
                 return true
@@ -380,9 +384,9 @@ public enum ToolSelector {
               intent != .conversation
         else { return false }
 
-        // 带 authorization plan 时，mutation 只按获准 operation 补入。
+        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入。
         if descriptor.permission != .readOnly {
-            if let allowedOperations, !allowedOperations.isEmpty {
+            if let allowedOperations {
                 guard let operation = descriptor.authorizationOperation,
                       allowedOperations.contains(operation) else { return false }
                 return true

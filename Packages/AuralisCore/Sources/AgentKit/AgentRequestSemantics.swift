@@ -125,11 +125,25 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "随机播放", "play", "playback", "pause", "resume", "next track", "previous track",
         ]) || barePlaybackVerb
 
-        let explicitQueueAction = has([
-            "加入队列", "放进队列", "放到队列", "接下来播放", "替换队列", "替换当前队列", "替换到队列", "覆盖当前队列", "替换成", "把队列换成",
-            "建立队列", "创建队列", "建立播放队列", "建立一个播放队列", "清空队列", "清空当前队列", "移出队列", "从队列移除",
-            "调整队列", "移动队列", "随机剩余队列", "换成", "换为", "queue_append", "queue_replace", "queue_clear",
-        ])
+        // 队列操作采用「domain target + action」结构化判定（P1-1）：
+        // 裸动词“换成/换为/替换成”不得独立产生 queue 授权
+        // （“把主题换成深色 / 把输出设备换成耳机”绝不能获得 queueReplace）。
+        let queueTargetPresent = has(["队列", "当前队列", "播放队列", "queue"])
+        let queueStructuralVerbs = [
+            "加入", "放进", "放到", "替换", "覆盖", "建立", "创建", "清空", "移出", "移除",
+            "调整", "移动", "随机剩余", "接下来播放", "append", "replace", "clear", "remove", "move", "shuffle",
+        ]
+        // “换成/换为”只有在同时存在明确队列 target 时才构成队列动作。
+        let queueSwapWithTarget = has(["换成", "换为"]) && queueTargetPresent
+        let explicitQueueAction = (queueTargetPresent && (has(queueStructuralVerbs) || queueSwapWithTarget))
+            || has(["queue_append", "queue_replace", "queue_clear", "queue_remove", "queue_move", "queue_shuffle_remaining", "queue_play_next", "play next"])
+        // 高置信 queueReplace：队列 target + 替换动作；或结构明确的歌曲集合 → 队列；
+        // 或显式 canonical vocabulary。裸“换成/换为/替换成”不在此列。
+        let trackCollectionTarget = has(["这些歌", "这些歌曲", "这几首", "这批歌", "候选歌曲", "选好的歌", "选定的歌"])
+        let queueReplaceVerb = has(["替换", "覆盖", "replace"])
+        let explicitQueueReplace = (queueTargetPresent && (queueReplaceVerb || queueSwapWithTarget))
+            || (trackCollectionTarget && queueReplaceVerb && has(["队列", "queue"]))
+            || has(["queue_replace", "replace queue", "替换队列", "替换当前队列", "替换到队列", "覆盖当前队列"])
         let explicitPlaylistAction = has([
             "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单", "放到歌单", "放进歌单", "放入歌单", "收进歌单", "删除歌单",
             "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序", "复制歌单", "合并歌单",
@@ -302,25 +316,22 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         var requested = Set<ToolAuthorizationOperation>()
         // 同义表达 → canonical operation 的确定性编译。Task Compiler 不允许
-        // LLM 输出权限：这里只做 normalize verb + domain composition。
-        // “替换到队列 / 覆盖当前队列 / 用这些歌替换队列”与“替换队列”归一为 queueReplace。
-        let queueReplaceSynonyms = [
-            "替换队列", "替换当前队列", "替换到队列", "覆盖当前队列", "替换成",
-            "换成", "换为", "把队列换成", "用这些歌替换", "用这些歌曲替换", "replace queue", "queue_replace",
-        ]
+        // LLM 输出权限：queueReplace 只来自结构化判定（explicitQueueReplace），
+        // 裸“换成/换为/替换成”不再授权任何 mutation。
         if explicitPlaybackAction && !playbackQuery {
             if has(["暂停", "pause"]) { requested.insert(.playbackPause) }
             else if has(["下一首", "上一首", "next track", "previous track"]) { requested.insert(.playbackNavigation) }
             else if has(["快进", "快退", "跳转", "seek"]) { requested.insert(.playbackSeek) }
             else if has(["循环", "随机播放", "shuffle", "repeat", "变速", "速度"]) { requested.insert(.playbackMode) }
             else { requested.insert(.playbackPlay) }
-            if has(queueReplaceSynonyms) {
+            if explicitQueueReplace {
                 requested.insert(.queueReplace)
             }
         }
 
         if explicitQueueAction {
-            if has(["建立队列", "创建队列", "建立播放队列", "建立一个播放队列"] + queueReplaceSynonyms) {
+            if explicitQueueReplace
+                || has(["建立队列", "创建队列", "建立播放队列", "建立一个播放队列"]) {
                 requested.insert(.queueReplace)
             }
             if has(["清空队列", "清空当前队列", "queue_clear", "clear queue"]) { requested.insert(.queueClear) }
