@@ -9,7 +9,7 @@ import Testing
 // MARK: - Test doubles
 
 /// Records every AgentBridge call so tests can assert on side effects without a real player/server.
-final class MockAgentBridge: AgentBridge, @unchecked Sendable {
+class MockAgentBridge: AgentBridge, @unchecked Sendable {
     let activeServerIDValue: ServerID?
     private(set) var playedTracks: [GlobalID] = []
     private(set) var serverPlayedTracks: [GlobalID] = []
@@ -20,6 +20,7 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     private(set) var createdPlaylistNames: [String] = []
     private(set) var replacedQueues: [[GlobalID]] = []
     private(set) var randomLimits: [Int] = []
+    private(set) var clearedQueueCount = 0
 
     /// 播放类工具的统一返回（默认 true；置 false 可模拟「目标不在目录」）。
     var playResult: Bool = true
@@ -65,10 +66,11 @@ final class MockAgentBridge: AgentBridge, @unchecked Sendable {
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult { mutation("已加入队列") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { mutation("已设为下一首") }
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult { mutation("已按顺序设为下一首") }
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return mutation("已替换队列") }
     func removeFromQueue(at index: Int) async -> AgentMutationResult { mutation("已移除队列歌曲") }
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { mutation("已调整队列顺序") }
-    func clearQueue() async -> AgentMutationResult { mutation("已清空队列") }
+    func clearQueue() async -> AgentMutationResult { clearedQueueCount += 1; return mutation("已清空队列") }
     func shuffleRemaining() async -> AgentMutationResult { mutation("已随机剩余队列") }
     func saveQueueAsPlaylist(name: String) async -> AgentMutationResult {
         createdPlaylistNames.append(name)
@@ -178,6 +180,22 @@ private actor EmittedCollector {
         messages.contains { message in
             message.messages.contains { item in
                 if case let .text(text) = item { return text.contains(substring) }
+                return false
+            }
+        }
+    }
+    func containsError(_ substring: String) -> Bool {
+        messages.contains { message in
+            message.messages.contains { item in
+                if case let .error(text) = item { return text.contains(substring) }
+                return false
+            }
+        }
+    }
+    func containsAnyError() -> Bool {
+        messages.contains { message in
+            message.messages.contains { item in
+                if case .error = item { return true }
                 return false
             }
         }
@@ -676,7 +694,7 @@ func offlinePlay() async throws {
     )
     #expect(await bridge.playedTracks.contains(gid))
     #expect(await collector.containsText("开始播放"))
-    #expect(await log.containsTool("playTrack"))
+    #expect(await log.containsTool("playback_play_song"))
 }
 
 @Test("Offline degrade: no match does not play")
@@ -720,7 +738,7 @@ func offlineLike() async throws {
         log: { await log.add($0) }
     )
     #expect(await bridge.likedTracks.contains(gid))
-    #expect(await log.containsTool("likeTrack"))
+    #expect(await log.containsTool("favorite_set"))
 }
 
 @Test("Offline degrade: 创建歌单不会被通用歌单列表分支截走")
@@ -742,8 +760,8 @@ func offlineCreatePlaylist() async throws {
     #expect(await collector.containsText("已创建歌单"))
 }
 
-@Test("LLM failure degrades to local rules")
-func llmFailureDegrades() async throws {
+@Test("Provider failure does not silently switch an explicit music request to offline execution")
+func providerFailureDoesNotSwitchProtocol() async throws {
     let store = try makeStore()
     let track = makeTrack(serverID: "test-server", remoteID: "zz-1", title: "ZZPlayUnique")
     try await seed(store, [track])
@@ -760,10 +778,10 @@ func llmFailureDegrades() async throws {
         confirm: { _ in true },
         emit: { await collector.record($0) }
     )
-    #expect(await bridge.playedTracks.contains(gid))
-    // 故障降级后改为本地能力处理，但不再谎称「已切换到本地模式」。
-    #expect(await collector.containsText("AI 服务暂时不可用"))
-    #expect(await collector.containsText("本地能力"))
+    #expect(!(await bridge.playedTracks.contains(gid)))
+    // 同一任务必须保留 Provider 协议的语义；只有根本没有 Provider
+    // 时，才会进入显式的离线兼容路径。
+    #expect(await collector.containsAnyError())
 }
 
 // MARK: - Agent 主循环（多轮 Tool Calling）
@@ -1067,8 +1085,8 @@ func streamingToolCallsExecuteAndFinalize() async throws {
     #expect(await collector.containsText("已处理完成。"))
 }
 
-@Test("Streaming: mid-stream error degrades to local fallback with error text")
-func streamingErrorDegradesToLocalFallback() async {
+@Test("Streaming: 普通聊天中途失败不会降级为本地音乐搜索")
+func streamingErrorDoesNotDegradeOrdinaryChatToMusicSearch() async {
     let store = try! makeStore()
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
@@ -1085,10 +1103,15 @@ func streamingErrorDegradesToLocalFallback() async {
         emit: { await collector.record($0) }
     )
 
-    #expect(await collector.containsText("AI 服务暂时不可用"))
-    #expect(await collector.containsText("测试错误"))
-    // 兜底路径仍然生效（本地搜索找不到 → 提示）。
-    #expect(await collector.containsText("本地未找到匹配的歌曲") == true)
+    let emitted = await collector.all()
+    let errors = emitted.flatMap(\.messages).compactMap { item -> String? in
+        if case let .error(value) = item { return value }
+        return nil
+    }.joined(separator: "\n")
+    #expect(errors.contains("AI Provider 请求失败"))
+    #expect(errors.contains("测试错误"))
+    #expect(!errors.contains("ACTION"))
+    #expect(await collector.containsText("本地未找到匹配的歌曲") == false)
 }
 
 
@@ -1151,7 +1174,7 @@ func contextManagerTruncatesToolResult() {
 func toolSelectorLoadsPlaylistTools() {
     let selected = ToolSelector.select(for: "从我的歌单随机推荐一首", all: AgentToolRegistry.all)
     let names = Set(selected.map(\.name))
-    #expect(names.contains("listPlaylists"))
+    #expect(names.contains("library_get_playlist"))
     #expect(names.contains("recommend_by_constraints"))
     #expect(names.contains("library_search"))
 }
@@ -1197,8 +1220,8 @@ func toolSelectorIsBounded() {
 func toolSelectorCoversFiveAcceptanceRequests() {
     let cases: [(String, Set<String>)] = [
         ("播放七里香。", ["library_search", "playback_play_song"]),
-        ("我有哪些歌单？", ["listPlaylists"]),
-        ("从我的歌单随机推荐一首。", ["listPlaylists", "recommend_by_constraints"]),
+        ("我有哪些歌单？", ["library_get_playlist"]),
+        ("从我的歌单随机推荐一首。", ["library_get_playlist", "recommend_by_constraints"]),
         ("挑选 20 首比较火的中文歌，列入清单，顺序播放。", ["library_select_tracks", "queue_replace"]),
         ("从深夜、伤感、女声三个标签里选 20 首，排除最近一周听过的，建立播放队列。", ["library_select_tracks", "queue_replace"]),
     ]
@@ -1216,7 +1239,7 @@ func toolSelectorCoversEightRequests() {
     let cases: [(String, String)] = [
         ("下一首。", "playback_next"),
         ("播放七里香。", "library_search"),
-        ("我有哪些歌单？", "listPlaylists"),
+        ("我有哪些歌单？", "library_get_playlist"),
         ("从我的歌单随机推荐一首。", "recommend_by_constraints"),
         ("从收藏里面找五首最近没有听过的歌。", "library_get_starred"),
         ("从深夜、伤感、女声标签里面选十首并建立队列。", "library_get_tracks_by_genre"),

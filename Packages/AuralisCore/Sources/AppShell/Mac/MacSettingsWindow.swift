@@ -148,13 +148,13 @@ public struct MacSettingsWindow: View {
     @AppStorage(ExternalMusicPreferences.Keys.listenBrainz) private var listenBrainzEnabled = true
     @State private var hasAPIKey = false
     @State private var isEditingAIProviderSettings = false
-    @State private var indexStatus: RecommendationIndexV2Status?
+    @State private var indexStatus: RecommendationIndexStatus?
     @State private var isLoadingIndexStatus = false
     @State private var isClearingExternalMusicCache = false
     @State private var isResettingExternalIdentity = false
     @State private var externalMusicMessage: String?
     @State private var isExportingIndex = false
-    @State private var indexExportFile: RecommendationIndexV2IndexFile?
+    @State private var indexExportFile: RecommendationIndexIndexFile?
     @State private var isImportingIndex = false
     @State private var isPerformingIndexTransfer = false
     @State private var indexTransferMessage: String?
@@ -223,7 +223,7 @@ public struct MacSettingsWindow: View {
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                 }
             }
-            Section(String(localized: "推荐索引 V2", bundle: .module)) {
+            Section(String(localized: "推荐索引", bundle: .module)) {
                 if isLoadingIndexStatus && indexStatus == nil {
                     HStack { ProgressView().controlSize(.small); Text(String(localized: "正在读取索引状态…", bundle: .module)) }
                 } else if let status = indexStatus {
@@ -232,10 +232,10 @@ public struct MacSettingsWindow: View {
                     ProgressView(value: Double(status.indexedTracks), total: Double(max(status.totalTracks, 1)))
                         .tint(theme.colorTokens.accent.color)
                     LabeledContent(String(localized: "规则版本", bundle: .module), value: status.rulesVersion)
-                    LabeledContent(String(localized: "索引格式", bundle: .module), value: "V2 包 v\(LocalCatalogStore.recommendationIndexV2PackageFormatVersion)")
+                    LabeledContent(String(localized: "索引格式", bundle: .module), value: "V2 包 v\(LocalCatalogStore.recommendationIndexPackageFormatVersion)")
                     HStack {
                         Button(status.pendingTracks == 0 ? String(localized: "检查并更新索引", bundle: .module) : String(localized: "开始/继续全量索引", bundle: .module)) {
-                            model.startOrContinueRecommendationIndexV2()
+                            model.startOrContinueRecommendationIndex()
                         }
                         .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
                         Button(String(localized: "导出索引…", bundle: .module)) { Task { await exportIndex() } }
@@ -253,7 +253,7 @@ public struct MacSettingsWindow: View {
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
                     Button(String(localized: "开始全量索引", bundle: .module)) {
-                        model.startOrContinueRecommendationIndexV2()
+                        model.startOrContinueRecommendationIndex()
                     }
                     .disabled(model.catalog.activeServerID == nil || model.agentCoordinator.isRunning)
                 }
@@ -273,7 +273,7 @@ public struct MacSettingsWindow: View {
         .fileExporter(
             isPresented: $isExportingIndex,
             document: indexExportFile,
-            contentType: .auralisIndexV2,
+            contentType: .auralisRecommendationIndex,
             defaultFilename: defaultIndexExportFilename
         ) { result in
             if case let .failure(error) = result {
@@ -282,7 +282,7 @@ public struct MacSettingsWindow: View {
         }
         .fileImporter(
             isPresented: $isImportingIndex,
-            allowedContentTypes: [.auralisIndexV2, .json, .data]
+            allowedContentTypes: [.auralisRecommendationIndex, .auralisLegacyRecommendationIndex, .json, .data]
         ) { result in
             switch result {
             case let .success(url):
@@ -296,7 +296,7 @@ public struct MacSettingsWindow: View {
             await refreshIndexStatus()
         }
         .task(id: model.catalog.activeServerID) { await refreshIndexStatus() }
-        .confirmationDialog(String(localized: "清空本机推荐索引 V2？", bundle: .module), isPresented: $isConfirmingIndexClear, titleVisibility: .visible) {
+        .confirmationDialog(String(localized: "清空本机推荐索引？", bundle: .module), isPresented: $isConfirmingIndexClear, titleVisibility: .visible) {
             Button(String(localized: "清空索引", bundle: .module), role: .destructive) {
                 Task { await clearRecommendationIndex() }
             }
@@ -309,7 +309,7 @@ public struct MacSettingsWindow: View {
     private var defaultIndexExportFilename: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return "Auralis-\(String(localized: "推荐索引 V2", bundle: .module))-\(formatter.string(from: Date()))"
+        return "Auralis-\(String(localized: "推荐索引", bundle: .module))-\(formatter.string(from: Date()))"
     }
 
     private func refreshIndexStatus() async {
@@ -318,7 +318,7 @@ public struct MacSettingsWindow: View {
             return
         }
         isLoadingIndexStatus = true
-        indexStatus = try? await model.catalogCoordinator.store.recommendationIndexV2Status(serverID: serverID)
+        indexStatus = try? await model.catalogCoordinator.store.recommendationIndexStatus(serverID: serverID)
         isLoadingIndexStatus = false
     }
 
@@ -328,9 +328,9 @@ public struct MacSettingsWindow: View {
         indexTransferMessage = nil
         defer { isClearingIndex = false }
         do {
-            try await model.catalogCoordinator.store.clearRecommendationIndexV2(serverID: serverID)
+            try await model.catalogCoordinator.store.clearRecommendationIndex(serverID: serverID)
             guard model.catalog.activeServerID == serverID else { return }
-            indexTransferMessage = String(localized: "当前服务器的推荐索引 V2 已清空，可重新开始索引。", bundle: .module)
+            indexTransferMessage = String(localized: "当前服务器的推荐索引已清空，可重新开始索引。", bundle: .module)
             await refreshIndexStatus()
         } catch {
             indexTransferMessage = String(localized: "清空索引失败：\(error.localizedDescription)", bundle: .module)
@@ -369,9 +369,9 @@ public struct MacSettingsWindow: View {
         indexTransferMessage = nil
         defer { isPerformingIndexTransfer = false }
         do {
-            let package = try await model.catalogCoordinator.store.exportRecommendationIndexV2Package(serverID: serverID)
+            let package = try await model.catalogCoordinator.store.exportRecommendationIndexPackage(serverID: serverID)
             let data = try JSONEncoder().encode(package)
-            indexExportFile = RecommendationIndexV2IndexFile(data: data)
+            indexExportFile = RecommendationIndexIndexFile(data: data)
             isExportingIndex = true
         } catch {
             indexTransferMessage = String(localized: "导出失败：\(error.localizedDescription)", bundle: .module)
@@ -391,7 +391,7 @@ public struct MacSettingsWindow: View {
         defer { isPerformingIndexTransfer = false }
         do {
             let data = try Data(contentsOf: url)
-            let stats = try await model.catalogCoordinator.store.importRecommendationIndexV2Package(
+            let stats = try await model.catalogCoordinator.store.importRecommendationIndexPackage(
                 data: data,
                 serverID: serverID
             )

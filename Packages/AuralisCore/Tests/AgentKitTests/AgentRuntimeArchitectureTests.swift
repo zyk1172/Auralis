@@ -16,11 +16,19 @@ struct AgentRuntimeArchitectureTests {
         ("替换当前队列", AgentTaskIntent.queueManagement),
         ("推荐几首深夜音乐", AgentTaskIntent.musicDiscovery),
         ("暂停播放", AgentTaskIntent.playbackControl),
-        ("搜索周杰伦", AgentTaskIntent.librarySearch),
+        ("搜索周杰伦的歌曲", AgentTaskIntent.librarySearch),
         ("记住我喜欢爵士", AgentTaskIntent.memoryManagement),
     ])
     func intentClassification(input: String, expected: AgentTaskIntent) {
         #expect(AgentIntentClassifier.classify(input) == expected)
+    }
+
+    @Test("通用词不会把普通知识问题路由到音乐任务")
+    func genericWordsStayConversation() {
+        #expect(AgentIntentClassifier.classify("推荐几本人工智能方面的书") == .conversation)
+        #expect(AgentIntentClassifier.classify("怎么下载 Python 的 wheel 文件") == .conversation)
+        #expect(AgentIntentClassifier.classify("为什么 iPhone 充电的时候会发热") == .conversation)
+        #expect(AgentIntentClassifier.classify("搜索 Python 的官方文档") == .conversation)
     }
 
     @Test func conversationPolicyAuthorizesEveryRegisteredTool() {
@@ -303,7 +311,7 @@ struct AgentRuntimeArchitectureTests {
     }
 
     @Test func fullIndexRequestUsesDeterministicCompletion() {
-        let policy = AgentTaskPolicyResolver.resolve(text: "一次性完成全部推荐索引 V2")
+        let policy = AgentTaskPolicyResolver.resolve(text: "一次性完成全部推荐索引")
         #expect(policy.intent == .libraryManagement)
         #expect(policy.completion == .indexPendingCountIsZero)
     }
@@ -311,7 +319,7 @@ struct AgentRuntimeArchitectureTests {
     @Test func continuationAfterErrorRestoresIndexPolicyAndTools() {
         let policy = AgentTaskPolicyResolver.resolve(
             text: "继续",
-            historyText: "开始并一次性完成推荐索引 V2"
+            historyText: "开始并一次性完成推荐索引"
         )
         #expect(policy.intent == .libraryManagement)
         #expect(policy.completion == .indexPendingCountIsZero)
@@ -320,16 +328,17 @@ struct AgentRuntimeArchitectureTests {
             for: "继续",
             intent: policy.intent,
             policy: policy,
-            all: AgentToolRegistry.all
+            all: AgentToolRegistry.all,
+            activeSkillID: "recommendation-index"
         )
         let names = Set(selected.map(\.name))
-        #expect(names.contains("library_index_v2_status"))
-        #expect(names.contains("library_index_v2_next_batch"))
-        #expect(names.contains("library_index_v2_write_batch"))
+        #expect(names.contains("library_index_status"))
+        #expect(!names.contains("library_index_v2_next_batch"))
+        #expect(!names.contains("library_index_v2_write_batch"))
     }
 
     @Test func indexStatusQuestionDoesNotStartFullBuild() {
-        let policy = AgentTaskPolicyResolver.resolve(text: "查看推荐索引 V2 状态")
+        let policy = AgentTaskPolicyResolver.resolve(text: "查看推荐索引状态")
         #expect(policy.completion == .successfulToolResult)
     }
 
@@ -348,7 +357,7 @@ struct AgentRuntimeArchitectureTests {
 
     @Test func taskReducerMergesFactsAndEvidence() {
         var state = AgentTaskState(intent: .librarySearch, goal: "find")
-        let descriptor = AgentToolRegistry.descriptor(for: "library_index_v2_status")!
+        let descriptor = AgentToolRegistry.descriptor(for: "library_index_status")!
         let call = ToolCall(name: descriptor.name)
         let result = ToolResult(
             call: call,

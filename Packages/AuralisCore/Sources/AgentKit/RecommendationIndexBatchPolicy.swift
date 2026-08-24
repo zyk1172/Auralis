@@ -1,10 +1,10 @@
 import Foundation
 
-/// Recommendation Index V2 的单次传输分片策略。
+/// Recommendation Index 的单次传输分片策略。
 ///
 /// 这里只控制单次 function call 的规模，不限制整个索引规模。
 /// 全量任务的真实完成条件始终是 pending == 0。
-enum RecommendationIndexV2BatchPolicy {
+enum RecommendationIndexBatchPolicy {
     static let minimumTracksPerBatch = 8
     static let fallbackTracksPerBatch = 16
 

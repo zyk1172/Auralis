@@ -239,6 +239,7 @@ private struct BridgeStub: AgentBridge {
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult { .confirmed("ok") }
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { .confirmed("ok") }
     func removeFromQueue(at index: Int) async -> AgentMutationResult { .confirmed("ok") }
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
@@ -286,22 +287,32 @@ struct AgentSystemPromptTests {
         #expect(prompt.contains("memory_save"))
     }
 
-    @Test("文本工具协议会列出推荐索引 V2 的完整工具链")
-    func recommendationIndexV2ToolsAreListed() {
-        let selected = ToolSelector.select(for: "构建推荐索引 V2", all: AgentToolRegistry.all)
+    @Test("索引内部工具不会进入文本协议提示词")
+    func recommendationIndexInternalToolsAreHidden() {
+        let selected = ToolSelector.select(
+            for: "构建推荐索引",
+            intent: .libraryManagement,
+            policy: AgentTaskPolicy.policy(for: .libraryManagement),
+            all: AgentToolRegistry.all,
+            activeSkillID: "recommendation-index"
+        )
         let prompt = AgentRunner.systemPrompt(context: AgentRunner.Context(), tools: selected, nativeToolCalling: false)
-        #expect(prompt.contains("library_index_v2_status"))
-        #expect(prompt.contains("library_index_v2_next_batch"))
-        #expect(prompt.contains("library_index_v2_write_batch"))
+        #expect(prompt.contains("library_index_status"))
+        #expect(!prompt.contains("recommendation_index_commit"))
     }
 
-    @Test("索引任务的后续短指令也保留 V2 原生工具")
-    func recommendationIndexV2ToolsRemainAvailableForContinuation() {
-        let selected = ToolSelector.select(for: "继续", all: AgentToolRegistry.all)
+    @Test("索引任务的后续短指令只保留公开状态工具")
+    func recommendationIndexInternalToolsRemainHiddenForContinuation() {
+        let selected = ToolSelector.select(
+            for: "继续",
+            intent: .libraryManagement,
+            policy: AgentTaskPolicy.policy(for: .libraryManagement),
+            all: AgentToolRegistry.all,
+            activeSkillID: "recommendation-index"
+        )
         let names = Set(selected.map(\.name))
-        #expect(names.contains("library_index_v2_status"))
-        #expect(names.contains("library_index_v2_next_batch"))
-        #expect(names.contains("library_index_v2_write_batch"))
+        #expect(names.contains("library_index_status"))
+        #expect(!names.contains("recommendation_index_commit"))
     }
 
     @Test("记忆与技能注入：列出已存记忆与技能名")
@@ -316,6 +327,33 @@ struct AgentSystemPromptTests {
         #expect(prompt.contains("小明"))
         #expect(prompt.contains("可用技能"))
         #expect(prompt.contains("夜跑歌单"))
+    }
+
+    @Test("记忆与技能注入有上下文上限，剩余内容按需查询")
+    func memoryAndSkillContextIsBounded() {
+        let memories = (0..<40).map { index in
+            AgentMemoryEntry(
+                key: "无关记忆\(index)",
+                value: "内容\(index)",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let skills = (0..<20).map { index in
+            AgentSkillEntry(
+                name: "技能\(index)",
+                instructions: "执行步骤 \(index)",
+                createdAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let prompt = AgentRunner.systemPrompt(
+            context: AgentRunner.Context(memories: memories, skills: skills),
+            tools: [],
+            nativeToolCalling: true
+        )
+        #expect(prompt.contains("另有 24 条记忆未注入"))
+        #expect(prompt.contains("另有 12 个技能未注入"))
+        #expect(!prompt.contains("无关记忆0"))
+        #expect(prompt.contains("无关记忆39"))
     }
 
     @Test("无记忆 / 无技能时给出占位文案")

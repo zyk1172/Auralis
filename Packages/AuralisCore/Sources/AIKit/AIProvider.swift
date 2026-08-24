@@ -15,11 +15,129 @@ public let auralisDefaultRequestTimeout: TimeInterval = 180
 public let auralisDefaultMaxContextTokens = 256_000
 
 /// 原生工具调用的请求偏好。`required` 只在 Runtime 已确认需要真实工具时使用；
-/// 对不支持该字段的中转，Runner 会有限次数降级到文本 ACTION 协议。
-public enum AIToolChoice: String, Codable, Hashable, Sendable {
+/// `named` 用于确定性 Workflow 强制当前步骤的唯一工具，避免模型跳到旁路工具。
+/// Provider 协议在请求前确定，工具能力被拒绝时必须报告原协议错误。
+public enum AIToolChoice: Codable, Hashable, Sendable {
     case auto
     case required
     case none
+    case named(String)
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case name
+    }
+
+    public init(from decoder: any Decoder) throws {
+        if let value = try? decoder.singleValueContainer().decode(String.self) {
+            switch value {
+            case "auto": self = .auto
+            case "required": self = .required
+            case "none": self = .none
+            default: self = .named(value)
+            }
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let name = try container.decodeIfPresent(String.self, forKey: .name) {
+            self = .named(name)
+        } else {
+            switch try container.decode(String.self, forKey: .mode) {
+            case "auto": self = .auto
+            case "required": self = .required
+            case "none": self = .none
+            default: throw DecodingError.dataCorruptedError(
+                forKey: .mode,
+                in: container,
+                debugDescription: "Unknown tool choice mode"
+            )
+            }
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .auto:
+            var container = encoder.singleValueContainer()
+            try container.encode("auto")
+        case .required:
+            var container = encoder.singleValueContainer()
+            try container.encode("required")
+        case .none:
+            var container = encoder.singleValueContainer()
+            try container.encode("none")
+        case let .named(name):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(name, forKey: .name)
+        }
+    }
+}
+
+/// Provider 原生托管工具。它们不是 Auralis 的 function tool：Provider 必须把
+/// 这些值编码成自己的 server-side tool 协议，不能伪装成普通函数交给 ToolRuntime。
+public enum AIHostedTool: String, Codable, Hashable, Sendable {
+    case webSearch
+    case webFetch
+}
+
+/// Provider-neutral response format.  A workflow asks for structured data
+/// here; each Provider codec is responsible for projecting it onto its own
+/// wire protocol.  Keeping this separate from function tools prevents a
+/// deterministic transform from being modelled as a synthetic tool call.
+public enum AIOutputFormat: Codable, Hashable, Sendable {
+    case text
+    case jsonObject
+    case jsonSchema(name: String, schema: AIJSONValue, strict: Bool)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, name, schema, strict
+    }
+
+    private enum Kind: String, Codable {
+        case text, jsonObject, jsonSchema
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .text:
+            self = .text
+        case .jsonObject:
+            self = .jsonObject
+        case .jsonSchema:
+            self = .jsonSchema(
+                name: try container.decode(String.self, forKey: .name),
+                schema: try container.decode(AIJSONValue.self, forKey: .schema),
+                strict: try container.decodeIfPresent(Bool.self, forKey: .strict) ?? true
+            )
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text:
+            try container.encode(Kind.text, forKey: .kind)
+        case .jsonObject:
+            try container.encode(Kind.jsonObject, forKey: .kind)
+        case let .jsonSchema(name, schema, strict):
+            try container.encode(Kind.jsonSchema, forKey: .kind)
+            try container.encode(name, forKey: .name)
+            try container.encode(schema, forKey: .schema)
+            try container.encode(strict, forKey: .strict)
+        }
+    }
+}
+
+/// The protocol selected before a model run starts.  A run may use a
+/// controlled compatibility retry, but it never silently mixes wire formats
+/// inside one transcript.
+public enum AIProviderToolMode: String, Codable, Hashable, Sendable {
+    case none
+    case openAIChat
+    case openAIResponses
+    case anthropicMessages
+    case textualToolProtocol
 }
 
 /// Auralis 当前模型能力声明。上下文与输出均由 Provider / 用户配置决定，默认值
@@ -28,26 +146,74 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
     public var maxOutputTokens: Int
     public var supportsToolCalling: Bool
+    public var supportsParallelTools: Bool
+    public var supportsToolChoice: Bool
+    public var supportsStrictSchema: Bool
     public var supportsStreaming: Bool
     public var supportsJSONMode: Bool
     public var supportsJSONSchema: Bool
+    public var supportsHostedWebSearch: Bool
+    public var supportsHostedWebFetch: Bool
+    public var supportsReasoningMetadata: Bool
+    public var toolMode: AIProviderToolMode
 
     public init(
         maxContextTokens: Int = 256_000,
         maxOutputTokens: Int = auralisDefaultMaxOutputTokens,
         supportsToolCalling: Bool = false,
+        supportsParallelTools: Bool = true,
+        supportsToolChoice: Bool = false,
+        supportsStrictSchema: Bool = false,
         supportsStreaming: Bool = true,
         supportsJSONMode: Bool = false,
-        supportsJSONSchema: Bool = false
+        supportsJSONSchema: Bool = false,
+        supportsHostedWebSearch: Bool = false,
+        supportsHostedWebFetch: Bool = false,
+        supportsReasoningMetadata: Bool = false,
+        toolMode: AIProviderToolMode? = nil
     ) {
         self.maxContextTokens = max(4_096, maxContextTokens)
         // 不再把输出硬性限制为「上下文的一半」：上下文与输出各自按用户配置取值，
         // 由服务端 / Provider 实际能力决定，Auralis 不自设比例限制。
         self.maxOutputTokens = max(512, maxOutputTokens)
         self.supportsToolCalling = supportsToolCalling
+        self.supportsParallelTools = supportsParallelTools
+        self.supportsToolChoice = supportsToolChoice
+        self.supportsStrictSchema = supportsStrictSchema
         self.supportsStreaming = supportsStreaming
         self.supportsJSONMode = supportsJSONMode
         self.supportsJSONSchema = supportsJSONSchema
+        self.supportsHostedWebSearch = supportsHostedWebSearch
+        self.supportsHostedWebFetch = supportsHostedWebFetch
+        self.supportsReasoningMetadata = supportsReasoningMetadata
+        self.toolMode = toolMode ?? (supportsToolCalling ? .openAIChat : .textualToolProtocol)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case maxContextTokens, maxOutputTokens, supportsToolCalling
+        case supportsParallelTools, supportsToolChoice, supportsStrictSchema
+        case supportsStreaming, supportsJSONMode, supportsJSONSchema
+        case supportsHostedWebSearch, supportsHostedWebFetch, supportsReasoningMetadata
+        case toolMode
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            maxContextTokens: try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? 256_000,
+            maxOutputTokens: try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens) ?? auralisDefaultMaxOutputTokens,
+            supportsToolCalling: try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false,
+            supportsParallelTools: try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true,
+            supportsToolChoice: try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? false,
+            supportsStrictSchema: try container.decodeIfPresent(Bool.self, forKey: .supportsStrictSchema) ?? false,
+            supportsStreaming: try container.decodeIfPresent(Bool.self, forKey: .supportsStreaming) ?? true,
+            supportsJSONMode: try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false,
+            supportsJSONSchema: try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false,
+            supportsHostedWebSearch: try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebSearch) ?? false,
+            supportsHostedWebFetch: try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebFetch) ?? false,
+            supportsReasoningMetadata: try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningMetadata) ?? false,
+            toolMode: try container.decodeIfPresent(AIProviderToolMode.self, forKey: .toolMode)
+        )
     }
 
     public static let conservative = ModelCapabilities()
@@ -256,6 +422,15 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     public var supportsJSONMode: Bool
     public var supportsJSONSchema: Bool
     public var supportsToolCalling: Bool
+    /// 仅在同一 Base URL / path / model 的能力诊断确认模型目录可用后为 true。
+    /// 这不是用户配置，也不参与旧配置的语义推断。
+    public var hasVerifiedModelAvailability: Bool
+    public var supportsParallelTools: Bool
+    public var supportsToolChoice: Bool
+    public var supportsStrictSchema: Bool
+    public var supportsHostedWebSearch: Bool
+    public var supportsHostedWebFetch: Bool
+    public var supportsReasoningMetadata: Bool
     public var supportsImageInput: Bool
 
     public init(
@@ -276,6 +451,13 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONMode: Bool = false,
         supportsJSONSchema: Bool = false,
         supportsToolCalling: Bool = false,
+        hasVerifiedModelAvailability: Bool = false,
+        supportsParallelTools: Bool = true,
+        supportsToolChoice: Bool = false,
+        supportsStrictSchema: Bool = false,
+        supportsHostedWebSearch: Bool = false,
+        supportsHostedWebFetch: Bool = false,
+        supportsReasoningMetadata: Bool = false,
         supportsImageInput: Bool = false
     ) {
         self.id = id
@@ -295,6 +477,13 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.supportsJSONMode = supportsJSONMode
         self.supportsJSONSchema = supportsJSONSchema
         self.supportsToolCalling = supportsToolCalling
+        self.hasVerifiedModelAvailability = hasVerifiedModelAvailability
+        self.supportsParallelTools = supportsParallelTools
+        self.supportsToolChoice = supportsToolChoice
+        self.supportsStrictSchema = supportsStrictSchema
+        self.supportsHostedWebSearch = supportsHostedWebSearch
+        self.supportsHostedWebFetch = supportsHostedWebFetch
+        self.supportsReasoningMetadata = supportsReasoningMetadata
         self.supportsImageInput = supportsImageInput
     }
 
@@ -304,7 +493,9 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         case id, name, baseURL, apiPath, credentialID, model, customHeaders
         case organization, project, temperature, maxTokens, maxContextTokens
         case timeout, usesStreaming, supportsJSONMode, supportsJSONSchema
-        case supportsToolCalling, supportsImageInput
+        case supportsToolCalling, hasVerifiedModelAvailability, supportsParallelTools, supportsToolChoice
+        case supportsStrictSchema, supportsHostedWebSearch, supportsHostedWebFetch
+        case supportsReasoningMetadata, supportsImageInput
     }
 
     public init(from decoder: any Decoder) throws {
@@ -326,6 +517,16 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsJSONMode = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false
         supportsJSONSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONSchema) ?? false
         supportsToolCalling = try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false
+        hasVerifiedModelAvailability = try container.decodeIfPresent(Bool.self, forKey: .hasVerifiedModelAvailability) ?? false
+        supportsParallelTools = try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true
+        // Arbitrary OpenAI-compatible gateways frequently accept but ignore
+        // `tool_choice`.  Treat missing custom configuration as unsupported;
+        // known provider presets opt in explicitly.
+        supportsToolChoice = try container.decodeIfPresent(Bool.self, forKey: .supportsToolChoice) ?? false
+        supportsStrictSchema = try container.decodeIfPresent(Bool.self, forKey: .supportsStrictSchema) ?? false
+        supportsHostedWebSearch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebSearch) ?? false
+        supportsHostedWebFetch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebFetch) ?? false
+        supportsReasoningMetadata = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningMetadata) ?? false
         supportsImageInput = try container.decodeIfPresent(Bool.self, forKey: .supportsImageInput) ?? false
     }
 
@@ -372,13 +573,64 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
 public struct AIToolCall: Codable, Hashable, Sendable {
     public let id: String
     public let name: String
-    /// 参数 JSON 字符串（如 `{"trackID":"server:1"}`），由调用方自行解析。
-    public let arguments: String
+    /// Provider decode 边界之后的 canonical 结构化参数。
+    public let arguments: AIJSONValue
 
-    public init(id: String, name: String, arguments: String) {
+    public init(id: String, name: String, arguments: AIJSONValue) {
         self.id = id
         self.name = name
         self.arguments = arguments
+    }
+
+    /// 兼容旧调用点。新 Provider codec 应在 decode 边界使用
+    /// `init(id:name:rawArguments:)`，不要把 raw JSON 继续传入 ToolRuntime。
+    @available(*, deprecated, message: "Decode raw JSON at the Provider boundary and pass AIJSONValue")
+    public init(id: String, name: String, arguments: String) {
+        self.id = id
+        self.name = name
+        self.arguments = (try? AIJSONValue(jsonString: arguments)) ?? .string(arguments)
+    }
+
+    public init(id: String, name: String, rawArguments: String) throws {
+        self.id = id
+        self.name = name
+        self.arguments = try AIJSONValue(jsonString: rawArguments)
+    }
+
+    public var rawArguments: String { arguments.jsonString }
+
+    public var structuredArguments: AIJSONValue { arguments }
+
+    public var argumentObject: [String: AIJSONValue]? {
+        guard case let .object(value) = arguments else { return nil }
+        return value
+    }
+}
+
+/// Provider 原生联网工具返回的中立来源信息。
+/// AIKit 不依赖 AgentKit，AgentKit 在 UI / ToolResult 边界将其映射为 WebSource。
+public struct AIWebCitation: Codable, Hashable, Sendable {
+    public let title: String
+    public let url: URL
+    public let snippet: String?
+    public let publishedAt: String?
+    public let backend: String?
+    public let sourceType: String?
+
+    public init(
+        title: String,
+        url: URL,
+        snippet: String? = nil,
+        publishedAt: String? = nil,
+        backend: String? = nil,
+        sourceType: String? = nil
+    ) {
+        self.title = title
+        self.url = url
+        self.snippet = snippet
+        self.publishedAt = publishedAt
+        self.backend = backend
+        self.sourceType = sourceType
     }
 }
 
@@ -388,11 +640,13 @@ public struct AIToolDefinition: Codable, Hashable, Sendable {
     public let name: String
     public let description: String
     public let parametersJSON: String?
+    public let strict: Bool
 
-    public init(name: String, description: String, parametersJSON: String? = nil) {
+    public init(name: String, description: String, parametersJSON: String? = nil, strict: Bool = false) {
         self.name = name
         self.description = description
         self.parametersJSON = parametersJSON
+        self.strict = strict
     }
 }
 
@@ -428,13 +682,25 @@ public struct AIMessage: Codable, Hashable, Sendable, Identifiable {
 
 public struct AICompletionRequest: Codable, Hashable, Sendable {
     public let model: String
-    public let messages: [AIMessage]
+    /// Provider-neutral transcript. `messages` remains a compatibility
+    /// projection for legacy codecs and callers.
+    public let transcript: AITranscript
+    public var messages: [AIMessage] { transcript.messages }
     public let temperature: Double
     public let maxTokens: Int
     /// 原生 function calling 的工具定义；为空则请求体不携带 `tools` 字段。
     public let tools: [AIToolDefinition]?
     /// 原生工具调用策略；为空则不携带 `tool_choice`，兼容更老的网关。
     public let toolChoice: AIToolChoice?
+    /// Provider 原生托管工具。普通 function schema 不应承载这些工具。
+    public let hostedTools: [AIHostedTool]?
+    /// Provider-neutral output contract.  Nil and `.text` both mean an
+    /// unconstrained natural-language response for compatibility.
+    public let outputFormat: AIOutputFormat?
+
+    private enum CodingKeys: String, CodingKey {
+        case model, transcript, messages, temperature, maxTokens, tools, toolChoice, hostedTools, outputFormat
+    }
 
     public init(
         model: String,
@@ -442,14 +708,67 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         temperature: Double = 0.4,
         maxTokens: Int = auralisDefaultMaxOutputTokens,
         tools: [AIToolDefinition]? = nil,
-        toolChoice: AIToolChoice? = nil
+        toolChoice: AIToolChoice? = nil,
+        hostedTools: [AIHostedTool]? = nil,
+        outputFormat: AIOutputFormat? = nil
     ) {
         self.model = model
-        self.messages = messages
+        self.transcript = AITranscript(messages: messages)
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.tools = tools
         self.toolChoice = toolChoice
+        self.hostedTools = hostedTools
+        self.outputFormat = outputFormat
+    }
+
+    public init(
+        model: String,
+        transcript: AITranscript,
+        temperature: Double = 0.4,
+        maxTokens: Int = auralisDefaultMaxOutputTokens,
+        tools: [AIToolDefinition]? = nil,
+        toolChoice: AIToolChoice? = nil,
+        hostedTools: [AIHostedTool]? = nil,
+        outputFormat: AIOutputFormat? = nil
+    ) {
+        self.model = model
+        self.transcript = transcript
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.tools = tools
+        self.toolChoice = toolChoice
+        self.hostedTools = hostedTools
+        self.outputFormat = outputFormat
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.model = try container.decode(String.self, forKey: .model)
+        if let transcript = try container.decodeIfPresent(AITranscript.self, forKey: .transcript) {
+            self.transcript = transcript
+        } else {
+            self.transcript = AITranscript(messages: try container.decodeIfPresent([AIMessage].self, forKey: .messages) ?? [])
+        }
+        self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
+        self.maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? auralisDefaultMaxOutputTokens
+        self.tools = try container.decodeIfPresent([AIToolDefinition].self, forKey: .tools)
+        self.toolChoice = try container.decodeIfPresent(AIToolChoice.self, forKey: .toolChoice)
+        self.hostedTools = try container.decodeIfPresent([AIHostedTool].self, forKey: .hostedTools)
+        self.outputFormat = try container.decodeIfPresent(AIOutputFormat.self, forKey: .outputFormat)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(model, forKey: .model)
+        try container.encode(transcript, forKey: .transcript)
+        try container.encode(messages, forKey: .messages)
+        try container.encode(temperature, forKey: .temperature)
+        try container.encode(maxTokens, forKey: .maxTokens)
+        try container.encodeIfPresent(tools, forKey: .tools)
+        try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
+        try container.encodeIfPresent(hostedTools, forKey: .hostedTools)
+        try container.encodeIfPresent(outputFormat, forKey: .outputFormat)
     }
 }
 
@@ -466,6 +785,8 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
     public let finishReason: String?
     /// 模型要求的原生工具调用；非空时表示需要执行工具并回灌结果。
     public let toolCalls: [AIToolCall]?
+    /// Provider hosted web/search 返回的来源，不泄漏 Provider 私有 payload。
+    public let webCitations: [AIWebCitation]?
 
     public init(
         model: String,
@@ -474,7 +795,8 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
         inputTokens: Int? = nil,
         outputTokens: Int? = nil,
         finishReason: String? = nil,
-        toolCalls: [AIToolCall]? = nil
+        toolCalls: [AIToolCall]? = nil,
+        webCitations: [AIWebCitation]? = nil
     ) {
         self.model = model
         self.content = content
@@ -483,17 +805,80 @@ public struct AICompletionResponse: Codable, Hashable, Sendable {
         self.outputTokens = outputTokens
         self.finishReason = finishReason
         self.toolCalls = toolCalls
+        self.webCitations = webCitations
     }
+}
+
+public enum AIProbeStatus: String, Codable, Hashable, Sendable {
+    case passed
+    /// A transient observation failure. It is health telemetry only and must
+    /// never override a protocol's declared production capability.
+    case degraded
+    /// The endpoint explicitly rejected the requested capability. This is the
+    /// only negative probe result allowed to change effective configuration.
+    case failed
+    case unavailable
+    case notTested
+}
+
+/// Provider connectivity is not a single boolean.  These stages intentionally
+/// distinguish an authenticated text endpoint from streaming and native tool
+/// compatibility so callers can keep ordinary chat available when tools fail.
+public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
+    public let modelCatalog: AIProbeStatus
+    public let modelAvailability: AIProbeStatus
+    public let textCompletion: AIProbeStatus
+    public let streaming: AIProbeStatus
+    public let nativeTools: AIProbeStatus
+    public let toolChoice: AIProbeStatus
+    public let details: [String]
+
+    public init(
+        modelCatalog: AIProbeStatus = .notTested,
+        modelAvailability: AIProbeStatus = .notTested,
+        textCompletion: AIProbeStatus = .notTested,
+        streaming: AIProbeStatus = .notTested,
+        nativeTools: AIProbeStatus = .notTested,
+        toolChoice: AIProbeStatus = .notTested,
+        details: [String] = []
+    ) {
+        self.modelCatalog = modelCatalog
+        self.modelAvailability = modelAvailability
+        self.textCompletion = textCompletion
+        self.streaming = streaming
+        self.nativeTools = nativeTools
+        self.toolChoice = toolChoice
+        self.details = details
+    }
+
+    public var supportsOrdinaryChat: Bool {
+        // 流式探测失败时 Provider 会以同一协议的非流式补全投影为事件流；
+        // 因此普通聊天只依赖文本补全，不应被 SSE 兼容性一并禁用。
+        textCompletion == .passed
+    }
+
+    /// Diagnostic probes are observations. A standard protocol declaration is
+    /// only overridden by an explicit server-side rejection, never by EOF,
+    /// timeout, 5xx or an incomplete streamed probe.
+    public var streamingExplicitlyRejected: Bool { streaming == .failed }
+    public var nativeToolsExplicitlyRejected: Bool { nativeTools == .failed }
 }
 
 public struct AIConnectionResult: Codable, Hashable, Sendable {
     public let latency: TimeInterval
     public let model: String
     public let message: String
-    public init(latency: TimeInterval, model: String, message: String) {
+    public let diagnostics: AIProviderDiagnostics?
+    public init(
+        latency: TimeInterval,
+        model: String,
+        message: String,
+        diagnostics: AIProviderDiagnostics? = nil
+    ) {
         self.latency = latency
         self.model = model
         self.message = message
+        self.diagnostics = diagnostics
     }
 }
 
@@ -504,6 +889,8 @@ public enum AIStreamEvent: Equatable, Sendable {
     /// `response.output_item.done` / Chat 的 `delta.tool_calls`）。
     /// 复用 `AIToolCall`，不新增重复 DTO。
     case toolCall(AIToolCall)
+    /// Provider hosted web/search 返回的来源。
+    case webCitations([AIWebCitation])
     case completed
     case usage(input: Int, output: Int)
 }

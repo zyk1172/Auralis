@@ -80,7 +80,8 @@ struct AnthropicMessagesProviderTests {
                 baseURL: URL(string: "https://relay.example.com")!,
                 apiPath: "/v1/messages",
                 model: "claude-test",
-                supportsToolCalling: true
+                supportsToolCalling: true,
+                supportsToolChoice: true
             ),
             credentialVault: KeychainCredentialVault(),
             session: makeSession()
@@ -129,5 +130,30 @@ struct AnthropicMessagesProviderTests {
         #expect((body["tool_choice"] as? [String: Any])?["type"] as? String == "auto")
         #expect((body["tools"] as? [[String: Any]])?.first?["name"] as? String == "library_search")
         #expect((body["tools"] as? [[String: Any]])?.first?["input_schema"] is [String: Any])
+    }
+
+    @Test("Anthropic 将并行 tool result 聚合为一个 user content block")
+    func aggregatesParallelToolResults() throws {
+        let messages = AnthropicMessagesProvider.encodeMessages(AITranscript(messages: [
+            AIMessage(role: .user, content: "搜索两首歌"),
+            AIMessage(
+                role: .assistant,
+                content: "",
+                toolCalls: [
+                    AIToolCall(id: "call-1", name: "searchTracks", arguments: #"{"q":"夜曲"}"#),
+                    AIToolCall(id: "call-2", name: "searchTracks", arguments: #"{"q":"晴天"}"#),
+                ]
+            ),
+            AIMessage(role: .tool, content: "夜曲结果", toolCallID: "call-1", name: "searchTracks"),
+            AIMessage(role: .tool, content: "晴天结果", toolCallID: "call-2", name: "searchTracks"),
+        ]))
+
+        #expect(messages.count == 3)
+        let toolMessage = try #require(messages.last)
+        #expect(toolMessage["role"] as? String == "user")
+        let blocks = try #require(toolMessage["content"] as? [[String: Any]])
+        #expect(blocks.count == 2)
+        #expect(blocks.map { $0["type"] as? String } == ["tool_result", "tool_result"])
+        #expect(blocks.map { $0["tool_use_id"] as? String } == ["call-1", "call-2"])
     }
 }

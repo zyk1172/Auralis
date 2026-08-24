@@ -30,6 +30,7 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func currentQueue() -> [Track] { [] }
 
     private(set) var playedTracks: [GlobalID] = []
+    private(set) var addedToQueue: [GlobalID] = []
     private(set) var deletedPlaylists: [GlobalID] = []
     private(set) var replacedQueues: [[GlobalID]] = []
     private(set) var clearedQueueCount = 0
@@ -65,8 +66,9 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func setSleepTimer(mode: String, minutes: TimeInterval) async -> AgentMutationResult { .confirmed("已设置睡眠定时") }
     func cancelSleepTimer() async -> AgentMutationResult { .confirmed("已取消睡眠定时") }
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval) { ("off", 0) }
-    func addToQueue(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func addToQueue(globalID: GlobalID) async -> AgentMutationResult { addedToQueue.append(globalID); return .confirmed("ok") }
     func playNext(globalID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult { .confirmed("ok") }
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult { replacedQueues.append(globalIDs); return .confirmed("ok") }
     func removeFromQueue(at index: Int) async -> AgentMutationResult { .confirmed("ok") }
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
@@ -387,7 +389,7 @@ struct AgentPermissiveRuntimeTests {
             #"ACTION: {"tool":"playback_play_song","args":{"trackID":"test-server:t1"}}"#,
         ], closing: "已开始播放。")
         await AgentRunner.run(
-            userText: "给我直接放一组适合开车提神的歌。",
+            userText: "替换队列为一组适合开车提神的歌并播放。",
             provider: provider,
             model: "scripted-model",
             bridge: bridge,
@@ -795,11 +797,14 @@ struct AgentPermissiveRuntimeTests {
         #expect(await probe.calls == 0)
     }
 
-    @Test("TEST18 删除离线下载直接执行（无确认）")
+    @Test("TEST18 拆分后的下载历史删除工具保持直接执行元数据")
     func removeDownloadDirectExecution() async throws {
-        // 当前注册表没有专门的“删除下载”工具；若未来加入，必须直接执行。
-        let hasRemoveTool = AgentToolRegistry.all.contains { $0.name.contains("remove") && $0.name.contains("download") }
-        #expect(hasRemoveTool == false, "当前没有下载删除工具，本测试只记录现状；不要求凭空新增")
+        let removeTool = AgentToolRegistry.descriptor(for: "music_download_history_remove")
+        let cleanTool = AgentToolRegistry.descriptor(for: "music_download_history_clean")
+        #expect(removeTool != nil)
+        #expect(cleanTool != nil)
+        #expect(removeTool?.requiresConfirmation == false)
+        #expect(cleanTool?.requiresConfirmation == false)
     }
 
     // MARK: - TEST 19-22：conversation Intent 可调用写/播放/队列/推荐工具
@@ -853,7 +858,7 @@ struct AgentPermissiveRuntimeTests {
         try await seedPerm(store, [makePermTrack(serverID: "test-server", remoteID: "t1", title: "A")])
         let bridge = PermissiveBridge()
         let provider = PermissiveScriptedProvider(actionBatches: [
-            #"ACTION: {"tool":"queue_replace","args":{"trackIDs":"test-server:t1"}}"#,
+            #"ACTION: {"tool":"queue_append","args":{"trackID":"test-server:t1"}}"#,
         ], closing: "队列已更新。")
         await AgentRunner.run(
             userText: "把这首歌放进队列",
@@ -866,7 +871,7 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { _ in }
         )
-        #expect(bridge.replacedQueues.count == 1)
+        #expect(bridge.addedToQueue == [GlobalID(serverID: "test-server", remoteID: "t1")])
     }
 
     @Test("TEST22 conversation Intent 可调用推荐工具")
@@ -898,7 +903,7 @@ struct AgentPermissiveRuntimeTests {
 
     @Test("TEST27 旧别名映射回 canonical，不再重复暴露")
     func schemaPrefersCanonicalOverAlias() {
-        let search = ToolSelector.select(for: "搜索周杰伦", all: AgentToolRegistry.all)
+        let search = ToolSelector.select(for: "搜索周杰伦的歌曲", all: AgentToolRegistry.all)
         let searchNames = Set(search.map(\.name))
         #expect(searchNames.contains("library_search"))
         #expect(!searchNames.contains("searchTracks"))
@@ -1347,7 +1352,7 @@ struct AgentPermissiveRuntimeTests {
             #"ACTION: {"tool":"queue_replace","args":{"trackIDs":"\#(ids)"}}"#,
         ], closing: "队列已替换为 10 首。")
         await AgentRunner.run(
-            userText: "放一组 10 首提神的歌",
+            userText: "替换队列为 10 首提神的歌",
             provider: provider,
             model: "scripted-model",
             bridge: bridge,

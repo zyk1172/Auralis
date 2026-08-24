@@ -2,10 +2,11 @@ import AIKit
 import Foundation
 
 /// 动态工具加载：Schema 优化器，只决定“这次把哪些工具的 JSON Schema 给模型”，
-/// 绝不决定 Agent 能否完成任务（permissive runtime 里已注册工具默认全部可执行）。
+/// 绝不决定 Agent 能否完成任务：它只优化当前轮的 model schema；已注册工具的
+/// 执行仍统一经过 ToolRuntime，受精确副作用授权或受信任 Stateful Skill 约束。
 ///
 /// 规则：CommonSafeTools ∪ IntentSuggestedTools ∪ KeywordSuggestedTools ∪
-/// TaskRequiredTools（纯加法）。任务进行中由 AgentRunner 每轮用「用户原文 + 模型
+/// TaskRequiredTools（纯加法）。任务进行中由 ToolLoop 每轮用「用户原文 + 模型
 /// 已输出文本 + 已执行工具」重新展开，第一轮没选中的工具不会永久缺失。
 ///
 /// 选择结果同时驱动：
@@ -20,16 +21,11 @@ public enum ToolSelector {
     /// 仅保留跨意图都安全且体积很小的工具。大部分工具由意图和用户关键词按需加入；
     /// 把完整音乐库、播放、歌单和索引 Schema 常驻会显著降低小模型的工具选择准确率。
     static let coreNames: [String] = [
-        "library_get_summary", "app_get_context", "memory_list",
+        "tool_search", "capabilities_get", "app_get_context",
     ]
 
     static let recommendationIndexStatusNames: [String] = [
-        "library_index_v2_status", "library_index_v2_read", "library_index_v2_tag_catalog",
-    ]
-
-    static let recommendationIndexBuildNames: [String] = [
-        "library_index_v2_status", "library_index_v2_next_batch",
-        "library_index_v2_write_batch", "library_index_v2_tag_catalog",
+        "library_index_status", "library_index_read",
     ]
 
     static let playbackNames: [String] = [
@@ -40,7 +36,7 @@ public enum ToolSelector {
     ]
 
     static let queueNames: [String] = [
-        "queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear",
+        "queue_get", "queue_append", "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear",
         "queue_remove", "queue_move", "queue_shuffle_remaining",
     ]
 
@@ -171,7 +167,7 @@ public enum ToolSelector {
 
     /// 按用户请求选择工具集（去重保序；旧别名映射回 canonical）。
     public static func select(for userText: String, all: [ToolDescriptor]) -> [ToolDescriptor] {
-        select(for: userText, all: all, allowAmbiguousContinuation: true)
+        select(for: userText, all: all, allowAmbiguousContinuation: true, activeSkillID: nil)
     }
 
     /// Runtime 已经有结构化意图时，不把“继续”这种短词擅自解释成索引任务。
@@ -179,83 +175,115 @@ public enum ToolSelector {
     private static func select(
         for userText: String,
         all: [ToolDescriptor],
-        allowAmbiguousContinuation: Bool
+        allowAmbiguousContinuation: Bool,
+        activeSkillID: String?
     ) -> [ToolDescriptor] {
-        let lower = userText.lowercased()
+        let semantics = AgentRequestSemantics.analyze(userText)
         var names = coreNames
 
-        if containsAny(lower, ["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放"]) {
+        // A catalog summary is useful for an explicit Auralis request, but it
+        // is not a generic-chat tool merely because the user said "推荐" or
+        // "搜索".
+        if semantics.isMusicContext {
+            names += ["library_get_summary"]
+        }
+
+        if semantics.domain == .playback {
             names += playbackNames
         }
-        if containsAny(lower, ["队列", "接下来播放", "替换队列", "清空队列"]) {
+        if semantics.domain == .queue {
             names += queueNames
         }
-        if containsAny(lower, ["搜索", "查找", "找歌", "哪首", "哪个专辑", "谁唱的"]) {
-            names += ["library_search", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
+        if semantics.domain == .musicLibrary {
+            names += ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
         }
-        let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
-        if containsAny(lower, indexMarkers) {
-            let buildMarkers = ["构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
-            names += containsAny(lower, buildMarkers)
-                ? recommendationIndexBuildNames
-                : recommendationIndexStatusNames
+        if semantics.domain == .conversation,
+           semantics.suggestedToolNamespaces.contains("catalog"),
+           semantics.suggestedToolNamespaces.contains("web") {
+            names += ["library_search", "library_resolve_entity", "web_search"]
         }
-        // 旧的无上下文调用方仍可查询“继续”的完整索引工具；正式 Runtime 通过
-        // 意图/任务策略调用下面的重载，不会把这个歧义短词带入普通会话。
-        if allowAmbiguousContinuation,
-           lower.trimmingCharacters(in: .whitespacesAndNewlines) == "继续" {
-            names += recommendationIndexBuildNames
+        if semantics.suggestedToolNamespaces.contains("annotation") {
+            names += annotationNames
+        }
+        if semantics.suggestedToolNamespaces.contains("playlist") {
+            names += playlistNames
+        }
+        if semantics.suggestedToolNamespaces.contains("recommendation") {
+            names += recommendationNames
+        }
+        if semantics.isRecommendationIndex {
+            names += recommendationIndexStatusNames
         }
 
-        if containsAny(lower, ["歌单", "playlist", "播放列表"]) { names += playlistNames }
-        if containsAny(lower, ["收藏", "喜欢", "评分", "不喜欢", "不感兴趣", "favorite", "star", "heart", "dislike"]) { names += annotationNames }
-        if containsAny(lower, ["服务器", "同步", "连接", "在线", "server", "sync", "connect"]) { names += serverNames }
-        if containsAny(lower, ["推荐", "随机", "recommand", "shuffle", "深夜", "伤感", "女声", "标签", "挑选", "筛选", "清单", "热门", "火", "选", "列", "索引", "分类", "归类", "标注", "v2", "大众评价", "乐评", "评分", "资料", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "学习", "工作", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) { names += recommendationNames }
-        if containsAny(lower, ["页面", "打开", "功能", "能力", "后台", "siri", "快捷指令", "网络", "存储", "空间", "音频输出", "耳机", "设备", "app"]) {
+        if semantics.domain == .playlist { names += playlistNames }
+        if semantics.requestedOperations.contains(where: { [.favoriteSet, .ratingSet, .dislikedSet].contains($0) }) { names += annotationNames }
+        if semantics.domain == .server { names += serverNames }
+        if semantics.domain == .recommendation {
+            names += recommendationNames
+        }
+        if semantics.domain == .system {
             names += appDeviceNames
         }
-        if containsAny(lower, ["统计", "收听", "听了", "最常听", "热门", "最近添加", "最近加入", "新添加", "新加入", "格式", "缓存占用", "存储分布", "分布"]) {
+        if semantics.domain == .diagnostics {
             names += statsNames
         }
-        if containsAny(lower, ["为什么", "停止", "失败", "卡顿", "诊断", "原因", "diagnos", "error", "重复", "元数据", "封面", "损坏", "缓存", "陈旧缓存", "不可播放"]) {
+        if semantics.domain == .diagnostics {
             names += diagnosticsNames + catalogMaintenanceNames
         }
-        if containsAny(lower, ["歌词", "lyric"]) { names += ["lyrics_get"] }
-        if containsAny(lower, ["下载", "离线", "download", "offline"]) { names += ["media_download_offline", "getDownloadedTracks"] }
-        if containsAny(lower, ["记住", "记忆", "我是谁", "我叫", "名字", "喜欢", "skill", "技能", "memory"]) { names += ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"] }
+        if semantics.isMusicContext, semantics.suggestedToolNamespaces.contains("catalog") { names += ["lyrics_get"] }
+        if semantics.domain == .download { names += ["media_download_offline", "getDownloadedTracks"] }
+        if semantics.domain == .web { names += ["web_search", "web_fetch"] }
+        if semantics.domain == .memory {
+            names += ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
+        }
+        if let activeSkillID {
+            names += all.filter { $0.requiredSkillID == activeSkillID }.map(\.name)
+        }
 
         let unique = Self.resolvedNames(names)
-        let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
+        let byName = Dictionary(uniqueKeysWithValues: all.filter { $0.isVisible(toSkillID: activeSkillID) }.map { ($0.name, $0) })
         return unique.compactMap { byName[$0] }
     }
 
     /// 意图感知选择：KeywordSuggested ∪ IntentSuggested ∪ TaskRequired，纯加法。
-    /// 意图只是路由提示，不再裁剪能力；不会把任何已注册工具按 policy 过滤掉。
+    /// 意图只是路由提示，不再裁剪能力；不会把任何 model 工具按 policy 过滤掉。
     public static func select(
         for userText: String,
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
-        all: [ToolDescriptor]
+        all: [ToolDescriptor],
+        activeSkillID: String? = nil
     ) -> [ToolDescriptor] {
-        let selected = select(for: userText, all: all, allowAmbiguousContinuation: false)
+        let selected = select(for: userText, all: all, allowAmbiguousContinuation: false, activeSkillID: activeSkillID)
         let intentNames: Set<String>
         switch intent {
         case .conversation:
-            intentNames = ["library_get_summary", "app_get_context", "memory_list"]
+            // Generic conversation starts from the compact core set.  A
+            // model-visible tool is added by explicit semantics or
+            // tool_search, never merely because the caller supplied the
+            // compatibility `.conversation` intent.
+            intentNames = []
         case .librarySearch:
-            intentNames = ["library_search", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
+            intentNames = ["library_search", "library_resolve_entity", "library_get_song", "library_get_album", "library_get_artist", "server_search"]
         case .playbackControl:
             intentNames = ["playback_get_state", "playback_play_song", "playback_pause", "playback_resume", "playback_next", "playback_previous", "playback_seek", "playback_set_shuffle", "playback_set_repeat"]
+        case .playbackQuery:
+            intentNames = ["playback_get_state", "diagnostics_now_playing", "getCurrentTrack", "getCurrentQueue"]
         case .musicDiscovery:
             intentNames = ["library_get_catalog_index", "library_get_catalog_tracks", "library_select_tracks", "recommend_by_mood", "recommend_by_constraints", "library_get_similar_songs", "queue_replace", "queue_append", "playback_play_song", "playback_play_playlist", "favorite_set", "preference_set_disliked", "lyrics_get", "result_present_tracks"]
         case .queueManagement:
-            intentNames = ["queue_get", "queue_append", "queue_play_next", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
+            intentNames = ["queue_get", "queue_append", "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear", "queue_move", "queue_shuffle_remaining", "queue_save_as_playlist"]
+        case .queueQuery:
+            intentNames = ["queue_get", "getCurrentQueue"]
         case .playlistManagement:
             intentNames = ["library_search", "library_get_song", "listPlaylists", "library_get_playlist", "playlist_create", "playlist_add_songs", "removeTracksFromPlaylist", "deletePlaylist"]
+        case .playlistQuery:
+            intentNames = ["listPlaylists", "library_get_playlist", "getPlaylist"]
         case .libraryManagement:
-            intentNames = policy.completion == .indexPendingCountIsZero
-                ? Set(["library_get_summary"] + recommendationIndexBuildNames)
-                : Set(["library_get_summary", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked"])
+            intentNames = Set([
+                "library_get_summary", "favorite_set", "setRating", "clearRating", "preference_set_disliked", "library_get_disliked",
+                "library_index_status", "library_index_read",
+            ])
         case .serverManagement:
             intentNames = Set(serverNames)
         case .diagnostics:
@@ -263,30 +291,40 @@ public enum ToolSelector {
         case .musicAppreciation:
             intentNames = ["library_search", "library_get_song", "music_appreciate", "music_get_public_evidence"]
         case .musicDownload:
-            intentNames = ["library_search", "server_search", "music_download", "media_download_offline", "getDownloadedTracks"]
+            intentNames = ["library_search", "server_search", "music_download_search", "music_download_submit", "music_download_status", "music_download_tasks", "music_download_history", "music_download_history_remove", "music_download_history_clean", "media_download_offline", "getDownloadedTracks"]
         case .memoryManagement:
-            intentNames = ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
+            intentNames = ["memory_save", "memory_search", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
         }
         let names = selected.map(\.name) + intentNames.sorted()
+        let skillNames = activeSkillID.map { skillID in
+            all.filter { $0.requiredSkillID == skillID }.map(\.name)
+        } ?? []
         let unique = Self.resolvedNames(names)
-        let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
-        return unique.compactMap { byName[$0] }
+        let allNames = Self.resolvedNames(unique + skillNames)
+        let byName = Dictionary(uniqueKeysWithValues: all.filter { $0.isVisible(toSkillID: activeSkillID) }.map { ($0.name, $0) })
+        return allNames.compactMap { byName[$0] }
     }
 
     /// 把选中的工具描述转为原生 function calling 定义。
     public static func toolDefinitions(from descriptors: [ToolDescriptor]) -> [AIToolDefinition] {
-        descriptors.map { descriptor in
+        toolDefinitions(from: descriptors, strict: false)
+    }
+
+    /// Provider capabilities decide whether strict schema is emitted; the
+    /// descriptor itself remains provider-neutral.
+    public static func toolDefinitions(from descriptors: [ToolDescriptor], strict: Bool, activeSkillID: String? = nil) -> [AIToolDefinition] {
+        descriptors.filter { $0.isVisible(toSkillID: activeSkillID) }.map { descriptor in
             AIToolDefinition(
                 name: descriptor.name,
                 description: descriptor.summary,
-                parametersJSON: Self.parametersJSON(for: descriptor)
+                parametersJSON: Self.parametersJSON(for: descriptor),
+                strict: strict
             )
         }
     }
 
     /// 由 ToolParameter 生成最小 JSON Schema。
     static func parametersJSON(for descriptor: ToolDescriptor) -> String? {
-        guard !descriptor.parameters.isEmpty else { return nil }
         var properties: [String: Any] = [:]
         for parameter in descriptor.parameters {
             if let schemaJSON = parameter.schemaJSON,
@@ -303,12 +341,10 @@ public enum ToolSelector {
             "type": "object",
             "properties": properties,
             "required": required,
+            "additionalProperties": false,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: schema) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    private static func containsAny(_ text: String, _ keywords: [String]) -> Bool {
-        keywords.contains { text.contains($0.lowercased()) }
-    }
 }

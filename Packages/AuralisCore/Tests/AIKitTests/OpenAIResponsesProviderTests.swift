@@ -122,7 +122,8 @@ struct OpenAIResponsesProviderTests {
                 baseURL: URL(string: baseURL)!,
                 apiPath: apiPath,
                 model: "test-model",
-                supportsToolCalling: true
+                supportsToolCalling: true,
+                supportsToolChoice: true
             ),
             credentialVault: KeychainCredentialVault()
         )
@@ -468,7 +469,27 @@ struct OpenAIResponsesNetworkTests {
                 baseURL: URL(string: "https://api.openai.com")!,
                 apiPath: apiPath,
                 model: "test-model",
-                supportsToolCalling: true
+                supportsToolCalling: true,
+                supportsToolChoice: true
+            ),
+            credentialVault: KeychainCredentialVault(),
+            session: session
+        )
+    }
+
+    private func makeChatProvider(
+        session: URLSession,
+        baseURL: String = "https://api.openai.com",
+        model: String = "test-model",
+        verifiedModelAvailability: Bool = false
+    ) -> OpenAICompatibleProvider {
+        OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "test",
+                baseURL: URL(string: baseURL)!,
+                apiPath: "/v1/chat/completions",
+                model: model,
+                hasVerifiedModelAvailability: verifiedModelAvailability
             ),
             credentialVault: KeychainCredentialVault(),
             session: session
@@ -478,6 +499,138 @@ struct OpenAIResponsesNetworkTests {
     private func requestObject(from request: URLRequest) throws -> [String: Any] {
         let body = try #require(request.httpBody)
         return try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+    }
+
+    @Test func connectionDiagnosticsSeparateTextStreamingAndNativeTools() async throws {
+        let text = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"文本正常"}}]}"#
+        let stream = """
+        data: {"choices":[{"delta":{"content":"OK"}}]}
+
+        data: [DONE]
+        """
+        let unsupportedTools = #"{"error":{"type":"invalid_request_error","message":"tools are not supported"}}"#
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(data: Data(#"{"data":[{"id":"test-model"}]}"#.utf8)),
+            .response(data: Data(text.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
+            .response(statusCode: 400, data: Data(unsupportedTools.utf8)),
+        ])
+        let provider = makeChatProvider(session: makeMockSession())
+
+        let result = try await provider.testConnection()
+        let diagnostics = try #require(result.diagnostics)
+        #expect(diagnostics.modelCatalog == .passed)
+        #expect(diagnostics.modelAvailability == .passed)
+        #expect(diagnostics.textCompletion == .passed)
+        #expect(diagnostics.streaming == .passed)
+        #expect(diagnostics.nativeTools == .failed)
+        #expect(diagnostics.supportsOrdinaryChat)
+    }
+
+    @Test func openCodeGoDiagnosticsUsesTheModelsCatalogUnderItsGatewayPath() async throws {
+        let text = #"{"model":"mimo-v2.5","choices":[{"message":{"role":"assistant","content":"正常"}}]}"#
+        let stream = """
+        data: {"choices":[{"delta":{"content":"OK"}}]}
+
+        data: [DONE]
+        """
+        let tool = """
+        data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"probe","type":"function","function":{"name":"capabilities_get","arguments":"{}"}}]}}]}
+
+        data: [DONE]
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(data: Data(#"{"data":[{"id":"mimo-v2.5"}]}"#.utf8)),
+            .response(data: Data(text.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(tool.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(tool.utf8)),
+        ])
+        let provider = makeChatProvider(
+            session: makeMockSession(),
+            baseURL: "https://opencode.ai/zen/go",
+            model: "mimo-v2.5"
+        )
+
+        let result = try await provider.testConnection()
+        #expect(result.diagnostics?.modelAvailability == .passed)
+        #expect(AIKitMockURLProtocol.requests.first?.url?.absoluteString == "https://opencode.ai/zen/go/v1/models")
+    }
+
+    @Test func inconclusiveNativeToolProbeDoesNotMarkToolsAsUnsupported() async throws {
+        let text = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"文本正常"}}]}"#
+        let stream = """
+        data: {"choices":[{"delta":{"content":"OK"}}]}
+
+        data: [DONE]
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(data: Data(#"{"data":[{"id":"test-model"}]}"#.utf8)),
+            .response(data: Data(text.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
+        ])
+        let provider = makeChatProvider(session: makeMockSession())
+
+        let result = try await provider.testConnection()
+        let diagnostics = try #require(result.diagnostics)
+        #expect(diagnostics.nativeTools == .unavailable)
+        #expect(diagnostics.toolChoice == .notTested)
+        #expect(diagnostics.supportsOrdinaryChat)
+
+        let nativeProbe = try requestObject(from: try #require(AIKitMockURLProtocol.requests.last))
+        #expect(nativeProbe["stream"] as? Bool == true)
+        #expect(nativeProbe["tools"] != nil)
+        #expect(nativeProbe["tool_choice"] == nil)
+        #expect(nativeProbe["max_tokens"] as? Int == auralisDefaultMaxOutputTokens)
+    }
+
+    @Test func verifiedModelRoutingErrorRefreshesCatalogAndRecovers() async throws {
+        let modelError = #"{"type":"error","error":{"type":"ModelError","message":"不支持模型"}}"#
+        let success = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"恢复成功"}}]}"#
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(statusCode: 401, data: Data(modelError.utf8)),
+            .response(data: Data(#"{"data":[{"id":"test-model"}]}"#.utf8)),
+            .response(statusCode: 401, data: Data(modelError.utf8)),
+            .response(data: Data(success.utf8)),
+        ])
+        let provider = makeChatProvider(session: makeMockSession(), verifiedModelAvailability: true)
+
+        let result = try await provider.complete(AICompletionRequest(
+            model: "test-model",
+            messages: [AIMessage(role: .user, content: "hello")]
+        ))
+        #expect(result.content == "恢复成功")
+        let requests = AIKitMockURLProtocol.requests
+        #expect(requests.map { $0.url?.path } == [
+            "/v1/chat/completions", "/v1/models", "/v1/chat/completions", "/v1/chat/completions",
+        ])
+    }
+
+    @Test func nonStreamingProjectionKeepsOrdinaryChatAvailableAfterSSEFailure() async throws {
+        let response = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"普通聊天仍可用"}}]}"#
+        AIKitMockURLProtocol.reset(stubs: [.response(data: Data(response.utf8))])
+        let provider = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "test",
+                baseURL: URL(string: "https://api.openai.com")!,
+                model: "test-model",
+                usesStreaming: false
+            ),
+            credentialVault: KeychainCredentialVault(),
+            session: makeMockSession()
+        )
+
+        var events: [AIStreamEvent] = []
+        for try await event in provider.stream(AICompletionRequest(
+            model: "test-model",
+            messages: [AIMessage(role: .user, content: "你好")]
+        )) {
+            events.append(event)
+        }
+        #expect(events.contains(.delta("普通聊天仍可用")))
+        #expect(events.last == .completed)
+        #expect(AIKitMockURLProtocol.requests.first?.httpBody != nil)
     }
 
     /// 完整对话（system/user/assistant+toolCalls/tool/user）编码为 Responses input，
@@ -565,6 +718,34 @@ struct OpenAIResponsesNetworkTests {
         #expect(first["tools"] != nil)
     }
 
+    @Test func unverifiedToolChoiceIsOmittedWhileNativeToolsRemainPresent() async throws {
+        let success = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"好"}}]}"#
+        AIKitMockURLProtocol.reset(stubs: [.response(data: Data(success.utf8))])
+        let provider = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "test",
+                baseURL: URL(string: "https://api.openai.com")!,
+                apiPath: "/v1/chat/completions",
+                model: "test-model",
+                supportsToolCalling: true,
+                supportsToolChoice: false
+            ),
+            credentialVault: KeychainCredentialVault(),
+            session: makeMockSession()
+        )
+        let tool = AIToolDefinition(name: "capabilities_get", description: "读取能力")
+        _ = try await provider.complete(AICompletionRequest(
+            model: "test-model",
+            messages: [AIMessage(role: .user, content: "检查能力")],
+            tools: [tool],
+            toolChoice: .required
+        ))
+
+        let object = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
+        #expect(object["tools"] != nil)
+        #expect(object["tool_choice"] == nil)
+    }
+
     @Test func completesWithResponsesNonStream() async throws {
         let stubBody = """
         {"id":"resp_1","object":"response","model":"gpt-4.1","status":"completed",
@@ -587,24 +768,50 @@ struct OpenAIResponsesNetworkTests {
         #expect(object["max_tokens"] == nil)
     }
 
-    /// testConnection 跟随端点判定：Responses 路径发 max_output_tokens=32 的小请求。
+    /// 能力诊断的文本阶段仍须跟随 Responses 协议；模型目录、流式与工具探测
+    /// 不能把一次无工具文本成功误标为完整 Agent 可用。
     @Test func testConnectionFollowsResponsesEndpoint() async throws {
         let stubBody = """
         {"id":"resp_1","object":"response","model":"gpt-4.1","status":"completed",
          "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"连接正常"}]}],
          "usage":{"input_tokens":5,"output_tokens":3}}
         """
-        AIKitMockURLProtocol.reset(stubs: [.response(data: Data(stubBody.utf8))])
+        let sse = """
+        data: {"type":"response.output_text.delta","delta":"OK"}
+
+        data: [DONE]
+        """
+        let toolBody = """
+        data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_probe","type":"function_call","call_id":"probe","name":"capabilities_get","arguments":"{}"}}
+
+        data: {"type":"response.completed","response":{"id":"resp_tool"}}
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(data: Data(#"{"data":[{"id":"test-model"}]}"#.utf8)),
+            .response(data: Data(stubBody.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
+            .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
+        ])
         let provider = makeProvider(session: makeMockSession())
 
         let result = try await provider.testConnection()
         #expect(result.message.contains("连接正常"))
         #expect(result.model == "gpt-4.1")
 
-        let object = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
+        let requests = AIKitMockURLProtocol.requests
+        #expect(requests.count == 5)
+        let object = try requestObject(from: requests[1])
         #expect(object["max_output_tokens"] as? Int == 32)
         #expect(object["input"] != nil)
         #expect(object["messages"] == nil)
+        let nativeProbe = try requestObject(from: requests[3])
+        #expect(nativeProbe["stream"] as? Bool == true)
+        #expect(nativeProbe["tools"] != nil)
+        #expect(nativeProbe["tool_choice"] == nil)
+        #expect(nativeProbe["max_output_tokens"] as? Int == auralisDefaultMaxOutputTokens)
+        let toolChoiceProbe = try requestObject(from: requests[4])
+        #expect(toolChoiceProbe["tool_choice"] as? String == "required")
     }
 
     /// Chat 路径回归：apiPath 为 chat/completions 时仍用旧格式，不受 Responses 改动影响。
@@ -763,5 +970,90 @@ struct OpenAIResponsesNetworkTests {
         } catch {
             Issue.record("错误类型不符：\(error)")
         }
+    }
+
+    @Test func hostedWebCapabilityRequiresResponsesProtocol() {
+        let responses = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "responses",
+                baseURL: URL(string: "https://api.openai.com")!,
+                apiPath: "/v1/responses",
+                model: "gpt-5.6",
+                supportsToolCalling: true,
+                supportsHostedWebSearch: true,
+                supportsHostedWebFetch: true
+            ),
+            credentialVault: KeychainCredentialVault()
+        )
+        #expect(responses.capabilities.supportsHostedWebSearch)
+        #expect(responses.capabilities.supportsHostedWebFetch == false)
+
+        let chat = OpenAICompatibleProvider(
+            configuration: AIProviderConfiguration(
+                name: "chat",
+                baseURL: URL(string: "https://api.openai.com")!,
+                apiPath: "/v1/chat/completions",
+                model: "gpt-5-search-api",
+                supportsToolCalling: true,
+                supportsHostedWebSearch: true
+            ),
+            credentialVault: KeychainCredentialVault()
+        )
+        #expect(chat.capabilities.supportsHostedWebSearch == false)
+    }
+
+    @Test func sendsResponsesHostedWebToolAndMapsCitations() async throws {
+        let responseBody = """
+        {"id":"resp_web","object":"response","model":"gpt-5.6","status":"completed",
+         "output":[
+           {"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"latest news"}},
+           {"type":"message","role":"assistant","content":[{"type":"output_text","text":"结果见来源。","annotations":[{"type":"url_citation","url":"https://example.com/news#section","title":"Example News","start_index":0,"end_index":4}]}]}
+         ]}
+        """
+        AIKitMockURLProtocol.reset(stubs: [.response(data: Data(responseBody.utf8))])
+        let provider = makeProvider(session: makeMockSession())
+        let response = try await provider.complete(AICompletionRequest(
+            model: "gpt-5.6",
+            messages: [AIMessage(role: .user, content: "查最新新闻")],
+            hostedTools: [.webSearch]
+        ))
+
+        let body = try requestObject(from: try #require(AIKitMockURLProtocol.requests.first))
+        let tools = try #require(body["tools"] as? [[String: Any]])
+        #expect(tools.count == 1)
+        #expect(tools[0]["type"] as? String == "web_search")
+        #expect(tools[0]["function"] == nil)
+        let citation = try #require(response.webCitations?.first)
+        #expect(citation.title == "Example News")
+        #expect(citation.url.absoluteString == "https://example.com/news#section")
+        #expect(citation.backend == "openai-responses")
+    }
+
+    @Test func streamsResponsesHostedWebCitations() async throws {
+        let sse = """
+        data: {"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"结果","annotations":[{"type":"url_citation","url":"https://example.com/a","title":"A"}]}]}}
+
+        data: {"type":"response.completed"}
+
+        data: [DONE]
+        """
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+        ])
+        let provider = makeProvider(session: makeMockSession())
+        var events: [AIStreamEvent] = []
+        for try await event in provider.stream(AICompletionRequest(
+            model: "test-model",
+            messages: [AIMessage(role: .user, content: "搜新闻")],
+            hostedTools: [.webSearch]
+        )) {
+            events.append(event)
+        }
+        #expect(events.contains { event in
+            if case let .webCitations(citations) = event {
+                return citations.first?.title == "A"
+            }
+            return false
+        })
     }
 }

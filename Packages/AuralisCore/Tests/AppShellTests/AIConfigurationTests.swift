@@ -108,3 +108,17 @@ func customMessagesPathUsesAnthropicProvider() throws {
     #expect(settings.isComplete)
     #expect(settings.makeProvider() is AnthropicMessagesProvider)
 }
+
+@Test("标准 Chat 协议不会因未运行能力诊断而关闭原生工具")
+func declaredChatProtocolKeepsNativeToolsEnabled() throws {
+    let defaults = try #require(UserDefaults(suiteName: "auralis-ai-config-test-\(UUID())"))
+    defaults.set("https://gateway.example.com", forKey: AIConnectionSettings.Keys.baseURL)
+    defaults.set("/v1/chat/completions", forKey: AIConnectionSettings.Keys.apiPath)
+    defaults.set("gateway-model", forKey: AIConnectionSettings.Keys.model)
+    defaults.set(AIEndpointMode.chatCompletions.rawValue, forKey: AIConnectionSettings.Keys.endpointMode)
+    let settings = AIConnectionSettings(defaults: defaults)
+
+    let provider = try #require(settings.makeProvider())
+    #expect(provider.supportsToolCalling)
+    #expect(provider.capabilities.toolMode == .openAIChat)
+}

@@ -148,12 +148,25 @@ enum AIEndpointMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 
     var supportsToolCalling: Bool {
-        true
+        // 协议选择是用户对 wire format 的显式声明。它决定可否尝试原生 tools，
+        // 不是一次模型行为探针的硬门禁；实际协议拒绝仍会被 Provider 明确上报。
+        switch self {
+        case .chatCompletions, .responses, .anthropicMessages:
+            return true
+        case .custom:
+            return false
+        }
     }
 
     var isSupported: Bool {
         true
     }
+}
+
+private struct VerifiedProviderCapabilities: Codable, Sendable {
+    let fingerprint: String
+    let diagnostics: AIProviderDiagnostics
+    let checkedAt: Date
 }
 
 /// 设置页与 AI 助手共用的接口配置。普通字段存 UserDefaults，
@@ -177,6 +190,7 @@ struct AIConnectionSettings: Sendable {
         static let endpointMode = "auralis.ai.endpointMode"
         static let maxContextTokens = "auralis.ai.maxContextTokens"
         static let maxOutputTokens = "auralis.ai.maxOutputTokens"
+        static let verifiedCapabilities = "auralis.ai.verifiedProviderCapabilities"
     }
 
     static let defaultBaseURL = "https://api.openai.com"
@@ -185,6 +199,7 @@ struct AIConnectionSettings: Sendable {
     static let defaultMaxContextTokens = auralisDefaultMaxContextTokens
     static let defaultMaxOutputTokens = auralisDefaultMaxOutputTokens
     static let defaultTimeout = auralisDefaultRequestTimeout
+    private static let verifiedCapabilitiesTTL: TimeInterval = 24 * 60 * 60
 
     init(defaults: UserDefaults = .standard) {
         baseURL = defaults.string(forKey: Keys.baseURL) ?? Self.defaultBaseURL
@@ -265,6 +280,48 @@ struct AIConnectionSettings: Sendable {
         "\(effectiveEndpointMode.title) · \(effectiveAPIPath)"
     }
 
+    private var capabilityFingerprint: String {
+        [
+            normalizedBaseURL()?.absoluteString.lowercased() ?? baseURL.lowercased(),
+            effectiveAPIPath.lowercased(),
+            model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+        ].joined(separator: "|")
+    }
+
+    private var verifiedCapabilities: AIProviderDiagnostics? {
+        guard let data = UserDefaults.standard.data(forKey: Keys.verifiedCapabilities),
+              let saved = try? JSONDecoder().decode(VerifiedProviderCapabilities.self, from: data),
+              saved.fingerprint == capabilityFingerprint,
+              Date().timeIntervalSince(saved.checkedAt) <= Self.verifiedCapabilitiesTTL
+        else { return nil }
+        return saved.diagnostics
+    }
+
+    static func persistDiagnostics(_ diagnostics: AIProviderDiagnostics, for settings: AIConnectionSettings) {
+        // “模型这次没有调用测试工具”只能说明探测不确定，不能作为长期负能力
+        // 缓存。保留其它已验证阶段，同时让下次诊断重新尝试 native/tool_choice。
+        let persisted = AIProviderDiagnostics(
+            modelCatalog: diagnostics.modelCatalog,
+            modelAvailability: diagnostics.modelAvailability,
+            textCompletion: diagnostics.textCompletion,
+            streaming: diagnostics.streaming,
+            nativeTools: diagnostics.nativeTools == .unavailable ? .notTested : diagnostics.nativeTools,
+            toolChoice: diagnostics.toolChoice == .unavailable ? .notTested : diagnostics.toolChoice,
+            details: diagnostics.details
+        )
+        let saved = VerifiedProviderCapabilities(
+            fingerprint: settings.capabilityFingerprint,
+            diagnostics: persisted,
+            checkedAt: .now
+        )
+        guard let data = try? JSONEncoder().encode(saved) else { return }
+        UserDefaults.standard.set(data, forKey: Keys.verifiedCapabilities)
+    }
+
+    static func clearPersistedDiagnostics() {
+        UserDefaults.standard.removeObject(forKey: Keys.verifiedCapabilities)
+    }
+
     /// 校验未通过时的可读原因，便于设置页给出明确提示。
     var completenessError: String? {
         if normalizedBaseURL() == nil {
@@ -295,7 +352,18 @@ struct AIConnectionSettings: Sendable {
             maxTokens: maxOutputTokens,
             maxContextTokens: maxContextTokens,
             timeout: Self.defaultTimeout,
-            supportsToolCalling: effectiveEndpointMode.supportsToolCalling
+            // Protocol declaration owns production capability. A probe can
+            // override it only after an explicit `stream` rejection; transient
+            // EOF/timeout/5xx are persisted as `.degraded` health telemetry.
+            usesStreaming: !(verifiedCapabilities?.streamingExplicitlyRejected ?? false),
+            // 已知协议默认可尝试原生工具；自定义 path 只有已经观测到真实
+            // native tool 调用成功时才启用。一次不确定结果绝不能关闭标准
+            // Provider 的真实工具路径。
+            supportsToolCalling: (effectiveEndpointMode.supportsToolCalling
+                || verifiedCapabilities?.nativeTools == .passed)
+                && !(verifiedCapabilities?.nativeToolsExplicitlyRejected ?? false),
+            hasVerifiedModelAvailability: verifiedCapabilities?.modelAvailability == .passed,
+            supportsToolChoice: verifiedCapabilities?.toolChoice == .passed
         )
         if effectiveEndpointMode == .anthropicMessages {
             return AnthropicMessagesProvider(configuration: configuration, credentialVault: credentialVault, session: session)

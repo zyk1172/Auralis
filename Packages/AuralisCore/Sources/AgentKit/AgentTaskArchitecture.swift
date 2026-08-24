@@ -4,14 +4,17 @@ import Foundation
 import LocalCatalog
 
 /// 用户请求的粗粒度意图。意图只用于任务理解、工具排序、提示、完成语义与 UI/诊断，
-/// 不再是普通音乐工具的执行权限边界（permissive direct-execution runtime）。
+/// 不再是普通模型工具或可信 Stateful Skill 之外工具的执行权限边界。
 public enum AgentTaskIntent: String, Codable, CaseIterable, Sendable {
     case conversation
     case librarySearch
     case playbackControl
+    case playbackQuery
     case musicDiscovery
     case queueManagement
+    case queueQuery
     case playlistManagement
+    case playlistQuery
     case libraryManagement
     case serverManagement
     case diagnostics
@@ -130,8 +133,8 @@ public enum AgentCompletionPredicate: Codable, Equatable, Sendable {
 }
 
 /// 每个任务的路由/诊断策略（intent、completion、budget 等）。
-/// 已注册的普通音乐工具默认全部允许执行；`authorizes` 不再构成能力门禁，
-/// 保留方法仅为兼容旧调用方，恒返回 true。
+/// `authorizes` 不再构成模型能力门禁，保留方法仅为兼容旧调用方，恒返回 true；
+/// 真实副作用授权由 ToolRuntime 按 canonical operation 执行。
 public struct AgentTaskPolicy: Codable, Equatable, Sendable {
     public let intent: AgentTaskIntent
     public let scopes: Set<GrantedScope>
@@ -154,6 +157,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
                 "searchTracks", "searchAlbums", "searchArtists", "getTrack", "getAlbum", "getArtist",
                 "library_search", "server_search", "library_get_song", "library_get_album", "library_get_artist",
                 "library_get_playlist", "library_get_catalog_index", "library_get_catalog_tracks",
+                "getFavorites", "library_get_starred", "library_get_disliked", "library_get_recently_played",
             ]
         case .playbackControl:
             return [
@@ -163,17 +167,23 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
                 "playback_seek", "playback_set_shuffle", "playback_set_repeat", "playback_set_speed",
                 "playback_set_sleep_timer", "playback_cancel_sleep_timer",
             ]
+        case .playbackQuery:
+            return [
+                "playback_get_state", "diagnostics_now_playing", "getCurrentTrack", "getCurrentQueue",
+            ]
         case .musicDiscovery:
             return [
                 "library_search", "library_select_tracks", "library_get_catalog_index", "library_get_catalog_tracks",
-                "library_index_v2_read", "server_search", "recommend_by_mood", "recommend_by_constraints",
+                "library_index_read", "server_search", "recommend_by_mood", "recommend_by_constraints",
                 "result_present_tracks", "getSimilarTracks", "library_get_similar_songs",
             ]
         case .queueManagement:
             return [
                 "queue_remove", "removeFromQueue", "reorderQueue", "clearQueue", "queue_get", "queue_append",
-                "queue_play_next", "queue_replace", "queue_clear", "queue_shuffle_remaining", "queue_move",
+                "queue_append_many", "queue_play_next", "queue_play_next_many", "queue_replace", "queue_clear", "queue_shuffle_remaining", "queue_move",
             ]
+        case .queueQuery:
+            return ["queue_get", "getCurrentQueue"]
         case .playlistManagement:
             return [
                 "listPlaylists", "getPlaylist", "createPlaylist", "renamePlaylist", "addTracksToPlaylist",
@@ -181,6 +191,8 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
                 "playlist_create", "playlist_add_songs", "playlist_rename", "playlist_remove_songs", "playlist_move",
                 "playlist_duplicate", "playlist_merge", "playlist_delete", "queue_save_as_playlist",
             ]
+        case .playlistQuery:
+            return ["listPlaylists", "getPlaylist", "library_get_playlist"]
         case .libraryManagement:
             return [
                 "getFavorites", "library_search", "library_get_summary", "library_get_song", "library_get_album", "library_get_artist",
@@ -189,7 +201,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
                 "library_find_broken_artwork", "library_find_stale_cache", "library_find_unplayable",
                 "likeTrack", "unlikeTrack", "favoriteAlbum", "unfavoriteAlbum", "favoriteArtist", "unfavoriteArtist",
                 "setRating", "clearRating", "favorite_set", "rating_set", "preference_set_disliked",
-                "refreshLibrary", "server_sync_start",
+                "refreshLibrary", "server_sync_start", "library_index_status", "library_index_read",
             ]
         case .serverManagement:
             return [
@@ -209,7 +221,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .musicAppreciation:
             return ["music_appreciate", "music_get_public_evidence", "lyrics_get", "library_get_song"]
         case .musicDownload:
-            return ["music_download", "media_download_offline", "cache_get_status"]
+            return ["music_download", "music_download_search", "music_download_submit", "music_download_status", "music_download_tasks", "music_download_history", "music_download_history_remove", "music_download_history_clean", "media_download_offline", "cache_get_status"]
         case .memoryManagement:
             return ["memory_save", "memory_list", "memory_delete", "memory_clear", "skill_create", "skill_list", "skill_read", "skill_delete"]
         }
@@ -260,12 +272,18 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
             return .init(intent: intent, scopes: [.catalogRead, .serverRead], allowedToolGroups: [.catalog, .server], allowedPermissions: read, completion: .successfulToolResult)
         case .playbackControl:
             return .init(intent: intent, scopes: [.catalogRead, .playbackWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: write, maxRisk: .medium, completion: .playbackMutation)
+        case .playbackQuery:
+            return .init(intent: intent, scopes: [.catalogRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback], allowedPermissions: read)
         case .musicDiscovery:
             return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
         case .queueManagement:
             return .init(intent: intent, scopes: [.catalogRead, .playbackWrite, .queueWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: destructive, maxRisk: .high, completion: .queueMutation)
+        case .queueQuery:
+            return .init(intent: intent, scopes: [.catalogRead], allowedToolGroups: [.catalog, .playback], allowedPermissions: read)
         case .playlistManagement:
             return .init(intent: intent, scopes: [.catalogRead, .playlistWrite], allowedToolGroups: [.catalog, .playlist], allowedPermissions: destructive, maxRisk: .high, completion: .playlistMutation)
+        case .playlistQuery:
+            return .init(intent: intent, scopes: [.catalogRead], allowedToolGroups: [.catalog, .playlist], allowedPermissions: read)
         case .libraryManagement:
             return .init(intent: intent, scopes: [.catalogRead, .annotationWrite], allowedToolGroups: [.catalog, .annotation], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult)
         case .serverManagement:
@@ -519,31 +537,41 @@ public enum AgentIntentClassifier {
     }
 
     private static func classifyDirect(_ text: String) -> AgentTaskIntent {
-        let value = text.lowercased()
-        func has(_ words: [String]) -> Bool { words.contains { value.contains($0) } }
-        // “推荐索引”是资料库维护任务，不是普通音乐推荐；优先于 discovery 关键词。
-        if has(["推荐索引", "索引 v2", "索引v2", "library_index_v2"]) { return .libraryManagement }
-        if has(["鉴赏", "赏析", "乐评", "大众评价", "appreciate"]) { return .musicAppreciation }
-        if has(["下载", "离线", "torrent", "moviepilot"]) { return .musicDownload }
-        if has(["诊断", "为什么", "错误", "失败", "日志", "卡住"]) { return .diagnostics }
-        if has(["播放状态", "当前播放状态", "正在播放状态"]) { return .diagnostics }
-        if has(["服务器", "同步", "连接", "navidrome", "nas"]) { return .serverManagement }
-        if has(["歌单", "playlist"]) { return .playlistManagement }
-        if has(["队列", "接下来播放", "替换队列", "清空队列"]) { return .queueManagement }
-        if has(["推荐", "相似", "发现", "随便听", "心情", "场景", "开车", "驾驶", "通勤", "提神", "运动", "健身", "跑步", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听", "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首"]) { return .musicDiscovery }
-        if has(["播放", "暂停", "下一首", "上一首", "快进", "循环", "随机播放"]) { return .playbackControl }
-        if has(["收藏", "评分", "资料库", "索引 v2", "索引v2"]) { return .libraryManagement }
-        if has(["记住", "记忆", "忘记", "技能", "memory", "skill"]) { return .memoryManagement }
-        if has(["找歌", "搜索", "查找", "哪首", "哪个专辑", "谁唱的"]) { return .librarySearch }
+        let semantics = AgentRequestSemantics.analyze(text)
+
+        // Appreciation is a deterministic evidence workflow, so it is
+        // checked before the shared playback/diagnostic domain mapping.
+        if semantics.isMusicAppreciation {
+            return .musicAppreciation
+        }
+        if semantics.domain == .memory { return .memoryManagement }
+        if semantics.isRecommendationIndex {
+            return .libraryManagement
+        }
+        if semantics.domain == .download { return .musicDownload }
+        if semantics.domain == .server { return .serverManagement }
+        if semantics.domain == .diagnostics {
+            return .diagnostics
+        }
+        switch semantics.domain {
+        case .playlist:
+            return semantics.isReadOnly ? .playlistQuery : .playlistManagement
+        case .queue:
+            return semantics.isReadOnly ? .queueQuery : .queueManagement
+        case .playback:
+            return semantics.isReadOnly ? .playbackQuery : .playbackControl
+        case .recommendation:
+            return .musicDiscovery
+        case .musicLibrary:
+            return .librarySearch
+        case .conversation, .web, .system, .memory, .download, .server, .diagnostics:
+            break
+        }
         return .conversation
     }
 
     private static func isContinuation(_ text: String) -> Bool {
-        let normalized = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "，。！？!?、；;：: \t\n"))
-        return ["继续", "继续吧", "第一个", "第一个吧", "就这个", "就它"].contains(normalized)
+        AgentHistoryPolicy.isExplicitContinuation(text)
     }
 }
 
@@ -588,14 +616,11 @@ public enum AgentTaskPolicyResolver {
     }
 }
 
-/// Recommendation Index 是普通本地工具服务；这里只负责在任务创建边界选择完成条件，
-/// 不参与模型循环、重试、超时或工具分派。
+/// Recommendation Index 的任务兼容规则只负责在任务创建边界选择恢复策略；真正的
+/// 批次状态、重试、checkpoint 和完成判定由 RecommendationIndexSkillRuntime 持有。
 public enum RecommendationIndexTaskRules {
     public static func requiresCompleteBuild(text: String, historyText: String = "") -> Bool {
-        let combined = (text + " " + historyText).lowercased()
-        let indexMarkers = ["推荐索引", "索引 v2", "索引v2", "index v2", "library_index_v2"]
-        let actionMarkers = ["构建", "重建", "继续", "处理", "分类", "一次性", "全部", "完成索引"]
-        return indexMarkers.contains(where: combined.contains) && actionMarkers.contains(where: combined.contains)
+        AgentRequestSemantics.analyze(text, historyText: historyText).isRecommendationIndexBuild
     }
 }
 
@@ -688,6 +713,9 @@ public enum AgentTaskReducer {
 
 /// Runtime 层的确定性完成判定。LLM 的自然语言只是一份候选答案；任务事实未满足时，
 /// Runtime 要求继续或明确失败，不能把“看起来完成”当成真实完成。
+///
+/// 普通聊天不会进入这里；活动 Recommendation Index 路径由专用 Runtime 完整拥有。
+/// index 分支只读取历史 task facts，绝不再向模型下发 batch/commit 控制指令。
 public enum AgentCompletionEvaluator {
     /// 判断任务事实是否已经足够完成，不依赖模型是否又输出了一句客套话。
     /// 播放、搜索、队列、歌单等真实工具成功后，空 content 也不能覆盖成功事实。
@@ -768,17 +796,9 @@ public enum AgentCompletionEvaluator {
             let pendingFixed = state.facts["recommendation.index.pending"]
             let pendingSemantic = state.facts["recommendation.index.pendingSemantic"] ?? "0"
             satisfied = pendingFixed == "0" && pendingSemantic == "0"
-            if pendingFixed == nil {
-                continuation = "推荐索引完成事实尚未取得。请先调用 library_index_v2_status；只有真实工具结果显示固定分类与开放语义标签都无待处理项才能结束。"
-            } else if pendingFixed != "0" {
-                continuation = "推荐索引仍有待分类歌曲（固定分类待处理 \(pendingFixed ?? "?") 首）。请调用 library_index_v2_next_batch 获取当前安全批次，写回后再次调用 next_batch；直到固定分类与开放标签都完成。"
-            } else if pendingSemantic != "0" {
-                continuation = "推荐索引固定分类已完成，但仍需为 \(pendingSemantic) 首歌曲补充开放语义标签。请继续调用 library_index_v2_next_batch（本批模式 semanticTagsOnly）并写回。"
-            } else if state.facts["recommendation.index.nextBatchAvailable"] == "true" {
-                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch 获取完整当前批次，分类后再调用 library_index_v2_write_batch。"
-            } else {
-                continuation = "推荐索引仍有待分类歌曲。请调用 library_index_v2_next_batch 获取当前安全批次并持续分类写回。"
-            }
+            continuation = pendingFixed == nil
+                ? "推荐索引尚未获得状态事实。"
+                : "推荐索引仍有待处理歌曲；专用 Runtime 会继续处理并核验。"
         case .appreciationWithEvidence:
             let metadataReady = state.facts["appreciation.metadata"] == "available"
             let lyricsResolved = state.facts["appreciation.lyrics"] != nil
@@ -815,11 +835,15 @@ public enum AgentCompletionEvaluator {
     }
 }
 
-/// Runtime 是任务生命周期与策略的拥有者；旧 Runner 暂作为低层模型循环实现。
+/// Runtime 是确定性任务的生命周期与策略拥有者；通用聊天直接进入
+/// ConversationEngine/ToolLoop，旧 AgentRunner 只保留 source-compatible forwarding。
 public actor AgentRuntime {
     private var runningTaskIDs: Set<UUID> = []
+    private let conversationEngine: ConversationEngine
 
-    public init() {}
+    public init(conversationEngine: ConversationEngine = ConversationEngine()) {
+        self.conversationEngine = conversationEngine
+    }
 
     public func isRunning(_ id: UUID) -> Bool { runningTaskIDs.contains(id) }
 
@@ -841,15 +865,20 @@ public actor AgentRuntime {
         model: String,
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
-        context: AgentRunner.Context,
+        context: ToolLoop.Context,
         history: [AgentChatMessage] = [],
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        webService: (any AgentWebService)? = nil,
         initialTaskState: AgentTaskState? = nil,
+        authorizationContext: SideEffectAuthorizationContext? = nil,
+        executionLineage: ExecutionLineage? = nil,
+        runID: UUID = UUID(),
+        executionLease: ToolExecutionLease? = nil,
         confirm: @escaping @Sendable (PendingConfirmation) async -> Bool,
         emit: @escaping @Sendable (AgentChatMessage) async -> Void,
         log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in },
-        progress: @escaping @Sendable (AgentRunner.AgentProgress) async -> Void = { _ in },
+        progress: @escaping @Sendable (ToolLoop.AgentProgress) async -> Void = { _ in },
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in }
     ) async {
         let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
@@ -865,7 +894,7 @@ public actor AgentRuntime {
         runningTaskIDs.insert(taskID)
         defer { runningTaskIDs.remove(taskID) }
         await state(taskState)
-        await AgentRunner.run(
+        await conversationEngine.run(
             userText: userText,
             provider: provider,
             model: model,
@@ -875,9 +904,14 @@ public actor AgentRuntime {
             history: history,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            webService: webService,
             intent: intent,
             policy: policy,
             initialTaskState: taskState,
+            authorizationContext: authorizationContext,
+            executionLineage: executionLineage,
+            runID: runID,
+            executionLease: executionLease,
             confirm: confirm,
             emit: emit,
             log: log,

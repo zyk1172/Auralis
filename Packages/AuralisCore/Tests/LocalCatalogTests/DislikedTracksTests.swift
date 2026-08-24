@@ -120,21 +120,21 @@ struct DislikedTracksTests {
         let store = try makeStore()
         let serverID: ServerID = "s1"
         try await seed(store, [track(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(id: id, moods: ["平静"], scenes: ["深夜"], energy: 3, confidence: 0.9)
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(id: id, moods: ["平静"], scenes: ["深夜"], energy: 3, confidence: 0.9)
         ], serverID: serverID)
-        #expect((try await store.recommendationIndexV2Status(serverID: serverID)).indexedTracks == 1)
+        #expect((try await store.recommendationIndexStatus(serverID: serverID)).indexedTracks == 1)
 
         // 标记不喜欢后索引仍有效（content hash 不含 dislike）。
         try await store.setDisliked(GlobalID(serverID: serverID, remoteID: "t1"), value: true)
-        let status = try await store.recommendationIndexV2Status(serverID: serverID)
+        let status = try await store.recommendationIndexStatus(serverID: serverID)
         #expect(status.indexedTracks == 1)
         #expect(status.pendingTracks == 0)
 
         // V2 导出不含 dislike（导出包只含分类字段）。
-        let package = try await store.exportRecommendationIndexV2Package(serverID: serverID)
+        let package = try await store.exportRecommendationIndexPackage(serverID: serverID)
         #expect(package.trackCount == 1)
     }
 
@@ -143,11 +143,11 @@ struct DislikedTracksTests {
         let store = try makeStore()
         let serverID: ServerID = "s1"
         try await seed(store, [track(serverID: serverID, remoteID: "t1", title: "Song")])
-        let batch = try await store.nextRecommendationIndexV2Batch(serverID: serverID, limit: 10)
+        let batch = try await store.nextRecommendationIndexBatch(serverID: serverID, limit: 10)
         let id = try #require(batch.tracks.first?.id)
         // 完整分类：固定维度 + 开放语义标签。
-        _ = try await store.writeRecommendationIndexV2([
-            RecommendationIndexV2Classification(
+        _ = try await store.writeRecommendationIndex([
+            RecommendationIndexClassification(
                 id: id,
                 moods: ["平静"],
                 energy: 3,
@@ -181,7 +181,7 @@ struct DislikedTracksTests {
         #expect(dims.contains("texture"))
 
         // status 统计开放标签。
-        let status = try await store.recommendationIndexV2Status(serverID: serverID)
+        let status = try await store.recommendationIndexStatus(serverID: serverID)
         #expect(status.indexedTracks == 1)
         #expect(status.semanticTaggedTracks == 1)
         #expect(status.pendingSemanticTagTracks == 0)

@@ -1,4 +1,5 @@
 import Application
+import AIKit
 import DesignSystem
 import Domain
 import LocalCatalog
@@ -652,6 +653,7 @@ struct AIProviderSettingsPage: View {
     @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
     @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
     @State private var endpointMode: AIEndpointMode = .chatCompletions
+    @State private var isApplyingEndpointConfiguration = false
     @State private var isConfiguringAPIKey = false
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
@@ -683,10 +685,8 @@ struct AIProviderSettingsPage: View {
                         .labelsHidden()
                         .pickerStyle(.menu)
                         .onChange(of: endpointMode) { _, newValue in
-                            aiEndpointModeRaw = newValue.rawValue
-                            if let apiPath = newValue.apiPath {
-                                aiAPIPath = apiPath
-                            }
+                            guard !isApplyingEndpointConfiguration else { return }
+                            applyEndpointConfiguration(newValue)
                         }
                     }
                     if endpointMode == .custom {
@@ -747,6 +747,7 @@ struct AIProviderSettingsPage: View {
                             Button(String(localized: "删除", bundle: .module), role: .destructive) {
                                 Task {
                                     try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
+                                    AIConnectionSettings.clearPersistedDiagnostics()
                                     hasAPIKey = false
                                 }
                             }
@@ -806,7 +807,7 @@ struct AIProviderSettingsPage: View {
 支持 OpenAI Chat Completions、OpenAI Responses API，
 以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio
 和兼容 OpenAI 协议的中转服务。Anthropic Messages
-暂未实现；选择该协议时不会发送请求。
+也支持原生流式与工具调用；不同网关的能力诊断会单独显示。
 API Key 仅保存于系统 Keychain。
 """, bundle: .module))
                     .font(.caption)
@@ -891,10 +892,8 @@ API Key 仅保存于系统 Keychain。
                 .pickerStyle(.menu)
 #endif
                 .onChange(of: endpointMode) { _, newValue in
-                    aiEndpointModeRaw = newValue.rawValue
-                    if let apiPath = newValue.apiPath {
-                        aiAPIPath = apiPath
-                    }
+                    guard !isApplyingEndpointConfiguration else { return }
+                    applyEndpointConfiguration(newValue)
                 }
                 if endpointMode == .custom {
                     TextField(String(localized: "API 路径", bundle: .module), text: $aiAPIPath, prompt: Text("/v1/chat/completions"))
@@ -945,6 +944,7 @@ API Key 仅保存于系统 Keychain。
                     ) {
                         APIKeyPage(theme: theme, hasExistingKey: hasAPIKey) { key in
                             try await credentialVault.store(key, for: AIConnectionSettings.credentialID)
+                            AIConnectionSettings.clearPersistedDiagnostics()
                             hasAPIKey = true
                         }
                     }
@@ -956,6 +956,7 @@ API Key 仅保存于系统 Keychain。
                         Button(String(localized: "删除", bundle: .module), role: .destructive) {
                             Task {
                                 try? await credentialVault.delete(id: AIConnectionSettings.credentialID)
+                                AIConnectionSettings.clearPersistedDiagnostics()
                                 hasAPIKey = false
                             }
                         }
@@ -1028,8 +1029,17 @@ API Key 仅保存于系统 Keychain。
             endpointMode = AIConnectionSettings().endpointMode
             syncEndpointFromModelIfNeeded()
         }
-        .onChange(of: aiModel) { _, _ in syncEndpointFromModelIfNeeded() }
-        .onChange(of: aiBaseURL) { _, _ in syncEndpointFromModelIfNeeded() }
+        .onChange(of: aiModel) { _, _ in
+            AIConnectionSettings.clearPersistedDiagnostics()
+            syncEndpointFromModelIfNeeded()
+        }
+        .onChange(of: aiBaseURL) { _, _ in
+            AIConnectionSettings.clearPersistedDiagnostics()
+            syncEndpointFromModelIfNeeded()
+        }
+        .onChange(of: aiAPIPath) { _, _ in
+            AIConnectionSettings.clearPersistedDiagnostics()
+        }
 #if os(macOS)
         .sheet(isPresented: $isConfiguringAPIKey) {
             APIKeySheet(
@@ -1037,6 +1047,7 @@ API Key 仅保存于系统 Keychain。
                 hasExistingKey: hasAPIKey,
                 onSave: { key in
                     try await credentialVault.store(key, for: AIConnectionSettings.credentialID)
+                    AIConnectionSettings.clearPersistedDiagnostics()
                     hasAPIKey = true
                 }
             )
@@ -1045,7 +1056,8 @@ API Key 仅保存于系统 Keychain。
     }
 
     private func testAIConnection() {
-        guard let provider = AIConnectionSettings().makeProvider(credentialVault: credentialVault) else {
+        let settings = AIConnectionSettings()
+        guard let provider = settings.makeProvider(credentialVault: credentialVault) else {
             connectionTestResult = .failure(
                 AIConnectionSettings().completenessError
                     ?? String(localized: "Base URL 或模型未填写完整。", bundle: .module)
@@ -1057,7 +1069,13 @@ API Key 仅保存于系统 Keychain。
         Task {
             do {
                 let result = try await provider.testConnection()
-                connectionTestResult = .success(String(localized: "连接成功 · \(result.model) · 延迟 \(String(format: "%.1f", result.latency)) 秒", bundle: .module))
+                if let diagnostics = result.diagnostics {
+                    AIConnectionSettings.persistDiagnostics(diagnostics, for: settings)
+                    let summary = diagnosticSummary(diagnostics, model: result.model, latency: result.latency)
+                    connectionTestResult = diagnostics.supportsOrdinaryChat ? .success(summary) : .failure(summary)
+                } else {
+                    connectionTestResult = .success(String(localized: "连接成功 · \(result.model) · 延迟 \(String(format: "%.1f", result.latency)) 秒", bundle: .module))
+                }
             } catch {
                 connectionTestResult = .failure(error.localizedDescription)
             }
@@ -1065,16 +1083,59 @@ API Key 仅保存于系统 Keychain。
         }
     }
 
+    private func diagnosticSummary(
+        _ diagnostics: AIProviderDiagnostics,
+        model: String,
+        latency: TimeInterval
+    ) -> String {
+        func symbol(_ status: AIProbeStatus) -> String {
+            switch status {
+            case .passed: "✅"
+            case .degraded: "⚠️"
+            case .failed: "❌"
+            case .unavailable: "⚪️"
+            case .notTested: "—"
+            }
+        }
+        var lines = [
+            "\(model) · \(String(format: "%.1f", latency)) 秒",
+            "模型目录 \(symbol(diagnostics.modelCatalog)) · 模型 \(symbol(diagnostics.modelAvailability)) · 文本 \(symbol(diagnostics.textCompletion)) · 流式 \(symbol(diagnostics.streaming))",
+            "原生工具 \(symbol(diagnostics.nativeTools)) · tool_choice \(symbol(diagnostics.toolChoice))",
+        ]
+        if diagnostics.supportsOrdinaryChat, diagnostics.nativeTools != .passed {
+            lines.append("普通聊天可用；Auralis 工具暂未通过能力验证。")
+        }
+        if diagnostics.textCompletion == .passed, diagnostics.streaming == .degraded {
+            lines.append("流式探测本次不稳定；生产仍按该协议使用流式输出。")
+        } else if diagnostics.textCompletion == .passed, diagnostics.streaming == .failed {
+            lines.append("服务端明确拒绝流式输出；普通聊天将使用同一协议的非流式模式。")
+        }
+        lines.append(contentsOf: diagnostics.details.prefix(2))
+        return lines.joined(separator: "\n")
+    }
+
     private func syncEndpointFromModelIfNeeded() {
         guard endpointMode != .custom,
               let recommended = AIEndpointMode.recommended(baseURL: aiBaseURL, model: aiModel),
               recommended != endpointMode
         else { return }
-        endpointMode = recommended
-        aiEndpointModeRaw = recommended.rawValue
-        if let apiPath = recommended.apiPath {
-            aiAPIPath = apiPath
+        applyEndpointConfiguration(recommended)
+    }
+
+    /// Keep the model preset, protocol and path in one state transaction.
+    /// Independent `onChange` handlers used to bounce these bindings within a
+    /// single SwiftUI frame when a model preset selected a new protocol.
+    private func applyEndpointConfiguration(_ mode: AIEndpointMode) {
+        isApplyingEndpointConfiguration = true
+        defer { isApplyingEndpointConfiguration = false }
+        withTransaction(Transaction(animation: nil)) {
+            endpointMode = mode
+            aiEndpointModeRaw = mode.rawValue
+            if let apiPath = mode.apiPath {
+                aiAPIPath = apiPath
+            }
         }
+        AIConnectionSettings.clearPersistedDiagnostics()
     }
 
 

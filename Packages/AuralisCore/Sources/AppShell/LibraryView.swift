@@ -9,10 +9,10 @@ struct LibraryView: View {
     let theme: BuiltInTheme
     @State private var scope = LibraryScope.albums
     @State private var playlistTarget: Track?
-    @State private var recommendationCategories: [RecommendationIndexV2Category] = []
+    @State private var recommendationCategories: [RecommendationIndexCategory] = []
     @State private var isLoadingRecommendationCategories = false
     /// AI 标签独立区：offset 游标分页（读取优化，不代表标签数量限制）。
-    @State private var aiTags: [RecommendationIndexV2Category] = []
+    @State private var aiTags: [RecommendationIndexCategory] = []
     @State private var aiTagSearch = ""
     @State private var recommendationCategoryError: String?
     @State private var aiTagNextOffset: Int? = 0
@@ -282,7 +282,7 @@ struct LibraryView: View {
         }
     }
 
-    /// AI 推荐索引 V2 的标签浏览。卡片尺寸、栅格和流派完全一致，区别仅在数据源是本地 SQLite 索引。
+    /// AI 推荐索引的标签浏览。卡片尺寸、栅格和流派完全一致，区别仅在数据源是本地 SQLite 索引。
     private var recommendationCategoryList: some View {
         Group {
             if isLoadingRecommendationCategories && recommendationCategories.isEmpty {
@@ -440,9 +440,9 @@ struct LibraryView: View {
         // 固定维度一次读取（数量有界）；开放语义标签单独分页（tag_catalog），
         // 避免 5000 个 AI 标签一次读进内存。
         do {
-            recommendationCategories = try await model.catalogCoordinator.store.recommendationIndexV2Categories(
+            recommendationCategories = try await model.catalogCoordinator.store.recommendationIndexCategories(
                 serverID: serverID,
-                dimensions: RecommendationIndexV2.fixedDimensions
+                dimensions: RecommendationIndex.fixedDimensions
             )
         } catch {
             recommendationCategories = []
@@ -463,9 +463,9 @@ struct LibraryView: View {
             return
         }
         let query = aiTagSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let page = (try? await model.catalogCoordinator.store.recommendationIndexV2TagCatalog(
+        let page = (try? await model.catalogCoordinator.store.recommendationIndexTagCatalog(
             serverID: serverID, query: query.isEmpty ? nil : query, limit: Self.aiTagPageSize, offset: offset
-        )) ?? RecommendationIndexV2TagPage(items: [], nextOffset: nil, hasMore: false)
+        )) ?? RecommendationIndexTagPage(items: [], nextOffset: nil, hasMore: false)
         var merged = reset ? page.items : aiTags + page.items
         // 防御性去重。
         var seen = Set<String>()
@@ -481,13 +481,13 @@ struct LibraryView: View {
         await loadAITags(reset: false)
     }
 
-    private func openRecommendationCategory(_ category: RecommendationIndexV2Category) {
+    private func openRecommendationCategory(_ category: RecommendationIndexCategory) {
         // 路由只携带分类身份，详情页自行按需读取并处理失败，避免把一次性快照
         // 存进导航值（索引刷新后详情页会重新解析，读库失败也能展示错误与重试）。
         model.browseDestination = .recommendationCategory(category)
     }
 
-    private static func categoryTitle(_ category: RecommendationIndexV2Category) -> String {
+    private static func categoryTitle(_ category: RecommendationIndexCategory) -> String {
         let dimension: String
         switch category.dimension {
         case "mood": dimension = String(localized: "情绪", bundle: .module)

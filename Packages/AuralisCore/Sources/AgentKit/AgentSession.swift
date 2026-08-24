@@ -65,6 +65,7 @@ public struct AgentSession: Codable, Sendable, Identifiable {
         case let .text(value): return value.count / 2
         case let .trackCards(cards): return cards.count * 12
         case let .albumCards(cards): return cards.count * 8
+        case let .webSources(sources): return sources.count * 20
         case let .playlistProposal(name, tracks): return name.count / 2 + tracks.count * 12
         case let .actionPreview(title, _): return title.count / 2
         case let .toolProgress(step): return step.count / 2
@@ -116,6 +117,27 @@ public actor SessionStore {
         }
         cache[id] = session
         persistSafely(operation: "append")
+    }
+
+    /// A running tool loop has one live activity row.  Replacing its previous
+    /// progress message avoids persisting an unbounded wall of transient
+    /// “executing tool” chat bubbles.
+    @discardableResult
+    public func replaceTrailingToolProgress(_ message: AgentChatMessage, in id: UUID) -> Bool {
+        guard var session = cache[id],
+              let index = session.messages.indices.last,
+              session.messages[index].role == .assistant,
+              session.messages[index].messages.allSatisfy({ item in
+                  if case .toolProgress = item { return true }
+                  return false
+              }) else {
+            return false
+        }
+        session.messages[index] = message
+        session.updatedAt = .now
+        cache[id] = session
+        persistSafely(operation: "replaceToolProgress")
+        return true
     }
 
     public func rename(_ id: UUID, to title: String) {

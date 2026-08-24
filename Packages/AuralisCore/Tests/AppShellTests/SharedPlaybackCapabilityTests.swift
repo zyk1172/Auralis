@@ -45,6 +45,10 @@ struct SharedPlaybackCapabilityTests {
         )
     }
 
+    private func globalID(_ id: String, serverID: ServerID = "server") -> GlobalID {
+        GlobalID(serverID: serverID, remoteID: id)
+    }
+
     @Test("shuffle 模式在物理队尾 canGoNext 仍为 true")
     @MainActor
     func shuffleCanGoNext() async {
@@ -112,6 +116,40 @@ struct SharedPlaybackCapabilityTests {
         // playNext 插入新队列项到当前歌曲之后（R05 允许重复歌曲）：[t1, t2, t1]。
         #expect(model.queue.count == 3)
         #expect(model.queue[2].id.rawValue == "t1")
+    }
+
+    @Test("AgentBridge 批量 playNext 原子保持顺序、重复项和 currentEntryID")
+    @MainActor
+    func agentBridgeBatchPlayNextIsAtomicAndOrdered() async {
+        let model = makeModel(
+            tracks: [track("X"), track("D"), track("A"), track("B")]
+        )
+        model.playQueue([track("X"), track("D")])
+        let bridge = AuralisAgentBridge(model: model, coordinator: model.catalogCoordinator)
+        let currentEntryID = model.queueStore.currentEntryID
+
+        let result = await bridge.playNext(globalIDs: [globalID("A"), globalID("A"), globalID("B")])
+
+        #expect(result.state == .confirmed)
+        #expect(model.queue.map(\.id.rawValue) == ["X", "A", "A", "B", "D"])
+        #expect(model.queueStore.currentEntryID == currentEntryID)
+        #expect(model.queueStore.currentIndex == 0)
+    }
+
+    @Test("AgentBridge 批量 playNext 解析失败时不发生部分 mutation")
+    @MainActor
+    func agentBridgeBatchPlayNextRejectsInvalidIDBeforeMutation() async {
+        let model = makeModel(tracks: [track("X"), track("D"), track("A")])
+        model.playQueue([track("X"), track("D")])
+        let bridge = AuralisAgentBridge(model: model, coordinator: model.catalogCoordinator)
+        let before = model.queue.map(\.id.rawValue)
+        let currentEntryID = model.queueStore.currentEntryID
+
+        let result = await bridge.playNext(globalIDs: [globalID("A"), globalID("missing"), globalID("D")])
+
+        #expect(result.state == .failed)
+        #expect(model.queue.map(\.id.rawValue) == before)
+        #expect(model.queueStore.currentEntryID == currentEntryID)
     }
 
     @Test("Siri 随机播放排除 disliked")

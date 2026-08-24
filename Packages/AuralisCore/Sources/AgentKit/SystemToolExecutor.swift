@@ -39,6 +39,7 @@ public enum SystemToolNames {
         "music_download",
         "memory_save",
         "memory_list",
+        "memory_search",
         "memory_delete",
         "memory_clear",
         "skill_create",
@@ -139,6 +140,7 @@ public struct SystemToolExecutor {
             case "memory_save":
                 let key = try require(call, "key")
                 let value = try require(call, "value")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let saved = await systemService.saveMemory(key: key, value: value)
                 return saved
                     ? .ok(call, descriptor, "已记住：\(key) = \(value)", .text("小猫记住了：\(key) = \(value)（下次会话也记得喵）"))
@@ -150,18 +152,30 @@ public struct SystemToolExecutor {
                 }
                 let text = memories.map { "\($0.key)：\($0.value)（记于 \(Self.dateText($0.updatedAt))）" }.joined(separator: "\n")
                 return .ok(call, descriptor, "共 \(memories.count) 条记忆", .text(text))
+            case "memory_search":
+                let query = try require(call, "query")
+                let limit = min(max((Int(call.optionalString("limit") ?? "10") ?? 10), 1), 50)
+                let memories = Array((await systemService.searchMemories(query: query)).prefix(limit))
+                if memories.isEmpty {
+                    return .ok(call, descriptor, "没有找到相关记忆", .text("没有找到与「\(query)」相关的长期记忆。"))
+                }
+                let text = memories.map { "\($0.key)：\($0.value)（记于 \(Self.dateText($0.updatedAt))）" }.joined(separator: "\n")
+                return .ok(call, descriptor, "找到 \(memories.count) 条相关记忆", .text(text))
             case "memory_delete":
                 let key = try require(call, "key")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let deleted = await systemService.deleteMemory(key: key)
                 return deleted
                     ? .ok(call, descriptor, "已忘记：\(key)")
                     : .fail(call, descriptor, "没有找到要删除的记忆：\(key)")
             case "memory_clear":
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let count = await systemService.clearMemories()
                 return .ok(call, descriptor, "已清空 \(count) 条记忆", .text("全部记忆已清空（\(count) 条）。"))
             case "skill_create":
                 let name = try require(call, "name")
                 let instructions = try require(call, "instructions")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 if let entry = await systemService.createSkill(name: name, instructions: instructions) {
                     let text = "技能「\(entry.name)」已保存到本机 skill 文件，之后用 skill_read 读取完整指令即可使用。"
                     return .ok(call, descriptor, "已创建技能「\(entry.name)」", .text(text))
@@ -182,6 +196,7 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, "技能「\(entry.name)」", .text(entry.instructions))
             case "skill_delete":
                 let name = try require(call, "name")
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let deleted = await systemService.deleteSkill(name: name)
                 return deleted
                     ? .ok(call, descriptor, "已删除技能：\(name)")
@@ -207,6 +222,7 @@ public struct SystemToolExecutor {
             case "media_download_offline":
                 let gid = try parseGlobalID(call, "trackID")
                 try await Self.requireActiveServerMatches(gid.serverID, systemService: systemService, call: call)
+                guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                 let ok = await systemService.downloadOffline(trackID: TrackID(rawValue: gid.remoteID))
                 return ok ? .ok(call, descriptor, "已开始下载到离线缓存") : .fail(call, descriptor, "下载失败或已在下载")
             case "cache_get_status":
@@ -227,14 +243,14 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, text, .trackCards(recommendation.tracks))
             case "recommend_by_constraints":
                 let constraints = AgentRecommendationConstraints(
-                    languages: (call.arguments["languages"] ?? "").split(separator: ",").map(String.init),
-                    genres: (call.arguments["genres"] ?? "").split(separator: ",").map(String.init),
+                    languages: Self.listParam(call, "languages"),
+                    genres: Self.listParam(call, "genres"),
                     yearFrom: try? intParam(call, "yearFrom"),
                     yearTo: try? intParam(call, "yearTo"),
                     favoritesOnly: (try? boolParam(call, "favoritesOnly")) ?? false,
                     excludeRecentlyPlayed: (try? boolParam(call, "excludeRecentlyPlayed")) ?? false,
                     onlyOffline: (try? boolParam(call, "onlyOffline")) ?? false,
-                    excludeArtist: call.arguments["excludeArtist"],
+                    excludeArtist: call.optionalString("excludeArtist"),
                     maxTotalMinutes: try? doubleParam(call, "maxTotalMinutes"),
                     losslessOnly: (try? boolParam(call, "losslessOnly")) ?? false,
                     limit: (try? intParam(call, "limit")) ?? 20
@@ -324,7 +340,7 @@ public struct SystemToolExecutor {
                     let result = await systemService.musicSearch(
                         artist: optionalParam(call, "artist"),
                         album: optionalParam(call, "album"),
-                        albumAliases: (call.arguments["album_aliases"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+                        albumAliases: Self.listParam(call, "album_aliases"),
                         keyword: optionalParam(call, "keyword"),
                         year: optionalIntParam(call, "year"),
                         limit: optionalIntParam(call, "limit") ?? 10,
@@ -334,6 +350,7 @@ public struct SystemToolExecutor {
                     )
                     return Self.musicSearchResult(call, descriptor, result)
                 case "download":
+                    guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                     let result = await systemService.musicDownload(
                         ref: optionalParam(call, "ref"),
                         siteID: optionalIntParam(call, "site_id"),
@@ -357,8 +374,10 @@ public struct SystemToolExecutor {
                     guard let hash = optionalParam(call, "hash"), !hash.isEmpty else {
                         throw SystemToolError.missingParameter("hash")
                     }
+                    guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                     return Self.musicHistoryMutationResult(call, descriptor, await systemService.musicHistoryRemove(hash: hash))
                 case "history_clean":
+                    guard permitsMutationCommit else { return revokedMutation(call, descriptor) }
                     return Self.musicHistoryMutationResult(
                         call, descriptor,
                         await systemService.musicHistoryClean(
@@ -385,6 +404,14 @@ public struct SystemToolExecutor {
 
     // MARK: - Helpers
 
+    private static var permitsMutationCommit: Bool {
+        ToolExecutionContext.permitsMutationCommit
+    }
+
+    private static func revokedMutation(_ call: ToolCall, _ descriptor: ToolDescriptor) -> ToolResult {
+        .fail(call, descriptor, "所属 AI 运行已取消，未执行操作")
+    }
+
     /// 系统服务只操作当前活动服务器：GlobalID 的 serverID 必须与活动服务器一致，
     /// 不能默默跨服务器把 remoteID 传给 service。
     private static func requireActiveServerMatches(
@@ -399,14 +426,14 @@ public struct SystemToolExecutor {
     }
 
     private static func require(_ call: ToolCall, _ key: String) throws -> String {
-        guard let value = call.arguments[key], !value.isEmpty else {
+        guard let value = call.optionalString(key), !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SystemToolError.missingParameter(key)
         }
         return value
     }
 
     private static func boolParam(_ call: ToolCall, _ key: String) throws -> Bool {
-        guard let raw = call.arguments[key] else { throw SystemToolError.invalidParameter(key, "缺失") }
+        guard let raw = call.optionalString(key) else { throw SystemToolError.invalidParameter(key, "缺失") }
         switch raw.lowercased() {
         case "true", "1", "yes", "on": return true
         case "false", "0", "no", "off": return false
@@ -415,42 +442,49 @@ public struct SystemToolExecutor {
     }
 
     private static func doubleParam(_ call: ToolCall, _ key: String) throws -> Double {
-        guard let raw = call.arguments[key], let value = Double(raw) else {
-            throw SystemToolError.invalidParameter(key, call.arguments[key] ?? "缺失")
+        guard let raw = call.optionalString(key), let value = Double(raw) else {
+            throw SystemToolError.invalidParameter(key, call.jsonText(key) ?? "缺失")
         }
         return value
     }
 
     private static func intParam(_ call: ToolCall, _ key: String) throws -> Int {
-        guard let raw = call.arguments[key], let value = Int(raw) else {
-            throw SystemToolError.invalidParameter(key, call.arguments[key] ?? "")
+        guard let raw = call.optionalString(key), let value = Int(raw) else {
+            throw SystemToolError.invalidParameter(key, call.jsonText(key) ?? "")
         }
         return value
     }
 
 
     private static func optionalParam(_ call: ToolCall, _ key: String) -> String? {
-        guard let value = call.arguments[key], !value.isEmpty else { return nil }
+        guard let value = call.optionalString(key), !value.isEmpty else { return nil }
         return value
     }
 
     private static func optionalIntParam(_ call: ToolCall, _ key: String) -> Int? {
-        guard let raw = call.arguments[key], let value = Int(raw) else { return nil }
+        guard let raw = call.optionalString(key), let value = Int(raw) else { return nil }
         return value
     }
 
     private static func optionalDoubleParam(_ call: ToolCall, _ key: String) -> Double? {
-        guard let raw = call.arguments[key], !raw.isEmpty else { return nil }
+        guard let raw = call.optionalString(key), !raw.isEmpty else { return nil }
         return Double(raw)
     }
 
     private static func optionalBoolParam(_ call: ToolCall, _ key: String) -> Bool? {
-        guard let raw = call.arguments[key] else { return nil }
+        guard let raw = call.optionalString(key) else { return nil }
         switch raw.lowercased() {
         case "true", "1", "yes", "on": return true
         case "false", "0", "no", "off": return false
         default: return nil
         }
+    }
+
+    private static func listParam(_ call: ToolCall, _ key: String) -> [String] {
+        if let values = try? call.strings(key) { return values }
+        return call.optionalString(key)?.split { $0 == "," || $0 == "，" }.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty } ?? []
     }
 
     // MARK: - 音乐下载结果格式化

@@ -118,7 +118,7 @@ func preferenceWhitelistRoundTrip() {
     defaults.set("identity-cache", forKey: "auralis.externalMusic.identityCache")
     defaults.set("metrics-cache", forKey: "auralis.externalMusic.communityMetricsCache")
     defaults.set("response-cache", forKey: "auralis.externalMusic.responseCache")
-    defaults.set("index-records", forKey: "auralis.recommendationIndexV2.records")
+    defaults.set("index-records", forKey: "auralis.recommendationIndex.records")
 
     let collected = SettingsBackupService.collectedPreferences(from: defaults)
     #expect(collected["auralis.selected-theme"] == "midnight")
@@ -132,7 +132,7 @@ func preferenceWhitelistRoundTrip() {
     #expect(collected["auralis.externalMusic.identityCache"] == nil)
     #expect(collected["auralis.externalMusic.communityMetricsCache"] == nil)
     #expect(collected["auralis.externalMusic.responseCache"] == nil)
-    #expect(collected["auralis.recommendationIndexV2.records"] == nil)
+    #expect(collected["auralis.recommendationIndex.records"] == nil)
 
     // 写回另一组 defaults，验证恢复路径。
     let targetSuite = "SettingsBackupTests-\(UUID().uuidString)"
@@ -153,5 +153,5 @@ func preferenceWhitelistRoundTrip() {
     #expect(target.object(forKey: "auralis.externalMusic.identityCache") == nil)
     #expect(target.object(forKey: "auralis.externalMusic.communityMetricsCache") == nil)
     #expect(target.object(forKey: "auralis.externalMusic.responseCache") == nil)
-    #expect(target.object(forKey: "auralis.recommendationIndexV2.records") == nil)
+    #expect(target.object(forKey: "auralis.recommendationIndex.records") == nil)
 }

@@ -29,9 +29,20 @@ public struct AnthropicMessagesProvider: AIProvider {
             maxContextTokens: configuration.maxContextTokens,
             maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: supportsToolCalling,
+            supportsParallelTools: configuration.supportsParallelTools,
+            supportsToolChoice: configuration.supportsToolChoice,
+            supportsStrictSchema: false,
             supportsStreaming: configuration.usesStreaming,
             supportsJSONMode: false,
-            supportsJSONSchema: configuration.supportsJSONSchema
+            supportsJSONSchema: configuration.supportsJSONSchema,
+            // The stored flags predate a real server-tool codec. Keep them
+            // out of advertised capabilities until the Anthropic server-tool
+            // continuation blocks (including pause_turn) are represented by
+            // the neutral transcript model.
+            supportsHostedWebSearch: false,
+            supportsHostedWebFetch: false,
+            supportsReasoningMetadata: configuration.supportsReasoningMetadata,
+            toolMode: supportsToolCalling ? .anthropicMessages : AIProviderToolMode.none
         )
     }
 
@@ -43,15 +54,116 @@ public struct AnthropicMessagesProvider: AIProvider {
             temperature: 0,
             maxTokens: 32
         ))
+        var details: [String] = [String(localized: "Anthropic Messages 未定义通用 /models 目录，模型可用性由实际请求验证。", bundle: .module)]
+        let streaming = await probeStreaming()
+        details.append(contentsOf: streaming.details)
+        let tools = await probeNativeTools()
+        details.append(contentsOf: tools.details)
         return AIConnectionResult(
             latency: Date().timeIntervalSince(started),
             model: response.model,
-            message: response.content
+            message: response.content,
+            diagnostics: .init(
+                modelCatalog: .unavailable,
+                modelAvailability: .unavailable,
+                textCompletion: .passed,
+                streaming: streaming.status,
+                nativeTools: tools.native,
+                toolChoice: tools.toolChoice,
+                details: details
+            )
         )
     }
 
+    private func probeStreaming() async -> (status: AIProbeStatus, details: [String]) {
+        do {
+            var completed = false
+            for try await event in stream(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: String(localized: "只回复 OK。", bundle: .module))],
+                temperature: 0,
+                maxTokens: 8
+            )) {
+                if case .completed = event { completed = true }
+            }
+            return completed
+                ? (.passed, [])
+                : (.degraded, [String(localized: "流式请求没有完成事件；这是瞬时健康观测，不会关闭生产流式协议。", bundle: .module)])
+        } catch {
+            return (.degraded, [String(localized: "流式输出失败：\(error.localizedDescription)。这是瞬时健康观测，不会关闭生产流式协议。", bundle: .module)])
+        }
+    }
+
+    private func probeNativeTools() async -> (native: AIProbeStatus, toolChoice: AIProbeStatus, details: [String]) {
+        let name = "capabilities_get"
+        let tool = AIToolDefinition(
+            name: name,
+            description: "Return the available Auralis capabilities. Call this read-only function with an empty object.",
+            parametersJSON: #"{"type":"object","properties":{},"additionalProperties":false}"#
+        )
+        do {
+            let observed = try await observesToolCall(with: self, tool: tool, toolChoice: nil)
+            guard observed else {
+                return (.unavailable, .notTested, [String(localized: "原生工具探测未收到工具调用；这不代表模型不支持工具。", bundle: .module)])
+            }
+            let choice = await probeToolChoice(with: tool)
+            return (.passed, choice.status, choice.details)
+        } catch let error as AIProviderError {
+            if error.explicitlyRejectsNativeTools {
+                return (.failed, .notTested, [String(localized: "服务端明确拒绝原生工具：\(error.localizedDescription)", bundle: .module)])
+            }
+            return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
+        } catch {
+            return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
+        }
+    }
+
+    private func probeToolChoice(with tool: AIToolDefinition) async -> (status: AIProbeStatus, details: [String]) {
+        var probeConfiguration = configuration
+        probeConfiguration.supportsToolChoice = true
+        let probeProvider = AnthropicMessagesProvider(
+            configuration: probeConfiguration,
+            credentialVault: credentialVault,
+            session: session
+        )
+        do {
+            let observed = try await observesToolCall(with: probeProvider, tool: tool, toolChoice: .required)
+            return observed
+                ? (.passed, [])
+                : (.unavailable, [String(localized: "tool_choice 探测未收到工具调用；生产请求将继续省略该字段。", bundle: .module)])
+        } catch let error as AIProviderError where error.explicitlyRejectsToolChoice {
+            return (.failed, [String(localized: "服务端明确拒绝 tool_choice：\(error.localizedDescription)", bundle: .module)])
+        } catch {
+            return (.unavailable, [String(localized: "tool_choice 探测未完成：\(error.localizedDescription)", bundle: .module)])
+        }
+    }
+
+    private func observesToolCall(
+        with provider: AnthropicMessagesProvider,
+        tool: AIToolDefinition,
+        toolChoice: AIToolChoice?
+    ) async throws -> Bool {
+        for try await event in provider.stream(AICompletionRequest(
+            model: configuration.model,
+            messages: [AIMessage(role: .user, content: "Use capabilities_get to inspect the available Auralis capabilities.")],
+            temperature: 0,
+            maxTokens: configuration.maxOutputTokens,
+            tools: [tool],
+            toolChoice: toolChoice
+        )) {
+            if case let .toolCall(call) = event, call.name == tool.name {
+                return true
+            }
+        }
+        return false
+    }
+
     public func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
-        let body = try Self.requestBody(request, stream: false)
+        let body = try Self.requestBody(
+            request,
+            stream: false,
+            supportsToolChoice: configuration.supportsToolChoice
+        )
         let (data, response) = try await perform(body: body)
         try Self.validate(response, body: data)
         return try Self.parseCompletion(data: data, fallbackModel: request.model)
@@ -61,7 +173,11 @@ public struct AnthropicMessagesProvider: AIProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let body = try Self.requestBody(request, stream: true)
+                    let body = try Self.requestBody(
+                        request,
+                        stream: true,
+                        supportsToolChoice: configuration.supportsToolChoice
+                    )
                     let (bytes, response) = try await performBytes(body: body)
                     try Self.validate(response)
                     continuation.yield(.started(model: request.model))
@@ -116,10 +232,10 @@ public struct AnthropicMessagesProvider: AIProvider {
                             }
                         case "message_stop":
                             for fragment in toolFragments.values.sorted(by: { $0.id < $1.id }) {
-                                continuation.yield(.toolCall(AIToolCall(
+                                continuation.yield(.toolCall(Self.decodeToolCall(
                                     id: fragment.id,
                                     name: fragment.name,
-                                    arguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
+                                    rawArguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
                                 )))
                             }
                             ended = true
@@ -146,10 +262,10 @@ public struct AnthropicMessagesProvider: AIProvider {
                     // 兼容没有 message_stop 的网关：不要让 Agent 永远等待。
                     if !ended, !toolFragments.isEmpty {
                         for fragment in toolFragments.values.sorted(by: { $0.id < $1.id }) {
-                            continuation.yield(.toolCall(AIToolCall(
+                            continuation.yield(.toolCall(Self.decodeToolCall(
                                 id: fragment.id,
                                 name: fragment.name,
-                                arguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
+                                rawArguments: fragment.arguments.isEmpty ? "{}" : fragment.arguments
                             )))
                         }
                     }
@@ -230,31 +346,20 @@ public struct AnthropicMessagesProvider: AIProvider {
         return request
     }
 
-    private static func requestBody(_ request: AICompletionRequest, stream: Bool) throws -> [String: Any] {
-        var system: [String] = []
-        var messages: [[String: Any]] = []
-        for message in request.messages {
-            switch message.role {
-            case .system:
-                if !message.content.isEmpty { system.append(message.content) }
-            case .user:
-                messages.append(["role": "user", "content": [["type": "text", "text": message.content]]])
-            case .assistant:
-                var content: [[String: Any]] = []
-                if !message.content.isEmpty { content.append(["type": "text", "text": message.content]) }
-                for call in message.toolCalls ?? [] {
-                    let input = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
-                    content.append(["type": "tool_use", "id": call.id, "name": call.name, "input": input])
-                }
-                messages.append(["role": "assistant", "content": content.isEmpty ? [["type": "text", "text": ""]] : content])
-            case .tool:
-                messages.append(["role": "user", "content": [[
-                    "type": "tool_result",
-                    "tool_use_id": message.toolCallID ?? "",
-                    "content": message.content,
-                ]]])
-            }
+    private static func requestBody(
+        _ request: AICompletionRequest,
+        stream: Bool,
+        supportsToolChoice: Bool
+    ) throws -> [String: Any] {
+        guard request.hostedTools?.isEmpty != false else {
+            throw AIProviderError.unsupportedEndpointProtocol("Anthropic hosted web tools are not enabled")
         }
+        let transcript = request.transcript
+        var system: [String] = []
+        for message in transcript.messages where message.role == .system {
+            if !message.content.isEmpty { system.append(message.content) }
+        }
+        let messages = encodeMessages(transcript)
 
         var body: [String: Any] = [
             "model": request.model,
@@ -264,6 +369,24 @@ public struct AnthropicMessagesProvider: AIProvider {
         if !system.isEmpty { body["system"] = system.joined(separator: "\n\n") }
         if request.temperature >= 0 { body["temperature"] = request.temperature }
         if stream { body["stream"] = true }
+        switch request.outputFormat {
+        case nil, .text:
+            break
+        case .jsonObject:
+            // Anthropic Messages exposes schema-constrained JSON through
+            // output_config.format; it has no schema-free json_object mode.
+            throw AIProviderError.unsupportedEndpointProtocol("Anthropic Messages requires a JSON schema for structured output")
+        case let .jsonSchema(_, schema, _):
+            guard let object = try JSONSerialization.jsonObject(with: schema.jsonData) as? [String: Any] else {
+                throw AIProviderError.unsupportedEndpointProtocol("Structured output schema is not a JSON object")
+            }
+            body["output_config"] = [
+                "format": [
+                    "type": "json_schema",
+                    "schema": object,
+                ],
+            ]
+        }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = try tools.map { tool in
                 var item: [String: Any] = ["name": tool.name, "description": tool.description]
@@ -276,15 +399,61 @@ public struct AnthropicMessagesProvider: AIProvider {
                 }
                 return item
             }
-            if let choice = request.toolChoice {
+            if supportsToolChoice, let choice = request.toolChoice {
                 switch choice {
                 case .auto: body["tool_choice"] = ["type": "auto"]
                 case .required: body["tool_choice"] = ["type": "any"]
+                case let .named(name): body["tool_choice"] = ["type": "tool", "name": name]
                 case .none: break
                 }
             }
         }
         return body
+    }
+
+    /// Encode the neutral message projection into Anthropic content blocks.
+    /// Parallel tool calls must be answered by one `user` message containing
+    /// all `tool_result` blocks; one user message per result is invalid for
+    /// the Messages API and loses the call/result association.
+    static func encodeMessages(_ transcript: AITranscript) -> [[String: Any]] {
+        encodeMessages(transcript.messages)
+    }
+
+    static func encodeMessages(_ source: [AIMessage]) -> [[String: Any]] {
+        var messages: [[String: Any]] = []
+        var index = 0
+        while index < source.count {
+            let message = source[index]
+            switch message.role {
+            case .system:
+                index += 1
+            case .user:
+                messages.append(["role": "user", "content": [["type": "text", "text": message.content]]])
+                index += 1
+            case .assistant:
+                var content: [[String: Any]] = []
+                if !message.content.isEmpty { content.append(["type": "text", "text": message.content]) }
+                for call in message.toolCalls ?? [] {
+                    let input = (try? JSONSerialization.jsonObject(with: Data(call.arguments.jsonString.utf8))) as? [String: Any] ?? [:]
+                    content.append(["type": "tool_use", "id": call.id, "name": call.name, "input": input])
+                }
+                messages.append(["role": "assistant", "content": content.isEmpty ? [["type": "text", "text": ""]] : content])
+                index += 1
+            case .tool:
+                var blocks: [[String: Any]] = []
+                while index < source.count, source[index].role == .tool {
+                    let result = source[index]
+                    blocks.append([
+                        "type": "tool_result",
+                        "tool_use_id": result.toolCallID ?? "",
+                        "content": result.content,
+                    ])
+                    index += 1
+                }
+                messages.append(["role": "user", "content": blocks])
+            }
+        }
+        return messages
     }
 
     private static func validate(_ response: URLResponse, body: Data? = nil) throws {
@@ -312,10 +481,10 @@ public struct AnthropicMessagesProvider: AIProvider {
             case "tool_use":
                 let input = block["input"] ?? [:]
                 let data = try JSONSerialization.data(withJSONObject: input)
-                calls.append(AIToolCall(
+                calls.append(Self.decodeToolCall(
                     id: block["id"] as? String ?? UUID().uuidString,
                     name: block["name"] as? String ?? "",
-                    arguments: String(data: data, encoding: .utf8) ?? "{}"
+                    rawArguments: String(data: data, encoding: .utf8) ?? "{}"
                 ))
             default: break
             }
@@ -329,5 +498,16 @@ public struct AnthropicMessagesProvider: AIProvider {
             finishReason: object["stop_reason"] as? String,
             toolCalls: calls.isEmpty ? nil : calls
         )
+    }
+
+    private static func decodeToolCall(id: String, name: String, rawArguments: String) -> AIToolCall {
+        let trimmed = rawArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let arguments: AIJSONValue
+        if trimmed.isEmpty || trimmed == "null" {
+            arguments = .object([:])
+        } else {
+            arguments = (try? AIJSONValue(jsonString: trimmed)) ?? .string(rawArguments)
+        }
+        return AIToolCall(id: id, name: name, arguments: arguments)
     }
 }

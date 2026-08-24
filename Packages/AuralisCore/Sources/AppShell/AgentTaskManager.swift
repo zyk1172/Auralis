@@ -33,6 +33,9 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
     public var budget: AgentTaskBudget?
     public var completedActions: [String]?
     public var noProgressRounds: Int?
+    /// Compact state-machine checkpoint for a resumable Stateful Skill.
+    /// The underlying catalog remains the source of truth for completion.
+    public var checkpointJSON: String?
 
     public init(
         id: UUID = UUID(),
@@ -49,7 +52,8 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
         goal: String? = nil,
         budget: AgentTaskBudget? = nil,
         completedActions: [String]? = [],
-        noProgressRounds: Int? = 0
+        noProgressRounds: Int? = 0,
+        checkpointJSON: String? = nil
     ) {
         self.id = id
         self.conversationID = conversationID
@@ -66,6 +70,7 @@ public struct AgentTaskRecord: Codable, Sendable, Identifiable {
         self.budget = budget
         self.completedActions = completedActions
         self.noProgressRounds = noProgressRounds
+        self.checkpointJSON = checkpointJSON
     }
 }
 
@@ -115,8 +120,7 @@ public final class AgentTaskStore {
 
     private static func isRecommendationIndexGoal(_ goal: String?) -> Bool {
         let text = goal?.lowercased() ?? ""
-        let markers = ["推荐索引", "索引 v2", "索引v2", "library_index_v2", "index v2"]
-        return markers.contains(where: text.contains)
+        return text.contains("推荐索引") || RecommendationIndexCompatibility.isLegacyBuildMarker(text)
     }
 
     @discardableResult
@@ -136,7 +140,8 @@ public final class AgentTaskStore {
         outputTokens: Int? = nil,
         error: String? = nil,
         completedActions: [String]? = nil,
-        noProgressRounds: Int? = nil
+        noProgressRounds: Int? = nil,
+        checkpointJSON: String? = nil
     ) {
         guard var record = records[id] else { return }
         if let status { record.status = status }
@@ -147,6 +152,7 @@ public final class AgentTaskStore {
         if let error { record.errorSummary = error }
         if let completedActions { record.completedActions = completedActions }
         if let noProgressRounds { record.noProgressRounds = noProgressRounds }
+        if let checkpointJSON { record.checkpointJSON = checkpointJSON }
         record.updatedAt = .now
         records[id] = record
         try? persist()

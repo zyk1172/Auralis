@@ -1,3 +1,4 @@
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -168,7 +169,7 @@ public struct AgentToolkit {
                 }
             }
             let cards = resolvedCards
-            let kind = call.arguments["kind"]?.lowercased()
+            let kind = call.optionalString("kind")?.lowercased()
             if kind == "disambiguation" {
                 return .ok(call, descriptor, "已列出 \(cards.count) 个匹配供选择", .trackCards(cards), presentationRole: .disambiguation)
             }
@@ -317,6 +318,9 @@ public struct AgentToolkit {
         case "preference_set_disliked":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             let value = try boolParam(call, "value")
+            guard ToolExecutionContext.permitsMutationCommit else {
+                return .fail(call, descriptor, "所属 AI 运行已取消，未修改偏好")
+            }
             try await catalog.setDisliked(gid, value: value, source: "agent")
             return .ok(
                 call,
@@ -337,7 +341,7 @@ public struct AgentToolkit {
                 .joined(separator: "、")
             return .ok(call, descriptor, text, .trackCards(tracks.map(TrackCard.from)))
         case "music_get_public_evidence":
-            let rawTrackID = call.arguments["trackID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawTrackID = call.optionalString("trackID")?.trimmingCharacters(in: .whitespacesAndNewlines)
             let track: Track
             if let rawTrackID, !rawTrackID.isEmpty {
                 let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
@@ -464,6 +468,51 @@ public struct AgentToolkit {
                 }
             }
             return .fail(call, descriptor, "未找到匹配结果")
+        case "library_resolve_entity":
+            let query = try require(call, "query")
+            let kind = (try? require(call, "kind"))?.lowercased() ?? "all"
+            let limit = min(max((try? intParam(call, "limit")) ?? 5, 1), 20)
+            if kind == "song" || kind == "track" || kind == "all" {
+                let summaries = try await catalog.searchTracks(query: query, serverID: serverID)
+                var tracks: [Track] = []
+                for summary in summaries.prefix(limit) {
+                    if let track = try await catalog.getTrack(summary.globalID) {
+                        tracks.append(track)
+                    }
+                }
+                if !tracks.isEmpty {
+                    return .ok(call, descriptor, "解析到歌曲 \(tracks.count) 首", .trackCards(tracks.map(TrackCard.from)))
+                }
+            }
+            if kind == "album" || kind == "all" {
+                let albums = try await catalog.searchAlbums(query: query, serverID: serverID)
+                if !albums.isEmpty {
+                    return .ok(call, descriptor, "解析到专辑 \(min(albums.count, limit)) 张", .albumCards(albums.prefix(limit).map { AlbumCard(globalID: $0.globalID, title: $0.title, artistName: $0.artistName) }))
+                }
+            }
+            if kind == "artist" || kind == "all" {
+                let artists = try await catalog.searchArtists(query: query, serverID: serverID)
+                if !artists.isEmpty {
+                    let text = artists.prefix(limit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
+                    return .ok(call, descriptor, "解析到艺术家 \(min(artists.count, limit)) 位", .text(text))
+                }
+            }
+            if kind == "playlist" || kind == "all" {
+                let playlists = try await catalog.listPlaylists(serverID: serverID)
+                let hits = playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
+                if !hits.isEmpty {
+                    let text = hits.prefix(limit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
+                    return .ok(call, descriptor, "解析到歌单 \(min(hits.count, limit)) 个", .text(text))
+                }
+            }
+            return .fail(call, descriptor, "没有解析到匹配的实体")
+        case "library_get_songs_batch":
+            let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
+            var tracks: [Track] = []
+            for gid in gids {
+                if let track = try await catalog.getTrack(gid) { tracks.append(track) }
+            }
+            return .ok(call, descriptor, "批量读取歌曲 \(tracks.count) 首", .trackCards(tracks.map(TrackCard.from)))
         case "library_select_tracks":
             // 集合查询：一次完成 筛选 + 排序 + 去重 + 限量，避免模型逐个歌手搜索凑数。
             let limit = min(max((try? intParam(call, "limit")) ?? 50, 1), 100)
@@ -590,7 +639,7 @@ public struct AgentToolkit {
             let downloaded = (try? await catalog.getDownloadedTracks(serverID: serverID).contains { $0.globalID == gid }) ?? false
             return .ok(call, descriptor, track.title, .text(Self.songDetailLine(track, downloaded: downloaded)))
         case "music_appreciate":
-            let rawTrackID = call.arguments["trackID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawTrackID = call.optionalString("trackID")?.trimmingCharacters(in: .whitespacesAndNewlines)
             let track: Track
             if let rawTrackID, !rawTrackID.isEmpty {
                 let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
@@ -751,7 +800,7 @@ public struct AgentToolkit {
             // 按分类取歌曲清单（artist/album/genre/language/year/favorites/recent/popular/all），
             // 只含元数据（无歌词/海报），供模型按需注入对话后做推荐。
             let category = (try? require(call, "category"))?.lowercased() ?? "all"
-            let value = call.arguments["value"]
+            let value = call.optionalString("value")
             let limit = (try? intParam(call, "limit")) ?? 100
             let lines = try await catalog.catalogTracks(
                 serverID: serverID, category: category, value: value, limit: limit
@@ -925,9 +974,32 @@ public struct AgentToolkit {
         case "queue_append":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             return mutationToolResult(call, descriptor, await bridge.addToQueue(globalID: gid))
+        case "queue_append_many":
+            let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
+            var completed = 0
+            for gid in gids {
+                let result = await bridge.addToQueue(globalID: gid)
+                guard result.state == .confirmed else {
+                    return ToolResult(
+                        call: call,
+                        permission: descriptor.permission,
+                        success: false,
+                        summary: "已追加 \(completed)/\(gids.count) 首；第 \(completed + 1) 首结果未知：\(result.summary)",
+                        // Earlier confirmed appends cannot be rolled back here;
+                        // report partial mutation even if the failing bridge
+                        // response itself was a deterministic failure.
+                        hasIndeterminateSideEffect: completed > 0 || result.state == .indeterminate
+                    )
+                }
+                completed += 1
+            }
+            return .ok(call, descriptor, "已确认追加 \(completed) 首到队列")
         case "queue_play_next":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             return mutationToolResult(call, descriptor, await bridge.playNext(globalID: gid))
+        case "queue_play_next_many":
+            let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
+            return mutationToolResult(call, descriptor, await bridge.playNext(globalIDs: gids))
         case "queue_replace":
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
             return mutationToolResult(call, descriptor, await bridge.replaceQueue(globalIDs: gids))
@@ -1043,7 +1115,7 @@ public struct AgentToolkit {
     }
 
     private static func require(_ call: ToolCall, _ key: String) throws -> String {
-        guard let value = call.arguments[key], !value.isEmpty else {
+        guard let value = call.optionalString(key), !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentToolError.missingParameter(key)
         }
         return value
@@ -1051,7 +1123,7 @@ public struct AgentToolkit {
 
     /// 多值参数解析：native function calling 传 JSON 数组，文本 ACTION 传逗号字符串。
     private static func listParam(_ call: ToolCall, _ key: String) throws -> [String] {
-        guard let raw = call.arguments[key], !raw.isEmpty else { return [] }
+        guard let raw = call.jsonText(key), !raw.isEmpty else { return [] }
         if let data = raw.data(using: .utf8),
            let array = try? JSONSerialization.jsonObject(with: data) as? [String] {
             return array.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -1126,7 +1198,7 @@ public struct AgentToolkit {
     }
 
     private static func boolParam(_ call: ToolCall, _ key: String) throws -> Bool {
-        guard let raw = call.arguments[key]?.lowercased() else {
+        guard let raw = call.optionalString(key)?.lowercased() else {
             throw AgentToolError.missingParameter(key)
         }
         switch raw {
@@ -1426,7 +1498,8 @@ extension ToolResult {
         _ payload: AgentMessage? = nil,
         facts: [String: String] = [:],
         evidence: [AgentEvidence] = [],
-        presentationRole: ToolPresentationRole? = nil
+        presentationRole: ToolPresentationRole? = nil,
+        trustLevel: AIContentTrustLevel = .trustedTool
     ) -> ToolResult {
         ToolResult(
             call: call,
@@ -1436,7 +1509,8 @@ extension ToolResult {
             payload: payload,
             facts: facts,
             evidence: evidence,
-            presentationRole: presentationRole ?? descriptor.defaultPresentationRole
+            presentationRole: presentationRole ?? descriptor.defaultPresentationRole,
+            trustLevel: trustLevel
         )
     }
 

@@ -1,3 +1,4 @@
+import AIKit
 import Domain
 import Foundation
 import LocalCatalog
@@ -25,14 +26,149 @@ public enum ToolGroup: String, Codable, Sendable, Hashable {
     case memory
 }
 
-/// Agent 工具调用。arguments 为已解析的参数字典（值经 Agent 内部编码，不含任何凭据）。
+/// Values accepted by the deprecated text-argument compatibility initializer.
+/// The runtime canonical representation remains `AIJSONValue`.
+public protocol ToolArgumentValue: Sendable {
+    var aiJSONValue: AIJSONValue { get }
+}
+
+extension AIJSONValue: ToolArgumentValue {
+    public var aiJSONValue: AIJSONValue { self }
+}
+
+extension String: ToolArgumentValue {
+    public var aiJSONValue: AIJSONValue { .string(self) }
+}
+
+/// Agent 工具调用。arguments 是 Runtime 的 canonical 结构化 JSON 对象；
+/// ACTION 文本兼容层只在进入此类型时把字符串包装成 `.string`。
 public struct ToolCall: Codable, Sendable {
     public let name: String
-    public let arguments: [String: String]
+    public let arguments: [String: AIJSONValue]
 
-    public init(name: String, arguments: [String: String] = [:]) {
+    public init(name: String, arguments: [String: AIJSONValue] = [:]) {
         self.name = name
         self.arguments = arguments
+    }
+
+    /// 兼容 ACTION / 旧持久化调用点。Canonical property 仍然是 JSON value。
+    @available(*, deprecated, message: "Use structured AIJSONValue arguments")
+    public init<T: ToolArgumentValue>(name: String, arguments: [String: T]) {
+        self.name = name
+        self.arguments = arguments.mapValues(\.aiJSONValue)
+    }
+
+    public init(name: String, rawArguments: [String: String]) {
+        self.name = name
+        self.arguments = rawArguments.mapValues(AIJSONValue.string)
+    }
+
+    public func string(_ key: String) throws -> String {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .string(value): return value
+        case let .number(value): return String(value)
+        case let .bool(value): return value ? "true" : "false"
+        default: throw ToolArgumentError.invalid(key, expected: "string")
+        }
+    }
+
+    public func optionalString(_ key: String) -> String? {
+        try? string(key)
+    }
+
+    /// Returns legacy text unchanged for string values, or canonical JSON for
+    /// arrays/objects. This is only for service adapters that still decode a
+    /// domain payload from text; the ToolCall itself remains structured.
+    public func jsonText(_ key: String) -> String? {
+        guard let value = arguments[key] else { return nil }
+        if case let .string(value) = value { return value }
+        return value.jsonString
+    }
+
+    public func int(_ key: String) throws -> Int {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .number(value) where value.isFinite && value.rounded() == value:
+            return Int(value)
+        case let .string(value) where Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) != nil:
+            return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))!
+        default: throw ToolArgumentError.invalid(key, expected: "integer")
+        }
+    }
+
+    public func double(_ key: String) throws -> Double {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .number(value): return value
+        case let .string(value) where Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) != nil:
+            return Double(value.trimmingCharacters(in: .whitespacesAndNewlines))!
+        default: throw ToolArgumentError.invalid(key, expected: "number")
+        }
+    }
+
+    public func bool(_ key: String) throws -> Bool {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .bool(value): return value
+        case let .string(value):
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1": return true
+            case "false", "0": return false
+            default: throw ToolArgumentError.invalid(key, expected: "boolean")
+            }
+        default: throw ToolArgumentError.invalid(key, expected: "boolean")
+        }
+    }
+
+    public func strings(_ key: String) throws -> [String] {
+        guard let value = arguments[key] else { throw ToolArgumentError.missing(key) }
+        switch value {
+        case let .array(values):
+            return try values.map { value in
+                guard case let .string(string) = value else {
+                    throw ToolArgumentError.invalid(key, expected: "array of strings")
+                }
+                return string
+            }
+        case let .string(value):
+            // ACTION compatibility only; native structured calls arrive as an array.
+            return value.split { $0 == "," || $0 == "，" }.map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }.filter { !$0.isEmpty }
+        default: throw ToolArgumentError.invalid(key, expected: "array of strings")
+        }
+    }
+
+    public func object(_ key: String) throws -> [String: AIJSONValue] {
+        guard let value = arguments[key], case let .object(object) = value else {
+            throw ToolArgumentError.invalid(key, expected: "object")
+        }
+        return object
+    }
+
+    /// Stable string projection for legacy diagnostics and task persistence.
+    public var stringArguments: [String: String] {
+        arguments.mapValues(Self.stringValue)
+    }
+
+    private static func stringValue(_ value: AIJSONValue) -> String {
+        switch value {
+        case let .string(value): return value
+        default: return value.jsonString
+        }
+    }
+}
+
+public enum ToolArgumentError: Error, LocalizedError, Sendable, Equatable {
+    case missing(String)
+    case invalid(String, expected: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .missing(key): return "缺少参数：\(key)"
+        case let .invalid(key, expected): return "参数 \(key) 应为 \(expected)"
+        }
     }
 }
 
@@ -49,6 +185,13 @@ public enum AgentSensitiveDataRedactor {
             let isSensitive = sensitiveFragments.contains { normalized.contains($0) }
             return (key, isSensitive ? "<redacted>" : value)
         }.reduce(into: [:]) { $0[$1.0] = $1.1 }
+    }
+
+    public static func arguments(_ values: [String: AIJSONValue]) -> [String: String] {
+        arguments(values.mapValues { value in
+            if case let .string(string) = value { return string }
+            return value.jsonString
+        })
     }
 }
 
@@ -68,6 +211,8 @@ public struct ToolResult: Sendable {
     /// 工具已产生部分写入或服务端状态无法确认。即使 `success == false`，Runner 也必须
     /// 阻止相同参数自动重试，避免创建重复歌单、重复添加歌曲等副作用。
     public let hasIndeterminateSideEffect: Bool
+    /// 外部 Web 内容只能作为数据回灌 Provider，不能变成系统指令或用户授权。
+    public let trustLevel: AIContentTrustLevel
 
     public init(
         call: ToolCall,
@@ -78,7 +223,8 @@ public struct ToolResult: Sendable {
         facts: [String: String] = [:],
         evidence: [AgentEvidence] = [],
         presentationRole: ToolPresentationRole = .none,
-        hasIndeterminateSideEffect: Bool = false
+        hasIndeterminateSideEffect: Bool = false,
+        trustLevel: AIContentTrustLevel = .trustedTool
     ) {
         self.call = call
         self.permission = permission
@@ -89,6 +235,7 @@ public struct ToolResult: Sendable {
         self.evidence = evidence
         self.presentationRole = presentationRole
         self.hasIndeterminateSideEffect = hasIndeterminateSideEffect
+        self.trustLevel = trustLevel
     }
 }
 
@@ -163,6 +310,9 @@ public protocol AgentBridge: Sendable {
     func getSleepTimer() async -> (mode: String, remaining: TimeInterval)
     func addToQueue(globalID: GlobalID) async -> AgentMutationResult
     func playNext(globalID: GlobalID) async -> AgentMutationResult
+    /// 原子地把多首歌曲按输入顺序插入当前歌曲之后。
+    /// 生产桥接必须在一次队列 mutation 中完成，不能由调用方逐首拼接。
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult
     func replaceQueue(globalIDs: [GlobalID]) async -> AgentMutationResult
     func removeFromQueue(at index: Int) async -> AgentMutationResult
     func reorderQueue(from: Int, to: Int) async -> AgentMutationResult
@@ -209,6 +359,9 @@ public protocol AgentBridge: Sendable {
 public extension AgentBridge {
     func serverSearch(query: String, limit: Int) async -> [Track] { [] }
     func playServerTrack(globalID: GlobalID) async -> Bool { false }
+    func playNext(globalIDs: [GlobalID]) async -> AgentMutationResult {
+        .failed("播放器桥接未实现批量下一首")
+    }
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { .unknown }
     func pause() async -> AgentMutationResult { .failed("播放器桥接未实现暂停") }
     func resume() async -> AgentMutationResult { .failed("播放器桥接未实现继续播放") }

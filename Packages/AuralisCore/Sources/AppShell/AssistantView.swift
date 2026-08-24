@@ -598,9 +598,12 @@ struct AssistantView: View {
     private var runningIndicator: some View {
         HStack(spacing: AuralisSpacing.small) {
             ProgressView().controlSize(.small)
-            // 显示任务管理器中的当前阶段（如「正在理解请求」「执行 playTrack」），
-            // 不展示 tool_call JSON / 凭据 / 原始服务器响应。
-            Text(agent.activeTask?.currentStep ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
+            // RunPresentationState is the single source of truth while a run
+            // is active.  AgentTask remains useful for persisted deterministic
+            // workflow diagnostics, but must not race a generic streaming run.
+            Text(agent.runPresentationState?.phase.displayText
+                 ?? agent.activeTask?.currentStep
+                 ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             Button(String(localized: "停止", bundle: .module)) { agent.cancel() }
                 .buttonStyle(HapticBorderedButtonStyle())
@@ -674,6 +677,42 @@ struct AssistantView: View {
 
         case let .albumCards(cards):
             AlbumCardList(cards: cards, theme: theme)
+
+        case let .webSources(sources):
+            VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+                Label(String(localized: "联网来源", bundle: .module), systemImage: "globe")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.primaryText.color)
+                ForEach(sources) { source in
+                    Link(destination: source.url) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.title)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(2)
+                            Text(source.domain)
+                                .font(.caption2)
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            if let publishedAt = source.publishedAt, !publishedAt.isEmpty {
+                                Text(publishedAt)
+                                    .font(.caption2)
+                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            }
+                            if !source.snippet.isEmpty {
+                                Text(source.snippet)
+                                    .font(.caption2)
+                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                                    .lineLimit(3)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(AuralisSpacing.medium)
+            .background(theme.colorTokens.elevated.color)
+            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+            .frame(maxWidth: 560, alignment: .leading)
 
         case let .playlistProposal(name, tracks):
             VStack(alignment: .leading, spacing: AuralisSpacing.small) {

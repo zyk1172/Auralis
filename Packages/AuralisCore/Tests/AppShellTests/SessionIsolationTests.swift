@@ -101,6 +101,77 @@ struct SessionIsolationTests {
         } })
     }
 
+    @Test("旧 Run 的展示回调不能覆盖当前 Run 的唯一 phase")
+    func staleRunCannotUpdateCurrentPresentation() async throws {
+        let (model, coordinator) = makeCoordinator()
+        _ = model
+        let sessionID = await coordinator.newSession()
+        let oldRun = UUID()
+        let newRun = UUID()
+        coordinator.currentRunID = newRun
+        coordinator.beginRunPresentation(runID: newRun, sessionID: sessionID)
+
+        await coordinator.receive(
+            AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "正在执行：playback_play_song…")]),
+            sessionID: sessionID,
+            runID: oldRun
+        )
+        #expect(coordinator.runPresentationState?.phase == .thinking)
+
+        await coordinator.receive(
+            AgentChatMessage(role: .assistant, messages: [.streaming("正在回答")]),
+            sessionID: sessionID,
+            runID: newRun
+        )
+        #expect(coordinator.runPresentationState?.phase == .streaming)
+
+        await coordinator.receive(
+            AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "正在重试当前批次…")]),
+            sessionID: sessionID,
+            runID: newRun
+        )
+        #expect(coordinator.runPresentationState?.phase == .retrying(message: "正在重试当前批次…"))
+    }
+
+    @Test("旧 Run 收尾不能释放新 Run 的所有权")
+    func oldRunCannotFinishNewRun() async throws {
+        let (model, coordinator) = makeCoordinator()
+        _ = model
+        _ = await coordinator.newSession()
+        let oldRun = UUID()
+        let newRun = UUID()
+        let newLease = ToolExecutionLease(runID: newRun, sessionID: coordinator.activeSessionID!, generation: 2)
+        coordinator.currentRunID = newRun
+        coordinator.currentExecutionLease = newLease
+
+        coordinator.finishOwnedRun(oldRun)
+
+        #expect(coordinator.currentRunID == newRun)
+        #expect(coordinator.currentExecutionLease === newLease)
+        #expect(await newLease.isValid())
+    }
+
+    @Test("切换会话先撤销旧 Run 的 mutation lease")
+    func sessionSwitchRevokesOldMutationLease() async throws {
+        let (model, coordinator) = makeCoordinator()
+        _ = model
+        let a = await coordinator.newSession()
+        let b = await coordinator.newSession()
+        await coordinator.activate(a)
+
+        let runID = UUID()
+        let lease = ToolExecutionLease(runID: runID, sessionID: a, generation: 1)
+        coordinator.currentRunID = runID
+        coordinator.currentExecutionLease = lease
+
+        await coordinator.activate(b)
+
+        #expect(!lease.isValidSnapshot)
+        #expect(coordinator.currentRunID == nil)
+        #expect(coordinator.currentExecutionLease == nil)
+        #expect(coordinator.activeSessionID == b)
+    }
+
     @Test("TEST E/F：切换会话不污染 UI（activeSessionID 正确、消息按会话隔离）")
     func progressIsolation() async throws {
         let (model, coordinator) = makeCoordinator()
