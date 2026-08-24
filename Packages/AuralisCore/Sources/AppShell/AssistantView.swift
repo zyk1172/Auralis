@@ -598,9 +598,12 @@ struct AssistantView: View {
     private var runningIndicator: some View {
         HStack(spacing: AuralisSpacing.small) {
             ProgressView().controlSize(.small)
-            // 显示任务管理器中的当前阶段（如「正在理解请求」「执行 playTrack」），
-            // 不展示 tool_call JSON / 凭据 / 原始服务器响应。
-            Text(agent.activeTask?.currentStep ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
+            // RunPresentationState is the single source of truth while a run
+            // is active.  AgentTask remains useful for persisted deterministic
+            // workflow diagnostics, but must not race a generic streaming run.
+            Text(agent.runPresentationState?.phase.displayText
+                 ?? agent.activeTask?.currentStep
+                 ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             Button(String(localized: "停止", bundle: .module)) { agent.cancel() }
                 .buttonStyle(HapticBorderedButtonStyle())

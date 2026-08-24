@@ -67,6 +67,10 @@ public final class AgentCoordinator: ObservableObject {
     public var headless = false
     /// 当前正在运行（或最近一次运行）的 Agent 任务；供 UI 展示步骤与状态。
     @Published public private(set) var activeTask: AgentTaskRecord?
+    /// Exactly one transient activity belongs to the current run.  Streaming,
+    /// tools, confirmation and Runtime retries update this value in place;
+    /// they do not accumulate as independent presentation states.
+    @Published public private(set) var runPresentationState: AssistantRunPresentationState?
     /// 会话列表搜索词。
     @Published public var sessionQuery = "" { didSet { refreshSessionList() } }
     /// 是否在会话列表里显示已归档会话（默认隐藏）。
@@ -517,6 +521,7 @@ public final class AgentCoordinator: ObservableObject {
         )
         currentExecutionLease = executionLease
         currentRunID = runID
+        beginRunPresentation(runID: runID, sessionID: sessionID)
         runTask = Task { [weak self] in
             guard let self else { return }
             // 用户在任务真正开始前点了停止：直接结束，不回任何消息。
@@ -862,7 +867,18 @@ public final class AgentCoordinator: ObservableObject {
         currentRunID = nil
         runTask = nil
         streamingStates[runID] = nil
+        if runPresentationState?.runID == runID {
+            runPresentationState = nil
+        }
         isRunning = false
+    }
+
+    /// Establish the one transient phase row for a new owned run.  Kept
+    /// internal so lifecycle tests can exercise stale-callback isolation
+    /// without needing to manufacture a live Provider request.
+    func beginRunPresentation(runID: UUID, sessionID: UUID) {
+        guard currentRunID == runID else { return }
+        runPresentationState = .init(runID: runID, sessionID: sessionID, phase: .thinking)
     }
 
     private static func failureSummary(in messages: ArraySlice<AgentChatMessage>) -> String? {
@@ -897,6 +913,9 @@ public final class AgentCoordinator: ObservableObject {
         currentRunID = nil
         if let cancelledRunID {
             streamingStates[cancelledRunID] = nil
+            if runPresentationState?.runID == cancelledRunID {
+                runPresentationState = nil
+            }
         }
         resolveConsent(.deny)
         resolveOperationConfirmation(false)
@@ -928,6 +947,8 @@ public final class AgentCoordinator: ObservableObject {
         // 过期 callback（旧 run 的迟到 token / 旧 run 的 final answer）→ 丢弃，不污染新运行。
         guard currentRunID == runID else { return }
         let isActiveSession = activeSessionID == sessionID
+
+        updateRunPresentation(for: message, sessionID: sessionID, runID: runID)
 
         // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
         if let delta = Self.streamingDeltaText(from: message) {
@@ -981,6 +1002,37 @@ public final class AgentCoordinator: ObservableObject {
             messages.append(message)
         }
         await sessionStore.append(message, to: sessionID)
+    }
+
+    /// Message-derived phases are intentionally transient.  The final answer
+    /// remains represented by the normal persisted assistant message, while
+    /// this state drives the single running indicator.
+    private func updateRunPresentation(
+        for message: AgentChatMessage,
+        sessionID: UUID,
+        runID: UUID
+    ) {
+        guard runPresentationState?.runID == runID,
+              runPresentationState?.sessionID == sessionID else { return }
+        if Self.streamingDeltaText(from: message) != nil {
+            runPresentationState?.phase = .streaming
+            return
+        }
+        guard let item = message.messages.last else { return }
+        switch item {
+        case let .toolProgress(step):
+            if step.contains("重试") {
+                runPresentationState?.phase = .retrying(message: step)
+            } else {
+                runPresentationState?.phase = .usingTool(name: step)
+            }
+        case .confirmation:
+            runPresentationState?.phase = .waitingForConfirmation
+        case let .error(text):
+            runPresentationState?.phase = .failed(message: text)
+        default:
+            break
+        }
     }
 
     /// 若消息是流式增量消息，返回其增量文本；否则返回 nil。
