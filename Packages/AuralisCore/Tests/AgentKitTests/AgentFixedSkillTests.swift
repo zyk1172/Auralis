@@ -43,7 +43,10 @@ private final class SkillBridge: AgentBridge, @unchecked Sendable {
     var activeServerID: ServerID? { activeServerIDValue }
     var lyricsStateValue: AgentLyricsState = .unknown
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { lyricsStateValue }
-    func currentTrack() -> Track? { nil }
+
+    /// 最近一次成功播放的曲目（供 playback_get_state 状态验证）。
+    private var lastPlayed: Track?
+    func currentTrack() -> Track? { lastPlayed }
 
     private var queueTracks: [Track] = []
     func currentQueue() -> [Track] { queueTracks }
@@ -60,8 +63,25 @@ private final class SkillBridge: AgentBridge, @unchecked Sendable {
     var mutationResult: AgentMutationResult = .confirmed("ok")
     var playlistAddResult: AgentMutationResult = .confirmed("ok")
     var onPlaylistCreated: (@Sendable (String, GlobalID) -> Void)?
+    /// 加歌成功后回调（测试用它把真实歌单内容写回 store，驱动强验证路径）。
+    var onTracksAdded: (@Sendable (GlobalID, [GlobalID]) -> Void)?
 
-    func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
+    func playTrack(globalID: GlobalID) async -> Bool {
+        playedTracks.append(globalID)
+        if playResult {
+            lastPlayed = Track(
+                id: TrackID(rawValue: globalID.remoteID),
+                serverID: globalID.serverID,
+                albumID: AlbumID(rawValue: "\(globalID.remoteID)-album"),
+                artistID: ArtistID(rawValue: "\(globalID.remoteID)-artist"),
+                title: "播放中",
+                artistName: "周杰伦",
+                albumTitle: "专辑",
+                duration: 200
+            )
+        }
+        return playResult
+    }
     func playServerTrack(globalID: GlobalID) async -> Bool { playResult }
     func playAlbum(globalID: GlobalID) async -> Bool { true }
     func playPlaylist(globalID: GlobalID) async -> Bool { true }
@@ -87,10 +107,10 @@ private final class SkillBridge: AgentBridge, @unchecked Sendable {
         replacedQueues.append(globalIDs)
         queueTracks = globalIDs.enumerated().map { index, gid in
             Track(
-                id: TrackID(rawValue: gid.remoteID ?? "t\(index)"),
+                id: TrackID(rawValue: gid.remoteID),
                 serverID: gid.serverID,
-                albumID: AlbumID(rawValue: "\(gid.remoteID ?? "t\(index)")-album"),
-                artistID: ArtistID(rawValue: "\(gid.remoteID ?? "t\(index)")-artist"),
+                albumID: AlbumID(rawValue: "\(gid.remoteID)-album"),
+                artistID: ArtistID(rawValue: "\(gid.remoteID)-artist"),
                 title: "歌\(index)",
                 artistName: "周杰伦",
                 albumTitle: "专辑",
@@ -114,6 +134,7 @@ private final class SkillBridge: AgentBridge, @unchecked Sendable {
     func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { mutationResult }
     func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult {
         addedToPlaylist.append((playlistGID, trackGIDs))
+        onTracksAdded?(playlistGID, trackGIDs)
         return playlistAddResult
     }
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { mutationResult }
@@ -454,6 +475,83 @@ struct QueueReplacePlaybackSkillTests {
         let runtime = BuiltInStatefulSkillRegistry.activate(semantics: semantics, userText: "列出我的歌单", initialTaskState: nil)
         #expect(runtime == nil)
     }
+
+    @Test("N10 用户要 10 首、模型交 58 首 → 最终只操作 10 首（targetCount 硬约束）")
+    func targetCountTruncatesOverSubmittedCandidates() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 58)
+        let bridge = SkillBridge()
+        let ids = (0..<58).map { "\(skillServerID.rawValue):t\($0)" }
+        let provider = SkillProvider([
+            skillResponse(calls: [skillCall(id: "c1", name: "result_present_tracks", arguments: ["trackIDs": .array(ids.map(AIJSONValue.string))])]),
+        ])
+        _ = await Self.runQueueSkill(
+            userText: "我要十首周杰伦的歌曲，替换到队列播放",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+        #expect(bridge.replacedQueues.count == 1)
+        #expect(bridge.replacedQueues.first?.count == 10, "模型提交 58 首时必须硬约束到 10 首，实际：\(bridge.replacedQueues.first?.count ?? -1)")
+        #expect(bridge.clearedQueueCount == 0)
+        #expect(bridge.appendedQueues.isEmpty)
+    }
+
+    @Test("N11 固定 Skill 激活后模型首轮 schema 中 mutation 数量 == 0")
+    func skillActivationHidesAllMutationsFromModelSchema() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let provider = SkillProvider([
+            skillResponse(calls: [skillCall(id: "c1", name: "library_search", arguments: ["query": .string("周杰伦")])]),
+            skillResponse(calls: [skillCall(id: "c2", name: "result_present_tracks", arguments: ["trackIDs": .array([.string("\(skillServerID.rawValue):t0")])])]),
+        ])
+        _ = await Self.runQueueSkill(
+            userText: "替换队列并播放周杰伦",
+            store: store,
+            bridge: SkillBridge(),
+            provider: provider
+        )
+        let requests = provider.requests()
+        #expect(!requests.isEmpty)
+        let firstTools = requests.first?.tools ?? []
+        #expect(!firstTools.isEmpty, "首轮应暴露只读工具")
+        let mutations = firstTools.map(\.name).filter { name in
+            guard let descriptor = AgentToolRegistry.descriptor(for: name) else { return false }
+            return descriptor.permission != .readOnly
+        }
+        #expect(mutations.isEmpty, "Skill 激活后模型 schema 不得出现任何 mutation（playback_play_artist/queue_clear 等），实际：\(mutations)")
+        // 只读工具仍然可用（search/select 必须可见）。
+        let names = firstTools.map(\.name)
+        #expect(names.contains("library_search"))
+        #expect(names.contains("result_present_tracks"))
+    }
+
+    @Test("N12 模型绕过 schema 硬调同族 mutation（playback_play_artist）→ 被拒绝，不提前播放")
+    func modelHardCallingMutationIsRejected() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let bridge = SkillBridge()
+        let provider = SkillProvider([
+            // 模型第一轮直接硬调 playback_play_artist（不在 schema 里）。
+            skillResponse(calls: [skillCall(id: "m1", name: "playback_play_artist", arguments: ["artistID": .string("\(skillServerID.rawValue):t0-artist")])]),
+            // 被拒后模型回到候选收集，正确提交候选。
+            skillResponse(calls: [skillCall(id: "c1", name: "result_present_tracks", arguments: ["trackIDs": .array([.string("\(skillServerID.rawValue):t0")])])]),
+        ])
+        let collector = await Self.runQueueSkill(
+            userText: "替换队列并播放周杰伦",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+        // 模型的 playback_play_artist 必须被拦截：Skill 只允许自己的 forced call 执行 mutation。
+        // Skill 主路径正常完成（播放 t0），但模型硬调的 artist 播放绝不可达。
+        #expect(bridge.playedTracks == [GlobalID(serverID: skillServerID, remoteID: "t0")],
+                "只允许 Skill 主路径播放，模型硬调的写操作不得执行，实际：\(bridge.playedTracks)")
+        #expect(bridge.replacedQueues.count == 1, "Skill 主路径正常完成替换")
+        #expect(bridge.clearedQueueCount == 0)
+        let completed = await collector.containsText("队列已替换并开始播放")
+        #expect(completed)
+    }
 }
 
 // MARK: - O 系列：PlaylistBuildSkill
@@ -497,19 +595,36 @@ struct PlaylistBuildSkillTests {
         #expect(bareRuntime == nil)
     }
 
-    @Test("O2/O3 create 一次、add 一次、verify → completed")
+    @Test("O2/O3 create 一次、add 一次、verify → completed；歌单名来自用户请求")
     func playlistBuildCreateAddVerifyOnce() async throws {
         let store = try skillStore()
         try await seedSkillTracks(store, count: 3)
         let bridge = SkillBridge()
+        // 记录创建的歌单名（P1-1 验证：生产路径 playlistName 必须是“通勤”而不是默认值）。
+        let playlistNameBox = NameBox()
         bridge.onPlaylistCreated = { name, gid in
+            playlistNameBox.set(name)
             Task {
                 try? await store.upsertPlaylist(
                     Playlist(
-                        id: PlaylistID(rawValue: gid.remoteID ?? UUID().uuidString),
+                        id: PlaylistID(rawValue: gid.remoteID),
                         serverID: "v2",
                         name: name,
                         trackIDs: []
+                    ),
+                    serverID: "v2"
+                )
+            }
+        }
+        // 加歌成功后把真实内容写回 store，驱动 library_get_playlist 强验证路径。
+        bridge.onTracksAdded = { playlistGID, trackGIDs in
+            Task {
+                try? await store.upsertPlaylist(
+                    Playlist(
+                        id: PlaylistID(rawValue: playlistGID.remoteID),
+                        serverID: "v2",
+                        name: playlistNameBox.get(),
+                        trackIDs: trackGIDs.map { TrackID(rawValue: $0.remoteID) }
                     ),
                     serverID: "v2"
                 )
@@ -519,16 +634,19 @@ struct PlaylistBuildSkillTests {
         let provider = SkillProvider([
             skillResponse(calls: [skillCall(id: "c1", name: "result_present_tracks", arguments: ["trackIDs": .array(ids.map(AIJSONValue.string))])]),
         ])
-        _ = await Self.runPlaylistSkill(
+        let collector = await Self.runPlaylistSkill(
             userText: "创建一个通勤歌单，加入这 3 首歌",
             store: store,
             bridge: bridge,
             provider: provider
         )
         #expect(bridge.createdPlaylistNames.count == 1, "playlist_create 必须恰一次")
+        #expect(bridge.createdPlaylistNames.first == "通勤", "生产路径歌单名必须来自用户请求，实际：\(String(describing: bridge.createdPlaylistNames.first))")
         #expect(bridge.addedToPlaylist.count == 1, "playlist_add_songs 必须恰一次")
         #expect(bridge.addedToPlaylist.first?.1.count == 3)
         #expect(bridge.deletedPlaylists.isEmpty, "Skill 不触碰 playlist_delete")
+        let completed = await collector.containsText("歌单已创建并加入歌曲")
+        #expect(completed, "强验证通过后应 completed")
     }
 
     @Test("O4/O5 create 成功 + add 失败 → 不重新 create、不删歌单、partial 报告")
@@ -541,7 +659,7 @@ struct PlaylistBuildSkillTests {
             Task {
                 try? await store.upsertPlaylist(
                     Playlist(
-                        id: PlaylistID(rawValue: gid.remoteID ?? UUID().uuidString),
+                        id: PlaylistID(rawValue: gid.remoteID),
                         serverID: "v2",
                         name: name,
                         trackIDs: []
@@ -567,24 +685,60 @@ struct PlaylistBuildSkillTests {
         #expect(partial)
     }
 
-    @Test("O6 resume 已有 createdPlaylistID → 不重新 create")
+    @Test("O6 resume 已有 createdPlaylistID + 已选候选 → 从 addingTracks 继续且 trackIDs 非空")
     func resumeSkipsCreate() throws {
         let checkpoint = PlaylistBuildSkillCheckpointForTest(
             playlistID: "v2:existing-playlist",
             playlistName: "通勤",
             targetCount: nil,
-            createdPlaylist: true
+            createdPlaylist: true,
+            selectedTrackIDs: ["v2:t0", "v2:t1", "v2:t2"]
         )
         let data = try JSONEncoder().encode(checkpoint)
         let json = String(data: data, encoding: .utf8)
         let runtime = BuiltInPlaylistBuildSkill().makeRuntime(checkpointJSON: json)
         let step = runtime.nextStep()
-        guard case let .executeTool(name, _) = step else {
+        guard case let .executeTool(name, arguments) = step else {
             Issue.record("resume 后 nextStep 应为 executeTool，实际 \(step)")
             return
         }
         #expect(name == "playlist_add_songs")
+        // P1-2：resume 的 trackIDs 必须非空且等于 checkpoint 保存的原候选，
+        // 不能发出空数组的 playlist_add_songs。
+        if case let .array(ids) = arguments["trackIDs"] {
+            let strings = ids.compactMap { value -> String? in
+                if case let .string(s) = value { return s }
+                return nil
+            }
+            #expect(strings == ["v2:t0", "v2:t1", "v2:t2"], "resume 必须携带原候选，实际：\(strings)")
+        } else {
+            Issue.record("playlist_add_songs 缺少 trackIDs 参数")
+        }
     }
+
+    @Test("O7 旧 checkpoint（无候选）恢复 → 回候选收集，不发出空 add、不重新 create")
+    func resumeWithoutCandidatesCollectsFirst() throws {
+        let checkpoint = PlaylistBuildSkillCheckpointForTest(
+            playlistID: "v2:existing-playlist",
+            playlistName: "通勤",
+            targetCount: nil,
+            createdPlaylist: true,
+            selectedTrackIDs: nil
+        )
+        let data = try JSONEncoder().encode(checkpoint)
+        let json = String(data: data, encoding: .utf8)
+        let runtime = BuiltInPlaylistBuildSkill().makeRuntime(checkpointJSON: json)
+        let step = runtime.nextStep()
+        // 有歌单但无候选 → 回到候选收集（freeModelTurn），绝不 create / 空 add。
+        #expect(step == .freeModelTurn)
+    }
+}
+
+private final class NameBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: String = ""
+    func set(_ newValue: String) { lock.lock(); storedValue = newValue; lock.unlock() }
+    func get() -> String { lock.lock(); defer { lock.unlock() }; return storedValue }
 }
 
 private struct PlaylistBuildSkillCheckpointForTest: Codable {
@@ -592,4 +746,5 @@ private struct PlaylistBuildSkillCheckpointForTest: Codable {
     var playlistName: String
     var targetCount: Int?
     var createdPlaylist: Bool
+    var selectedTrackIDs: [String]?
 }

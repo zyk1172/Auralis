@@ -71,7 +71,7 @@ private final class OrchestrationBridge: AgentBridge, @unchecked Sendable {
     var activeServerID: ServerID? { activeServerIDValue }
     var lyricsStateValue: AgentLyricsState = .unknown
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { lyricsStateValue }
-    func currentTrack() -> Track? { nil }
+    func currentTrack() -> Track? { lastPlayed }
     // currentQueue 反映最近一次 replaceQueue 的结果（供 Skill 的队列验证读取）。
     func currentQueue() -> [Track] {
         guard let gids = replacedQueues.last else { return [] }
@@ -94,11 +94,28 @@ private final class OrchestrationBridge: AgentBridge, @unchecked Sendable {
     private(set) var clearedQueueCount = 0
     private(set) var deletedPlaylists: [GlobalID] = []
     private(set) var appendedQueues: [GlobalID] = []
+    /// 最近一次成功播放的曲目（供 playback_get_state 状态验证）。
+    private var lastPlayed: Track?
 
     var playResult: Bool = true
     var mutationResult: AgentMutationResult = .confirmed("ok")
 
-    func playTrack(globalID: GlobalID) async -> Bool { playedTracks.append(globalID); return playResult }
+    func playTrack(globalID: GlobalID) async -> Bool {
+        playedTracks.append(globalID)
+        if playResult {
+            lastPlayed = Track(
+                id: TrackID(rawValue: globalID.remoteID),
+                serverID: globalID.serverID,
+                albumID: AlbumID(rawValue: "\(globalID.remoteID)-album"),
+                artistID: ArtistID(rawValue: "\(globalID.remoteID)-artist"),
+                title: "播放中",
+                artistName: "周杰伦",
+                albumTitle: "专辑",
+                duration: 200
+            )
+        }
+        return playResult
+    }
     func playServerTrack(globalID: GlobalID) async -> Bool { true }
     func playAlbum(globalID: GlobalID) async -> Bool { true }
     func playPlaylist(globalID: GlobalID) async -> Bool { true }
@@ -434,8 +451,8 @@ struct AgentToolOrchestrationRegressionTests {
         #expect(bridge.appendedQueues.isEmpty, "不得 fallback 到 queue_append")
         let probeCount = await probe.count()
         #expect(probeCount == 0, "可逆 mutation 不需要模型自创确认")
-        let textA = await collector.containsText("队列已替换并验证完成")
-        let textB = await collector.containsText("已开始播放")
+        let textA = await collector.containsText("队列已替换并开始播放")
+        let textB = await collector.containsText("验证完成")
         #expect(textA || textB)
     }
 
