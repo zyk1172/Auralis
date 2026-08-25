@@ -121,7 +121,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let barePlaybackVerb = has(["播放"])
             && !has(["播放列表", "播放队列", "播放状态", "正在播放什么", "当前播放什么", "最近播放", "最近听过", "播放历史"])
         let explicitPlaybackAction = has([
-            "先放", "放一首", "放一组", "放几首", "直接放", "给我放", "暂停", "下一首", "上一首", "继续播放", "快进", "快退", "跳转", "循环播放",
+            "先放", "放一首", "放一组", "放几首", "直接放", "给我放", "来首", "来点", "整点", "来一首", "放一下", "暂停", "下一首", "上一首", "继续播放", "快进", "快退", "跳转", "循环播放",
             "随机播放", "play", "playback", "pause", "resume", "next track", "previous track",
         ]) || barePlaybackVerb
 
@@ -149,7 +149,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序", "复制歌单", "合并歌单",
             "保存当前队列为歌单", "保存队列为歌单", "把当前队列保存为歌单", "存为歌单", "保存成歌单", "保存队列", "save queue",
             "playlist_create", "playlist_add", "playlist_delete", "playlist_rename",
-        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "添加", "放到", "放进", "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并", "保存", "存为", "存成"]))
+        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "加到", "添加", "放到", "放进", "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并", "保存", "存为", "存成"]))
 
         let musicAnnotationTarget = has([
             "这首歌", "歌曲", "音乐", "专辑", "歌手", "艺人", "艺术家", "当前播放", "current track", "track", "song", "album", "artist",
@@ -374,7 +374,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
                 requested.insert(.playlistCreate)
             }
             if has(["加入歌单", "加到歌单", "添加到歌单", "放到歌单", "放进歌单", "放入歌单", "收进歌单", "playlist_add"])
-                || (has(["歌单", "playlist", "播放列表"]) && has(["加入", "添加", "放到", "放进", "放入", "收进"])) {
+                || (has(["歌单", "playlist", "播放列表"]) && has(["加入", "加到", "添加", "放到", "放进", "放入", "收进"])) {
                 requested.insert(.playlistAdd)
             }
             // “创建一个 N 首歌单” explicitly contains both operations:
@@ -398,6 +398,10 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         if explicitAnnotationAction {
             if ratingMutation { requested.insert(.ratingSet) }
             else if has(["不喜欢", "不感兴趣", "dislike"]) { requested.insert(.dislikedSet) }
+            else if has(["rating", "rate", "评分", "打分"]) {
+                // 英文/中文评分查询（what is this track's rating?）：纯读取，
+                // 不产生 favoriteSet / ratingSet mutation 授权。
+            }
             else { requested.insert(.favoriteSet) }
         }
         if indexBuild { requested.insert(.recommendationIndexWrite) }

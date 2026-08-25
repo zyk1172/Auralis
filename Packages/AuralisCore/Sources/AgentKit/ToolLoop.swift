@@ -1216,6 +1216,15 @@ public struct ToolLoop {
         activeSkill?.configure(maxOutputTokens: resolvedOutputBudget)
         Self.mergeSkillFacts(activeSkill, into: &taskState)
 
+        // run-scoped Capability 环境快照：System Prompt 与 capabilities_get 使用
+        // 同一来源的真实状态（activeServer 真实查询，不再硬编码 false）。
+        let capabilityEnvironment = await Self.capabilityEnvironment(
+            provider: provider,
+            catalog: catalog,
+            systemService: systemService,
+            webService: webService,
+            activeServer: (await bridge.getActiveServer()) != nil
+        )
         var conversation = AgentContextBuilder.build(
             systemPrompt: Self.systemPrompt(
                 context: context,
@@ -1223,12 +1232,8 @@ public struct ToolLoop {
                 nativeToolCalling: nativeMode,
                 goal: taskState.goal,
                 workflowInstruction: activeSkill?.instructions,
-                environment: Self.capabilityEnvironment(
-                    provider: provider,
-                    catalog: catalog,
-                    systemService: systemService,
-                    webService: webService
-                )
+                environment: capabilityEnvironment,
+                relevantCapabilityIDs: Self.relevantCapabilityIDs(for: intent, semantics: plan.semantics)
             ),
             task: taskState,
             facts: [],
@@ -3074,7 +3079,15 @@ public struct ToolLoop {
         let trackLine = { (cards: [TrackCard]) -> String in
             let shown = cards.prefix(visibleCount)
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
-            return cards.count > visibleCount ? "\(list)…等 \(cards.count) 首" : list
+            if cards.count > visibleCount {
+                if let targetCount, targetCount > 50 {
+                    // 候选超过单轮可见上限：明确告知，避免模型误以为只能拿到 50 首而
+                    // 提前 final。完整候选由 Runtime 持有，可通过更精确条件分批查询。
+                    return "\(list)…候选共 \(cards.count) 首（单轮已展示前 50；超过上限，请用更精确的筛选条件缩小范围，或确认是否需要这么多）"
+                }
+                return "\(list)…等 \(cards.count) 首"
+            }
+            return list
         }
         switch message {
         case let .text(value):
@@ -3197,16 +3210,47 @@ public struct ToolLoop {
 
     /// run-scoped Capability 环境快照：System Prompt / capabilities_get 共用同一份，
     /// 避免各处采集不同状态导致能力声明漂移。
+    /// 当前任务相关 Capability（System Prompt 只注入这些；conversation 注入全部）。
+    static func relevantCapabilityIDs(
+        for intent: AgentTaskIntent,
+        semantics: AgentRequestSemantics
+    ) -> [String]? {
+        switch intent {
+        case .conversation:
+            return nil
+        case .musicDiscovery:
+            return ["music_recommendation", "catalog_search", "playlist_construction"]
+        case .playlistManagement:
+            return ["playlist_mutation", "playlist_construction", "catalog_search"]
+        case .playbackControl:
+            return ["playback_control", "catalog_search"]
+        case .librarySearch, .playbackQuery, .queueQuery, .playlistQuery:
+            return ["catalog_search"]
+        case .queueManagement:
+            return ["queue_mutation", "catalog_search"]
+        case .libraryManagement:
+            if semantics.isRecommendationIndex {
+                return ["recommendation_index_build", "recommendation_index_status", "recommendation_index_browse", "library_analysis"]
+            }
+            return ["library_analysis", "catalog_search"]
+        case .musicAppreciation:
+            return ["music_appreciation"]
+        default:
+            return nil
+        }
+    }
+
     static func capabilityEnvironment(
         provider: (any AIProvider)?,
         catalog: LocalCatalogStore,
         systemService: (any AgentSystemService)?,
-        webService: (any AgentWebService)?
+        webService: (any AgentWebService)?,
+        activeServer: Bool
     ) -> AgentCapabilityEnvironment {
         AgentCapabilityEnvironment(
             providerAvailable: provider != nil,
             catalogAvailable: true,
-            activeServer: false,
+            activeServer: activeServer,
             webAvailable: webService != nil,
             downloadServiceAvailable: systemService != nil,
             systemServiceAvailable: systemService != nil
@@ -3219,7 +3263,8 @@ public struct ToolLoop {
         nativeToolCalling: Bool,
         goal: String = "",
         workflowInstruction: String? = nil,
-        environment: AgentCapabilityEnvironment = AgentCapabilityEnvironment(providerAvailable: true)
+        environment: AgentCapabilityEnvironment = AgentCapabilityEnvironment(providerAvailable: true),
+        relevantCapabilityIDs: [String]? = nil
     ) -> String {
         return SystemPromptBuilder.build(
             context: context,
@@ -3227,7 +3272,8 @@ public struct ToolLoop {
             nativeToolCalling: nativeToolCalling,
             goal: goal,
             workflowInstruction: workflowInstruction,
-            environment: environment
+            environment: environment,
+            relevantCapabilityIDs: relevantCapabilityIDs
         )
 
         /*

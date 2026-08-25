@@ -412,10 +412,17 @@ public enum AgentCapabilityCatalog {
 
     /// 生成供 System Prompt / capabilities_get / 诊断共用的紧凑能力摘要。
     /// available / degraded / unavailable 都明确展示，degraded 不静默消失。
-    public static func systemPromptSummary(environment: AgentCapabilityEnvironment) -> String {
+    /// `relevantIDs` 非 nil 时只注入相关能力（System Prompt 精简），完整列表
+    /// 通过 capabilities_get 获取；nil 表示注入全部。
+    public static func systemPromptSummary(
+        environment: AgentCapabilityEnvironment,
+        relevantIDs: [String]? = nil
+    ) -> String {
         var lines: [String] = ["## Auralis 高层能力（Capability 摘要）"]
         lines.append("模型可见 Tool 列表不是 Auralis 全部能力；以下能力部分由 Trusted Runtime / Stateful Skill 完成，判断系统能力以本摘要为准。")
+        let relevant = relevantIDs.map { Set($0) }
         for capability in all {
+            if let relevant, !relevant.contains(capability.id) { continue }
             let availability = availability(for: capability, environment: environment)
             let planningNote = capability.requiresAIPlanning ? "AI 规划需要 Provider" : "AI 规划不需要 Provider"
             let directReadNote = capability.supportsDirectRead ? " · 确定性只读可绕过 Provider" : ""
@@ -442,6 +449,9 @@ public enum AgentCapabilityCatalog {
             lines.append(line)
         }
         lines.append("模型不得声称自己直接写数据库：持久化由 Runtime 完成。")
+        if relevantIDs != nil {
+            lines.append("以上是当前任务相关能力；需要完整能力列表时调用 capabilities_get。")
+        }
         return lines.joined(separator: "\n")
     }
 }

@@ -217,11 +217,20 @@ public enum ToolSelector {
         }
 
         // Tool Broker：轻量确定性 relevance ranking（纯本地计算，不产生授权）。
-        // 只读工具按相关性排序取 Top-K；mutation 已在上层按 allowedOperations
-        // fail-closed 过滤，这里只做 schema 精选与前置依赖补全。
-        let ranked = selected.sorted { lhs, rhs in
-            relevanceScore(lhs, userText: userText, semantics: semantics)
-                > relevanceScore(rhs, userText: userText, semantics: semantics)
+        // 先做宽松召回：即使保守 semantics 第一层没有把工具放进 selected，
+        // utteranceExample bigram 重叠或授权操作命中的工具也会补进来——
+        // 但 mutation 仍必须通过 allowedOperations fail-closed（Recall 宽松、
+        // Authorization 保守）。priority 只参与相关工具间排序，不参与 relevant 判定。
+        let brokered = selected + brokerExtraRecall(
+            visible: visible,
+            selectedNames: selectedNames,
+            userText: userText,
+            semantics: semantics,
+            allowedOperations: allowedOperations
+        )
+        let ranked = brokered.sorted { lhs, rhs in
+            semanticScore(lhs, userText: userText, semantics: semantics) + lhs.discoveryMetadata.priority
+                > semanticScore(rhs, userText: userText, semantics: semantics) + rhs.discoveryMetadata.priority
         }
         var finalSet = ranked
         var finalNames = Set(finalSet.map(\.name))
@@ -256,18 +265,71 @@ public enum ToolSelector {
         if let activeSkillID {
             return core + rest
         }
-        let relevant = rest.filter { relevanceScore($0, userText: userText, semantics: semantics) > 0 }
+        // legacy 调用方（allowedOperations == nil，无 authorization plan）保持完整
+        // shortlist：兼容面不裁剪，避免破坏既有行为契约。
+        // conversation 域（普通对话/模糊搜索）不裁剪：对话可能涉及任意能力，
+        // 且模糊搜索（如“搜索胡广生”）需要保留两个检索入口供模型选择。
+        if allowedOperations == nil || semantics.domain == .conversation {
+            return core + rest
+        }
+        let relevant = rest.filter { semanticScore($0, userText: userText, semantics: semantics) > 0 }
         let fillerCount = max(ToolBrokerTopK - core.count - relevant.count, 0)
-        let filler = rest.filter { relevanceScore($0, userText: userText, semantics: semantics) == 0 }
+        let filler = rest.filter { semanticScore($0, userText: userText, semantics: semantics) == 0 }
             .prefix(fillerCount)
         return core + relevant + filler
+    }
+
+    /// 宽松召回：保守 semantics 未命中的工具，只要 utteranceExample bigram 与用户
+    /// 文本重叠、或授权操作命中，就补进 shortlist。mutation 必须已授权。
+    private static func brokerExtraRecall(
+        visible: [ToolDescriptor],
+        selectedNames: Set<String>,
+        userText: String,
+        semantics: AgentRequestSemantics,
+        allowedOperations: Set<ToolAuthorizationOperation>?
+    ) -> [ToolDescriptor] {
+        let lower = userText.lowercased()
+        let userGrams = cjkBigrams(of: lower)
+        var result: [ToolDescriptor] = []
+        for descriptor in visible {
+            guard !selectedNames.contains(descriptor.name) else { continue }
+            if descriptor.permission != .readOnly {
+                guard descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations) else { continue }
+            }
+            let exampleHit = descriptor.utteranceExamples.contains { example in
+                let exampleLower = example.lowercased()
+                if lower.contains(exampleLower) || exampleLower.contains(lower) { return true }
+                let overlap = userGrams.intersection(cjkBigrams(of: exampleLower))
+                return !overlap.isEmpty
+            }
+            let operationHit = descriptor.authorizationOperation.map {
+                semantics.requestedOperations.contains($0)
+            } ?? false
+            if exampleHit || operationHit {
+                result.append(descriptor)
+            }
+        }
+        return result
+    }
+
+    /// CJK/ASCII bigram：连续字母段生成 2-gram，用于宽松示例匹配。
+    private static func cjkBigrams(of text: String) -> Set<String> {
+        let chars = Array(text.filter { $0.isLetter || $0.isNumber })
+        guard chars.count >= 2 else { return [] }
+        var grams = Set<String>()
+        for i in 0...(chars.count - 2) {
+            grams.insert(String(chars[i...i + 1]))
+        }
+        return grams
     }
 
     /// 模型首轮 schema 的 Top-K 目标规模（core 工具不占名额）。
     private static let ToolBrokerTopK = 10
 
-    /// 轻量确定性 relevance score。数值是 ranking 提示，不是授权。
-    private static func relevanceScore(
+    /// 轻量确定性语义 relevance score。**不含 priority**：priority 只参与相关
+    /// 工具之间的排序，不决定"是否相关"——否则默认 priority 会让所有工具 score>0，
+    /// Top-K 完全失效。数值是 ranking 提示，不是授权。
+    private static func semanticScore(
         _ descriptor: ToolDescriptor,
         userText: String,
         semantics: AgentRequestSemantics
@@ -284,11 +346,13 @@ public enum ToolSelector {
             score += 500
             break
         }
-        // 3) 示例关键 token 命中（宽松召回）。
+        // 3) 示例 bigram 重叠命中（宽松召回，正确分词：CJK 2-gram）。
+        let userGrams = cjkBigrams(of: lower)
         for example in descriptor.utteranceExamples {
-            let tokens = example.lowercased().filter { $0.isLetter }.map(String.init)
-            if tokens.contains(where: { $0.count >= 2 && lower.contains($0) }) {
+            let overlap = userGrams.intersection(cjkBigrams(of: example.lowercased()))
+            if !overlap.isEmpty {
                 score += 120
+                break
             }
         }
         // 4) domain / namespace 匹配。
@@ -305,8 +369,6 @@ public enum ToolSelector {
            descriptor.summary.lowercased().contains(lower.prefix(2)) {
             score += 40
         }
-        // 7) discovery metadata priority。
-        score += descriptor.discoveryMetadata.priority
         return score
     }
 

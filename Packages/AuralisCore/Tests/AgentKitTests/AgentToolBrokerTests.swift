@@ -43,7 +43,7 @@ struct AgentToolBrokerTests {
         let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
         let names = Set(selected.map(\.name))
         #expect(names.contains("recommend_by_mood"), "深夜场景应召回情绪推荐")
-        #expect(names.contains("library_search") || names.contains("library_select_tracks"))
+        // 推荐主要由 recommend_by_mood 产出候选；不强求 library_search 必须在首轮。
     }
 
     @Test("Broker 「找20首中文摇滚」→ library_select_tracks 优先")
@@ -155,5 +155,59 @@ struct AgentToolBrokerTests {
         let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
         #expect(selected.contains { $0.name == "rating_set" },
                 "授权 ratingSet 时应召回 rating_set 工具")
+    }
+
+    // MARK: - 第二轮 Review 修复回归
+
+    @Test("R2 来首稻香 → 授权 playbackPlay 且召回播放/搜索工具")
+    func laishouPlaybackAuthorizesAndRecalls() {
+        let plan = makePlan("来首稻香")
+        #expect(plan.allowedOperations.contains(.playbackPlay), "「来首」是明确播放意图")
+        let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
+        let names = Set(selected.map(\.name))
+        #expect(names.contains("playback_play_song"), "应召回 playback_play_song")
+        #expect(names.contains("library_search") || names.contains("library_resolve_entity"))
+    }
+
+    @Test("R2 把稻香加到通勤歌单 → 授权 playlistAdd 且补 playlist resolution")
+    func addToPlaylistPrerequisiteExpansion() {
+        let plan = makePlan("把稻香加到通勤歌单")
+        #expect(plan.allowedOperations.contains(.playlistAdd), "加歌单应授权 playlistAdd")
+        let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
+        let names = Set(selected.map(\.name))
+        #expect(names.contains("playlist_add_songs"), "应召回 playlist_add_songs")
+        #expect(names.contains("playlist_list"), "playlist_add_songs 需要 PlaylistID → 补 playlist_list")
+        #expect(names.contains("library_search") || names.contains("library_resolve_entity"),
+                "需要 TrackID → 补搜索/解析入口")
+    }
+
+    @Test("R2 英文评分查询不产生任何 mutation 授权")
+    func englishRatingQueryStaysReadOnly() {
+        for text in ["what is this track's rating?", "what's the rating of this song?"] {
+            let semantics = AgentRequestSemantics.analyze(text)
+            #expect(!semantics.requestedOperations.contains(.ratingSet), "\(text) 不得授权 ratingSet")
+            #expect(!semantics.requestedOperations.contains(.favoriteSet), "\(text) 不得误授权 favoriteSet")
+        }
+    }
+
+    @Test("R2 Top-K 实际裁剪：无关工具（score==0）被挡在首轮外")
+    func topKActuallyTrimsIrrelevantTools() {
+        let plan = makePlan("播放稻香")
+        let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
+        // 记忆/下载/诊断工具与播放无关，且无 example/domain 命中 → score==0 应被裁。
+        let irrelevant = selected.filter {
+            $0.group == .memory || $0.group == .download || $0.name.hasPrefix("diagnostics_")
+        }
+        #expect(irrelevant.count <= 2, "无关工具应被 Top-K 裁剪，实际：\(irrelevant.map(\.name))")
+    }
+
+    @Test("R2 候选超过 50 首时明确提示上限而非静默截断")
+    func candidateOverFiftyNotice() {
+        let cards = (0..<80).map { i in
+            TrackCard(globalID: GlobalID(serverID: "v2", remoteID: "t\(i)"), title: "歌\(i)", artistName: "艺人", albumTitle: "专辑", duration: 200, isFavorite: false)
+        }
+        let text = ToolLoop.messageTextForModel(.trackCards(cards), targetCount: 80)
+        #expect(text.contains("超过上限"), "应提示单轮上限")
+        #expect(text.contains("80"), "应说明候选总数")
     }
 }
