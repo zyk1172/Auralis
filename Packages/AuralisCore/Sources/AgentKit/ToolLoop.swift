@@ -564,12 +564,12 @@ public struct ToolLoop {
         // run-scoped Capability 快照：普通聊天路径的 capabilities_get 与
         // System Prompt 摘要共用同一份真实状态。getActiveServer 用 try? 保护：
         // 任务取消时静默降级（activeServer=false），不打断既有的取消处理路径。
-        let capabilityEnvironment = await Self.capabilityEnvironment(
+        let capabilityEnvironment = Self.capabilityEnvironment(
             provider: provider,
             catalog: catalog,
             systemService: systemService,
             webService: webService,
-            activeServer: (try? await bridge.getActiveServer()) != nil
+            activeServer: (await bridge.getActiveServer()) != nil
         )
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
@@ -1229,12 +1229,12 @@ public struct ToolLoop {
 
         // run-scoped Capability 环境快照：System Prompt 与 capabilities_get 使用
         // 同一来源的真实状态（activeServer 真实查询，不再硬编码 false）。
-        let capabilityEnvironment = await Self.capabilityEnvironment(
+        let capabilityEnvironment = Self.capabilityEnvironment(
             provider: provider,
             catalog: catalog,
             systemService: systemService,
             webService: webService,
-            activeServer: (try? await bridge.getActiveServer()) != nil
+            activeServer: (await bridge.getActiveServer()) != nil
         )
         var conversation = AgentContextBuilder.build(
             systemPrompt: Self.systemPrompt(

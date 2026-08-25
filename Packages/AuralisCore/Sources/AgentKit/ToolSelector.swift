@@ -262,7 +262,7 @@ public enum ToolSelector {
         // 完整的只读检索面，截断会破坏"搜索 → 选歌"链路。
         let core = finalSet.filter { $0.isCoreInfrastructure || $0.name == "result_present_tracks" }
         let rest = finalSet.filter { !($0.isCoreInfrastructure || $0.name == "result_present_tracks") }
-        if let activeSkillID {
+        if activeSkillID != nil {
             return core + rest
         }
         // legacy 调用方（allowedOperations == nil，无 authorization plan）保持完整

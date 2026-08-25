@@ -1604,7 +1604,7 @@ public enum AgentToolRegistry {
             if let snapshot = context.capabilityEnvironment {
                 capabilityEnv = snapshot
             } else {
-                capabilityEnv = await AgentCapabilityEnvironment(
+                capabilityEnv = AgentCapabilityEnvironment(
                     providerAvailable: providerCapabilities != nil,
                     catalogAvailable: true,
                     activeServer: (await bridge.getActiveServer()) != nil,
