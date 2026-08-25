@@ -48,12 +48,37 @@ struct AgentToolBrokerTests {
         #expect(selected.contains { ["library_search", "library_resolve_entity"].contains($0.name) })
     }
 
-    @Test("Intent 歌单名中的实体内容不污染 memory 路由")
+    @Test("Intent 歌单名中的实体内容不污染命令路由")
     func playlistEntityNamesDoNotContaminateIntent() {
+        let commands = [
+            "删除歌单 暂停",
+            "帮我删除一下歌单 暂停",
+            "删除这个歌单 暂停",
+            "把名叫“暂停”的歌单删除",
+            "把歌单“下一首”删除",
+        ]
+        for command in commands {
+            let plan = makePlan(command)
+            #expect(plan.semantics.domain == .playlist)
+            #expect(plan.authorization.allowedOperations == [.playlistDelete])
+        }
+
+        for command in ["删除歌单怎么操作？", "删除歌单是什么意思？", "删除歌单要怎么弄？"] {
+            let plan = makePlan(command)
+            #expect(plan.authorization.allowedOperations.isEmpty)
+            #expect(!plan.authorization.allowedOperations.contains(.playlistDelete))
+        }
+
+        // Masking must preserve an explicit second command after the entity.
+        let compound = makePlan("删除歌单 通勤，然后暂停播放")
+        #expect(compound.authorization.allowedOperations == [.playlistDelete, .playbackPause])
+
         for name in ["我叫大傻蛋", "请记住我", "下一首", "删除服务器", "暂停", "收藏"] {
             let plan = makePlan("删除歌单 \(name)")
             #expect(plan.semantics.domain == .playlist)
             #expect(plan.authorization.allowedOperations == [.playlistDelete])
+            #expect(!plan.authorization.allowedOperations.contains(.memorySave))
+            #expect(!plan.authorization.allowedOperations.contains(.serverRemove))
         }
     }
 

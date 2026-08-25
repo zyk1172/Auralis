@@ -391,6 +391,93 @@ func backgroundRestorePromptsSetupWhenEmpty() async throws {
 
 // MARK: - Automatic tool execution (integration through AgentCoordinator)
 
+@Test("Session activation sanitizes legacy persisted identifiers")
+@MainActor
+func sessionActivationSanitizesLegacyPersistedIdentifiers() async throws {
+    let directory = temporaryAgentDirectory()
+    let seedStore = SessionStore(fileURL: directory.appendingPathComponent("agent-sessions.json"))
+    let legacySession = await seedStore.create()
+    let legacyID = GlobalID(serverID: "server-persist", remoteID: "playlist-123")
+    await seedStore.append(
+        AgentChatMessage(
+            role: .assistant,
+            messages: [.text("歌单（playlistID=\(legacyID.description)，8 首）")]
+        ),
+        to: legacySession.id
+    )
+
+    let model = AuralisAppModel(
+        connector: NoRestoreConnector(result: makeResult(tracks: [])),
+        storeURL: temporaryCatalogURL()
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: directory
+    )
+    await coordinator.bootstrap()
+    await coordinator.activate(legacySession.id)
+
+    let text = coordinator.messages.flatMap { message in
+        message.messages.compactMap { item -> String? in
+            if case let .text(value) = item { return value }
+            return nil
+        }
+    }.joined(separator: "\n")
+    #expect(text.contains("歌单"))
+    #expect(!text.contains(legacyID.description))
+    #expect(!text.contains("playlistID="))
+}
+
+@Test("Session switch away and back still sanitizes persisted identifiers")
+@MainActor
+func sessionSwitchRoundTripSanitizesPersistedIdentifiers() async throws {
+    let directory = temporaryAgentDirectory()
+    let seedStore = SessionStore(fileURL: directory.appendingPathComponent("agent-sessions.json"))
+    let sessionA = await seedStore.create()
+    let sessionB = await seedStore.create()
+    let dirtyID = GlobalID(serverID: "server-persist", remoteID: "playlist-456")
+    await seedStore.append(
+        AgentChatMessage(
+            role: .assistant,
+            messages: [.text("歌单（playlistID=\(dirtyID.description)，5 首）")]
+        ),
+        to: sessionA.id
+    )
+
+    let model = AuralisAppModel(
+        connector: NoRestoreConnector(result: makeResult(tracks: [])),
+        storeURL: temporaryCatalogURL()
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: directory
+    )
+    await coordinator.bootstrap()
+
+    func visibleText() -> String {
+        coordinator.messages.flatMap { message in
+            message.messages.compactMap { item -> String? in
+                if case let .text(value) = item { return value }
+                return nil
+            }
+        }.joined(separator: "\n")
+    }
+
+    // First view must be clean.
+    await coordinator.activate(sessionA.id)
+    #expect(visibleText().contains("歌单"))
+    #expect(!visibleText().contains(dirtyID.description))
+
+    // Switch to another session and back; the ID must not reappear.
+    await coordinator.activate(sessionB.id)
+    await coordinator.activate(sessionA.id)
+    #expect(visibleText().contains("歌单"))
+    #expect(!visibleText().contains(dirtyID.description))
+    #expect(!visibleText().contains("playlistID="))
+}
+
 @Test("不可逆删除在 UI 批准后执行并记入操作日志")
 @MainActor
 func destructiveToolExecutesWithoutConfirmation() async throws {

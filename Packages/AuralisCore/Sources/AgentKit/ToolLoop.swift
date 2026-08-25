@@ -1335,7 +1335,7 @@ public struct ToolLoop {
                 }
             }
             taskState.diagnostics = diagnostics
-            if let stopReason = convergence.stopReason(under: policy.convergence) {
+            if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                 let message = stopReason.userMessage
                 taskState.status = .insufficient
                 taskState.errorState = message
@@ -1954,7 +1954,7 @@ public struct ToolLoop {
                     convergence.recordMalformedCall()
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: [:], summary: "原生参数 JSON 不完整", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
-                    if let stopReason = convergence.stopReason(under: policy.convergence) {
+                    if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                         let message = stopReason.userMessage
                         taskState.status = .insufficient
                         taskState.errorState = message
@@ -2074,7 +2074,7 @@ public struct ToolLoop {
                     diagnostics.recordFailure(code: "mutation_authorization_denied")
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "副作用授权拒绝", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
-                    if let stopReason = convergence.stopReason(under: policy.convergence) {
+                    if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                         let message = stopReason.userMessage
                         taskState.status = .insufficient
                         taskState.errorState = message
@@ -2254,7 +2254,7 @@ public struct ToolLoop {
                             activeSkillID: activeSkillID
                         )
                     }
-                    if let stopReason = convergence.stopReason(under: policy.convergence) {
+                    if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                         let message = stopReason.userMessage
                         taskState.status = .insufficient
                         taskState.errorState = message

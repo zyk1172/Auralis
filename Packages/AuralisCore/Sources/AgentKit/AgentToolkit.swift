@@ -479,10 +479,14 @@ public struct AgentToolkit {
             guard !artists.isEmpty else {
                 return .ok(call, descriptor, "艺术家 0 位", .text("当前资料库没有艺术家"))
             }
-            let text = "共 \(artists.count) 位艺术家：" + artists.map {
-                "\($0.name)（\($0.albumCount) 张专辑）"
-            }.joined(separator: "、")
-            return .ok(call, descriptor, "艺术家 \(artists.count) 位", .text(text))
+            let cards = artists.map {
+                ArtistCard(
+                    globalID: GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue),
+                    name: $0.name,
+                    albumCount: $0.albumCount
+                )
+            }
+            return .ok(call, descriptor, "艺术家 \(artists.count) 位", .artistCards(cards))
         case "library_get_albums":
             let limit = min(max((try? intParam(call, "limit")) ?? 100, 1), 500)
             let albums = try await catalog.allAlbums(serverID: serverID, limit: limit)

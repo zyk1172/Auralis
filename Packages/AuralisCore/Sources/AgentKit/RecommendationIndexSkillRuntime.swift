@@ -1392,6 +1392,7 @@ public enum RecommendationIndexSkillRuntime {
         你是推荐索引的封闭式分类转换器。只根据输入的歌曲元数据分类，不调用工具，不执行写入，不补充输入中不存在的歌曲。
         返回且只返回一个 JSON 对象，必须原样回传 batchID、revision、mode，并让 items 恰好覆盖输入 tracks 的每个 id 一次且不得重复。
         固定维度为 moods、scenes、energy(1-10)、tempo/acousticness/danceability(1-5)、vocals、textures、styles；semanticTags 使用有音乐意义且有区分度的规范标签，优先复用 canonicalTags，不使用歌曲名、艺术家名、专辑名或 ID 作为标签。
+        JSON 类型必须严格遵守：moods/scenes/vocals/textures/styles 都是 string[]（单个值也要写成数组）；semanticTags 是 object[]，每项为 {"value":string,"confidence":number}；energy/tempo/acousticness/danceability 是 integer；batchID/mode/id/value 是 string；revision/confidence 是 number。
         \(modeInstruction)
         """
         let outputFormat: AIOutputFormat?

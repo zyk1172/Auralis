@@ -93,10 +93,13 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let continuation = isContinuation(current)
         let inherited = continuation ? normalized(historyText) : ""
         var value = [inherited, current].filter { !$0.isEmpty }.joined(separator: " ")
-        // A playlist name is an entity literal, not a second command. Analyze
-        // only the command span for authorization so “删除歌单 暂停” cannot
-        // compile both playlistDelete and playbackPause.
-        value = Self.playlistCommandSpan(for: value)
+        // Playlist names are entity literals, not secondary commands. Mask the
+        // literal while preserving the surrounding text so instructional guards,
+        // explicit compound commands, and future authorization spans all see the
+        // same normalized utterance shape.
+        if Self.hasPlaylistActionSignal(value) {
+            value = Self.maskPlaylistEntities(for: value)
+        }
         guard !value.isEmpty else {
             return Self(domain: .conversation, operation: .conversation, isMusicContext: false, isContinuation: continuation)
         }
@@ -555,20 +558,51 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static func playlistCommandSpan(for text: String) -> String {
-        let phrases = [
-            "保存当前队列为歌单", "把当前队列保存为歌单", "保存队列为歌单",
-            "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单",
-            "放到歌单", "放进歌单", "放入歌单", "收进歌单", "删除歌单",
-            "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序",
-            "复制歌单", "合并歌单", "playlist_create", "playlist_add",
-            "playlist_delete", "playlist_rename",
+    private static func hasPlaylistActionSignal(_ text: String) -> Bool {
+        containsAny(text, ["歌单", "playlist", "播放列表"])
+            && containsAny(text, [
+                "创建", "新建", "建一个", "建", "加入", "加到", "添加", "放到", "放进",
+                "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并",
+                "保存", "存为", "存成", "playlist_create", "playlist_add",
+                "playlist_delete", "playlist_rename",
+            ])
+    }
+
+    /// Replace only the playlist entity literal with a neutral token. The
+    /// surrounding text remains available for instructional guards (“怎么操作？”)
+    /// and for legitimate compound commands (“…，然后暂停播放”).
+    private static func maskPlaylistEntities(for text: String) -> String {
+        let rules: [(pattern: String, template: String)] = [
+            // 歌单「暂停」 / playlist "Pause" / 播放列表叫“下一首”
+            (
+                #"((?:歌单|playlist|播放列表)\s*(?:叫|名叫|名为)?\s*)([“”"'「『]).*?([””"'」』])"#,
+                "$1$2实体$3"
+            ),
+            // 名叫“暂停”的歌单 / 名为 Pause 的 playlist
+            (
+                #"((?:名叫|名为|叫)\s*)([“”"'「』]).*?([””"'「』])\s*的?\s*((?:歌单|playlist|播放列表))"#,
+                "$1$2实体$3 的 $4"
+            ),
+            // 名叫暂停的歌单（无引号）
+            (
+                #"((?:名叫|名为|叫)\s*)([^，。；；,\n]+?)\s*的?\s*((?:歌单|playlist|播放列表))"#,
+                "$1实体 的 $3"
+            ),
+            // 删除这个歌单 暂停，然后暂停播放：mask the entity but keep the next clause.
+            (
+                #"((?:歌单|playlist|播放列表)\s+)(?:叫|名叫|名为)?\s*([^，。；；,\n]+?)(?=\s*(?:，|。|；|;|,|\n|然后|再|接着|之后|$))"#,
+                "$1实体"
+            ),
         ]
-        let matches = phrases.compactMap { phrase -> Range<String.Index>? in
-            text.range(of: phrase)
-        }.sorted { $0.lowerBound < $1.lowerBound }
-        guard let match = matches.first else { return text }
-        return String(text[..<match.upperBound])
+        return rules.reduce(text) { current, rule in
+            guard let regex = try? NSRegularExpression(pattern: rule.pattern) else { return current }
+            let range = NSRange(current.startIndex..., in: current)
+            return regex.stringByReplacingMatches(
+                in: current,
+                range: range,
+                withTemplate: rule.template
+            )
+        }
     }
 
     /// 判定一个「数量 + 曲库名词」请求是否带有限定/过滤条件。

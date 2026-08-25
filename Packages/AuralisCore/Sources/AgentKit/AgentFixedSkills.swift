@@ -599,7 +599,8 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             return .none
         case "playlist_create", "createPlaylist":
             playlistCreated = true
-            // GlobalID 从 payload 文本“名称 · id”提取。
+            // Structured cards are the canonical create result; legacy text is
+            // only a compatibility fallback.
             createdPlaylistID = Self.extractPlaylistID(from: result.payload, fallback: result.summary)
             transition(to: .addingTracks)
             return .none
@@ -696,6 +697,9 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
 
     /// playlist_create 的 payload 是 .text("名称 · GlobalID")。
     private static func extractPlaylistID(from payload: AgentMessage?, fallback: String) -> String? {
+        if case let .playlistCards(cards)? = payload, let card = cards.first {
+            return card.globalID.description
+        }
         if case let .text(text)? = payload, let separator = text.range(of: " · ") {
             let candidate = String(text[separator.upperBound...]).trimmingCharacters(in: .whitespaces)
             if GlobalID(candidate) != nil { return candidate }

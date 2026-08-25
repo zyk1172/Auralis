@@ -34,6 +34,15 @@ private actor SkillCollector {
             }
         }
     }
+
+    func joinedErrors() -> String {
+        messages.flatMap { message in
+            message.messages.compactMap { item -> String? in
+                if case let .error(value) = item { return value }
+                return nil
+            }
+        }.joined(separator: "\n")
+    }
 }
 
 /// 增强桥接：currentQueue 反映最近一次 replaceQueue 的结果；createPlaylist 可回调写 store。
@@ -62,9 +71,9 @@ private final class SkillBridge: AgentBridge, @unchecked Sendable {
     var playResult: Bool = true
     var mutationResult: AgentMutationResult = .confirmed("ok")
     var playlistAddResult: AgentMutationResult = .confirmed("ok")
-    var onPlaylistCreated: (@Sendable (String, GlobalID) -> Void)?
+    var onPlaylistCreated: (@Sendable (String, GlobalID) async throws -> Void)?
     /// 加歌成功后回调（测试用它把真实歌单内容写回 store，驱动强验证路径）。
-    var onTracksAdded: (@Sendable (GlobalID, [GlobalID]) -> Void)?
+    var onTracksAdded: (@Sendable (GlobalID, [GlobalID]) async throws -> Void)?
 
     func playTrack(globalID: GlobalID) async -> Bool {
         playedTracks.append(globalID)
@@ -128,13 +137,13 @@ private final class SkillBridge: AgentBridge, @unchecked Sendable {
     func createPlaylist(name: String) async -> GlobalID? {
         createdPlaylistNames.append(name)
         let gid = GlobalID(serverID: "v2", remoteID: UUID().uuidString)
-        onPlaylistCreated?(name, gid)
+        try? await onPlaylistCreated?(name, gid)
         return gid
     }
     func renamePlaylist(globalID: GlobalID, name: String) async -> AgentMutationResult { mutationResult }
     func addTracksToPlaylist(playlistGID: GlobalID, trackGIDs: [GlobalID]) async -> AgentMutationResult {
         addedToPlaylist.append((playlistGID, trackGIDs))
-        onTracksAdded?(playlistGID, trackGIDs)
+        try? await onTracksAdded?(playlistGID, trackGIDs)
         return playlistAddResult
     }
     func removeTracksFromPlaylist(playlistGID: GlobalID, atIndices: [Int]) async -> AgentMutationResult { mutationResult }
@@ -652,31 +661,27 @@ struct PlaylistBuildSkillTests {
         let playlistNameBox = NameBox()
         bridge.onPlaylistCreated = { name, gid in
             playlistNameBox.set(name)
-            Task {
-                try? await store.upsertPlaylist(
-                    Playlist(
-                        id: PlaylistID(rawValue: gid.remoteID),
-                        serverID: "v2",
-                        name: name,
-                        trackIDs: []
-                    ),
-                    serverID: "v2"
-                )
-            }
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: gid.remoteID),
+                    serverID: "v2",
+                    name: name,
+                    trackIDs: []
+                ),
+                serverID: "v2"
+            )
         }
         // 加歌成功后把真实内容写回 store，驱动 library_get_playlist 强验证路径。
         bridge.onTracksAdded = { playlistGID, trackGIDs in
-            Task {
-                try? await store.upsertPlaylist(
-                    Playlist(
-                        id: PlaylistID(rawValue: playlistGID.remoteID),
-                        serverID: "v2",
-                        name: playlistNameBox.get(),
-                        trackIDs: trackGIDs.map { TrackID(rawValue: $0.remoteID) }
-                    ),
-                    serverID: "v2"
-                )
-            }
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: playlistGID.remoteID),
+                    serverID: "v2",
+                    name: playlistNameBox.get(),
+                    trackIDs: trackGIDs.map { TrackID(rawValue: $0.remoteID) }
+                ),
+                serverID: "v2"
+            )
         }
         let ids = (0..<3).map { "\(skillServerID.rawValue):t\($0)" }
         let provider = SkillProvider([
@@ -690,6 +695,9 @@ struct PlaylistBuildSkillTests {
         )
         #expect(bridge.createdPlaylistNames.count == 1, "playlist_create 必须恰一次")
         #expect(bridge.createdPlaylistNames.first == "通勤", "生产路径歌单名必须来自用户请求，实际：\(String(describing: bridge.createdPlaylistNames.first))")
+        let errors = await collector.joinedErrors()
+        if !errors.isEmpty { Issue.record("\(errors)") }
+        #expect(errors.isEmpty)
         #expect(bridge.addedToPlaylist.count == 1, "playlist_add_songs 必须恰一次")
         #expect(bridge.addedToPlaylist.first?.1.count == 3)
         #expect(bridge.deletedPlaylists.isEmpty, "Skill 不触碰 playlist_delete")
@@ -704,17 +712,15 @@ struct PlaylistBuildSkillTests {
         let bridge = SkillBridge()
         bridge.playlistAddResult = .failed("加歌失败")
         bridge.onPlaylistCreated = { name, gid in
-            Task {
-                try? await store.upsertPlaylist(
-                    Playlist(
-                        id: PlaylistID(rawValue: gid.remoteID),
-                        serverID: "v2",
-                        name: name,
-                        trackIDs: []
-                    ),
-                    serverID: "v2"
-                )
-            }
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: gid.remoteID),
+                    serverID: "v2",
+                    name: name,
+                    trackIDs: []
+                ),
+                serverID: "v2"
+            )
         }
         let ids = (0..<3).map { "\(skillServerID.rawValue):t\($0)" }
         let provider = SkillProvider([
@@ -811,17 +817,15 @@ struct PlaylistBuildSkillTests {
         // 创建歌单但 add 后不写回 store（模拟歌单实际为空）：library_get_playlist
         // 返回空 tracks，空歌单本身就是验证结果，必须失败而不能跳过验证。
         bridge.onPlaylistCreated = { name, gid in
-            Task {
-                try? await store.upsertPlaylist(
-                    Playlist(
-                        id: PlaylistID(rawValue: gid.remoteID),
-                        serverID: "v2",
-                        name: name,
-                        trackIDs: []
-                    ),
-                    serverID: "v2"
-                )
-            }
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: gid.remoteID),
+                    serverID: "v2",
+                    name: name,
+                    trackIDs: []
+                ),
+                serverID: "v2"
+            )
         }
         let ids = (0..<3).map { "\(skillServerID.rawValue):t\($0)" }
         let provider = SkillProvider([

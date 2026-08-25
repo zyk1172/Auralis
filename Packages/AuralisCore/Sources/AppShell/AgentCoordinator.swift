@@ -257,7 +257,11 @@ public final class AgentCoordinator: ObservableObject {
 
     public func activate(_ id: UUID) async {
         activeSessionID = id
-        messages = await sessionStore.session(id)?.messages ?? []
+        // SessionStore is the durable user-facing transcript. Sanitize again at
+        // this read boundary so IDs written by older builds cannot reappear after
+        // activation/restart.
+        messages = (await sessionStore.session(id)?.messages ?? [])
+            .map(AgentUserFacingSanitizer.chatMessage)
         let runID = runIDsBySession[id]
         currentRunID = runID
         runTask = runID.flatMap { runTasks[$0] }
@@ -588,7 +592,8 @@ public final class AgentCoordinator: ObservableObject {
                 return
             }
             // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
-            let history = await self.sessionStore.session(sessionID)?.messages ?? []
+            let history = (await self.sessionStore.session(sessionID)?.messages ?? [])
+                .map(AgentUserFacingSanitizer.chatMessage)
             let originUserMessageID = UUID()
             // “继续”可能连续出现多次（尤其是上一轮被 429/工具错误打断后）。
             // 只取最近一条完整任务指令，避免第二次“继续”把索引/批处理意图
@@ -1259,7 +1264,7 @@ public final class AgentCoordinator: ObservableObject {
            messages[index].role == .assistant,
            Self.isToolProgress(messages[index]) {
             messages[index] = sanitizedMessage
-            if await sessionStore.replaceTrailingToolProgress(message, in: sessionID) {
+            if await sessionStore.replaceTrailingToolProgress(sanitizedMessage, in: sessionID) {
                 return
             }
         }

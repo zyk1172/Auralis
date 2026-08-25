@@ -189,6 +189,15 @@ private actor ScenarioMessageCollector {
     func append(_ message: AgentChatMessage) { messages.append(message) }
     func all() -> [AgentChatMessage] { messages }
 
+    func artistCardCounts() -> [Int] {
+        messages.flatMap { message in
+            message.messages.compactMap { item -> Int? in
+                if case let .artistCards(cards) = item { return cards.count }
+                return nil
+            }
+        }
+    }
+
     func containsText(_ text: String) -> Bool {
         messages.contains { message in
             message.messages.contains { item in
@@ -205,6 +214,15 @@ private actor ScenarioMessageCollector {
                 return nil
             }
         }.joined(separator: "\n")
+    }
+
+    func playlistCardCounts() -> [Int] {
+        messages.flatMap { message in
+            message.messages.compactMap { item -> Int? in
+                if case let .playlistCards(cards) = item { return cards.count }
+                return nil
+            }
+        }
     }
 
     func containsError(_ text: String) -> Bool {
@@ -366,7 +384,7 @@ func deterministicReadFastPathUsesExactlyOneTargetTool() async throws {
         #expect(metrics.map(\.toolName) == [expectedTool], "\(userText) 应只执行 \(expectedTool)")
         #expect(!(await collector.containsError("失败")), "\(userText) 的 direct tool 不应返回失败")
         if expectedTool == "library_get_artists" {
-            #expect(await collector.containsText("共 1 位艺术家"))
+            #expect(await collector.artistCardCounts() == [1])
         }
     }
 }
@@ -411,8 +429,7 @@ func deterministicPlaylistListFastPathPreservesLimit() async throws {
     #expect(provider.requests().isEmpty)
     let metrics = await ToolMetricsCollector.shared.snapshot().filter { $0.runID == runID }
     #expect(metrics.map(\.toolName) == ["playlist_list"])
-    let output = await collector.joinedText()
-    #expect(output.components(separatedBy: "Playlist-").count - 1 == 10)
+    #expect(await collector.playlistCardCounts() == [10])
 }
 
 @Test("Library summary counts distinct artist and album IDs")
