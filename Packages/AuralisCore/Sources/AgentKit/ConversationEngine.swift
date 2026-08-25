@@ -4,26 +4,11 @@ import LocalCatalog
 
 /// Chat-first conversation boundary.  Intent is a hint for ranking and task
 /// completion; it is never permission to reinterpret an ordinary answer as a
-/// local music search.
+/// local music search. AI Assistant 是智能层：AI Provider 不可用时直接返回
+/// 不可用，不做关键词规则伪 Agent 降级（Direct Read Fast Path 除外，那是
+/// 确定性只读快路径，与离线降级无关）。
 public struct ConversationEngine: Sendable {
     public init() {}
-
-    public static func isExplicitMusicCommand(_ text: String) -> Bool {
-        let semantics = AgentRequestSemantics.analyze(text)
-        return semantics.isMusicContext && semantics.domain != .conversation
-    }
-
-    public static func allowsOfflineFallback(intent: AgentTaskIntent, userText: String) -> Bool {
-        guard isExplicitMusicCommand(userText) else { return false }
-        switch intent {
-        case .librarySearch, .playbackControl, .musicDiscovery, .queueManagement,
-             .playlistManagement, .libraryManagement, .musicAppreciation, .musicDownload:
-            return true
-        case .conversation, .playbackQuery, .queueQuery, .playlistQuery,
-             .serverManagement, .diagnostics, .memoryManagement:
-            return false
-        }
-    }
 
     public func run(
         userText: String,

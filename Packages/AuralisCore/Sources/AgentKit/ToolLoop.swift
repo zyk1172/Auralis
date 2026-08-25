@@ -432,22 +432,13 @@ public struct ToolLoop {
                     state: state
                 )
             }
-        } else if ConversationEngine.allowsOfflineFallback(intent: resolvedIntent, userText: userText) {
-            await runOffline(
-                userText: userText,
-                bridge: bridge,
-                catalog: catalog,
-                context: context,
-                sideEffectAuthorization: resolvedAuthorization,
-                executionLease: resolvedExecutionLease,
-                availableToolDescriptors: availableToolDescriptors,
-                emit: emit,
-                log: log
-            )
         } else {
+            // AI Provider 不可用：AI Assistant 是智能层，不降级为关键词规则伪 Agent。
+            // 普通聊天 / 复杂音乐任务 / 推荐 / 鉴赏 / 歌单构建一律明确不可用；
+            // 播放器 UI、搜索页、歌单页、队列页等系统命令入口不受影响。
             await emit(AgentChatMessage(
                 role: .assistant,
-                messages: [.error("AI 服务未配置或暂时不可用；这是普通聊天请求，不会改写为本地音乐库搜索。请先配置可用的 AI Provider。")]
+                messages: [.error("AI 服务未配置或暂时不可用；本次 AI 任务无法执行。播放器、搜索、歌单、队列等 App 内普通功能仍可正常使用，但不会改写为本地关键词规则或随机推荐。请先配置可用的 AI Provider。")]
             ))
         }
     }
@@ -1227,7 +1218,8 @@ public struct ToolLoop {
                 tools: selectedTools,
                 nativeToolCalling: nativeMode,
                 goal: taskState.goal,
-                workflowInstruction: activeSkill?.instructions
+                workflowInstruction: activeSkill?.instructions,
+                providerAvailable: true
             ),
             task: taskState,
             facts: [],
@@ -2805,11 +2797,49 @@ public struct ToolLoop {
         }
     }
 
-    private static func canUseOfflineFallback(
-        intent: AgentTaskIntent,
-        userText: String
-    ) -> Bool {
-        ConversationEngine.allowsOfflineFallback(intent: intent, userText: userText)
+    private static func confirmationSignature(name: String, args: [String: String]) -> String {
+        let normalized = args.keys.sorted().map { key in
+            "\(key)=\(args[key] ?? "")"
+        }.joined(separator: "&")
+        return "\(name)|\(normalized)"
+    }
+
+    private static func pendingConfirmation(
+        descriptor: ToolDescriptor,
+        name: String,
+        diagnosticArgs: [String: String],
+        runID: UUID,
+        sessionID: UUID,
+        toolCallID: String?
+    ) -> PendingConfirmation {
+        // PendingConfirmation is only a Runtime approval boundary for tools
+        // explicitly marked by the single confirmation policy. Reversible
+        // mutations do not enter this helper and must never invent a second
+        // confirmation protocol in natural language.
+        let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
+        let detail: String
+        if diagnosticArgs.isEmpty {
+            detail = [descriptor.confirmationPolicy.reason, confirmationGuidance]
+                .compactMap { $0 }
+                .joined(separator: "\n")
+        } else {
+            let arguments = diagnosticArgs.keys.sorted().map { "\($0)=\(diagnosticArgs[$0] ?? "")" }.joined(separator: "、")
+            detail = [descriptor.confirmationPolicy.reason, "参数：\(arguments)", confirmationGuidance]
+                .compactMap { $0 }
+                .joined(separator: "\n")
+        }
+        return PendingConfirmation(
+            runID: runID,
+            sessionID: sessionID,
+            toolCallID: toolCallID,
+            toolName: name,
+            permission: descriptor.permission,
+            operation: descriptor.authorizationOperation,
+            reason: descriptor.confirmationPolicy.reason,
+            title: descriptor.summary,
+            detail: detail,
+            call: ToolCall(name: name, rawArguments: diagnosticArgs)
+        )
     }
 
     private static func errorText(_ error: Error) -> String {
@@ -3017,325 +3047,6 @@ public struct ToolLoop {
         await emit(AgentChatMessage(role: .assistant, messages: [.streaming(delta)]))
     }
 
-    // MARK: - Offline rule-based fallback
-
-    private static func runOffline(
-        userText: String,
-        bridge: AgentBridge,
-        catalog: LocalCatalogStore,
-        context: Context,
-        sideEffectAuthorization: SideEffectAuthorizationContext,
-        executionLease: ToolExecutionLease,
-        availableToolDescriptors: [ToolDescriptor],
-        emit: @escaping @Sendable (AgentChatMessage) async -> Void,
-        log: @escaping @Sendable (AgentActionRecord) async -> Void = { _ in }
-    ) async {
-        // Offline compatibility still executes within the same revocable run
-        // capability. Its remaining direct bridge calls are guarded again at
-        // the concrete AppShell commit boundary.
-        await ToolExecutionContext.$lease.withValue(executionLease) {
-            await runOfflineBody(
-                userText: userText,
-                bridge: bridge,
-                catalog: catalog,
-                context: context,
-                sideEffectAuthorization: sideEffectAuthorization,
-                resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
-                recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
-                availableToolDescriptors: availableToolDescriptors,
-                emit: emit,
-                log: log
-            )
-        }
-    }
-
-    private static func runOfflineBody(
-        userText: String,
-        bridge: AgentBridge,
-        catalog: LocalCatalogStore,
-        context: Context,
-        sideEffectAuthorization: SideEffectAuthorizationContext,
-        resourceLeaseRegistry: MutationResourceLeaseRegistry,
-        recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry,
-        availableToolDescriptors: [ToolDescriptor],
-        emit: @escaping @Sendable (AgentChatMessage) async -> Void,
-        log: @escaping @Sendable (AgentActionRecord) async -> Void
-    ) async {
-        let text = userText.trimmingCharacters(in: .whitespaces)
-        let lower = text.lowercased()
-
-        func search(_ q: String) async -> [CatalogTrackSummary] {
-            (try? await catalog.searchTracks(query: q, serverID: context.serverID)) ?? []
-        }
-
-        func executeMutation(_ name: String, arguments: [String: AIJSONValue] = [:]) async -> ToolResult {
-            await ToolRuntime.executeMeasured(
-                ToolCall(name: name, arguments: arguments),
-                bridge: bridge,
-                catalog: catalog,
-                serverID: context.serverID,
-                systemService: nil,
-                authorizationContext: sideEffectAuthorization,
-                executionLease: ToolExecutionContext.lease ?? .revoked(),
-                resourceLeaseRegistry: resourceLeaseRegistry,
-                recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
-                customToolRegistry: context.customToolRegistry,
-                availableToolDescriptors: availableToolDescriptors,
-                runID: ToolExecutionContext.lease?.runID,
-                callID: nil
-            )
-        }
-
-        if lower.contains("收藏") || lower.contains("喜欢") {
-            if let q = extractQuery(text, markers: ["收藏", "喜欢"]) {
-                let hits = await search(q)
-                if let first = hits.first {
-                    let result = await executeMutation("favorite_set", arguments: [
-                        "targetType": .string("song"),
-                        "targetID": .string(first.globalID.description),
-                        "value": .bool(true),
-                    ])
-                    if result.success {
-                        await log(AgentActionRecord(toolName: "favorite_set", permission: .reversible, summary: result.summary))
-                        await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("已收藏：\(first.title)")]))
-                    } else {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.text("收藏《\(first.title)》未确认：\(result.summary)")]))
-                    }
-                } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("未找到匹配的歌曲。")]))
-                }
-            } else {
-                let list = (try? await catalog.getFavorites(serverID: context.serverID)) ?? []
-                await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(list.map(TrackCard.from)), .text("你的收藏（\(list.count) 首）")]))
-            }
-            return
-        }
-
-        if lower.contains("相似") {
-            if let current = await bridge.currentTrack(),
-               let gid = GlobalID("\(current.serverID.rawValue):\(current.id.rawValue)") {
-                let list = (try? await catalog.getSimilarTracks(gid)) ?? []
-                await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(list.map(TrackCard.from)), .text("相似歌曲（\(list.count) 首）")]))
-            } else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("当前没有正在播放的歌曲，无法推荐相似。")]))
-            }
-            return
-        }
-
-        if lower.contains("最近") || lower.contains("历史") {
-            let list = (try? await catalog.getRecentHistory(serverID: context.serverID)) ?? []
-            await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(list.map(TrackCard.from)), .text("最近播放（\(list.count) 首）")]))
-            return
-        }
-
-        if lower.contains("下载") {
-            let list = (try? await catalog.getDownloadedTracks(serverID: context.serverID)) ?? []
-            await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(list.map(TrackCard.from)), .text("已下载（\(list.count) 首）")]))
-            return
-        }
-
-        // 添加到歌单（LLM 不可用时本地规则直接完成）
-        if lower.contains("加到歌单") || lower.contains("加入歌单") || lower.contains("放进歌单") || lower.contains("存到歌单") {
-            let trackText = Self.extractBetween(text, left: ["把", "将"], right: ["加到", "加入", "放进", "存到"]) ?? text
-            let playlistText = Self.extractBetween(text, left: ["加到", "加入", "放进", "存到"], right: ["歌单"]) ?? ""
-            let trackQuery = trackText.trimmingCharacters(in: .whitespaces)
-            let playlistName = playlistText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let hits = await search(trackQuery)
-            guard let first = hits.first else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("未找到歌曲：\(trackQuery)")]))
-                return
-            }
-            let name = playlistName.isEmpty ? "默认歌单" : playlistName
-            let playlists = (try? await catalog.listPlaylists(serverID: context.serverID)) ?? []
-            guard let playlist = playlists.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("没有找到歌单「\(name)」；本次请求只授权加入歌曲，不会擅自创建新歌单。")]))
-                return
-            }
-            let added = await executeMutation("playlist_add_songs", arguments: [
-                "playlistID": .string(playlist.globalID.description),
-                "trackIDs": .array([.string(first.globalID.description)]),
-            ])
-            if added.success {
-                await log(AgentActionRecord(toolName: "playlist_add_songs", permission: .reversible, summary: "把《\(first.title)》加入歌单「\(name)」"))
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("已把《\(first.title)》加入歌单「\(name)」")]))
-            } else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("加入歌单「\(name)」失败：\(added.summary)")]))
-            }
-            return
-        }
-
-        // 创建歌单（LLM 不可用时本地规则直接完成）
-        if lower.contains("创建歌单") || lower.contains("新建歌单") || lower.contains("建一个歌单") {
-            let name = extractQuery(text, markers: ["创建歌单", "新建歌单", "建一个歌单", "叫", "名为"]) ?? "我的歌单"
-            let result = await executeMutation("playlist_create", arguments: ["name": .string(name)])
-            if result.success {
-                await log(AgentActionRecord(toolName: "playlist_create", permission: .reversible, summary: result.summary))
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("已创建歌单「\(name)」")]))
-            } else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("创建歌单失败：\(result.summary)")]))
-            }
-            return
-        }
-
-        if lower.contains("歌单") {
-            let list = (try? await catalog.listPlaylists(serverID: context.serverID)) ?? []
-            let text = list.isEmpty
-                ? "暂无歌单。"
-                : "歌单：" + list.map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
-            await emit(AgentChatMessage(role: .assistant, messages: [.text(text)]))
-            return
-        }
-
-        if lower.contains("播放") {
-            // “播放一首歌 / 随机播放”没有可搜索的曲名，不能把整句当查询词；
-            // AI 失败时仍从本地曲库选一首真实歌曲执行，避免错误地报告“未找到”。
-            if lower.contains("播放一首") || lower.contains("随机播放") || lower.contains("随便播放") {
-                let all = (try? await catalog.allTrackSummaries(serverID: context.serverID)) ?? []
-                if let first = all.randomElement() {
-                    let result = await executeMutation("playback_play_song", arguments: [
-                        "trackID": .string(first.globalID.description),
-                    ])
-                    guard result.success else {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.text("未能开始播放：\(result.summary)")]))
-                        return
-                    }
-                    await log(AgentActionRecord(toolName: "playback_play_song", permission: .reversible, summary: result.summary))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("开始播放：\(first.title)")]))
-                } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("曲库中没有可播放的歌曲。")]))
-                }
-                return
-            }
-            let q = extractQuery(text, markers: ["播放"]) ?? text
-            let hits = await search(q)
-            if let first = hits.first {
-                let result = await executeMutation("playback_play_song", arguments: [
-                    "trackID": .string(first.globalID.description),
-                ])
-                if result.success {
-                    await log(AgentActionRecord(toolName: "playback_play_song", permission: .reversible, summary: result.summary))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.trackCards([.from(first)]), .text("开始播放：\(first.title)")]))
-                } else {
-                    await emit(AgentChatMessage(role: .assistant, messages: [.text("未能播放：\(result.summary)")]))
-                }
-            } else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("未找到可播放的歌曲：\(q)")]))
-            }
-            return
-        }
-
-        // 推荐（LLM 不可用时）：从收藏 / 相似 / 曲库随机中取真实歌曲，避免「未找到可播放的歌曲」死路。
-        if lower.contains("推荐") {
-            let favorites = (try? await catalog.getFavorites(serverID: context.serverID)) ?? []
-            if !favorites.isEmpty {
-                let sample = Array(favorites.shuffled().prefix(10))
-                await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(sample.map(TrackCard.from)), .text("离线推荐：从你的收藏里选了 \(sample.count) 首")]))
-                return
-            }
-            if let current = await bridge.currentTrack(),
-               let gid = GlobalID("\(current.serverID.rawValue):\(current.id.rawValue)") {
-                let similar = (try? await catalog.getSimilarTracks(gid)) ?? []
-                if !similar.isEmpty {
-                    let sample = Array(similar.prefix(10))
-                    await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(sample.map(TrackCard.from)), .text("离线推荐：与当前播放相似 \(sample.count) 首")]))
-                    return
-                }
-            }
-            let all = (try? await catalog.allTrackSummaries(serverID: context.serverID)) ?? []
-            if !all.isEmpty {
-                let sample = Array(all.shuffled().prefix(10))
-                await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(sample.map(TrackCard.from)), .text("离线推荐：从曲库随机选了 \(sample.count) 首")]))
-            } else {
-                await emit(AgentChatMessage(role: .assistant, messages: [.text("曲库为空，请先连接服务器并同步资料库后再推荐。")]))
-            }
-            return
-        }
-
-        // 默认：搜索并以卡片展示
-        let hits = await search(text)
-        if hits.isEmpty {
-            await emit(AgentChatMessage(role: .assistant, messages: [.text("本地未找到匹配的歌曲，可尝试连接服务器后再试：只要服务器上有这首歌就能直接在线播放，无需先下载或同步。")]))
-        } else {
-            await emit(AgentChatMessage(role: .assistant, messages: [.trackCards(hits.prefix(20).map(TrackCard.from)), .text("找到 \(hits.count) 首相关歌曲")]))
-        }
-    }
-
-    // MARK: - Helpers
-
-    private static func confirmationSignature(name: String, args: [String: String]) -> String {
-        let normalized = args.keys.sorted().map { key in
-            "\(key)=\(args[key] ?? "")"
-        }.joined(separator: "&")
-        return "\(name)|\(normalized)"
-    }
-
-    private static func pendingConfirmation(
-        descriptor: ToolDescriptor,
-        name: String,
-        diagnosticArgs: [String: String],
-        runID: UUID,
-        sessionID: UUID,
-        toolCallID: String?
-    ) -> PendingConfirmation {
-        // PendingConfirmation is only a Runtime approval boundary for tools
-        // explicitly marked by the single confirmation policy. Reversible
-        // mutations do not enter this helper and must never invent a second
-        // confirmation protocol in natural language.
-        let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
-        let detail: String
-        if diagnosticArgs.isEmpty {
-            detail = [descriptor.confirmationPolicy.reason, confirmationGuidance]
-                .compactMap { $0 }
-                .joined(separator: "\n")
-        } else {
-            let arguments = diagnosticArgs.keys.sorted().map { "\($0)=\(diagnosticArgs[$0] ?? "")" }.joined(separator: "、")
-            detail = [descriptor.confirmationPolicy.reason, "参数：\(arguments)", confirmationGuidance]
-                .compactMap { $0 }
-                .joined(separator: "\n")
-        }
-        return PendingConfirmation(
-            runID: runID,
-            sessionID: sessionID,
-            toolCallID: toolCallID,
-            toolName: name,
-            permission: descriptor.permission,
-            operation: descriptor.authorizationOperation,
-            reason: descriptor.confirmationPolicy.reason,
-            title: descriptor.summary,
-            detail: detail,
-            call: ToolCall(name: name, rawArguments: diagnosticArgs)
-        )
-    }
-
-    /// 提取两个标记之间的文本（用于「把X加到歌单Y」这类解析）。
-    private static func extractBetween(_ text: String, left: [String], right: [String]) -> String? {
-        var value = text
-        for marker in left where !marker.isEmpty {
-            if let range = value.range(of: marker) {
-                value = String(value[range.upperBound...])
-                break
-            }
-        }
-        for marker in right where !marker.isEmpty {
-            if let range = value.range(of: marker) {
-                value = String(value[..<range.lowerBound])
-                break
-            }
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func extractQuery(_ text: String, markers: [String]) -> String? {
-        for marker in markers {
-            if let range = text.range(of: marker) {
-                let after = text[range.upperBound...]
-                let cleaned = after.trimmingCharacters(in: .whitespaces)
-                return cleaned.isEmpty ? nil : cleaned
-            }
-        }
-        return nil
-    }
 
     /// 把结构化消息（卡片）转成模型可读的文本，使工具结果中的歌曲清单可见。
     /// 只把前 5 条清单回传模型（其余用总数概括），避免搜索结果/歌手相关歌曲
@@ -3470,14 +3181,16 @@ public struct ToolLoop {
         tools: [ToolDescriptor],
         nativeToolCalling: Bool,
         goal: String = "",
-        workflowInstruction: String? = nil
+        workflowInstruction: String? = nil,
+        providerAvailable: Bool = true
     ) -> String {
         return SystemPromptBuilder.build(
             context: context,
             tools: tools,
             nativeToolCalling: nativeToolCalling,
             goal: goal,
-            workflowInstruction: workflowInstruction
+            workflowInstruction: workflowInstruction,
+            providerAvailable: providerAvailable
         )
 
         /*
