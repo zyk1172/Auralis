@@ -180,7 +180,8 @@ public struct ToolLoop {
 
     /// 执行一次用户请求。
     /// - Parameters:
-    ///   - provider: 可用时为 LLM 规划；为 nil 时走本地规则降级。
+    ///   - provider: AI Provider；为 nil 时 AI Assistant 明确返回不可用（只保留
+    ///     Direct Read Fast Path 的确定性只读查询，不做关键词规则降级）。
     ///   - toolTimeout: 单个工具执行的最长等待时间；超时以结构化失败回灌模型，不终止任务。
     ///   - confirm: 仅在不可逆高风险工具实际执行前调用；其它工具不会经过该回调。
     ///   - emit: 逐步向 UI 发送结构化消息。
@@ -1219,7 +1220,12 @@ public struct ToolLoop {
                 nativeToolCalling: nativeMode,
                 goal: taskState.goal,
                 workflowInstruction: activeSkill?.instructions,
-                providerAvailable: true
+                environment: Self.capabilityEnvironment(
+                    provider: provider,
+                    catalog: catalog,
+                    systemService: systemService,
+                    webService: webService
+                )
             ),
             task: taskState,
             facts: [],
@@ -3176,13 +3182,31 @@ public struct ToolLoop {
         }
     }
 
+    /// run-scoped Capability 环境快照：System Prompt / capabilities_get 共用同一份，
+    /// 避免各处采集不同状态导致能力声明漂移。
+    static func capabilityEnvironment(
+        provider: (any AIProvider)?,
+        catalog: LocalCatalogStore,
+        systemService: (any AgentSystemService)?,
+        webService: (any AgentWebService)?
+    ) -> AgentCapabilityEnvironment {
+        AgentCapabilityEnvironment(
+            providerAvailable: provider != nil,
+            catalogAvailable: true,
+            activeServer: false,
+            webAvailable: webService != nil,
+            downloadServiceAvailable: systemService != nil,
+            systemServiceAvailable: systemService != nil
+        )
+    }
+
     public static func systemPrompt(
         context: Context,
         tools: [ToolDescriptor],
         nativeToolCalling: Bool,
         goal: String = "",
         workflowInstruction: String? = nil,
-        providerAvailable: Bool = true
+        environment: AgentCapabilityEnvironment = AgentCapabilityEnvironment(providerAvailable: true)
     ) -> String {
         return SystemPromptBuilder.build(
             context: context,
@@ -3190,7 +3214,7 @@ public struct ToolLoop {
             nativeToolCalling: nativeToolCalling,
             goal: goal,
             workflowInstruction: workflowInstruction,
-            providerAvailable: providerAvailable
+            environment: environment
         )
 
         /*

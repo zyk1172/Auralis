@@ -1578,14 +1578,16 @@ public enum AgentToolRegistry {
                 "上下文约 \(capabilities.maxContextTokens) tokens · 输出约 \(capabilities.maxOutputTokens) tokens",
                 "联网能力：\(webText.isEmpty ? "未配置" : webText)",
                 "",
-                // 高层能力摘要来自单一 canonical AgentCapabilityCatalog（与 System Prompt
-                // 摘要同源），不再是"模型可见 tools 列表"。模型据此正确自省：
-                // 看不到 runtime-only tool ≠ 没有该能力。
-                AgentCapabilityCatalog.systemPromptSummary(
+                // 高层能力摘要来自单一 canonical AgentCapabilityCatalog + run-scoped
+                // 环境快照（与 System Prompt 摘要同源），不再是"模型可见 tools 列表"。
+                AgentCapabilityCatalog.systemPromptSummary(environment: AgentCapabilityEnvironment(
                     providerAvailable: providerCapabilities != nil,
                     catalogAvailable: true,
-                    activeServer: (await bridge.getActiveServer()) != nil
-                ),
+                    activeServer: (await bridge.getActiveServer()) != nil,
+                    webAvailable: webService != nil,
+                    downloadServiceAvailable: systemService != nil,
+                    systemServiceAvailable: systemService != nil
+                )),
             ].joined(separator: "\n")
             return .ok(canonicalCall, canonicalDescriptor, "已读取 Provider 能力与高层能力摘要", .text(text))
         case "web_search":

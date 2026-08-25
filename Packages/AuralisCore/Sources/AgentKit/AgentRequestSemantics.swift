@@ -155,7 +155,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "这首歌", "歌曲", "音乐", "专辑", "歌手", "艺人", "艺术家", "当前播放", "current track", "track", "song", "album", "artist",
         ])
         let annotationAction = has([
-            "收藏", "取消收藏", "给这首歌评分", "给歌曲评分", "设置评分", "清除评分", "评分", "打分",
+            "收藏", "取消收藏", "给这首歌评分", "给歌曲评分", "设置评分", "清除评分",
             "不喜欢这首", "不喜欢这首歌", "不感兴趣这首", "favorite", "rating", "dislike",
         ])
         let explicitNonMusicAnnotationTarget = has([
@@ -167,10 +167,23 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             && !explicitNonMusicAnnotationTarget
             && has(["收藏", "favorite"])
             && value.count > 3
+        // 评分读取（“这首歌的评分是多少？”）：不含 mutation 动词，自然落入只读
+        // query 分支，绝不产生 mutation 授权。
+        // 评分变更：明确动作动词（设置/给…评/打…分/清除/删除/取消）+ 评分名词，
+        // 且指向音乐目标。裸「评分 / 打分」不构成 mutation 授权。
+        let ratingMutationPhrase = has([
+            "给这首歌评分", "给歌曲评分", "给这首歌打", "给歌曲打", "设置评分", "设置评分为",
+            "评分为", "评为", "清除", "删除", "取消", "清掉", "删掉",
+        ])
+        let ratingMutation = !collectionQuery
+            && !explicitNonMusicAnnotationTarget
+            && (musicAnnotationTarget || implicitTrackTitleTarget)
+            && ratingMutationPhrase
+            && has(["评分", "rating", "打分", "分"])
         let explicitAnnotationAction = !collectionQuery
             && !explicitNonMusicAnnotationTarget
             && (musicAnnotationTarget || implicitTrackTitleTarget)
-            && annotationAction
+            && (annotationAction || ratingMutation)
 
         let indexMarker = has([
             "推荐索引", "索引处理", "索引进度", "索引还剩", "索引分类", "索引完成", "索引了",
@@ -383,7 +396,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         }
 
         if explicitAnnotationAction {
-            if has(["评分", "rating", "清除评分"]) { requested.insert(.ratingSet) }
+            if ratingMutation { requested.insert(.ratingSet) }
             else if has(["不喜欢", "不感兴趣", "dislike"]) { requested.insert(.dislikedSet) }
             else { requested.insert(.favoriteSet) }
         }

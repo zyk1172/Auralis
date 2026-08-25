@@ -16,7 +16,7 @@ public enum SystemPromptBuilder {
         nativeToolCalling: Bool,
         goal: String = "",
         workflowInstruction: String? = nil,
-        providerAvailable: Bool = true
+        environment: AgentCapabilityEnvironment = AgentCapabilityEnvironment(providerAvailable: true)
     ) -> String {
         let language = currentLanguage
         let profile = AssistantProfile.kitty(language: language)
@@ -28,11 +28,7 @@ public enum SystemPromptBuilder {
         let capabilities = capabilitySummary(tools)
         // 高层能力摘要：来自单一 canonical AgentCapabilityCatalog（与 capabilities_get
         // 同源）。模型据此自省"系统能完成什么"，而不是只看 model-visible tools。
-        let assistantCapabilities = AgentCapabilityCatalog.systemPromptSummary(
-            providerAvailable: providerAvailable,
-            catalogAvailable: true,
-            activeServer: context.serverID != nil
-        )
+        let assistantCapabilities = AgentCapabilityCatalog.systemPromptSummary(environment: environment)
         let protocolRule: String
         if tools.isEmpty {
             protocolRule = "当前 Provider 尚未通过 Auralis 工具能力验证。可以正常对话；涉及 Auralis 状态查询或操作时，明确说明工具暂不可用，不要输出 ACTION 文本。"

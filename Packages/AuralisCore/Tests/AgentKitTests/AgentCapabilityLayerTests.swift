@@ -212,13 +212,15 @@ struct AgentCapabilityLayerTests {
             Issue.record("缺少 recommendation_index_build capability")
             return
         }
-        #expect(build.requiresProvider)
+        #expect(build.requiresAIPlanning, "推荐索引需要 AI 规划")
         #expect(build.persists, "推荐索引必须真实持久化")
         #expect(build.executionOwner == .trustedRuntime, "持久化由 Trusted Runtime 执行")
         #expect(build.relatedTools.contains("library_index_status"))
         // 模型自省表述：看不到 commit 不等于不能保存。
         let summary = AgentCapabilityCatalog.systemPromptSummary(
-            providerAvailable: true, catalogAvailable: true, activeServer: true
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: true, catalogAvailable: true, activeServer: true
+            )
         )
         #expect(summary.contains("不要因为看不到内部 commit 工具就声称无法保存"))
         #expect(summary.contains("受控 Runtime 执行"))
@@ -258,7 +260,9 @@ struct AgentCapabilityLayerTests {
         #expect(missing == 0, "relatedTools 必须指向真实注册工具")
         // 摘要覆盖关键能力。
         let summary = AgentCapabilityCatalog.systemPromptSummary(
-            providerAvailable: true, catalogAvailable: true, activeServer: true
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: true, catalogAvailable: true, activeServer: true
+            )
         )
         for required in ["Recommendation Index", "音乐推荐", "音乐鉴赏", "多步骤歌单构建", "音乐库分析", "联网资料核验"] {
             #expect(summary.contains(required), "摘要应包含 \(required)")
@@ -269,17 +273,128 @@ struct AgentCapabilityLayerTests {
     func availabilityReflectsProvider() {
         let build = AgentCapabilityCatalog.capability(id: "recommendation_index_build")!
         let withoutProvider = AgentCapabilityCatalog.availability(
-            for: build, providerAvailable: false, catalogAvailable: true, activeServer: true
+            for: build,
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: false, catalogAvailable: true, activeServer: true
+            )
         )
         if case .available = withoutProvider {
             Issue.record("Provider 缺失时 recommendation_index_build 不得可用")
         }
         let read = AgentCapabilityCatalog.capability(id: "catalog_search")!
         let readAvailable = AgentCapabilityCatalog.availability(
-            for: read, providerAvailable: false, catalogAvailable: true, activeServer: true
+            for: read,
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: false, catalogAvailable: true, activeServer: true
+            )
         )
         if case .available = readAvailable {} else {
             Issue.record("只读检索不应依赖 Provider")
+        }
+    }
+
+    // MARK: - 评分授权边界（P1 回归）
+
+    @Test("P1 评分读取：这首歌的评分是多少？→ 只读，不产生 ratingSet 授权")
+    func ratingReadDoesNotGrantMutation() {
+        let semantics = AgentRequestSemantics.analyze("这首歌的评分是多少？")
+        #expect(!semantics.requestedOperations.contains(.ratingSet), "查询不得获得写授权")
+        #expect(semantics.isReadOnly, "查询必须是只读")
+    }
+
+    @Test("P1 评分变更：清除这首歌的评分 → mutation + ratingSet")
+    func ratingClearGrantsMutation() {
+        let semantics = AgentRequestSemantics.analyze("清除这首歌的评分")
+        #expect(semantics.requestedOperations.contains(.ratingSet), "明确清除动作必须授权 ratingSet")
+        #expect(semantics.operation == .mutate || semantics.isExplicitMutation)
+    }
+
+    @Test("P1 评分变更：给这首歌打 4 分 / 给这首歌评分 4 分 → ratingSet")
+    func ratingSetActionsGrantMutation() {
+        for text in ["给这首歌打 4 分", "给这首歌评分 4 分", "设置这首歌的评分为 4", "取消这首歌的评分", "删除这首歌的评分"] {
+            let semantics = AgentRequestSemantics.analyze(text)
+            #expect(semantics.requestedOperations.contains(.ratingSet), "「\(text)」应授权 ratingSet")
+        }
+    }
+
+    // MARK: - Capability 语义一致性（P2 回归）
+
+    @Test("P2 server_query 只读、server_management_sync 变更，属性与工具一致")
+    func serverCapabilitiesSemanticsConsistent() {
+        let query = AgentCapabilityCatalog.capability(id: "server_query")!
+        #expect(query.readOnly, "server_query 必须只读")
+        #expect(query.relatedTools.contains("server_list"))
+        #expect(!query.relatedTools.contains("server_switch"), "只读查询不得关联变更工具")
+        let management = AgentCapabilityCatalog.capability(id: "server_management_sync")!
+        #expect(!management.readOnly, "server_management_sync 是变更能力")
+        #expect(management.relatedTools.contains("server_switch"))
+        #expect(management.relatedTools.contains("server_sync_start"))
+        #expect(management.requiresAIPlanning)
+    }
+
+    @Test("P2 catalog_search 声明与真实路由一致：AI 规划需要 Provider")
+    func catalogSearchRequiresPlanning() {
+        let search = AgentCapabilityCatalog.capability(id: "catalog_search")!
+        #expect(search.requiresAIPlanning, "普通聊天中的自然语言搜索在 provider=nil 时不可执行")
+        #expect(!search.supportsDirectRead, "「搜索周杰伦」不属于 Direct Read Fast Path")
+    }
+
+    @Test("P2 web_research / music_download availability 反映真实服务配置")
+    func availabilityReflectsServices() {
+        let web = AgentCapabilityCatalog.capability(id: "web_research")!
+        let noWeb = AgentCapabilityCatalog.availability(
+            for: web,
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: true, catalogAvailable: true, activeServer: true,
+                webAvailable: false, downloadServiceAvailable: true, systemServiceAvailable: true
+            )
+        )
+        if case .available = noWeb {
+            Issue.record("未配置 webService 时 web_research 不得 available")
+        }
+        let download = AgentCapabilityCatalog.capability(id: "music_download")!
+        let noDownload = AgentCapabilityCatalog.availability(
+            for: download,
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: true, catalogAvailable: true, activeServer: true,
+                webAvailable: true, downloadServiceAvailable: false, systemServiceAvailable: true
+            )
+        )
+        if case .available = noDownload {
+            Issue.record("下载服务未配置时 music_download 不得 available")
+        }
+    }
+
+    @Test("P2 degraded 状态明确展示，不静默消失")
+    func degradedIsDisplayed() {
+        let query = AgentCapabilityCatalog.capability(id: "server_query")!
+        let degraded = AgentCapabilityCatalog.availability(
+            for: query,
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: true, catalogAvailable: true, activeServer: false
+            )
+        )
+        if case .degraded = degraded {} else {
+            Issue.record("未连接服务器时 server_query 应为 degraded，实际 \(degraded.label)")
+        }
+        let summary = AgentCapabilityCatalog.systemPromptSummary(
+            environment: AgentCapabilityEnvironment(
+                providerAvailable: true, catalogAvailable: true, activeServer: false
+            )
+        )
+        #expect(summary.contains("[当前降级"), "degraded 能力必须在摘要中展示而非过滤")
+        #expect(summary.contains("[当前不可用"), "unavailable 能力必须在摘要中展示")
+    }
+
+    @Test("P2 readOnly capability 不得关联 mutation 工具；mutation capability 有关联写工具")
+    func readOnlyCapabilityHasNoMutationTools() {
+        let registered = Dictionary(uniqueKeysWithValues: AgentToolRegistry.all.map { ($0.name, $0) })
+        for capability in AgentCapabilityCatalog.all where capability.readOnly {
+            for toolName in capability.relatedTools {
+                guard let descriptor = registered[toolName] else { continue }
+                #expect(descriptor.permission == .readOnly,
+                        "只读能力 \(capability.id) 不得关联 mutation 工具 \(toolName)")
+            }
         }
     }
 }
