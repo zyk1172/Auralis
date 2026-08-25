@@ -235,10 +235,9 @@ public struct AgentConvergenceTracker: Sendable {
         if consecutiveMalformedCalls >= policy.maxConsecutiveMalformedCalls {
             return .repeatedMalformedCall
         }
-        // 任一搜索工具连续无新证据达到阈值 → 停止该搜索路径（可诊断原因）。
-        if searchNoNewEvidenceStreakByTool.values.contains(where: { $0 >= policy.maxSameToolNoNewEvidence }) {
-            return .noNewEvidence
-        }
+        // A single exhausted search path must not kill the whole run. The
+        // caller removes that tool from the schema; another canonical path or
+        // the general no-progress watchdog decides whether the task can go on.
         return nil
     }
 }

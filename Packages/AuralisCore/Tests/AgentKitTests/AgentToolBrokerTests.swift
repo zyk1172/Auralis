@@ -37,6 +37,29 @@ struct AgentToolBrokerTests {
         #expect(irrelevant.isEmpty, "不应暴露诊断工具，实际：\(irrelevant.map(\.name))")
     }
 
+    @Test("Broker 「鉴赏这首歌」→ music_appreciate 位于最前")
+    func musicAppreciationShortlistIsDeterministic() throws {
+        let plan = makePlan("鉴赏这首歌")
+        #expect(plan.semantics.isMusicAppreciation)
+        #expect(plan.semantics.isReadOnly)
+        let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
+        let primary = try #require(selected.first { !$0.isCoreInfrastructure && $0.name != "result_present_tracks" })
+        #expect(primary.name == "music_appreciate")
+        #expect(selected.contains { ["library_search", "library_resolve_entity"].contains($0.name) })
+    }
+
+    @Test("Intent 歌单名中的实体内容不污染 memory 路由")
+    func playlistEntityNamesDoNotContaminateIntent() {
+        for name in ["我叫大傻蛋", "请记住我", "下一首", "删除服务器", "暂停", "收藏"] {
+            let plan = makePlan("删除歌单 \(name)")
+            #expect(plan.semantics.domain == .playlist)
+            #expect(plan.authorization.allowedOperations.contains(.playlistDelete))
+            #expect(!plan.authorization.allowedOperations.contains(.memorySave))
+            #expect(!plan.authorization.allowedOperations.contains(.playbackPlay))
+            #expect(!plan.authorization.allowedOperations.contains(.serverRemove))
+        }
+    }
+
     @Test("Broker 「来点适合深夜听的」→ recommend_by_mood 优先")
     func brokerMoodShortlist() {
         let plan = makePlan("推荐几首适合深夜听的歌")

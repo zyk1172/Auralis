@@ -218,7 +218,11 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         // 执行语义统一入口：教学问句（怎么/如何…）抑制授权时，执行语义同步关闭，
         // 杜绝「授权被抑制但 isRecommendationIndexBuild 仍为 true」的 split-brain。
         let executableIndexBuild = requestedIndexBuild && !suppressesMutationAuthorization
-        let memorySave = has([
+        // Playlist names are user data, not commands. “删除歌单 我叫大傻蛋”
+        // contains a memory-save phrase only because it is the entity target;
+        // the explicit playlist action owns routing and authorization.
+        let playlistActionTarget = has(["歌单", "playlist", "播放列表"]) && explicitPlaylistAction
+        let memorySave = !playlistActionTarget && has([
             "请记住", "记住我的", "记住我", "保存到记忆", "保存记忆", "memory_save",
             "创建技能", "skill_create", "我叫", "我的名字是", "我的生日是",
         ])
@@ -432,7 +436,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             else { requested.insert(.favoriteSet) }
         }
         if executableIndexBuild { requested.insert(.recommendationIndexWrite) }
-        if !suppressesMutationAuthorization, serverMutation {
+        if !suppressesMutationAuthorization, serverMutation, !playlistActionTarget {
             if has(["删除服务器", "server_remove", "remove server"]) { requested.insert(.serverRemove) }
             else if has(["切换服务器", "server_switch", "switch server"]) { requested.insert(.serverSwitch) }
             else if has(["同步", "sync", "曲库同步"]) { requested.insert(.serverSync) }
@@ -474,6 +478,9 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         if indexMarker {
             return Self(domain: .musicLibrary, operation: executableIndexBuild ? .mutate : .read, isMusicContext: true, isContinuation: continuation, isRecommendationIndex: true, isRecommendationIndexBuild: executableIndexBuild, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
         }
+        if playlistActionTarget {
+            return Self(domain: .playlist, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["playlist", "catalog"], directReadCapability: directReadCapability)
+        }
         if serverContext {
             return Self(domain: .server, operation: serverMutation ? .mutate : .read, isMusicContext: isMusicContext, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["server"], directReadCapability: directReadCapability)
         }
@@ -513,6 +520,9 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         }
         if recommendationRequest && isMusicContext {
             return Self(domain: .recommendation, operation: .discover, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["catalog", "playback"])
+        }
+        if musicAppreciation {
+            return Self(domain: .musicLibrary, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: true, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
         }
         if isMusicContext && (genericSearch || query || collectionQuery) {
             let namespaces = collectionQuery ? ["catalog", "server", "annotation"] : ["catalog", "server"]
