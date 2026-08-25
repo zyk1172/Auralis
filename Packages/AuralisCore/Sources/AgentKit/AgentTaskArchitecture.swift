@@ -125,6 +125,9 @@ public enum AgentCompletionPredicate: Codable, Equatable, Sendable {
     case modelAnswer
     /// 真实成功执行了至少一个工具（Tool Success ≠ Evidence）。
     case successfulToolResult
+    /// 已产生最终歌曲选择（result_present_tracks final）。targetCount 存在时
+    /// 必须 finalSelection.count >= targetCount，否则不完成。
+    case finalTrackSelection
     case queueMutation
     case playlistMutation
     case playbackMutation
@@ -136,6 +139,7 @@ public enum AgentCompletionPredicate: Codable, Equatable, Sendable {
         switch self {
         case .modelAnswer: return "modelAnswer"
         case .successfulToolResult: return "successfulToolResult"
+        case .finalTrackSelection: return "finalTrackSelection"
         case .queueMutation: return "queueMutation"
         case .playlistMutation: return "playlistMutation"
         case .playbackMutation: return "playbackMutation"
@@ -290,7 +294,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .playbackQuery:
             return .init(intent: intent, scopes: [.catalogRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback], allowedPermissions: read)
         case .musicDiscovery:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .successfulToolResult, convergence: .compoundTask)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .finalTrackSelection, convergence: .compoundTask)
         case .queueManagement:
             return .init(intent: intent, scopes: [.catalogRead, .playbackWrite, .queueWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: destructive, maxRisk: .high, completion: .queueMutation, convergence: .compoundTask)
         case .queueQuery:
@@ -793,6 +797,15 @@ public enum AgentCompletionEvaluator {
             return false
         case .successfulToolResult:
             return state.successfulToolNames.contains(where: policy.completionToolNames.contains)
+        case .finalTrackSelection:
+            // 必须有最终选择事实；有目标数量时数量必须达标。
+            guard let count = Int(state.facts["task.finalSelection.count"] ?? ""), count > 0 else {
+                return false
+            }
+            if let targetText = state.facts["task.targetCount"], let target = Int(targetText) {
+                return count >= target
+            }
+            return true
         case .queueMutation:
             return state.facts["sideEffect.queue"] == "success"
         case .playlistMutation:
@@ -847,6 +860,15 @@ public enum AgentCompletionEvaluator {
             // Evidence 只用于外部事实/大众评价/诊断 provenance，不承担“工具是否执行过”的语义。
             satisfied = state.successfulToolNames.contains(where: policy.completionToolNames.contains)
             continuation = "当前任务需要至少一次与当前意图匹配的真实成功工具结果。请调用相关工具后再依据真实结果回答。"
+        case .finalTrackSelection:
+            let count = Int(state.facts["task.finalSelection.count"] ?? "")
+            if let target = Int(state.facts["task.targetCount"] ?? "") {
+                satisfied = (count ?? 0) >= target
+                continuation = "最终歌曲选择尚未达到目标数量（需要 \(target) 首，当前 \(count ?? 0) 首）。请基于真实候选调用 result_present_tracks 提交最终选择。"
+            } else {
+                satisfied = (count ?? 0) > 0
+                continuation = "尚未提交最终歌曲选择。请基于真实候选调用 result_present_tracks(trackIDs=[最终歌曲]) 提交。"
+            }
         case .queueMutation:
             satisfied = state.facts["sideEffect.queue"] == "success"
             continuation = "队列修改尚未得到成功工具结果。请执行获准的队列工具；不要仅用文字声称已经完成。"

@@ -67,3 +67,19 @@ Runtime 在准备批次时按需读取已有 canonical 标签及使用次数，�
 
 `RecommendationIndexSemanticTagsTests`：3 / 30 / 100 标签、重复与变体归一、
 semanticTagsOnly 保留固定维度、导出导入保留开放标签。
+
+
+## 模型认知与 Runtime-owned 边界
+
+推荐索引是 **Runtime-owned closed workflow**：Runtime 准备批次 → 模型仅输出当前批次的
+封闭结构化分类（`tools=[]`，模型看不到任何写入工具）→ Runtime 验证 batchID / revision /
+mode / track 覆盖 / 重复 / schema → 由 Runtime 构造内部 `recommendation_index_commit` →
+`ToolRuntime` → `RecommendationIndexToolService` → `LocalCatalogStore` SQLite 事务 →
+再读取真实 `recommendation_index_v2_state` 验证 pending 下降。
+
+因此：
+
+- `recommendation_index_commit` 继续对普通模型隐藏，普通 tool schema / tool_search 不可见；
+- 模型不得声称自己直接写数据库；正确表述是“Auralis Runtime 会保存分类结果”；
+- 模型不得因为看不到内部 commit 工具就判断“无法保存”；
+- 模型输出文字不构成写入成功证据，完成只以 Runtime 验证的真实状态为准。

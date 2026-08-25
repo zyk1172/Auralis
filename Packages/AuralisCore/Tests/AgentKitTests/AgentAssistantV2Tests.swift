@@ -3,20 +3,6 @@ import AIKit
 import Testing
 
 struct AgentAssistantV2Tests {
-    @Test("普通聊天不会获得本地音乐降级，明确音乐请求可以降级")
-    func offlineFallbackRequiresExplicitMusicCommand() {
-        #expect(!ConversationEngine.allowsOfflineFallback(intent: .conversation, userText: "解释一下黑洞是什么"))
-        #expect(!ConversationEngine.allowsOfflineFallback(intent: .conversation, userText: "你是谁"))
-        #expect(ConversationEngine.allowsOfflineFallback(intent: .librarySearch, userText: "帮我找歌 夜曲"))
-        #expect(ConversationEngine.allowsOfflineFallback(intent: .playbackControl, userText: "暂停播放"))
-        #expect(AgentIntentClassifier.classify("查一下今天有什么科技新闻") == .conversation)
-        #expect(AgentIntentClassifier.classify("查看当前音频输出设备") == .conversation)
-        #expect(!ConversationEngine.isExplicitMusicCommand("推荐几本人工智能方面的书"))
-        #expect(!ConversationEngine.isExplicitMusicCommand("怎么下载 Python 的 wheel 文件"))
-        #expect(!ConversationEngine.isExplicitMusicCommand("为什么 iPhone 充电的时候会发热"))
-        #expect(ConversationEngine.isExplicitMusicCommand("推荐几首适合通勤的音乐"))
-        #expect(ConversationEngine.isExplicitMusicCommand("暂停播放"))
-    }
 
     @Test("ToolCatalog 是发现工具的唯一搜索源")
     func catalogSearchesRegisteredDescriptors() throws {

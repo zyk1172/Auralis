@@ -324,7 +324,10 @@ struct AgentPermissiveRuntimeTests {
         system.recommendationTracks = [permCard(GlobalID(serverID: "test-server", remoteID: "t1"), title: "引擎轰鸣")]
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(
-            actionBatches: [#"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#],
+            actionBatches: [
+                #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
+                #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":["test-server:t1"]}}"#,
+            ],
             closing: "为你找到 3 首适合开车提神的歌：引擎轰鸣等。"
         )
         await AgentRunner.run(
@@ -338,8 +341,9 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        #expect(provider.requests.count >= 2)
+        #expect(provider.requests.count >= 3)
         #expect(provider.requests[1].messages.contains { $0.role == .user && $0.content.contains("（工具执行结果）recommend_by_mood: 成功") })
+        #expect(provider.requests[2].messages.contains { $0.role == .user && $0.content.contains("result_present_tracks") })
         #expect(await collector.containsText("适合开车提神的歌"))
         #expect(await collector.containsError("没有进展") == false)
     }
@@ -996,6 +1000,7 @@ struct AgentPermissiveRuntimeTests {
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
+            #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":["test-server:t0","test-server:t1","test-server:t2","test-server:t3","test-server:t4","test-server:t5","test-server:t6","test-server:t7","test-server:t8","test-server:t9","test-server:t10","test-server:t11"]}}"#,
             "已经为你选好了。",
         ])
         await AgentRunner.run(
@@ -1009,7 +1014,7 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        // 中文数量 12 被识别；模型仍不调用 final → Runtime 兜底取前 12 首。
+        // 中文数量 12 被识别；模型提交 12 首 final selection → 展示 12 首。
         let groups = await collector.trackCardGroupCounts()
         #expect(groups == [12])
     }
@@ -1026,6 +1031,8 @@ struct AgentPermissiveRuntimeTests {
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
             "已经为你选好 1 首适合开车提神的歌。",
+            #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":["test-server:t1"]}}"#,
+            "完成。",
         ])
         await AgentRunner.run(
             userText: "推荐一首开车提神的歌给我看看",
@@ -1044,7 +1051,7 @@ struct AgentPermissiveRuntimeTests {
             req.messages.contains { $0.role == .user && $0.content.contains("result_present_tracks") }
         }
         #expect(repairSeen)
-        // 模型仍不调用 result_present_tracks → Runtime 确定性兜底：按用户要求数量（1 首）建立 final。
+        // 模型在提示后提交 result_present_tracks final → 完成条件满足，展示 1 首。
         let groups = await collector.trackCardGroupCounts()
         #expect(groups == [1])
     }
@@ -1384,12 +1391,12 @@ struct AgentPermissiveRuntimeTests {
         bridge.slowTestConnection = true
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
-            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"80"}}"#,
+            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"40"}}"#,
             #"ACTION: {"tool":"server_test_connection","args":{"serverID":"test-server"}}"#,
         ])
         let task = Task {
             await AgentRunner.run(
-                userText: "搜索 80 首候选",
+                userText: "搜索 40 首候选",
                 provider: provider,
                 model: "scripted-model",
                 bridge: bridge,
@@ -1413,7 +1420,7 @@ struct AgentPermissiveRuntimeTests {
             do { _ = try await group.next() } catch { Issue.record("取消后任务未能及时结束") }
             group.cancelAll()
         }
-        // Cancel 时绝不倾倒 80 首候选。
+        // Cancel 时绝不倾倒候选（40 首，不触发 >50 fail-fast，保持 cancel 语义）。
         #expect(await collector.containsAnyTrackCards() == false)
         #expect(await collector.containsText("已取消"))
     }
@@ -1471,5 +1478,67 @@ struct AgentPermissiveRuntimeTests {
         // 无证据的“大众共识”不能作为成功回答输出。
         #expect(await collector.containsError("没有满足确定性完成条件"))
         #expect(await collector.containsText("广受好评") == false)
+    }
+
+    @Test("TEST-50 超过 50 首的任务在建立边界 fail-fast")
+    func overFiftyFailsFast() async throws {
+        let store = try makePermStore()
+        let tracks = (0..<60).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
+        try await seedPerm(store, tracks)
+        let bridge = PermissiveBridge()
+        let system = PermissiveSystemService()
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"深夜"}}"#,
+        ])
+        await AgentRunner.run(
+            userText: "推荐 80 首适合深夜开的歌",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            systemService: system,
+            intent: .conversation,
+            toolTimeout: 30,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        // fail-fast：明确告知上限，不进入永远无法满足的 targetCount=80 死路。
+        #expect(await collector.containsError("最多支持 50 首"))
+        // 不执行任何 mutation / 不展示候选。
+        #expect(await collector.containsAnyTrackCards() == false)
+        #expect(await collector.containsError("没有进展") == false)
+    }
+
+    @Test("TEST-51 ToolExecutorContext child/derived 保留 run-scoped capabilityEnvironment")
+    func childContextPreservesCapabilityEnvironment() {
+        let env = AgentCapabilityEnvironment(
+            providerAvailable: true, catalogAvailable: true, activeServer: true,
+            webAvailable: true, webSearchAvailable: true, webFetchAvailable: true
+        )
+        let store = try! makePermStore()
+        let base = ToolExecutorContext(
+            bridge: PermissiveBridge(),
+            catalog: store,
+            serverID: "test-server",
+            systemService: nil,
+            externalMusicService: nil,
+            allowsLyrics: false,
+            providerCapabilities: nil,
+            webService: nil,
+            authorizationContext: nil,
+            activeSkillID: nil,
+            executionAuthority: nil,
+            executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 0),
+            resourceLeaseRegistry: MutationResourceLeaseRegistry(),
+            recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry(),
+            capabilityEnvironment: env
+        )
+        // derived context 保留 snapshot：
+        let derived = base.withAdditionalAuthorizationOperations([.playbackPlay])
+        #expect(derived.capabilityEnvironment == env, "withAdditionalAuthorizationOperations 必须保留 capabilityEnvironment")
+        // child 执行路径仍能拿到 snapshot（executeChild 走 ToolRuntime.execute 透传链）：
+        #expect(base.capabilityEnvironment == env)
     }
 }

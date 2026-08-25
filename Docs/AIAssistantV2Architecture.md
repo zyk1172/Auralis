@@ -52,8 +52,19 @@
 准备批次、验证 `batchID/revision` 后自行提交写入。`AgentRunner` 只保留弃用的
 source-compatibility forwarding。入口默认是 generic conversation；
 “推荐 / 下载 / 为什么 / 搜索”等通用词只有和明确音乐/Auralis 上下文组合后才会进入 deterministic
-intent，避免把“推荐几本书”或“怎么下载 Python”改写成音乐任务。没有明确音乐命令时，Provider
-不可用不会触发本地音乐搜索。
+intent，避免把“推荐几本书”或“怎么下载 Python”改写成音乐任务。AI Provider 不可用时，
+AI Assistant **不降级为关键词规则伪 Agent**（`runOffline` 已删除）：复杂推荐、鉴赏、分类、
+歌单构建、音乐库整理一律明确返回“AI 服务不可用”；唯一例外是 Direct Read Fast Path
+（高置信度只读状态查询仍直接执行一次 canonical read 返回真实数据）。播放器、搜索、歌单、
+队列等 App 内普通功能与 AI 层完全独立。
+
+## Capability 层（模型自省）
+
+`AgentCapabilityCatalog` 是单一 canonical capability 源（System Prompt 摘要 /
+`capabilities_get` / 诊断同源）。Capability 描述系统能完成的高层任务（含 Runtime-owned
+workflow），与 Tool（原子操作）和 Workflow（如何完成）区分。例如 `recommendation_index_build`
+声明 `requiresProvider / persists / executionOwner=trustedRuntime`；模型据此知道“可以建立
+并保存分类索引”，尽管看不到内部 `recommendation_index_commit`。
 
 联网通过可替换的 `AgentWebService` 注入。默认 App 实现是受 HTTPS/私有地址/响应大小约束
 的 DuckDuckGo Instant Answer capability；默认 `web_fetch` 只接受当前 run 的 source registry

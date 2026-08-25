@@ -241,6 +241,33 @@ public struct ToolCatalog: Sendable {
             if summary.contains(token) { result += 40 }
             if aliases.contains(where: { $0.contains(token) }) { result += 40 }
         }
+        // 自然语言示例参与 ranking：完整示例子串命中权重高；token 命中次之。
+        let examples = descriptor.utteranceExamples.map { $0.lowercased() }
+        if examples.contains(needle) { result += 800 }
+        for example in examples {
+            if example.contains(needle) {
+                result += 350
+                break
+            }
+            if tokens.contains(where: { $0.count >= 2 && example.contains($0) }) {
+                result += 80
+            }
+        }
+        // Coverage 加权：命中 meaningful token 数 / 总 token 数越高排名越高，
+        // 例如「下一首播放」同时命中 play_next 相关概念的工具应高于只命中一个的工具。
+        let meaningful = tokens.filter { $0.count >= 2 }
+        if !meaningful.isEmpty {
+            var hitCount = 0
+            for token in meaningful {
+                if name.contains(token) || namespace.contains(token)
+                    || tags.contains(where: { $0.contains(token) })
+                    || summary.contains(token) || operation.map({ $0.contains(token) }) ?? false
+                    || examples.contains(where: { $0.contains(token) }) {
+                    hitCount += 1
+                }
+            }
+            result += Int((Double(hitCount) / Double(meaningful.count)) * 200)
+        }
         return result
     }
 }

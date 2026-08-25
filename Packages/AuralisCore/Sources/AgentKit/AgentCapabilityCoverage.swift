@@ -8,6 +8,16 @@ import Foundation
 /// 而应明确返回“当前 Auralis 没有删除音乐服务器曲库文件的受支持工具”。
 ///
 /// 判定完全基于注册表描述符与语义请求，不依赖模型输出、网页内容或授权猜测。
+///
+/// 职责分工（与 AgentCapabilityCatalog 不重复）：
+/// - AgentCapabilityCoverage：单次请求的 fail-fast 判定——「用户这句话要的
+///   canonical operation 在注册表里是否存在」。输入是语义 + 注册表，输出是
+///   支持/不支持。这是执行前的一次性拦截。
+/// - AgentCapabilityCatalog：模型自省的高层能力目录——「系统能完成哪些高层任务、
+///   是否需要 AI 规划、执行层依赖什么服务」。输入是运行环境快照，输出是
+///   供 System Prompt / capabilities_get 使用的能力摘要。
+/// 两者一低一高：Coverage 管单请求 fail-fast，Catalog 管能力宣传与自省。
+/// 唯一共享的事实源都是 AgentToolRegistry（descriptor / operation / 权限）。
 public enum AgentCapabilityCoverage {
     /// 返回 nil 表示支持；返回非 nil 时是面向用户的 fail-fast 说明。
     ///

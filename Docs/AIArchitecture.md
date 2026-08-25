@@ -5,6 +5,12 @@
 AI 不在播放可靠性关键路径内，不直接访问数据库，不写音频文件，不生成不存在的 Track ID，
 也不能发明 MusicBrainz ID、发行日期或参与人员。
 
+AI Assistant 是建立在播放器之上的智能层，不是播放器 UI 的自然语言备用入口。AI Provider
+不可用时 **不降级为关键词规则伪 Agent**（本地规则 fallback 已删除）：复杂推荐、鉴赏、
+分类、歌单构建、音乐库整理一律明确返回“AI 服务不可用”；只有高置信度只读的 Direct Read
+Fast Path 在 Provider 缺失时仍直接执行一次 canonical read 返回真实数据（性能优化，不是
+离线降级）。普通播放器 UI / 搜索 / 歌单 / 队列等系统命令入口完全独立于 AI 层。
+
 ```text
 User intent
   → privacy gate and request preview

@@ -3,8 +3,14 @@
 ## AI Assistant 当前实现
 
 当前实现的入口是聊天，而不是一个先把用户请求硬分进音乐意图的路由器。`AgentIntentClassifier`
-只产出排序、完成条件和诊断提示；真正的能力来自注册表与运行时。普通知识聊天在 Provider
-缺失或失败时不会被改写为本地音乐搜索，只有明确的音乐操作/查询才允许使用离线音乐能力。
+只产出排序、完成条件和诊断提示；真正的能力来自注册表与运行时。
+
+AI Assistant 是建立在播放器之上的智能层，不是播放器 UI 的自然语言备用入口。AI Provider
+不可用时，AI Assistant **不做任何关键词规则伪 Agent 降级**：复杂推荐、鉴赏、分类、歌单构建、
+音乐库整理一律明确返回"AI 服务不可用"。唯一例外是 Direct Read Fast Path——高置信度、
+只读、确定性的状态查询（如"音乐库有多少首歌 / 队列有多少首"）在 Provider 缺失时仍直接
+执行一次 canonical read 返回真实数据，这是性能优化，不是离线降级模拟 AI。播放器、搜索、
+歌单、队列等 App 内普通功能完全独立于 AI 层。
 
 ```text
 AssistantView / Siri / App Intent
@@ -27,6 +33,18 @@ AgentCoordinator (@MainActor)
               │
 AgentToolRegistry → AgentToolkit / SystemToolExecutor / AgentWebService
 ```
+
+## Capability / Tool / Workflow 三层
+
+- **Capability**（`AgentCapabilityCatalog`，单一 canonical 源）：系统能完成的高层任务，
+  是模型自省的权威依据。例如 `recommendation_index_build` 声明 `executionOwner =
+  trustedRuntime`、`persists = true`，模型据此知道"可以建立并保存分类索引"。
+- **Tool**（`AgentToolRegistry`）：Runtime 暴露给模型的原子操作。
+- **Workflow**（Stateful Skill / `RecommendationIndexSkillRuntime`）：系统如何完成复杂事情。
+
+System Prompt 能力摘要、`capabilities_get`、诊断均来自 `AgentCapabilityCatalog`，不维护
+多份漂移列表。模型看不到 runtime-only tool（如 `recommendation_index_commit`）≠ 没有该
+能力；内部提交工具继续对普通模型隐藏，持久化由 Trusted Runtime 完成。
 
 普通聊天直接进入 `ConversationEngine → ToolLoop`；只有需要持久化状态、工作流或确定性
 完成条件的任务才经过 `AgentRuntime → ConversationEngine`。`AgentRunner` 已不再是生产

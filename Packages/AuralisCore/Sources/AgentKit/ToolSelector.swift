@@ -91,7 +91,8 @@ public enum ToolSelector {
             intent: plan.intent,
             all: all,
             activeSkillID: activeSkillID,
-            allowedOperations: plan.authorization.allowedOperations
+            allowedOperations: plan.authorization.allowedOperations,
+            userText: plan.currentUserText
         )
     }
 
@@ -141,7 +142,8 @@ public enum ToolSelector {
         intent: AgentTaskIntent?,
         all: [ToolDescriptor],
         activeSkillID: String?,
-        allowedOperations: Set<ToolAuthorizationOperation>?
+        allowedOperations: Set<ToolAuthorizationOperation>?,
+        userText: String = ""
     ) -> [ToolDescriptor] {
         let visible = all.filter { $0.isVisible(toSkillID: activeSkillID) }
         var selected: [ToolDescriptor] = []
@@ -214,7 +216,163 @@ public enum ToolSelector {
             append(visible.filter { $0.requiredSkillID == activeSkillID })
         }
 
-        return selected
+        // Tool Broker：轻量确定性 relevance ranking（纯本地计算，不产生授权）。
+        // 先做宽松召回：即使保守 semantics 第一层没有把工具放进 selected，
+        // utteranceExample bigram 重叠或授权操作命中的工具也会补进来——
+        // 但 mutation 仍必须通过 allowedOperations fail-closed（Recall 宽松、
+        // Authorization 保守）。priority 只参与相关工具间排序，不参与 relevant 判定。
+        let brokered = selected + brokerExtraRecall(
+            visible: visible,
+            selectedNames: selectedNames,
+            userText: userText,
+            semantics: semantics,
+            allowedOperations: allowedOperations
+        )
+        let ranked = brokered.sorted { lhs, rhs in
+            semanticScore(lhs, userText: userText, semantics: semantics) + lhs.discoveryMetadata.priority
+                > semanticScore(rhs, userText: userText, semantics: semantics) + rhs.discoveryMetadata.priority
+        }
+        var finalSet = ranked
+        var finalNames = Set(finalSet.map(\.name))
+        // 前置依赖补全：mutation 工具需要真实 TrackID / PlaylistID 时，
+        // 自动把解析/查找入口放进 shortlist（模型不用自己猜工具依赖）。
+        let visibleByName = Dictionary(uniqueKeysWithValues: visible.map { ($0.name, $0) })
+        let needsTrackResolution = ranked.contains { descriptor in
+            descriptor.semanticInputs.contains("TrackID") || descriptor.semanticInputs.contains("TrackIDs")
+        }
+        if needsTrackResolution, !finalNames.contains("library_search"), !finalNames.contains("library_resolve_entity") {
+            for name in ["library_search", "library_resolve_entity"] {
+                if let tool = visibleByName[name], tool.permission == .readOnly, finalNames.insert(name).inserted {
+                    finalSet.append(tool)
+                }
+            }
+        }
+        let needsPlaylistResolution = ranked.contains { descriptor in
+            descriptor.semanticInputs.contains("PlaylistID")
+        }
+        if needsPlaylistResolution, !finalNames.contains("playlist_list") {
+            if let tool = visibleByName["playlist_list"], tool.permission == .readOnly, finalNames.insert("playlist_list").inserted {
+                finalSet.append(tool)
+            }
+        }
+        // Top-K：保底保留核心基础设施（tool_search / capabilities_get / result_present_tracks）。
+        // 相关工具（score > 0）全部保留，只截断无关工具（score == 0）——保证模型
+        // 需要的真实工具不被 Top-K 误伤，同时把无关 schema 挡在首轮之外。
+        // 固定 Skill 激活时（activeSkillID != nil）完全不截断：候选收集阶段模型需要
+        // 完整的只读检索面，截断会破坏"搜索 → 选歌"链路。
+        let core = finalSet.filter { $0.isCoreInfrastructure || $0.name == "result_present_tracks" }
+        let rest = finalSet.filter { !($0.isCoreInfrastructure || $0.name == "result_present_tracks") }
+        if activeSkillID != nil {
+            return core + rest
+        }
+        // legacy 调用方（allowedOperations == nil，无 authorization plan）保持完整
+        // shortlist：兼容面不裁剪，避免破坏既有行为契约。
+        // conversation 域（普通对话/模糊搜索）不裁剪：对话可能涉及任意能力，
+        // 且模糊搜索（如“搜索胡广生”）需要保留两个检索入口供模型选择。
+        if allowedOperations == nil || semantics.domain == .conversation {
+            return core + rest
+        }
+        let relevant = rest.filter { semanticScore($0, userText: userText, semantics: semantics) > 0 }
+        let fillerCount = max(ToolBrokerTopK - core.count - relevant.count, 0)
+        let filler = rest.filter { semanticScore($0, userText: userText, semantics: semantics) == 0 }
+            .prefix(fillerCount)
+        return core + relevant + filler
+    }
+
+    /// 宽松召回：保守 semantics 未命中的工具，只要 utteranceExample bigram 与用户
+    /// 文本重叠、或授权操作命中，就补进 shortlist。mutation 必须已授权。
+    private static func brokerExtraRecall(
+        visible: [ToolDescriptor],
+        selectedNames: Set<String>,
+        userText: String,
+        semantics: AgentRequestSemantics,
+        allowedOperations: Set<ToolAuthorizationOperation>?
+    ) -> [ToolDescriptor] {
+        let lower = userText.lowercased()
+        let userGrams = cjkBigrams(of: lower)
+        var result: [ToolDescriptor] = []
+        for descriptor in visible {
+            guard !selectedNames.contains(descriptor.name) else { continue }
+            if descriptor.permission != .readOnly {
+                guard descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations) else { continue }
+            }
+            let exampleHit = descriptor.utteranceExamples.contains { example in
+                let exampleLower = example.lowercased()
+                // 完整示例子串命中 = 高置信度 admission。
+                if lower.contains(exampleLower) || exampleLower.contains(lower) { return true }
+                // 宽松召回最低门槛：至少 2 个 bigram 重叠才纳入——单个高频二字词
+                // （歌曲/播放/歌单/适合）不构成 admission 依据，防止 schema inflation。
+                let overlap = userGrams.intersection(cjkBigrams(of: exampleLower))
+                return overlap.count >= 2
+            }
+            let operationHit = descriptor.authorizationOperation.map {
+                semantics.requestedOperations.contains($0)
+            } ?? false
+            if exampleHit || operationHit {
+                result.append(descriptor)
+            }
+        }
+        return result
+    }
+
+    /// CJK/ASCII bigram：连续字母段生成 2-gram，用于宽松示例匹配。
+    private static func cjkBigrams(of text: String) -> Set<String> {
+        let chars = Array(text.filter { $0.isLetter || $0.isNumber })
+        guard chars.count >= 2 else { return [] }
+        var grams = Set<String>()
+        for i in 0...(chars.count - 2) {
+            grams.insert(String(chars[i...i + 1]))
+        }
+        return grams
+    }
+
+    /// 模型首轮 schema 的 Top-K 目标规模（core 工具不占名额）。
+    private static let ToolBrokerTopK = 10
+
+    /// 轻量确定性语义 relevance score。**不含 priority**：priority 只参与相关
+    /// 工具之间的排序，不决定"是否相关"——否则默认 priority 会让所有工具 score>0，
+    /// Top-K 完全失效。数值是 ranking 提示，不是授权。
+    private static func semanticScore(
+        _ descriptor: ToolDescriptor,
+        userText: String,
+        semantics: AgentRequestSemantics
+    ) -> Int {
+        var score = 0
+        let lower = userText.lowercased()
+        // 1) 精确授权操作命中（最相关）。
+        if let operation = descriptor.authorizationOperation,
+           semantics.requestedOperations.contains(operation) {
+            score += 1000
+        }
+        // 2) 自然语言示例命中（完整示例子串）。
+        for example in descriptor.utteranceExamples where lower.contains(example.lowercased()) {
+            score += 500
+            break
+        }
+        // 3) 示例 bigram 重叠命中（宽松召回，正确分词：CJK 2-gram）。
+        let userGrams = cjkBigrams(of: lower)
+        for example in descriptor.utteranceExamples {
+            let overlap = userGrams.intersection(cjkBigrams(of: example.lowercased()))
+            if !overlap.isEmpty {
+                score += 120
+                break
+            }
+        }
+        // 4) domain / namespace 匹配。
+        if descriptor.namespace == semantics.domain.rawValue
+            || descriptor.group.rawValue == semantics.domain.rawValue {
+            score += 150
+        }
+        // 5) tags 命中。
+        if descriptor.tags.contains(where: { $0.lowercased().count >= 2 && lower.contains($0.lowercased()) }) {
+            score += 100
+        }
+        // 6) summary 关键词弱命中。
+        if descriptor.summary.count >= 2, lower.count >= 2,
+           descriptor.summary.lowercased().contains(lower.prefix(2)) {
+            score += 40
+        }
+        return score
     }
 
     private static func matches(
