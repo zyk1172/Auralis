@@ -91,7 +91,8 @@ public enum ToolSelector {
             intent: plan.intent,
             all: all,
             activeSkillID: activeSkillID,
-            allowedOperations: plan.authorization.allowedOperations
+            allowedOperations: plan.authorization.allowedOperations,
+            userText: plan.currentUserText
         )
     }
 
@@ -141,7 +142,8 @@ public enum ToolSelector {
         intent: AgentTaskIntent?,
         all: [ToolDescriptor],
         activeSkillID: String?,
-        allowedOperations: Set<ToolAuthorizationOperation>?
+        allowedOperations: Set<ToolAuthorizationOperation>?,
+        userText: String = ""
     ) -> [ToolDescriptor] {
         let visible = all.filter { $0.isVisible(toSkillID: activeSkillID) }
         var selected: [ToolDescriptor] = []
@@ -214,7 +216,98 @@ public enum ToolSelector {
             append(visible.filter { $0.requiredSkillID == activeSkillID })
         }
 
-        return selected
+        // Tool Broker：轻量确定性 relevance ranking（纯本地计算，不产生授权）。
+        // 只读工具按相关性排序取 Top-K；mutation 已在上层按 allowedOperations
+        // fail-closed 过滤，这里只做 schema 精选与前置依赖补全。
+        let ranked = selected.sorted { lhs, rhs in
+            relevanceScore(lhs, userText: userText, semantics: semantics)
+                > relevanceScore(rhs, userText: userText, semantics: semantics)
+        }
+        var finalSet = ranked
+        var finalNames = Set(finalSet.map(\.name))
+        // 前置依赖补全：mutation 工具需要真实 TrackID / PlaylistID 时，
+        // 自动把解析/查找入口放进 shortlist（模型不用自己猜工具依赖）。
+        let visibleByName = Dictionary(uniqueKeysWithValues: visible.map { ($0.name, $0) })
+        let needsTrackResolution = ranked.contains { descriptor in
+            descriptor.semanticInputs.contains("TrackID") || descriptor.semanticInputs.contains("TrackIDs")
+        }
+        if needsTrackResolution, !finalNames.contains("library_search"), !finalNames.contains("library_resolve_entity") {
+            for name in ["library_search", "library_resolve_entity"] {
+                if let tool = visibleByName[name], tool.permission == .readOnly, finalNames.insert(name).inserted {
+                    finalSet.append(tool)
+                }
+            }
+        }
+        let needsPlaylistResolution = ranked.contains { descriptor in
+            descriptor.semanticInputs.contains("PlaylistID")
+        }
+        if needsPlaylistResolution, !finalNames.contains("playlist_list") {
+            if let tool = visibleByName["playlist_list"], tool.permission == .readOnly, finalNames.insert("playlist_list").inserted {
+                finalSet.append(tool)
+            }
+        }
+        // Top-K：保底保留核心基础设施（tool_search / capabilities_get / result_present_tracks）。
+        // 相关工具（score > 0）全部保留，只截断无关工具（score == 0）——保证模型
+        // 需要的真实工具不被 Top-K 误伤，同时把无关 schema 挡在首轮之外。
+        // 固定 Skill 激活时（activeSkillID != nil）完全不截断：候选收集阶段模型需要
+        // 完整的只读检索面，截断会破坏"搜索 → 选歌"链路。
+        let core = finalSet.filter { $0.isCoreInfrastructure || $0.name == "result_present_tracks" }
+        let rest = finalSet.filter { !($0.isCoreInfrastructure || $0.name == "result_present_tracks") }
+        if let activeSkillID {
+            return core + rest
+        }
+        let relevant = rest.filter { relevanceScore($0, userText: userText, semantics: semantics) > 0 }
+        let fillerCount = max(ToolBrokerTopK - core.count - relevant.count, 0)
+        let filler = rest.filter { relevanceScore($0, userText: userText, semantics: semantics) == 0 }
+            .prefix(fillerCount)
+        return core + relevant + filler
+    }
+
+    /// 模型首轮 schema 的 Top-K 目标规模（core 工具不占名额）。
+    private static let ToolBrokerTopK = 10
+
+    /// 轻量确定性 relevance score。数值是 ranking 提示，不是授权。
+    private static func relevanceScore(
+        _ descriptor: ToolDescriptor,
+        userText: String,
+        semantics: AgentRequestSemantics
+    ) -> Int {
+        var score = 0
+        let lower = userText.lowercased()
+        // 1) 精确授权操作命中（最相关）。
+        if let operation = descriptor.authorizationOperation,
+           semantics.requestedOperations.contains(operation) {
+            score += 1000
+        }
+        // 2) 自然语言示例命中（完整示例子串）。
+        for example in descriptor.utteranceExamples where lower.contains(example.lowercased()) {
+            score += 500
+            break
+        }
+        // 3) 示例关键 token 命中（宽松召回）。
+        for example in descriptor.utteranceExamples {
+            let tokens = example.lowercased().filter { $0.isLetter }.map(String.init)
+            if tokens.contains(where: { $0.count >= 2 && lower.contains($0) }) {
+                score += 120
+            }
+        }
+        // 4) domain / namespace 匹配。
+        if descriptor.namespace == semantics.domain.rawValue
+            || descriptor.group.rawValue == semantics.domain.rawValue {
+            score += 150
+        }
+        // 5) tags 命中。
+        if descriptor.tags.contains(where: { $0.lowercased().count >= 2 && lower.contains($0.lowercased()) }) {
+            score += 100
+        }
+        // 6) summary 关键词弱命中。
+        if descriptor.summary.count >= 2, lower.count >= 2,
+           descriptor.summary.lowercased().contains(lower.prefix(2)) {
+            score += 40
+        }
+        // 7) discovery metadata priority。
+        score += descriptor.discoveryMetadata.priority
+        return score
     }
 
     private static func matches(

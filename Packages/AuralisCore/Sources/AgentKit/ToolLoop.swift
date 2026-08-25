@@ -979,7 +979,10 @@ public struct ToolLoop {
 
                 var resultText = "（工具执行结果）\(call.name): \(result.success ? "成功" : "失败") - \(result.summary)"
                 if let payload = result.payload {
-                    let detail = messageTextForModel(payload)
+                    let detail = messageTextForModel(
+                        payload,
+                        targetCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
+                    )
                     if !detail.isEmpty { resultText += "；详情：\(detail)" }
                 }
                 resultText = AIContentTrustBoundary.wrap(resultText, trustLevel: result.trustLevel)
@@ -2262,6 +2265,12 @@ public struct ToolLoop {
                         case (.finalResult, let .trackCards(cards)):
                             presentation.setFinalTracks(cards)
                             taskState.selectedIDs = Set(cards.map { $0.globalID.description })
+                            // 最终选择事实：musicDiscovery 完成判定依据
+                            // （finalTrackSelection 要求 finalSelection 存在且达标）。
+                            taskState.facts["task.finalSelection.count"] = String(cards.count)
+                            if let target = ws.targetQueueCount {
+                                taskState.facts["task.targetCount"] = String(target)
+                            }
                         case (.disambiguation, let .trackCards(cards)):
                             presentation.setDisambiguation(cards)
                         default:
@@ -2296,7 +2305,7 @@ public struct ToolLoop {
                 // 工具结果回传：摘要 + 真实歌曲/专辑清单；失败也回灌（不终止循环）。
                 var resultText = "（工具执行结果）\(call.name): \(result.success ? "成功" : "失败") - \(result.summary)"
                 if let payload = result.payload {
-                    let detail = Self.messageTextForModel(payload)
+                    let detail = Self.messageTextForModel(payload, targetCount: ws.targetQueueCount)
                     if !detail.isEmpty { resultText += "；详情：\(detail)" }
                 }
                 resultText = AIContentTrustBoundary.wrap(resultText, trustLevel: result.trustLevel)
@@ -2599,6 +2608,8 @@ public struct ToolLoop {
             return "推荐索引已完成。"
         case .successfulToolResult:
             return "已根据真实工具结果完成。"
+        case .finalTrackSelection:
+            return "已提交最终歌曲选择。"
         case .modelAnswer, .appreciationWithEvidence:
             return "已完成。"
         }
@@ -2797,7 +2808,7 @@ public struct ToolLoop {
         switch policy.completion {
         case .modelAnswer, .appreciationWithEvidence:
             return false
-        case .successfulToolResult, .queueMutation, .playlistMutation,
+        case .successfulToolResult, .finalTrackSelection, .queueMutation, .playlistMutation,
              .playbackMutation, .indexPendingCountIsZero:
             return true
         }
@@ -3055,13 +3066,15 @@ public struct ToolLoop {
 
 
     /// 把结构化消息（卡片）转成模型可读的文本，使工具结果中的歌曲清单可见。
-    /// 只把前 5 条清单回传模型（其余用总数概括），避免搜索结果/歌手相关歌曲
-    /// 一次性占据大量上下文、诱导模型整段罗列。
-    private static func messageTextForModel(_ message: AgentMessage) -> String {
+    /// 可见窗口是 targetCount 感知的：用户要求 N 首时，模型至少能看到
+    /// max(N, 10) 个真实候选（上限 50），避免“Runtime 有 50 首、模型只看到
+    /// 5 首”导致多首任务无法完成。其余用总数概括。
+    static func messageTextForModel(_ message: AgentMessage, targetCount: Int? = nil) -> String {
+        let visibleCount = min(max(targetCount ?? 10, 10), 50)
         let trackLine = { (cards: [TrackCard]) -> String in
-            let shown = cards.prefix(5)
+            let shown = cards.prefix(visibleCount)
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
-            return cards.count > 5 ? "\(list)…等 \(cards.count) 首" : list
+            return cards.count > visibleCount ? "\(list)…等 \(cards.count) 首" : list
         }
         switch message {
         case let .text(value):
@@ -3069,9 +3082,9 @@ public struct ToolLoop {
         case let .trackCards(cards):
             return "歌曲清单：\(trackLine(cards))"
         case let .albumCards(cards):
-            let shown = cards.prefix(5)
+            let shown = cards.prefix(visibleCount)
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
-            let suffix = cards.count > 5 ? "…等 \(cards.count) 张" : ""
+            let suffix = cards.count > visibleCount ? "…等 \(cards.count) 张" : ""
             return "专辑清单：\(list)\(suffix)"
         case let .webSources(sources):
             return sources.prefix(5).map { "来源：\($0.title)（\($0.url.absoluteString)）\n\($0.snippet)" }.joined(separator: "\n")

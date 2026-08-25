@@ -337,6 +337,14 @@ public struct ToolDescriptor: Sendable, Hashable {
     /// Canonical descriptors may declare reversibility explicitly. Custom
     /// descriptors use `derivedRisk`; ordinary writes default to reversible.
     public let declaredRisk: ToolRisk?
+    /// 自然语言语义元数据：典型用户说法（Tool Broker relevance ranking 用，
+    /// 不构成授权）。
+    public let utteranceExamples: [String]
+    /// 该工具需要输入的语义实体（如 TrackName / MusicConstraints /
+    /// PlaylistName），Tool Broker 据此自动补前置工具。
+    public let semanticInputs: [String]
+    /// 该工具产出的语义实体（如 TrackID / TrackCandidateSet）。
+    public let semanticOutputs: [String]
 
     public init(
         name: String,
@@ -367,7 +375,10 @@ public struct ToolDescriptor: Sendable, Hashable {
         derivedMutationResources: Set<MutationResource> = [],
         derivedAuthorizationOperations: Set<ToolAuthorizationOperation> = [],
         derivedRisk: ToolRisk? = nil,
-        declaredRisk: ToolRisk? = nil
+        declaredRisk: ToolRisk? = nil,
+        utteranceExamples: [String] = [],
+        semanticInputs: [String] = [],
+        semanticOutputs: [String] = []
     ) {
         self.name = name
         self.namespace = namespace ?? group.rawValue
@@ -404,6 +415,9 @@ public struct ToolDescriptor: Sendable, Hashable {
         self.derivedAuthorizationOperations = derivedAuthorizationOperations
         self.derivedRisk = derivedRisk
         self.declaredRisk = declaredRisk
+        self.utteranceExamples = utteranceExamples
+        self.semanticInputs = semanticInputs
+        self.semanticOutputs = semanticOutputs
     }
 
     public func isVisible(toSkillID skillID: String? = nil) -> Bool {
@@ -970,8 +984,11 @@ public enum AgentToolRegistry {
                 .init(name: "limit", required: false, description: "返回数量，默认 30，最多 100"),
                 .init(name: "onlyFavorites", required: false, description: "只搜收藏（true/false）"),
                 .init(name: "onlyOffline", required: false, description: "只搜离线（true/false）"),
-              ]),
-        .init(name: "library_get_catalog_index", group: .catalog, permission: .readOnly, summary: "查看曲库分类索引（歌手/专辑/流派/语言/年代/总览），了解曲库里有什么，推荐前先用它",
+              ],
+              utteranceExamples: ["找一下稻香", "搜索周杰伦", "我的曲库里有没有这首歌", "找某个专辑"],
+              semanticInputs: ["SearchQuery", "TrackName", "ArtistName", "AlbumName", "PlaylistName"],
+              semanticOutputs: ["TrackCandidateSet", "AlbumCandidateSet", "ArtistCandidateSet", "PlaylistCandidateSet"]),
+        .init(name: "library_get_catalog_index", group: .catalog, permission: .readOnly, summary: "查看曲库分类结构与分布（歌手/专辑/流派/语言/年代/总览）；仅在需要了解曲库结构或可用分类时使用，普通推荐/批量选歌不需要先调用",
               parameters: [.init(name: "category", required: false, description: "artists/albums/genres/languages/years/overview，默认 overview")],
               maxResultCharacters: ContextManager.maxIndexCharacters),
         .init(name: "library_get_catalog_tracks", group: .catalog, permission: .readOnly, summary: "按分类取歌曲清单（artist/album/genre/language/year/favorites/recent/popular/all），只含元数据，供推荐筛选",
@@ -1017,7 +1034,10 @@ public enum AgentToolRegistry {
                 .init(name: "playableOnly", required: false, description: "deprecated：不再按瞬时 streamURL 过滤；Auralis 播放时会向服务器刷新/在线流播（默认 false）"),
                 .init(name: "sort", required: false, description: "popularityProxy/favorites/recentlyPlayed/title/random，默认 popularityProxy（recentlyAdded 由 library_get_recently_added 提供）"),
                 .init(name: "limit", required: false, description: "返回数量，默认 50，最多 100"),
-              ]),
+              ],
+              utteranceExamples: ["找20首中文摇滚", "给我30首90年代歌曲", "从收藏里挑15首最近没听过的", "找50首粤语歌"],
+              semanticInputs: ["MusicConstraints"],
+              semanticOutputs: ["TrackCandidateSet"]),
         .init(name: "library_get_song", group: .catalog, permission: .readOnly, summary: "获取单曲详情（含格式/码率/收藏/评分/离线状态）",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "music_appreciate", group: .catalog, permission: .readOnly, summary: "为正在播放或指定歌曲准备分层鉴赏证据：已核验元数据、私人播放数据与可用的外部大众评价；没有 Community Evidence 时明确标记不可用",
@@ -1062,7 +1082,10 @@ public enum AgentToolRegistry {
         // 播放
         .init(name: "playback_get_state", group: .playback, permission: .readOnly, summary: "获取播放器状态"),
         .init(name: "playback_play_song", group: .playback, permission: .reversible, summary: "播放指定歌曲",
-              parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
+              parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")],
+              utteranceExamples: ["播放稻香", "来首稻香", "放一下这首歌"],
+              semanticInputs: ["TrackID"],
+              semanticOutputs: ["PlaybackMutation"]),
         .init(name: "playback_play_album", group: .playback, permission: .reversible, summary: "播放指定专辑",
               parameters: [.init(name: "albumID", required: true, description: "GlobalAlbumID")]),
         .init(name: "playback_play_artist", group: .playback, permission: .reversible, summary: "播放指定艺术家的歌曲",
@@ -1161,7 +1184,10 @@ public enum AgentToolRegistry {
               parameters: [
                 .init(name: "mood", required: true, description: "情绪：深夜/放松/通勤/学习/运动/伤感/治愈/怀旧/安静/高能量"),
                 .init(name: "limit", required: false, description: "返回数量，默认 10"),
-              ]),
+              ],
+              utteranceExamples: ["来点适合深夜听的", "想听安静一些的", "给我一些通勤音乐", "找适合跑步的歌"],
+              semanticInputs: ["MoodScene"],
+              semanticOutputs: ["TrackCandidateSet"]),
         .init(name: "recommend_by_constraints", group: .catalog, permission: .readOnly, summary: "组合约束推荐（中文/收藏/排除最近/年代/流派/时长/无损/离线/排除艺术家）",
               parameters: [
                 .init(name: "languages", required: false, description: "逗号分隔语言，如 中文"),

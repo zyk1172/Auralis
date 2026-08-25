@@ -324,7 +324,10 @@ struct AgentPermissiveRuntimeTests {
         system.recommendationTracks = [permCard(GlobalID(serverID: "test-server", remoteID: "t1"), title: "引擎轰鸣")]
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(
-            actionBatches: [#"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#],
+            actionBatches: [
+                #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
+                #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":["test-server:t1"]}}"#,
+            ],
             closing: "为你找到 3 首适合开车提神的歌：引擎轰鸣等。"
         )
         await AgentRunner.run(
@@ -338,8 +341,9 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        #expect(provider.requests.count >= 2)
+        #expect(provider.requests.count >= 3)
         #expect(provider.requests[1].messages.contains { $0.role == .user && $0.content.contains("（工具执行结果）recommend_by_mood: 成功") })
+        #expect(provider.requests[2].messages.contains { $0.role == .user && $0.content.contains("result_present_tracks") })
         #expect(await collector.containsText("适合开车提神的歌"))
         #expect(await collector.containsError("没有进展") == false)
     }
@@ -996,6 +1000,7 @@ struct AgentPermissiveRuntimeTests {
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
+            #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":["test-server:t0","test-server:t1","test-server:t2","test-server:t3","test-server:t4","test-server:t5","test-server:t6","test-server:t7","test-server:t8","test-server:t9","test-server:t10","test-server:t11"]}}"#,
             "已经为你选好了。",
         ])
         await AgentRunner.run(
@@ -1009,7 +1014,7 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        // 中文数量 12 被识别；模型仍不调用 final → Runtime 兜底取前 12 首。
+        // 中文数量 12 被识别；模型提交 12 首 final selection → 展示 12 首。
         let groups = await collector.trackCardGroupCounts()
         #expect(groups == [12])
     }
@@ -1026,6 +1031,8 @@ struct AgentPermissiveRuntimeTests {
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
             "已经为你选好 1 首适合开车提神的歌。",
+            #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":["test-server:t1"]}}"#,
+            "完成。",
         ])
         await AgentRunner.run(
             userText: "推荐一首开车提神的歌给我看看",
@@ -1044,7 +1051,7 @@ struct AgentPermissiveRuntimeTests {
             req.messages.contains { $0.role == .user && $0.content.contains("result_present_tracks") }
         }
         #expect(repairSeen)
-        // 模型仍不调用 result_present_tracks → Runtime 确定性兜底：按用户要求数量（1 首）建立 final。
+        // 模型在提示后提交 result_present_tracks final → 完成条件满足，展示 1 首。
         let groups = await collector.trackCardGroupCounts()
         #expect(groups == [1])
     }
