@@ -1577,8 +1577,17 @@ public enum AgentToolRegistry {
                 "并行工具=\(capabilities.supportsParallelTools ? "支持" : "不支持") · tool_choice=\(capabilities.supportsToolChoice ? "支持" : "不支持") · strict schema=\(capabilities.supportsStrictSchema ? "支持" : "不支持")",
                 "上下文约 \(capabilities.maxContextTokens) tokens · 输出约 \(capabilities.maxOutputTokens) tokens",
                 "联网能力：\(webText.isEmpty ? "未配置" : webText)",
+                "",
+                // 高层能力摘要来自单一 canonical AgentCapabilityCatalog（与 System Prompt
+                // 摘要同源），不再是"模型可见 tools 列表"。模型据此正确自省：
+                // 看不到 runtime-only tool ≠ 没有该能力。
+                AgentCapabilityCatalog.systemPromptSummary(
+                    providerAvailable: providerCapabilities != nil,
+                    catalogAvailable: true,
+                    activeServer: (await bridge.getActiveServer()) != nil
+                ),
             ].joined(separator: "\n")
-            return .ok(canonicalCall, canonicalDescriptor, "已读取当前能力摘要", .text(text))
+            return .ok(canonicalCall, canonicalDescriptor, "已读取 Provider 能力与高层能力摘要", .text(text))
         case "web_search":
             guard let webService else {
                 return .fail(canonicalCall, canonicalDescriptor, "联网能力未配置；当前 Provider 也没有托管搜索能力。")

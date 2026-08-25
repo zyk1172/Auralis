@@ -155,7 +155,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "这首歌", "歌曲", "音乐", "专辑", "歌手", "艺人", "艺术家", "当前播放", "current track", "track", "song", "album", "artist",
         ])
         let annotationAction = has([
-            "收藏", "取消收藏", "给这首歌评分", "给歌曲评分", "设置评分", "清除评分",
+            "收藏", "取消收藏", "给这首歌评分", "给歌曲评分", "设置评分", "清除评分", "评分", "打分",
             "不喜欢这首", "不喜欢这首歌", "不感兴趣这首", "favorite", "rating", "dislike",
         ])
         let explicitNonMusicAnnotationTarget = has([
