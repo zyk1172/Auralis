@@ -317,8 +317,10 @@ public struct AgentToolkit {
             return mutationToolResult(call, descriptor, await bridge.clearRating(globalID: gid))
         case "rating_set":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
-            let raw = try require(call, "value")
-            if let value = Int(raw), value > 0 {
+            // value 是 integer schema；intParam 优先 call.int（原生 number 4.0 → 4），
+            // 避免走字符串投影 "4.0" 导致 Int 失败而误判为清除评分。
+            let value = try intParam(call, "value")
+            if value > 0 {
                 return mutationToolResult(call, descriptor, await bridge.setRating(globalID: gid, rating: min(max(value, 1), 5)))
             }
             return mutationToolResult(call, descriptor, await bridge.clearRating(globalID: gid))

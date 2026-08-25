@@ -1533,7 +1533,7 @@ public enum AgentToolRegistry {
         case "tool_search":
             let query = canonicalCall.optionalString("query") ?? ""
             let namespace = canonicalCall.optionalString("namespace")
-            let limit = min(max(Int(canonicalCall.optionalString("limit") ?? "8") ?? 8, 1), 50)
+            let limit = min(max((try? canonicalCall.int("limit")) ?? Int(canonicalCall.optionalString("limit") ?? "") ?? 8, 1), 50)
             // 授权感知：当前 run 的 allowedOperations 传入检索，mutation 结果携带
             // authorized 标记（能力存在但当前请求未授权 = false），模型能直接看到，
             // 而不是只在下一轮 schema 阶段被悄悄过滤。
@@ -1585,7 +1585,7 @@ public enum AgentToolRegistry {
             }
             do {
                 let query = canonicalCall.optionalString("query") ?? ""
-                let limit = min(max(Int(canonicalCall.optionalString("limit") ?? "5") ?? 5, 1), 10)
+                let limit = min(max((try? canonicalCall.int("limit")) ?? Int(canonicalCall.optionalString("limit") ?? "") ?? 5, 1), 10)
                 let result = try await webService.search(query: query, limit: limit)
                 return .ok(
                     canonicalCall,

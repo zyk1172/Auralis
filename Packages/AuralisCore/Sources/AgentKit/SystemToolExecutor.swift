@@ -154,7 +154,8 @@ public struct SystemToolExecutor {
                 return .ok(call, descriptor, "共 \(memories.count) 条记忆", .text(text))
             case "memory_search":
                 let query = try require(call, "query")
-                let limit = min(max((Int(call.optionalString("limit") ?? "10") ?? 10), 1), 50)
+                // limit 是 integer schema：优先结构化 number（4.0 → 4），避免字符串投影静默丢失。
+                let limit = min(max((try? call.int("limit")) ?? 10, 1), 50)
                 let memories = Array((await systemService.searchMemories(query: query)).prefix(limit))
                 if memories.isEmpty {
                     return .ok(call, descriptor, "没有找到相关记忆", .text("没有找到与「\(query)」相关的长期记忆。"))
@@ -462,6 +463,11 @@ public struct SystemToolExecutor {
     }
 
     private static func optionalIntParam(_ call: ToolCall, _ key: String) -> Int? {
+        // 优先结构化 number（原生 function calling 的 4.0 → 4）；字符串投影
+        // "4.0" 会让 Int 解析失败导致参数静默丢失，只作文本 ACTION 兜底。
+        if let value = try? call.int(key) {
+            return value
+        }
         guard let raw = call.optionalString(key), let value = Int(raw) else { return nil }
         return value
     }
