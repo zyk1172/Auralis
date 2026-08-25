@@ -243,19 +243,38 @@ struct AgentToolBrokerTests {
         }
     }
 
-    @Test("R3 Provider Hosted Web Search 使 web_research 可用（无 App 服务时）")
-    func hostedWebMakesWebResearchAvailable() {
+    @Test("R3/R4 Hosted Web 三态：都有→available，只有其一→degraded，全无→unavailable")
+    func hostedWebTriStateAvailability() {
         let web = AgentCapabilityCatalog.capability(id: "web_research")!
-        // Provider 支持 Hosted Web Search，但 webService == nil：
-        let env = AgentCapabilityEnvironment(
+        // Search + Fetch 都有 → available：
+        let both = AgentCapabilityEnvironment(
             providerAvailable: true, catalogAvailable: true, activeServer: true,
-            webAvailable: false,
-            webSearchAvailable: true, webFetchAvailable: false
+            webAvailable: false, webSearchAvailable: true, webFetchAvailable: true
         )
-        if case .available = AgentCapabilityCatalog.availability(for: web, environment: env) {} else {
-            Issue.record("Provider Hosted Web Search 可用时 web_research 不得 unavailable")
+        if case .available = AgentCapabilityCatalog.availability(for: web, environment: both) {} else {
+            Issue.record("Search+Fetch 都有时 web_research 必须 available")
         }
-        // 全无联网能力时 unavailable：
+        // 只有 Search → degraded（缺少网页读取）：
+        let searchOnly = AgentCapabilityEnvironment(
+            providerAvailable: true, catalogAvailable: true, activeServer: true,
+            webAvailable: false, webSearchAvailable: true, webFetchAvailable: false
+        )
+        if case let .degraded(reason) = AgentCapabilityCatalog.availability(for: web, environment: searchOnly) {
+            #expect(reason.contains("网页读取"), "degraded 必须说明缺什么，实际：\(reason)")
+        } else {
+            Issue.record("只有 Search 时 web_research 应为 degraded")
+        }
+        // 只有 Fetch → degraded：
+        let fetchOnly = AgentCapabilityEnvironment(
+            providerAvailable: true, catalogAvailable: true, activeServer: true,
+            webAvailable: false, webSearchAvailable: false, webFetchAvailable: true
+        )
+        if case let .degraded(reason) = AgentCapabilityCatalog.availability(for: web, environment: fetchOnly) {
+            #expect(reason.contains("联网搜索"), "degraded 必须说明缺什么，实际：\(reason)")
+        } else {
+            Issue.record("只有 Fetch 时 web_research 应为 degraded")
+        }
+        // 全无 → unavailable：
         let none = AgentCapabilityEnvironment(
             providerAvailable: true, catalogAvailable: true, activeServer: true,
             webAvailable: false, webSearchAvailable: false, webFetchAvailable: false
@@ -263,5 +282,38 @@ struct AgentToolBrokerTests {
         if case .unavailable = AgentCapabilityCatalog.availability(for: web, environment: none) {} else {
             Issue.record("无任何联网能力时 web_research 必须 unavailable")
         }
+    }
+
+
+    @Test("R4 「暂停是什么功能？」→ 不授权 playbackPause")
+    func instructionalPauseNoMutation() {
+        let semantics = AgentRequestSemantics.analyze("暂停是什么功能？")
+        #expect(!semantics.requestedOperations.contains(.playbackPause))
+        #expect(semantics.isReadOnly)
+    }
+
+    @Test("R4 教学问句不产生歌单/队列/收藏 mutation 授权")
+    func instructionalQueriesDoNotMutate() {
+        let cases: [(String, ToolAuthorizationOperation)] = [
+            ("怎么创建歌单？", .playlistCreate),
+            ("如何删除歌单？", .playlistDelete),
+            ("怎么清空队列？", .queueClear),
+            ("怎样取消收藏？", .favoriteSet),
+        ]
+        for (text, op) in cases {
+            let semantics = AgentRequestSemantics.analyze(text)
+            #expect(!semantics.requestedOperations.contains(op), "「\(text)」是教学问句，不得授权 \(op.rawValue)")
+            #expect(semantics.isReadOnly, "「\(text)」必须只读")
+        }
+    }
+
+    @Test("R4 「可以帮我创建一个叫通勤的歌单吗？」→ 执行请求，授权 playlistCreate")
+    func executionRequestStillAuthorizes() {
+        let semantics = AgentRequestSemantics.analyze("可以帮我创建一个叫通勤的歌单吗？")
+        #expect(semantics.requestedOperations.contains(.playlistCreate),
+                "「可以帮我」是明确执行请求，教学问句抑制不适用")
+        // 纯教学问句不授权：
+        let how = AgentRequestSemantics.analyze("怎么创建一个歌单？")
+        #expect(!how.requestedOperations.contains(.playlistCreate))
     }
 }

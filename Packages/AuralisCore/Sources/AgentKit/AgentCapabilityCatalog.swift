@@ -404,13 +404,17 @@ public enum AgentCapabilityCatalog {
                     return .degraded(reason: "未连接音乐服务器；本地目录能力仍可用")
                 }
             case .webService:
-                // App 服务、Provider Hosted Web Search、Provider Hosted Web Fetch
-                // 任一可用都算联网可用——避免 Provider 自带托管搜索时被误报不可用。
-                if !environment.webAvailable
-                    && !environment.webSearchAvailable
-                    && !environment.webFetchAvailable {
-                    return .unavailable(reason: "联网能力未配置（App 服务与 Provider 托管搜索均不可用）")
+                // 三态：App 服务（覆盖搜索+读取）或 Hosted Search+Fetch 都有 →
+                // available；只有其一 → degraded（说明缺什么）；全无 → unavailable。
+                if environment.webAvailable
+                    || (environment.webSearchAvailable && environment.webFetchAvailable) {
+                    break
                 }
+                if !environment.webSearchAvailable && !environment.webFetchAvailable {
+                    return .unavailable(reason: "联网能力未配置（App 服务与 Provider 托管搜索/读取均不可用）")
+                }
+                let missing = !environment.webSearchAvailable ? "联网搜索" : "网页读取"
+                return .degraded(reason: "缺少\(missing)（当前只有\(environment.webSearchAvailable ? "联网搜索" : "网页读取")）")
             case .downloadService:
                 if !environment.downloadServiceAvailable {
                     return .unavailable(reason: "下载服务不可用")

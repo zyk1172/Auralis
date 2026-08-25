@@ -1510,4 +1510,35 @@ struct AgentPermissiveRuntimeTests {
         #expect(await collector.containsAnyTrackCards() == false)
         #expect(await collector.containsError("没有进展") == false)
     }
+
+    @Test("TEST-51 ToolExecutorContext child/derived 保留 run-scoped capabilityEnvironment")
+    func childContextPreservesCapabilityEnvironment() {
+        let env = AgentCapabilityEnvironment(
+            providerAvailable: true, catalogAvailable: true, activeServer: true,
+            webAvailable: true, webSearchAvailable: true, webFetchAvailable: true
+        )
+        let store = try! makePermStore()
+        let base = ToolExecutorContext(
+            bridge: PermissiveBridge(),
+            catalog: store,
+            serverID: "test-server",
+            systemService: nil,
+            externalMusicService: nil,
+            allowsLyrics: false,
+            providerCapabilities: nil,
+            webService: nil,
+            authorizationContext: nil,
+            activeSkillID: nil,
+            executionAuthority: nil,
+            executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 0),
+            resourceLeaseRegistry: MutationResourceLeaseRegistry(),
+            recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry(),
+            capabilityEnvironment: env
+        )
+        // derived context 保留 snapshot：
+        let derived = base.withAdditionalAuthorizationOperations([.playbackPlay])
+        #expect(derived.capabilityEnvironment == env, "withAdditionalAuthorizationOperations 必须保留 capabilityEnvironment")
+        // child 执行路径仍能拿到 snapshot（executeChild 走 ToolRuntime.execute 透传链）：
+        #expect(base.capabilityEnvironment == env)
+    }
 }

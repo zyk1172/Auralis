@@ -336,11 +336,24 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             return nil
         }()
 
+        // instructional / explanatory query：询问方法或语义（怎么创建歌单 /
+        // 如何删除歌单 / 下一首是什么 / 暂停是什么功能 / how do I…）不是执行
+        // 请求，不得产生任何 mutation 授权。带「帮我 / 请 / 给我 / 可以帮我」
+        // 等明确执行词时仍视为请求执行。
+        let executionRequestPhrase = has(["帮我", "请", "给我", "帮我一下", "可以帮我", "麻烦", "please", "help me"])
+        let instructionalQuery = has([
+            "怎么", "如何", "怎样", "怎么才能", "怎么用", "是什么", "是什么意思", "是什么功能", "有什么作用",
+            "how do i", "how does", "what does",
+        ])
+        let suppressesMutationAuthorization = instructionalQuery && !executionRequestPhrase
+
         var requested = Set<ToolAuthorizationOperation>()
         // 同义表达 → canonical operation 的确定性编译。Task Compiler 不允许
         // LLM 输出权限：queueReplace 只来自结构化判定（explicitQueueReplace），
         // 裸“换成/换为/替换成”不再授权任何 mutation。
-        if strongPlaybackAction && !playbackQuery {
+        // instructional query（怎么/如何/怎样…）整体抑制 mutation 授权编译，
+        // 但「帮我/请/给我」等执行词可覆盖该抑制。
+        if !suppressesMutationAuthorization, strongPlaybackAction, !playbackQuery {
             if has(["暂停", "pause"]) { requested.insert(.playbackPause) }
             else if has(["下一首", "上一首", "next track", "previous track"]) { requested.insert(.playbackNavigation) }
             else if has(["快进", "快退", "跳转", "seek"]) { requested.insert(.playbackSeek) }
@@ -351,7 +364,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
-        if explicitQueueAction {
+        if !suppressesMutationAuthorization, explicitQueueAction {
             if explicitQueueReplace
                 || has(["建立队列", "创建队列", "建立播放队列", "建立一个播放队列"]) {
                 requested.insert(.queueReplace)
@@ -366,18 +379,18 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         // 复合意图编译：跨域组合操作。
         // “替换到队列播放 / 用这些歌覆盖当前队列然后开始播放” → queueReplace + playbackPlay。
-        if requested.contains(.queueReplace),
+        if !suppressesMutationAuthorization, requested.contains(.queueReplace),
            has(["播放", "开始播放", "开播", "接着放", "放出来"]),
            !requested.contains(.playbackPause),
            !requested.contains(.playbackNavigation) {
             requested.insert(.playbackPlay)
         }
         // “加入队列并播放下一首” → queueAppend + queuePlayNext。
-        if requested.contains(.queueAppend), has(["播放下一首", "接下来播放", "下一首播放"]) {
+        if !suppressesMutationAuthorization, requested.contains(.queueAppend), has(["播放下一首", "接下来播放", "下一首播放"]) {
             requested.insert(.queuePlayNext)
         }
 
-        if explicitPlaylistAction {
+        if !suppressesMutationAuthorization, explicitPlaylistAction {
             if has(["创建歌单", "新建歌单", "playlist_create"])
                 || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建立"])) {
                 requested.insert(.playlistCreate)
@@ -404,7 +417,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
-        if explicitAnnotationAction {
+        if !suppressesMutationAuthorization, explicitAnnotationAction {
             if ratingMutation { requested.insert(.ratingSet) }
             else if has(["不喜欢", "不感兴趣", "dislike"]) { requested.insert(.dislikedSet) }
             else if has(["rating", "rate", "评分", "打分"]) {
@@ -413,17 +426,17 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
             else { requested.insert(.favoriteSet) }
         }
-        if indexBuild { requested.insert(.recommendationIndexWrite) }
-        if serverMutation {
+        if !suppressesMutationAuthorization, indexBuild { requested.insert(.recommendationIndexWrite) }
+        if !suppressesMutationAuthorization, serverMutation {
             if has(["删除服务器", "server_remove", "remove server"]) { requested.insert(.serverRemove) }
             else if has(["切换服务器", "server_switch", "switch server"]) { requested.insert(.serverSwitch) }
             else if has(["同步", "sync", "曲库同步"]) { requested.insert(.serverSync) }
             else { requested.insert(.serverConfigure) }
         }
-        if downloadContext && isMusicContext && !query {
+        if !suppressesMutationAuthorization, downloadContext, isMusicContext, !query {
             requested.insert(has(["离线", "offline", "media_download_offline"]) ? .offlineDownload : .downloadSubmit)
         }
-        if explicitMemory {
+        if !suppressesMutationAuthorization, explicitMemory {
             if memoryDelete {
                 if has(["删除技能", "skill_delete"]) { requested.insert(.skillDelete) }
                 else if has(["清除记忆", "memory_clear"]) { requested.insert(.memoryClear) }
@@ -434,12 +447,12 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
-        if customToolCreate { requested.insert(.customToolCreate) }
-        if customToolUpdate { requested.insert(.customToolUpdate) }
-        if customToolEnable { requested.insert(.customToolEnable) }
-        if customToolDisable { requested.insert(.customToolDisable) }
-        if customToolDelete { requested.insert(.customToolDelete) }
-        if customToolRepair { requested.insert(.customToolRepair) }
+        if !suppressesMutationAuthorization, customToolCreate { requested.insert(.customToolCreate) }
+        if !suppressesMutationAuthorization, customToolUpdate { requested.insert(.customToolUpdate) }
+        if !suppressesMutationAuthorization, customToolEnable { requested.insert(.customToolEnable) }
+        if !suppressesMutationAuthorization, customToolDisable { requested.insert(.customToolDisable) }
+        if !suppressesMutationAuthorization, customToolDelete { requested.insert(.customToolDelete) }
+        if !suppressesMutationAuthorization, customToolRepair { requested.insert(.customToolRepair) }
 
         if explicitMemory {
             return Self(domain: .memory, operation: requested.isEmpty ? .read : .mutate, isMusicContext: isMusicContext, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["memory"])

@@ -187,7 +187,8 @@ public struct ToolExecutorContext: Sendable {
             resourceLeaseRegistry: resourceLeaseRegistry,
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
             customToolRegistry: customToolRegistry,
-            availableToolDescriptors: availableToolDescriptors
+            availableToolDescriptors: availableToolDescriptors,
+            capabilityEnvironment: capabilityEnvironment
         )
     }
 
@@ -208,7 +209,8 @@ public struct ToolExecutorContext: Sendable {
             resourceLeaseRegistry: resourceLeaseRegistry,
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
             customToolRegistry: customToolRegistry,
-            availableToolDescriptors: availableToolDescriptors
+            availableToolDescriptors: availableToolDescriptors,
+            capabilityEnvironment: capabilityEnvironment
         )
     }
 
