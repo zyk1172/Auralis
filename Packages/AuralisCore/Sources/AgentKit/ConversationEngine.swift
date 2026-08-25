@@ -41,6 +41,8 @@ public struct ConversationEngine: Sendable {
         initialTaskState: AgentTaskState? = nil,
         authorizationContext: SideEffectAuthorizationContext? = nil,
         executionLineage: ExecutionLineage? = nil,
+        convergencePolicy: AgentConvergencePolicy? = nil,
+        enabledFixedSkills: Bool = true,
         runID: UUID = UUID(),
         executionLease: ToolExecutionLease? = nil,
         toolTimeout: TimeInterval = ToolLoop.toolExecutionTimeout,
@@ -51,11 +53,23 @@ public struct ConversationEngine: Sendable {
         state: @escaping @Sendable (AgentTaskState) async -> Void = { _ in },
         observeRecommendationIndex: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void = { _ in }
     ) async {
+        // 一次 turn 只生成一份共享请求计划；lineage 与 ToolLoop 全部复用，
+        // 不再各自重新分析用户文本。
+        let plan = AgentRequestPlan.build(
+            userText: userText,
+            history: history,
+            explicitIntent: intent,
+            explicitPolicy: policy,
+            authorizationContext: authorizationContext,
+            executionLineage: executionLineage,
+            initialTaskState: initialTaskState
+        )
         let resolvedLineage = executionLineage ?? Self.executionLineage(
             userText: userText,
             history: history,
             initialTaskState: initialTaskState,
-            authorizationContext: authorizationContext
+            authorizationContext: authorizationContext,
+            plan: plan
         )
         await ToolLoop.run(
             userText: userText,
@@ -73,6 +87,9 @@ public struct ConversationEngine: Sendable {
             initialTaskState: initialTaskState,
             authorizationContext: resolvedLineage.authorization,
             executionLineage: resolvedLineage,
+            requestPlan: plan,
+            convergencePolicy: convergencePolicy,
+            enabledFixedSkills: enabledFixedSkills,
             runID: runID,
             executionLease: executionLease,
             toolTimeout: toolTimeout,
@@ -88,13 +105,16 @@ public struct ConversationEngine: Sendable {
     /// Resolve authorization at the conversation/task boundary.  A short
     /// continuation refers to the last substantive user request, while a
     /// persisted task goal wins for resume.  ToolLoop never derives consent
-    /// from the current model-loop text.
+    /// from the current model-loop text. All authorization derives from the
+    /// same shared `AgentRequestPlan` (single semantics per turn).
     private static func executionLineage(
         userText: String,
         history: [AgentChatMessage],
         initialTaskState: AgentTaskState?,
-        authorizationContext: SideEffectAuthorizationContext?
+        authorizationContext: SideEffectAuthorizationContext?,
+        plan: AgentRequestPlan
     ) -> ExecutionLineage {
+        _ = history
         if let authorizationContext {
             return ExecutionLineage(
                 sourceRequest: authorizationContext.originalUserRequest,
@@ -104,22 +124,24 @@ public struct ConversationEngine: Sendable {
         if let goal = initialTaskState?.goal.trimmingCharacters(in: .whitespacesAndNewlines),
            !goal.isEmpty,
            goal.caseInsensitiveCompare(userText.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame {
-            return .resumedTask(
-                goal: goal,
-                taskID: initialTaskState?.id ?? UUID()
-            )
-        }
-        let historyText = AgentHistoryPolicy.relevantHistoryText(for: userText, in: history)
-        if !historyText.isEmpty {
-            let authorization = SideEffectAuthorizationContext(
-                sourceRequest: historyText,
-                semantics: AgentRequestSemantics.analyze(historyText)
-            )
             return ExecutionLineage(
-                sourceRequest: historyText,
-                authorization: authorization
+                originUserMessageID: UUID(),
+                taskID: initialTaskState?.id ?? UUID(),
+                sourceRequest: goal,
+                authorization: plan.authorization
             )
         }
-        return .newRequest(text: userText)
+        if !plan.relevantHistoryText.isEmpty {
+            // 短续写：授权沿用合并后的共享语义（ToolSelector 与 Authorization 同源），
+            // sourceRequest 保留最初的完整任务指令供诊断/恢复。
+            return ExecutionLineage(
+                sourceRequest: plan.relevantHistoryText,
+                authorization: plan.authorization
+            )
+        }
+        return .newRequest(
+            text: userText,
+            semantics: plan.semantics
+        )
     }
 }

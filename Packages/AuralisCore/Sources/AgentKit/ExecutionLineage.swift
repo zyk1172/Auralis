@@ -32,13 +32,22 @@ public struct ExecutionLineage: Sendable, Hashable {
         text: String,
         originUserMessageID: UUID = UUID()
     ) -> ExecutionLineage {
-        let semantics = AgentRequestSemantics.analyze(text)
+        newRequest(text: text, originUserMessageID: originUserMessageID, semantics: nil)
+    }
+
+    /// 复用一次 turn 的共享 semantics，避免 Authorization 层再独立分析一次。
+    public static func newRequest(
+        text: String,
+        originUserMessageID: UUID = UUID(),
+        semantics: AgentRequestSemantics?
+    ) -> ExecutionLineage {
+        let resolvedSemantics = semantics ?? AgentRequestSemantics.analyze(text)
         return ExecutionLineage(
             originUserMessageID: originUserMessageID,
             sourceRequest: text,
             authorization: SideEffectAuthorizationContext(
                 sourceRequest: text,
-                semantics: semantics
+                semantics: resolvedSemantics
             )
         )
     }
@@ -52,14 +61,30 @@ public struct ExecutionLineage: Sendable, Hashable {
         originUserMessageID: UUID = UUID(),
         activeSkillID: String? = nil
     ) -> ExecutionLineage {
-        let semantics = AgentRequestSemantics.analyze(goal)
+        resumedTask(
+            goal: goal,
+            taskID: taskID,
+            originUserMessageID: originUserMessageID,
+            activeSkillID: activeSkillID,
+            semantics: nil
+        )
+    }
+
+    public static func resumedTask(
+        goal: String,
+        taskID: UUID,
+        originUserMessageID: UUID = UUID(),
+        activeSkillID: String? = nil,
+        semantics: AgentRequestSemantics?
+    ) -> ExecutionLineage {
+        let resolvedSemantics = semantics ?? AgentRequestSemantics.analyze(goal)
         return ExecutionLineage(
             originUserMessageID: originUserMessageID,
             taskID: taskID,
             sourceRequest: goal,
             authorization: SideEffectAuthorizationContext(
                 sourceRequest: goal,
-                semantics: semantics
+                semantics: resolvedSemantics
             ),
             activeSkillID: activeSkillID
         )
@@ -101,10 +126,28 @@ public enum ExecutionLineageResolver {
         originUserMessageID: UUID = UUID(),
         previous: ExecutionLineage?
     ) -> ExecutionLineage {
+        resolve(
+            currentUserText: currentUserText,
+            originUserMessageID: originUserMessageID,
+            previous: previous,
+            semantics: nil
+        )
+    }
+
+    public static func resolve(
+        currentUserText: String,
+        originUserMessageID: UUID = UUID(),
+        previous: ExecutionLineage?,
+        semantics: AgentRequestSemantics?
+    ) -> ExecutionLineage {
         if AgentHistoryPolicy.isExplicitContinuation(currentUserText),
            let previous {
             return previous.continued(originUserMessageID: originUserMessageID)
         }
-        return .newRequest(text: currentUserText, originUserMessageID: originUserMessageID)
+        return .newRequest(
+            text: currentUserText,
+            originUserMessageID: originUserMessageID,
+            semantics: semantics
+        )
     }
 }

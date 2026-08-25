@@ -46,6 +46,8 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     var slowTestConnection = false
     /// 模拟无视任务取消的底层 I/O，用于验证 Runner 主动取消能立即释放调用方。
     var nonCooperativeTestConnection = false
+    /// 非协作 server_test_connection 已进入执行（供测试确定性等待取消时机）。
+    let nonCooperativeStarted = InvocationGate()
     /// 模拟已经发出写请求、但底层 I/O 无视取消的情况。
     var nonCooperativeClearQueue = false
     let clearQueueStarted = InvocationGate()
@@ -112,6 +114,8 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func getActiveServer() async -> ServerAccount? { nil }
     func testServerConnection(serverID: ServerID) async -> Bool {
         if nonCooperativeTestConnection {
+            // 信号：非协作工具已进入执行（调用方取消必须能穿透它）。
+            await nonCooperativeStarted.signal()
             let sleeper = Task.detached {
                 try? await Task.sleep(for: .seconds(2))
             }
@@ -582,7 +586,7 @@ struct AgentPermissiveRuntimeTests {
             #"ACTION: {"tool":"queue_replace","args":{"trackIDs":"test-server:t2"}}"#,
         ], closing: "两次替换都完成。")
         await AgentRunner.run(
-            userText: "先放 A 再换成 B",
+            userText: "先把队列换成 A 再换成 B",
             provider: provider,
             model: "scripted-model",
             bridge: bridge,
@@ -1174,7 +1178,11 @@ struct AgentPermissiveRuntimeTests {
                 emit: { await collector.record($0) }
             )
         }
-        try await Task.sleep(for: .milliseconds(100))
+        // 确定性等待：非协作工具真正进入执行后再取消，消除固定 sleep 对调度时序的依赖。
+        let signalDeadline = Date().addingTimeInterval(3)
+        while !(await bridge.nonCooperativeStarted.isSignaled()), Date() < signalDeadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
         task.cancel()
         await withTaskGroup(of: Bool.self) { group in
             group.addTask {

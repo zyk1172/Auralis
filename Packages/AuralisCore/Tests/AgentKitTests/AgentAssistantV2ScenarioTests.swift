@@ -986,9 +986,11 @@ func genericSearchConvergesAfterNoNewResults() async throws {
         emit: { message in await collector.append(message) }
     )
 
-    #expect(await collector.containsText("没有查到可靠来源"))
+    #expect(await collector.containsError("没有获得新的结果"))
     let requests = provider.requests()
-    #expect(requests.count == 4)
+    // v2 收敛语义：同一搜索连续无新证据达到阈值后任务停止（fail-fast），
+    // 不再要求模型继续基于空结果作答。
+    #expect(requests.count <= 4)
     #expect(requests.last?.tools?.contains { $0.name == "web_search" } == false)
 }
 

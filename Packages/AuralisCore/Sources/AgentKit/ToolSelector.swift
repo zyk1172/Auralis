@@ -77,25 +77,47 @@ public enum ToolSelector {
         )
     }
 
+    /// Production entry point：消费一次 turn 的共享 `AgentRequestPlan`，不再
+    /// 自己重新分析用户文本（避免与 Authorization / Intent 的 split-brain）。
+    /// 同时接收 authorization plan：显式 mutation 请求下，mutation schema 只
+    /// 暴露获准的 canonical operation，避免模型拿一堆无权执行的写工具乱试。
+    public static func select(
+        plan: AgentRequestPlan,
+        all: [ToolDescriptor],
+        activeSkillID: String? = nil
+    ) -> [ToolDescriptor] {
+        shortlist(
+            semantics: plan.semantics,
+            intent: plan.intent,
+            all: all,
+            activeSkillID: activeSkillID,
+            allowedOperations: plan.authorization.allowedOperations
+        )
+    }
+
     private static func select(
         for userText: String,
         all: [ToolDescriptor],
         allowAmbiguousContinuation: Bool,
         activeSkillID: String?
     ) -> [ToolDescriptor] {
-        _ = allowAmbiguousContinuation
-        let historyText = ""
+        let historyText = allowAmbiguousContinuation
+            ? AgentHistoryPolicy.relevantHistoryText(for: userText, in: [])
+            : ""
         let semantics = AgentRequestSemantics.analyze(userText, historyText: historyText)
         return shortlist(
             semantics: semantics,
             intent: nil,
             all: all,
-            activeSkillID: activeSkillID
+            activeSkillID: activeSkillID,
+            allowedOperations: nil
         )
     }
 
     /// Intent-aware overload retained for compatibility. Intent contributes a
     /// ranking hint only; the descriptor catalog still supplies every name.
+    /// 注意：这里没有 relevant history（兼容旧调用方）；production 路径请使用
+    /// `select(plan:all:activeSkillID:)`。
     public static func select(
         for userText: String,
         intent: AgentTaskIntent,
@@ -109,7 +131,8 @@ public enum ToolSelector {
             semantics: semantics,
             intent: intent,
             all: all,
-            activeSkillID: activeSkillID
+            activeSkillID: activeSkillID,
+            allowedOperations: nil
         )
     }
 
@@ -117,7 +140,8 @@ public enum ToolSelector {
         semantics: AgentRequestSemantics,
         intent: AgentTaskIntent?,
         all: [ToolDescriptor],
-        activeSkillID: String?
+        activeSkillID: String?,
+        allowedOperations: Set<ToolAuthorizationOperation>?
     ) -> [ToolDescriptor] {
         let visible = all.filter { $0.isVisible(toSkillID: activeSkillID) }
         var selected: [ToolDescriptor] = []
@@ -150,7 +174,7 @@ public enum ToolSelector {
         }
 
         append(visible.filter { descriptor in
-            matches(descriptor, semantics: semantics)
+            matches(descriptor, semantics: semantics, allowedOperations: allowedOperations)
         })
 
         // A discovery request often contains a playback verb (for example
@@ -162,7 +186,7 @@ public enum ToolSelector {
         if semantics.isMusicContext,
            semantics.suggestedToolNamespaces.contains("recommendation") {
             append(visible.filter { descriptor in
-                discoveryExpansionMatches(descriptor)
+                discoveryExpansionMatches(descriptor, allowedOperations: allowedOperations)
             })
         }
 
@@ -171,7 +195,7 @@ public enum ToolSelector {
         // ordinary conversation or non-music requests.
         if let intent {
             append(visible.filter { descriptor in
-                intentMatches(descriptor, intent: intent, semantics: semantics)
+                intentMatches(descriptor, intent: intent, semantics: semantics, allowedOperations: allowedOperations)
             })
         }
 
@@ -195,7 +219,8 @@ public enum ToolSelector {
 
     private static func matches(
         _ descriptor: ToolDescriptor,
-        semantics: AgentRequestSemantics
+        semantics: AgentRequestSemantics,
+        allowedOperations: Set<ToolAuthorizationOperation>?
     ) -> Bool {
         guard descriptor.visibility == .model else { return false }
         guard descriptor.name != "tool_search" else { return false }
@@ -209,9 +234,24 @@ public enum ToolSelector {
             semantics.requestedOperations.contains($0)
         } ?? false
 
-        // Explicitly named operations always win ranking, but never override
-        // Runtime authorization.
-        if exactOperation { return true }
+        // 最小权限暴露：production 路径携带 authorization plan 时（allowedOperations
+        // 非 nil，即使为空集合），mutation schema 只暴露获准的 canonical operation
+        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 工具仍走
+        // 下方的 domain/语义过滤，不在此提前放行。
+        // allowedOperations == [] 必须自然得到 0 个 mutation schema，绝不回落到旧的
+        // intent/group 展开或 semantics 的 exactOperation 捷径（fail-closed）。
+        // nil 仅表示 legacy 兼容调用方没有提供授权 plan，保持旧行为。
+        // 模型仍可能通过 tool_search 发现其它工具，但 ToolRuntime 的 exact
+        // authorization 才是最终边界。
+        if allowedOperations != nil, descriptor.permission != .readOnly {
+            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
+        }
+        if exactOperation {
+            // Explicitly named operations win ranking only for legacy callers
+            // without an authorization plan; they never override Runtime
+            // authorization.
+            return true
+        }
 
         func has(_ values: String...) -> Bool {
             values.contains { value in
@@ -303,8 +343,17 @@ public enum ToolSelector {
 
     }
 
-    private static func discoveryExpansionMatches(_ descriptor: ToolDescriptor) -> Bool {
+    private static func discoveryExpansionMatches(
+        _ descriptor: ToolDescriptor,
+        allowedOperations: Set<ToolAuthorizationOperation>?
+    ) -> Bool {
         guard descriptor.visibility == .model, descriptor.requiredSkillID == nil else { return false }
+
+        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入
+        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 走 group 过滤。
+        if allowedOperations != nil, descriptor.permission != .readOnly {
+            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
+        }
 
         switch descriptor.group {
         case .catalog, .annotation:
@@ -323,12 +372,19 @@ public enum ToolSelector {
     private static func intentMatches(
         _ descriptor: ToolDescriptor,
         intent: AgentTaskIntent,
-        semantics: AgentRequestSemantics
+        semantics: AgentRequestSemantics,
+        allowedOperations: Set<ToolAuthorizationOperation>?
     ) -> Bool {
         guard descriptor.visibility == .model,
               descriptor.requiredSkillID == nil,
               intent != .conversation
         else { return false }
+
+        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入
+        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 走意图过滤。
+        if allowedOperations != nil, descriptor.permission != .readOnly {
+            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
+        }
 
         let name = descriptor.name.lowercased()
         let tags = descriptor.tags.map { $0.lowercased() }
@@ -347,7 +403,7 @@ public enum ToolSelector {
         case .playbackQuery:
             return descriptor.permission == .readOnly && (descriptor.group == .playback || has("playback", "current", "queue"))
         case .musicDiscovery:
-            return discoveryExpansionMatches(descriptor)
+            return discoveryExpansionMatches(descriptor, allowedOperations: allowedOperations)
         case .queueManagement, .queueQuery:
             return descriptor.group == .playback || (descriptor.permission == .readOnly && has("queue", "genre", "select", "catalog"))
         case .playlistManagement, .playlistQuery:

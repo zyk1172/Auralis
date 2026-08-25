@@ -44,6 +44,11 @@ public struct AgentTaskWorkingSet: Sendable {
     public private(set) var cacheHits = 0
     /// 实际执行（非缓存复用）的工具调用次数。
     public private(set) var executedCalls = 0
+    /// 任务级候选证据指纹：所有唯一候选 ID 的稳定投影。
+    /// 用于搜索结果 before/after 对比（发现新证据即指纹变化）。
+    public var evidenceFingerprint: String {
+        uniqueSongIDs.map(\.description).sorted().joined(separator: "|")
+    }
     /// 连续“无新歌曲”的搜索次数。
     public private(set) var noNewResultsStreak = 0
     /// 最近若干次调用轨迹（诊断用）。

@@ -418,6 +418,30 @@ public struct ToolDescriptor: Sendable, Hashable {
         }
     }
 
+    /// 统一的 schema exposure 授权判定（ToolSelector / ToolCatalog / ToolLoop 的
+    /// tool_search 扩展三处共用，避免 schema 层与 Runtime 出现两套授权语义）。
+    ///
+    /// - `permission == .readOnly`：始终可见；
+    /// - Custom Tool（`customToolID != nil`）：`derivedAuthorizationOperations`
+    ///   非空且 ⊆ allowedOperations（Custom Tool 没有单一 authorizationOperation，
+    ///   由多个 canonical operations 派生）；
+    /// - 普通 mutation：`authorizationOperation` 非 nil 且 ∈ allowedOperations；
+    /// - 其余（非只读且无 operation 的普通工具）：fail-closed `false`。
+    ///
+    /// `allowedOperations == nil` 表示 legacy 兼容调用方未提供授权 plan，不收紧。
+    public func isAuthorizedForModelExposure(
+        allowedOperations: Set<ToolAuthorizationOperation>?
+    ) -> Bool {
+        if permission == .readOnly { return true }
+        guard let allowedOperations else { return true }
+        if customToolID != nil {
+            return !derivedAuthorizationOperations.isEmpty
+                && derivedAuthorizationOperations.isSubset(of: allowedOperations)
+        }
+        guard let operation = authorizationOperation else { return false }
+        return allowedOperations.contains(operation)
+    }
+
     private static func defaultVisibility(for name: String) -> ToolVisibility {
         // These descriptors are retained as an execution/persistence
         // compatibility layer. Their canonical replacements are registered
@@ -1079,11 +1103,13 @@ public enum AgentToolRegistry {
                                  schemaJSON: #"{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string"}}"#)],
               tags: ["queue", "batch", "append", "批量"]),
         .init(name: "queue_play_next", group: .playback, permission: .reversible, summary: "把歌曲插入到当前歌曲之后播放",
-              parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
+              parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")],
+              aliases: ["playNext", "下一首播放", "接下来播放", "插到下一首"]),
         .init(name: "queue_play_next_many", group: .playback, permission: .reversible, summary: "一次把多首歌曲按顺序插入到当前歌曲之后播放",
               parameters: [.init(name: "trackIDs", required: true, description: "GlobalTrackID JSON 数组",
                                  schemaJSON: #"{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string"}}"#)],
-              tags: ["queue", "batch", "play_next", "批量"]),
+              tags: ["queue", "batch", "play_next", "批量"],
+              aliases: ["playNextMany", "下一首播放多首", "接下来播放多首"]),
         .init(name: "queue_replace", group: .playback, permission: .reversible, summary: "替换整个播放队列",
               parameters: [.init(name: "trackIDs", required: true, description: "GlobalTrackID 数组",
                                  schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)]),
@@ -1508,8 +1534,18 @@ public enum AgentToolRegistry {
             let query = canonicalCall.optionalString("query") ?? ""
             let namespace = canonicalCall.optionalString("namespace")
             let limit = min(max(Int(canonicalCall.optionalString("limit") ?? "8") ?? 8, 1), 50)
+            // 授权感知：当前 run 的 allowedOperations 传入检索，mutation 结果携带
+            // authorized 标记（能力存在但当前请求未授权 = false），模型能直接看到，
+            // 而不是只在下一轮 schema 阶段被悄悄过滤。
+            let authorizedOperations = context.authorizationContext?.allowedOperations
             let entries = ToolCatalog(descriptors: context.availableToolDescriptors)
-                .search(query: query, namespace: namespace, limit: limit, activeSkillID: activeSkillID)
+                .search(
+                    query: query,
+                    namespace: namespace,
+                    limit: limit,
+                    activeSkillID: activeSkillID,
+                    authorizedOperations: authorizedOperations
+                )
             let text = entries.isEmpty
                 ? "未找到匹配工具。可以换一个能力描述、工具名或命名空间再搜索。"
                 : entries.map { entry in
@@ -1517,7 +1553,13 @@ public enum AgentToolRegistry {
                         entry.sideEffect == .none ? "只读" : "会改变状态",
                         entry.networkAccess ? "联网" : nil,
                     ].compactMap { $0 }.joined(separator: " · ")
-                    return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）"
+                    let authFlag: String
+                    if let authorized = entry.authorized {
+                        authFlag = authorized ? "当前请求已授权" : "当前请求未授权（不要调用，Runtime 会拒绝）"
+                    } else {
+                        authFlag = ""
+                    }
+                    return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）\(authFlag.isEmpty ? "" : "；\(authFlag)")"
                 }.joined(separator: "\n")
             return .ok(canonicalCall, canonicalDescriptor, "发现 \(entries.count) 个工具", .text(text))
         case "capabilities_get":
