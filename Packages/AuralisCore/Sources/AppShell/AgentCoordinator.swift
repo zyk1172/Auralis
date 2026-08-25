@@ -1160,9 +1160,19 @@ public final class AgentCoordinator: ObservableObject {
     /// global count of background work. Session A may continue indexing while
     /// Session B is idle and must not show A's spinner.
     private func refreshActiveRunState() {
-        isRunning = activeSessionID.flatMap { runIDsBySession[$0] } != nil
+        // 只在值真正变化时赋值 @Published，避免无意义的重复 publication
+        // （dismiss/approve 的延迟 resolve 与 SwiftUI 事务收尾叠加时，重复
+        //  publish 可能加剧 view-update 期间的同步变更告警）。
+        let running = activeSessionID.flatMap { runIDsBySession[$0] } != nil
+        if running != isRunning {
+            isRunning = running
+        }
         let activeRunID = activeSessionID.flatMap { runIDsBySession[$0] }
-        pendingOperationConfirmation = activeRunID.flatMap { operationConfirmations[$0] }
+        let confirmation = activeRunID.flatMap { operationConfirmations[$0] }
+        // PendingConfirmation 用稳定 id 比较；不改变其业务语义。
+        if confirmation?.id != pendingOperationConfirmation?.id {
+            pendingOperationConfirmation = confirmation
+        }
     }
 
     /// The published property above is deliberately only a projection for

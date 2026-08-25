@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "" : {
+
+    },
     "-12" : {
       "localizations" : {
         "en" : {
@@ -1924,22 +1927,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Token 數量"
-          }
-        }
-      }
-    },
-    "索引包 v%lld" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Index Package v%lld"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "索引套件 v%lld"
           }
         }
       }
@@ -6344,7 +6331,11 @@
         }
       }
     },
+    "将删除当前服务器的所有分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
+
+    },
     "将删除当前服务器的所有推荐索引分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -7743,6 +7734,15 @@
         }
       }
     },
+    "所属 AI 运行已取消，未修改下载历史" : {
+
+    },
+    "所属 AI 运行已取消，未提交下载" : {
+
+    },
+    "所属 AI 运行已取消，未清理下载历史" : {
+
+    },
     "打开专辑" : {
       "localizations" : {
         "en" : {
@@ -7822,6 +7822,9 @@
           }
         }
       }
+    },
+    "批准并执行" : {
+
     },
     "批量删除" : {
       "localizations" : {
@@ -12408,6 +12411,9 @@
         }
       }
     },
+    "确认操作" : {
+
+    },
     "确认清除" : {
       "localizations" : {
         "en" : {
@@ -12708,6 +12714,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "系統集成"
+          }
+        }
+      }
+    },
+    "索引包 v%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Index Package v%lld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "索引套件 v%lld"
           }
         }
       }

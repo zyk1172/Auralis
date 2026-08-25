@@ -127,7 +127,18 @@ struct AssistantView: View {
             Text(agent.pendingConsent.map { String(localized: "允许发送以下内容到「\($0.modelName)」？", bundle: .module) } ?? String(localized: "首次外发确认", bundle: .module)),
             isPresented: Binding(
                 get: { agent.pendingConsent != nil },
-                set: { if !$0 { agent.denyConsent() } }
+                // SwiftUI 可能在 view update / alert reconciliation 阶段回调 setter；
+                // 若在此同步 publish ObservableObject 会触发
+                // "Publishing changes from within view updates"。
+                // 将 denyConsent 延迟到当前 transaction 结束后的下一 main runloop：
+                // 还要绑定 request id，避免旧 alert 的迟到 dismiss 误拒绝新请求。
+                set: { isPresented in
+                    guard !isPresented, let consentID = agent.pendingConsent?.id else { return }
+                    DispatchQueue.main.async {
+                        guard agent.pendingConsent?.id == consentID else { return }
+                        agent.denyConsent()
+                    }
+                }
             ),
             presenting: agent.pendingConsent
         ) { _ in
@@ -143,7 +154,18 @@ struct AssistantView: View {
             Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认操作", bundle: .module)),
             isPresented: Binding(
                 get: { agent.pendingOperationConfirmation != nil },
-                set: { if !$0 { agent.denyOperationConfirmation() } }
+                // 与 pendingConsent 相同：dismiss 的 setter 延迟到下一 main runloop。
+                // resolveOperationConfirmation 幂等（continuation 已消费则仅清状态），
+                // 绑定 confirmation id 后，approve 后的迟到 dismiss 以及旧 alert
+                // 的迟到回调都不会误伤新的确认。
+                set: { isPresented in
+                    guard !isPresented,
+                          let confirmationID = agent.pendingOperationConfirmation?.id else { return }
+                    DispatchQueue.main.async {
+                        guard agent.pendingOperationConfirmation?.id == confirmationID else { return }
+                        agent.denyOperationConfirmation()
+                    }
+                }
             ),
             presenting: agent.pendingOperationConfirmation
         ) { _ in

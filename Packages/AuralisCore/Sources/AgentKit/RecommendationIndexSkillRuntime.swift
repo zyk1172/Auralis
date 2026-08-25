@@ -533,7 +533,7 @@ public enum RecommendationIndexSkillRuntime {
             runID: runID,
             sessionID: sessionID
         ) else {
-            let message = "推荐索引已在另一个运行中；当前没有启动新的索引任务。"
+            let message = "推荐索引启动失败（stage=readingStatus）：已在另一个运行中；当前没有启动新的索引任务。"
             await emitObservation(.failed, phase: .readingStatus, message: message)
             taskState.status = .failed
             taskState.completionState = .failed
@@ -710,10 +710,18 @@ public enum RecommendationIndexSkillRuntime {
             attempt: Int = classificationAttempt,
             diagnostic: RecommendationIndexClassificationDiagnostics? = nil
         ) async {
+            // Every terminal Runtime failure must retain the deterministic
+            // stage in the user-visible task/error path. Classification
+            // diagnostics carry the stricter providerOutput/json/identity/
+            // coverage/mode/commit/verify/noProgress stage; status and batch
+            // preparation use their workflow phase as the stage.
+            let qualifiedMessage = message.contains("stage=")
+                ? message
+                : "\(message)（stage=\(diagnostic?.stage.rawValue ?? phase.rawValue)）"
             taskState.status = .failed
             taskState.completionState = .failed
-            taskState.errorState = message
-            taskState.errors.append(message)
+            taskState.errorState = qualifiedMessage
+            taskState.errors.append(qualifiedMessage)
             taskState.pendingActions = []
             if let diagnostic {
                 await recordDiagnostic(diagnostic)
@@ -721,11 +729,11 @@ public enum RecommendationIndexSkillRuntime {
             await publish(
                 phase: phase,
                 currentBatch: currentBatch,
-                stoppedReason: message,
+                stoppedReason: qualifiedMessage,
                 terminal: true,
                 attempt: attempt
             )
-            await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+            await emit(AgentChatMessage(role: .assistant, messages: [.error(qualifiedMessage)]))
         }
 
         taskState.status = .running
@@ -742,14 +750,10 @@ public enum RecommendationIndexSkillRuntime {
                 return
             }
             if let violation = taskState.budgetViolation(policy: policy) {
-                let message = violation.localizedDescription
-                taskState.status = .failed
-                taskState.completionState = .failed
-                taskState.errorState = message
-                taskState.errors.append(message)
-                taskState.pendingActions = []
-                await publish(phase: .readingStatus, stoppedReason: message, terminal: true)
-                await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+                await fail(
+                    violation.localizedDescription,
+                    phase: .readingStatus
+                )
                 return
             }
 
@@ -763,7 +767,7 @@ public enum RecommendationIndexSkillRuntime {
                 return
             }
             guard let status = latestStatus else {
-                let message = "无法读取推荐索引状态：目录尚未提供当前服务器的索引状态。"
+                let message = "无法读取推荐索引状态（stage=readingStatus）：目录尚未提供当前服务器的索引状态。"
                 taskState.status = .failed
                 taskState.completionState = .failed
                 taskState.errorState = message
@@ -912,40 +916,46 @@ public enum RecommendationIndexSkillRuntime {
                     message: (classificationDiagnostics ?? (error as? RecommendationIndexClassificationDiagnostics))?.compactSummary
                         ?? error.localizedDescription
                 )
+                let failureDiagnostic = classificationDiagnostics
+                    ?? (error as? RecommendationIndexClassificationDiagnostics)
+                    ?? RecommendationIndexClassificationDiagnostics(
+                        stage: .providerOutput,
+                        batchSize: prepared.tracks.count,
+                        rawLength: 0,
+                        jsonFound: false,
+                        message: "AI Provider 请求失败：\(error.localizedDescription)",
+                        expectedBatchID: prepared.batchID,
+                        expectedRevision: prepared.revision,
+                        pendingBefore: status.pendingUniqueTracks
+                    )
                 if isMalformedOrTruncated(error) {
                     if prepared.tracks.count <= RecommendationIndexBatchPolicy.minimumTracksPerBatch {
-                        let diagnostic = classificationDiagnostics ?? (error as? RecommendationIndexClassificationDiagnostics)
-                        let diagnosticText = diagnostic.map(\.compactSummary) ?? ""
-                        let failureMessage = diagnosticText.isEmpty
-                            ? "推荐索引当前批次即使缩小到 1 首仍无法通过结构化校验；未写入该批次。"
-                            : "推荐索引当前批次即使缩小到 1 首仍无法通过结构化校验；未写入该批次。（\(diagnosticText)）"
+                        let failureMessage = "推荐索引当前批次即使缩小到 1 首仍无法通过结构化校验；未写入该批次。（\(failureDiagnostic.compactSummary)）"
                         await fail(
                             failureMessage,
                             phase: .classifyingBatch,
                             currentBatch: prepared,
-                            attempt: classificationAttempt
+                            attempt: classificationAttempt,
+                            diagnostic: failureDiagnostic
                         )
                         return
                     }
                     preferredBatchSize = RecommendationIndexBatchPolicy.reducedLimit(from: prepared.tracks.count)
                     taskState.status = .waitingForModel
                     taskState.pendingActions = ["推荐索引正在重试当前批次…"]
-                    if let diagnostic = classificationDiagnostics ?? (error as? RecommendationIndexClassificationDiagnostics) {
-                        if let data = try? JSONEncoder().encode(diagnostic) {
-                            taskState.facts["recommendation.index.classification.failure"] = String(decoding: data, as: UTF8.self)
-                        }
-                        await log(AgentActionRecord(
-                            toolName: "recommendation_index_classification",
-                            permission: .readOnly,
-                            summary: diagnostic.compactSummary
-                        ))
+                    if let data = try? JSONEncoder().encode(failureDiagnostic) {
+                        taskState.facts["recommendation.index.classification.failure"] = String(decoding: data, as: UTF8.self)
                     }
+                    await log(AgentActionRecord(
+                        toolName: "recommendation_index_classification",
+                        permission: .readOnly,
+                        summary: failureDiagnostic.compactSummary
+                    ))
                     // Never persist the old batch as writable after a failed
                     // transform. The next prepare creates a new ID/revision.
                     await publish(
                         phase: .retrying,
-                        stoppedReason: classificationDiagnostics.map { "分类输出校验失败（\($0.stage.rawValue)），正在重试" }
-                            ?? "分类输出校验失败，正在重试",
+                        stoppedReason: "分类输出校验失败（\(failureDiagnostic.stage.rawValue)），正在重试",
                         terminal: false,
                         attempt: classificationAttempt
                     )
@@ -967,7 +977,7 @@ public enum RecommendationIndexSkillRuntime {
                     transientClassificationRetries += 1
                     taskState.status = .waitingForModel
                     taskState.pendingActions = ["推荐索引正在重试模型请求…"]
-                    let retryMessage = "分类请求暂时失败，正在重试（第 \(transientClassificationRetries) 次）"
+                    let retryMessage = "分类请求暂时失败（stage=\(failureDiagnostic.stage.rawValue)），正在重试（第 \(transientClassificationRetries) 次）"
                     await publish(
                         phase: .retrying,
                         currentBatch: prepared,
@@ -999,7 +1009,8 @@ public enum RecommendationIndexSkillRuntime {
                     "推荐索引暂时无法继续：AI Provider 请求失败。\(error.localizedDescription)",
                     phase: .classifyingBatch,
                     currentBatch: prepared,
-                    attempt: classificationAttempt
+                    attempt: classificationAttempt,
+                    diagnostic: failureDiagnostic
                 )
                 return
             }
@@ -1018,9 +1029,22 @@ public enum RecommendationIndexSkillRuntime {
             } catch {
                 // This can only indicate an internal encoding defect; it must
                 // never reach the catalog as a partial write.
+                let diagnostic = RecommendationIndexClassificationDiagnostics(
+                    stage: .commit,
+                    batchSize: prepared.tracks.count,
+                    rawLength: 0,
+                    jsonFound: true,
+                    message: "分类结果编码失败：\(error.localizedDescription)",
+                    expectedBatchID: prepared.batchID,
+                    expectedRevision: prepared.revision,
+                    pendingBefore: status.pendingUniqueTracks
+                )
                 await fail(
                     "推荐索引分类结果无法编码，未写入任何数据。",
-                    phase: .writingBatch
+                    phase: .writingBatch,
+                    currentBatch: prepared,
+                    attempt: classificationAttempt,
+                    diagnostic: diagnostic
                 )
                 return
             }

@@ -41,7 +41,13 @@ private actor IndexExecutionGate {
 }
 
 private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
-    enum FirstResponse: Equatable { case valid, malformed, malformedForever, transientFailures(Int) }
+    enum FirstResponse: Equatable {
+        case valid
+        case malformed
+        case malformedForever
+        case permanentFailure
+        case transientFailures(Int)
+    }
 
     private let lock = NSLock()
     private var firstResponse: FirstResponse
@@ -97,6 +103,9 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
         }
         if shouldFailTransiently {
             throw AIProviderError.transport("temporary index test failure")
+        }
+        if firstResponse == .permanentFailure {
+            throw AIProviderError.httpStatusDetail(status: 401, detail: "permanent index test failure")
         }
         if shouldReturnMalformed {
             return AICompletionResponse(model: request.model, content: #"{"batchID":"truncated""#)
@@ -182,6 +191,37 @@ func recommendationIndexStopsAtMinimumBatchSize() async throws {
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
     #expect(provider.requests().count == 1)
     #expect(await events.kinds().contains(.failed))
+}
+
+@Test("Recommendation Index Provider failures expose the providerOutput stage")
+func recommendationIndexProviderFailureStageIsVisible() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 1)
+    let provider = ClosedIndexProvider(firstResponse: .permanentFailure)
+    let messages = ClosedIndexMessages()
+    let states = ClosedIndexStates()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "建立推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "建立推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { await messages.append($0) },
+        state: { await states.append($0) }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
+    #expect(await messages.contains("stage=providerOutput"))
+    #expect(await states.last()?.errorState?.contains("stage=providerOutput") == true)
 }
 
 private actor ClosedIndexMessages {
@@ -349,6 +389,7 @@ func recommendationIndexStopsOnNoProgress() async throws {
     #expect(kinds.contains(.verifyCompleted))
     #expect(kinds.contains(.failed))
     #expect(await states.last()?.facts["recommendation.index.diagnostics"]?.contains("noProgress") == true)
+    #expect(await states.last()?.errorState?.contains("stage=noProgress") == true)
 }
 
 @Test("Recommendation Index exposes live progress before the batch commit and completes after commit")

@@ -331,7 +331,7 @@ public struct ToolLoop {
                     intent: .libraryManagement,
                     goal: userText
                 )
-                let message = "推荐索引需要可用的 AI Provider；当前没有发起离线音乐搜索或其他替代执行。"
+                let message = "推荐索引执行失败（stage=providerOutput）：需要可用的 AI Provider；当前没有发起离线音乐搜索或其他替代执行。"
                 taskState.status = .failed
                 taskState.completionState = .failed
                 taskState.errorState = message

@@ -99,6 +99,15 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         let has = { (terms: [String]) in containsAny(value, terms) }
 
+        // instructional / explanatory query（怎么/如何/怎样…）不是执行请求：
+        // 不得产生 mutation 授权；带「帮我/请/给我/可以帮我」等执行词时仍视为执行。
+        let executionRequestPhrase = has(["帮我", "请", "给我", "帮我一下", "可以帮我", "麻烦", "please", "help me"])
+        let instructionalQuery = has([
+            "怎么", "如何", "怎样", "怎么才能", "怎么用", "是什么", "是什么意思", "是什么功能", "有什么作用",
+            "how do i", "how does", "what does",
+        ])
+        let suppressesMutationAuthorization = instructionalQuery && !executionRequestPhrase
+
         let quantityQuery = has(["有多少", "多少", "数量", "几位", "几张", "几首歌"])
         let query = has([
             "有哪些", "有什么", "哪些", "列表", "查看", "查询", "列出", "显示", "当前", "现在",
@@ -197,11 +206,18 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let indexMarker = has([
             "推荐索引", "索引处理", "索引进度", "索引还剩", "索引分类", "索引完成", "索引了",
         ]) || RecommendationIndexCompatibility.isLegacyBuildMarker(value)
-        let explicitIndexBuild = has([
-            "开始构建", "启动构建", "开始索引", "启动索引", "构建推荐索引", "构建完整推荐索引", "建立索引", "重建索引", "重建推荐索引", "继续构建", "继续处理索引",
-            "开始并一次性完成推荐索引", "一次性完成全部推荐索引", "开始分类剩余歌曲", "完成整个索引任务", "继续之前的推荐索引任务", "继续处理推荐索引",
+        // 结构化判定（不再要求连续完整短语）：
+        // INDEX TARGET（indexMarker）+ BUILD ACTION（动词动作）。
+        // “建立推荐索引” = “推荐索引”（target）+ “建立”（action）→ 命中。
+        // 只读/教学表达（“推荐索引是什么 / 索引进度怎么样 / 怎么建立推荐索引”）
+        // 由 action 缺失或 instructional guard 拦截。
+        let indexBuildAction = has([
+            "构建", "建立", "创建", "生成", "重建", "补全", "补完", "开始", "启动", "继续", "完成", "做完",
         ])
-        let indexBuild = indexMarker && explicitIndexBuild
+        let requestedIndexBuild = indexMarker && indexBuildAction
+        // 执行语义统一入口：教学问句（怎么/如何…）抑制授权时，执行语义同步关闭，
+        // 杜绝「授权被抑制但 isRecommendationIndexBuild 仍为 true」的 split-brain。
+        let executableIndexBuild = requestedIndexBuild && !suppressesMutationAuthorization
         let memorySave = has([
             "请记住", "记住我的", "记住我", "保存到记忆", "保存记忆", "memory_save",
             "创建技能", "skill_create", "我叫", "我的名字是", "我的生日是",
@@ -336,17 +352,6 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             return nil
         }()
 
-        // instructional / explanatory query：询问方法或语义（怎么创建歌单 /
-        // 如何删除歌单 / 下一首是什么 / 暂停是什么功能 / how do I…）不是执行
-        // 请求，不得产生任何 mutation 授权。带「帮我 / 请 / 给我 / 可以帮我」
-        // 等明确执行词时仍视为请求执行。
-        let executionRequestPhrase = has(["帮我", "请", "给我", "帮我一下", "可以帮我", "麻烦", "please", "help me"])
-        let instructionalQuery = has([
-            "怎么", "如何", "怎样", "怎么才能", "怎么用", "是什么", "是什么意思", "是什么功能", "有什么作用",
-            "how do i", "how does", "what does",
-        ])
-        let suppressesMutationAuthorization = instructionalQuery && !executionRequestPhrase
-
         var requested = Set<ToolAuthorizationOperation>()
         // 同义表达 → canonical operation 的确定性编译。Task Compiler 不允许
         // LLM 输出权限：queueReplace 只来自结构化判定（explicitQueueReplace），
@@ -426,7 +431,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
             else { requested.insert(.favoriteSet) }
         }
-        if !suppressesMutationAuthorization, indexBuild { requested.insert(.recommendationIndexWrite) }
+        if executableIndexBuild { requested.insert(.recommendationIndexWrite) }
         if !suppressesMutationAuthorization, serverMutation {
             if has(["删除服务器", "server_remove", "remove server"]) { requested.insert(.serverRemove) }
             else if has(["切换服务器", "server_switch", "switch server"]) { requested.insert(.serverSwitch) }
@@ -467,7 +472,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             return Self(domain: .system, operation: .read, isMusicContext: false, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
         }
         if indexMarker {
-            return Self(domain: .musicLibrary, operation: indexBuild ? .mutate : .read, isMusicContext: true, isContinuation: continuation, isRecommendationIndex: true, isRecommendationIndexBuild: indexBuild, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
+            return Self(domain: .musicLibrary, operation: executableIndexBuild ? .mutate : .read, isMusicContext: true, isContinuation: continuation, isRecommendationIndex: true, isRecommendationIndexBuild: executableIndexBuild, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
         }
         if serverContext {
             return Self(domain: .server, operation: serverMutation ? .mutate : .read, isMusicContext: isMusicContext, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["server"], directReadCapability: directReadCapability)

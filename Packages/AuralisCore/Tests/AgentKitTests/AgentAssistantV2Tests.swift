@@ -141,6 +141,72 @@ struct AgentAssistantV2Tests {
         }
     }
 
+    @Test("Recommendation Index natural language uses one executable build route")
+    func recommendationIndexNaturalLanguageBuildRoute() {
+        let executableRequests = [
+            "建立推荐索引",
+            "帮我建立推荐索引",
+            "创建推荐索引",
+            "生成推荐索引",
+            "开始建立推荐索引",
+            "重建推荐索引",
+            "继续构建推荐索引",
+            "把推荐索引做完",
+        ]
+
+        for text in executableRequests {
+            let semantics = AgentRequestSemantics.analyze(text)
+            let policy = AgentTaskPolicyResolver.resolve(text: text)
+            let route = WorkflowEngine.route(
+                intent: .libraryManagement,
+                text: text,
+                semantics: semantics
+            )
+
+            #expect(semantics.isRecommendationIndex, "必须识别推荐索引 target：\(text)")
+            #expect(semantics.isRecommendationIndexBuild, "必须识别 build action：\(text)")
+            #expect(semantics.operation == .mutate, "执行请求必须是 mutate：\(text)")
+            #expect(semantics.requestedOperations.contains(.recommendationIndexWrite))
+            #expect(semantics.requiresSideEffect)
+            #expect(policy.intent == .libraryManagement)
+            #expect(policy.completion == .indexPendingCountIsZero)
+            #expect(route.kind == .recommendationIndex)
+            #expect(route.usesRecommendationIndex)
+        }
+    }
+
+    @Test("Recommendation Index status and instructional questions stay read-only")
+    func recommendationIndexReadAndInstructionalRoute() {
+        let readOnlyQueries = [
+            "推荐索引是什么？",
+            "查看推荐索引状态",
+            "推荐索引进度怎么样",
+        ]
+        let instructionalQueries = [
+            "怎么建立推荐索引？",
+            "如何重建推荐索引？",
+        ]
+
+        for text in readOnlyQueries + instructionalQueries {
+            let semantics = AgentRequestSemantics.analyze(text)
+            let policy = AgentTaskPolicyResolver.resolve(text: text)
+            let route = WorkflowEngine.route(
+                intent: .libraryManagement,
+                text: text,
+                semantics: semantics
+            )
+
+            #expect(semantics.isRecommendationIndex, "必须识别推荐索引 target：\(text)")
+            #expect(!semantics.isRecommendationIndexBuild, "只读/教学请求不得启动 build：\(text)")
+            #expect(!semantics.requestedOperations.contains(.recommendationIndexWrite))
+            #expect(!semantics.requiresSideEffect)
+            #expect(semantics.operation != .mutate)
+            #expect(policy.completion != .indexPendingCountIsZero)
+            #expect(route.kind == .generic)
+            #expect(!route.usesRecommendationIndex)
+        }
+    }
+
     @Test("recursive schema validation checks enum, nested object, arrays and extra keys")
     func recursivelyValidatesStructuredArguments() throws {
         let descriptor = ToolDescriptor(

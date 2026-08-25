@@ -159,10 +159,13 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var completions = 0
     private var observedBatchSizes: [Int] = []
+    private var observedRequests: [AICompletionRequest] = []
     private let pauseGate: CoordinatorIndexGate?
+    private let failFirstAttempt: Bool
 
-    init(pauseGate: CoordinatorIndexGate? = nil) {
+    init(pauseGate: CoordinatorIndexGate? = nil, failFirstAttempt: Bool = true) {
         self.pauseGate = pauseGate
+        self.failFirstAttempt = failFirstAttempt
     }
 
     let capabilities = ModelCapabilities(
@@ -187,9 +190,10 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
     func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
         let count = lock.withLock {
             completions += 1
+            observedRequests.append(request)
             return completions
         }
-        guard count > 1 else {
+        guard !failFirstAttempt || count > 1 else {
             // Keep this production-path resume fixture deterministic: the
             // first attempt is a non-retryable provider boundary failure;
             // transient transport recovery is covered by the Skill runtime
@@ -255,6 +259,10 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
 
     var batchSizes: [Int] {
         lock.withLock { observedBatchSizes }
+    }
+
+    var requests: [AICompletionRequest] {
+        lock.withLock { observedRequests }
     }
 }
 
@@ -418,6 +426,74 @@ func destructiveToolExecutesWithoutConfirmation() async throws {
     #expect((await connector.deletedPlaylistIDs).contains(PlaylistID(rawValue: playlistRemoteID)))
     #expect(!model.catalog.playlists.contains { $0.id.rawValue == playlistRemoteID })
     #expect(coordinator.actionRecords.contains { $0.toolName == "deletePlaylist" && $0.permission == .destructive })
+}
+
+@Test("UI confirmation dismiss defers denial and resumes the run exactly once")
+@MainActor
+func operationConfirmationDismissDefersDenialAndResumesOnce() async throws {
+    let playlistRemoteID = UUID().uuidString
+    let playlist = Playlist(
+        id: PlaylistID(rawValue: playlistRemoteID),
+        serverID: "test-server",
+        name: "待删除",
+        trackIDs: []
+    )
+    let connector = RecordingConnector(
+        result: makeResult(tracks: [makeTrack(remoteID: "remote-1", title: "Only")], playlists: [playlist])
+    )
+    let model = AuralisAppModel(connector: connector, storeURL: temporaryCatalogURL())
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+
+    let gid = GlobalID(serverID: "test-server", remoteID: playlistRemoteID)
+    try await model.catalogCoordinator.store.upsertPlaylist(playlist, serverID: "test-server", isReadOnly: false)
+    coordinator.send(
+        "删除歌单",
+        provider: ScriptedAIProvider(
+            actionBatches: [
+                "ACTION: {\"tool\":\"deletePlaylist\",\"args\":{\"playlistID\":\"\(gid.description)\"}}"
+            ]
+        )
+    )
+
+    for _ in 0..<500 {
+        if coordinator.pendingOperationConfirmation != nil { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    let confirmationID = try #require(coordinator.pendingOperationConfirmation?.id)
+
+    // This is the same next-runloop boundary used by AssistantView's alert
+    // Binding setter. It must resume the waiting confirmation with false.
+    DispatchQueue.main.async {
+        guard coordinator.pendingOperationConfirmation?.id == confirmationID else { return }
+        coordinator.denyOperationConfirmation()
+    }
+    for _ in 0..<500 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    #expect(!coordinator.isRunning)
+    #expect(coordinator.pendingOperationConfirmation == nil)
+    #expect(!connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: playlistRemoteID)))
+
+    // A delayed/duplicate dismiss callback must be idempotent and must not
+    // resume another continuation or execute the denied write.
+    coordinator.denyOperationConfirmation()
+    #expect(coordinator.pendingOperationConfirmation == nil)
+    #expect(!connector.deletedPlaylistIDs.contains(PlaylistID(rawValue: playlistRemoteID)))
 }
 
 @Test("运行时确认按会话隔离，不阻塞后台会话")
@@ -830,6 +906,109 @@ func recommendationIndexLivePhaseReachesCoordinatorPresentation() async throws {
     }
     #expect(!coordinator.isRunning)
     #expect(try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server").pendingUniqueTracks == 0)
+}
+
+@Test("Coordinator exact Chinese build request reaches the real Recommendation Index Runtime")
+@MainActor
+func recommendationIndexExactChineseBuildRequestUsesRealRuntime() async throws {
+    let tracks = [
+        makeTrack(remoteID: "exact-index-1", title: "Exact Index One"),
+        makeTrack(remoteID: "exact-index-2", title: "Exact Index Two"),
+    ]
+    let catalogStore = try LocalCatalogStore(url: temporaryCatalogURL())
+    let model = AuralisAppModel(
+        connector: RestoringConnector(result: makeResult(tracks: tracks)),
+        catalogStore: catalogStore
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: temporaryAgentDirectory()
+    )
+    await model.connect(to: .init(
+        displayName: "Test Library",
+        baseURL: URL(string: "https://music.example.test")!,
+        username: "listener",
+        password: "test-only-value"
+    ))
+    await coordinator.bootstrap()
+    try? await Task.sleep(for: .milliseconds(50))
+
+    let sync = try await model.catalogCoordinator.store.beginSync(serverID: "test-server", mode: .full)
+    try await model.catalogCoordinator.store.stageTracks(tracks, session: sync)
+    try await model.catalogCoordinator.store.completeSync(sync, completedAt: .now)
+    let initialStatus = try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server")
+    #expect(initialStatus.pendingUniqueTracks == 2)
+
+    let text = "建立推荐索引"
+    let semantics = AgentRequestSemantics.analyze(text)
+    let policy = AgentTaskPolicyResolver.resolve(text: text)
+    let route = WorkflowEngine.route(
+        intent: policy.intent,
+        text: text,
+        semantics: semantics
+    )
+    #expect(semantics.isRecommendationIndexBuild)
+    #expect(semantics.requestedOperations.contains(.recommendationIndexWrite))
+    #expect(policy.intent == .libraryManagement)
+    #expect(policy.completion == .indexPendingCountIsZero)
+    #expect(route.kind == .recommendationIndex)
+
+    let gate = CoordinatorIndexGate()
+    let provider = ResumeIndexProvider(pauseGate: gate, failFirstAttempt: false)
+    coordinator.send(text, provider: provider)
+    await gate.waitUntilEntered()
+
+    for _ in 0..<100 {
+        if coordinator.recommendationIndexExecutionState.isRunning { break }
+        await Task.yield()
+    }
+    guard case let .running(snapshot) = coordinator.recommendationIndexExecutionState else {
+        Issue.record("expected the exact Chinese request to enter RecommendationIndexSkillRuntime")
+        await gate.release()
+        return
+    }
+    #expect(snapshot.phase == .classifyingBatch)
+    #expect(snapshot.currentBatchSize == 2)
+    #expect(snapshot.pendingTracks == 2)
+    guard case let .workflow(skillID, phase, _) = coordinator.runPresentationState?.phase else {
+        Issue.record("expected the live workflow presentation to be Recommendation Index")
+        await gate.release()
+        return
+    }
+    #expect(skillID == RecommendationIndexSkillRuntime.skillID)
+    #expect(phase == RecommendationIndexWorkflow.State.classifyingBatch.rawValue)
+
+    await gate.release()
+    for _ in 0..<600 {
+        if !coordinator.isRunning { break }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    let finalStatus = try await model.catalogCoordinator.store.recommendationIndexStatus(serverID: "test-server")
+    #expect(!coordinator.isRunning)
+    #expect(coordinator.activeTask?.status == .completed)
+    #expect(finalStatus.pendingUniqueTracks == 0)
+    #expect(finalStatus.pendingSemanticTagTracks == 0)
+
+    let requests = provider.requests
+    #expect(requests.count == 1)
+    #expect(requests.allSatisfy { $0.tools?.isEmpty == true })
+    #expect(requests.allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(requests.allSatisfy { $0.toolChoice == nil })
+    #expect(requests.allSatisfy { request in
+        request.messages.allSatisfy { !$0.content.contains("recommendation_index_commit") }
+    })
+    #expect(coordinator.actionRecords.contains { $0.toolName == "recommendation_index_commit" })
+    #expect(!coordinator.messages.contains { message in
+        message.messages.contains { item in
+            if case let .text(value) = item {
+                return value.contains("无法保存") || value.contains("没有写工具")
+            }
+            return false
+        }
+    })
 }
 
 @Test("Coordinator 真实入口连续处理三批，并在 Provider 失败后继续完成索引")
