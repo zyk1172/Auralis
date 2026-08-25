@@ -361,7 +361,7 @@ public final class AuralisAgentBridge: AgentBridge {
 
     public func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult {
         guard permitsMutationCommit else { return revokedMutationResult }
-        return await model.deletePlaylist(id: PlaylistID(rawValue: globalID.remoteID))
+        return await model.deletePlaylist(globalID: globalID)
             ? .confirmed("已删除歌单")
             : .failed("歌单不存在、只读或服务器未确认删除")
     }

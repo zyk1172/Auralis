@@ -2859,8 +2859,19 @@ public final class AuralisAppModel: ObservableObject {
     }
 
     public func deletePlaylist(id: PlaylistID) async -> Bool {
-        playlistDeletionError = nil
         guard let playlist = catalog.playlists.first(where: { $0.id == id }) else {
+            playlistDeletionError = String(localized: "无法定位歌单所属服务器。", bundle: .module)
+            return false
+        }
+        return await deletePlaylist(globalID: GlobalID(serverID: playlist.serverID, remoteID: id.rawValue))
+    }
+
+    public func deletePlaylist(globalID: GlobalID) async -> Bool {
+        playlistDeletionError = nil
+        let playlistID = PlaylistID(rawValue: globalID.remoteID)
+        guard let playlist = catalog.playlists.first(where: {
+            $0.id == playlistID && $0.serverID == globalID.serverID
+        }) else {
             playlistDeletionError = String(localized: "无法定位歌单所属服务器。", bundle: .module)
             return false
         }
@@ -2869,23 +2880,19 @@ public final class AuralisAppModel: ObservableObject {
             playlistDeletionError = String(localized: "该歌单为只读歌单，无法删除。", bundle: .module)
             return false
         }
-        let serverID = playlist.serverID
-        let succeeded = await connector.deletePlaylist(serverID: serverID, playlistID: id)
+        let succeeded = await connector.deletePlaylist(serverID: globalID.serverID, playlistID: playlistID)
         guard succeeded else {
             playlistDeletionError = String(localized: "服务器未确认删除。请检查网络与歌单权限后重试。", bundle: .module)
             return false
         }
-        deletedPlaylistIDs.insert(id)
-        catalog.playlists.removeAll { $0.id == id }
-        playlistTracks.removeValue(forKey: id)
-        playlistIDsNeedingContentRefresh.remove(id)
-        if case let .playlist(shown) = browseDestination, shown.id == id {
+        deletedPlaylistIDs.insert(playlistID)
+        catalog.playlists.removeAll { $0.id == playlistID }
+        playlistTracks.removeValue(forKey: playlistID)
+        playlistIDsNeedingContentRefresh.remove(playlistID)
+        if case let .playlist(shown) = browseDestination, shown.id == playlistID {
             browseDestination = .playlists
         }
-        if let serverID = catalog.activeServerID {
-            let gid = GlobalID(serverID: serverID, remoteID: id.rawValue)
-            try? await catalogCoordinator.store.deletePlaylist(gid)
-        }
+        try? await catalogCoordinator.store.deletePlaylist(globalID)
         return true
     }
 
