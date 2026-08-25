@@ -884,7 +884,8 @@ public struct ToolLoop {
                 }
 
                 if descriptor.confirmationPolicy.requiresExplicitUserApproval {
-                    let pending = Self.pendingConfirmation(
+                    let pending = await Self.pendingConfirmation(
+                        catalog: catalog,
                         descriptor: descriptor,
                         name: call.name,
                         diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments),
@@ -2086,7 +2087,8 @@ public struct ToolLoop {
                 }
 
                 if descriptor.confirmationPolicy.requiresExplicitUserApproval {
-                    let pending = Self.pendingConfirmation(
+                    let pending = await Self.pendingConfirmation(
+                        catalog: catalog,
                         descriptor: descriptor,
                         name: call.name,
                         diagnosticArgs: diagnosticArgs,
@@ -2850,20 +2852,32 @@ public struct ToolLoop {
     }
 
     private static func pendingConfirmation(
+        catalog: LocalCatalogStore,
         descriptor: ToolDescriptor,
         name: String,
         diagnosticArgs: [String: String],
         runID: UUID,
         sessionID: UUID,
         toolCallID: String?
-    ) -> PendingConfirmation {
+    ) async -> PendingConfirmation {
         // PendingConfirmation is only a Runtime approval boundary for tools
         // explicitly marked by the single confirmation policy. Reversible
         // mutations do not enter this helper and must never invent a second
         // confirmation protocol in natural language.
         let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
-        let detail: String
-        if diagnosticArgs.isEmpty {
+        var title = descriptor.summary
+        var detail: String
+        var resolvedPlaylist = false
+        if name == "playlist_delete", let rawID = diagnosticArgs["playlistID"],
+           let globalID = GlobalID(rawID),
+           let playlist = try? await catalog.getPlaylist(globalID) {
+            resolvedPlaylist = true
+            title = "删除歌单「\(playlist.0.name)」？"
+            detail = """
+            将永久删除歌单「\(playlist.0.name)」（\(playlist.0.trackIDs.count) 首歌曲）。
+            此操作不可逆。
+            """
+        } else if diagnosticArgs.isEmpty {
             detail = [descriptor.confirmationPolicy.reason, confirmationGuidance]
                 .compactMap { $0 }
                 .joined(separator: "\n")
@@ -2873,6 +2887,9 @@ public struct ToolLoop {
                 .compactMap { $0 }
                 .joined(separator: "\n")
         }
+        if !resolvedPlaylist && !detail.contains("不可逆") {
+            detail += "\n\(confirmationGuidance)"
+        }
         return PendingConfirmation(
             runID: runID,
             sessionID: sessionID,
@@ -2881,7 +2898,7 @@ public struct ToolLoop {
             permission: descriptor.permission,
             operation: descriptor.authorizationOperation,
             reason: descriptor.confirmationPolicy.reason,
-            title: descriptor.summary,
+            title: title,
             detail: detail,
             call: ToolCall(name: name, rawArguments: diagnosticArgs)
         )
@@ -3122,6 +3139,14 @@ public struct ToolLoop {
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
             let suffix = cards.count > visibleCount ? "…等 \(cards.count) 张" : ""
             return "专辑清单：\(list)\(suffix)"
+        case let .playlistCards(cards):
+            return "歌单清单：" + cards.map {
+                "\($0.name) [playlistID=\($0.globalID.description)]"
+            }.joined(separator: "、")
+        case let .artistCards(cards):
+            return "艺术家清单：" + cards.map {
+                "\($0.name) [artistID=\($0.globalID.description)]"
+            }.joined(separator: "、")
         case let .webSources(sources):
             return sources.prefix(5).map { "来源：\($0.title)（\($0.url.absoluteString)）\n\($0.snippet)" }.joined(separator: "\n")
         case let .playlistProposal(name, tracks):

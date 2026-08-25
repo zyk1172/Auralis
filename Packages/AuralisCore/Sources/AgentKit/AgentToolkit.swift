@@ -120,8 +120,10 @@ public struct AgentToolkit {
         case "searchArtists":
             let q = try require(call, "q")
             let list = try await catalog.searchArtists(query: q, serverID: serverID)
-            let text = list.isEmpty ? "未找到艺术家" : list.prefix(30).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
-            return .ok(call, descriptor, "找到 \(list.count) 位艺术家", .text(text))
+            let cards = list.prefix(30).map {
+                ArtistCard(globalID: $0.globalID, name: $0.name, albumCount: $0.albumCount)
+            }
+            return .ok(call, descriptor, "找到 \(list.count) 位艺术家", .artistCards(Array(cards)))
         case "getTrack":
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             guard let track = try await catalog.getTrack(gid) else {
@@ -130,12 +132,12 @@ public struct AgentToolkit {
             return .ok(call, descriptor, track.title, .text("\(track.title) · \(track.artistName)"))
         case "getAlbum":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
-            guard let _ = try await catalog.getAlbum(gid) else { return .fail(call, descriptor, "专辑不存在") }
-            return .ok(call, descriptor, "已获取专辑", .text(gid.description))
+            guard let album = try await catalog.getAlbum(gid) else { return .fail(call, descriptor, "专辑不存在") }
+            return .ok(call, descriptor, "已获取专辑", .albumCards([AlbumCard(globalID: gid, title: album.title, artistName: album.artistName)]))
         case "getArtist":
             let gid = try await requireArtistID(call, "artistID", catalog: catalog, serverID: serverID)
-            guard let _ = try await catalog.getArtist(gid) else { return .fail(call, descriptor, "艺术家不存在") }
-            return .ok(call, descriptor, "已获取艺术家", .text(gid.description))
+            guard let artist = try await catalog.getArtist(gid) else { return .fail(call, descriptor, "艺术家不存在") }
+            return .ok(call, descriptor, "已获取艺术家", .artistCards([ArtistCard(globalID: gid, name: artist.name, albumCount: artist.albumCount)]))
         case "getFavorites":
             let list = try await catalog.getFavorites(serverID: serverID)
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
@@ -182,28 +184,31 @@ public struct AgentToolkit {
         // MARK: Playback
         case "playTrack":
             let gid = try parsePlaybackTrackID(call, "trackID", serverID: serverID)
-            if (try? await catalog.getTrack(gid)) != nil {
+            let localTrack = try? await catalog.getTrack(gid)
+            if localTrack != nil {
                 if await bridge.playTrack(globalID: gid) {
-                    return .ok(call, descriptor, "开始播放", .actionPreview(title: "播放", detail: gid.description))
+                    return .ok(call, descriptor, "开始播放", .actionPreview(title: "播放", detail: "\(localTrack!.title) · \(localTrack!.artistName)"))
                 }
             }
             // 本地目录尚未同步：走服务器在线流播回退（播放是流媒体，不需要先下载/同步）。
             if await bridge.playServerTrack(globalID: gid) {
-                return .ok(call, descriptor, "开始播放（服务器在线流播）", .actionPreview(title: "播放", detail: gid.description))
+                return .ok(call, descriptor, "开始播放（服务器在线流播）", .actionPreview(title: "播放", detail: "在线曲目"))
             }
             return .fail(call, descriptor, "未找到该歌曲：服务器上不存在该资源或暂时无法获取播放地址（可先用 server_search 在线确认歌名，确属缺失时再考虑 music_download 下载到服务器音乐库）")
         case "playAlbum":
             let gid = try await requireAlbumID(call, "albumID", catalog: catalog, serverID: serverID)
+            let album = try? await catalog.getAlbum(gid)
             guard await bridge.playAlbum(globalID: gid) else {
                 return .fail(call, descriptor, "未找到该专辑中的可播放歌曲")
             }
-            return .ok(call, descriptor, "播放专辑", .actionPreview(title: "播放专辑", detail: gid.description))
+            return .ok(call, descriptor, "播放专辑", .actionPreview(title: "播放专辑", detail: album.map { "\($0.title) · \($0.artistName)" } ?? "专辑"))
         case "playPlaylist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
+            let playlistName = (try? await catalog.getPlaylist(gid))??.0.name ?? "歌单"
             guard await bridge.playPlaylist(globalID: gid) else {
                 return .fail(call, descriptor, "未找到该歌单中的可播放歌曲")
             }
-            return .ok(call, descriptor, "播放歌单", .actionPreview(title: "播放歌单", detail: gid.description))
+            return .ok(call, descriptor, "播放歌单", .actionPreview(title: "播放歌单", detail: playlistName))
         case "pause":
             return mutationToolResult(call, descriptor, await bridge.pause())
         case "resume":
@@ -242,10 +247,15 @@ public struct AgentToolkit {
             }
             // 名字后带 GlobalPlaylistID（格式「服务器ID:歌单ID」），供 playback_play_playlist 等直接使用。
             let limit = min(max((try? intParam(call, "limit")) ?? 100, 1), 100)
-            let text = list.prefix(limit).map {
-                "\($0.name)（id=\($0.globalID)，\($0.trackIDs.count) 首，\($0.isReadOnly ? "只读" : "可编辑")）"
-            }.joined(separator: "、")
-            return .ok(call, descriptor, "歌单 \(list.count) 个", .text("共 \(list.count) 个歌单：\(text)"))
+            let cards = list.prefix(limit).map {
+                PlaylistCard(
+                    globalID: $0.globalID,
+                    name: $0.name,
+                    trackCount: $0.trackIDs.count,
+                    isReadOnly: $0.isReadOnly
+                )
+            }
+            return .ok(call, descriptor, "歌单 \(list.count) 个", .playlistCards(Array(cards)))
         case "getPlaylist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             guard let (playlist, tracks) = try await catalog.getPlaylist(gid) else {
@@ -257,7 +267,7 @@ public struct AgentToolkit {
             guard let gid = await bridge.createPlaylist(name: name) else {
                 return .fail(call, descriptor, "创建歌单失败")
             }
-            return .ok(call, descriptor, "已创建歌单", .text("\(name) · \(gid.description)"))
+            return .ok(call, descriptor, "已创建歌单", .playlistCards([PlaylistCard(globalID: gid, name: name, trackCount: 0, isReadOnly: false)]))
         case "renamePlaylist", "playlist_rename":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             let name = try require(call, "name")
@@ -287,7 +297,32 @@ public struct AgentToolkit {
             return mutationToolResult(call, descriptor, await bridge.mergePlaylists(sourceGIDs: gids, into: name))
         case "deletePlaylist", "playlist_delete":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
-            return mutationToolResult(call, descriptor, await bridge.deletePlaylist(globalID: gid))
+            let resolved = try await catalog.getPlaylist(gid)
+            guard let playlist = resolved?.0 else {
+                return .fail(call, descriptor, "歌单不存在，未执行删除")
+            }
+            let mutation = await bridge.deletePlaylist(globalID: gid)
+            guard mutation.succeeded else {
+                return mutationToolResult(call, descriptor, mutation)
+            }
+            // The bridge's confirmed state means the connector verified remote
+            // deletion. Re-read the local canonical store so the Runtime fact
+            // covers both halves instead of trusting the mutation prose.
+            let locallyDeleted = ((try? await catalog.getPlaylist(gid)) ?? nil) == nil
+            guard locallyDeleted else {
+                return .fail(call, descriptor, "服务器已删除，但本地目录仍能读取歌单；请刷新后核验")
+            }
+            return .ok(
+                call,
+                descriptor,
+                "已删除歌单「\(playlist.name)」",
+                facts: [
+                    "playlist.deleted.verified": "true",
+                    "playlist.deleted.globalID": gid.description,
+                    "playlist.deleted.name": playlist.name,
+                    "playlist.deleted.trackCount": String(playlist.trackIDs.count),
+                ]
+            )
 
         // MARK: Annotation
         case "likeTrack":
@@ -445,7 +480,7 @@ public struct AgentToolkit {
                 return .ok(call, descriptor, "艺术家 0 位", .text("当前资料库没有艺术家"))
             }
             let text = "共 \(artists.count) 位艺术家：" + artists.map {
-                "\($0.name)（id=\(GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue))，\($0.albumCount) 张专辑）"
+                "\($0.name)（\($0.albumCount) 张专辑）"
             }.joined(separator: "、")
             return .ok(call, descriptor, "艺术家 \(artists.count) 位", .text(text))
         case "library_get_albums":
@@ -499,14 +534,18 @@ public struct AgentToolkit {
             if kind == "artist" || kind == "all" {
                 let artists = try await catalog.searchArtists(query: query, serverID: serverID)
                 if !artists.isEmpty {
-                    return .ok(call, descriptor, "艺术家 \(artists.count) 位", .text(artists.prefix(safeLimit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")))
+                    return .ok(call, descriptor, "艺术家 \(artists.count) 位", .artistCards(artists.prefix(safeLimit).map {
+                        ArtistCard(globalID: $0.globalID, name: $0.name, albumCount: $0.albumCount)
+                    }))
                 }
             }
             if kind == "playlist" || kind == "all" {
                 let playlists = try await catalog.listPlaylists(serverID: serverID)
                 let hits = playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
                 if !hits.isEmpty {
-                    return .ok(call, descriptor, "歌单 \(hits.count) 个", .text(hits.prefix(safeLimit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")))
+                    return .ok(call, descriptor, "歌单 \(hits.count) 个", .playlistCards(hits.prefix(safeLimit).map {
+                        PlaylistCard(globalID: $0.globalID, name: $0.name, trackCount: $0.trackIDs.count, isReadOnly: $0.isReadOnly)
+                    }))
                 }
             }
             return .fail(call, descriptor, "未找到匹配结果")
@@ -535,16 +574,18 @@ public struct AgentToolkit {
             if kind == "artist" || kind == "all" {
                 let artists = try await catalog.searchArtists(query: query, serverID: serverID)
                 if !artists.isEmpty {
-                    let text = artists.prefix(limit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
-                    return .ok(call, descriptor, "解析到艺术家 \(min(artists.count, limit)) 位", .text(text))
+                    return .ok(call, descriptor, "解析到艺术家 \(min(artists.count, limit)) 位", .artistCards(artists.prefix(limit).map {
+                        ArtistCard(globalID: $0.globalID, name: $0.name, albumCount: $0.albumCount)
+                    }))
                 }
             }
             if kind == "playlist" || kind == "all" {
                 let playlists = try await catalog.listPlaylists(serverID: serverID)
                 let hits = playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
                 if !hits.isEmpty {
-                    let text = hits.prefix(limit).map { "\($0.name)（\($0.globalID)）" }.joined(separator: "、")
-                    return .ok(call, descriptor, "解析到歌单 \(min(hits.count, limit)) 个", .text(text))
+                    return .ok(call, descriptor, "解析到歌单 \(min(hits.count, limit)) 个", .playlistCards(hits.prefix(limit).map {
+                        PlaylistCard(globalID: $0.globalID, name: $0.name, trackCount: $0.trackIDs.count, isReadOnly: $0.isReadOnly)
+                    }))
                 }
             }
             return .fail(call, descriptor, "没有解析到匹配的实体")
@@ -1076,7 +1117,7 @@ public struct AgentToolkit {
         case "playlist_create":
             let name = try require(call, "name")
             guard let gid = await bridge.createPlaylist(name: name) else { return .fail(call, descriptor, "创建歌单失败") }
-            return .ok(call, descriptor, "已创建歌单", .text("\(name) · \(gid.description)"))
+            return .ok(call, descriptor, "已创建歌单", .playlistCards([PlaylistCard(globalID: gid, name: name, trackCount: 0, isReadOnly: false)]))
         case "playlist_add_songs":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)

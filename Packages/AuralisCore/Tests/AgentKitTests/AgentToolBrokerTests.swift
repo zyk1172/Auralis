@@ -53,10 +53,7 @@ struct AgentToolBrokerTests {
         for name in ["我叫大傻蛋", "请记住我", "下一首", "删除服务器", "暂停", "收藏"] {
             let plan = makePlan("删除歌单 \(name)")
             #expect(plan.semantics.domain == .playlist)
-            #expect(plan.authorization.allowedOperations.contains(.playlistDelete))
-            #expect(!plan.authorization.allowedOperations.contains(.memorySave))
-            #expect(!plan.authorization.allowedOperations.contains(.playbackPlay))
-            #expect(!plan.authorization.allowedOperations.contains(.serverRemove))
+            #expect(plan.authorization.allowedOperations == [.playlistDelete])
         }
     }
 

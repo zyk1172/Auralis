@@ -92,7 +92,11 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let current = normalized(text)
         let continuation = isContinuation(current)
         let inherited = continuation ? normalized(historyText) : ""
-        let value = [inherited, current].filter { !$0.isEmpty }.joined(separator: " ")
+        var value = [inherited, current].filter { !$0.isEmpty }.joined(separator: " ")
+        // A playlist name is an entity literal, not a second command. Analyze
+        // only the command span for authorization so “删除歌单 暂停” cannot
+        // compile both playlistDelete and playbackPause.
+        value = Self.playlistCommandSpan(for: value)
         guard !value.isEmpty else {
             return Self(domain: .conversation, operation: .conversation, isMusicContext: false, isContinuation: continuation)
         }
@@ -549,6 +553,22 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
     private static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func playlistCommandSpan(for text: String) -> String {
+        let phrases = [
+            "保存当前队列为歌单", "把当前队列保存为歌单", "保存队列为歌单",
+            "创建歌单", "新建歌单", "加入歌单", "加到歌单", "添加到歌单",
+            "放到歌单", "放进歌单", "放入歌单", "收进歌单", "删除歌单",
+            "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序",
+            "复制歌单", "合并歌单", "playlist_create", "playlist_add",
+            "playlist_delete", "playlist_rename",
+        ]
+        let matches = phrases.compactMap { phrase -> Range<String.Index>? in
+            text.range(of: phrase)
+        }.sorted { $0.lowerBound < $1.lowerBound }
+        guard let match = matches.first else { return text }
+        return String(text[..<match.upperBound])
     }
 
     /// 判定一个「数量 + 曲库名词」请求是否带有限定/过滤条件。

@@ -67,7 +67,14 @@ private actor OrchestrationConfirmProbe {
 
 private final class OrchestrationBridge: AgentBridge, @unchecked Sendable {
     let activeServerIDValue: ServerID?
-    init(activeServerID: ServerID? = nil) { self.activeServerIDValue = activeServerID }
+    let deleteSideEffect: (@Sendable (GlobalID) async throws -> Void)?
+    init(
+        activeServerID: ServerID? = nil,
+        deleteSideEffect: (@Sendable (GlobalID) async throws -> Void)? = nil
+    ) {
+        self.activeServerIDValue = activeServerID
+        self.deleteSideEffect = deleteSideEffect
+    }
     var activeServerID: ServerID? { activeServerIDValue }
     var lyricsStateValue: AgentLyricsState = .unknown
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { lyricsStateValue }
@@ -155,6 +162,7 @@ private final class OrchestrationBridge: AgentBridge, @unchecked Sendable {
     func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult { mutationResult }
     func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { mutationResult }
     func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult {
+        try? await deleteSideEffect?(globalID)
         deletedPlaylists.append(globalID)
         return mutationResult
     }
@@ -488,6 +496,13 @@ struct AgentToolOrchestrationRegressionTests {
         #expect(bridge.deletedPlaylists.count == 1)
         let probeCount = await probe.count()
         #expect(probeCount == 1, "不可逆删除只出现一次正式确认")
+        let confirmation = await probe.decisions.first
+        #expect(confirmation?.title == "删除歌单「跑步」？")
+        #expect(confirmation?.detail.contains("跑步") == true)
+        #expect(confirmation?.detail.contains("0 首") == true)
+        #expect(confirmation?.detail.contains("不可逆") == true)
+        #expect(confirmation?.detail.contains("playlistID=") != true)
+        #expect(confirmation?.title.contains(orchestrationServerID.rawValue) != true)
         var toolSearchCount = 0
         for request in provider.requests() {
             let hasSearch = request.transcript.messages.contains { message in
@@ -703,7 +718,9 @@ struct AgentToolOrchestrationRegressionTests {
             Playlist(id: "pl-b", serverID: orchestrationServerID, name: "通勤", trackIDs: []),
             serverID: orchestrationServerID
         )
-        let bridge = OrchestrationBridge()
+        let bridge = OrchestrationBridge(deleteSideEffect: { gid in
+            try await store.deletePlaylist(gid)
+        })
         let collector = OrchestrationCollector()
         let probe = OrchestrationConfirmProbe(approve: true)
         let provider = OrchestrationProvider([
@@ -724,6 +741,11 @@ struct AgentToolOrchestrationRegressionTests {
             confirm: { await probe.decide($0) },
             emit: { await collector.append($0) }
         )
+        let requests = provider.requests()
+        let toolResults = requests.last?.messages.filter { $0.role == .tool }.map(\.content) ?? []
+        let remainingPlaylist = try await store.getPlaylist(GlobalID(serverID: orchestrationServerID, remoteID: "pl-b"))
+        #expect(remainingPlaylist == nil, "playlist remained locally")
+        #expect(toolResults.contains { $0.contains("已删除歌单") }, "tool results: \(toolResults)")
         #expect(bridge.deletedPlaylists.count == 1, "成功后的重复删除不得再次执行")
         #expect(await probe.count() == 1, "成功后的重复删除不得再次弹确认")
     }

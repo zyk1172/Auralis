@@ -2,6 +2,70 @@ import Domain
 import Foundation
 import LocalCatalog
 
+/// Last-line redaction for user-visible prose. Structured tool payloads and
+/// provider transcripts keep IDs so playback and follow-up mutations still work.
+public enum AgentUserFacingSanitizer {
+    private static let labeledID = try! NSRegularExpression(
+        pattern: #"(?i)\b(?:playlistID|trackID|albumID|artistID|serverID|GlobalID)\s*=\s*[^\s，。；、）)]+"#
+    )
+    private static let genericLabeledID = try! NSRegularExpression(
+        pattern: #"(?i)\b(?:id|uuid|rawValue)\s*=\s*[^\s，。；、）)]+"#
+    )
+    private static let globalIDCall = try! NSRegularExpression(
+        pattern: #"(?i)\bGlobalID\s*\([^)]*\)"#
+    )
+    private static let bareGlobalID = try! NSRegularExpression(
+        pattern: #"\b(?:server|srv)-[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*"#
+    )
+
+    public static func text(_ value: String) -> String {
+        let replacement = "[内部标识]"
+        return [labeledID, genericLabeledID, globalIDCall, bareGlobalID]
+            .reduce(value) { current, regex in
+                regex.stringByReplacingMatches(
+                    in: current,
+                    range: NSRange(current.startIndex..., in: current),
+                    withTemplate: replacement
+                )
+            }
+    }
+
+    public static func confirmation(_ pending: PendingConfirmation) -> PendingConfirmation {
+        PendingConfirmation(
+            runID: pending.runID,
+            sessionID: pending.sessionID,
+            toolCallID: pending.toolCallID,
+            toolName: pending.toolName,
+            permission: pending.permission,
+            operation: pending.operation,
+            reason: pending.reason.map(text),
+            title: text(pending.title),
+            detail: text(pending.detail),
+            call: pending.call
+        )
+    }
+
+    public static func chatMessage(_ message: AgentChatMessage) -> AgentChatMessage {
+        AgentChatMessage(
+            id: message.id,
+            role: message.role,
+            messages: message.messages.map(sanitize),
+            createdAt: message.createdAt
+        )
+    }
+
+    private static func sanitize(_ message: AgentMessage) -> AgentMessage {
+        switch message {
+        case let .text(value): .text(text(value))
+        case let .streaming(value): .streaming(text(value))
+        case let .error(value): .error(text(value))
+        case let .actionPreview(title, detail): .actionPreview(title: text(title), detail: text(detail))
+        case let .confirmation(pending): .confirmation(confirmation(pending))
+        default: message
+        }
+    }
+}
+
 /// 工具结果对 UI 的展示角色（确定性，由 Tool 执行/Descriptor 声明，不由模型决定）。
 ///
 /// - `none`: 不进入任何展示状态（纯内部查询 / 副作用 / 失败）。

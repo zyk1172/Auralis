@@ -395,6 +395,18 @@ struct AgentRuntimeArchitectureTests {
         #expect(second == .accept)
     }
 
+    @Test func playlistDeleteCompletionRequiresVerifiedRuntimeFact() {
+        var state = AgentTaskState(intent: .playlistManagement, goal: "删除歌单")
+        let descriptor = AgentToolRegistry.descriptor(for: "playlist_delete")!
+        state.successfulToolNames.append(descriptor.name)
+        // A generic side-effect success is not enough for destructive deletion.
+        state.facts["sideEffect.playlist"] = "success"
+        #expect(!AgentCompletionEvaluator.factsSatisfied(state: state, policy: .policy(for: .playlistManagement)))
+
+        state.facts["playlist.deleted.verified"] = "true"
+        #expect(AgentCompletionEvaluator.factsSatisfied(state: state, policy: .policy(for: .playlistManagement)))
+    }
+
     @Test func indexCompletionRequiresBothFixedAndSemanticPendingZero() {
         var state = AgentTaskState(intent: .libraryManagement, goal: "index")
         let policy = AgentTaskPolicy(
