@@ -44,6 +44,7 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     enum FirstResponse: Equatable {
         case valid
         case malformed
+        case codableFailure
         case malformedForever
         case permanentFailure
         case transientFailures(Int)
@@ -90,12 +91,25 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
             await gate.markEntered()
             await gate.waitUntilReleased()
         }
-        let shouldReturnMalformed = lock.withLock {
-            recorded.append(request)
-            let value = firstResponse == .malformedForever || (!didRespond && firstResponse == .malformed)
-            didRespond = true
-            return value
+        enum ResponseKind {
+            case codableFailure
+            case malformed
+            case normal
         }
+
+        let responseKind: ResponseKind = lock.withLock {
+            recorded.append(request)
+            let wasFirstResponse = !didRespond
+            didRespond = true
+            if wasFirstResponse, firstResponse == .codableFailure { return .codableFailure }
+            if firstResponse == .malformedForever
+                || (wasFirstResponse && firstResponse == .malformed) { return .malformed }
+            return .normal
+        }
+        if responseKind == .codableFailure {
+            return AICompletionResponse(model: request.model, content: #"{"items":[{"vocals":{}}]}"#)
+        }
+        let shouldReturnMalformed = responseKind == .malformed
         let shouldFailTransiently = lock.withLock {
             guard remainingTransientFailures > 0 else { return false }
             remainingTransientFailures -= 1
@@ -191,6 +205,39 @@ func recommendationIndexStopsAtMinimumBatchSize() async throws {
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
     #expect(provider.requests().count == 1)
     #expect(await events.kinds().contains(.failed))
+}
+
+@Test("Recommendation Index codable contract failure does not shrink the batch")
+func recommendationIndexCodableFailureDoesNotShrinkBatch() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 16)
+    let provider = ClosedIndexProvider(firstResponse: .codableFailure)
+    let events = ClosedIndexEvents()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 16)
+    #expect(provider.requests().count == 1)
+    let kinds = await events.kinds()
+    #expect(kinds.contains(.classificationFailed))
+    #expect(kinds.contains(.failed))
+    #expect(kinds.filter { $0 == .batchPrepared }.count == 1)
 }
 
 @Test("Recommendation Index Provider failures expose the providerOutput stage")

@@ -102,6 +102,9 @@ public struct RecommendationIndexClassificationDiagnostics: Error, LocalizedErro
     public let pendingBefore: Int?
     public let pendingAfter: Int?
     public let pendingDelta: Int?
+    public let fieldPath: String?
+    public let expectedType: String?
+    public let actualType: String?
 
     public init(
         stage: RecommendationIndexClassificationFailureStage,
@@ -118,7 +121,10 @@ public struct RecommendationIndexClassificationDiagnostics: Error, LocalizedErro
         duplicateIDs: [String] = [],
         pendingBefore: Int? = nil,
         pendingAfter: Int? = nil,
-        pendingDelta: Int? = nil
+        pendingDelta: Int? = nil,
+        fieldPath: String? = nil,
+        expectedType: String? = nil,
+        actualType: String? = nil
     ) {
         self.stage = stage
         self.batchSize = batchSize
@@ -135,6 +141,31 @@ public struct RecommendationIndexClassificationDiagnostics: Error, LocalizedErro
         self.pendingBefore = pendingBefore
         self.pendingAfter = pendingAfter
         self.pendingDelta = pendingDelta
+        self.fieldPath = fieldPath
+        self.expectedType = expectedType
+        self.actualType = actualType
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stage = try container.decode(RecommendationIndexClassificationFailureStage.self, forKey: .stage)
+        batchSize = try container.decode(Int.self, forKey: .batchSize)
+        rawLength = try container.decode(Int.self, forKey: .rawLength)
+        jsonFound = try container.decode(Bool.self, forKey: .jsonFound)
+        message = try container.decode(String.self, forKey: .message)
+        expectedBatchID = try container.decodeIfPresent(UUID.self, forKey: .expectedBatchID)
+        receivedBatchID = try container.decodeIfPresent(UUID.self, forKey: .receivedBatchID)
+        expectedRevision = try container.decodeIfPresent(UInt64.self, forKey: .expectedRevision)
+        receivedRevision = try container.decodeIfPresent(UInt64.self, forKey: .receivedRevision)
+        missingIDs = try container.decodeIfPresent([String].self, forKey: .missingIDs) ?? []
+        extraIDs = try container.decodeIfPresent([String].self, forKey: .extraIDs) ?? []
+        duplicateIDs = try container.decodeIfPresent([String].self, forKey: .duplicateIDs) ?? []
+        pendingBefore = try container.decodeIfPresent(Int.self, forKey: .pendingBefore)
+        pendingAfter = try container.decodeIfPresent(Int.self, forKey: .pendingAfter)
+        pendingDelta = try container.decodeIfPresent(Int.self, forKey: .pendingDelta)
+        fieldPath = try container.decodeIfPresent(String.self, forKey: .fieldPath)
+        expectedType = try container.decodeIfPresent(String.self, forKey: .expectedType)
+        actualType = try container.decodeIfPresent(String.self, forKey: .actualType)
     }
 
     public var errorDescription: String? {
@@ -154,6 +185,10 @@ public struct RecommendationIndexClassificationDiagnostics: Error, LocalizedErro
         }
         if let expectedRevision, let receivedRevision {
             parts.append("expected_revision=\(expectedRevision), received_revision=\(receivedRevision)")
+        }
+        if let fieldPath { parts.append("field=\(fieldPath)") }
+        if let expectedType, let actualType {
+            parts.append("expected=\(expectedType), actual=\(actualType)")
         }
         if !missingIDs.isEmpty { parts.append("missing_ids=\(missingIDs.joined(separator: ","))") }
         if !extraIDs.isEmpty { parts.append("extra_ids=\(extraIDs.joined(separator: ","))") }
@@ -201,7 +236,7 @@ public enum RecommendationIndexClassificationParser {
                 message: "JSON 文本无法编码"
             ))
         }
-        guard (try? AIJSONValue(jsonData: data)) != nil else {
+        guard let parsedJSON = try? AIJSONValue(jsonData: data) else {
             return .failure(.init(
                 stage: .jsonExtraction,
                 batchSize: batch.tracks.count,
@@ -214,12 +249,16 @@ public enum RecommendationIndexClassificationParser {
         do {
             envelope = try JSONDecoder().decode(RecommendationIndexClassificationEnvelope.self, from: data)
         } catch {
+            let shape = decodingShape(error, in: parsedJSON)
             return .failure(.init(
                 stage: .codableDecode,
                 batchSize: batch.tracks.count,
                 rawLength: rawLength,
                 jsonFound: true,
-                message: decodingMessage(error)
+                message: decodingMessage(error),
+                fieldPath: shape.fieldPath,
+                expectedType: shape.expectedType,
+                actualType: shape.actualType
             ))
         }
 
@@ -331,6 +370,72 @@ public enum RecommendationIndexClassificationParser {
         }
     }
 
+    private static func decodingShape(
+        _ error: Error,
+        in json: AIJSONValue
+    ) -> (fieldPath: String?, expectedType: String?, actualType: String?) {
+        guard case let DecodingError.typeMismatch(_, context) = error,
+              !context.codingPath.isEmpty
+        else { return (nil, nil, nil) }
+
+        let path = codingPath(context.codingPath)
+        let key = context.codingPath.last?.stringValue
+        let expected = expectedType(forKey: key)
+        return (path, expected, actualType(at: context.codingPath, in: json))
+    }
+
+    private static func expectedType(forKey key: String?) -> String? {
+        switch key {
+        case "moods", "scenes", "vocals", "textures", "styles":
+            return "string[]"
+        case "semanticTags":
+            return "object[]"
+        case "items":
+            return "object[]"
+        case "energy", "tempo", "acousticness", "danceability", "revision":
+            return "integer"
+        case "confidence":
+            return "number"
+        case "id", "batchID", "mode", "value":
+            return "string"
+        default:
+            return nil
+        }
+    }
+
+    private static func actualType(
+        at path: [any CodingKey],
+        in json: AIJSONValue
+    ) -> String? {
+        var value = json
+        for key in path.dropLast() {
+            switch (key.intValue, value) {
+            case let (.some(index), .array(items)) where items.indices.contains(index):
+                value = items[index]
+            case let (.none, .object(fields)) where fields[key.stringValue] != nil:
+                value = fields[key.stringValue]!
+            default:
+                return nil
+            }
+        }
+        guard let last = path.last else { return nil }
+        if last.intValue == nil, case let .object(fields) = value, let target = fields[last.stringValue] {
+            return typeName(target)
+        }
+        return typeName(value)
+    }
+
+    private static func typeName(_ value: AIJSONValue) -> String {
+        switch value {
+        case .string: "string"
+        case .number: "number"
+        case .bool: "bool"
+        case .array: "array"
+        case .object: "object"
+        case .null: "null"
+        }
+    }
+
     private static func codingPath(_ path: [CodingKey]) -> String {
         path.reduce(into: "") { result, key in
             if let index = key.intValue {
@@ -363,7 +468,17 @@ public enum RecommendationIndexSkillRuntime {
         let canonicalTags: [TagSnapshot]
     }
 
-    private static let outputSchema = try! AIJSONValue(jsonString: #"""
+    private static func outputSchema(for mode: String) -> AIJSONValue {
+        let itemRequired: String
+        if mode == "semanticTagsOnly" {
+            itemRequired = #"["id", "semanticTags", "mode", "confidence"]"#
+        } else {
+            itemRequired = #"""
+              ["id", "moods", "scenes", "energy", "tempo", "acousticness", "danceability",
+               "vocals", "textures", "styles", "semanticTags", "mode", "confidence"]
+            """#
+        }
+        return try! AIJSONValue(jsonString: #"""
     {
       "type": "object",
       "additionalProperties": false,
@@ -404,13 +519,14 @@ public enum RecommendationIndexSkillRuntime {
               "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
               "confidence": {"type": "number", "minimum": 0, "maximum": 1}
             },
-            "required": ["id", "mode"]
+            "required": \#(itemRequired)
           }
         }
       },
       "required": ["batchID", "revision", "mode", "items"]
     }
     """#)
+    }
 
     public static func shouldActivate(
         semantics: AgentRequestSemantics,
@@ -860,6 +976,8 @@ public enum RecommendationIndexSkillRuntime {
                 attempt: classificationAttempt
             )
             do {
+                var contractRepairAttempt = 0
+                while true {
                 let request = try await classificationRequest(
                     provider: provider,
                     model: model,
@@ -899,7 +1017,26 @@ public enum RecommendationIndexSkillRuntime {
                     )
                 case let .failure(diagnostic):
                     classificationDiagnostics = diagnostic
+
+                    // Contract repairs always replay against the exact prepared
+                    // identity; a fresh batch would hide the mismatch instead of
+                    // repairing the model's echo.
+                    if case .retrySameBatch = Self.disposition(for: diagnostic),
+                       contractRepairAttempt < 1 {
+                        contractRepairAttempt += 1
+                        await recordDiagnostic(diagnostic)
+                        await publish(
+                            phase: .retrying,
+                            currentBatch: prepared,
+                            stoppedReason: "分类契约校验失败，正在使用同一批次重试",
+                            terminal: false,
+                            attempt: classificationAttempt
+                        )
+                        continue
+                    }
                     throw diagnostic
+                }
+                break
                 }
             } catch is CancellationError {
                 taskState.status = .cancelled
@@ -928,7 +1065,39 @@ public enum RecommendationIndexSkillRuntime {
                         expectedRevision: prepared.revision,
                         pendingBefore: status.pendingUniqueTracks
                     )
-                if isMalformedOrTruncated(error) {
+                if isTransientClassificationFailure(error), transientClassificationRetries < 2 {
+                    transientClassificationRetries += 1
+                    taskState.status = .waitingForModel
+                    taskState.pendingActions = ["推荐索引正在重试模型请求…"]
+                    let retryMessage = "分类请求暂时失败（stage=\(failureDiagnostic.stage.rawValue)），正在重试（第 \(transientClassificationRetries) 次）"
+                    await publish(
+                        phase: .retrying,
+                        currentBatch: prepared,
+                        stoppedReason: retryMessage,
+                        terminal: false,
+                        attempt: classificationAttempt
+                    )
+                    do {
+                        let delay = UInt64(800 * (1 << (transientClassificationRetries - 1))) * 1_000_000
+                        try await Task.sleep(nanoseconds: delay)
+                    } catch {
+                        taskState.status = .cancelled
+                        taskState.pendingActions = []
+                        await publish(
+                            phase: .classifyingBatch,
+                            currentBatch: prepared,
+                            stoppedReason: "运行已取消",
+                            terminal: true,
+                            attempt: classificationAttempt
+                        )
+                        return
+                    }
+                    // A transport retry may replay the request, but it does not
+                    // discard the still-unwritten prepared batch identity.
+                    continue
+                }
+                switch Self.disposition(for: error) {
+                case .shrinkBatch:
                     if prepared.tracks.count <= RecommendationIndexBatchPolicy.minimumTracksPerBatch {
                         let failureMessage = "推荐索引当前批次即使缩小到 1 首仍无法通过结构化校验；未写入该批次。（\(failureDiagnostic.compactSummary)）"
                         await fail(
@@ -972,47 +1141,16 @@ public enum RecommendationIndexSkillRuntime {
                         attempt: classificationAttempt
                     )
                     continue
-                }
-                if isTransientClassificationFailure(error), transientClassificationRetries < 2 {
-                    transientClassificationRetries += 1
-                    taskState.status = .waitingForModel
-                    taskState.pendingActions = ["推荐索引正在重试模型请求…"]
-                    let retryMessage = "分类请求暂时失败（stage=\(failureDiagnostic.stage.rawValue)），正在重试（第 \(transientClassificationRetries) 次）"
-                    await publish(
-                        phase: .retrying,
+                case .retrySameBatch, .fail:
+                    await fail(
+                        "推荐索引结构化输出不符合当前批次契约，重试同一批次也无法恢复；未写入该批次。（\(failureDiagnostic.compactSummary)）",
+                        phase: .classifyingBatch,
                         currentBatch: prepared,
-                        stoppedReason: retryMessage,
-                        terminal: false,
-                        attempt: classificationAttempt
+                        attempt: classificationAttempt,
+                        diagnostic: failureDiagnostic
                     )
-                    do {
-                        let delay = UInt64(800 * (1 << (transientClassificationRetries - 1))) * 1_000_000
-                        try await Task.sleep(nanoseconds: delay)
-                    } catch {
-                        taskState.status = .cancelled
-                        taskState.pendingActions = []
-                        await publish(
-                            phase: .classifyingBatch,
-                            currentBatch: prepared,
-                            stoppedReason: "运行已取消",
-                            terminal: true,
-                            attempt: classificationAttempt
-                        )
-                        return
-                    }
-                    // The next outer iteration re-reads status and prepares a
-                    // fresh batch identity. No uncommitted model output is
-                    // ever reused after a transport failure.
-                    continue
+                    return
                 }
-                await fail(
-                    "推荐索引暂时无法继续：AI Provider 请求失败。\(error.localizedDescription)",
-                    phase: .classifyingBatch,
-                    currentBatch: prepared,
-                    attempt: classificationAttempt,
-                    diagnostic: failureDiagnostic
-                )
-                return
             }
 
             let leaseStillValid = await executionLease.isValid()
@@ -1260,7 +1398,7 @@ public enum RecommendationIndexSkillRuntime {
         if provider.capabilities.supportsJSONSchema {
             outputFormat = .jsonSchema(
                 name: "recommendation_index_classification",
-                schema: outputSchema,
+                schema: outputSchema(for: batch.mode),
                 strict: true
             )
         } else if provider.capabilities.supportsJSONMode {
@@ -1307,15 +1445,25 @@ public enum RecommendationIndexSkillRuntime {
         return try? JSONDecoder().decode(RecommendationIndexCheckpoint.self, from: data)
     }
 
-    private static func isMalformedOrTruncated(_ error: Error) -> Bool {
-        if error is RecommendationIndexValidationError
-            || error is RecommendationIndexClassificationDiagnostics
-            || error is RecommendationIndexRuntimeError {
-            return true
+    private enum ClassificationFailureDisposition {
+        case shrinkBatch
+        case retrySameBatch
+        case fail
+    }
+
+    private static func disposition(for error: Error) -> ClassificationFailureDisposition {
+        if let diagnostic = error as? RecommendationIndexClassificationDiagnostics {
+            switch diagnostic.stage {
+            case .codableDecode, .commit, .verify, .noProgress:
+                return .fail
+            case .batchIdentity, .revision, .trackCoverage, .mode:
+                return .retrySameBatch
+            case .providerOutput, .jsonExtraction:
+                return .shrinkBatch
+            }
         }
-        guard let providerError = error as? AIProviderError else { return false }
-        if case .outputTruncated = providerError { return true }
-        return false
+        if case .outputTruncated = error as? AIProviderError { return .shrinkBatch }
+        return .fail
     }
 
     private static func isTransientClassificationFailure(_ error: Error) -> Bool {

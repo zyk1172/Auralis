@@ -55,6 +55,44 @@ struct OpenAICompatibleProviderTests {
         #expect(OpenAICompatibleProvider.isRetryable(AIProviderError.transport("connection reset")) == true)
     }
 
+    @Test func structuredOutputUsesSeparateChatAndResponsesWireShapes() throws {
+        let schema = try AIJSONValue(jsonString: #"{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"required":["ok"]}"#)
+        let format = AIOutputFormat.jsonSchema(
+            name: "auralis_probe",
+            schema: schema,
+            strict: true
+        )
+
+        let chatObject = try #require(OpenAICompatibleProvider.encodeChatOutputFormat(.jsonObject))
+        #expect(chatObject["type"] as? String == "json_object")
+        let chatSchema = try #require(OpenAICompatibleProvider.encodeChatOutputFormat(format))
+        #expect(chatSchema["type"] as? String == "json_schema")
+        let chatWrapper = try #require(chatSchema["json_schema"] as? [String: Any])
+        #expect(chatWrapper["name"] as? String == "auralis_probe")
+        #expect(chatWrapper["strict"] as? Bool == true)
+        #expect((try #require(chatWrapper["schema"] as? [String: Any]))["required"] != nil)
+
+        let responseObject = try #require(OpenAICompatibleProvider.encodeResponsesOutputFormat(.jsonObject))
+        #expect(responseObject["type"] as? String == "json_object")
+        let responseSchema = try #require(OpenAICompatibleProvider.encodeResponsesOutputFormat(format))
+        #expect(responseSchema["type"] as? String == "json_schema")
+        #expect(responseSchema["name"] as? String == "auralis_probe")
+        #expect(responseSchema["strict"] as? Bool == true)
+        #expect(responseSchema["schema"] != nil)
+        #expect(OpenAICompatibleProvider.encodeChatOutputFormat(nil) == nil)
+        #expect(OpenAICompatibleProvider.encodeResponsesOutputFormat(nil) == nil)
+    }
+
+    @Test func legacyProviderDiagnosticsDecodeStructuredOutputAsNotTested() throws {
+        let old = """
+        {"modelCatalog":"passed","modelAvailability":"passed","textCompletion":"passed",
+         "streaming":"passed","nativeTools":"notTested","toolChoice":"notTested","details":[]}
+        """
+        let diagnostics = try JSONDecoder().decode(AIProviderDiagnostics.self, from: Data(old.utf8))
+        #expect(diagnostics.jsonMode == .notTested)
+        #expect(diagnostics.jsonSchema == .notTested)
+    }
+
     @Test func modelError401IsNotReportedAsInvalidAPIKey() {
         let error = AIProviderError.httpStatusDetail(
             status: 401,

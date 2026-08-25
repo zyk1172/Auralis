@@ -831,6 +831,8 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
     public let streaming: AIProbeStatus
     public let nativeTools: AIProbeStatus
     public let toolChoice: AIProbeStatus
+    public let jsonMode: AIProbeStatus
+    public let jsonSchema: AIProbeStatus
     public let details: [String]
 
     public init(
@@ -840,6 +842,8 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
         streaming: AIProbeStatus = .notTested,
         nativeTools: AIProbeStatus = .notTested,
         toolChoice: AIProbeStatus = .notTested,
+        jsonMode: AIProbeStatus = .notTested,
+        jsonSchema: AIProbeStatus = .notTested,
         details: [String] = []
     ) {
         self.modelCatalog = modelCatalog
@@ -848,7 +852,27 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
         self.streaming = streaming
         self.nativeTools = nativeTools
         self.toolChoice = toolChoice
+        self.jsonMode = jsonMode
+        self.jsonSchema = jsonSchema
         self.details = details
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case modelCatalog, modelAvailability, textCompletion, streaming
+        case nativeTools, toolChoice, jsonMode, jsonSchema, details
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        modelCatalog = try container.decode(AIProbeStatus.self, forKey: .modelCatalog)
+        modelAvailability = try container.decode(AIProbeStatus.self, forKey: .modelAvailability)
+        textCompletion = try container.decode(AIProbeStatus.self, forKey: .textCompletion)
+        streaming = try container.decodeIfPresent(AIProbeStatus.self, forKey: .streaming) ?? .notTested
+        nativeTools = try container.decodeIfPresent(AIProbeStatus.self, forKey: .nativeTools) ?? .notTested
+        toolChoice = try container.decodeIfPresent(AIProbeStatus.self, forKey: .toolChoice) ?? .notTested
+        jsonMode = try container.decodeIfPresent(AIProbeStatus.self, forKey: .jsonMode) ?? .notTested
+        jsonSchema = try container.decodeIfPresent(AIProbeStatus.self, forKey: .jsonSchema) ?? .notTested
+        details = try container.decodeIfPresent([String].self, forKey: .details) ?? []
     }
 
     public var supportsOrdinaryChat: Bool {

@@ -76,6 +76,19 @@ public extension AIProviderError {
                 || text.contains("unknown parameter"))
     }
 
+    var explicitlyRejectsStructuredOutput: Bool {
+        guard case let .httpStatusDetail(_, detail) = self else { return false }
+        let text = detail.lowercased()
+        let fieldMentions = text.contains("response_format")
+            || text.contains("text.format")
+            || text.contains("json_schema")
+            || text.contains("json_object")
+        return fieldMentions
+            && (text.contains("not supported")
+                || text.contains("unsupported")
+                || text.contains("unknown parameter"))
+    }
+
     /// 是否属于「瞬时故障」——值得再试一次，而不是配置或业务层面的确定性错误。
     /// 供 Provider 内部重试与上层（如 AgentRunner）判定是否补一次重试共用。
     var isTransient: Bool {
@@ -285,6 +298,10 @@ public struct OpenAICompatibleProvider: AIProvider {
         details.append(contentsOf: streaming.details)
         let tools = await probeNativeTools()
         details.append(contentsOf: tools.details)
+        let jsonModeProbe = await probeJSONOutput()
+        details.append(contentsOf: jsonModeProbe.details)
+        let jsonSchemaProbe = await probeJSONSchema()
+        details.append(contentsOf: jsonSchemaProbe.details)
         return AIConnectionResult(
             latency: Date().timeIntervalSince(started),
             model: response.model,
@@ -296,6 +313,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                 streaming: streaming.status,
                 nativeTools: tools.native,
                 toolChoice: tools.toolChoice,
+                jsonMode: jsonModeProbe.status,
+                jsonSchema: jsonSchemaProbe.status,
                 details: details
             )
         )
@@ -391,6 +410,44 @@ public struct OpenAICompatibleProvider: AIProvider {
             return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
         } catch {
             return (.unavailable, .notTested, [String(localized: "原生工具探测未完成：\(error.localizedDescription)", bundle: .module)])
+        }
+    }
+
+    private func probeJSONOutput() async -> (status: AIProbeStatus, details: [String]) {
+        await probeStructuredOutput(format: .jsonObject)
+    }
+
+    private func probeJSONSchema() async -> (status: AIProbeStatus, details: [String]) {
+        let schema = try! AIJSONValue(jsonString: #"""
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"ok": {"type": "boolean"}},
+          "required": ["ok"]
+        }
+        """#)
+        return await probeStructuredOutput(
+            format: .jsonSchema(name: "auralis_probe", schema: schema, strict: true)
+        )
+    }
+
+    private func probeStructuredOutput(format: AIOutputFormat) async -> (status: AIProbeStatus, details: [String]) {
+        do {
+            let response = try await complete(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: #"Return JSON exactly: {"ok":true}"#)],
+                temperature: 0,
+                maxTokens: 32,
+                outputFormat: format
+            ))
+            if (try? AIJSONValue(jsonData: Data(response.content.utf8))) == .object(["ok": .bool(true)]) {
+                return (.passed, [])
+            }
+            return (.degraded, [String(localized: "结构化输出请求已接受，但响应不是约定 JSON；本次不缓存为能力。", bundle: .module)])
+        } catch let error as AIProviderError where error.explicitlyRejectsStructuredOutput {
+            return (.failed, [String(localized: "服务端明确拒绝结构化输出：\(error.localizedDescription)", bundle: .module)])
+        } catch {
+            return (.degraded, [String(localized: "结构化输出探测未完成：\(error.localizedDescription)；这是瞬时观测，不会关闭生产能力。", bundle: .module)])
         }
     }
 
@@ -1254,7 +1311,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         return body
     }
 
-    private static func encodeChatOutputFormat(_ format: AIOutputFormat?) -> [String: Any]? {
+    static func encodeChatOutputFormat(_ format: AIOutputFormat?) -> [String: Any]? {
         switch format {
         case nil, .text:
             return nil
@@ -1273,7 +1330,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         }
     }
 
-    private static func encodeResponsesOutputFormat(_ format: AIOutputFormat?) -> [String: Any]? {
+    static func encodeResponsesOutputFormat(_ format: AIOutputFormat?) -> [String: Any]? {
         switch format {
         case nil, .text:
             return nil

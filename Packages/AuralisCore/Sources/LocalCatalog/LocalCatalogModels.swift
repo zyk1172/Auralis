@@ -267,18 +267,44 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        moods = try container.decodeIfPresent([String].self, forKey: .moods) ?? []
-        scenes = try container.decodeIfPresent([String].self, forKey: .scenes) ?? []
+        moods = try Self.decodeStringArray(.moods, from: container)
+        scenes = try Self.decodeStringArray(.scenes, from: container)
         energy = try container.decodeIfPresent(Int.self, forKey: .energy) ?? 3
         tempo = try container.decodeIfPresent(Int.self, forKey: .tempo) ?? 3
         acousticness = try container.decodeIfPresent(Int.self, forKey: .acousticness) ?? 3
         danceability = try container.decodeIfPresent(Int.self, forKey: .danceability) ?? 3
-        vocals = try container.decodeIfPresent([String].self, forKey: .vocals) ?? []
-        textures = try container.decodeIfPresent([String].self, forKey: .textures) ?? []
-        styles = try container.decodeIfPresent([String].self, forKey: .styles) ?? []
+        vocals = try Self.decodeStringArray(.vocals, from: container)
+        textures = try Self.decodeStringArray(.textures, from: container)
+        styles = try Self.decodeStringArray(.styles, from: container)
         semanticTags = try container.decodeIfPresent([RecommendationIndexSemanticTag].self, forKey: .semanticTags) ?? []
         mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "full"
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
+    }
+
+    private static func decodeStringArray(
+        _ key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> [String] {
+        guard container.contains(key) else { return [] }
+        if try container.decodeNil(forKey: key) { return [] }
+
+        if let values = try? container.decode([String].self, forKey: key) {
+            return values
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        if let scalar = try? container.decode(String.self, forKey: key) {
+            let normalized = scalar.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalized.isEmpty ? [] : [normalized]
+        }
+
+        throw DecodingError.typeMismatch(
+            [String].self,
+            DecodingError.Context(
+                codingPath: container.codingPath + [key],
+                debugDescription: "\(key.stringValue) 必须是 string 或 string[]"
+            )
+        )
     }
 }
 
