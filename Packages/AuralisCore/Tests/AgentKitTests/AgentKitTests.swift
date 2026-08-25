@@ -670,95 +670,6 @@ func serverSearchReturnsServerTracks() async throws {
     }
 }
 
-// MARK: - Offline degrade (no LLM)
-
-@Test("Offline degrade: play still works without the LLM")
-func offlinePlay() async throws {
-    let store = try makeStore()
-    let track = makeTrack(serverID: "test-server", remoteID: "zz-1", title: "ZZPlayUnique")
-    try await seed(store, [track])
-    let bridge = MockAgentBridge()
-    let collector = EmittedCollector()
-    let log = ActionRecorder()
-    let gid = GlobalID(serverID: "test-server", remoteID: "zz-1")
-    await AgentRunner.run(
-        userText: "播放 ZZPlayUnique",
-        provider: nil,
-        model: "scripted-model",
-        bridge: bridge,
-        catalog: store,
-        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
-        confirm: { _ in true },
-        emit: { await collector.record($0) },
-        log: { await log.add($0) }
-    )
-    #expect(await bridge.playedTracks.contains(gid))
-    #expect(await collector.containsText("开始播放"))
-    #expect(await log.containsTool("playback_play_song"))
-}
-
-@Test("Offline degrade: no match does not play")
-func offlineNoMatch() async throws {
-    let store = try makeStore()
-    let track = makeTrack(serverID: "test-server", remoteID: "zz-1", title: "ZZPlayUnique")
-    try await seed(store, [track])
-    let bridge = MockAgentBridge()
-    let collector = EmittedCollector()
-    await AgentRunner.run(
-        userText: "播放 不存在的歌",
-        provider: nil,
-        model: "scripted-model",
-        bridge: bridge,
-        catalog: store,
-        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
-        confirm: { _ in true },
-        emit: { await collector.record($0) }
-    )
-    #expect(await bridge.playedTracks.isEmpty)
-    #expect(await collector.containsText("未找到可播放的歌曲"))
-}
-
-@Test("Offline degrade: like works without the LLM")
-func offlineLike() async throws {
-    let store = try makeStore()
-    let track = makeTrack(serverID: "test-server", remoteID: "zz-1", title: "ZZLikeUnique")
-    try await seed(store, [track])
-    let bridge = MockAgentBridge()
-    let log = ActionRecorder()
-    let gid = GlobalID(serverID: "test-server", remoteID: "zz-1")
-    await AgentRunner.run(
-        userText: "收藏 ZZLikeUnique",
-        provider: nil,
-        model: "scripted-model",
-        bridge: bridge,
-        catalog: store,
-        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
-        confirm: { _ in true },
-        emit: { _ in },
-        log: { await log.add($0) }
-    )
-    #expect(await bridge.likedTracks.contains(gid))
-    #expect(await log.containsTool("favorite_set"))
-}
-
-@Test("Offline degrade: 创建歌单不会被通用歌单列表分支截走")
-func offlineCreatePlaylist() async throws {
-    let store = try makeStore()
-    let bridge = MockAgentBridge(activeServerID: "test-server")
-    let collector = EmittedCollector()
-    await AgentRunner.run(
-        userText: "创建歌单 深夜驾驶",
-        provider: nil,
-        model: "scripted-model",
-        bridge: bridge,
-        catalog: store,
-        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
-        confirm: { _ in true },
-        emit: { await collector.record($0) }
-    )
-    #expect(bridge.createdPlaylistNames.contains("深夜驾驶"))
-    #expect(await collector.containsText("已创建歌单"))
-}
 
 @Test("Provider failure does not silently switch an explicit music request to offline execution")
 func providerFailureDoesNotSwitchProtocol() async throws {
@@ -779,8 +690,7 @@ func providerFailureDoesNotSwitchProtocol() async throws {
         emit: { await collector.record($0) }
     )
     #expect(!(await bridge.playedTracks.contains(gid)))
-    // 同一任务必须保留 Provider 协议的语义；只有根本没有 Provider
-    // 时，才会进入显式的离线兼容路径。
+    // Provider 失败不切离线协议；AI Assistant 直接报告不可用。
     #expect(await collector.containsAnyError())
 }
 
@@ -1834,26 +1744,4 @@ func toolSelectorExposesCatalogIndexTools() {
     let names = Set(selected.map(\.name))
     #expect(names.contains("library_get_catalog_index"))
     #expect(names.contains("library_get_catalog_tracks"))
-}
-
-@Test("Offline recommendation picks from favorites instead of dead-ending")
-func offlineRecommendationUsesFavorites() async throws {
-    let store = try makeStore()
-    let track = with(makeTrack(serverID: "test-server", remoteID: "r1", title: "推荐歌")) { $0.streamURL = URL(string: "https://e.com/1") }
-    try await seed(store, [track])
-    try await store.setFavorite(GlobalID(serverID: "test-server", remoteID: "r1"), value: true)
-    let bridge = MockAgentBridge()
-    let collector = EmittedCollector()
-    await AgentRunner.run(
-        userText: "推荐几首歌",
-        provider: nil,
-        model: "scripted-model",
-        bridge: bridge,
-        catalog: store,
-        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
-        confirm: { _ in true },
-        emit: { await collector.record($0) }
-    )
-    #expect(await collector.containsText("离线推荐"))
-    #expect(await collector.containsText("未找到可播放的歌曲") == false)
 }

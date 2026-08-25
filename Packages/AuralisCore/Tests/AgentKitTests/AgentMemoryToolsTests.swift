@@ -298,7 +298,9 @@ struct AgentSystemPromptTests {
         )
         let prompt = AgentRunner.systemPrompt(context: AgentRunner.Context(), tools: selected, nativeToolCalling: false)
         #expect(prompt.contains("library_index_status"))
-        #expect(!prompt.contains("recommendation_index_commit"))
+        // commit 只作为"不可见"规则文本出现，绝不能作为工具契约进入提示词。
+        #expect(!prompt.contains("- recommendation_index_commit("), "commit 不得作为 ACTION 契约工具行")
+        #expect(!prompt.contains("## ACTION 参数契约（仅本轮可用工具）\n- recommendation_index_commit"))
     }
 
     @Test("索引任务的后续短指令只保留公开状态工具")
