@@ -46,7 +46,9 @@ public enum AgentUserFacingSanitizer {
     }
 
     public static func chatMessage(_ message: AgentChatMessage) -> AgentChatMessage {
-        AgentChatMessage(
+        // User-authored text is verbatim; only assistant output needs ID hiding.
+        guard message.role == .assistant else { return message }
+        return AgentChatMessage(
             id: message.id,
             role: message.role,
             messages: message.messages.map(sanitize),

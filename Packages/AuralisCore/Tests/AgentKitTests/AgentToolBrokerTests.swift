@@ -63,10 +63,38 @@ struct AgentToolBrokerTests {
             #expect(plan.authorization.allowedOperations == [.playlistDelete])
         }
 
+        // Post-position verb order must not regress (P1 from review round 3).
+        let postPosition = [
+            "把歌单 通勤 删除",
+            "把通勤这个歌单删除",
+            "把通勤歌单删掉",
+        ]
+        for command in postPosition {
+            let plan = makePlan(command)
+            #expect(plan.semantics.domain == .playlist, "\(command) 应识别为 playlist 域")
+            #expect(plan.authorization.allowedOperations.contains(.playlistDelete), "\(command) 应授权 playlistDelete，实际：\(plan.authorization.allowedOperations)")
+        }
+
         for command in ["删除歌单怎么操作？", "删除歌单是什么意思？", "删除歌单要怎么弄？"] {
             let plan = makePlan(command)
             #expect(plan.authorization.allowedOperations.isEmpty)
             #expect(!plan.authorization.allowedOperations.contains(.playlistDelete))
+        }
+
+        // Spaced variants must not have their instructional signal consumed by
+        // entity masking (P0 regression from review round 3).
+        let spacedInstructional = [
+            "删除歌单 怎么操作？",
+            "删除歌单 如何操作？",
+            "删除歌单 是什么意思？",
+            "删除歌单 要怎么弄？",
+            "删除歌单 应该怎么删除？",
+            "删除这个歌单 怎么操作？",
+        ]
+        for command in spacedInstructional {
+            let plan = makePlan(command)
+            #expect(plan.authorization.allowedOperations.isEmpty, "\(command) 不应产生任何授权，实际：\(plan.authorization.allowedOperations)")
+            #expect(!plan.authorization.allowedOperations.contains(.playlistDelete), "\(command) 不得授权 playlistDelete")
         }
 
         // Masking must preserve an explicit second command after the entity.
