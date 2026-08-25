@@ -331,14 +331,12 @@ extension LocalCatalogStore {
                 // 只补开放标签：不要求固定维度合法，也绝不触碰旧固定维度。
                 return (item, line)
             }
+            // Numeric ranges are the validity boundary; categorical arrays may be
+            // legitimately empty so the model never invents a tag just to pass.
             guard (1...10).contains(item.energy),
                   (1...5).contains(item.tempo),
                   (1...5).contains(item.acousticness),
-                  (1...5).contains(item.danceability),
-                  !normalizedTags(item.moods, allowed: RecommendationIndex.moods).isEmpty ||
-                  !normalizedTags(item.scenes, allowed: RecommendationIndex.scenes).isEmpty ||
-                  !normalizedTags(item.textures, allowed: RecommendationIndex.textures).isEmpty ||
-                  !normalizedTags(item.styles, allowed: RecommendationIndex.styles).isEmpty
+                  (1...5).contains(item.danceability)
             else { return nil }
             return (item, line)
         }
@@ -347,6 +345,21 @@ extension LocalCatalogStore {
             // Do this check before opening the transaction. A malformed item
             // must never allow the valid prefix to become a partial commit.
             throw RecommendationIndexWriteError.invalidBatch
+        }
+        if requireExact {
+            // Strict writes must not silently drop non-canonical fixed values.
+            // Every categorical entry must already be in its canonical set.
+            let strictValid = classifications.prefix(100).allSatisfy { item in
+                guard item.mode != "semanticTagsOnly" else { return true }
+                return item.moods.allSatisfy { RecommendationIndex.moods.contains($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    && item.scenes.allSatisfy { RecommendationIndex.scenes.contains($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    && item.vocals.allSatisfy { RecommendationIndex.vocals.contains($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    && item.textures.allSatisfy { RecommendationIndex.textures.contains($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    && item.styles.allSatisfy { RecommendationIndex.styles.contains($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            }
+            if !strictValid {
+                throw RecommendationIndexWriteError.invalidBatch
+            }
         }
         guard !valid.isEmpty else { return 0 }
 

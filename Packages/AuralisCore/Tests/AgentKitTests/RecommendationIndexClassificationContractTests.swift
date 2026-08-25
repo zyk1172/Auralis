@@ -120,4 +120,77 @@ struct RecommendationIndexClassificationContractTests {
         #expect(diagnostic.expectedType == nil)
         #expect(diagnostic.actualType == nil)
     }
+
+    // MARK: - Taxonomy pre-validation
+
+    @Test("Canonical taxonomy values pass parser validation")
+    func canonicalTaxonomyPasses() throws {
+        let current = batch(["track"])
+        let item = envelopeJSON("track", moods: #"["忧郁"]"#, scenes: #"["深夜"]"#, vocals: #"["女声"]"#, textures: #"["氛围"]"#, styles: #"["流行"]"#)
+        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        #expect(try result.get().items.count == 1)
+    }
+
+    @Test("Synonym values fail at taxonomy stage before commit")
+    func synonymTaxonomyFails() throws {
+        let current = batch(["track"])
+        let item = envelopeJSON("track", moods: #"["伤感"]"#, scenes: #"["夜晚"]"#, vocals: #"["女声"]"#, textures: #"["柔和"]"#, styles: #"["流行音乐"]"#)
+        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        guard case let .failure(diagnostic) = result else {
+            Issue.record("expected taxonomy failure")
+            return
+        }
+        #expect(diagnostic.stage == .taxonomy)
+    }
+
+    @Test("Mixed canonical and synonym values fail atomically")
+    func mixedTaxonomyFails() throws {
+        let current = batch(["track"])
+        let item = envelopeJSON("track", moods: #"["忧郁","伤感"]"#, scenes: #"["深夜"]"#, vocals: #"["女声"]"#, textures: #"[]"#, styles: #"[]"#)
+        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        guard case let .failure(diagnostic) = result else {
+            Issue.record("expected taxonomy failure for mixed values")
+            return
+        }
+        #expect(diagnostic.stage == .taxonomy)
+    }
+
+    @Test("Vocals-only categorical classification is valid")
+    func vocalsOnlyIsValid() throws {
+        let current = batch(["track"])
+        let item = envelopeJSON("track", moods: "[]", scenes: "[]", vocals: #"["器乐"]"#, textures: "[]", styles: "[]")
+        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        #expect(try result.get().items.count == 1)
+    }
+
+    @Test("Empty categorical arrays are valid when numeric dimensions pass")
+    func emptyCategoricalArraysAreValid() throws {
+        let current = batch(["track"])
+        let item = envelopeJSON("track", moods: "[]", scenes: "[]", vocals: "[]", textures: "[]", styles: "[]")
+        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        #expect(try result.get().items.count == 1)
+    }
+
+    @Test("semanticTags as plain string array fails at codableDecode stage")
+    func semanticTagsStringArrayFailsCodable() throws {
+        let current = batch(["track"])
+        let json = """
+        {"batchID":"\(current.batchID.uuidString)","revision":7,"mode":"full","items":[
+          {"id":"track","moods":["忧郁"],"scenes":["深夜"],"energy":3,"tempo":3,
+           "acousticness":3,"danceability":3,"vocals":["女声"],"textures":["钢琴"],
+           "styles":["流行"],"semanticTags":["夜行感"],"mode":"full","confidence":0.9}
+        ]}
+        """
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        guard case let .failure(diagnostic) = result else {
+            Issue.record("expected codableDecode failure")
+            return
+        }
+        #expect(diagnostic.stage == .codableDecode)
+    }
 }
