@@ -124,6 +124,9 @@ public struct ToolExecutorContext: Sendable {
     public let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
     public let customToolRegistry: CustomToolRegistry
     public let availableToolDescriptors: [ToolDescriptor]
+    /// run-scoped Capability 环境快照（System Prompt / capabilities_get /
+    /// 诊断共用同一份）。capabilities_get 直接消费，不再自行重新采集。
+    public let capabilityEnvironment: AgentCapabilityEnvironment?
 
     public init(
         bridge: any AgentBridge,
@@ -141,7 +144,8 @@ public struct ToolExecutorContext: Sendable {
         resourceLeaseRegistry: MutationResourceLeaseRegistry,
         recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry,
         customToolRegistry: CustomToolRegistry = .shared,
-        availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all
+        availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
+        capabilityEnvironment: AgentCapabilityEnvironment? = nil
     ) {
         self.bridge = bridge
         self.catalog = catalog
@@ -159,6 +163,7 @@ public struct ToolExecutorContext: Sendable {
         self.recommendationIndexExecutionRegistry = recommendationIndexExecutionRegistry
         self.customToolRegistry = customToolRegistry
         self.availableToolDescriptors = availableToolDescriptors
+        self.capabilityEnvironment = capabilityEnvironment
     }
 
     /// Execute a child canonical call from a declarative tool.  The child

@@ -210,4 +210,58 @@ struct AgentToolBrokerTests {
         #expect(text.contains("超过上限"), "应提示单轮上限")
         #expect(text.contains("80"), "应说明候选总数")
     }
+
+    // MARK: - 第三轮 Review 修复回归
+
+    @Test("R3 「来点适合深夜听的」→ 推荐场景，绝不授权 playbackPlay")
+    func weakPlaybackHintDoesNotAuthorize() {
+        let semantics = AgentRequestSemantics.analyze("来点适合深夜听的")
+        #expect(!semantics.requestedOperations.contains(.playbackPlay),
+                "「来点」是弱播放提示，不得扩大播放授权")
+        #expect(semantics.operation != .mutate || semantics.requestedOperations.isEmpty,
+                "弱表达不应产生播放 mutation")
+    }
+
+    @Test("R3 「整点周杰伦听听」→ 完整结构才授权 playbackPlay")
+    func zhengdianListeningAuthorizesPlayback() {
+        let semantics = AgentRequestSemantics.analyze("整点周杰伦听听")
+        #expect(semantics.requestedOperations.contains(.playbackPlay),
+                "「整点 X 听听」完整结构是明确播放意图")
+        let bare = AgentRequestSemantics.analyze("整点好听的")
+        #expect(!bare.requestedOperations.contains(.playbackPlay), "裸「整点」不授权播放")
+    }
+
+    @Test("R3 英文评分查询真正只读：operation .read、isReadOnly、无副作用")
+    func englishRatingQueryIsTrulyReadOnly() {
+        for text in ["what is this track's rating?", "what's the rating of this song?"] {
+            let semantics = AgentRequestSemantics.analyze(text)
+            #expect(!semantics.requestedOperations.contains(.ratingSet), "「\(text)」不得授权 ratingSet")
+            #expect(!semantics.requestedOperations.contains(.favoriteSet), "「\(text)」不得误授权 favoriteSet")
+            #expect(semantics.operation == .read, "「\(text)」operation 必须 .read，实际 \(semantics.operation)")
+            #expect(semantics.isReadOnly, "「\(text)」必须真正只读")
+            #expect(!semantics.requiresSideEffect, "「\(text)」不得要求副作用")
+        }
+    }
+
+    @Test("R3 Provider Hosted Web Search 使 web_research 可用（无 App 服务时）")
+    func hostedWebMakesWebResearchAvailable() {
+        let web = AgentCapabilityCatalog.capability(id: "web_research")!
+        // Provider 支持 Hosted Web Search，但 webService == nil：
+        let env = AgentCapabilityEnvironment(
+            providerAvailable: true, catalogAvailable: true, activeServer: true,
+            webAvailable: false,
+            webSearchAvailable: true, webFetchAvailable: false
+        )
+        if case .available = AgentCapabilityCatalog.availability(for: web, environment: env) {} else {
+            Issue.record("Provider Hosted Web Search 可用时 web_research 不得 unavailable")
+        }
+        // 全无联网能力时 unavailable：
+        let none = AgentCapabilityEnvironment(
+            providerAvailable: true, catalogAvailable: true, activeServer: true,
+            webAvailable: false, webSearchAvailable: false, webFetchAvailable: false
+        )
+        if case .unavailable = AgentCapabilityCatalog.availability(for: web, environment: none) {} else {
+            Issue.record("无任何联网能力时 web_research 必须 unavailable")
+        }
+    }
 }

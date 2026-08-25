@@ -561,6 +561,16 @@ public struct ToolLoop {
         var selectedTools = ToolSelector.select(plan: plan, all: availableToolDescriptors)
         let directReadToolName = plan.semantics.directReadCapability?.toolName
         let effectiveAuthorization = sideEffectAuthorization
+        // run-scoped Capability 快照：普通聊天路径的 capabilities_get 与
+        // System Prompt 摘要共用同一份真实状态。getActiveServer 用 try? 保护：
+        // 任务取消时静默降级（activeServer=false），不打断既有的取消处理路径。
+        let capabilityEnvironment = await Self.capabilityEnvironment(
+            provider: provider,
+            catalog: catalog,
+            systemService: systemService,
+            webService: webService,
+            activeServer: (try? await bridge.getActiveServer()) != nil
+        )
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -761,7 +771,8 @@ public struct ToolLoop {
                     resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
                     recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                     customToolRegistry: context.customToolRegistry,
-                    availableToolDescriptors: availableToolDescriptors
+                    availableToolDescriptors: availableToolDescriptors,
+                    capabilityEnvironment: capabilityEnvironment
                 )
                 let structuredCalls = calls.map { call in
                     call.usesTextProtocol
@@ -1223,7 +1234,7 @@ public struct ToolLoop {
             catalog: catalog,
             systemService: systemService,
             webService: webService,
-            activeServer: (await bridge.getActiveServer()) != nil
+            activeServer: (try? await bridge.getActiveServer()) != nil
         )
         var conversation = AgentContextBuilder.build(
             systemPrompt: Self.systemPrompt(
@@ -1270,6 +1281,17 @@ public struct ToolLoop {
         var ws = AgentTaskWorkingSet(
             targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
         )
+        // AI final-selection 上限 50：超过时 fail-fast。单轮模型可见候选窗口
+        // 最多 50 个真实 TrackID，而 finalSelection completion 要求达到
+        // targetCount——若接受 targetCount>50 会进入「目标无法满足」的死路，
+        // 必须在任务建立边界就明确拒绝，而不是静默截断误导模型。
+        if let target = ws.targetQueueCount, target > 50 {
+            await emit(AgentChatMessage(
+                role: .assistant,
+                messages: [.error("当前一次 AI 选歌任务最多支持 50 首（本次要求 \(target) 首）。请缩小数量或分批进行。")]
+            ))
+            return
+        }
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
@@ -2126,6 +2148,7 @@ public struct ToolLoop {
                             recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                             customToolRegistry: context.customToolRegistry,
                             availableToolDescriptors: availableToolDescriptors,
+                            capabilityEnvironment: capabilityEnvironment,
                             runID: runID,
                             callID: executionCallID
                         )
@@ -3247,11 +3270,16 @@ public struct ToolLoop {
         webService: (any AgentWebService)?,
         activeServer: Bool
     ) -> AgentCapabilityEnvironment {
-        AgentCapabilityEnvironment(
+        // Provider 自带 Hosted Web Search / Fetch 时，即使没有 App 自有
+        // AgentWebService，联网能力仍真实可用——避免模型自省误报不可用。
+        let providerCaps = provider?.capabilities
+        return AgentCapabilityEnvironment(
             providerAvailable: provider != nil,
             catalogAvailable: true,
             activeServer: activeServer,
             webAvailable: webService != nil,
+            webSearchAvailable: webService != nil || (providerCaps?.supportsHostedWebSearch ?? false),
+            webFetchAvailable: webService != nil || (providerCaps?.supportsHostedWebFetch ?? false),
             downloadServiceAvailable: systemService != nil,
             systemServiceAvailable: systemService != nil
         )

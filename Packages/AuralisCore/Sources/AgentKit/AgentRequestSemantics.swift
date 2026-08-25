@@ -120,10 +120,19 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         // playback mutations. Keep the verb signal separate from nouns.
         let barePlaybackVerb = has(["播放"])
             && !has(["播放列表", "播放队列", "播放状态", "正在播放什么", "当前播放什么", "最近播放", "最近听过", "播放历史"])
-        let explicitPlaybackAction = has([
-            "先放", "放一首", "放一组", "放几首", "直接放", "给我放", "来首", "来点", "整点", "来一首", "放一下", "暂停", "下一首", "上一首", "继续播放", "快进", "快退", "跳转", "循环播放",
-            "随机播放", "play", "playback", "pause", "resume", "next track", "previous track",
+        // 强播放授权：明确播放动词（含「整点 X 听听」完整结构）才产生
+        // .playbackPlay 等播放 mutation 授权。弱表达（来点/想听/适合/深夜…）
+        // 只属于 Tool Relevance，绝不扩大授权——Recall 宽、Authorization 窄。
+        let strongPlaybackAction = has([
+            "先放", "放一首", "放一组", "放几首", "直接放", "给我放", "来首", "来一首", "放一下",
+            "暂停", "下一首", "上一首", "继续播放", "快进", "快退", "跳转", "循环播放", "随机播放",
+            "play", "playback", "pause", "resume", "next track", "previous track",
         ]) || barePlaybackVerb
+            // 「整点周杰伦听听」→ 完整结构（整点 + 听听）才算播放意图；裸「整点」不授权。
+            || (has(["整点"]) && has(["听听"]))
+        // 弱播放提示：仅用于音乐上下文判定与 Tool Broker 宽松召回，不产生任何授权。
+        let weakPlaybackHint = has(["来点", "想听", "适合", "听听", "来几首"])
+        let explicitPlaybackAction = strongPlaybackAction || weakPlaybackHint
 
         // 队列操作采用「domain target + action」结构化判定（P1-1）：
         // 裸动词“换成/换为/替换成”不得独立产生 queue 授权
@@ -291,14 +300,14 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if has(["播放队列", "队列", "queue"]) && !explicitQueueAction {
                 return Self.directRead("queue_get")
             }
-            if playbackQuery && !explicitPlaybackAction {
+            if playbackQuery && !strongPlaybackAction {
                 return Self.directRead("playback_get_state")
             }
             if collectionQuery {
                 return Self.directRead("library_get_starred")
             }
             if has(["最近播放", "最近听过", "播放历史", "recent history"])
-                && !explicitPlaybackAction {
+                && !strongPlaybackAction {
                 return Self.directRead("library_get_recently_played", limit: requestedLimit)
             }
             if librarySummaryQuery {
@@ -331,7 +340,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         // 同义表达 → canonical operation 的确定性编译。Task Compiler 不允许
         // LLM 输出权限：queueReplace 只来自结构化判定（explicitQueueReplace），
         // 裸“换成/换为/替换成”不再授权任何 mutation。
-        if explicitPlaybackAction && !playbackQuery {
+        if strongPlaybackAction && !playbackQuery {
             if has(["暂停", "pause"]) { requested.insert(.playbackPause) }
             else if has(["下一首", "上一首", "next track", "previous track"]) { requested.insert(.playbackNavigation) }
             else if has(["快进", "快退", "跳转", "seek"]) { requested.insert(.playbackSeek) }
@@ -473,14 +482,16 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             return Self(domain: .queue, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces), directReadCapability: directReadCapability)
         }
 
-        if explicitPlaybackAction || (explicitMusicNouns && has(["播放"])) {
+        if strongPlaybackAction || (explicitMusicNouns && has(["播放"])) {
             let namespaces = recommendationRequest
                 ? ["playback", "catalog", "recommendation"]
                 : ["playback", "catalog"]
             return Self(domain: .playback, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces), directReadCapability: directReadCapability)
         }
         if explicitAnnotationAction {
-            return Self(domain: .musicLibrary, operation: .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["annotation", "catalog"])
+            // 评分/收藏查询（requested 空，如“这首歌的评分是多少？”）必须真正只读；
+            // 只有产生了明确 mutation operation 才 .mutate。
+            return Self(domain: .musicLibrary, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["annotation", "catalog"])
         }
         if recommendationRequest && isMusicContext {
             return Self(domain: .recommendation, operation: .discover, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["catalog", "playback"])

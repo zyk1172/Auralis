@@ -298,9 +298,12 @@ public enum ToolSelector {
             }
             let exampleHit = descriptor.utteranceExamples.contains { example in
                 let exampleLower = example.lowercased()
+                // 完整示例子串命中 = 高置信度 admission。
                 if lower.contains(exampleLower) || exampleLower.contains(lower) { return true }
+                // 宽松召回最低门槛：至少 2 个 bigram 重叠才纳入——单个高频二字词
+                // （歌曲/播放/歌单/适合）不构成 admission 依据，防止 schema inflation。
                 let overlap = userGrams.intersection(cjkBigrams(of: exampleLower))
-                return !overlap.isEmpty
+                return overlap.count >= 2
             }
             let operationHit = descriptor.authorizationOperation.map {
                 semantics.requestedOperations.contains($0)

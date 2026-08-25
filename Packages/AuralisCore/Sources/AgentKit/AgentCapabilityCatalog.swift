@@ -69,7 +69,12 @@ public struct AgentCapabilityEnvironment: Sendable, Equatable {
     public let providerAvailable: Bool
     public let catalogAvailable: Bool
     public let activeServer: Bool
+    /// App 自有联网服务（AgentWebService）是否可用。
     public let webAvailable: Bool
+    /// 联网搜索：App 服务 或 Provider 托管搜索（supportsHostedWebSearch）。
+    public let webSearchAvailable: Bool
+    /// 联网网页读取：App 服务 或 Provider 托管抓取（supportsHostedWebFetch）。
+    public let webFetchAvailable: Bool
     public let downloadServiceAvailable: Bool
     public let systemServiceAvailable: Bool
 
@@ -78,6 +83,8 @@ public struct AgentCapabilityEnvironment: Sendable, Equatable {
         catalogAvailable: Bool = true,
         activeServer: Bool = false,
         webAvailable: Bool = false,
+        webSearchAvailable: Bool? = nil,
+        webFetchAvailable: Bool? = nil,
         downloadServiceAvailable: Bool = false,
         systemServiceAvailable: Bool = false
     ) {
@@ -85,6 +92,9 @@ public struct AgentCapabilityEnvironment: Sendable, Equatable {
         self.catalogAvailable = catalogAvailable
         self.activeServer = activeServer
         self.webAvailable = webAvailable
+        // 未显式给定时，webSearch/Fetch 回退到 webAvailable（App 服务覆盖两者）。
+        self.webSearchAvailable = webSearchAvailable ?? webAvailable
+        self.webFetchAvailable = webFetchAvailable ?? webAvailable
         self.downloadServiceAvailable = downloadServiceAvailable
         self.systemServiceAvailable = systemServiceAvailable
     }
@@ -394,8 +404,12 @@ public enum AgentCapabilityCatalog {
                     return .degraded(reason: "未连接音乐服务器；本地目录能力仍可用")
                 }
             case .webService:
-                if !environment.webAvailable {
-                    return .unavailable(reason: "联网能力未配置")
+                // App 服务、Provider Hosted Web Search、Provider Hosted Web Fetch
+                // 任一可用都算联网可用——避免 Provider 自带托管搜索时被误报不可用。
+                if !environment.webAvailable
+                    && !environment.webSearchAvailable
+                    && !environment.webFetchAvailable {
+                    return .unavailable(reason: "联网能力未配置（App 服务与 Provider 托管搜索均不可用）")
                 }
             case .downloadService:
                 if !environment.downloadServiceAvailable {

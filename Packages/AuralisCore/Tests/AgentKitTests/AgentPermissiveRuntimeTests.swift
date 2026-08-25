@@ -1391,12 +1391,12 @@ struct AgentPermissiveRuntimeTests {
         bridge.slowTestConnection = true
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
-            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"80"}}"#,
+            #"ACTION: {"tool":"library_select_tracks","args":{"limit":"40"}}"#,
             #"ACTION: {"tool":"server_test_connection","args":{"serverID":"test-server"}}"#,
         ])
         let task = Task {
             await AgentRunner.run(
-                userText: "搜索 80 首候选",
+                userText: "搜索 40 首候选",
                 provider: provider,
                 model: "scripted-model",
                 bridge: bridge,
@@ -1420,7 +1420,7 @@ struct AgentPermissiveRuntimeTests {
             do { _ = try await group.next() } catch { Issue.record("取消后任务未能及时结束") }
             group.cancelAll()
         }
-        // Cancel 时绝不倾倒 80 首候选。
+        // Cancel 时绝不倾倒候选（40 首，不触发 >50 fail-fast，保持 cancel 语义）。
         #expect(await collector.containsAnyTrackCards() == false)
         #expect(await collector.containsText("已取消"))
     }
@@ -1478,5 +1478,36 @@ struct AgentPermissiveRuntimeTests {
         // 无证据的“大众共识”不能作为成功回答输出。
         #expect(await collector.containsError("没有满足确定性完成条件"))
         #expect(await collector.containsText("广受好评") == false)
+    }
+
+    @Test("TEST-50 超过 50 首的任务在建立边界 fail-fast")
+    func overFiftyFailsFast() async throws {
+        let store = try makePermStore()
+        let tracks = (0..<60).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
+        try await seedPerm(store, tracks)
+        let bridge = PermissiveBridge()
+        let system = PermissiveSystemService()
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"深夜"}}"#,
+        ])
+        await AgentRunner.run(
+            userText: "推荐 80 首适合深夜开的歌",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+            systemService: system,
+            intent: .conversation,
+            toolTimeout: 30,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+        // fail-fast：明确告知上限，不进入永远无法满足的 targetCount=80 死路。
+        #expect(await collector.containsError("最多支持 50 首"))
+        // 不执行任何 mutation / 不展示候选。
+        #expect(await collector.containsAnyTrackCards() == false)
+        #expect(await collector.containsError("没有进展") == false)
     }
 }

@@ -97,7 +97,8 @@ public struct ToolRuntime {
         resourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry(),
         recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
         customToolRegistry: CustomToolRegistry = .shared,
-        availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all
+        availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
+        capabilityEnvironment: AgentCapabilityEnvironment? = nil
     ) async -> ToolResult {
         let descriptor: ToolDescriptor?
         if let builtIn = AgentToolRegistry.descriptor(for: call.name) {
@@ -177,7 +178,8 @@ public struct ToolRuntime {
                 resourceLeaseRegistry: resourceLeaseRegistry,
                 recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
                 customToolRegistry: customToolRegistry,
-                availableToolDescriptors: availableToolDescriptors
+                availableToolDescriptors: availableToolDescriptors,
+                capabilityEnvironment: capabilityEnvironment
             )
             let resources = descriptor.mutationResources
             if !resources.isEmpty {
@@ -263,6 +265,7 @@ public struct ToolRuntime {
         recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
         customToolRegistry: CustomToolRegistry = .shared,
         availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
+        capabilityEnvironment: AgentCapabilityEnvironment? = nil,
         runID: UUID? = nil,
         callID: String? = nil,
         metricsCollector: ToolMetricsCollector? = .shared
@@ -299,7 +302,8 @@ public struct ToolRuntime {
             resourceLeaseRegistry: resourceLeaseRegistry,
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
             customToolRegistry: customToolRegistry,
-            availableToolDescriptors: availableToolDescriptors
+            availableToolDescriptors: availableToolDescriptors,
+            capabilityEnvironment: capabilityEnvironment
         )
         let executorMilliseconds = milliseconds(since: executorStarted)
         if let metricsCollector {
@@ -350,6 +354,7 @@ public struct ToolRuntime {
                     recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                     customToolRegistry: context.customToolRegistry,
                     availableToolDescriptors: context.availableToolDescriptors,
+                    capabilityEnvironment: context.capabilityEnvironment,
                     runID: runID,
                     callID: nil,
                     metricsCollector: metricsCollector
@@ -393,6 +398,7 @@ public struct ToolRuntime {
                     recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                     customToolRegistry: context.customToolRegistry,
                     availableToolDescriptors: context.availableToolDescriptors,
+                    capabilityEnvironment: context.capabilityEnvironment,
                     runID: runID,
                     callID: nil,
                     metricsCollector: metricsCollector
@@ -423,6 +429,7 @@ public struct ToolRuntime {
                         recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                         customToolRegistry: context.customToolRegistry,
                         availableToolDescriptors: context.availableToolDescriptors,
+                    capabilityEnvironment: context.capabilityEnvironment,
                         runID: runID,
                         callID: nil,
                         metricsCollector: metricsCollector

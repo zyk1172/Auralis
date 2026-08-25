@@ -1599,6 +1599,21 @@ public enum AgentToolRegistry {
             return .ok(canonicalCall, canonicalDescriptor, "发现 \(entries.count) 个工具", .text(text))
         case "capabilities_get":
             let capabilities = providerCapabilities ?? .conservative
+            // run-scoped 快照优先；context 未携带时兜底采集（保持自省可用）。
+            let capabilityEnv: AgentCapabilityEnvironment
+            if let snapshot = context.capabilityEnvironment {
+                capabilityEnv = snapshot
+            } else {
+                capabilityEnv = await AgentCapabilityEnvironment(
+                    providerAvailable: providerCapabilities != nil,
+                    catalogAvailable: true,
+                    activeServer: (await bridge.getActiveServer()) != nil,
+                    webSearchAvailable: webService != nil || (providerCapabilities?.supportsHostedWebSearch ?? false),
+                    webFetchAvailable: webService != nil || (providerCapabilities?.supportsHostedWebFetch ?? false),
+                    downloadServiceAvailable: systemService != nil,
+                    systemServiceAvailable: systemService != nil
+                )
+            }
             let mode = capabilities.toolMode.rawValue
             let providerText = capabilities.supportsToolCalling ? "原生工具调用=支持" : "原生工具调用=不支持"
             let webText = [
@@ -1614,15 +1629,8 @@ public enum AgentToolRegistry {
                 "联网能力：\(webText.isEmpty ? "未配置" : webText)",
                 "",
                 // 高层能力摘要来自单一 canonical AgentCapabilityCatalog + run-scoped
-                // 环境快照（与 System Prompt 摘要同源），不再是"模型可见 tools 列表"。
-                AgentCapabilityCatalog.systemPromptSummary(environment: AgentCapabilityEnvironment(
-                    providerAvailable: providerCapabilities != nil,
-                    catalogAvailable: true,
-                    activeServer: (await bridge.getActiveServer()) != nil,
-                    webAvailable: webService != nil,
-                    downloadServiceAvailable: systemService != nil,
-                    systemServiceAvailable: systemService != nil
-                )),
+                // 环境快照（与 System Prompt 摘要同源）。
+                AgentCapabilityCatalog.systemPromptSummary(environment: capabilityEnv),
             ].joined(separator: "\n")
             return .ok(canonicalCall, canonicalDescriptor, "已读取 Provider 能力与高层能力摘要", .text(text))
         case "web_search":
