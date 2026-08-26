@@ -188,9 +188,19 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
     }
 
     func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        lock.withLock {
+            observedRequests.append(request)
+        }
+
+        // The runtime first gathers read-only evidence, then makes the closed
+        // classification request. Evidence does not affect this fixture's
+        // classification attempt count or its deliberate provider failure.
+        guard request.outputFormat != nil else {
+            return AICompletionResponse(model: request.model, content: "Evidence is sufficient for classification.")
+        }
+
         let count = lock.withLock {
             completions += 1
-            observedRequests.append(request)
             return completions
         }
         guard !failFirstAttempt || count > 1 else {
@@ -219,7 +229,10 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
             observedBatchSizes.append(tracks.count)
         }
 
-        let items = tracks.compactMap { track -> [String: Any]? in
+        let items = tracks.compactMap { entry -> [String: Any]? in
+            // Classification input now carries evidence alongside each track.
+            // The fixture intentionally reads only the canonical track record.
+            let track = (entry["track"] as? [String: Any]) ?? entry
             guard let id = track["id"] as? String else { return nil }
             return [
                 "id": id,
@@ -1080,11 +1093,14 @@ func recommendationIndexExactChineseBuildRequestUsesRealRuntime() async throws {
     #expect(finalStatus.pendingSemanticTagTracks == 0)
 
     let requests = provider.requests
-    #expect(requests.count == 1)
-    #expect(requests.allSatisfy { $0.tools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.hostedTools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.toolChoice == nil })
-    #expect(requests.allSatisfy { request in
+    let evidenceRequests = requests.filter { $0.outputFormat == nil }
+    let classificationRequests = requests.filter { $0.outputFormat != nil }
+    #expect(evidenceRequests.count == 1)
+    #expect(classificationRequests.count == 1)
+    #expect(classificationRequests.allSatisfy { $0.tools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.toolChoice == nil })
+    #expect(classificationRequests.allSatisfy { request in
         request.messages.allSatisfy { !$0.content.contains("recommendation_index_commit") }
     })
     #expect(coordinator.actionRecords.contains { $0.toolName == "recommendation_index_commit" })

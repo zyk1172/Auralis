@@ -68,7 +68,10 @@
       }
     },
     "Anthropic Messages 未定义通用 /models 目录，模型可用性由实际请求验证。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Anthropic Messages does not define a generic /models directory; model availability is verified by actual requests." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "Anthropic Messages 未定義通用 /models 目錄，模型可用性由實際請求驗證。" } }
+      }
     },
     "Responses 流在工具调用参数完成前中断" : {
       "localizations" : {
@@ -87,19 +90,34 @@
       }
     },
     "tool_choice 探测未完成：%@" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "tool_choice probe did not complete: %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "tool_choice 探測未完成：%@" } }
+      }
     },
     "tool_choice 探测未收到工具调用；生产请求将继续省略该字段。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The tool_choice probe received no tool call; production requests will continue to omit this field." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "tool_choice 探測未收到工具呼叫；生產請求將繼續省略該欄位。" } }
+      }
     },
     "原生工具探测未完成：%@" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Native tool probe did not complete: %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "原生工具探測未完成：%@" } }
+      }
     },
     "原生工具探测未收到工具调用；这不代表模型不支持工具。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The native-tool probe received no tool call; this does not mean the model lacks tool support." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "原生工具探測未收到工具呼叫；這不代表模型不支援工具。" } }
+      }
     },
     "只回复 OK。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reply with OK only." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "只回覆 OK。" } }
+      }
     },
     "响应流失败" : {
       "localizations" : {
@@ -118,7 +136,10 @@
       }
     },
     "基础文本生成失败。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Base text generation failed." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "基礎文字生成失敗。" } }
+      }
     },
     "尚未配置 API Key，请先在设置中填写。" : {
       "localizations" : {
@@ -170,7 +191,10 @@
       }
     },
     "当前模型未在该端点的模型目录中出现。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The current model does not appear in the model directory for this endpoint." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "目前模型未出現在此端點的模型目錄中。" } }
+      }
     },
     "接口使用不安全的 HTTP 明文传输，且目标不在本机/局域网内（API Key 会被明文发送）。请改用 HTTPS 地址。" : {
       "localizations" : {
@@ -205,13 +229,22 @@
       }
     },
     "服务端明确拒绝 tool_choice：%@" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The server explicitly rejected tool_choice: %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "伺服器明確拒絕 tool_choice：%@" } }
+      }
     },
     "服务端明确拒绝原生工具：%@" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The server explicitly rejected native tools: %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "伺服器明確拒絕原生工具：%@" } }
+      }
     },
     "服务端明确拒绝结构化输出：%@" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The server explicitly rejected structured output: %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "伺服器明確拒絕結構化輸出：%@" } }
+      }
     },
     "服务返回 HTTP \\(status)：API Key 无效或权限不足，请检查设置中的 Key。" : {
       "extractionState" : "stale",
@@ -299,10 +332,16 @@
       }
     },
     "服务返回 HTTP %lld：上游路由或网关暂时不可用，请稍后重试。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "HTTP %lld: The upstream route or gateway is temporarily unavailable. Please try again later." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "服務回傳 HTTP %lld：上游路由或閘道暫時無法使用，請稍後再試。" } }
+      }
     },
     "服务返回 HTTP %lld：当前请求与该端点不兼容，请检查协议、模型或工具能力。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "HTTP %lld: The current request is incompatible with this endpoint. Check the protocol, model, or tool capability." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "服務回傳 HTTP %lld：目前請求與此端點不相容，請檢查協定、模型或工具能力。" } }
+      }
     },
     "服务返回 HTTP %lld：接口路径错误，请检查 Base URL 是否已包含 /v1 等路径前缀。" : {
       "localizations" : {
@@ -337,10 +376,16 @@
       }
     },
     "服务返回 HTTP %lld：服务端报告当前模型不可用或不受支持（ModelError）。API Key 不一定有问题；请检查模型 ID、端点套餐或上游路由。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "HTTP %lld: The server reports that the current model is unavailable or unsupported (ModelError). The API key may be valid; check the model ID, endpoint plan, or upstream route." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "服務回傳 HTTP %lld：伺服器指出目前模型無法使用或不受支援（ModelError）。API Key 不一定有問題；請檢查模型 ID、端點方案或上游路由。" } }
+      }
     },
     "服务返回 HTTP %lld：鉴权失败，请检查 API Key 或账户权限。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "HTTP %lld: Authentication failed. Check the API key or account permissions." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "服務回傳 HTTP %lld：驗證失敗，請檢查 API Key 或帳戶權限。" } }
+      }
     },
     "服务返回 HTTP %lld。" : {
       "localizations" : {
@@ -457,16 +502,28 @@
       }
     },
     "模型目录不是 JSON 对象。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The model directory is not a JSON object." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "模型目錄不是 JSON 物件。" } }
+      }
     },
     "模型目录可访问，但不包含 %@。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The model directory is reachable, but does not contain %@." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "模型目錄可存取，但不包含 %@。" } }
+      }
     },
     "模型目录未返回任何模型 ID。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The model directory returned no model IDs." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "模型目錄未回傳任何模型 ID。" } }
+      }
     },
     "模型目录未验证：%@" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Model directory not verified: %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "模型目錄未驗證：%@" } }
+      }
     },
     "模型输出达到长度上限，结构化工具参数可能未完成。请缩小当前批次后重试。" : {
       "localizations" : {
@@ -485,10 +542,16 @@
       }
     },
     "流式请求没有完成事件；这是瞬时健康观测，不会关闭生产流式协议。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The streaming request had no completion event. This transient health observation will not disable the production streaming protocol." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "串流請求沒有完成事件；這是瞬時健康觀測，不會關閉生產串流協定。" } }
+      }
     },
     "流式输出失败：%@。这是瞬时健康观测，不会关闭生产流式协议。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Streaming output failed: %@. This transient health observation will not disable the production streaming protocol." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "串流輸出失敗：%@。這是瞬時健康觀測，不會關閉生產串流協定。" } }
+      }
     },
     "用一句话确认连接正常。" : {
       "localizations" : {
@@ -507,10 +570,16 @@
       }
     },
     "结构化输出探测未完成：%@；这是瞬时观测，不会关闭生产能力。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Structured-output probe did not complete: %@. This transient observation will not disable production capability." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "結構化輸出探測未完成：%@；這是瞬時觀測，不會關閉生產能力。" } }
+      }
     },
     "结构化输出请求已接受，但响应不是约定 JSON；本次不缓存为能力。" : {
-
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The structured-output request was accepted, but the response was not the expected JSON; the capability will not be cached this time." } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "結構化輸出請求已接受，但回應不是約定 JSON；本次不快取為能力。" } }
+      }
     },
     "网络请求失败：\\(message)" : {
       "extractionState" : "stale",
