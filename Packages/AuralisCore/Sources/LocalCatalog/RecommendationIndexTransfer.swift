@@ -322,7 +322,8 @@ extension LocalCatalogStore {
                         .text(entry.classifier.isEmpty ? "imported" : entry.classifier),
                         .real(entry.classifiedAt.timeIntervalSince1970),
                         .integer(Int64(RecommendationIndex.contentHashVersion)),
-                        .integer(Int64(RecommendationIndex.semanticTagRulesVersion)),
+                        // The legacy state column remains for old databases; v3 never produces open tags.
+                        .integer(0),
                     ]
                 )
             }
