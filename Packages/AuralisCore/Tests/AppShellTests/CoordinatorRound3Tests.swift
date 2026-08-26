@@ -243,9 +243,13 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
                 "tempo": 2,
                 "acousticness": 4,
                 "danceability": 2,
+                "themes": [],
+                "genres": [],
                 "vocals": ["器乐"],
                 "textures": ["钢琴"],
                 "styles": ["轻音乐"],
+                "instruments": [],
+                "rhythms": [],
                 "semanticTags": [["value": "夜行感", "confidence": 0.8]],
                 "confidence": 0.9,
             ]

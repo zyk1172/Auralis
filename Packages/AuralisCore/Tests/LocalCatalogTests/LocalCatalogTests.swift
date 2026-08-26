@@ -235,7 +235,7 @@ func recommendationIndexRoundTrip() async throws {
     #expect(complete.indexedTracks == 2)
     #expect(complete.pendingTracks == 0)
     #expect(try await store.recommendationIndexTrackIDs(serverID: serverID, query: "深夜").map(\.description) == [firstID])
-    #expect(try await store.readRecommendationIndex(serverID: serverID, dimension: "texture", value: "钢琴").map(\.track.id) == [firstID])
+    #expect(try await store.readRecommendationIndex(serverID: serverID, dimension: "instrument", value: "钢琴").map(\.track.id) == [firstID])
 }
 
 @Test("Strict Recommendation Index writes reject an invalid item atomically")

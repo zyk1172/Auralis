@@ -13,13 +13,7 @@ struct MacRecommendationCategoriesView: View {
     var onNavigate: (MacNavigationTarget) -> Void = { _ in }
 
     @State private var categories: [RecommendationIndexCategory] = []
-    @State private var aiTags: [RecommendationIndexCategory] = []
     @State private var isLoading = true
-    @State private var tagQuery = ""
-    @State private var tagNextOffset: Int? = 0
-    @State private var isLoadingMoreTags = false
-
-    private static let tagPageSize = 30
     private let gridColumns = [GridItem(.adaptive(minimum: 158), spacing: 14)]
 
     var body: some View {
@@ -27,7 +21,7 @@ struct MacRecommendationCategoriesView: View {
             if isLoading && categories.isEmpty {
                 ProgressView { Text(String(localized: "正在读取本地分类…", bundle: .module)) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if categories.isEmpty && aiTags.isEmpty {
+            } else if categories.isEmpty {
                 ContentUnavailableView(
                     String(localized: "还没有分类", bundle: .module),
                     systemImage: "square.grid.2x2",
@@ -42,9 +36,6 @@ struct MacRecommendationCategoriesView: View {
                         }
                     }
 
-                    if !aiTags.isEmpty || !tagQuery.isEmpty {
-                        aiTagSection
-                    }
                 }
                 .padding(20)
             }
@@ -86,55 +77,9 @@ struct MacRecommendationCategoriesView: View {
         .accessibilityLabel(String(localized: "\(category.macCategoryTitle)，\(category.trackCount) 首歌曲", bundle: .module))
     }
 
-    private var aiTagSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(String(localized: "AI 标签", bundle: .module))
-                    .font(.headline)
-                Spacer()
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                        TextField(String(localized: "搜索标签", bundle: .module), text: $tagQuery)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { Task { await loadTagPage(reset: true) } }
-                    Button {
-                        Task { await loadTagPage(reset: true) }
-                    } label: {
-                        Label(String(localized: "搜索", bundle: .module), systemImage: "arrow.clockwise").labelStyle(.iconOnly)
-                    }
-                    .help(String(localized: "搜索标签", bundle: .module))
-                }
-                .frame(maxWidth: 260)
-            }
-
-            LazyVGrid(columns: gridColumns, spacing: 14) {
-                ForEach(aiTags) { category in
-                    categoryCard(category)
-                }
-            }
-
-            if tagNextOffset != nil {
-                Button {
-                    Task { await loadMoreTags() }
-                } label: {
-                    HStack(spacing: 8) {
-                        if isLoadingMoreTags { ProgressView().controlSize(.small) }
-                        Text(String(localized: "加载更多标签", bundle: .module))
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isLoadingMoreTags)
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(.top, 26)
-    }
-
     private func load() async {
         guard let serverID = model.catalog.activeServerID else {
             categories = []
-            aiTags = []
             isLoading = false
             return
         }
@@ -146,39 +91,6 @@ struct MacRecommendationCategoriesView: View {
         guard model.catalog.activeServerID == serverID, !Task.isCancelled else { return }
         categories = RecommendationBrowserState.categoriesSortedByTrackCount(fixedCategories)
         isLoading = false
-        await loadTagPage(reset: true)
-    }
-
-    private func loadTagPage(reset: Bool) async {
-        guard let serverID = model.catalog.activeServerID else { return }
-        if reset {
-            aiTags = []
-            tagNextOffset = 0
-        }
-        guard let offset = tagNextOffset else {
-            isLoadingMoreTags = false
-            return
-        }
-        let query = tagQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let page = (try? await model.catalogCoordinator.store.recommendationIndexTagCatalog(
-            serverID: serverID,
-            query: query.isEmpty ? nil : query,
-            limit: Self.tagPageSize,
-            offset: offset
-        )) ?? RecommendationIndexTagPage(items: [], nextOffset: nil, hasMore: false)
-        guard model.catalog.activeServerID == serverID, !Task.isCancelled else { return }
-        var merged = reset ? page.items : aiTags + page.items
-        var seen = Set<String>()
-        merged = merged.filter { seen.insert($0.id).inserted }
-        aiTags = RecommendationBrowserState.categoriesSortedByTrackCount(merged)
-        tagNextOffset = page.nextOffset
-        isLoadingMoreTags = false
-    }
-
-    private func loadMoreTags() async {
-        guard !isLoadingMoreTags, tagNextOffset != nil else { return }
-        isLoadingMoreTags = true
-        await loadTagPage(reset: false)
     }
 }
 
@@ -276,20 +188,28 @@ extension RecommendationIndexCategory {
         switch self.dimension {
         case "mood": dimension = String(localized: "情绪", bundle: .module)
         case "scene": dimension = String(localized: "场景", bundle: .module)
-        case "vocal": dimension = String(localized: "人声", bundle: .module)
-        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "theme": dimension = String(localized: "主题", bundle: .module)
+        case "genre": dimension = String(localized: "类型", bundle: .module)
         case "style": dimension = String(localized: "风格", bundle: .module)
+        case "vocal": dimension = String(localized: "人声", bundle: .module)
+        case "instrument": dimension = String(localized: "乐器", bundle: .module)
+        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "rhythm": dimension = String(localized: "节奏", bundle: .module)
         case "energy": dimension = String(localized: "能量", bundle: .module)
         case "tempo": dimension = String(localized: "速度", bundle: .module)
         case "acousticness": dimension = String(localized: "原声感", bundle: .module)
         case "danceability": dimension = String(localized: "舞动性", bundle: .module)
-        case "tag": dimension = String(localized: "AI 标签", bundle: .module)
+        case "instrumentalness": dimension = String(localized: "器乐性", bundle: .module)
+        case "liveness": dimension = String(localized: "现场感", bundle: .module)
+        case "speechiness": dimension = String(localized: "人声密度", bundle: .module)
+        case "valence": dimension = String(localized: "情感正负", bundle: .module)
+        case "complexity": dimension = String(localized: "复杂度", bundle: .module)
         default: dimension = self.dimension
         }
         let suffix: String
         switch self.dimension {
         case "energy": suffix = "\(value)/10"
-        case "tempo", "acousticness", "danceability": suffix = "\(value)/5"
+        case "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity": suffix = "\(value)/5"
         default: suffix = value
         }
         return String(localized: "\(dimension) · \(suffix)", bundle: .module)
@@ -299,13 +219,22 @@ extension RecommendationIndexCategory {
         switch dimension {
         case "mood": "face.smiling"
         case "scene": "location"
-        case "vocal": "mic"
-        case "texture": "waveform"
+        case "theme": "theatermasks"
+        case "genre": "music.quarternote.3"
         case "style": "music.note.list"
+        case "vocal": "mic"
+        case "instrument": "pianokeys"
+        case "texture": "waveform"
+        case "rhythm": "metronome"
         case "energy": "bolt"
         case "tempo": "metronome"
         case "acousticness": "guitars"
         case "danceability": "figure.dance"
+        case "instrumentalness": "waveform.path"
+        case "liveness": "person.wave.2"
+        case "speechiness": "text.bubble"
+        case "valence": "face.smiling.inverse"
+        case "complexity": "circle.grid.cross"
         default: "tag"
         }
     }

@@ -601,10 +601,14 @@ public struct ToolDescriptor: Sendable, Hashable {
 
 /// 全部 Agent 工具注册表。集中声明权限与确认要求，供 Runner 校验与 UI 展示。
 public enum AgentToolRegistry {
-    /// 原生 Function Calling 直接接收数组。固定音乐分析维度
-    /// （mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability）保持规范；
-    /// 另外支持开放语义标签 semanticTags（dimension='tag'，数量无硬上限）。
-    static let recommendationClassificationArraySchema = #"""
+    /// 原生 Function Calling 直接接收数组。固定 taxonomy v3 只允许
+    /// RecommendationIndexTaxonomy 中存在的 TagID；运行时永远不能创建新标签。
+    static let recommendationClassificationArraySchema: String = {
+        let enumJSON: (TagDimension) -> String = { dimension in
+            let ids = RecommendationIndexTaxonomy.ids(for: dimension).map(\.rawValue)
+            return "[" + ids.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        }
+        return #"""
     {
       "type": "array",
       "minItems": 1,
@@ -614,34 +618,32 @@ public enum AgentToolRegistry {
         "additionalProperties": false,
         "properties": {
           "id": {"type": "string"},
-          "moods": {"type": "array", "items": {"type": "string"}},
-          "scenes": {"type": "array", "items": {"type": "string"}},
-          "energy": {"type": "integer", "minimum": 1, "maximum": 10},
-          "tempo": {"type": "integer", "minimum": 1, "maximum": 5},
-          "acousticness": {"type": "integer", "minimum": 1, "maximum": 5},
-          "danceability": {"type": "integer", "minimum": 1, "maximum": 5},
-          "vocals": {"type": "array", "items": {"type": "string"}},
-          "textures": {"type": "array", "items": {"type": "string"}},
-          "styles": {"type": "array", "items": {"type": "string"}},
-          "semanticTags": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "value": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-              },
-              "required": ["value", "confidence"]
-            }
-          },
-          "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
+          "moods": {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": \#(enumJSON(.mood))}},
+          "scenes": {"type": "array", "maxItems": 6, "items": {"type": "string", "enum": \#(enumJSON(.scene))}},
+          "themes": {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": \#(enumJSON(.theme))}},
+          "genres": {"type": "array", "maxItems": 3, "items": {"type": "string", "enum": \#(enumJSON(.genre))}},
+          "styles": {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": \#(enumJSON(.style))}},
+          "vocals": {"type": "array", "maxItems": 4, "items": {"type": "string", "enum": \#(enumJSON(.vocal))}},
+          "instruments": {"type": "array", "maxItems": 8, "items": {"type": "string", "enum": \#(enumJSON(.instrument))}},
+          "textures": {"type": "array", "maxItems": 6, "items": {"type": "string", "enum": \#(enumJSON(.texture))}},
+          "rhythms": {"type": "array", "maxItems": 4, "items": {"type": "string", "enum": \#(enumJSON(.rhythm))}},
+          "energy": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 10}, {"type": "null"}]},
+          "tempo": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "acousticness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "danceability": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "instrumentalness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "liveness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "speechiness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "valence": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "complexity": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "mode": {"type": "string", "enum": ["full"]},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         },
         "required": ["id"]
       }
     }
     """#
+    }()
 
     public static let all: [ToolDescriptor] = [
         // MARK: Runtime discovery and generic capabilities
@@ -1004,10 +1006,24 @@ public enum AgentToolRegistry {
               maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "status", "read"], aliases: [RecommendationIndexCompatibility.legacyStatusTool]),
         .init(name: "library_index_read", group: .catalog, permission: .readOnly, summary: "读取已完成的推荐索引条目及分类标签，可按维度和标签筛选",
               parameters: [
-                .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability/tag"),
-                .init(name: "value", required: false, description: "要匹配的标签值，如 通勤、深夜、平静"),
+                .init(name: "dimension", required: false, description: "mood/scene/theme/genre/style/vocal/instrument/texture/rhythm/energy/tempo/acousticness/danceability/instrumentalness/liveness/speechiness/valence/complexity"),
+                .init(name: "value", required: false, description: "要匹配的标签 ID、展示名或别名，如 scene.commute、深夜、通勤"),
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
               ], maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "read", "catalog"], aliases: [RecommendationIndexCompatibility.legacyReadTool]),
+        .init(name: "recommendation_taxonomy_list", group: .catalog, permission: .readOnly,
+              summary: "列出 Auralis 固定推荐 taxonomy（情绪/场景/主题/类型/风格/人声/乐器/质感/节奏），返回稳定 TagID 与展示名",
+              parameters: [
+                .init(name: "dimension", required: false, description: "可选 mood/scene/theme/genre/style/vocal/instrument/texture/rhythm"),
+                .init(name: "limit", required: false, description: "返回数量，默认 200，最多 500"),
+              ],
+              tags: ["recommendation-index", "taxonomy", "list", "fixed"]),
+        .init(name: "recommendation_taxonomy_search", group: .catalog, permission: .readOnly,
+              summary: "在 Auralis 固定推荐 taxonomy 中搜索 TagID、展示名或别名；只能返回已定义标签，不能创建新标签",
+              parameters: [
+                .init(name: "query", required: true, description: "自然语言或别名，如 开车/伤感/纯音乐/神圣"),
+                .init(name: "limit", required: false, description: "返回数量，默认 12，最多 50"),
+              ],
+              tags: ["recommendation-index", "taxonomy", "search", "fixed", "alias"]),
         .init(name: "recommendation_index_commit", group: .catalog, permission: .reversible,
               summary: "由 Recommendation Index Runtime 提交已验证的当前批次分类；模型不可见",
               parameters: [

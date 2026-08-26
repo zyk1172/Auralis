@@ -355,34 +355,18 @@ extension LocalCatalogStore {
                   !rawValue.contains("\n"), !rawValue.contains("\t")
             else { continue }
             switch rawDimension {
-            case "mood":
-                guard RecommendationIndex.moods.contains(rawValue) else { continue }
-            case "scene":
-                guard RecommendationIndex.scenes.contains(rawValue) else { continue }
-            case "vocal":
-                guard RecommendationIndex.vocals.contains(rawValue) else { continue }
-            case "texture":
-                guard RecommendationIndex.textures.contains(rawValue) else { continue }
-            case "style":
-                guard RecommendationIndex.styles.contains(rawValue) else { continue }
+            case "mood", "scene", "theme", "genre", "style", "vocal", "instrument", "texture", "rhythm":
+                guard let dimension = TagDimension(rawValue: rawDimension),
+                      let definition = RecommendationIndexTaxonomy.resolve(rawValue),
+                      definition.dimension == dimension
+                else { continue }
+                rawValue = definition.id.rawValue
             case "energy":
                 guard let number = Int(rawValue), (1...10).contains(number) else { continue }
-            case "tempo", "acousticness", "danceability":
+            case "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity":
                 guard let number = Int(rawValue), (1...5).contains(number) else { continue }
-            case "tag":
-                // 开放语义标签：规范化后入库，保持与写回路径一致。
-                guard let canonical = RecommendationIndex.normalizeSemanticTag(rawValue) else { continue }
-                if rawValue != canonical { rawValue = canonical }
             default:
-                // 自建维度：非保留名、长度限制、无换行制表符。
-                let reserved = Set(["mood", "scene", "vocal", "texture", "style", "energy", "tempo", "acousticness", "danceability"])
-                let dimension = tag.dimension.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !dimension.isEmpty,
-                      dimension.count <= 24,
-                      !reserved.contains(dimension.lowercased()),
-                      !dimension.contains("\n"), !dimension.contains("\t")
-                else { continue }
-                guard rawValue.count <= 32 else { continue }
+                continue
             }
             let key = rawDimension + "\u{1F}" + rawValue
             guard !seen.contains(key) else { continue }

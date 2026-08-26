@@ -197,7 +197,7 @@ public struct CatalogTrackLine: Codable, Sendable, Hashable {
 }
 
 /// 一条开放语义标签（AI 自建）：value 为规范化的中文/常见英文标签，confidence 为模型置信度。
-/// 标签数量没有硬上限；质量通过规范化、复用 canonical 与语义规则控制。
+@available(*, deprecated, message: "Open semantic tags are no longer produced; retained only for legacy decode")
 public struct RecommendationIndexSemanticTag: Codable, Sendable, Hashable {
     public let value: String
     public let confidence: Double
@@ -212,73 +212,137 @@ public struct RecommendationIndexSemanticTag: Codable, Sendable, Hashable {
 /// 这些标签只基于曲目元数据，不保存歌词、文件路径或播放地址。
 public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
     public let id: String
+    /// Canonical fixed-taxonomy IDs, for example "mood.sacred".
     public let moods: [String]
     public let scenes: [String]
-    public let energy: Int
-    public let tempo: Int
-    public let acousticness: Int
-    public let danceability: Int
-    public let vocals: [String]
-    public let textures: [String]
+    public let themes: [String]
+    public let genres: [String]
     public let styles: [String]
-    /// 开放语义标签（dimension = "tag"），不设数量上限。
+    public let vocals: [String]
+    public let instruments: [String]
+    public let textures: [String]
+    public let rhythms: [String]
+    public let energy: Int?
+    public let tempo: Int?
+    public let acousticness: Int?
+    public let danceability: Int?
+    public let instrumentalness: Int?
+    public let liveness: Int?
+    public let speechiness: Int?
+    public let valence: Int?
+    public let complexity: Int?
+    /// Legacy open semantic tags. Deprecated and never written by the v3 chain.
     public let semanticTags: [RecommendationIndexSemanticTag]
-    /// "full"=完整分类（固定维度 + 语义标签）；"semanticTagsOnly"=只补开放标签（不触碰旧固定维度）。
+    /// Legacy mode retained for decoding old persisted envelopes.
     public let mode: String
     public let confidence: Double
 
     private enum CodingKeys: String, CodingKey {
         case id, moods, scenes, energy, tempo, acousticness, danceability
-        case vocals, textures, styles, semanticTags, mode, confidence
+        case themes, genres, styles, vocals, instruments, textures, rhythms
+        case instrumentalness, liveness, speechiness, valence, complexity
+        case semanticTags, mode, confidence
     }
 
     public init(
         id: String,
         moods: [String] = [],
         scenes: [String] = [],
-        energy: Int = 3,
-        tempo: Int = 3,
-        acousticness: Int = 3,
-        danceability: Int = 3,
+        energy: Int? = nil,
+        tempo: Int? = nil,
+        acousticness: Int? = nil,
+        danceability: Int? = nil,
         vocals: [String] = [],
         textures: [String] = [],
         styles: [String] = [],
         semanticTags: [RecommendationIndexSemanticTag] = [],
         mode: String = "full",
-        confidence: Double = 0.5
+        confidence: Double = 0.5,
+        themes: [String] = [],
+        genres: [String] = [],
+        instruments: [String] = [],
+        rhythms: [String] = [],
+        instrumentalness: Int? = nil,
+        liveness: Int? = nil,
+        speechiness: Int? = nil,
+        valence: Int? = nil,
+        complexity: Int? = nil
     ) {
         self.id = id
         self.moods = moods
         self.scenes = scenes
+        self.themes = themes
+        self.genres = genres
+        self.styles = styles
         self.energy = energy
         self.tempo = tempo
         self.acousticness = acousticness
         self.danceability = danceability
+        self.instrumentalness = instrumentalness
+        self.liveness = liveness
+        self.speechiness = speechiness
+        self.valence = valence
+        self.complexity = complexity
         self.vocals = vocals
+        self.instruments = instruments
         self.textures = textures
-        self.styles = styles
+        self.rhythms = rhythms
         self.semanticTags = semanticTags
         self.mode = mode
         self.confidence = confidence
     }
 
-    /// 原生工具 Schema 只强制真实 ID 与能量值；其它维度允许模型按证据省略，
-    /// 解码时使用与公开初始化器一致的安全默认值，而不是让整批写回失败。
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         moods = try Self.decodeStringArray(.moods, from: container)
         scenes = try Self.decodeStringArray(.scenes, from: container)
-        energy = try container.decodeIfPresent(Int.self, forKey: .energy) ?? 3
-        tempo = try container.decodeIfPresent(Int.self, forKey: .tempo) ?? 3
-        acousticness = try container.decodeIfPresent(Int.self, forKey: .acousticness) ?? 3
-        danceability = try container.decodeIfPresent(Int.self, forKey: .danceability) ?? 3
-        vocals = try Self.decodeStringArray(.vocals, from: container)
-        textures = try Self.decodeStringArray(.textures, from: container)
+        themes = try Self.decodeStringArray(.themes, from: container)
+        genres = try Self.decodeStringArray(.genres, from: container)
         styles = try Self.decodeStringArray(.styles, from: container)
+        vocals = try Self.decodeStringArray(.vocals, from: container)
+        instruments = try Self.decodeStringArray(.instruments, from: container)
+        textures = try Self.decodeStringArray(.textures, from: container)
+        rhythms = try Self.decodeStringArray(.rhythms, from: container)
+        energy = try container.decodeIfPresent(Int.self, forKey: .energy)
+        tempo = try container.decodeIfPresent(Int.self, forKey: .tempo)
+        acousticness = try container.decodeIfPresent(Int.self, forKey: .acousticness)
+        danceability = try container.decodeIfPresent(Int.self, forKey: .danceability)
+        instrumentalness = try container.decodeIfPresent(Int.self, forKey: .instrumentalness)
+        liveness = try container.decodeIfPresent(Int.self, forKey: .liveness)
+        speechiness = try container.decodeIfPresent(Int.self, forKey: .speechiness)
+        valence = try container.decodeIfPresent(Int.self, forKey: .valence)
+        complexity = try container.decodeIfPresent(Int.self, forKey: .complexity)
         semanticTags = try container.decodeIfPresent([RecommendationIndexSemanticTag].self, forKey: .semanticTags) ?? []
         mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "full"
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
+    }
+
+    /// v3 wire contract intentionally omits the deprecated open semanticTags
+    /// field, even though the in-memory type keeps it for legacy decode.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(moods, forKey: .moods)
+        try container.encode(scenes, forKey: .scenes)
+        try container.encode(themes, forKey: .themes)
+        try container.encode(genres, forKey: .genres)
+        try container.encode(styles, forKey: .styles)
+        try container.encode(vocals, forKey: .vocals)
+        try container.encode(instruments, forKey: .instruments)
+        try container.encode(textures, forKey: .textures)
+        try container.encode(rhythms, forKey: .rhythms)
+        try container.encodeIfPresent(energy, forKey: .energy)
+        try container.encodeIfPresent(tempo, forKey: .tempo)
+        try container.encodeIfPresent(acousticness, forKey: .acousticness)
+        try container.encodeIfPresent(danceability, forKey: .danceability)
+        try container.encodeIfPresent(instrumentalness, forKey: .instrumentalness)
+        try container.encodeIfPresent(liveness, forKey: .liveness)
+        try container.encodeIfPresent(speechiness, forKey: .speechiness)
+        try container.encodeIfPresent(valence, forKey: .valence)
+        try container.encodeIfPresent(complexity, forKey: .complexity)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(confidence, forKey: .confidence)
     }
 
     private static func decodeStringArray(
@@ -406,7 +470,48 @@ public struct RecommendationIndexCategory: Sendable, Hashable, Identifiable {
     }
 }
 
+/// Structured Recommendation Index query used by Agent recommendation. Tags are
+/// stable taxonomy IDs. Include is a hard filter; prefer is a ranking boost;
+/// exclude removes or heavily penalizes matching tracks.
+public struct RecommendationIndexQuery: Sendable, Hashable {
+    public var includeTags: [String]
+    public var preferTags: [String]
+    public var excludeTags: [String]
+    public var energyRange: ClosedRange<Int>?
+    public var tempoRange: ClosedRange<Int>?
+    public var danceabilityRange: ClosedRange<Int>?
+    public var acousticnessRange: ClosedRange<Int>?
+    public var instrumentalnessRange: ClosedRange<Int>?
+    public var valenceRange: ClosedRange<Int>?
+    public var limit: Int
+
+    public init(
+        includeTags: [String] = [],
+        preferTags: [String] = [],
+        excludeTags: [String] = [],
+        energyRange: ClosedRange<Int>? = nil,
+        tempoRange: ClosedRange<Int>? = nil,
+        danceabilityRange: ClosedRange<Int>? = nil,
+        acousticnessRange: ClosedRange<Int>? = nil,
+        instrumentalnessRange: ClosedRange<Int>? = nil,
+        valenceRange: ClosedRange<Int>? = nil,
+        limit: Int = 50
+    ) {
+        self.includeTags = includeTags
+        self.preferTags = preferTags
+        self.excludeTags = excludeTags
+        self.energyRange = energyRange
+        self.tempoRange = tempoRange
+        self.danceabilityRange = danceabilityRange
+        self.acousticnessRange = acousticnessRange
+        self.instrumentalnessRange = instrumentalnessRange
+        self.valenceRange = valenceRange
+        self.limit = min(max(limit, 1), 200)
+    }
+}
+
 /// AI 标签（dimension='tag'）的一页结果：offset 游标分页，总量不受页大小限制。
+@available(*, deprecated, message: "Open semantic tags are no longer used")
 public struct RecommendationIndexTagPage: Sendable, Hashable {
     public let items: [RecommendationIndexCategory]
     /// 下一页起始 offset；nil 表示没有更多。

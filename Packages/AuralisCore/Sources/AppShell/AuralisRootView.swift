@@ -1256,16 +1256,25 @@ struct BrowseDetailSheet: View {
         switch category.dimension {
         case "mood": dimension = String(localized: "情绪", bundle: .module)
         case "scene": dimension = String(localized: "场景", bundle: .module)
-        case "vocal": dimension = String(localized: "人声", bundle: .module)
-        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "theme": dimension = String(localized: "主题", bundle: .module)
+        case "genre": dimension = String(localized: "类型", bundle: .module)
         case "style": dimension = String(localized: "风格", bundle: .module)
+        case "vocal": dimension = String(localized: "人声", bundle: .module)
+        case "instrument": dimension = String(localized: "乐器", bundle: .module)
+        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "rhythm": dimension = String(localized: "节奏", bundle: .module)
         case "energy": dimension = String(localized: "能量", bundle: .module)
         case "tempo": dimension = String(localized: "速度", bundle: .module)
         case "acousticness": dimension = String(localized: "原声感", bundle: .module)
         case "danceability": dimension = String(localized: "舞动性", bundle: .module)
+        case "instrumentalness": dimension = String(localized: "器乐性", bundle: .module)
+        case "liveness": dimension = String(localized: "现场感", bundle: .module)
+        case "speechiness": dimension = String(localized: "人声密度", bundle: .module)
+        case "valence": dimension = String(localized: "情感正负", bundle: .module)
+        case "complexity": dimension = String(localized: "复杂度", bundle: .module)
         default: dimension = category.dimension
         }
-        let value = ["energy": 10, "tempo": 5, "acousticness": 5, "danceability": 5][category.dimension]
+        let value = ["energy": 10, "tempo": 5, "acousticness": 5, "danceability": 5, "instrumentalness": 5, "liveness": 5, "speechiness": 5, "valence": 5, "complexity": 5][category.dimension]
             .map { "\(category.value)/\($0)" } ?? category.value
         return "\(dimension) · \(value)"
     }

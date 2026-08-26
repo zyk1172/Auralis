@@ -381,7 +381,7 @@ func recommendationIndexNativeStructuredWrite() async throws {
             "acousticness": 5,
             "danceability": 1,
             "vocals": ["器乐"],
-            "textures": ["弦乐"],
+            "textures": ["弦乐组"],
             "styles": ["古典"],
             "confidence": 0.94,
         ]],
@@ -405,7 +405,7 @@ func recommendationIndexNativeStructuredWrite() async throws {
 
     let status = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(status.pendingTracks == 0)
-    let fixed = try await store.readRecommendationIndex(serverID: serverID, dimension: "texture", value: "弦乐")
+    let fixed = try await store.readRecommendationIndex(serverID: serverID, dimension: "instrument", value: "弦乐组")
     #expect(fixed.map(\.track.id) == [gid.description])
     #expect(await collector.contains("tool_search") == false)
     #expect(provider.requests().first?.toolChoice == .auto)

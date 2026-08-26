@@ -368,20 +368,7 @@ public enum RecommendationIndexClassificationParser {
                 duplicateIDs: duplicateIDs
             ))
         }
-        // Fixed taxonomy pre-validation: reject before commit so invalid values
-        // never enter the SQLite transaction or get silently filtered away.
-        if batch.mode != "semanticTagsOnly",
-           let taxonomyFailure = taxonomyViolation(envelope.items) {
-            return .failure(.init(
-                stage: .taxonomy,
-                batchSize: batch.tracks.count,
-                rawLength: rawLength,
-                jsonFound: true,
-                message: "固定维度包含非 canonical 值：\(taxonomyFailure.values.sorted().joined(separator: "、"))",
-                fieldPath: taxonomyFailure.fieldPath
-            ))
-        }
-        return .success(envelope)
+        return .success(sanitizedEnvelope(envelope))
     }
 
     private static func requiredKeyViolation(
@@ -391,16 +378,11 @@ public enum RecommendationIndexClassificationParser {
         guard case let .object(root) = json,
               case let .array(items)? = root["items"]
         else { return nil }
-        let required: [String]
-        if mode == "semanticTagsOnly" {
-            required = ["id", "semanticTags", "mode", "confidence"]
-        } else {
-            required = [
-                "id", "moods", "scenes", "energy", "tempo", "acousticness",
-                "danceability", "vocals", "textures", "styles", "semanticTags",
-                "mode", "confidence",
-            ]
-        }
+        _ = mode
+        let required = [
+            "id", "moods", "scenes", "themes", "genres", "styles",
+            "vocals", "instruments", "textures", "rhythms", "mode", "confidence",
+        ]
         for (index, item) in items.enumerated() {
             guard case let .object(fields) = item else {
                 return ("items[\(index)]", "object")
@@ -412,30 +394,98 @@ public enum RecommendationIndexClassificationParser {
         return nil
     }
 
-    /// Returns the first fixed-dimension violation (field path + offending
-    /// values), or nil when every categorical array is within its canonical set.
-    static func taxonomyViolation(
-        _ items: [RecommendationIndexClassification]
-    ) -> (fieldPath: String, values: Set<String>)? {
-        for (itemIndex, item) in items.enumerated() {
-            let perItem: [(field: String, values: [String], allowed: Set<String>)] = [
-                ("moods", item.moods, RecommendationIndex.moods),
-                ("scenes", item.scenes, RecommendationIndex.scenes),
-                ("vocals", item.vocals, RecommendationIndex.vocals),
-                ("textures", item.textures, RecommendationIndex.textures),
-                ("styles", item.styles, RecommendationIndex.styles),
-            ]
-            for dimension in perItem {
-                let trimmed = dimension.values
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                let invalid = Set(trimmed).subtracting(dimension.allowed)
-                if !invalid.isEmpty {
-                    return ("items[\(itemIndex)].\(dimension.field)", invalid)
+    /// Canonicalize display names/aliases, reroute cross-dimension tags, and
+    /// drop unknown values. Unknown extras are never batch-fatal because the
+    /// fixed taxonomy is the only legal target space.
+    private static func sanitizedEnvelope(
+        _ envelope: RecommendationIndexClassificationEnvelope
+    ) -> RecommendationIndexClassificationEnvelope {
+        let items = envelope.items.map { item -> RecommendationIndexClassification in
+            var moods: [String] = []
+            var scenes: [String] = []
+            var themes: [String] = []
+            var genres: [String] = []
+            var styles: [String] = []
+            var vocals: [String] = []
+            var instruments: [String] = []
+            var textures: [String] = []
+            var rhythms: [String] = []
+            func route(_ raw: String, to expected: TagDimension) {
+                guard let definition = RecommendationIndexTaxonomy.resolve(raw) else { return }
+                if definition.dimension == expected {
+                    switch expected {
+                    case .mood: moods.append(definition.id.rawValue)
+                    case .scene: scenes.append(definition.id.rawValue)
+                    case .theme: themes.append(definition.id.rawValue)
+                    case .genre: genres.append(definition.id.rawValue)
+                    case .style: styles.append(definition.id.rawValue)
+                    case .vocal: vocals.append(definition.id.rawValue)
+                    case .instrument: instruments.append(definition.id.rawValue)
+                    case .texture: textures.append(definition.id.rawValue)
+                    case .rhythm: rhythms.append(definition.id.rawValue)
+                    }
+                } else {
+                    switch definition.dimension {
+                    case .mood: moods.append(definition.id.rawValue)
+                    case .scene: scenes.append(definition.id.rawValue)
+                    case .theme: themes.append(definition.id.rawValue)
+                    case .genre: genres.append(definition.id.rawValue)
+                    case .style: styles.append(definition.id.rawValue)
+                    case .vocal: vocals.append(definition.id.rawValue)
+                    case .instrument: instruments.append(definition.id.rawValue)
+                    case .texture: textures.append(definition.id.rawValue)
+                    case .rhythm: rhythms.append(definition.id.rawValue)
+                    }
                 }
             }
+            item.moods.forEach { route($0, to: .mood) }
+            item.scenes.forEach { route($0, to: .scene) }
+            item.themes.forEach { route($0, to: .theme) }
+            item.genres.forEach { route($0, to: .genre) }
+            item.styles.forEach { route($0, to: .style) }
+            item.vocals.forEach { route($0, to: .vocal) }
+            item.instruments.forEach { route($0, to: .instrument) }
+            item.textures.forEach { route($0, to: .texture) }
+            item.rhythms.forEach { route($0, to: .rhythm) }
+            let sortedMoods = Array(Set(moods)).sorted()
+            let sortedScenes = Array(Set(scenes)).sorted()
+            let sortedThemes = Array(Set(themes)).sorted()
+            let sortedGenres = Array(Set(genres)).sorted()
+            let sortedStyles = Array(Set(styles)).sorted()
+            let sortedVocals = Array(Set(vocals)).sorted()
+            let sortedInstruments = Array(Set(instruments)).sorted()
+            let sortedTextures = Array(Set(textures)).sorted()
+            let sortedRhythms = Array(Set(rhythms)).sorted()
+            return RecommendationIndexClassification(
+                id: item.id,
+                moods: sortedMoods,
+                scenes: sortedScenes,
+                energy: item.energy,
+                tempo: item.tempo,
+                acousticness: item.acousticness,
+                danceability: item.danceability,
+                vocals: sortedVocals,
+                textures: sortedTextures,
+                styles: sortedStyles,
+                mode: item.mode,
+                confidence: item.confidence,
+                themes: sortedThemes,
+                genres: sortedGenres,
+                instruments: sortedInstruments,
+                rhythms: sortedRhythms,
+                instrumentalness: item.instrumentalness,
+                liveness: item.liveness,
+                speechiness: item.speechiness,
+                valence: item.valence,
+                complexity: item.complexity
+            )
         }
-        return nil
+        return RecommendationIndexClassificationEnvelope(
+            batchID: envelope.batchID,
+            revision: envelope.revision,
+            mode: envelope.mode,
+            items: items
+        )
     }
 
     private static func extractJSONObject(from text: String) -> String? {
@@ -570,32 +620,23 @@ public enum RecommendationIndexClassificationParser {
 public enum RecommendationIndexSkillRuntime {
     public static let skillID = "recommendation-index"
 
-    private struct TagSnapshot: Codable, Sendable {
-        let value: String
-        let trackCount: Int
-    }
-
     private struct ClassificationInput: Codable, Sendable {
         let batchID: UUID
         let revision: UInt64
         let mode: String
         let tracks: [RecommendationIndexTrackEvidence]
-        let canonicalTags: [TagSnapshot]
     }
 
     private static func outputSchema(for mode: String) -> AIJSONValue {
-        let itemRequired: String
-        if mode == "semanticTagsOnly" {
-            itemRequired = #"["id", "semanticTags", "mode", "confidence"]"#
-        } else {
-            itemRequired = #"""
-              ["id", "moods", "scenes", "energy", "tempo", "acousticness", "danceability",
-               "vocals", "textures", "styles", "semanticTags", "mode", "confidence"]
-            """#
+        _ = mode
+        let itemRequired = #"["id", "moods", "scenes", "themes", "genres", "styles", "vocals", "instruments", "textures", "rhythms", "mode", "confidence"]"#
+        let enumJSON: (TagDimension, Int) -> String = { dimension, maxItems in
+            let ids = RecommendationIndexTaxonomy.ids(for: dimension).map(\.rawValue)
+            let enumBody = ids.map { "\"\($0)\"" }.joined(separator: ",")
+            return #"{"type":"array","maxItems":\#(maxItems),"items":{"type":"string","enum":[\#(enumBody)]}}"#
         }
-        let enumJSON: (Set<String>) -> String = { values in
-            let sorted = values.sorted()
-            return "[" + sorted.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        let numericJSON: (String, Int) -> String = { name, maximum in
+            #""\#(name)":{"anyOf":[{"type":"integer","minimum":1,"maximum":\#(maximum)},{"type":"null"}]}"#
         }
         return try! AIJSONValue(jsonString: #"""
     {
@@ -604,7 +645,7 @@ public enum RecommendationIndexSkillRuntime {
       "properties": {
         "batchID": {"type": "string"},
         "revision": {"type": "integer", "minimum": 1},
-        "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
+        "mode": {"type": "string", "enum": ["full"]},
         "items": {
           "type": "array",
           "minItems": 1,
@@ -614,28 +655,25 @@ public enum RecommendationIndexSkillRuntime {
             "additionalProperties": false,
             "properties": {
               "id": {"type": "string"},
-              "moods": {"type": "array", "items": {"type": "string", "enum": \#(enumJSON(RecommendationIndex.moods))}},
-              "scenes": {"type": "array", "items": {"type": "string", "enum": \#(enumJSON(RecommendationIndex.scenes))}},
-              "energy": {"type": "integer", "minimum": 1, "maximum": 10},
-              "tempo": {"type": "integer", "minimum": 1, "maximum": 5},
-              "acousticness": {"type": "integer", "minimum": 1, "maximum": 5},
-              "danceability": {"type": "integer", "minimum": 1, "maximum": 5},
-              "vocals": {"type": "array", "items": {"type": "string", "enum": \#(enumJSON(RecommendationIndex.vocals))}},
-              "textures": {"type": "array", "items": {"type": "string", "enum": \#(enumJSON(RecommendationIndex.textures))}},
-              "styles": {"type": "array", "items": {"type": "string", "enum": \#(enumJSON(RecommendationIndex.styles))}},
-              "semanticTags": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "value": {"type": "string"},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-                  },
-                  "required": ["value", "confidence"]
-                }
-              },
-              "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
+              "moods": \#(enumJSON(.mood, 5)),
+              "scenes": \#(enumJSON(.scene, 6)),
+              "themes": \#(enumJSON(.theme, 5)),
+              "genres": \#(enumJSON(.genre, 3)),
+              "styles": \#(enumJSON(.style, 5)),
+              "vocals": \#(enumJSON(.vocal, 4)),
+              "instruments": \#(enumJSON(.instrument, 8)),
+              "textures": \#(enumJSON(.texture, 6)),
+              "rhythms": \#(enumJSON(.rhythm, 4)),
+              \#(numericJSON("energy", 10)),
+              \#(numericJSON("tempo", 5)),
+              \#(numericJSON("acousticness", 5)),
+              \#(numericJSON("danceability", 5)),
+              \#(numericJSON("instrumentalness", 5)),
+              \#(numericJSON("liveness", 5)),
+              \#(numericJSON("speechiness", 5)),
+              \#(numericJSON("valence", 5)),
+              \#(numericJSON("complexity", 5)),
+              "mode": {"type": "string", "enum": ["full"]},
               "confidence": {"type": "number", "minimum": 0, "maximum": 1}
             },
             "required": \#(itemRequired)
@@ -1753,46 +1791,21 @@ public enum RecommendationIndexSkillRuntime {
         serverID: ServerID?,
         evidence: [RecommendationIndexTrackEvidence]
     ) async throws -> AICompletionRequest {
-        let page = try await catalog.recommendationIndexTagCatalog(
-            serverID: serverID,
-            limit: 100,
-            offset: 0
-        )
         let input = ClassificationInput(
             batchID: batch.batchID,
             revision: batch.revision,
             mode: batch.mode,
-            tracks: evidence,
-            canonicalTags: page.items.map { TagSnapshot(value: $0.value, trackCount: $0.trackCount) }
+            tracks: evidence
         )
         let payload = String(decoding: try JSONEncoder().encode(input), as: UTF8.self)
-        let modeInstruction = batch.mode == "semanticTagsOnly"
-            ? "本批仅补充开放 semanticTags；每项 mode 必须为 semanticTagsOnly。"
-            : "本批执行完整音乐属性分类；每项 mode 必须为 full。"
-        let taxonomyInstruction: String
-        if batch.mode == "semanticTagsOnly" {
-            taxonomyInstruction = ""
-        } else {
-            let list: (String, Set<String>) -> String = { name, values in
-                "\(name)（只能从以下值中选择，不允许发明同义词）：\(values.sorted().joined(separator: "、"))"
-            }
-            taxonomyInstruction = """
-
-        固定维度 canonical 值：
-        \(list("moods", RecommendationIndex.moods))
-        \(list("scenes", RecommendationIndex.scenes))
-        \(list("vocals", RecommendationIndex.vocals))
-        \(list("textures", RecommendationIndex.textures))
-        \(list("styles", RecommendationIndex.styles))
-        注意：不要用"伤感"替代"忧郁"、"夜晚"替代"深夜"、"流行音乐"替代"流行"。更细的自由语义放到 semanticTags。
-        """
-        }
+        let modeInstruction = "本批执行完整固定 taxonomy 分类；每项 mode 必须为 full。"
         let system = """
-        你是推荐索引的封闭式分类转换器。只根据输入的歌曲元数据分类，不调用工具，不执行写入，不补充输入中不存在的歌曲。
+        你是 Auralis FIXED TAXONOMY CLASSIFIER。你只能从 Auralis 已定义的固定 taxonomy 中选择标签，不能发明新标签、不能创建自由文本标签。
         返回且只返回一个 JSON 对象，必须原样回传 batchID、revision、mode，并让 items 恰好覆盖输入 tracks 的每个 id 一次且不得重复。
-        固定维度为 moods、scenes、energy(1-10)、tempo/acousticness/danceability(1-5)、vocals、textures、styles；semanticTags 使用有音乐意义且有区分度的规范标签，优先复用 canonicalTags，不使用歌曲名、艺术家名、专辑名或 ID 作为标签。
-        JSON 类型必须严格遵守：moods/scenes/vocals/textures/styles 都是 string[]（单个值也要写成数组）；semanticTags 是 object[]，每项为 {"value":string,"confidence":number}；energy/tempo/acousticness/danceability 是 integer；batchID/mode/id/value 是 string；revision/confidence 是 number。
-        \(taxonomyInstruction)
+        固定维度为 moods/scenes/themes/genres/styles/vocals/instruments/textures/rhythms；数值为 energy(1-10)、tempo/acousticness/danceability/instrumentalness/liveness/speechiness/valence/complexity(1-5)。
+        数组中的每一项必须使用 schema 中存在的固定 taxonomy ID（例如 mood.sacred、scene.late_night、instrument.piano、vocal.instrumental）。没有足够证据时返回空数组或 null，不要伪造中间值。
+        genre 与 style 分开，mood 与 scene/theme 分开，instrument 与 texture 分开。不要为了完整而强行选择标签。
+        JSON 类型必须严格遵守：categorical 都是 string[]；数值是 integer 或 null；batchID/mode/id 是 string；revision/confidence 是 number。
         \(modeInstruction)
         """
         let outputFormat: AIOutputFormat?
