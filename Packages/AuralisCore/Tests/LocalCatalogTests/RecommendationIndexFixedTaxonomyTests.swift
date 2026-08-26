@@ -1,6 +1,6 @@
 import Domain
 import Foundation
-import LocalCatalog
+@testable import LocalCatalog
 import MusicLibrary
 import Testing
 
@@ -175,5 +175,28 @@ struct RecommendationIndexFixedTaxonomyTests {
             )
         )
         #expect(Set(excluded) == Set([lateSacred]))
+    }
+
+    @Test("Migration removes legacy semantic tag rows and keeps fixed taxonomy")
+    func migrationRemovesLegacyTagRows() async throws {
+        let store = try makeStore()
+        let serverID: ServerID = "fixed-v3-migration"
+        let gid = try await seedTrack(store, serverID: serverID, remoteID: "t1", title: "Legacy")
+        let db = await store.db
+        try db.run(
+            "DELETE FROM catalog_migrations WHERE key = ?",
+            [.text("recommendation_v3_fixed_taxonomy")]
+        )
+        try db.run(
+            "INSERT INTO recommendation_index_v2_tags (global_id, dimension, value, confidence) VALUES (?, 'tag', '夜行感', 0.8)",
+            [.text(gid.description)]
+        )
+        try await store.runCatalogMigrations()
+
+        let rows = try db.query(
+            "SELECT 1 FROM recommendation_index_v2_tags WHERE dimension = 'tag'",
+            []
+        )
+        #expect(rows.isEmpty)
     }
 }
