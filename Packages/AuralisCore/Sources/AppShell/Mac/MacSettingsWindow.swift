@@ -142,6 +142,7 @@ public struct MacSettingsWindow: View {
     @AppStorage("auralis.ai.allowsMetadata") private var allowsMetadata = true
     @AppStorage("auralis.ai.allowsLyrics") private var allowsLyrics = false
     @AppStorage("auralis.ai.allowsHistory") private var allowsHistory = false
+    @AppStorage("auralis.ai.allowsFavoritesAndRatings") private var allowsFavoritesAndRatings = false
     @AppStorage(ExternalMusicPreferences.Keys.enabled) private var externalMusicEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.musicBrainz) private var musicBrainzEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.critiqueBrainz) private var critiqueBrainzEnabled = true
@@ -170,6 +171,7 @@ public struct MacSettingsWindow: View {
                 Toggle(String(localized: "允许发送歌曲元数据", bundle: .module), isOn: $allowsMetadata)
                 Toggle(String(localized: "允许发送歌词", bundle: .module), isOn: $allowsLyrics)
                 Toggle(String(localized: "允许发送播放历史摘要", bundle: .module), isOn: $allowsHistory)
+                Toggle(String(localized: "允许发送收藏和评分", bundle: .module), isOn: $allowsFavoritesAndRatings)
             }
             Section(String(localized: "大模型", bundle: .module)) {
                 let settings = AIConnectionSettings()

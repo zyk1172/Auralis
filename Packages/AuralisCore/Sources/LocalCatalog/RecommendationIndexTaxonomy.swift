@@ -249,14 +249,14 @@ public enum RecommendationIndexTaxonomy {
         // a valid taxonomy entry into an unresolvable write value.
         for tag in all {
             if byID[tag.id]?.id != tag.id {
-                issues.append("canonical id (tag.id.rawValue) is not uniquely resolvable")
+                issues.append("canonical id \(tag.id.rawValue) is not uniquely resolvable")
             }
             if Self.resolve(tag.displayName, expectedDimension: tag.dimension).definition?.id != tag.id {
-                issues.append("display (tag.displayName) is not reversible for (tag.id.rawValue)")
+                issues.append("display \(tag.displayName) is not reversible for \(tag.id.rawValue)")
             }
             for alias in tag.aliases
                 where Self.resolve(alias, expectedDimension: tag.dimension).definition?.id != tag.id {
-                issues.append("alias (alias) is not reversible for (tag.id.rawValue)")
+                issues.append("alias \(alias) is not reversible for \(tag.id.rawValue)")
             }
         }
 

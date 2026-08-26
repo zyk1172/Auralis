@@ -144,6 +144,10 @@ public enum AIProviderToolMode: String, Codable, Hashable, Sendable {
 /// 只服务于旧配置迁移和未声明能力的兼容端点。
 public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
+    /// Whether the context window is an endpoint/model fact. When false,
+    /// callers must use their conservative byte budget instead of treating
+    /// the default value as a precise provider limit.
+    public var hasKnownContextWindow: Bool
     public var maxOutputTokens: Int
     public var supportsToolCalling: Bool
     public var supportsParallelTools: Bool
@@ -159,6 +163,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
 
     public init(
         maxContextTokens: Int = 256_000,
+        hasKnownContextWindow: Bool? = nil,
         maxOutputTokens: Int = auralisDefaultMaxOutputTokens,
         supportsToolCalling: Bool = false,
         supportsParallelTools: Bool = true,
@@ -173,6 +178,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         toolMode: AIProviderToolMode? = nil
     ) {
         self.maxContextTokens = max(4_096, maxContextTokens)
+        self.hasKnownContextWindow = hasKnownContextWindow ?? (maxContextTokens != auralisDefaultMaxContextTokens)
         // 不再把输出硬性限制为「上下文的一半」：上下文与输出各自按用户配置取值，
         // 由服务端 / Provider 实际能力决定，Auralis 不自设比例限制。
         self.maxOutputTokens = max(512, maxOutputTokens)
@@ -190,7 +196,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case maxContextTokens, maxOutputTokens, supportsToolCalling
+        case maxContextTokens, hasKnownContextWindow, maxOutputTokens, supportsToolCalling
         case supportsParallelTools, supportsToolChoice, supportsStrictSchema
         case supportsStreaming, supportsJSONMode, supportsJSONSchema
         case supportsHostedWebSearch, supportsHostedWebFetch, supportsReasoningMetadata
@@ -201,6 +207,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             maxContextTokens: try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? 256_000,
+            hasKnownContextWindow: try container.decodeIfPresent(Bool.self, forKey: .hasKnownContextWindow),
             maxOutputTokens: try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens) ?? auralisDefaultMaxOutputTokens,
             supportsToolCalling: try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false,
             supportsParallelTools: try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true,
@@ -543,14 +550,15 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
     public var allowsFilePaths = false
     public init() {}
 
-    /// 设置页三个隐私开关对应的 UserDefaults 键，与 SettingsView /
+    /// 设置页隐私开关对应的 UserDefaults 键，与 SettingsView /
     /// MacSettingsWindow 的 @AppStorage 保持一致。
     public static let metadataDefaultsKey = "auralis.ai.allowsMetadata"
     public static let lyricsDefaultsKey = "auralis.ai.allowsLyrics"
     public static let historyDefaultsKey = "auralis.ai.allowsHistory"
+    public static let favoritesAndRatingsDefaultsKey = "auralis.ai.allowsFavoritesAndRatings"
 
     /// 读取用户当前的隐私权限（UserDefaults）。键缺失时按 PrivacyModel 的默认值：
-    /// 元数据默认允许（true）、歌词与播放历史默认关闭（false）。
+    /// 元数据默认允许（true）、歌词、播放历史与收藏/评分默认关闭（false）。
     /// 用 `object(forKey:)` 区分「从未设置」与「显式 false」，
     /// 避免 `bool(forKey:)` 把缺失键一律当成 false 而覆盖元数据的默认 true。
     public static func current(defaults: UserDefaults = .standard) -> AIPrivacyPermissions {
@@ -563,6 +571,9 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
         }
         if let value = defaults.object(forKey: historyDefaultsKey) as? Bool {
             permissions.allowsPlaybackHistory = value
+        }
+        if let value = defaults.object(forKey: favoritesAndRatingsDefaultsKey) as? Bool {
+            permissions.allowsFavoritesAndRatings = value
         }
         return permissions
     }

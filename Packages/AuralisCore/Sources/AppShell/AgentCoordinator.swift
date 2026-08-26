@@ -550,13 +550,14 @@ public final class AgentCoordinator: ObservableObject {
             totalArtists: cat.artists.count,
             totalAlbums: cat.albums.count,
             totalPlaylists: cat.playlists.count,
-            favoriteCount: model.favoriteTracks.count,
+            favoriteCount: permissions.allowsFavoritesAndRatings ? model.favoriteTracks.count : 0,
             recentlyPlayedTitles: recentlyPlayedTitles,
             isShuffled: model.isShuffled,
             repeatMode: model.repeatMode.title,
             allowsMetadata: permissions.allowsMetadata,
             allowsLyrics: permissions.allowsLyrics,
             allowsHistory: permissions.allowsPlaybackHistory,
+            allowsFavoritesAndRatings: permissions.allowsFavoritesAndRatings,
             memories: memoryStore.memories,
             skills: memoryStore.skills,
             mutationResourceLeaseRegistry: mutationResourceLeaseRegistry,
@@ -1374,6 +1375,9 @@ public final class AgentCoordinator: ObservableObject {
         }
         if permissions.allowsPlaybackHistory {
             fields.append(String(localized: "最近播放历史（最近 5 首）", bundle: .module))
+        }
+        if permissions.allowsFavoritesAndRatings {
+            fields.append(String(localized: "收藏与个人评分", bundle: .module))
         }
         if permissions.allowsLyrics {
             fields.append(String(localized: "歌词（查询到时）", bundle: .module))

@@ -1237,7 +1237,12 @@ func cardsBufferedUntilFinalAnswer() async throws {
         model: "scripted-model",
         bridge: bridge,
         catalog: store,
-        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        context: .init(
+            serverID: "test-server",
+            currentTrackTitle: nil,
+            queueCount: 0,
+            allowsFavoritesAndRatings: true
+        ),
         confirm: { _ in true },
         emit: { await collector.record($0) }
     )
@@ -1491,7 +1496,8 @@ func musicAppreciateUsesEvidenceBoundaries() async throws {
         ToolCall(name: "music_appreciate", arguments: ["trackID": "test-server:appreciate-1"]),
         bridge: MockAgentBridge(activeServerID: "test-server"),
         catalog: store,
-        serverID: "test-server"
+        serverID: "test-server",
+        allowsFavoritesAndRatings: true
     )
 
     #expect(result.success)
@@ -1522,7 +1528,8 @@ func musicAppreciateUsesProviderSpecificCommunityEvidence() async throws {
         bridge: MockAgentBridge(activeServerID: "test-server"),
         catalog: store,
         serverID: "test-server",
-        externalMusicService: FixedCommunityMusicService()
+        externalMusicService: FixedCommunityMusicService(),
+        allowsFavoritesAndRatings: true
     )
 
     #expect(result.success)

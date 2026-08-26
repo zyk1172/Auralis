@@ -199,6 +199,7 @@ public struct SettingsBackupService: Sendable {
         "auralis.ai.allowsMetadata": .bool,
         "auralis.ai.allowsLyrics": .bool,
         "auralis.ai.allowsHistory": .bool,
+        "auralis.ai.allowsFavoritesAndRatings": .bool,
         "auralis.ai.maxContextTokens": .int,
         "auralis.ai.maxOutputTokens": .int,
         "auralis.externalMusic.enabled": .bool,

@@ -170,7 +170,7 @@ public enum AgentCapabilityCatalog {
             persists: true,
             executionOwner: .trustedRuntime,
             modelRole: "根据 Runtime 提供的当前批次歌曲元数据，生成封闭式结构化分类（批量、修订、曲目全覆盖）。",
-            runtimeRole: "读取真实目录状态、准备批次、校验模型分类（batchID/revision/mode/track 覆盖/重复）、提交 SQLite、再读取真实状态验证 pending 下降。",
+            runtimeRole: "读取真实目录状态、准备批次、校验模型分类（batchID/revision/track 覆盖/重复）、提交 SQLite、再读取真实状态验证 pending 下降。",
             userFacingDescription: "建立并持久化 Auralis Recommendation Index（模型生成分类，受控 Runtime 负责保存）。",
             relatedTools: ["library_index_status", "library_index_read"],
             limitations: ["分类写入由 Trusted Runtime 完成；模型看不到内部 commit 工具是安全设计，不代表不能保存。"]

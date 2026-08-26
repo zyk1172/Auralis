@@ -79,7 +79,7 @@ public enum SystemPromptBuilder {
 
         ## 当前 Auralis 状态
         - 服务器：\(server)
-        - 本地资料库：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.favoriteCount) 首收藏
+        - 本地资料库：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.allowsFavoritesAndRatings ? context.favoriteCount : 0) 首收藏
         - 播放：\(nowPlaying)；队列 \(context.queueCount) 首；\(context.isShuffled ? "随机模式" : "顺序模式")；循环 \(context.repeatMode)
         - 最近播放：\(recent)
 

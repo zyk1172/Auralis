@@ -35,6 +35,10 @@ struct RecommendationIndexClassificationContractTests {
         #"{"batchID":"\#(current.batchID.uuidString)","revision":\#(current.revision),"items":[\#(item)]}"#
     }
 
+    private func envelope(_ current: RecommendationIndexPreparedBatch, items: [String]) -> String {
+        #"{"batchID":"\#(current.batchID.uuidString)","revision":\#(current.revision),"items":[\#(items.joined(separator: ","))]}"#
+    }
+
     @Test("DeepSeek-style v3 output without item mode parses successfully")
     func deepSeekStyleOutputWithoutItemModeSucceeds() throws {
         let current = batch(["track"])
@@ -101,6 +105,132 @@ struct RecommendationIndexClassificationContractTests {
         #expect(value.speechiness == nil)
         #expect(value.valence == nil)
         #expect(value.complexity == nil)
+    }
+
+    @Test("Confidence accepts quoted values and falls back for invalid values")
+    func confidenceIsTolerantAndBounded() throws {
+        let current = batch(["quoted", "high", "low", "invalid", "null", "missing"])
+        let values = try RecommendationIndexClassificationParser.parse(
+            envelope(
+                current,
+                items: [
+                    #"{"id":"quoted","confidence":"0.8"}"#,
+                    #"{"id":"high","confidence":2}"#,
+                    #"{"id":"low","confidence":-1}"#,
+                    #"{"id":"invalid","confidence":true}"#,
+                    #"{"id":"null","confidence":null}"#,
+                    #"{"id":"missing"}"#
+                ]
+            ),
+            for: current
+        ).get().items
+
+        let confidenceByID = Dictionary(uniqueKeysWithValues: values.map { ($0.id, $0.confidence) })
+        #expect(confidenceByID["quoted"] == 0.8)
+        #expect(confidenceByID["high"] == 0.5)
+        #expect(confidenceByID["low"] == 0.5)
+        #expect(confidenceByID["invalid"] == 0.5)
+        #expect(confidenceByID["null"] == 0.5)
+        #expect(confidenceByID["missing"] == 0.5)
+    }
+
+    @Test("Classifier track serialization excludes personal library state")
+    func classifierTrackDoesNotSerializePersonalState() throws {
+        let source = CatalogTrackLine(
+            id: "server-a:track-1",
+            title: "Song",
+            artist: "Artist",
+            album: "Album",
+            year: 2024,
+            genres: ["genre.pop"],
+            language: "zh",
+            duration: 180,
+            isFavorite: true,
+            rating: 5,
+            playCount: 99,
+            isDownloaded: true
+        )
+        let evidence = RecommendationIndexTrackEvidence(
+            track: RecommendationIndexClassifierTrack(source),
+            evidence: []
+        )
+        let json = String(decoding: try JSONEncoder().encode(evidence), as: UTF8.self)
+
+        #expect(json.contains("server-a:track-1"))
+        #expect(json.contains("Song"))
+        #expect(!json.contains("isFavorite"))
+        #expect(!json.contains("rating"))
+        #expect(!json.contains("playCount"))
+        #expect(!json.contains("isDownloaded"))
+    }
+
+    @Test("Numeric values keep valid integers and drop only out-of-range values")
+    func numericValuesAreTolerantAndBounded() throws {
+        let current = batch(["max", "tooHigh", "tooLow", "tempoMax", "tempoTooHigh", "string", "null", "missing"])
+        let valueByID = Dictionary(
+            uniqueKeysWithValues: try RecommendationIndexClassificationParser.parse(
+                envelope(
+                    current,
+                    items: [
+                        #"{"id":"max","energy":10}"#,
+                        #"{"id":"tooHigh","energy":11}"#,
+                        #"{"id":"tooLow","energy":0}"#,
+                        #"{"id":"tempoMax","tempo":5}"#,
+                        #"{"id":"tempoTooHigh","tempo":6}"#,
+                        #"{"id":"string","danceability":"3"}"#,
+                        #"{"id":"null","valence":null}"#,
+                        #"{"id":"missing"}"#
+                    ]
+                ),
+                for: current
+            ).get().items.map { ($0.id, $0) }
+        )
+
+        #expect(valueByID["max"]?.energy == 10)
+        #expect(valueByID["tooHigh"]?.energy == nil)
+        #expect(valueByID["tooLow"]?.energy == nil)
+        #expect(valueByID["tempoMax"]?.tempo == 5)
+        #expect(valueByID["tempoTooHigh"]?.tempo == nil)
+        #expect(valueByID["string"]?.danceability == 3)
+        #expect(valueByID["null"]?.valence == nil)
+        #expect(valueByID["missing"]?.energy == nil)
+    }
+
+    @Test("One out-of-range numeric value does not discard a sixteen-track batch")
+    func outOfRangeNumericValueDoesNotKillBatch() throws {
+        let ids = (0..<16).map { "track-\($0)" }
+        let current = batch(ids)
+        let items = ids.map { id in
+            let energy = id == "track-7" ? "11" : "8"
+            return #"{"id":"\#(id)","moods":["mood.sacred"],"energy":\#(energy)}"#
+        }
+
+        let values = try RecommendationIndexClassificationParser.parse(
+            envelope(current, items: items),
+            for: current
+        ).get().items
+
+        #expect(values.count == 16)
+        #expect(values.first(where: { $0.id == "track-7" })?.energy == nil)
+        #expect(values.allSatisfy { $0.moods == ["mood.sacred"] })
+    }
+
+    @Test("Float numeric values remain a repairable Codable diagnostic")
+    func floatNumericValueIsDiagnosed() throws {
+        let current = batch(["track"])
+        let result = RecommendationIndexClassificationParser.parse(
+            envelope(current, item: #"{"id":"track","energy":3.5}"#),
+            for: current
+        )
+
+        guard case let .failure(diagnostic) = result else {
+            Issue.record("expected codableDecode failure")
+            return
+        }
+        #expect(diagnostic.stage == .codableDecode)
+        #expect(diagnostic.fieldPath == "items[0].energy")
+        #expect(diagnostic.expectedType == "integer")
+        #expect(diagnostic.actualType == "number")
     }
 
     @Test("Null categorical fields also default to empty arrays")
@@ -255,6 +385,17 @@ struct RecommendationIndexClassificationContractTests {
             ) as? [String: Any]
         )
         #expect(envelopeObject["mode"] == nil)
+    }
+
+    @Test("Hidden commit schema has no legacy item mode")
+    func hiddenCommitSchemaHasNoLegacyItemMode() throws {
+        let descriptor = try #require(
+            AgentToolRegistry.all.first(where: { $0.name == "recommendation_index_commit" })
+        )
+        let itemsSchema = try #require(
+            descriptor.parameters.first(where: { $0.name == "items" })?.schemaJSON
+        )
+        #expect(!itemsSchema.contains("\"mode\""))
     }
 
     @Test("Strict schema contains fixed enums and requires nullable numeric properties")

@@ -20,7 +20,8 @@ public struct AgentToolkit {
         catalog: LocalCatalogStore,
         serverID: ServerID?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
-        allowsLyrics: Bool = false
+        allowsLyrics: Bool = false,
+        allowsFavoritesAndRatings: Bool = false
     ) async -> ToolResult {
         await AgentToolRegistry.execute(
             call,
@@ -29,7 +30,8 @@ public struct AgentToolkit {
             serverID: serverID,
             systemService: nil,
             externalMusicService: externalMusicService,
-            allowsLyrics: allowsLyrics
+            allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings
         )
     }
 
@@ -41,7 +43,8 @@ public struct AgentToolkit {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
-        allowsLyrics: Bool = false
+        allowsLyrics: Bool = false,
+        allowsFavoritesAndRatings: Bool = false
     ) async -> ToolResult {
         await AgentToolRegistry.execute(
             call,
@@ -50,7 +53,8 @@ public struct AgentToolkit {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
-            allowsLyrics: allowsLyrics
+            allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings
         )
     }
 
@@ -63,6 +67,7 @@ public struct AgentToolkit {
         serverID: ServerID?,
         externalMusicService: (any AgentExternalMusicService)?,
         allowsLyrics: Bool,
+        allowsFavoritesAndRatings: Bool = false,
         recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
     ) async -> ToolResult {
         do {
@@ -74,6 +79,7 @@ public struct AgentToolkit {
                 serverID: serverID,
                 externalMusicService: externalMusicService,
                 allowsLyrics: allowsLyrics,
+                allowsFavoritesAndRatings: allowsFavoritesAndRatings,
                 recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
             )
         } catch {
@@ -96,8 +102,12 @@ public struct AgentToolkit {
         serverID: ServerID?,
         externalMusicService: (any AgentExternalMusicService)?,
         allowsLyrics: Bool,
+        allowsFavoritesAndRatings: Bool,
         recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
     ) async throws -> ToolResult {
+        if !allowsFavoritesAndRatings, Self.favoriteAndRatingMutationNames.contains(call.name) {
+            return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏，未执行修改。")
+        }
         if RecommendationIndexToolService.handles(call.name) {
             return try await RecommendationIndexToolService.execute(
                 call,
@@ -139,6 +149,9 @@ public struct AgentToolkit {
             guard let artist = try await catalog.getArtist(gid) else { return .fail(call, descriptor, "艺术家不存在") }
             return .ok(call, descriptor, "已获取艺术家", .artistCards([ArtistCard(globalID: gid, name: artist.name, albumCount: artist.albumCount)]))
         case "getFavorites":
+            guard allowsFavoritesAndRatings else {
+                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
+            }
             let list = try await catalog.getFavorites(serverID: serverID)
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "getRecentHistory":
@@ -469,9 +482,11 @@ public struct AgentToolkit {
             // albums remain distinct entities instead of being merged by
             // display text.
             let index = try await catalog.makeCatalogIndex(serverID: serverID)
-            let favorites = try await catalog.getFavorites(serverID: serverID).count
-            return .ok(call, descriptor, "\(index.songCount) 首歌曲、\(index.artistCount) 位艺术家、\(index.albumCount) 张专辑、\(favorites) 首收藏",
-                       .text("\(index.songCount) 首歌曲 · \(index.artistCount) 位艺术家 · \(index.albumCount) 张专辑 · \(favorites) 首收藏"))
+            let favoriteText = allowsFavoritesAndRatings
+                ? "、\(try await catalog.getFavorites(serverID: serverID).count) 首收藏"
+                : ""
+            return .ok(call, descriptor, "\(index.songCount) 首歌曲、\(index.artistCount) 位艺术家、\(index.albumCount) 张专辑\(favoriteText)",
+                       .text("\(index.songCount) 首歌曲 · \(index.artistCount) 位艺术家 · \(index.albumCount) 张专辑\(favoriteText)"))
         case "library_get_artists":
             let limit = min(max((try? intParam(call, "limit")) ?? 100, 1), 500)
             let artists = try await catalog.allArtists(serverID: serverID, limit: limit)
@@ -513,6 +528,9 @@ public struct AgentToolkit {
             let kind = (try? require(call, "kind"))?.lowercased() ?? "all"
             let onlyFavorites = (try? boolParam(call, "onlyFavorites")) ?? false
             let onlyOffline = (try? boolParam(call, "onlyOffline")) ?? false
+            guard !onlyFavorites || allowsFavoritesAndRatings else {
+                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
+            }
             let safeLimit = min(max(limit, 1), 100)
             var tracks = try await catalog.searchTracks(query: query, serverID: serverID)
             if onlyFavorites { tracks = tracks.filter(\.isFavorite) }
@@ -615,6 +633,9 @@ public struct AgentToolkit {
             // playableOnly 已弃用（deprecated）：不因瞬时未缓存 streamURL 排除可播放歌曲。
             _ = (try? boolParam(call, "playableOnly")) ?? false
             let sort = (try? require(call, "sort"))?.lowercased() ?? "popularityProxy"
+            guard (!favoritesOnly && sort != "favorites") || allowsFavoritesAndRatings else {
+                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
+            }
 
             var tracks = try await catalog.allTracks(serverID: serverID)
             if favoritesOnly { tracks = tracks.filter(\.isFavorite) }
@@ -714,7 +735,7 @@ public struct AgentToolkit {
                 if let year = track.year { parts.append("\(year)年") }
                 if let language = track.language, !language.isEmpty { parts.append("\(language)") }
                 parts.append("播放\(pop?.playCount ?? 0)次")
-                if track.isFavorite { parts.append("收藏") }
+                if allowsFavoritesAndRatings, track.isFavorite { parts.append("收藏") }
                 return parts.joined(separator: "·")
             }.joined(separator: "；")
             let summary = "候选 \(selected.count) 首（\(sort == "popularityProxy" ? "按本地热度代理排序" : sort)）\(languageNote)；\(detail)"
@@ -724,7 +745,11 @@ public struct AgentToolkit {
             let gid = try await requireTrackID(call, "trackID", catalog: catalog, serverID: serverID)
             guard let track = try await catalog.getTrack(gid) else { return .fail(call, descriptor, "单曲不存在") }
             let downloaded = (try? await catalog.getDownloadedTracks(serverID: serverID).contains { $0.globalID == gid }) ?? false
-            return .ok(call, descriptor, track.title, .text(Self.songDetailLine(track, downloaded: downloaded)))
+            return .ok(call, descriptor, track.title, .text(Self.songDetailLine(
+                track,
+                downloaded: downloaded,
+                allowsFavoritesAndRatings: allowsFavoritesAndRatings
+            )))
         case "music_appreciate":
             let rawTrackID = call.optionalString("trackID")?.trimmingCharacters(in: .whitespacesAndNewlines)
             let track: Track
@@ -755,6 +780,7 @@ public struct AgentToolkit {
                 popularity: popularity,
                 downloaded: downloaded,
                 isDisliked: isDisliked,
+                allowsFavoritesAndRatings: allowsFavoritesAndRatings,
                 lyricsState: lyricsState,
                 external: external
             )
@@ -775,6 +801,9 @@ public struct AgentToolkit {
                     claim: "本地私人数据：播放 \(popularity?.playCount ?? 0) 次，\(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { "，个人评分 \($0)/5" } ?? "")\(isDisliked ? "，已标记不喜欢" : "")."
                 ),
             ]
+            if !allowsFavoritesAndRatings {
+                evidence.removeAll { $0.source == .derivedLocalStatistic }
+            }
             if let external {
                 evidence.append(contentsOf: Self.communityEvidence(from: external))
             }
@@ -786,7 +815,7 @@ public struct AgentToolkit {
                 facts: [
                     "appreciation.metadata": "available",
                     "appreciation.lyrics": lyricsState.rawValue,
-                    "appreciation.privateData": "available",
+                    "appreciation.privateData": allowsFavoritesAndRatings ? "available" : "hidden",
                     "appreciation.community": hasCommunityEvidence ? "available" : "unavailable",
                 ],
                 evidence: evidence
@@ -810,6 +839,9 @@ public struct AgentToolkit {
             let list = try await catalog.getRecentHistory(serverID: serverID, limit: min(max(limit, 1), 100))
             return .ok(call, descriptor, "最近播放 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "library_get_starred":
+            guard allowsFavoritesAndRatings else {
+                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
+            }
             let list = try await catalog.getFavorites(serverID: serverID)
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "library_get_random_songs":
@@ -887,6 +919,9 @@ public struct AgentToolkit {
             // 按分类取歌曲清单（artist/album/genre/language/year/favorites/recent/popular/all），
             // 只含元数据（无歌词/海报），供模型按需注入对话后做推荐。
             let category = (try? require(call, "category"))?.lowercased() ?? "all"
+            guard category != "favorites" || allowsFavoritesAndRatings else {
+                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
+            }
             let value = call.optionalString("value")
             let limit = (try? intParam(call, "limit")) ?? 100
             let lines = try await catalog.catalogTracks(
@@ -902,8 +937,8 @@ public struct AgentToolkit {
                 if !t.genres.isEmpty { parts.append(t.genres.prefix(2).map(GenreLocalization.displayName(for:)).joined(separator: "/")) }
                 parts.append("\(t.duration)秒")
                 if t.playCount > 0 { parts.append("播放\(t.playCount)次") }
-                if t.isFavorite { parts.append("收藏") }
-                if let rating = t.rating { parts.append("评分\(rating)") }
+                if allowsFavoritesAndRatings, t.isFavorite { parts.append("收藏") }
+                if allowsFavoritesAndRatings, let rating = t.rating { parts.append("评分\(rating)") }
                 return parts.joined(separator: "·")
             }
             let text = "「\(category)」\(lines.count) 首：" + lines.map(lineText).joined(separator: "；")
@@ -1400,14 +1435,27 @@ public struct AgentToolkit {
             .joined()
     }
 
-    private static func songDetailLine(_ track: Track, downloaded: Bool) -> String {
+    private static let favoriteAndRatingMutationNames: Set<String> = [
+        "likeTrack", "unlikeTrack",
+        "favoriteAlbum", "unfavoriteAlbum",
+        "favoriteArtist", "unfavoriteArtist",
+        "setRating", "clearRating", "rating_set", "favorite_set",
+    ]
+
+    private static func songDetailLine(
+        _ track: Track,
+        downloaded: Bool,
+        allowsFavoritesAndRatings: Bool
+    ) -> String {
         var parts: [String] = ["\(track.title) · \(track.artistName) · \(track.albumTitle)"]
         if track.duration > 0 { parts.append("\(Int(track.duration)) 秒") }
         if let year = track.year { parts.append("\(year) 年") }
         if let codec = track.sourceInfo.codec, !codec.isEmpty { parts.append("格式 \(codec)") }
         if let bitRate = track.sourceInfo.bitRate, bitRate > 0 { parts.append("\(bitRate) kbps") }
-        parts.append(track.isFavorite ? "已收藏" : "未收藏")
-        if let rating = track.rating { parts.append("评分 \(rating)") }
+        if allowsFavoritesAndRatings {
+            parts.append(track.isFavorite ? "已收藏" : "未收藏")
+            if let rating = track.rating { parts.append("评分 \(rating)") }
+        }
         parts.append(downloaded ? "已离线" : "未离线")
         return parts.joined(separator: " · ")
     }
@@ -1419,6 +1467,7 @@ public struct AgentToolkit {
         popularity: TrackPopularity?,
         downloaded: Bool,
         isDisliked: Bool,
+        allowsFavoritesAndRatings: Bool,
         lyricsState: AgentLyricsState,
         external: AgentExternalMusicResult?
     ) -> String {
@@ -1438,7 +1487,9 @@ public struct AgentToolkit {
             "- 音源：\(audio.isEmpty ? "服务器未提供编码/规格" : audio.joined(separator: " · "))\(downloaded ? " · 已离线" : "")",
             "",
             "【我的私人数据】",
-            "- 本机播放 \(popularity?.playCount ?? 0) 次 · \(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { " · 个人评分 \($0)/5" } ?? "")\(isDisliked ? " · 已标记不喜欢" : "")",
+            allowsFavoritesAndRatings
+                ? "- 本机播放 \(popularity?.playCount ?? 0) 次 · \(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { " · 个人评分 \($0)/5" } ?? "")\(isDisliked ? " · 已标记不喜欢" : "")"
+                : "- 本机私人数据已按隐私设置隐藏",
             "",
             "【大众评价】",
         ]

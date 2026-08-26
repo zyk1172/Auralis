@@ -69,6 +69,14 @@ struct RecommendationIndexFixedTaxonomyTests {
         #expect(RecommendationIndexTaxonomy.byID[TagID(rawValue: "vocal.instrumental")] != nil)
     }
 
+    @Test("Taxonomy validation diagnostics contain concrete values")
+    func taxonomyValidationDiagnosticsAreInterpolated() {
+        let issues = RecommendationIndexTaxonomy.validate()
+        #expect(!issues.contains { $0.contains("(tag.id.rawValue)") })
+        #expect(!issues.contains { $0.contains("(tag.displayName)") })
+        #expect(!issues.contains { $0.contains("(alias)") })
+    }
+
     @Test("Dimension-aware taxonomy resolution is reversible and canonical IDs are unambiguous")
     func dimensionAwareTaxonomyResolution() {
         #expect(

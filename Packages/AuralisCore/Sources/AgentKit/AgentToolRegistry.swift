@@ -636,7 +636,6 @@ public enum AgentToolRegistry {
           "speechiness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
           "valence": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
           "complexity": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
-          "mode": {"type": "string", "enum": ["full"]},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         },
         "required": ["id"]
@@ -1464,6 +1463,7 @@ public enum AgentToolRegistry {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
         allowsLyrics: Bool = false,
+        allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
         webService: (any AgentWebService)? = nil,
         activeSkillID: String? = nil,
@@ -1513,6 +1513,7 @@ public enum AgentToolRegistry {
             systemService: systemService,
             externalMusicService: externalMusicService,
             allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
             webService: webService,
             authorizationContext: nil,
@@ -1545,6 +1546,7 @@ public enum AgentToolRegistry {
         let activeSkillID = context.activeSkillID
         let externalMusicService = context.externalMusicService
         let allowsLyrics = context.allowsLyrics
+        let allowsFavoritesAndRatings = context.allowsFavoritesAndRatings
         let bridge = context.bridge
         let catalog = context.catalog
         let serverID = context.serverID
@@ -1747,6 +1749,7 @@ public enum AgentToolRegistry {
             serverID: serverID,
             externalMusicService: externalMusicService,
             allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
     }
@@ -1764,6 +1767,7 @@ public enum AgentToolRegistry {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
         allowsLyrics: Bool = false,
+        allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
         webService: (any AgentWebService)? = nil,
         activeSkillID: String? = nil,
@@ -1779,6 +1783,7 @@ public enum AgentToolRegistry {
             systemService: systemService,
             externalMusicService: externalMusicService,
             allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
             webService: webService,
             authorizationContext: nil,

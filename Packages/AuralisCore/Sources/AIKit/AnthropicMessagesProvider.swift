@@ -27,6 +27,7 @@ public struct AnthropicMessagesProvider: AIProvider {
     public var capabilities: ModelCapabilities {
         ModelCapabilities(
             maxContextTokens: configuration.maxContextTokens,
+            hasKnownContextWindow: configuration.maxContextTokens != auralisDefaultMaxContextTokens,
             maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: supportsToolCalling,
             supportsParallelTools: configuration.supportsParallelTools,

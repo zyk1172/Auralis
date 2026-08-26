@@ -42,14 +42,16 @@ struct DislikeAgentTests {
         catalog: LocalCatalogStore,
         bridge: MockAgentBridge,
         serverID: ServerID?,
-        allowsLyrics: Bool = false
+        allowsLyrics: Bool = false,
+        allowsFavoritesAndRatings: Bool = false
     ) async -> ToolResult {
         await AgentToolkit.execute(
             ToolCall(name: name, arguments: args),
             bridge: bridge,
             catalog: catalog,
             serverID: serverID,
-            allowsLyrics: allowsLyrics
+            allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings
         )
     }
 
@@ -213,7 +215,7 @@ struct DislikeAgentTests {
 
         // 私人数据包含“已标记不喜欢”
         try await store.setDisliked(GlobalID(serverID: serverID, remoteID: "t1"), value: true)
-        let r5 = await execute("music_appreciate", ["trackID": GlobalID(serverID: serverID, remoteID: "t1").description], catalog: store, bridge: bridge, serverID: serverID, allowsLyrics: true)
+        let r5 = await execute("music_appreciate", ["trackID": GlobalID(serverID: serverID, remoteID: "t1").description], catalog: store, bridge: bridge, serverID: serverID, allowsLyrics: true, allowsFavoritesAndRatings: true)
         #expect(r5.success)
         #expect(r5.evidence.contains { $0.claim.contains("已标记不喜欢") } == true)
     }
