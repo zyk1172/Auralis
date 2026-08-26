@@ -87,6 +87,13 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     }
 
     func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        // Evidence phase is intentionally a separate tool-capable request.
+        // This closed-transform fixture has no evidence to add, so preserve
+        // `firstResponse` for the subsequent JSON-schema classifier request.
+        if request.outputFormat == nil {
+            lock.withLock { recorded.append(request) }
+            return AICompletionResponse(model: request.model, content: "现有元数据足够，无需补充证据。")
+        }
         if let gate {
             await gate.markEntered()
             await gate.waitUntilReleased()
@@ -148,7 +155,8 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
               let tracks = input["tracks"] as? [[String: Any]] else {
             return "{}"
         }
-        let items: [[String: Any]] = tracks.compactMap { track in
+        let items: [[String: Any]] = tracks.compactMap { entry in
+            let track = (entry["track"] as? [String: Any]) ?? entry
             guard let id = track["id"] as? String else { return nil }
             return [
                 "id": id,
@@ -203,7 +211,7 @@ func recommendationIndexStopsAtMinimumBatchSize() async throws {
     )
 
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
-    #expect(provider.requests().count == 1)
+    #expect(provider.requests().count == 2) // evidence + closed classification
     #expect(await events.kinds().contains(.failed))
 }
 
@@ -233,7 +241,7 @@ func recommendationIndexCodableFailureDoesNotShrinkBatch() async throws {
     )
 
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 16)
-    #expect(provider.requests().count == 1)
+    #expect(provider.requests().count == 2) // evidence + closed classification
     let kinds = await events.kinds()
     #expect(kinds.contains(.classificationFailed))
     #expect(kinds.contains(.failed))
@@ -368,13 +376,14 @@ func recommendationIndexClosedTransformCommits() async throws {
     #expect(!(await messages.contains("只返回完整 JSON")))
     let requests = provider.requests()
     #expect(!requests.isEmpty)
-    #expect(requests.allSatisfy { $0.tools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.hostedTools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.toolChoice == nil })
-    #expect(requests.allSatisfy {
+    let classificationRequests = requests.filter {
         if case .jsonSchema = $0.outputFormat { return true }
         return false
-    })
+    }
+    #expect(!classificationRequests.isEmpty)
+    #expect(classificationRequests.allSatisfy { $0.tools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.toolChoice == nil })
     let eventKinds = await events.kinds()
     for kind in [
         .routeSelected,
@@ -429,7 +438,7 @@ func recommendationIndexStopsOnNoProgress() async throws {
     )
 
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 2)
-    #expect(provider.requests().count == 2)
+    #expect(provider.requests().count == 4) // one evidence and one classification request per batch
     let kinds = await events.kinds()
     #expect(kinds.filter { $0 == .noProgress }.count == 2)
     #expect(kinds.contains(.verifyStarted))
@@ -525,8 +534,12 @@ func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
 
     let requests = provider.requests()
     #expect(requests.count >= 3)
-    let first = try #require(requests[0].messages.last?.content.data(using: .utf8))
-    let second = try #require(requests[1].messages.last?.content.data(using: .utf8))
+    let classificationRequests = requests.filter {
+        if case .jsonSchema = $0.outputFormat { return true }
+        return false
+    }
+    let first = try #require(classificationRequests[0].messages.last?.content.data(using: .utf8))
+    let second = try #require(classificationRequests[1].messages.last?.content.data(using: .utf8))
     let firstJSON = try #require(JSONSerialization.jsonObject(with: first) as? [String: Any])
     let secondJSON = try #require(JSONSerialization.jsonObject(with: second) as? [String: Any])
     #expect(firstJSON["batchID"] as? String != secondJSON["batchID"] as? String)
@@ -567,9 +580,14 @@ func recommendationIndexRetriesTransientClassificationFailures() async throws {
     let eventKinds = await events.kinds()
     #expect(eventKinds.filter { $0 == .retrying }.count == 2)
     #expect(!eventKinds.contains(.failed))
-    #expect(provider.requests().allSatisfy { $0.tools?.isEmpty == true })
-    #expect(provider.requests().allSatisfy { $0.hostedTools?.isEmpty == true })
-    #expect(provider.requests().allSatisfy { $0.toolChoice == nil })
+    let classificationRequests = provider.requests().filter {
+        if case .jsonSchema = $0.outputFormat { return true }
+        return false
+    }
+    #expect(!classificationRequests.isEmpty)
+    #expect(classificationRequests.allSatisfy { $0.tools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.toolChoice == nil })
 }
 
 @Test("Stale Recommendation Index envelope is rejected by batch identity")

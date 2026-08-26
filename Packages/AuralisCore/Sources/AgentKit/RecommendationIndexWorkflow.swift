@@ -7,6 +7,8 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     public enum State: String, Codable, Sendable, Equatable {
         case readingStatus
         case fetchingBatch
+        case loadingCanonicalTags
+        case gatheringEvidence
         case classifyingBatch
         case retrying
         case writingBatch

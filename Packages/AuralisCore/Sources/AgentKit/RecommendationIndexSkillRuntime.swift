@@ -34,6 +34,21 @@ public struct RecommendationIndexPreparedBatch: Sendable, Equatable {
     }
 }
 
+/// Sanitized, run-scoped evidence attached to one track before the closed
+/// classifier runs.  It is never persisted and never carries raw web pages or
+/// full lyrics.
+public struct RecommendationIndexEvidenceRecord: Codable, Sendable, Equatable {
+    public let toolName: String
+    public let targetTrackID: String?
+    public let kind: String
+    public let summaryForModel: String
+}
+
+public struct RecommendationIndexTrackEvidence: Codable, Sendable, Equatable {
+    public let track: CatalogTrackLine
+    public let evidence: [RecommendationIndexEvidenceRecord]
+}
+
 /// The sole model-produced value in the closed Recommendation Index chain.
 /// It is data, not a request to execute a tool.
 public struct RecommendationIndexClassificationEnvelope: Codable, Sendable, Equatable {
@@ -504,7 +519,7 @@ public enum RecommendationIndexSkillRuntime {
         let batchID: UUID
         let revision: UInt64
         let mode: String
-        let tracks: [CatalogTrackLine]
+        let tracks: [RecommendationIndexTrackEvidence]
         let canonicalTags: [TagSnapshot]
     }
 
@@ -620,6 +635,11 @@ public enum RecommendationIndexSkillRuntime {
         bridge: AgentBridge,
         catalog: LocalCatalogStore,
         serverID: ServerID?,
+        systemService: (any AgentSystemService)? = nil,
+        externalMusicService: (any AgentExternalMusicService)? = nil,
+        webService: (any AgentWebService)? = nil,
+        allowsLyrics: Bool = false,
+        availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
         authorizationContext: SideEffectAuthorizationContext,
@@ -665,6 +685,10 @@ public enum RecommendationIndexSkillRuntime {
             batch: RecommendationIndexPreparedBatch? = nil,
             attempt: Int = classificationAttempt,
             durationSince: Date? = nil,
+            requestPayloadBytes: Int? = nil,
+            outputBytes: Int? = nil,
+            inputTokens: Int? = nil,
+            outputTokens: Int? = nil,
             message: String? = nil
         ) async {
             await observe(RecommendationIndexExecutionEvent(
@@ -682,6 +706,10 @@ public enum RecommendationIndexSkillRuntime {
                 pendingTracks: latestStatus?.pendingTracks,
                 pendingSemanticTracks: latestStatus?.pendingSemanticTagTracks,
                 durationMilliseconds: durationSince.map { max(0, Int(Date().timeIntervalSince($0) * 1_000)) },
+                requestPayloadBytes: requestPayloadBytes,
+                outputBytes: outputBytes,
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
                 provider: providerName,
                 model: modelName,
                 message: message
@@ -723,6 +751,13 @@ public enum RecommendationIndexSkillRuntime {
                 return "正在读取推荐索引状态"
             case .fetchingBatch:
                 return "正在准备推荐索引批次"
+            case .loadingCanonicalTags:
+                return "推荐索引：正在检查已有标签"
+            case .gatheringEvidence:
+                if let currentBatch {
+                    return "推荐索引：正在补充歌曲证据（\(currentBatch.tracks.count) 首）"
+                }
+                return "推荐索引：正在补充歌曲证据"
             case .classifyingBatch:
                 if let status, let currentBatch {
                     return "推荐索引：已完成 \(status.indexedTracks) / \(status.totalTracks)，正在分类当前批次 \(currentBatch.tracks.count) 首"
@@ -1000,6 +1035,39 @@ public enum RecommendationIndexSkillRuntime {
             )
 
             taskState.status = .waitingForModel
+            taskState.pendingActions = ["推荐索引：正在补充歌曲证据"]
+            await publish(phase: .gatheringEvidence, currentBatch: prepared)
+            await emitObservation(.evidenceStarted, phase: .gatheringEvidence, batch: prepared)
+            let evidence = await gatherEvidence(
+                userText: userText,
+                provider: provider,
+                model: model,
+                batch: prepared,
+                bridge: bridge,
+                catalog: catalog,
+                serverID: serverID,
+                systemService: systemService,
+                externalMusicService: externalMusicService,
+                webService: webService,
+                allowsLyrics: allowsLyrics,
+                availableToolDescriptors: availableToolDescriptors,
+                executionLease: executionLease,
+                resourceLeaseRegistry: resourceLeaseRegistry,
+                executionStateRegistry: executionStateRegistry,
+                observe: observe,
+                providerName: providerName,
+                modelName: modelName,
+                runID: runID,
+                sessionID: sessionID
+            )
+            await emitObservation(
+                .evidenceCompleted,
+                phase: .gatheringEvidence,
+                batch: prepared,
+                message: "records=\(evidence.reduce(0) { $0 + $1.evidence.count })"
+            )
+
+            taskState.status = .waitingForModel
             taskState.pendingActions = ["推荐索引：已完成 \(status.indexedTracks) / \(status.totalTracks)，正在分类当前批次 \(prepared.tracks.count) 首"]
             await publish(phase: .classifyingBatch, currentBatch: prepared)
             await progress(ToolLoop.AgentProgress(
@@ -1013,6 +1081,7 @@ public enum RecommendationIndexSkillRuntime {
             var classificationDiagnostics: RecommendationIndexClassificationDiagnostics?
             classificationAttempt += 1
             let classificationStartedAt = Date()
+            await emitObservation(.canonicalTagsLoadStarted, phase: .loadingCanonicalTags, batch: prepared)
             await emitObservation(
                 .classificationStarted,
                 phase: .classifyingBatch,
@@ -1027,13 +1096,32 @@ public enum RecommendationIndexSkillRuntime {
                     model: model,
                     batch: prepared,
                     catalog: catalog,
-                    serverID: serverID
+                    serverID: serverID,
+                    evidence: evidence
                 )
+                await emitObservation(.canonicalTagsLoadCompleted, phase: .loadingCanonicalTags, batch: prepared)
                 // Hard invariant: this model turn is a closed transform.
                 precondition(request.tools?.isEmpty == true)
                 precondition(request.hostedTools?.isEmpty == true)
                 precondition(request.toolChoice == nil)
+                await emitObservation(
+                    .providerRequestStarted,
+                    phase: .classifyingBatch,
+                    batch: prepared,
+                    attempt: classificationAttempt,
+                    requestPayloadBytes: request.messages.last?.content.utf8.count,
+                    message: "output=jsonSchema"
+                )
                 let response = try await complete(provider, request: request, timeout: requestTimeout)
+                await emitObservation(
+                    .providerRequestCompleted,
+                    phase: .classifyingBatch,
+                    batch: prepared,
+                    attempt: classificationAttempt,
+                    outputBytes: response.content.utf8.count,
+                    inputTokens: response.inputTokens,
+                    outputTokens: response.outputTokens
+                )
                 taskState.progress.modelRounds += 1
                 taskState.progress.inputTokens += response.inputTokens ?? 0
                 taskState.progress.outputTokens += response.outputTokens ?? 0
@@ -1088,6 +1176,14 @@ public enum RecommendationIndexSkillRuntime {
                 await publish(phase: .classifyingBatch, currentBatch: prepared, stoppedReason: "运行已取消", terminal: true)
                 return
             } catch {
+                await emitObservation(
+                    .providerRequestFailed,
+                    phase: .classifyingBatch,
+                    batch: prepared,
+                    attempt: classificationAttempt,
+                    durationSince: classificationStartedAt,
+                    message: error.localizedDescription
+                )
                 await emitObservation(
                     .classificationFailed,
                     phase: .classifyingBatch,
@@ -1409,12 +1505,152 @@ public enum RecommendationIndexSkillRuntime {
         )
     }
 
+    /// Internal evidence loop for one prepared batch.  It may execute only
+    /// model-visible read-only descriptors.  The following classification
+    /// request remains a separate, tool-free deterministic transform.
+    private static func gatherEvidence(
+        userText: String,
+        provider: any AIProvider,
+        model: String,
+        batch: RecommendationIndexPreparedBatch,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore,
+        serverID: ServerID?,
+        systemService: (any AgentSystemService)?,
+        externalMusicService: (any AgentExternalMusicService)?,
+        webService: (any AgentWebService)?,
+        allowsLyrics: Bool,
+        availableToolDescriptors: [ToolDescriptor],
+        executionLease: ToolExecutionLease,
+        resourceLeaseRegistry: MutationResourceLeaseRegistry,
+        executionStateRegistry: RecommendationIndexExecutionRegistry,
+        observe: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void,
+        providerName: String?,
+        modelName: String?,
+        runID: UUID,
+        sessionID: UUID
+    ) async -> [RecommendationIndexTrackEvidence] {
+        let environment = AgentCapabilityEnvironment(
+            providerAvailable: true,
+            activeServer: (await bridge.getActiveServer()) != nil,
+            webSearchAvailable: webService != nil || provider.capabilities.supportsHostedWebSearch,
+            webFetchAvailable: webService != nil || provider.capabilities.supportsHostedWebFetch,
+            downloadServiceAvailable: systemService != nil,
+            systemServiceAvailable: systemService != nil
+        )
+        let allReadOnly = availableToolDescriptors.filter {
+            $0.visibility == .model && $0.permission == .readOnly
+        }
+        var selected = ToolSelector.select(for: userText, all: availableToolDescriptors)
+            .filter { $0.visibility == .model && $0.permission == .readOnly }
+        if let search = allReadOnly.first(where: { $0.name == "tool_search" }),
+           !selected.contains(where: { $0.name == search.name }) {
+            selected.append(search)
+        }
+        let nativeMode = provider.supportsToolCalling
+            && provider.capabilities.toolMode != .none
+            && provider.capabilities.toolMode != .textualToolProtocol
+        var conversation: [AIMessage] = [
+            .init(
+                role: .system,
+                content: "你是 Recommendation Index 的内部证据阶段。只可调用只读 Auralis 工具；不要输出分类 JSON，不要写入、修改播放、歌单、收藏、评分、服务器、下载或记忆。\n\n\(ToolCatalog(descriptors: availableToolDescriptors).awarenessEntries(environment: environment).map(\.renderedLine).joined(separator: "\\n"))\n\n当前直接可调用的 schema 是 Runtime 已加载的只读工具；可用 tool_search 发现其它只读工具。若批次元数据已经足够或证据已补齐，直接停止调用工具。"
+            ),
+            .init(role: .user, content: "为以下批次决定是否需要只读补证；不需要时不要调用工具。\n\(String(decoding: (try? JSONEncoder().encode(batch.tracks)) ?? Data(), as: UTF8.self))"),
+        ]
+        var records: [String: [RecommendationIndexEvidenceRecord]] = [:]
+        var seenCalls = Set<String>()
+        var discovered = Set<String>()
+        var totalCalls = 0
+        for round in 0..<3 {
+            let definitions = nativeMode
+                ? ToolSelector.toolDefinitions(from: selected, strict: provider.capabilities.supportsStrictSchema)
+                : []
+            let request = AICompletionRequest(
+                model: model,
+                transcript: AITranscript(messages: conversation),
+                temperature: 0,
+                maxTokens: min(provider.capabilities.maxOutputTokens, 1_024),
+                tools: nativeMode ? definitions : nil,
+                toolChoice: nil,
+                hostedTools: nil
+            )
+            await observe(.init(
+                kind: .providerRequestStarted, runID: runID, sessionID: sessionID, serverID: serverID,
+                phase: .gatheringEvidence, batchID: batch.batchID, batchRevision: batch.revision,
+                batchSize: batch.tracks.count, attempt: round + 1, provider: providerName, model: modelName,
+                message: "output=plainJSON payload_bytes=\(request.messages.last?.content.utf8.count ?? 0)"
+            ))
+            guard let response = try? await complete(provider, request: request, timeout: 30) else { break }
+            await observe(.init(
+                kind: .providerRequestCompleted, runID: runID, sessionID: sessionID, serverID: serverID,
+                phase: .gatheringEvidence, batchID: batch.batchID, batchRevision: batch.revision,
+                batchSize: batch.tracks.count, attempt: round + 1, provider: providerName, model: modelName,
+                message: "output_bytes=\(response.content.utf8.count)"
+            ))
+            let calls = response.toolCalls ?? []
+            guard !calls.isEmpty else { break }
+            conversation.append(.init(role: .assistant, content: response.content, toolCalls: calls))
+            var results: [AIMessage] = []
+            for raw in calls where totalCalls < 12 {
+                guard case let .object(arguments) = raw.arguments,
+                      let descriptor = selected.first(where: { $0.name == raw.name }),
+                      descriptor.permission == .readOnly
+                else {
+                    results.append(.init(role: .tool, content: "工具未装载或不是证据阶段允许的只读工具。", toolCallID: raw.id))
+                    continue
+                }
+                let signature = "\(raw.name):\(raw.arguments.jsonString)"
+                guard seenCalls.insert(signature).inserted else {
+                    results.append(.init(role: .tool, content: "相同证据查询已执行；请使用现有结果。", toolCallID: raw.id))
+                    continue
+                }
+                totalCalls += 1
+                await observe(.init(kind: .evidenceToolStarted, runID: runID, sessionID: sessionID, serverID: serverID,
+                    phase: .gatheringEvidence, batchID: batch.batchID, batchRevision: batch.revision, batchSize: batch.tracks.count,
+                    attempt: round + 1, provider: providerName, model: modelName, message: raw.name))
+                let result = await ToolRuntime.execute(
+                    ToolCall(name: raw.name, arguments: arguments), bridge: bridge, catalog: catalog, serverID: serverID,
+                    systemService: systemService, externalMusicService: externalMusicService, allowsLyrics: allowsLyrics,
+                    providerCapabilities: provider.capabilities, webService: webService, authorizationContext: nil,
+                    executionLease: executionLease, resourceLeaseRegistry: resourceLeaseRegistry,
+                    recommendationIndexExecutionRegistry: executionStateRegistry,
+                    availableToolDescriptors: availableToolDescriptors, capabilityEnvironment: environment
+                )
+                let summary = String(result.summary.prefix(1_200))
+                let target = stringArgument(arguments["trackID"]) ?? stringArgument(arguments["id"])
+                if let target, batch.tracks.contains(where: { $0.id == target }) {
+                    records[target, default: []].append(.init(toolName: raw.name, targetTrackID: target, kind: descriptor.namespace, summaryForModel: summary))
+                }
+                if raw.name == "tool_search", result.success {
+                    let query = stringArgument(arguments["query"]) ?? ""
+                    for entry in ToolCatalog(descriptors: allReadOnly).search(query: query, limit: 8) {
+                        guard let found = allReadOnly.first(where: { $0.name == entry.name }), discovered.insert(found.name).inserted,
+                              !selected.contains(where: { $0.name == found.name }) else { continue }
+                        selected.append(found)
+                    }
+                }
+                results.append(.init(role: .tool, content: "\(raw.name)：\(summary)", toolCallID: raw.id))
+                await observe(.init(kind: .evidenceToolCompleted, runID: runID, sessionID: sessionID, serverID: serverID,
+                    phase: .gatheringEvidence, batchID: batch.batchID, batchRevision: batch.revision, batchSize: batch.tracks.count,
+                    attempt: round + 1, provider: providerName, model: modelName, message: "\(raw.name) success=\(result.success)"))
+            }
+            conversation.append(contentsOf: results)
+        }
+        return batch.tracks.map { .init(track: $0, evidence: records[$0.id] ?? []) }
+    }
+
+    private static func stringArgument(_ value: AIJSONValue?) -> String? {
+        guard case let .some(.string(value)) = value else { return nil }
+        return value
+    }
+
     private static func classificationRequest(
         provider: any AIProvider,
         model: String,
         batch: RecommendationIndexPreparedBatch,
         catalog: LocalCatalogStore,
-        serverID: ServerID?
+        serverID: ServerID?,
+        evidence: [RecommendationIndexTrackEvidence]
     ) async throws -> AICompletionRequest {
         let page = try await catalog.recommendationIndexTagCatalog(
             serverID: serverID,
@@ -1425,7 +1661,7 @@ public enum RecommendationIndexSkillRuntime {
             batchID: batch.batchID,
             revision: batch.revision,
             mode: batch.mode,
-            tracks: batch.tracks,
+            tracks: evidence,
             canonicalTags: page.items.map { TagSnapshot(value: $0.value, trackCount: $0.trackCount) }
         )
         let payload = String(decoding: try JSONEncoder().encode(input), as: UTF8.self)

@@ -5,6 +5,42 @@ import Foundation
 import LocalCatalog
 import Testing
 
+@Test("完整工具认知目录包含全部 model-visible descriptor 的用途")
+func toolAwarenessDirectoryUsesCanonicalDescriptors() {
+    let prompt = SystemPromptBuilder.build(
+        context: .init(),
+        tools: [AgentToolRegistry.descriptor(for: "tool_search")!],
+        nativeToolCalling: true,
+        awarenessTools: AgentToolRegistry.all,
+        authorizedOperations: []
+    )
+    for descriptor in AgentToolRegistry.all where descriptor.visibility == .model {
+        #expect(prompt.contains(descriptor.name))
+        #expect(prompt.contains(descriptor.summary))
+    }
+    #expect(!prompt.contains("recommendation_index_commit："))
+}
+
+@Test("model-visible descriptor 都有真实的 canonical purpose")
+func modelToolSummariesAreMeaningful() {
+    for descriptor in AgentToolRegistry.all where descriptor.visibility == .model {
+        #expect(!descriptor.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(descriptor.summary != descriptor.name)
+    }
+}
+
+@Test("未授权 mutation 留在目录但不进入 executable schema")
+func unauthorizedMutationIsAwareButNotExecutable() {
+    let delete = AgentToolRegistry.descriptor(for: "playlist_delete")!
+    let entry = ToolCatalog(descriptors: [delete]).awarenessEntries(
+        environment: .init(),
+        authorizedOperations: []
+    ).first!
+    #expect(entry.authorized == false)
+    #expect(entry.renderedLine.contains("能力存在，但当前请求未授权执行"))
+    #expect(delete.isAuthorizedForModelExposure(allowedOperations: []) == false)
+}
+
 // MARK: - Tool Broker / CandidateSet / Completion 回归测试
 //
 // 覆盖本轮优化：

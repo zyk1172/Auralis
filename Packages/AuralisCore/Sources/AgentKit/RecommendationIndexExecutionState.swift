@@ -96,6 +96,8 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
         switch phase {
         case .readingStatus: return "正在读取状态"
         case .fetchingBatch: return "正在准备批次"
+        case .loadingCanonicalTags: return "正在检查已有标签"
+        case .gatheringEvidence: return "正在补充歌曲证据"
         case .classifyingBatch: return "正在分类当前批次"
         case .retrying: return "正在重试当前批次"
         case .writingBatch: return "正在保存分类"

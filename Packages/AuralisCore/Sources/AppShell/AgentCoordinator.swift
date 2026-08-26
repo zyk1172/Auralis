@@ -942,6 +942,26 @@ public final class AgentCoordinator: ObservableObject {
         case .batchPrepared:
             if let batch { return "推荐索引：已准备（\(batch)）" }
             return "正在准备推荐索引批次…"
+        case .canonicalTagsLoadStarted:
+            return "推荐索引：正在检查已有标签…"
+        case .canonicalTagsLoadCompleted:
+            return "推荐索引：已有标签已加载，准备分类…"
+        case .evidenceStarted:
+            if let batch { return "推荐索引：正在补充歌曲证据（\(batch)）" }
+            return "推荐索引：正在补充歌曲证据…"
+        case .evidenceToolStarted:
+            return "推荐索引：正在补充歌曲证据（调用：\(event.message ?? "只读工具")）"
+        case .evidenceToolCompleted:
+            return "推荐索引：歌曲证据已返回（\(event.message ?? "只读工具")）"
+        case .evidenceCompleted:
+            return "推荐索引：歌曲证据阶段完成，准备分类…"
+        case .providerRequestStarted:
+            if let batch { return "推荐索引：正在请求模型分类（\(batch)）" }
+            return "推荐索引：正在请求模型分类…"
+        case .providerRequestCompleted:
+            return "推荐索引：模型已返回，正在验证分类…"
+        case .providerRequestFailed:
+            return "推荐索引：模型请求失败，准备重试…"
         case .classificationStarted:
             if let progress, let batch { return "推荐索引：正在分类（\(progress)，\(batch)）" }
             if let batch { return "推荐索引：正在分类（\(batch)）" }

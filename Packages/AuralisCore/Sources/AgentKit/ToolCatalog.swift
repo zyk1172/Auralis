@@ -13,6 +13,11 @@ public struct ToolCatalogEntry: Codable, Hashable, Sendable, Identifiable {
     public let networkAccess: Bool
     public let parallelSafe: Bool
     public let tags: [String]
+    /// Semantic contracts are compact model-facing hints.  The full JSON
+    /// schema remains loaded only when Runtime selects this tool.
+    public let semanticInputs: [String]
+    public let semanticOutputs: [String]
+    public let permission: ToolPermission
     /// Canonical authorization operation（无副作用时为 nil）。
     public let authorizationOperation: String?
     /// 当前请求是否已获授权。nil 表示调用方未提供授权信息（普通发现查询）。
@@ -31,8 +36,106 @@ public struct ToolCatalogEntry: Codable, Hashable, Sendable, Identifiable {
         self.networkAccess = descriptor.networkAccess
         self.parallelSafe = descriptor.parallelSafe
         self.tags = descriptor.tags
+        self.semanticInputs = descriptor.semanticInputs.isEmpty
+            ? descriptor.parameters.map(\.name)
+            : descriptor.semanticInputs
+        self.semanticOutputs = descriptor.semanticOutputs
+        self.permission = descriptor.permission
         self.authorizationOperation = descriptor.authorizationOperation?.rawValue
         self.authorized = authorized
+    }
+}
+
+/// A compact, model-facing directory row derived from the canonical
+/// `ToolDescriptor`.  This is awareness, not an executable schema and never
+/// grants a capability to the model.
+public struct ToolAwarenessEntry: Sendable, Hashable, Identifiable {
+    public enum Availability: Sendable, Hashable {
+        case available
+        case degraded(String)
+        case unavailable(String)
+
+        var description: String {
+            switch self {
+            case .available: "可用"
+            case let .degraded(reason): "降级：\(reason)"
+            case let .unavailable(reason): "不可用：\(reason)"
+            }
+        }
+    }
+
+    public var id: String { name }
+    public let name: String
+    public let namespace: String
+    /// `ToolDescriptor.summary` is the canonical model-facing purpose.
+    public let purpose: String
+    public let permission: ToolPermission
+    public let semanticInputs: [String]
+    public let semanticOutputs: [String]
+    public let availability: Availability
+    /// nil for read-only tools; mutations state whether this request grants
+    /// their exact canonical operation.
+    public let authorized: Bool?
+
+    init(
+        descriptor: ToolDescriptor,
+        environment: AgentCapabilityEnvironment,
+        authorizedOperations: Set<ToolAuthorizationOperation>?
+    ) {
+        name = descriptor.name
+        namespace = descriptor.namespace
+        purpose = descriptor.summary
+        permission = descriptor.permission
+        semanticInputs = descriptor.semanticInputs.isEmpty
+            ? descriptor.parameters.map(\.name)
+            : descriptor.semanticInputs
+        semanticOutputs = descriptor.semanticOutputs
+        availability = Self.availability(for: descriptor, environment: environment)
+        authorized = descriptor.permission == .readOnly
+            ? nil
+            : descriptor.isAuthorizedForModelExposure(allowedOperations: authorizedOperations)
+    }
+
+    private static func availability(
+        for descriptor: ToolDescriptor,
+        environment: AgentCapabilityEnvironment
+    ) -> Availability {
+        if descriptor.group == .server, !environment.activeServer {
+            return .degraded("未连接音乐服务器")
+        }
+        if descriptor.name == "web_search", !environment.webSearchAvailable {
+            return .unavailable("联网搜索未配置")
+        }
+        if descriptor.name == "web_fetch", !environment.webFetchAvailable {
+            return .unavailable("网页读取未配置")
+        }
+        if descriptor.group == .download, !environment.downloadServiceAvailable {
+            return .unavailable("下载服务不可用")
+        }
+        if descriptor.group == .memory, !environment.systemServiceAvailable {
+            return .degraded("系统服务不可用")
+        }
+        return .available
+    }
+
+    var renderedLine: String {
+        let inputs = semanticInputs.isEmpty ? "无" : semanticInputs.joined(separator: "、")
+        let outputs = semanticOutputs.isEmpty ? "结果" : semanticOutputs.joined(separator: "、")
+        let authorization: String
+        if let authorized {
+            authorization = authorized ? "；当前请求已授权执行" : "；能力存在，但当前请求未授权执行"
+        } else {
+            authorization = ""
+        }
+        return "- \(name)：\(purpose)。输入：\(inputs)；输出：\(outputs)；权限：\(permissionLabel)；状态：\(availability.description)\(authorization)"
+    }
+
+    private var permissionLabel: String {
+        switch permission {
+        case .readOnly: "只读"
+        case .reversible: "可逆修改"
+        case .destructive: "不可逆修改"
+        }
     }
 }
 
@@ -78,6 +181,31 @@ public struct ToolCatalog: Sendable {
             descriptor.name.lowercased() == normalized
                 || descriptor.aliases.contains(where: { $0.lowercased() == normalized })
         }
+    }
+
+    /// Complete model awareness directory.  It intentionally filters by
+    /// visibility but does not filter mutations by authorization: a model
+    /// must know a capability exists even when Runtime will not execute it in
+    /// this request.  Internal/legacy names never enter this directory.
+    public func awarenessEntries(
+        activeSkillID: String? = nil,
+        environment: AgentCapabilityEnvironment,
+        authorizedOperations: Set<ToolAuthorizationOperation>? = nil
+    ) -> [ToolAwarenessEntry] {
+        descriptors
+            .filter { $0.isVisible(toSkillID: activeSkillID) }
+            .map {
+                ToolAwarenessEntry(
+                    descriptor: $0,
+                    environment: environment,
+                    authorizedOperations: authorizedOperations
+                )
+            }
+            .sorted {
+                $0.namespace == $1.namespace
+                    ? $0.name < $1.name
+                    : $0.namespace < $1.namespace
+            }
     }
 
     /// Returns only model-visible canonical capabilities. Legacy and

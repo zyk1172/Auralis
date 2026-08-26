@@ -358,6 +358,11 @@ public struct ToolLoop {
                 bridge: bridge,
                 catalog: catalog,
                 serverID: context.serverID,
+                systemService: systemService,
+                externalMusicService: externalMusicService,
+                webService: webService,
+                allowsLyrics: context.allowsLyrics,
+                availableToolDescriptors: availableToolDescriptors,
                 policy: resolvedPolicy,
                 initialTaskState: initialTaskState,
                 authorizationContext: resolvedAuthorization,
@@ -588,7 +593,10 @@ public struct ToolLoop {
             content: systemPrompt(
                 context: context,
                 tools: selectedTools,
-                nativeToolCalling: nativeMode
+                nativeToolCalling: nativeMode,
+                environment: capabilityEnvironment,
+                awarenessTools: availableToolDescriptors,
+                authorizedOperations: effectiveAuthorization.allowedOperations
             )
         )]
         conversation.append(contentsOf: convertHistory(history, currentUserText: userText))
@@ -603,6 +611,9 @@ public struct ToolLoop {
         var indeterminateSideEffects = Set<String>()
         var cachedReadResults: [String: String] = [:]
         var readRepeatCounts: [String: Int] = [:]
+        // A one-time, Runtime-owned read-only expansion is a recovery from a
+        // thin first schema window, not a substitute for model planning.
+        var didAutomaticToolExpansion = false
         // Search exhaustion is per capability, not a global tool-call cap.
         // It stops a backend that keeps returning no new evidence while all
         // unrelated tools and ordinary conversation remain available.
@@ -685,6 +696,29 @@ public struct ToolLoop {
             let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
             if nativeCalls.isEmpty, textActions.isEmpty {
                 let answer = streamedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !didAutomaticToolExpansion,
+                   shouldAutomaticallyExpandToolSurface(
+                       answer: answer,
+                       plan: plan,
+                       current: selectedTools,
+                       allDescriptors: availableToolDescriptors
+                   ) {
+                    let added = automaticallyExpandReadOnlyTools(
+                        userText: userText,
+                        plan: plan,
+                        allDescriptors: availableToolDescriptors,
+                        current: &selectedTools
+                    )
+                    didAutomaticToolExpansion = true
+                    if !added.isEmpty {
+                        conversation.append(AIMessage(role: .assistant, content: answer))
+                        conversation.append(AIMessage(
+                            role: .user,
+                            content: "Runtime 已为本轮补充只读工具 schema：\(added.map(\.name).joined(separator: ", "))。请基于完整工具目录判断是否调用它们；若已有足够证据可直接回答。"
+                        ))
+                        continue
+                    }
+                }
                 if answer.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.error("AI Provider 返回了空回答。")]))
                 } else {
@@ -1245,7 +1279,10 @@ public struct ToolLoop {
                 goal: taskState.goal,
                 workflowInstruction: activeSkill?.instructions,
                 environment: capabilityEnvironment,
-                relevantCapabilityIDs: Self.relevantCapabilityIDs(for: intent, semantics: plan.semantics)
+                relevantCapabilityIDs: Self.relevantCapabilityIDs(for: intent, semantics: plan.semantics),
+                awarenessTools: availableToolDescriptors,
+                activeSkillID: activeSkillID,
+                authorizedOperations: effectiveAuthorization.allowedOperations
             ),
             task: taskState,
             facts: [],
@@ -2751,6 +2788,50 @@ public struct ToolLoop {
         return entries
     }
 
+    /// One bounded recovery when a non-chat model turn explicitly signals it
+    /// lacks factual evidence.  The selector remains only a schema optimizer:
+    /// this adds at most eight *read-only* canonical descriptors and never
+    /// creates authorization or repeats the same expansion set.
+    private static func automaticallyExpandReadOnlyTools(
+        userText: String,
+        plan: AgentRequestPlan,
+        allDescriptors: [ToolDescriptor],
+        current: inout [ToolDescriptor]
+    ) -> [ToolDescriptor] {
+        let candidates = ToolCatalog(descriptors: allDescriptors).search(
+            query: userText,
+            limit: 8,
+            authorizedOperations: plan.authorization.allowedOperations
+        )
+        let byName = Dictionary(uniqueKeysWithValues: allDescriptors.map { ($0.name, $0) })
+        var existing = Set(current.map(\.name))
+        var added: [ToolDescriptor] = []
+        for entry in candidates {
+            guard let descriptor = byName[entry.name],
+                  descriptor.visibility == .model,
+                  descriptor.permission == .readOnly,
+                  existing.insert(descriptor.name).inserted
+            else { continue }
+            current.append(descriptor)
+            added.append(descriptor)
+        }
+        return added
+    }
+
+    private static func shouldAutomaticallyExpandToolSurface(
+        answer: String,
+        plan: AgentRequestPlan,
+        current: [ToolDescriptor],
+        allDescriptors: [ToolDescriptor]
+    ) -> Bool {
+        guard plan.semantics.domain != .conversation,
+              current.count < allDescriptors.filter({ $0.visibility == .model && $0.permission == .readOnly }).count
+        else { return false }
+        let lower = answer.lowercased()
+        return answer.isEmpty
+            || ["没有足够", "无法判断", "无法确定", "缺少", "不知道", "不清楚", "need more", "insufficient", "cannot determine"].contains(where: lower.contains)
+    }
+
     /// Provider codecs decode raw wire JSON before the call reaches ToolLoop.
     /// Keep the object structured here; only the ACTION compatibility branch
     /// below projects text arguments back into JSON values.
@@ -3317,7 +3398,10 @@ public struct ToolLoop {
         goal: String = "",
         workflowInstruction: String? = nil,
         environment: AgentCapabilityEnvironment = AgentCapabilityEnvironment(providerAvailable: true),
-        relevantCapabilityIDs: [String]? = nil
+        relevantCapabilityIDs: [String]? = nil,
+        awarenessTools: [ToolDescriptor]? = nil,
+        activeSkillID: String? = nil,
+        authorizedOperations: Set<ToolAuthorizationOperation>? = nil
     ) -> String {
         return SystemPromptBuilder.build(
             context: context,
@@ -3326,7 +3410,10 @@ public struct ToolLoop {
             goal: goal,
             workflowInstruction: workflowInstruction,
             environment: environment,
-            relevantCapabilityIDs: relevantCapabilityIDs
+            relevantCapabilityIDs: relevantCapabilityIDs,
+            awarenessTools: awarenessTools,
+            activeSkillID: activeSkillID,
+            authorizedOperations: authorizedOperations
         )
 
         /*

@@ -1584,20 +1584,32 @@ public enum AgentToolRegistry {
                     activeSkillID: activeSkillID,
                     authorizedOperations: authorizedOperations
                 )
+            let environment: AgentCapabilityEnvironment
+            if let snapshot = context.capabilityEnvironment {
+                environment = snapshot
+            } else {
+                let activeServer = (await bridge.getActiveServer()) != nil
+                environment = AgentCapabilityEnvironment(
+                    providerAvailable: context.providerCapabilities != nil,
+                    activeServer: activeServer,
+                    webSearchAvailable: webService != nil || (context.providerCapabilities?.supportsHostedWebSearch ?? false),
+                    webFetchAvailable: webService != nil || (context.providerCapabilities?.supportsHostedWebFetch ?? false),
+                    downloadServiceAvailable: systemService != nil,
+                    systemServiceAvailable: systemService != nil
+                )
+            }
+            let awareness = Dictionary(uniqueKeysWithValues: ToolCatalog(descriptors: context.availableToolDescriptors)
+                .awarenessEntries(
+                    activeSkillID: activeSkillID,
+                    environment: environment,
+                    authorizedOperations: authorizedOperations
+                )
+                .map { ($0.name, $0) })
             let text = entries.isEmpty
                 ? "未找到匹配工具。可以换一个能力描述、工具名或命名空间再搜索。"
                 : entries.map { entry in
-                    let flags = [
-                        entry.sideEffect == .none ? "只读" : "会改变状态",
-                        entry.networkAccess ? "联网" : nil,
-                    ].compactMap { $0 }.joined(separator: " · ")
-                    let authFlag: String
-                    if let authorized = entry.authorized {
-                        authFlag = authorized ? "当前请求已授权" : "当前请求未授权（不要调用，Runtime 会拒绝）"
-                    } else {
-                        authFlag = ""
-                    }
-                    return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）\(authFlag.isEmpty ? "" : "；\(authFlag)")"
+                    awareness[entry.name]?.renderedLine
+                        ?? "- \(entry.name) [\(entry.namespace)]：\(entry.summary)"
                 }.joined(separator: "\n")
             return .ok(canonicalCall, canonicalDescriptor, "发现 \(entries.count) 个工具", .text(text))
         case "capabilities_get":
