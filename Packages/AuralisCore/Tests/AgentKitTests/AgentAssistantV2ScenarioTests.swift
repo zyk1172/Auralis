@@ -189,6 +189,15 @@ private actor ScenarioMessageCollector {
     func append(_ message: AgentChatMessage) { messages.append(message) }
     func all() -> [AgentChatMessage] { messages }
 
+    func artistCardCounts() -> [Int] {
+        messages.flatMap { message in
+            message.messages.compactMap { item -> Int? in
+                if case let .artistCards(cards) = item { return cards.count }
+                return nil
+            }
+        }
+    }
+
     func containsText(_ text: String) -> Bool {
         messages.contains { message in
             message.messages.contains { item in
@@ -205,6 +214,15 @@ private actor ScenarioMessageCollector {
                 return nil
             }
         }.joined(separator: "\n")
+    }
+
+    func playlistCardCounts() -> [Int] {
+        messages.flatMap { message in
+            message.messages.compactMap { item -> Int? in
+                if case let .playlistCards(cards) = item { return cards.count }
+                return nil
+            }
+        }
     }
 
     func containsError(_ text: String) -> Bool {
@@ -366,7 +384,7 @@ func deterministicReadFastPathUsesExactlyOneTargetTool() async throws {
         #expect(metrics.map(\.toolName) == [expectedTool], "\(userText) 应只执行 \(expectedTool)")
         #expect(!(await collector.containsError("失败")), "\(userText) 的 direct tool 不应返回失败")
         if expectedTool == "library_get_artists" {
-            #expect(await collector.containsText("共 1 位艺术家"))
+            #expect(await collector.artistCardCounts() == [1])
         }
     }
 }
@@ -411,8 +429,7 @@ func deterministicPlaylistListFastPathPreservesLimit() async throws {
     #expect(provider.requests().isEmpty)
     let metrics = await ToolMetricsCollector.shared.snapshot().filter { $0.runID == runID }
     #expect(metrics.map(\.toolName) == ["playlist_list"])
-    let output = await collector.joinedText()
-    #expect(output.components(separatedBy: "Playlist-").count - 1 == 10)
+    #expect(await collector.playlistCardCounts() == [10])
 }
 
 @Test("Library summary counts distinct artist and album IDs")
@@ -547,6 +564,57 @@ func toolSearchExpandsDeviceCapability() async throws {
     #expect(!firstTools.contains("device_get_audio_route"))
     #expect(secondTools.contains("device_get_audio_route"))
     #expect(await collector.containsText("当前音频输出是测试耳机"))
+}
+
+@Test("V2 production loop: tool_search expands a synthetic obscure tool with no preset utterance examples")
+func toolSearchExpandsSyntheticObscureTool() async throws {
+    let registry = CustomToolRegistry(storageURL: nil)
+    _ = try await registry.create(CustomToolManifest(
+        name: "test_obscure_music_analysis",
+        description: "分析特殊音乐元数据并返回结构化只读证据",
+        implementation: .workflow(steps: [CustomToolStep(tool: "library_get_summary")])
+    ))
+    let syntheticName = try #require(
+        await registry.modelDescriptors().first?.name
+    )
+    let context = ToolLoop.Context(customToolRegistry: registry)
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "discover-obscure",
+            name: "tool_search",
+            arguments: ["query": .string("特殊音乐分析")]
+        )]),
+        scenarioResponse(calls: [scenarioCall(
+            id: "run-obscure",
+            name: syntheticName,
+            arguments: [:]
+        )]),
+        scenarioResponse(content: "特殊音乐分析已完成。"),
+    ])
+    let store = try scenarioStore()
+    let collector = ScenarioMessageCollector()
+
+    await ConversationEngine().run(
+        userText: "告诉我一个系统事实。",
+        provider: provider,
+        model: "scenario",
+        bridge: MockAgentBridge(),
+        catalog: store,
+        context: context,
+        systemService: ScenarioSystemService(),
+        intent: .conversation,
+        policy: AgentTaskPolicy.policy(for: .conversation),
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    let requests = provider.requests()
+    let firstTools = Set(requests.first?.tools?.map(\.name) ?? [])
+    let secondTools = Set(requests.dropFirst().first?.tools?.map(\.name) ?? [])
+    #expect(!firstTools.contains(syntheticName))
+    #expect(secondTools.contains(syntheticName))
+    #expect(requests.dropFirst().dropFirst().first?.messages.contains(where: { $0.role == .tool && $0.content.contains("已执行自建工具") }) == true)
+    #expect(await collector.containsText("特殊音乐分析已完成"))
 }
 
 @Test("V2 production loop: parallel read-only calls retain ids and replay all results")

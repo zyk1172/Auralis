@@ -223,7 +223,10 @@ public struct AgentConvergenceTracker: Sendable {
     }
 
     /// 返回第一个命中的停止原因；nil 表示可以继续。
-    public func stopReason(under policy: AgentConvergencePolicy) -> AgentConvergenceStopReason? {
+    public func stopReason(
+        under policy: AgentConvergencePolicy,
+        tolerateSearchExhaustion: Bool = false
+    ) -> AgentConvergenceStopReason? {
         if modelRounds >= policy.maxModelRounds { return .modelRoundLimit }
         if totalToolCalls >= policy.maxTotalToolCalls { return .totalToolCallLimit }
         if identicalToolCallStreak >= policy.maxIdenticalToolCalls { return .identicalToolCall }
@@ -235,10 +238,11 @@ public struct AgentConvergenceTracker: Sendable {
         if consecutiveMalformedCalls >= policy.maxConsecutiveMalformedCalls {
             return .repeatedMalformedCall
         }
-        // 任一搜索工具连续无新证据达到阈值 → 停止该搜索路径（可诊断原因）。
-        if searchNoNewEvidenceStreakByTool.values.contains(where: { $0 >= policy.maxSameToolNoNewEvidence }) {
-            return .noNewEvidence
-        }
-        return nil
+        // A single exhausted search path must not kill a run when a distinct
+        // canonical path remains (for example music_appreciate). For ordinary
+        // search-only requests, exhaustion remains a diagnosable stop reason.
+        let hasExhaustedSearch = searchNoNewEvidenceStreakByTool.values
+            .contains(where: { $0 >= policy.maxSameToolNoNewEvidence })
+        return hasExhaustedSearch && !tolerateSearchExhaustion ? .noNewEvidence : nil
     }
 }

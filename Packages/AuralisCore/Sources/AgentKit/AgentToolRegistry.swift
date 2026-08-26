@@ -601,10 +601,14 @@ public struct ToolDescriptor: Sendable, Hashable {
 
 /// 全部 Agent 工具注册表。集中声明权限与确认要求，供 Runner 校验与 UI 展示。
 public enum AgentToolRegistry {
-    /// 原生 Function Calling 直接接收数组。固定音乐分析维度
-    /// （mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability）保持规范；
-    /// 另外支持开放语义标签 semanticTags（dimension='tag'，数量无硬上限）。
-    static let recommendationClassificationArraySchema = #"""
+    /// 原生 Function Calling 直接接收数组。固定 taxonomy v3 只允许
+    /// RecommendationIndexTaxonomy 中存在的 TagID；运行时永远不能创建新标签。
+    static let recommendationClassificationArraySchema: String = {
+        let enumJSON: (TagDimension) -> String = { dimension in
+            let ids = RecommendationIndexTaxonomy.ids(for: dimension).map(\.rawValue)
+            return "[" + ids.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+        }
+        return #"""
     {
       "type": "array",
       "minItems": 1,
@@ -614,34 +618,32 @@ public enum AgentToolRegistry {
         "additionalProperties": false,
         "properties": {
           "id": {"type": "string"},
-          "moods": {"type": "array", "items": {"type": "string"}},
-          "scenes": {"type": "array", "items": {"type": "string"}},
-          "energy": {"type": "integer", "minimum": 1, "maximum": 10},
-          "tempo": {"type": "integer", "minimum": 1, "maximum": 5},
-          "acousticness": {"type": "integer", "minimum": 1, "maximum": 5},
-          "danceability": {"type": "integer", "minimum": 1, "maximum": 5},
-          "vocals": {"type": "array", "items": {"type": "string"}},
-          "textures": {"type": "array", "items": {"type": "string"}},
-          "styles": {"type": "array", "items": {"type": "string"}},
-          "semanticTags": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "value": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-              },
-              "required": ["value", "confidence"]
-            }
-          },
-          "mode": {"type": "string", "enum": ["full", "semanticTagsOnly"]},
+          "moods": {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": \#(enumJSON(.mood))}},
+          "scenes": {"type": "array", "maxItems": 6, "items": {"type": "string", "enum": \#(enumJSON(.scene))}},
+          "themes": {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": \#(enumJSON(.theme))}},
+          "genres": {"type": "array", "maxItems": 3, "items": {"type": "string", "enum": \#(enumJSON(.genre))}},
+          "styles": {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": \#(enumJSON(.style))}},
+          "vocals": {"type": "array", "maxItems": 4, "items": {"type": "string", "enum": \#(enumJSON(.vocal))}},
+          "instruments": {"type": "array", "maxItems": 8, "items": {"type": "string", "enum": \#(enumJSON(.instrument))}},
+          "textures": {"type": "array", "maxItems": 6, "items": {"type": "string", "enum": \#(enumJSON(.texture))}},
+          "rhythms": {"type": "array", "maxItems": 4, "items": {"type": "string", "enum": \#(enumJSON(.rhythm))}},
+          "energy": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 10}, {"type": "null"}]},
+          "tempo": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "acousticness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "danceability": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "instrumentalness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "liveness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "speechiness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "valence": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "complexity": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
+          "mode": {"type": "string", "enum": ["full"]},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         },
         "required": ["id"]
       }
     }
     """#
+    }()
 
     public static let all: [ToolDescriptor] = [
         // MARK: Runtime discovery and generic capabilities
@@ -795,23 +797,23 @@ public enum AgentToolRegistry {
               defaultPresentationRole: .finalResult),
 
         // MARK: Canonical 新式工具（旧别名仍注册，仅供执行兼容；schema 只暴露 canonical）
-        .init(name: "library_get_least_played", group: .catalog, permission: .readOnly, summary: "获取最少播放的单曲",
+        .init(name: "library_get_least_played", group: .catalog, permission: .readOnly, summary: "读取本地播放记录中最少播放的真实歌曲，用于发现和推荐候选",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 50")]),
-        .init(name: "library_get_downloaded", group: .catalog, permission: .readOnly, summary: "获取已下载的单曲"),
-        .init(name: "queue_remove", group: .playback, permission: .reversible, summary: "从队列移除指定位置",
+        .init(name: "library_get_downloaded", group: .catalog, permission: .readOnly, summary: "读取已下载到本地的真实歌曲，用于离线浏览和播放规划"),
+        .init(name: "queue_remove", group: .playback, permission: .reversible, summary: "从当前播放队列移除指定位置的歌曲",
               parameters: [.init(name: "index", required: true, description: "队列索引（从 0）")]),
-        .init(name: "playlist_rename", group: .playlist, permission: .reversible, summary: "重命名歌单",
+        .init(name: "playlist_rename", group: .playlist, permission: .reversible, summary: "重命名已有歌单；需要准确的 GlobalPlaylistID",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
                            .init(name: "name", required: true, description: "新名称")]),
-        .init(name: "playlist_remove_songs", group: .playlist, permission: .reversible, summary: "从歌单移除曲目",
+        .init(name: "playlist_remove_songs", group: .playlist, permission: .reversible, summary: "从指定歌单移除选中曲目；需要准确的 GlobalPlaylistID",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
                            .init(name: "indices", required: false, description: "要移除的曲目索引数组（歌单内 0 基索引）",
                                  schemaJSON: #"{"type":"array","items":{"type":"integer","minimum":0}}"#)]),
-        .init(name: "playlist_move", group: .playlist, permission: .reversible, summary: "调整歌单内曲目顺序",
+        .init(name: "playlist_move", group: .playlist, permission: .reversible, summary: "调整指定歌单内曲目顺序；需要准确的 GlobalPlaylistID",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
                            .init(name: "from", required: true, description: "原索引"),
                            .init(name: "to", required: true, description: "目标索引")]),
-        .init(name: "playlist_duplicate", group: .playlist, permission: .reversible, summary: "复制歌单",
+        .init(name: "playlist_duplicate", group: .playlist, permission: .reversible, summary: "复制一个已有歌单为新歌单，保留原曲目内容",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
         .init(name: "playlist_merge", group: .playlist, permission: .reversible, summary: "把多个歌单合并成新歌单",
               parameters: [.init(name: "name", required: true, description: "新歌单名称"),
@@ -822,13 +824,13 @@ public enum AgentToolRegistry {
               summary: "删除歌单（不可逆，需要用户批准）",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")],
               declaredRisk: .irreversibleDelete),
-        .init(name: "rating_set", group: .annotation, permission: .reversible, summary: "设置单曲评分（value 0 表示清除）",
+        .init(name: "rating_set", group: .annotation, permission: .reversible, summary: "设置或清除指定歌曲评分；读取评分不要调用此工具",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID"),
                            .init(name: "value", required: true, description: "评分 1-5；0 表示清除评分",
                                  schemaJSON: #"{"type":"integer","minimum":0,"maximum":5}"#)]),
-        .init(name: "server_switch", group: .server, permission: .reversible, summary: "切换服务器",
+        .init(name: "server_switch", group: .server, permission: .reversible, summary: "切换当前音乐服务器；需要准确的服务器 ID",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
-        .init(name: "server_remove", group: .server, permission: .reversible, summary: "删除服务器（仅本地清理）",
+        .init(name: "server_remove", group: .server, permission: .reversible, summary: "从 Auralis 移除一个已配置服务器（仅清理本地配置，不删除服务器远端数据）",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
 
         // MARK: Playback
@@ -954,29 +956,29 @@ public enum AgentToolRegistry {
 
         // App / 设备状态
         .init(name: "app_get_context", group: .catalog, permission: .readOnly, summary: "获取 App 上下文（页面/服务器/当前歌曲/播放状态/网络）", tags: ["core", "context", "app"]),
-        .init(name: "app_open_page", group: .catalog, permission: .readOnly, summary: "打开指定页面",
+        .init(name: "app_open_page", group: .catalog, permission: .readOnly, summary: "打开 Auralis App 内指定页面，用于用户需要直接查看某界面时",
               parameters: [.init(name: "page", required: true, description: "首页/音乐库/搜索/AI助手/设置/当前播放/歌词/播放队列/下载管理/服务器管理")]),
-        .init(name: "app_get_feature_status", group: .catalog, permission: .readOnly, summary: "查询后台播放/Siri/快捷指令/本地网络等能力状态"),
-        .init(name: "device_get_network_status", group: .catalog, permission: .readOnly, summary: "获取网络类型与服务器可达性"),
-        .init(name: "device_get_audio_route", group: .catalog, permission: .readOnly, summary: "获取当前音频输出设备"),
-        .init(name: "device_get_storage_status", group: .catalog, permission: .readOnly, summary: "获取存储占用与剩余空间"),
+        .init(name: "app_get_feature_status", group: .catalog, permission: .readOnly, summary: "查询后台播放/Siri/快捷指令/本地网络等系统能力是否可用"),
+        .init(name: "device_get_network_status", group: .catalog, permission: .readOnly, summary: "读取当前网络类型与音乐服务器可达性，用于诊断或选择在线操作"),
+        .init(name: "device_get_audio_route", group: .catalog, permission: .readOnly, summary: "读取当前音频输出设备（耳机/扬声器等），用于播放状态诊断"),
+        .init(name: "device_get_storage_status", group: .catalog, permission: .readOnly, summary: "读取设备存储占用与剩余空间，用于缓存/下载规划或诊断"),
 
         // 服务器
-        .init(name: "server_list", group: .server, permission: .readOnly, summary: "列出已配置的服务器"),
-        .init(name: "server_get_current", group: .server, permission: .readOnly, summary: "获取当前服务器信息（不含凭据）"),
+        .init(name: "server_list", group: .server, permission: .readOnly, summary: "列出 Auralis 已配置的音乐服务器及基础信息"),
+        .init(name: "server_get_current", group: .server, permission: .readOnly, summary: "读取当前使用的音乐服务器信息（不含凭据），用于确认上下文"),
         .init(name: "server_test_connection", group: .server, permission: .readOnly, summary: "对指定服务器执行真实连通性测试",
               parameters: [.init(name: "serverID", required: true, description: "要测试的服务器 ID")]),
-        .init(name: "server_get_capabilities", group: .server, permission: .readOnly, summary: "获取当前服务器支持的 OpenSubsonic 能力"),
-        .init(name: "server_sync_status", group: .server, permission: .readOnly, summary: "查看资料库同步状态与上次同步时间"),
+        .init(name: "server_get_capabilities", group: .server, permission: .readOnly, summary: "读取当前服务器支持的 OpenSubsonic 能力，判断在线功能可用性"),
+        .init(name: "server_sync_status", group: .server, permission: .readOnly, summary: "读取资料库同步状态与上次同步时间，用于判断本地数据是否可能陈旧"),
         .init(name: "server_sync_start", group: .server, permission: .reversible, summary: "触发一次音乐库增量同步（后台执行，本地未找到歌曲时可先同步）"),
-        .init(name: "server_search", group: .server, permission: .readOnly, summary: "在服务器上在线搜索歌曲（HTTP，本地无结果时使用）",
+        .init(name: "server_search", group: .server, permission: .readOnly, summary: "在服务器上在线搜索真实歌曲（HTTP），本地资料库无结果时用于查找远端曲目",
               parameters: [
                 .init(name: "query", required: true, description: "搜索关键词"),
                 .init(name: "limit", required: false, description: "返回数量，默认 20"),
               ]),
 
         // 本地库
-        .init(name: "library_get_summary", group: .catalog, permission: .readOnly, summary: "获取本地资料库统计摘要"),
+        .init(name: "library_get_summary", group: .catalog, permission: .readOnly, summary: "读取本地资料库统计摘要（歌曲/艺术家/专辑/流派等），用于了解曲库规模"),
         .init(name: "library_search", group: .catalog, permission: .readOnly, summary: "统一搜索歌曲/专辑/艺术家/歌单/流派/歌词",
               parameters: [
                 .init(name: "query", required: true, description: "搜索关键词"),
@@ -1004,10 +1006,24 @@ public enum AgentToolRegistry {
               maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "status", "read"], aliases: [RecommendationIndexCompatibility.legacyStatusTool]),
         .init(name: "library_index_read", group: .catalog, permission: .readOnly, summary: "读取已完成的推荐索引条目及分类标签，可按维度和标签筛选",
               parameters: [
-                .init(name: "dimension", required: false, description: "mood/scene/vocal/texture/style/energy/tempo/acousticness/danceability/tag"),
-                .init(name: "value", required: false, description: "要匹配的标签值，如 通勤、深夜、平静"),
+                .init(name: "dimension", required: false, description: "mood/scene/theme/genre/style/vocal/instrument/texture/rhythm/energy/tempo/acousticness/danceability/instrumentalness/liveness/speechiness/valence/complexity"),
+                .init(name: "value", required: false, description: "要匹配的标签 ID、展示名或别名，如 scene.commute、深夜、通勤"),
                 .init(name: "limit", required: false, description: "返回 1-100 条，默认 50"),
               ], maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "read", "catalog"], aliases: [RecommendationIndexCompatibility.legacyReadTool]),
+        .init(name: "recommendation_taxonomy_list", group: .catalog, permission: .readOnly,
+              summary: "列出 Auralis 固定推荐 taxonomy（情绪/场景/主题/类型/风格/人声/乐器/质感/节奏），返回稳定 TagID 与展示名",
+              parameters: [
+                .init(name: "dimension", required: false, description: "可选 mood/scene/theme/genre/style/vocal/instrument/texture/rhythm"),
+                .init(name: "limit", required: false, description: "返回数量，默认 200，最多 500"),
+              ],
+              tags: ["recommendation-index", "taxonomy", "list", "fixed"]),
+        .init(name: "recommendation_taxonomy_search", group: .catalog, permission: .readOnly,
+              summary: "在 Auralis 固定推荐 taxonomy 中搜索 TagID、展示名或别名；只能返回已定义标签，不能创建新标签",
+              parameters: [
+                .init(name: "query", required: true, description: "自然语言或别名，如 开车/伤感/纯音乐/神圣"),
+                .init(name: "limit", required: false, description: "返回数量，默认 12，最多 50"),
+              ],
+              tags: ["recommendation-index", "taxonomy", "search", "fixed", "alias"]),
         .init(name: "recommendation_index_commit", group: .catalog, permission: .reversible,
               summary: "由 Recommendation Index Runtime 提交已验证的当前批次分类；模型不可见",
               parameters: [
@@ -1041,38 +1057,41 @@ public enum AgentToolRegistry {
               utteranceExamples: ["找20首中文摇滚", "给我30首90年代歌曲", "从收藏里挑15首最近没听过的", "找50首粤语歌"],
               semanticInputs: ["MusicConstraints"],
               semanticOutputs: ["TrackCandidateSet"]),
-        .init(name: "library_get_song", group: .catalog, permission: .readOnly, summary: "获取单曲详情（含格式/码率/收藏/评分/离线状态）",
+        .init(name: "library_get_song", group: .catalog, permission: .readOnly, summary: "读取指定歌曲在本地音乐库中的真实元数据与状态（格式、码率、收藏、评分、离线），用于实体确认、鉴赏、播放或推荐规划",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "music_appreciate", group: .catalog, permission: .readOnly, summary: "为正在播放或指定歌曲准备分层鉴赏证据：已核验元数据、私人播放数据与可用的外部大众评价；没有 Community Evidence 时明确标记不可用",
-              parameters: [.init(name: "trackID", required: false, description: "可选 GlobalTrackID；省略时鉴赏当前正在播放的歌曲")]),
-        .init(name: "library_get_album", group: .catalog, permission: .readOnly, summary: "获取专辑详情",
+              parameters: [.init(name: "trackID", required: false, description: "可选 GlobalTrackID；省略时鉴赏当前正在播放的歌曲")],
+              utteranceExamples: ["鉴赏这首歌", "赏析这首歌", "这首歌的乐评", "大众评价这首歌", "appreciate this song"],
+              semanticInputs: ["CurrentTrackID", "TrackID"],
+              semanticOutputs: ["MusicAppreciationEvidence"]),
+        .init(name: "library_get_album", group: .catalog, permission: .readOnly, summary: "读取指定专辑在本地音乐资料库中的真实元数据，用于专辑分析、实体确认及后续播放/推荐规划",
               parameters: [.init(name: "albumID", required: true, description: "GlobalAlbumID")]),
-        .init(name: "library_get_artist", group: .catalog, permission: .readOnly, summary: "获取艺术家详情",
+        .init(name: "library_get_artist", group: .catalog, permission: .readOnly, summary: "读取指定艺术家的真实本地资料和专辑概况，用于艺术家分析、实体确认及后续歌曲/专辑检索",
               parameters: [.init(name: "artistID", required: true, description: "GlobalArtistID")]),
-        .init(name: "library_get_artists", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的艺术家",
+        .init(name: "library_get_artists", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的真实艺术家及各自专辑数量，用于艺术家浏览、实体确认和后续检索/播放规划",
               parameters: [.init(name: "limit", required: false, description: "最多返回多少位艺术家，默认 100，最大 500")],
               tags: ["catalog", "artists", "list", "read"]),
-        .init(name: "library_get_albums", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的专辑",
+        .init(name: "library_get_albums", group: .catalog, permission: .readOnly, summary: "列出本地资料库中的真实专辑及基础信息，用于专辑浏览、实体确认和后续检索/播放规划",
               parameters: [.init(name: "limit", required: false, description: "最多返回多少张专辑，默认 100，最大 500")],
               tags: ["catalog", "albums", "list", "read"]),
-        .init(name: "library_get_playlist", group: .catalog, permission: .readOnly, summary: "获取歌单详情",
+        .init(name: "library_get_playlist", group: .catalog, permission: .readOnly, summary: "读取指定歌单在本地资料库中的真实名称、曲目与状态，用于歌单确认、规划或修改前核对",
               parameters: [.init(name: "playlistID", required: true, description: "GlobalPlaylistID")]),
-        .init(name: "playlist_list", group: .playlist, permission: .readOnly, summary: "列出当前音乐服务器的歌单（只读）",
+        .init(name: "playlist_list", group: .playlist, permission: .readOnly, summary: "列出当前音乐服务器的真实歌单（名称与基础信息），用于选择目标歌单或确认现有歌单",
               parameters: [.init(name: "limit", required: false, description: "最多返回多少个歌单，默认 100，最大 100")],
               tags: ["playlist", "list", "query", "read", "catalog"], aliases: ["listPlaylists"]),
-        .init(name: "library_get_recently_added", group: .catalog, permission: .readOnly, summary: "获取最近添加的歌曲",
+        .init(name: "library_get_recently_added", group: .catalog, permission: .readOnly, summary: "读取最近加入本地资料库的真实歌曲，用于新歌浏览和推荐候选",
               parameters: [
                 .init(name: "days", required: false, description: "最近 N 天，默认 30"),
                 .init(name: "limit", required: false, description: "返回数量，默认 20"),
               ]),
-        .init(name: "library_get_most_played", group: .catalog, permission: .readOnly, summary: "获取最常播放的歌曲",
+        .init(name: "library_get_most_played", group: .catalog, permission: .readOnly, summary: "读取本地播放记录中最常播放的真实歌曲，用于用户偏好分析和推荐候选",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 20")]),
-        .init(name: "library_get_recently_played", group: .catalog, permission: .readOnly, summary: "获取最近播放",
+        .init(name: "library_get_recently_played", group: .catalog, permission: .readOnly, summary: "读取最近播放过的真实歌曲，用于上下文恢复和推荐候选",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 20")]),
-        .init(name: "library_get_starred", group: .catalog, permission: .readOnly, summary: "获取收藏的歌曲"),
-        .init(name: "library_get_random_songs", group: .catalog, permission: .readOnly, summary: "获取随机歌曲",
+        .init(name: "library_get_starred", group: .catalog, permission: .readOnly, summary: "读取用户收藏的真实歌曲，用于收藏浏览、筛选和推荐候选"),
+        .init(name: "library_get_random_songs", group: .catalog, permission: .readOnly, summary: "从本地资料库随机读取真实歌曲，用于随机播放、发现和候选生成",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 10")]),
-        .init(name: "library_get_similar_songs", group: .catalog, permission: .readOnly, summary: "获取相似歌曲",
+        .init(name: "library_get_similar_songs", group: .catalog, permission: .readOnly, summary: "按指定歌曲的真实内容/元数据读取相似歌曲，用于相似推荐和发现",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "library_get_genres", group: .catalog, permission: .readOnly, summary: "获取全部流派及其歌曲数量（按歌曲数降序）",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 30")]),
@@ -1083,7 +1102,7 @@ public enum AgentToolRegistry {
               ]),
 
         // 播放
-        .init(name: "playback_get_state", group: .playback, permission: .readOnly, summary: "获取播放器状态"),
+        .init(name: "playback_get_state", group: .playback, permission: .readOnly, summary: "读取当前播放器状态（播放中/暂停、歌曲、队列与模式），用于判断上下文和规划播放操作"),
         .init(name: "playback_play_song", group: .playback, permission: .reversible, summary: "播放指定歌曲",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")],
               utteranceExamples: ["播放稻香", "来首稻香", "放一下这首歌"],
@@ -1121,7 +1140,7 @@ public enum AgentToolRegistry {
         .init(name: "playback_get_sleep_timer", group: .playback, permission: .readOnly, summary: "查询睡眠定时状态"),
 
         // 队列
-        .init(name: "queue_get", group: .playback, permission: .readOnly, summary: "获取当前播放队列"),
+        .init(name: "queue_get", group: .playback, permission: .readOnly, summary: "读取当前播放队列中的真实歌曲与顺序，用于确认队列或规划队列修改"),
         .init(name: "queue_append", group: .playback, permission: .reversible, summary: "把歌曲追加到队列末尾",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "queue_append_many", group: .playback, permission: .reversible, summary: "一次把多首歌曲追加到队列末尾",
@@ -1152,17 +1171,17 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "name", required: true, description: "歌单名称")]),
 
         // 收藏 / 歌单 / 歌词 / 下载 / 缓存 / 统计 / 诊断
-        .init(name: "favorite_set", group: .annotation, permission: .reversible, summary: "设置收藏（歌曲/专辑/艺术家）",
+        .init(name: "favorite_set", group: .annotation, permission: .reversible, summary: "设置或取消歌曲/专辑/艺术家的收藏状态；需要已解析的准确 GlobalID",
               parameters: [
                 .init(name: "targetType", required: true, description: "song/album/artist"),
                 .init(name: "targetID", required: true, description: "GlobalID"),
                 .init(name: "value", required: true, description: "true=收藏 / false=取消收藏"),
               ]),
-        .init(name: "playlist_create", group: .playlist, permission: .reversible, summary: "新建歌单",
+        .init(name: "playlist_create", group: .playlist, permission: .reversible, summary: "新建一个真实歌单并返回 GlobalPlaylistID，供后续加歌、播放或编辑使用",
               parameters: [.init(name: "name", required: true, description: "歌单名称")],
               semanticInputs: ["PlaylistName"],
               semanticOutputs: ["PlaylistID"]),
-        .init(name: "playlist_add_songs", group: .playlist, permission: .reversible, summary: "把歌曲加入歌单",
+        .init(name: "playlist_add_songs", group: .playlist, permission: .reversible, summary: "把已解析的真实歌曲 GlobalTrackID 加入指定歌单；需要准确的 PlaylistID 与 TrackID",
               parameters: [
                 .init(name: "playlistID", required: true, description: "GlobalPlaylistID"),
                 .init(name: "trackIDs", required: true, description: "GlobalTrackID 数组",
@@ -1581,20 +1600,32 @@ public enum AgentToolRegistry {
                     activeSkillID: activeSkillID,
                     authorizedOperations: authorizedOperations
                 )
+            let environment: AgentCapabilityEnvironment
+            if let snapshot = context.capabilityEnvironment {
+                environment = snapshot
+            } else {
+                let activeServer = (await bridge.getActiveServer()) != nil
+                environment = AgentCapabilityEnvironment(
+                    providerAvailable: context.providerCapabilities != nil,
+                    activeServer: activeServer,
+                    webSearchAvailable: webService != nil || (context.providerCapabilities?.supportsHostedWebSearch ?? false),
+                    webFetchAvailable: webService != nil || (context.providerCapabilities?.supportsHostedWebFetch ?? false),
+                    downloadServiceAvailable: systemService != nil,
+                    systemServiceAvailable: systemService != nil
+                )
+            }
+            let awareness = Dictionary(uniqueKeysWithValues: ToolCatalog(descriptors: context.availableToolDescriptors)
+                .awarenessEntries(
+                    activeSkillID: activeSkillID,
+                    environment: environment,
+                    authorizedOperations: authorizedOperations
+                )
+                .map { ($0.name, $0) })
             let text = entries.isEmpty
                 ? "未找到匹配工具。可以换一个能力描述、工具名或命名空间再搜索。"
                 : entries.map { entry in
-                    let flags = [
-                        entry.sideEffect == .none ? "只读" : "会改变状态",
-                        entry.networkAccess ? "联网" : nil,
-                    ].compactMap { $0 }.joined(separator: " · ")
-                    let authFlag: String
-                    if let authorized = entry.authorized {
-                        authFlag = authorized ? "当前请求已授权" : "当前请求未授权（不要调用，Runtime 会拒绝）"
-                    } else {
-                        authFlag = ""
-                    }
-                    return "\(entry.name) [\(entry.namespace)]：\(entry.summary)（\(flags)）\(authFlag.isEmpty ? "" : "；\(authFlag)")"
+                    awareness[entry.name]?.renderedLine
+                        ?? "- \(entry.name) [\(entry.namespace)]：\(entry.summary)"
                 }.joined(separator: "\n")
             return .ok(canonicalCall, canonicalDescriptor, "发现 \(entries.count) 个工具", .text(text))
         case "capabilities_get":

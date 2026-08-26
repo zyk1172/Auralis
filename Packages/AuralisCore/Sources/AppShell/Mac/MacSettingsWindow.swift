@@ -302,7 +302,7 @@ public struct MacSettingsWindow: View {
             }
             Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         } message: {
-            Text(String(localized: "将删除当前服务器的所有分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
+            Text(String(localized: "将删除当前服务器的所有分类标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。", bundle: .module))
         }
     }
 

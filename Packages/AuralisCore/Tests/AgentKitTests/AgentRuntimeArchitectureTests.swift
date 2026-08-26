@@ -395,7 +395,19 @@ struct AgentRuntimeArchitectureTests {
         #expect(second == .accept)
     }
 
-    @Test func indexCompletionRequiresBothFixedAndSemanticPendingZero() {
+    @Test func playlistDeleteCompletionRequiresVerifiedRuntimeFact() {
+        var state = AgentTaskState(intent: .playlistManagement, goal: "删除歌单")
+        let descriptor = AgentToolRegistry.descriptor(for: "playlist_delete")!
+        state.successfulToolNames.append(descriptor.name)
+        // A generic side-effect success is not enough for destructive deletion.
+        state.facts["sideEffect.playlist"] = "success"
+        #expect(!AgentCompletionEvaluator.factsSatisfied(state: state, policy: .policy(for: .playlistManagement)))
+
+        state.facts["playlist.deleted.verified"] = "true"
+        #expect(AgentCompletionEvaluator.factsSatisfied(state: state, policy: .policy(for: .playlistManagement)))
+    }
+
+    @Test func indexCompletionUsesAuthoritativeFixedPendingOnly() {
         var state = AgentTaskState(intent: .libraryManagement, goal: "index")
         let policy = AgentTaskPolicy(
             intent: .libraryManagement,
@@ -404,14 +416,9 @@ struct AgentRuntimeArchitectureTests {
             allowedPermissions: [.readOnly, .reversible],
             completion: .indexPendingCountIsZero
         )
-        // 固定分类完成但开放标签待处理 4000 → 不能宣布完成。
+        // 旧任务事实可能仍携带 semantic pending，但 v3 完成判定不再读取它。
         state.facts["recommendation.index.pending"] = "0"
         state.facts["recommendation.index.pendingSemantic"] = "4000"
-        let incomplete = AgentCompletionEvaluator.evaluateModelAnswer("完成", state: &state, policy: policy, repairAttempts: 0)
-        #expect(incomplete != .accept)
-
-        // 开放标签也归零 → 完成。
-        state.facts["recommendation.index.pendingSemantic"] = "0"
         let complete = AgentCompletionEvaluator.evaluateModelAnswer("完成", state: &state, policy: policy, repairAttempts: 0)
         #expect(complete == .accept)
         #expect(state.completionState == .satisfied)

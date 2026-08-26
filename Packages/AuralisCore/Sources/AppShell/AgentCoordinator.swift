@@ -145,6 +145,7 @@ public final class AgentCoordinator: ObservableObject {
     /// 用 runID 隔离后，Session A 的流式气泡永远不会与 Session B 共享。
     private struct AgentStreamingState {
         var messageID: UUID?
+        var rawText = ""
     }
     private var streamingStates: [UUID: AgentStreamingState] = [:]
     private var runPresentationStates: [UUID: AssistantRunPresentationState] = [:]
@@ -256,7 +257,11 @@ public final class AgentCoordinator: ObservableObject {
 
     public func activate(_ id: UUID) async {
         activeSessionID = id
-        messages = await sessionStore.session(id)?.messages ?? []
+        // SessionStore is the durable user-facing transcript. Sanitize again at
+        // this read boundary so IDs written by older builds cannot reappear after
+        // activation/restart.
+        messages = (await sessionStore.session(id)?.messages ?? [])
+            .map(AgentUserFacingSanitizer.chatMessage)
         let runID = runIDsBySession[id]
         currentRunID = runID
         runTask = runID.flatMap { runTasks[$0] }
@@ -587,7 +592,8 @@ public final class AgentCoordinator: ObservableObject {
                 return
             }
             // 历史只从 SessionStore 读取：Session A 只能看到 A 的聊天记录。
-            let history = await self.sessionStore.session(sessionID)?.messages ?? []
+            let history = (await self.sessionStore.session(sessionID)?.messages ?? [])
+                .map(AgentUserFacingSanitizer.chatMessage)
             let originUserMessageID = UUID()
             // “继续”可能连续出现多次（尤其是上一轮被 429/工具错误打断后）。
             // 只取最近一条完整任务指令，避免第二次“继续”把索引/批处理意图
@@ -936,6 +942,26 @@ public final class AgentCoordinator: ObservableObject {
         case .batchPrepared:
             if let batch { return "推荐索引：已准备（\(batch)）" }
             return "正在准备推荐索引批次…"
+        case .canonicalTagsLoadStarted:
+            return "推荐索引：正在检查已有标签…"
+        case .canonicalTagsLoadCompleted:
+            return "推荐索引：已有标签已加载，准备分类…"
+        case .evidenceStarted:
+            if let batch { return "推荐索引：正在补充歌曲证据（\(batch)）" }
+            return "推荐索引：正在补充歌曲证据…"
+        case .evidenceToolStarted:
+            return "推荐索引：正在补充歌曲证据（调用：\(event.message ?? "只读工具")）"
+        case .evidenceToolCompleted:
+            return "推荐索引：歌曲证据已返回（\(event.message ?? "只读工具")）"
+        case .evidenceCompleted:
+            return "推荐索引：歌曲证据阶段完成，准备分类…"
+        case .providerRequestStarted:
+            if let batch { return "推荐索引：正在请求模型分类（\(batch)）" }
+            return "推荐索引：正在请求模型分类…"
+        case .providerRequestCompleted:
+            return "推荐索引：模型已返回，正在验证分类…"
+        case .providerRequestFailed:
+            return "推荐索引：模型请求失败，准备重试…"
         case .classificationStarted:
             if let progress, let batch { return "推荐索引：正在分类（\(progress)，\(batch)）" }
             if let batch { return "推荐索引：正在分类（\(batch)）" }
@@ -1205,16 +1231,18 @@ public final class AgentCoordinator: ObservableObject {
         guard ownsRun(runID, sessionID: sessionID) else { return }
         let isActiveSession = activeSessionID == sessionID
 
-        updateRunPresentation(for: message, sessionID: sessionID, runID: runID)
+        let sanitizedMessage = AgentUserFacingSanitizer.chatMessage(message)
+        updateRunPresentation(for: sanitizedMessage, sessionID: sessionID, runID: runID)
 
         // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
         if let delta = Self.streamingDeltaText(from: message) {
             var state = streamingStates[runID] ?? AgentStreamingState(messageID: nil)
+            state.rawText += delta
             if isActiveSession {
                 if let streamingID = state.messageID,
                    let index = messages.lastIndex(where: { $0.id == streamingID }) {
                     var existing = messages[index]
-                    let accumulated = Self.accumulatedStreamingText(existing) + delta
+                    let accumulated = AgentUserFacingSanitizer.text(state.rawText)
                     existing = AgentChatMessage(
                         id: existing.id,
                         role: .assistant,
@@ -1224,7 +1252,12 @@ public final class AgentCoordinator: ObservableObject {
                     messages[index] = existing
                 } else {
                     state.messageID = message.id
-                    messages.append(message)
+                    messages.append(AgentChatMessage(
+                        id: message.id,
+                        role: .assistant,
+                        messages: [.streaming(AgentUserFacingSanitizer.text(state.rawText))],
+                        createdAt: message.createdAt
+                    ))
                 }
             } else if state.messageID == nil {
                 state.messageID = message.id
@@ -1238,8 +1271,8 @@ public final class AgentCoordinator: ObservableObject {
         streamingStates[runID] = nil
         if let streamingID = state?.messageID, isActiveSession,
            let index = messages.lastIndex(where: { $0.id == streamingID }) {
-            messages[index] = message
-            await sessionStore.append(message, to: sessionID)
+            messages[index] = sanitizedMessage
+            await sessionStore.append(sanitizedMessage, to: sessionID)
             return
         }
         // Tool activity is transient run state, not a chat transcript.  Keep
@@ -1250,15 +1283,15 @@ public final class AgentCoordinator: ObservableObject {
            let index = messages.indices.last,
            messages[index].role == .assistant,
            Self.isToolProgress(messages[index]) {
-            messages[index] = message
-            if await sessionStore.replaceTrailingToolProgress(message, in: sessionID) {
+            messages[index] = sanitizedMessage
+            if await sessionStore.replaceTrailingToolProgress(sanitizedMessage, in: sessionID) {
                 return
             }
         }
         if isActiveSession {
-            messages.append(message)
+            messages.append(sanitizedMessage)
         }
-        await sessionStore.append(message, to: sessionID)
+        await sessionStore.append(sanitizedMessage, to: sessionID)
     }
 
     /// Message-derived phases are intentionally transient.  The final answer
@@ -1387,7 +1420,9 @@ public final class AgentCoordinator: ObservableObject {
               pending.sessionID == nil || pending.sessionID == sessionID,
               runLeases[runID]?.isValidSnapshot == true else { return false }
         guard operationConfirmationContinuations[runID] == nil else { return false }
-        operationConfirmations[runID] = pending
+        // Keep the exact ToolCall intact, but never let diagnostics text leak
+        // identifiers through the alert title/detail projection.
+        operationConfirmations[runID] = AgentUserFacingSanitizer.confirmation(pending)
         refreshActiveRunState()
         return await withCheckedContinuation { continuation in
             operationConfirmationContinuations[runID] = continuation

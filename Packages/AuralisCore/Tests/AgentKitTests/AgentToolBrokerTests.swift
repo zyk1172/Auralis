@@ -5,6 +5,64 @@ import Foundation
 import LocalCatalog
 import Testing
 
+@Test("完整工具认知目录包含全部 model-visible descriptor 的用途")
+func toolAwarenessDirectoryUsesCanonicalDescriptors() {
+    let prompt = SystemPromptBuilder.build(
+        context: .init(),
+        tools: [AgentToolRegistry.descriptor(for: "tool_search")!],
+        nativeToolCalling: true,
+        awarenessTools: AgentToolRegistry.all,
+        authorizedOperations: []
+    )
+    for descriptor in AgentToolRegistry.all where descriptor.visibility == .model {
+        #expect(prompt.contains(descriptor.name))
+        #expect(prompt.contains(descriptor.summary))
+    }
+    #expect(!prompt.contains("recommendation_index_commit："))
+}
+
+@Test("model-visible descriptor 都有真实的 canonical purpose")
+func modelToolSummariesAreMeaningful() {
+    for descriptor in AgentToolRegistry.all where descriptor.visibility == .model {
+        #expect(!descriptor.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(descriptor.summary != descriptor.name)
+    }
+}
+
+@Test("高价值工具 summary 说明真实用途、目标实体与使用场景")
+func keyToolSummariesExplainPurposeAndContext() throws {
+    let checks: [(tool: String, required: [String])] = [
+        ("library_get_album", ["本地音乐资料库", "专辑分析", "实体确认"]),
+        ("library_get_artist", ["真实本地资料", "专辑概况", "实体确认"]),
+        ("library_get_song", ["真实元数据", "实体确认", "播放"]),
+        ("library_get_playlist", ["真实名称", "歌单确认", "修改前核对"]),
+        ("library_get_similar_songs", ["真实内容", "相似歌曲"]),
+        ("playback_get_state", ["当前播放器状态", "规划播放操作"]),
+        ("queue_get", ["真实歌曲与顺序", "队列修改"]),
+        ("playlist_add_songs", ["已解析的真实歌曲", "准确的 PlaylistID", "TrackID"]),
+        ("music_appreciate", ["分层鉴赏证据", "外部大众评价"]),
+        ("music_get_public_evidence", ["真实公开音乐资料证据", "不得编造"]),
+    ]
+    for check in checks {
+        let descriptor = try #require(AgentToolRegistry.descriptor(for: check.tool))
+        for fragment in check.required {
+            #expect(descriptor.summary.contains(fragment), "\(check.tool) 的 summary 缺少「\(fragment)」")
+        }
+    }
+}
+
+@Test("未授权 mutation 留在目录但不进入 executable schema")
+func unauthorizedMutationIsAwareButNotExecutable() {
+    let delete = AgentToolRegistry.descriptor(for: "playlist_delete")!
+    let entry = ToolCatalog(descriptors: [delete]).awarenessEntries(
+        environment: .init(),
+        authorizedOperations: []
+    ).first!
+    #expect(entry.authorized == false)
+    #expect(entry.renderedLine.contains("能力存在，但当前请求未授权执行"))
+    #expect(delete.isAuthorizedForModelExposure(allowedOperations: []) == false)
+}
+
 // MARK: - Tool Broker / CandidateSet / Completion 回归测试
 //
 // 覆盖本轮优化：
@@ -35,6 +93,83 @@ struct AgentToolBrokerTests {
         // 无关工具不应大量暴露。
         let irrelevant = selected.filter { $0.name.hasPrefix("diagnostics_") }
         #expect(irrelevant.isEmpty, "不应暴露诊断工具，实际：\(irrelevant.map(\.name))")
+    }
+
+    @Test("Broker 「鉴赏这首歌」→ music_appreciate 位于最前")
+    func musicAppreciationShortlistIsDeterministic() throws {
+        let plan = makePlan("鉴赏这首歌")
+        #expect(plan.semantics.isMusicAppreciation)
+        #expect(plan.semantics.isReadOnly)
+        let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
+        let primary = try #require(selected.first { !$0.isCoreInfrastructure && $0.name != "result_present_tracks" })
+        #expect(primary.name == "music_appreciate")
+        #expect(selected.contains { ["library_search", "library_resolve_entity"].contains($0.name) })
+    }
+
+    @Test("Intent 歌单名中的实体内容不污染命令路由")
+    func playlistEntityNamesDoNotContaminateIntent() {
+        let commands = [
+            "删除歌单 暂停",
+            "帮我删除一下歌单 暂停",
+            "删除这个歌单 暂停",
+            "删除歌单暂停",
+            "删除歌单下一首",
+            "删掉歌单删除服务器",
+            "删除歌单播放",
+            "把名叫“暂停”的歌单删除",
+            "把歌单“下一首”删除",
+        ]
+        for command in commands {
+            let plan = makePlan(command)
+            #expect(plan.semantics.domain == .playlist)
+            #expect(plan.authorization.allowedOperations == [.playlistDelete], "\(command) 实际：\(plan.authorization.allowedOperations)")
+        }
+
+        // Post-position verb order must not regress (P1 from review round 3).
+        let postPosition = [
+            "把歌单 通勤 删除",
+            "把通勤这个歌单删除",
+            "把通勤歌单删掉",
+        ]
+        for command in postPosition {
+            let plan = makePlan(command)
+            #expect(plan.semantics.domain == .playlist, "\(command) 应识别为 playlist 域")
+            #expect(plan.authorization.allowedOperations.contains(.playlistDelete), "\(command) 应授权 playlistDelete，实际：\(plan.authorization.allowedOperations)")
+        }
+
+        for command in ["删除歌单怎么操作？", "删除歌单是什么意思？", "删除歌单要怎么弄？"] {
+            let plan = makePlan(command)
+            #expect(plan.authorization.allowedOperations.isEmpty)
+            #expect(!plan.authorization.allowedOperations.contains(.playlistDelete))
+        }
+
+        // Spaced variants must not have their instructional signal consumed by
+        // entity masking (P0 regression from review round 3).
+        let spacedInstructional = [
+            "删除歌单 怎么操作？",
+            "删除歌单 如何操作？",
+            "删除歌单 是什么意思？",
+            "删除歌单 要怎么弄？",
+            "删除歌单 应该怎么删除？",
+            "删除这个歌单 怎么操作？",
+        ]
+        for command in spacedInstructional {
+            let plan = makePlan(command)
+            #expect(plan.authorization.allowedOperations.isEmpty, "\(command) 不应产生任何授权，实际：\(plan.authorization.allowedOperations)")
+            #expect(!plan.authorization.allowedOperations.contains(.playlistDelete), "\(command) 不得授权 playlistDelete")
+        }
+
+        // Masking must preserve an explicit second command after the entity.
+        let compound = makePlan("删除歌单 通勤，然后暂停播放")
+        #expect(compound.authorization.allowedOperations == [.playlistDelete, .playbackPause])
+
+        for name in ["我叫大傻蛋", "请记住我", "下一首", "删除服务器", "暂停", "收藏"] {
+            let plan = makePlan("删除歌单 \(name)")
+            #expect(plan.semantics.domain == .playlist)
+            #expect(plan.authorization.allowedOperations == [.playlistDelete])
+            #expect(!plan.authorization.allowedOperations.contains(.memorySave))
+            #expect(!plan.authorization.allowedOperations.contains(.serverRemove))
+        }
     }
 
     @Test("Broker 「来点适合深夜听的」→ recommend_by_mood 优先")

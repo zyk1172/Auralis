@@ -2,7 +2,20 @@
   "sourceLanguage" : "zh-Hans",
   "strings" : {
     "" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "—"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "—"
+          }
+        }
+      }
     },
     "-12" : {
       "localizations" : {
@@ -5125,6 +5138,22 @@
         }
       }
     },
+    "只读" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read-only"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "唯讀"
+          }
+        }
+      }
+    },
     "只读操作" : {
       "localizations" : {
         "en" : {
@@ -5153,6 +5182,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "可撤銷操作"
+          }
+        }
+      }
+    },
+    "可编辑" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editable"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可編輯"
           }
         }
       }
@@ -6332,7 +6377,20 @@
       }
     },
     "将删除当前服务器的所有分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This will delete all categories and AI tags for the current server. Your music library, downloads, playback history, and indexes of other servers are unaffected; you can restart indexing later."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將刪除目前伺服器的所有分類與 AI 標籤。音樂庫、下載、播放記錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
+          }
+        }
+      }
     },
     "将删除当前服务器的所有推荐索引分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
       "extractionState" : "stale",
@@ -6523,6 +6581,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "盡量不重複"
+          }
+        }
+      }
+    },
+    "展开其余 %lld 个" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand %lld More"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開其餘 %lld 個"
+          }
+        }
+      }
+    },
+    "展开其余 %lld 位" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand %lld More Artists"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開其餘 %lld 位"
           }
         }
       }
@@ -7735,13 +7825,52 @@
       }
     },
     "所属 AI 运行已取消，未修改下载历史" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The associated AI run was cancelled; download history was not modified."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所屬 AI 執行已取消，未修改下載歷史。"
+          }
+        }
+      }
     },
     "所属 AI 运行已取消，未提交下载" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The associated AI run was cancelled; download was not submitted."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所屬 AI 執行已取消，未提交下載。"
+          }
+        }
+      }
     },
     "所属 AI 运行已取消，未清理下载历史" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The associated AI run was cancelled; download history was not cleared."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所屬 AI 執行已取消，未清理下載歷史。"
+          }
+        }
+      }
     },
     "打开专辑" : {
       "localizations" : {
@@ -7824,7 +7953,20 @@
       }
     },
     "批准并执行" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approve and Execute"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "批准並執行"
+          }
+        }
+      }
     },
     "批量删除" : {
       "localizations" : {
@@ -12412,7 +12554,20 @@
       }
     },
     "确认操作" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm Action"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認操作"
+          }
+        }
+      }
     },
     "确认清除" : {
       "localizations" : {
@@ -14560,6 +14715,150 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "通用"
+          }
+        }
+      }
+    },
+    "器乐性" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instrumentalness"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "器樂性"
+          }
+        }
+      }
+    },
+    "现场感" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liveness"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現場感"
+          }
+        }
+      }
+    },
+    "人声密度" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speechiness"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "人聲密度"
+          }
+        }
+      }
+    },
+    "情感正负" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Valence"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "情感正負"
+          }
+        }
+      }
+    },
+    "复杂度" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complexity"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複雜度"
+          }
+        }
+      }
+    },
+    "类型" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Genre"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "類型"
+          }
+        }
+      }
+    },
+    "乐器" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instrument"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "樂器"
+          }
+        }
+      }
+    },
+    "节奏" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rhythm"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "節奏"
+          }
+        }
+      }
+    },
+    "将删除当前服务器的所有分类标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This removes all classification tags for the current server. Your library, downloads, playback history, and other servers' indexes are unaffected; you can rebuild the index later."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將刪除目前伺服器的所有分類標籤。音樂庫、下載、播放紀錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
           }
         }
       }

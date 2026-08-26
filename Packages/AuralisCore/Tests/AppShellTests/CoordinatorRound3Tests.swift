@@ -188,9 +188,19 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
     }
 
     func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        lock.withLock {
+            observedRequests.append(request)
+        }
+
+        // The runtime first gathers read-only evidence, then makes the closed
+        // classification request. Evidence does not affect this fixture's
+        // classification attempt count or its deliberate provider failure.
+        guard request.outputFormat != nil else {
+            return AICompletionResponse(model: request.model, content: "Evidence is sufficient for classification.")
+        }
+
         let count = lock.withLock {
             completions += 1
-            observedRequests.append(request)
             return completions
         }
         guard !failFirstAttempt || count > 1 else {
@@ -210,7 +220,6 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
               let input = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let batchID = input["batchID"] as? String,
               let revision = input["revision"] as? NSNumber,
-              let mode = input["mode"] as? String,
               let tracks = input["tracks"] as? [[String: Any]]
         else {
             throw AIProviderError.malformedResponse(detail: "测试分类输入无法解析", retryable: false)
@@ -219,28 +228,32 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
             observedBatchSizes.append(tracks.count)
         }
 
-        let items = tracks.compactMap { track -> [String: Any]? in
+        let items = tracks.compactMap { entry -> [String: Any]? in
+            // Classification input now carries evidence alongside each track.
+            // The fixture intentionally reads only the canonical track record.
+            let track = (entry["track"] as? [String: Any]) ?? entry
             guard let id = track["id"] as? String else { return nil }
             return [
                 "id": id,
-                "mode": mode,
                 "moods": ["平静"],
                 "scenes": ["深夜"],
                 "energy": 3,
                 "tempo": 2,
                 "acousticness": 4,
                 "danceability": 2,
+                "themes": [],
+                "genres": [],
                 "vocals": ["器乐"],
                 "textures": ["钢琴"],
                 "styles": ["轻音乐"],
-                "semanticTags": [["value": "夜行感", "confidence": 0.8]],
+                "instruments": [],
+                "rhythms": [],
                 "confidence": 0.9,
             ]
         }
         let response: [String: Any] = [
             "batchID": batchID,
             "revision": revision,
-            "mode": mode,
             "items": items,
         ]
         let data = try JSONSerialization.data(withJSONObject: response)
@@ -390,6 +403,93 @@ func backgroundRestorePromptsSetupWhenEmpty() async throws {
 }
 
 // MARK: - Automatic tool execution (integration through AgentCoordinator)
+
+@Test("Session activation sanitizes legacy persisted identifiers")
+@MainActor
+func sessionActivationSanitizesLegacyPersistedIdentifiers() async throws {
+    let directory = temporaryAgentDirectory()
+    let seedStore = SessionStore(fileURL: directory.appendingPathComponent("agent-sessions.json"))
+    let legacySession = await seedStore.create()
+    let legacyID = GlobalID(serverID: "server-persist", remoteID: "playlist-123")
+    await seedStore.append(
+        AgentChatMessage(
+            role: .assistant,
+            messages: [.text("歌单（playlistID=\(legacyID.description)，8 首）")]
+        ),
+        to: legacySession.id
+    )
+
+    let model = AuralisAppModel(
+        connector: NoRestoreConnector(result: makeResult(tracks: [])),
+        storeURL: temporaryCatalogURL()
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: directory
+    )
+    await coordinator.bootstrap()
+    await coordinator.activate(legacySession.id)
+
+    let text = coordinator.messages.flatMap { message in
+        message.messages.compactMap { item -> String? in
+            if case let .text(value) = item { return value }
+            return nil
+        }
+    }.joined(separator: "\n")
+    #expect(text.contains("歌单"))
+    #expect(!text.contains(legacyID.description))
+    #expect(!text.contains("playlistID="))
+}
+
+@Test("Session switch away and back still sanitizes persisted identifiers")
+@MainActor
+func sessionSwitchRoundTripSanitizesPersistedIdentifiers() async throws {
+    let directory = temporaryAgentDirectory()
+    let seedStore = SessionStore(fileURL: directory.appendingPathComponent("agent-sessions.json"))
+    let sessionA = await seedStore.create()
+    let sessionB = await seedStore.create()
+    let dirtyID = GlobalID(serverID: "server-persist", remoteID: "playlist-456")
+    await seedStore.append(
+        AgentChatMessage(
+            role: .assistant,
+            messages: [.text("歌单（playlistID=\(dirtyID.description)，5 首）")]
+        ),
+        to: sessionA.id
+    )
+
+    let model = AuralisAppModel(
+        connector: NoRestoreConnector(result: makeResult(tracks: [])),
+        storeURL: temporaryCatalogURL()
+    )
+    let coordinator = AgentCoordinator(
+        model: model,
+        coordinator: model.catalogCoordinator,
+        directory: directory
+    )
+    await coordinator.bootstrap()
+
+    func visibleText() -> String {
+        coordinator.messages.flatMap { message in
+            message.messages.compactMap { item -> String? in
+                if case let .text(value) = item { return value }
+                return nil
+            }
+        }.joined(separator: "\n")
+    }
+
+    // First view must be clean.
+    await coordinator.activate(sessionA.id)
+    #expect(visibleText().contains("歌单"))
+    #expect(!visibleText().contains(dirtyID.description))
+
+    // Switch to another session and back; the ID must not reappear.
+    await coordinator.activate(sessionB.id)
+    await coordinator.activate(sessionA.id)
+    #expect(visibleText().contains("歌单"))
+    #expect(!visibleText().contains(dirtyID.description))
+    #expect(!visibleText().contains("playlistID="))
+}
 
 @Test("不可逆删除在 UI 批准后执行并记入操作日志")
 @MainActor
@@ -990,14 +1090,17 @@ func recommendationIndexExactChineseBuildRequestUsesRealRuntime() async throws {
     #expect(!coordinator.isRunning)
     #expect(coordinator.activeTask?.status == .completed)
     #expect(finalStatus.pendingUniqueTracks == 0)
-    #expect(finalStatus.pendingSemanticTagTracks == 0)
+    #expect(finalStatus.pendingUniqueTracks == 0)
 
     let requests = provider.requests
-    #expect(requests.count == 1)
-    #expect(requests.allSatisfy { $0.tools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.hostedTools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.toolChoice == nil })
-    #expect(requests.allSatisfy { request in
+    let evidenceRequests = requests.filter { $0.outputFormat == nil }
+    let classificationRequests = requests.filter { $0.outputFormat != nil }
+    #expect(evidenceRequests.count == 1)
+    #expect(classificationRequests.count == 1)
+    #expect(classificationRequests.allSatisfy { $0.tools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.toolChoice == nil })
+    #expect(classificationRequests.allSatisfy { request in
         request.messages.allSatisfy { !$0.content.contains("recommendation_index_commit") }
     })
     #expect(coordinator.actionRecords.contains { $0.toolName == "recommendation_index_commit" })
@@ -1077,7 +1180,7 @@ func recommendationIndexProcessesThreeBatchesThroughCoordinator() async throws {
     #expect(!coordinator.isRunning)
     #expect(coordinator.activeTask?.status == .completed)
     #expect(finalStatus.pendingUniqueTracks == 0)
-    #expect(finalStatus.pendingSemanticTagTracks == 0)
+    #expect(finalStatus.pendingUniqueTracks == 0)
     #expect(provider.completionCount == 4)
     #expect(provider.batchSizes == [8, 8, 4])
 }

@@ -44,6 +44,7 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     enum FirstResponse: Equatable {
         case valid
         case malformed
+        case codableFailure
         case malformedForever
         case permanentFailure
         case transientFailures(Int)
@@ -86,16 +87,36 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     }
 
     func complete(_ request: AICompletionRequest) async throws -> AICompletionResponse {
+        // Evidence phase is intentionally a separate tool-capable request.
+        // This closed-transform fixture has no evidence to add, so preserve
+        // `firstResponse` for the subsequent JSON-schema classifier request.
+        if request.outputFormat == nil {
+            lock.withLock { recorded.append(request) }
+            return AICompletionResponse(model: request.model, content: "现有元数据足够，无需补充证据。")
+        }
         if let gate {
             await gate.markEntered()
             await gate.waitUntilReleased()
         }
-        let shouldReturnMalformed = lock.withLock {
-            recorded.append(request)
-            let value = firstResponse == .malformedForever || (!didRespond && firstResponse == .malformed)
-            didRespond = true
-            return value
+        enum ResponseKind {
+            case codableFailure
+            case malformed
+            case normal
         }
+
+        let responseKind: ResponseKind = lock.withLock {
+            recorded.append(request)
+            let wasFirstResponse = !didRespond
+            didRespond = true
+            if wasFirstResponse, firstResponse == .codableFailure { return .codableFailure }
+            if firstResponse == .malformedForever
+                || (wasFirstResponse && firstResponse == .malformed) { return .malformed }
+            return .normal
+        }
+        if responseKind == .codableFailure {
+            return AICompletionResponse(model: request.model, content: Self.codableFailureEnvelope(for: request))
+        }
+        let shouldReturnMalformed = responseKind == .malformed
         let shouldFailTransiently = lock.withLock {
             guard remainingTransientFailures > 0 else { return false }
             remainingTransientFailures -= 1
@@ -130,32 +151,136 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
               let input = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let batchID = input["batchID"] as? String,
               let revision = input["revision"] as? NSNumber,
-              let mode = input["mode"] as? String,
               let tracks = input["tracks"] as? [[String: Any]] else {
             return "{}"
         }
-        let items: [[String: Any]] = tracks.compactMap { track in
+        let items: [[String: Any]] = tracks.compactMap { entry in
+            let track = (entry["track"] as? [String: Any]) ?? entry
             guard let id = track["id"] as? String else { return nil }
             return [
                 "id": id,
-                "mode": mode,
                 "moods": ["平静"],
                 "scenes": ["深夜"],
                 "energy": 3,
                 "tempo": 2,
                 "acousticness": 4,
                 "danceability": 2,
+                "themes": [],
+                "genres": [],
                 "vocals": ["器乐"],
                 "textures": ["钢琴"],
                 "styles": ["轻音乐"],
-                "semanticTags": [["value": "夜行感", "confidence": 0.8]],
+                "instruments": [],
+                "rhythms": [],
                 "confidence": 0.9,
             ]
         }
         let object: [String: Any] = [
             "batchID": batchID,
             "revision": revision,
-            "mode": mode,
+            "items": items,
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func codableFailureEnvelope(for request: AICompletionRequest) -> String {
+        guard let payload = request.messages.last?.content.data(using: .utf8),
+              let input = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let batchID = input["batchID"] as? String,
+              let revision = input["revision"] as? NSNumber,
+              let tracks = input["tracks"] as? [[String: Any]] else {
+            return #"{}"#
+        }
+        let items: [[String: Any]] = tracks.compactMap { entry in
+            let track = (entry["track"] as? [String: Any]) ?? entry
+            guard let id = track["id"] as? String else { return nil }
+            return ["id": id, "vocals": ["unexpected": true]]
+        }
+        let object: [String: Any] = [
+            "batchID": batchID,
+            "revision": revision,
+            "items": items,
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object)
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Text-only Recommendation Index provider. It cannot use native tool calling,
+/// so the evidence phase must be skipped and only the closed classification
+/// request should be sent.
+private final class TextOnlyIndexProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [AICompletionRequest] = []
+
+    let capabilities: ModelCapabilities
+
+    init(supportsJSONMode: Bool = false) {
+        capabilities = ModelCapabilities(
+            maxContextTokens: 32_000,
+            maxOutputTokens: 4_096,
+            supportsToolCalling: false,
+            supportsStreaming: true,
+            supportsJSONMode: supportsJSONMode,
+            supportsJSONSchema: false,
+            toolMode: .textualToolProtocol
+        )
+    }
+
+    var supportsToolCalling: Bool { false }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "text-index", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        lock.withLock { recorded.append(request) }
+        return AICompletionResponse(model: request.model, content: Self.envelope(for: request))
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func requests() -> [AICompletionRequest] {
+        lock.withLock { recorded }
+    }
+
+    private static func envelope(for request: AICompletionRequest) -> String {
+        guard let payload = request.messages.last?.content.data(using: .utf8),
+              let input = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let batchID = input["batchID"] as? String,
+              let revision = input["revision"] as? NSNumber,
+              let tracks = input["tracks"] as? [[String: Any]] else {
+            return "{}"
+        }
+        let items: [[String: Any]] = tracks.compactMap { entry in
+            let track = (entry["track"] as? [String: Any]) ?? entry
+            guard let id = track["id"] as? String else { return nil }
+            return [
+                "id": id,
+                "moods": ["平静"],
+                "scenes": ["深夜"],
+                "energy": 3,
+                "tempo": 2,
+                "acousticness": 4,
+                "danceability": 2,
+                "themes": [],
+                "genres": [],
+                "vocals": ["器乐"],
+                "textures": ["钢琴"],
+                "styles": ["轻音乐"],
+                "instruments": [],
+                "rhythms": [],
+                "confidence": 0.9,
+            ]
+        }
+        let object: [String: Any] = [
+            "batchID": batchID,
+            "revision": revision,
             "items": items,
         ]
         let data = try! JSONSerialization.data(withJSONObject: object)
@@ -189,8 +314,110 @@ func recommendationIndexStopsAtMinimumBatchSize() async throws {
     )
 
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
-    #expect(provider.requests().count == 1)
+    #expect(provider.requests().count == 2) // evidence + closed classification
     #expect(await events.kinds().contains(.failed))
+}
+
+@Test("Text-only Recommendation Index skips the evidence phase and still classifies")
+func textOnlyProviderSkipsEvidencePhase() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 1)
+    let provider = TextOnlyIndexProvider()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "text-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+    #expect(provider.requests().count == 1)
+}
+
+@Test("Recommendation Index codable contract repair retries the exact batch without shrinking")
+func recommendationIndexCodableFailureRetriesExactBatch() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 16)
+    let provider = ClosedIndexProvider(firstResponse: .codableFailure)
+    let events = ClosedIndexEvents()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in },
+        observeRecommendationIndex: { await events.append($0) }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+    let requests = provider.requests()
+    #expect(requests.count == 5, "actual request count: \(requests.count)") // two 8-track batches; first has one same-batch repair
+    let classificationRequests = requests.filter { $0.outputFormat != nil }
+    #expect(classificationRequests.count == 3, "actual classification count: \(classificationRequests.count)")
+    let firstPayload = try #require(classificationRequests[0].messages.last?.content)
+    let repairedPayload = try #require(classificationRequests[1].messages.last?.content)
+    let firstJSON = try AIJSONValue(jsonString: firstPayload)
+    let repairedJSON = try AIJSONValue(jsonString: repairedPayload)
+    #expect(firstJSON == repairedJSON)
+    #expect(classificationRequests[1].messages.first?.content.contains("items[0].vocals") == true)
+    let kinds = await events.kinds()
+    #expect(!kinds.contains(.classificationFailed))
+    #expect(!kinds.contains(.failed))
+    #expect(kinds.filter { $0 == .batchPrepared }.count == 2, "batchPrepared events: \(kinds.filter { $0 == .batchPrepared }.count)")
+}
+
+@Test("JSON-mode Recommendation Index requests include the complete compact taxonomy")
+func jsonModeProviderReceivesCompleteTaxonomy() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 1)
+    let provider = TextOnlyIndexProvider(supportsJSONMode: true)
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "json-mode-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    let request = try #require(provider.requests().first)
+    #expect(request.outputFormat == .jsonObject)
+    let system = request.messages.first?.content ?? ""
+    #expect(system.contains("mood.sacred=神圣"))
+    #expect(system.contains("scene.late_night=深夜"))
+    #expect(system.contains("style.city_pop=City Pop"))
+    #expect(system.contains("instrument.piano=钢琴"))
+    #expect(system.contains("semanticTags") == true)
 }
 
 @Test("Recommendation Index Provider failures expose the providerOutput stage")
@@ -321,13 +548,14 @@ func recommendationIndexClosedTransformCommits() async throws {
     #expect(!(await messages.contains("只返回完整 JSON")))
     let requests = provider.requests()
     #expect(!requests.isEmpty)
-    #expect(requests.allSatisfy { $0.tools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.hostedTools?.isEmpty == true })
-    #expect(requests.allSatisfy { $0.toolChoice == nil })
-    #expect(requests.allSatisfy {
+    let classificationRequests = requests.filter {
         if case .jsonSchema = $0.outputFormat { return true }
         return false
-    })
+    }
+    #expect(!classificationRequests.isEmpty)
+    #expect(classificationRequests.allSatisfy { $0.tools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.toolChoice == nil })
     let eventKinds = await events.kinds()
     for kind in [
         .routeSelected,
@@ -382,7 +610,7 @@ func recommendationIndexStopsOnNoProgress() async throws {
     )
 
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 2)
-    #expect(provider.requests().count == 2)
+    #expect(provider.requests().count == 4) // one evidence and one classification request per batch
     let kinds = await events.kinds()
     #expect(kinds.filter { $0 == .noProgress }.count == 2)
     #expect(kinds.contains(.verifyStarted))
@@ -478,8 +706,12 @@ func recommendationIndexMalformedOutputChangesBatchIdentity() async throws {
 
     let requests = provider.requests()
     #expect(requests.count >= 3)
-    let first = try #require(requests[0].messages.last?.content.data(using: .utf8))
-    let second = try #require(requests[1].messages.last?.content.data(using: .utf8))
+    let classificationRequests = requests.filter {
+        if case .jsonSchema = $0.outputFormat { return true }
+        return false
+    }
+    let first = try #require(classificationRequests[0].messages.last?.content.data(using: .utf8))
+    let second = try #require(classificationRequests[1].messages.last?.content.data(using: .utf8))
     let firstJSON = try #require(JSONSerialization.jsonObject(with: first) as? [String: Any])
     let secondJSON = try #require(JSONSerialization.jsonObject(with: second) as? [String: Any])
     #expect(firstJSON["batchID"] as? String != secondJSON["batchID"] as? String)
@@ -520,9 +752,14 @@ func recommendationIndexRetriesTransientClassificationFailures() async throws {
     let eventKinds = await events.kinds()
     #expect(eventKinds.filter { $0 == .retrying }.count == 2)
     #expect(!eventKinds.contains(.failed))
-    #expect(provider.requests().allSatisfy { $0.tools?.isEmpty == true })
-    #expect(provider.requests().allSatisfy { $0.hostedTools?.isEmpty == true })
-    #expect(provider.requests().allSatisfy { $0.toolChoice == nil })
+    let classificationRequests = provider.requests().filter {
+        if case .jsonSchema = $0.outputFormat { return true }
+        return false
+    }
+    #expect(!classificationRequests.isEmpty)
+    #expect(classificationRequests.allSatisfy { $0.tools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.hostedTools?.isEmpty == true })
+    #expect(classificationRequests.allSatisfy { $0.toolChoice == nil })
 }
 
 @Test("Stale Recommendation Index envelope is rejected by batch identity")
@@ -545,16 +782,13 @@ func recommendationIndexRejectsStaleEnvelope() throws {
         batchID: UUID(),
         revision: 2,
         checkpointGeneration: 4,
-        mode: "full",
         tracks: [track],
-        pendingFixed: 1,
-        pendingSemantic: 1
+        pendingFixed: 1
     )
     let stale = RecommendationIndexClassificationEnvelope(
         batchID: UUID(),
         revision: 1,
-        mode: "full",
-        items: [.init(id: track.id, mode: "full")]
+        items: [.init(id: track.id)]
     )
     #expect(throws: RecommendationIndexValidationError.staleBatch) {
         try RecommendationIndexSkillRuntime.validate(stale, for: current)
@@ -574,14 +808,13 @@ func recommendationIndexParserDiagnosticsAreStructured() throws {
         playCount: 0, isDownloaded: false
     )
     let batch = RecommendationIndexPreparedBatch(
-        batchID: UUID(), revision: 3, checkpointGeneration: 2, mode: "full",
-        tracks: [first, second], pendingFixed: 2, pendingSemantic: 0
+        batchID: UUID(), revision: 3, checkpointGeneration: 2,
+        tracks: [first, second], pendingFixed: 2
     )
     let valid = RecommendationIndexClassificationEnvelope(
         batchID: batch.batchID,
         revision: batch.revision,
-        mode: "full",
-        items: [.init(id: first.id, mode: "full"), .init(id: second.id, mode: "full")]
+        items: [.init(id: first.id), .init(id: second.id)]
     )
     let validJSON = String(decoding: try JSONEncoder().encode(valid), as: UTF8.self)
     let parsed = RecommendationIndexClassificationParser.parse(
@@ -593,8 +826,7 @@ func recommendationIndexParserDiagnosticsAreStructured() throws {
     let incomplete = RecommendationIndexClassificationEnvelope(
         batchID: batch.batchID,
         revision: batch.revision,
-        mode: "full",
-        items: [.init(id: first.id, mode: "full")]
+        items: [.init(id: first.id)]
     )
     let incompleteResult = RecommendationIndexClassificationParser.parse(
         String(decoding: try JSONEncoder().encode(incomplete), as: UTF8.self),

@@ -92,17 +92,27 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let current = normalized(text)
         let continuation = isContinuation(current)
         let inherited = continuation ? normalized(historyText) : ""
-        let value = [inherited, current].filter { !$0.isEmpty }.joined(separator: " ")
+        let rawValue = [inherited, current].filter { !$0.isEmpty }.joined(separator: " ")
+        // Playlist names are entity literals, not secondary commands. Mask the
+        // literal only for operation authorization so a name like “暂停” cannot
+        // compile into a second command. Safety guards (instructional/explanatory)
+        // always read the raw utterance because masking can consume phrases such
+        // as “怎么操作” that appear after a space-separated entity slot.
+        var value = rawValue
+        if Self.hasPlaylistActionSignal(value) {
+            value = Self.maskPlaylistEntities(for: value)
+        }
         guard !value.isEmpty else {
             return Self(domain: .conversation, operation: .conversation, isMusicContext: false, isContinuation: continuation)
         }
 
+        let hasRaw = { (terms: [String]) in containsAny(rawValue, terms) }
         let has = { (terms: [String]) in containsAny(value, terms) }
 
         // instructional / explanatory query（怎么/如何/怎样…）不是执行请求：
         // 不得产生 mutation 授权；带「帮我/请/给我/可以帮我」等执行词时仍视为执行。
-        let executionRequestPhrase = has(["帮我", "请", "给我", "帮我一下", "可以帮我", "麻烦", "please", "help me"])
-        let instructionalQuery = has([
+        let executionRequestPhrase = hasRaw(["帮我", "请", "给我", "帮我一下", "可以帮我", "麻烦", "please", "help me"])
+        let instructionalQuery = hasRaw([
             "怎么", "如何", "怎样", "怎么才能", "怎么用", "是什么", "是什么意思", "是什么功能", "有什么作用",
             "how do i", "how does", "what does",
         ])
@@ -167,7 +177,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "重命名歌单", "改名歌单", "移除歌单歌曲", "调整歌单顺序", "复制歌单", "合并歌单",
             "保存当前队列为歌单", "保存队列为歌单", "把当前队列保存为歌单", "存为歌单", "保存成歌单", "保存队列", "save queue",
             "playlist_create", "playlist_add", "playlist_delete", "playlist_rename",
-        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "加到", "添加", "放到", "放进", "放入", "收进", "删除", "重命名", "改名", "移除", "调整", "复制", "合并", "保存", "存为", "存成"]))
+        ]) || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建", "加入", "加到", "添加", "放到", "放进", "放入", "收进", "删除", "删掉", "重命名", "改名", "移除", "调整", "复制", "合并", "保存", "存为", "存成"]))
 
         let musicAnnotationTarget = has([
             "这首歌", "歌曲", "音乐", "专辑", "歌手", "艺人", "艺术家", "当前播放", "current track", "track", "song", "album", "artist",
@@ -218,7 +228,11 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         // 执行语义统一入口：教学问句（怎么/如何…）抑制授权时，执行语义同步关闭，
         // 杜绝「授权被抑制但 isRecommendationIndexBuild 仍为 true」的 split-brain。
         let executableIndexBuild = requestedIndexBuild && !suppressesMutationAuthorization
-        let memorySave = has([
+        // Playlist names are user data, not commands. “删除歌单 我叫大傻蛋”
+        // contains a memory-save phrase only because it is the entity target;
+        // the explicit playlist action owns routing and authorization.
+        let playlistActionTarget = has(["歌单", "playlist", "播放列表"]) && explicitPlaylistAction
+        let memorySave = !playlistActionTarget && has([
             "请记住", "记住我的", "记住我", "保存到记忆", "保存记忆", "memory_save",
             "创建技能", "skill_create", "我叫", "我的名字是", "我的生日是",
         ])
@@ -411,7 +425,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
                 requested.insert(.playlistAdd)
             }
             if has(["删除歌单", "playlist_delete"])
-                || (has(["歌单", "playlist", "播放列表"]) && has(["删除"])) { requested.insert(.playlistDelete) }
+                || (has(["歌单", "playlist", "播放列表"]) && has(["删除", "删掉"])) { requested.insert(.playlistDelete) }
             if has(["重命名歌单", "改名歌单", "playlist_rename"]) { requested.insert(.playlistRename) }
             if has(["移除歌单歌曲", "playlist_remove"]) { requested.insert(.playlistRemove) }
             if has(["调整歌单顺序", "移动歌单", "playlist_move"]) { requested.insert(.playlistMove) }
@@ -432,7 +446,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             else { requested.insert(.favoriteSet) }
         }
         if executableIndexBuild { requested.insert(.recommendationIndexWrite) }
-        if !suppressesMutationAuthorization, serverMutation {
+        if !suppressesMutationAuthorization, serverMutation, !playlistActionTarget {
             if has(["删除服务器", "server_remove", "remove server"]) { requested.insert(.serverRemove) }
             else if has(["切换服务器", "server_switch", "switch server"]) { requested.insert(.serverSwitch) }
             else if has(["同步", "sync", "曲库同步"]) { requested.insert(.serverSync) }
@@ -474,6 +488,9 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         if indexMarker {
             return Self(domain: .musicLibrary, operation: executableIndexBuild ? .mutate : .read, isMusicContext: true, isContinuation: continuation, isRecommendationIndex: true, isRecommendationIndexBuild: executableIndexBuild, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
         }
+        if playlistActionTarget {
+            return Self(domain: .playlist, operation: requested.isEmpty ? .read : .mutate, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["playlist", "catalog"], directReadCapability: directReadCapability)
+        }
         if serverContext {
             return Self(domain: .server, operation: serverMutation ? .mutate : .read, isMusicContext: isMusicContext, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["server"], directReadCapability: directReadCapability)
         }
@@ -514,6 +531,9 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         if recommendationRequest && isMusicContext {
             return Self(domain: .recommendation, operation: .discover, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: ["catalog", "playback"])
         }
+        if musicAppreciation {
+            return Self(domain: .musicLibrary, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: true, requestedOperations: requested, suggestedToolNamespaces: ["catalog"])
+        }
         if isMusicContext && (genericSearch || query || collectionQuery) {
             let namespaces = collectionQuery ? ["catalog", "server", "annotation"] : ["catalog", "server"]
             return Self(domain: .musicLibrary, operation: .read, isMusicContext: true, isContinuation: continuation, isMusicAppreciation: musicAppreciation, requestedOperations: requested, suggestedToolNamespaces: Set(namespaces), directReadCapability: directReadCapability)
@@ -539,6 +559,60 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
     private static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func hasPlaylistActionSignal(_ text: String) -> Bool {
+        containsAny(text, ["歌单", "playlist", "播放列表"])
+            && containsAny(text, [
+                "创建", "新建", "建一个", "建", "加入", "加到", "添加", "放到", "放进",
+                "放入", "收进", "删除", "删掉", "重命名", "改名", "移除", "调整", "复制", "合并",
+                "保存", "存为", "存成", "playlist_create", "playlist_add",
+                "playlist_delete", "playlist_rename",
+            ])
+    }
+
+    /// Replace only the playlist entity literal with a neutral token. The
+    /// surrounding text remains available for instructional guards (“怎么操作？”)
+    /// and for legitimate compound commands (“…，然后暂停播放”).
+    private static func maskPlaylistEntities(for text: String) -> String {
+        let rules: [(pattern: String, template: String)] = [
+            // 歌单「暂停」 / playlist "Pause" / 播放列表叫“下一首”
+            (
+                #"((?:歌单|playlist|播放列表)\s*(?:叫|名叫|名为)?\s*)([“”"'「『]).*?([””"'」』])"#,
+                "$1$2实体$3"
+            ),
+            // 名叫“暂停”的歌单 / 名为 Pause 的 playlist
+            (
+                #"((?:名叫|名为|叫)\s*)([“”"'「』]).*?([””"'「』])\s*的?\s*((?:歌单|playlist|播放列表))"#,
+                "$1$2实体$3 的 $4"
+            ),
+            // 名叫暂停的歌单（无引号）
+            (
+                #"((?:名叫|名为|叫)\s*)([^，。；；,\n]+?)\s*的?\s*((?:歌单|playlist|播放列表))"#,
+                "$1实体 的 $3"
+            ),
+            // 删除歌单暂停 / 删掉歌单删除服务器：直接动作 + 歌单 + 无空格名称。
+            (
+                #"((?:删除|删掉|创建|新建|加入|添加到|放到|重命名|改名|移除|复制|合并)\s*(?:这个|那个)?\s*((?:歌单|playlist|播放列表)))(?!并|且|然后|再|接着|之后|并且|以及|和)\s*(?:叫|名叫|名为)?\s*([^，。；；,\n]+?)(?=$|然后|再|接着|之后|并且|以及|并|且|和|，|。|；|;|,|\n)"#,
+                "$1实体"
+            ),
+            // 删除这个歌单 暂停：mask the entity but keep the next clause.
+            // Action verbs terminate the entity span so post-position orders
+            // like “把歌单 通勤 删除” keep the real verb visible.
+            (
+                #"((?:歌单|playlist|播放列表)\s+)(?!并|且|然后|再|接着|之后|并且|以及|和)(?:叫|名叫|名为)?\s*([^，。；；,\n]+?)(?=\s*(?:，|。|；|;|,|\n|然后|再|接着|之后|并且|以及|并|且|和|删除|删掉|清除|重命名|改名|暂停|播放|下一首|上一首|$))"#,
+                "$1实体"
+            ),
+        ]
+        return rules.reduce(text) { current, rule in
+            guard let regex = try? NSRegularExpression(pattern: rule.pattern) else { return current }
+            let range = NSRange(current.startIndex..., in: current)
+            return regex.stringByReplacingMatches(
+                in: current,
+                range: range,
+                withTemplate: rule.template
+            )
+        }
     }
 
     /// 判定一个「数量 + 曲库名词」请求是否带有限定/过滤条件。

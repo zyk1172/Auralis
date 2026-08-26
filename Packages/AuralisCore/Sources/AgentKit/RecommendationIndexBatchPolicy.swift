@@ -19,8 +19,7 @@ enum RecommendationIndexBatchPolicy {
     static let safePayloadBytes = 48_000
 
     static func recommendedLimit(
-        maxOutputTokens: Int,
-        mode: String? = nil
+        maxOutputTokens: Int
     ) -> Int {
         let base: Int
 
@@ -41,21 +40,8 @@ enum RecommendationIndexBatchPolicy {
             base = 100
         }
 
-        // semanticTagsOnly 的输出结构明显比 full 更轻，
-        // 可以适当扩大，但仍不能超过 schema 的 100。
-        let adjusted: Int
-
-        if mode == "semanticTagsOnly" {
-            adjusted = min(
-                base + 16,
-                maximumTracksPerBatch
-            )
-        } else {
-            adjusted = base
-        }
-
         return min(
-            max(adjusted, minimumTracksPerBatch),
+            max(base, minimumTracksPerBatch),
             maximumTracksPerBatch
         )
     }

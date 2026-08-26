@@ -11,13 +11,7 @@ struct LibraryView: View {
     @State private var playlistTarget: Track?
     @State private var recommendationCategories: [RecommendationIndexCategory] = []
     @State private var isLoadingRecommendationCategories = false
-    /// AI 标签独立区：offset 游标分页（读取优化，不代表标签数量限制）。
-    @State private var aiTags: [RecommendationIndexCategory] = []
-    @State private var aiTagSearch = ""
     @State private var recommendationCategoryError: String?
-    @State private var aiTagNextOffset: Int? = 0
-    @State private var isLoadingMoreTags = false
-    private static let aiTagPageSize = 30
 
     init(model: AuralisAppModel, theme: BuiltInTheme, initialScope: LibraryScope = .albums) {
         self.model = model
@@ -341,87 +335,7 @@ struct LibraryView: View {
                     .padding(.horizontal, AuralisSpacing.medium)
                     .padding(.top, AuralisSpacing.medium)
 
-                    // AI 标签独立区：搜索 + 分页（读取优化，不代表标签数量限制）。
-                    if !aiTags.isEmpty || !aiTagSearch.isEmpty {
-                        HStack {
-                            Text(String(localized: "AI 标签", bundle: .module))
-                                .font(.headline)
-                                .foregroundStyle(theme.colorTokens.primaryText.color)
-                            Spacer()
-                            HStack(spacing: 4) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.caption)
-                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                                TextField(String(localized: "搜索标签", bundle: .module), text: $aiTagSearch)
-                                    .textFieldStyle(.plain)
-                                    .font(.caption)
-                                    .onSubmit { Task { await loadAITags(reset: true) } }
-                            }
-                            .padding(.horizontal, AuralisSpacing.small)
-                            .padding(.vertical, 4)
-                            .background(theme.colorTokens.surface.color)
-                            .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
-                            .frame(maxWidth: 180)
-                        }
-                        .padding(.horizontal, AuralisSpacing.medium)
-                        .padding(.top, AuralisSpacing.large)
-
-                        LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 150), spacing: AuralisSpacing.medium)],
-                            spacing: AuralisSpacing.medium
-                        ) {
-                            ForEach(aiTags) { category in
-                                Button {
-                                    openRecommendationCategory(category)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: AuralisSpacing.small) {
-                                        HStack {
-                                            Image(systemName: "tag")
-                                                .font(.title3)
-                                                .foregroundStyle(theme.colorTokens.accent.color)
-                                            Spacer()
-                                            Text("\(category.trackCount)")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(theme.colorTokens.secondaryText.color)
-                                        }
-                                        Text(category.value)
-                                            .font(.headline)
-                                            .lineLimit(1)
-                                            .foregroundStyle(theme.colorTokens.primaryText.color)
-                                        Text(String(localized: "\(category.trackCount) 首", bundle: .module))
-                                            .font(.caption)
-                                            .foregroundStyle(theme.colorTokens.secondaryText.color)
-                                    }
-                                    .padding(AuralisSpacing.medium)
-                                    .frame(maxWidth: .infinity, minHeight: 86, alignment: .topLeading)
-                                    .background(theme.colorTokens.surface.color)
-                                    .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium, style: .continuous))
-                                }
-                                .buttonStyle(HapticPlainButtonStyle())
-                            }
-                        }
-                        .padding(.horizontal, AuralisSpacing.medium)
-                        .padding(.top, AuralisSpacing.small)
-
-                        if aiTagNextOffset != nil {
-                            Button {
-                                Task { await loadMoreAITags() }
-                            } label: {
-                                HStack {
-                                    if isLoadingMoreTags { ProgressView().controlSize(.small) }
-                                    Text(String(localized: "加载更多标签", bundle: .module))
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .padding(.horizontal, AuralisSpacing.medium)
-                            .padding(.bottom, AuralisSpacing.medium)
-                        } else {
-                            Spacer().frame(height: AuralisSpacing.medium)
-                        }
-                    } else {
-                        Spacer().frame(height: AuralisSpacing.medium)
-                    }
+                    Spacer().frame(height: AuralisSpacing.medium)
                 }
                 .reportsBottomDockScroll(source: .library)
             }
@@ -432,13 +346,10 @@ struct LibraryView: View {
     private func loadRecommendationCategories() async {
         guard let serverID = model.catalog.activeAccount?.id else {
             recommendationCategories = []
-            aiTags = []
             return
         }
         isLoadingRecommendationCategories = true
         recommendationCategoryError = nil
-        // 固定维度一次读取（数量有界）；开放语义标签单独分页（tag_catalog），
-        // 避免 5000 个 AI 标签一次读进内存。
         do {
             recommendationCategories = try await model.catalogCoordinator.store.recommendationIndexCategories(
                 serverID: serverID,
@@ -449,36 +360,6 @@ struct LibraryView: View {
             recommendationCategoryError = String(localized: "读取分类失败：\(error.localizedDescription)", bundle: .module)
         }
         isLoadingRecommendationCategories = false
-        await loadAITags(reset: true)
-    }
-
-    private func loadAITags(reset: Bool) async {
-        guard let serverID = model.catalog.activeAccount?.id else { return }
-        if reset {
-            aiTags = []
-            aiTagNextOffset = 0
-        }
-        guard let offset = aiTagNextOffset else {
-            isLoadingMoreTags = false
-            return
-        }
-        let query = aiTagSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let page = (try? await model.catalogCoordinator.store.recommendationIndexTagCatalog(
-            serverID: serverID, query: query.isEmpty ? nil : query, limit: Self.aiTagPageSize, offset: offset
-        )) ?? RecommendationIndexTagPage(items: [], nextOffset: nil, hasMore: false)
-        var merged = reset ? page.items : aiTags + page.items
-        // 防御性去重。
-        var seen = Set<String>()
-        merged = merged.filter { seen.insert($0.id).inserted }
-        aiTags = merged
-        aiTagNextOffset = page.nextOffset
-        isLoadingMoreTags = false
-    }
-
-    private func loadMoreAITags() async {
-        guard !isLoadingMoreTags, aiTagNextOffset != nil else { return }
-        isLoadingMoreTags = true
-        await loadAITags(reset: false)
     }
 
     private func openRecommendationCategory(_ category: RecommendationIndexCategory) {
@@ -492,20 +373,28 @@ struct LibraryView: View {
         switch category.dimension {
         case "mood": dimension = String(localized: "情绪", bundle: .module)
         case "scene": dimension = String(localized: "场景", bundle: .module)
-        case "vocal": dimension = String(localized: "人声", bundle: .module)
-        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "theme": dimension = String(localized: "主题", bundle: .module)
+        case "genre": dimension = String(localized: "类型", bundle: .module)
         case "style": dimension = String(localized: "风格", bundle: .module)
+        case "vocal": dimension = String(localized: "人声", bundle: .module)
+        case "instrument": dimension = String(localized: "乐器", bundle: .module)
+        case "texture": dimension = String(localized: "质感", bundle: .module)
+        case "rhythm": dimension = String(localized: "节奏", bundle: .module)
         case "energy": dimension = String(localized: "能量", bundle: .module)
         case "tempo": dimension = String(localized: "速度", bundle: .module)
         case "acousticness": dimension = String(localized: "原声感", bundle: .module)
         case "danceability": dimension = String(localized: "舞动性", bundle: .module)
-        case "tag": dimension = String(localized: "AI 标签", bundle: .module)
+        case "instrumentalness": dimension = String(localized: "器乐性", bundle: .module)
+        case "liveness": dimension = String(localized: "现场感", bundle: .module)
+        case "speechiness": dimension = String(localized: "人声密度", bundle: .module)
+        case "valence": dimension = String(localized: "情感正负", bundle: .module)
+        case "complexity": dimension = String(localized: "复杂度", bundle: .module)
         default: dimension = category.dimension
         }
         let suffix: String
         switch category.dimension {
         case "energy": suffix = "\(category.value)/10"
-        case "tempo", "acousticness", "danceability": suffix = "\(category.value)/5"
+        case "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity": suffix = "\(category.value)/5"
         default: suffix = category.value
         }
         return "\(dimension) · \(suffix)"
@@ -515,14 +404,22 @@ struct LibraryView: View {
         switch dimension {
         case "mood": "face.smiling"
         case "scene": "location"
-        case "vocal": "mic"
-        case "texture": "waveform"
+        case "theme": "theatermasks"
+        case "genre": "music.quarternote.3"
         case "style": "music.note.list"
+        case "vocal": "mic"
+        case "instrument": "pianokeys"
+        case "texture": "waveform"
+        case "rhythm": "metronome"
         case "energy": "bolt"
         case "tempo": "metronome"
         case "acousticness": "guitars"
         case "danceability": "figure.dance"
-        case "tag": "tag"
+        case "instrumentalness": "waveform.path"
+        case "liveness": "person.wave.2"
+        case "speechiness": "text.bubble"
+        case "valence": "face.smiling.inverse"
+        case "complexity": "circle.grid.cross"
         default: "tag"
         }
     }

@@ -720,6 +720,12 @@ struct AssistantView: View {
         case let .albumCards(cards):
             AlbumCardList(cards: cards, theme: theme)
 
+        case let .playlistCards(cards):
+            PlaylistCardList(cards: cards, theme: theme)
+
+        case let .artistCards(cards):
+            ArtistCardList(cards: cards, theme: theme)
+
         case let .webSources(sources):
             VStack(alignment: .leading, spacing: AuralisSpacing.small) {
                 Label(String(localized: "联网来源", bundle: .module), systemImage: "globe")
@@ -1023,6 +1029,98 @@ private struct AlbumCardList: View {
             }
         }
         .frame(maxWidth: 560, alignment: .leading)
+    }
+}
+
+private struct PlaylistCardList: View {
+    let cards: [PlaylistCard]
+    let theme: BuiltInTheme
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
+            ForEach(expanded ? cards : Array(cards.prefix(5))) { card in
+                HStack {
+                    Image(systemName: "music.note.list")
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(card.name).font(.subheadline)
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                        Text("\(card.trackCount) 首 · \(card.isReadOnly ? String(localized: "只读", bundle: .module) : String(localized: "可编辑", bundle: .module))")
+                            .font(.caption2)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                    Spacer()
+                }
+                .padding(AuralisSpacing.small)
+                .background(theme.colorTokens.elevated.color)
+                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+            }
+            if cards.count > 5 {
+                expandButton
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+
+    private var expandButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+        } label: {
+            Label(
+                expanded ? String(localized: "收起", bundle: .module) : String(localized: "展开其余 \(cards.count - 5) 个", bundle: .module),
+                systemImage: expanded ? "chevron.up" : "chevron.down"
+            )
+            .font(.caption)
+            .foregroundStyle(theme.colorTokens.accent.color)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ArtistCardList: View {
+    let cards: [ArtistCard]
+    let theme: BuiltInTheme
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AuralisSpacing.xSmall) {
+            ForEach(expanded ? cards : Array(cards.prefix(5))) { card in
+                HStack {
+                    Image(systemName: "person.crop.circle")
+                        .foregroundStyle(theme.colorTokens.accent.color)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(card.name).font(.subheadline)
+                            .foregroundStyle(theme.colorTokens.primaryText.color)
+                        Text("\(card.albumCount) 张专辑")
+                            .font(.caption2)
+                            .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    }
+                    Spacer()
+                }
+                .padding(AuralisSpacing.small)
+                .background(theme.colorTokens.elevated.color)
+                .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
+            }
+            if cards.count > 5 {
+                expandButton
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+
+    private var expandButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+        } label: {
+            Label(
+                expanded ? String(localized: "收起", bundle: .module) : String(localized: "展开其余 \(cards.count - 5) 位", bundle: .module),
+                systemImage: expanded ? "chevron.up" : "chevron.down"
+            )
+            .font(.caption)
+            .foregroundStyle(theme.colorTokens.accent.color)
+        }
+        .buttonStyle(.plain)
     }
 }
 

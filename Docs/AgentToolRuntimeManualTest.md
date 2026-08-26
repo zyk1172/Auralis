@@ -100,11 +100,31 @@ swift test --package-path Packages/AuralisCore --no-parallel
 
 一次 EOF、超时、502/503、429 或不完整 SSE 只能记录 `degraded`，不能永久关闭协议声明的 streaming/tools 能力。只有服务端明确拒绝参数或协议时，才可以标记 `explicitlyRejected`。
 
-对当前配置的真实 Provider 至少完成一次 Recommendation Index smoke：使用真实模型完成一个小批次，
-确认分类请求没有 tools/hosted tools/tool choice，响应能通过 batchID、revision、mode、track coverage
-校验，并在 commit 后看到真实 pending 下降。记录 provider/model 和结果即可，不记录 API Key、Cookie、
-Authorization header 或含凭据的 URL；没有安全可用的 Provider 凭据时，明确标记为未执行，不得用 mock
-结果冒充真实 smoke。
+对当前配置的真实 Provider 至少完成一次 Recommendation Index v3 smoke：使用真实模型完成一个小批次，
+确认分类请求没有 tools/hosted tools/tool choice，响应能通过 batchID、revision、track coverage 校验，
+只包含固定 taxonomy TagID，并在 commit 后看到真实 pending 下降。记录 provider/model 和结果即可，不记录
+API Key、Cookie、Authorization header 或含凭据的 URL；没有安全可用的 Provider 凭据时，明确标记为未执行，
+不得用 mock 结果冒充真实 smoke。
+
+### Recommendation Index v3 / DeepSeek real-provider smoke
+
+这是当前 PR #9 的真实回归路径，专门覆盖“模型省略 item.mode 与大部分可推断字段”这一故障。
+
+1. 在真机安装当前构建，准备至少 16 首尚未完成固定 taxonomy 分类的歌曲；记录开始前真实 SQLite 状态
+   `indexed` 与 `pending`。
+2. 配置已授权的 OpenAI-Compatible Provider，模型使用 `deepseek-v4-flash`，batch size 使用 `16`。
+3. 启动一次完整 Recommendation Index，确认分类请求没有 `tools`、`hostedTools` 或 `toolChoice`，
+   JSON mode/普通文本请求的 system prompt 包含完整 compact taxonomy catalog。
+4. 检查第一批：模型输出可以没有 root `mode`、item `mode`、`scenes`、`themes`、其它 categorical、
+   numeric 字段和 `confidence`；不能出现 `stage=codableDecode`，也不能因为缺少空数组字段缩小批次。
+5. 检查 commit 后真实 SQLite 状态，而不是只看模型返回 JSON：
+   `indexed_after > indexed_before` 且 `pending_after < pending_before`。以 `indexed=0,pending=10033`
+   为例，第一批成功后必须同时满足 `indexed_after > 0`、`pending_after < 10033`。
+6. 抽查写入的 tag value 只为固定 canonical TagID（例如 `mood.sacred`），没有自由语义标签；任务只有在
+   authoritative `pending=0` 时才结束。
+
+没有安全可用的真实 Provider API Key、真机或真实曲库时，本节必须记录为 `SKIPPED`，并写明缺少的前置条件；
+不要用 mock Provider 的 SQLite 结果替代真实 smoke。
 
 ## 7. 记录结果
 

@@ -10,6 +10,8 @@ public enum AgentMessage: Sendable {
     case trackCards([TrackCard])
     /// 专辑卡片列表。
     case albumCards([AlbumCard])
+    case playlistCards([PlaylistCard])
+    case artistCards([ArtistCard])
     /// Internet citations returned by web_search/web_fetch.  Sources are
     /// separate from assistant prose so the UI can render them as links.
     case webSources([WebSource])
@@ -31,7 +33,8 @@ public enum AgentMessage: Sendable {
 
 extension AgentMessage: Codable {
     private enum Kind: String, Codable {
-        case text, trackCards, albumCards, webSources, playlistProposal, actionPreview, toolProgress, error, confirmation, streaming
+        case text, trackCards, albumCards, playlistCards, artistCards, webSources,
+             playlistProposal, actionPreview, toolProgress, error, confirmation, streaming
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -45,6 +48,12 @@ extension AgentMessage: Codable {
             try container.encode(value, forKey: .value)
         case let .albumCards(value):
             try container.encode(Kind.albumCards, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case let .playlistCards(value):
+            try container.encode(Kind.playlistCards, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case let .artistCards(value):
+            try container.encode(Kind.artistCards, forKey: .type)
             try container.encode(value, forKey: .value)
         case let .webSources(value):
             try container.encode(Kind.webSources, forKey: .type)
@@ -79,6 +88,8 @@ extension AgentMessage: Codable {
         case .text: self = .text(try container.decode(String.self, forKey: .value))
         case .trackCards: self = .trackCards(try container.decode([TrackCard].self, forKey: .value))
         case .albumCards: self = .albumCards(try container.decode([AlbumCard].self, forKey: .value))
+        case .playlistCards: self = .playlistCards(try container.decode([PlaylistCard].self, forKey: .value))
+        case .artistCards: self = .artistCards(try container.decode([ArtistCard].self, forKey: .value))
         case .webSources: self = .webSources(try container.decode([WebSource].self, forKey: .value))
         case .playlistProposal:
             self = .playlistProposal(
@@ -99,6 +110,34 @@ extension AgentMessage: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case type, value, name, title, detail
+    }
+}
+
+public struct PlaylistCard: Codable, Sendable, Identifiable, Hashable {
+    public var id: GlobalID { globalID }
+    public let globalID: GlobalID
+    public let name: String
+    public let trackCount: Int
+    public let isReadOnly: Bool
+
+    public init(globalID: GlobalID, name: String, trackCount: Int, isReadOnly: Bool) {
+        self.globalID = globalID
+        self.name = name
+        self.trackCount = trackCount
+        self.isReadOnly = isReadOnly
+    }
+}
+
+public struct ArtistCard: Codable, Sendable, Identifiable, Hashable {
+    public var id: GlobalID { globalID }
+    public let globalID: GlobalID
+    public let name: String
+    public let albumCount: Int
+
+    public init(globalID: GlobalID, name: String, albumCount: Int) {
+        self.globalID = globalID
+        self.name = name
+        self.albumCount = albumCount
     }
 }
 

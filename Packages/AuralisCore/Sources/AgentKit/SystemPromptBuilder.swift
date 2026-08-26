@@ -17,7 +17,10 @@ public enum SystemPromptBuilder {
         goal: String = "",
         workflowInstruction: String? = nil,
         environment: AgentCapabilityEnvironment = AgentCapabilityEnvironment(providerAvailable: true),
-        relevantCapabilityIDs: [String]? = nil
+        relevantCapabilityIDs: [String]? = nil,
+        awarenessTools: [ToolDescriptor]? = nil,
+        activeSkillID: String? = nil,
+        authorizedOperations: Set<ToolAuthorizationOperation>? = nil
     ) -> String {
         let language = currentLanguage
         let profile = AssistantProfile.kitty(language: language)
@@ -26,7 +29,14 @@ public enum SystemPromptBuilder {
         let recent = recentSummary(context: context, language: language)
         let memories = memorySummary(context.memories, language: language, goal: goal)
         let skills = skillSummary(context.skills, language: language)
+        let awareness = awarenessSummary(
+            awarenessTools ?? tools,
+            activeSkillID: activeSkillID,
+            environment: environment,
+            authorizedOperations: authorizedOperations
+        )
         let capabilities = capabilitySummary(tools)
+        let compositions = ToolCompositionExamples.promptSection()
         // 高层能力摘要：来自单一 canonical AgentCapabilityCatalog（与 capabilities_get
         // 同源）。模型据此自省"系统能完成什么"，而不是只看 model-visible tools。
         let assistantCapabilities = AgentCapabilityCatalog.systemPromptSummary(environment: environment, relevantIDs: relevantCapabilityIDs)
@@ -79,8 +89,15 @@ public enum SystemPromptBuilder {
         ## 可用技能
         \(skills)
 
-        ## 工具能力（本轮模型可见）
+        ## Auralis 工具目录
+        \(awareness)
+
+        ## 当前轮可直接调用工具
+        上面的目录说明 Auralis 存在的能力；它不是本轮完整 JSON Schema。下面才是 Runtime 已装载、可直接调用的工具。
+        若需要目录中尚未装载的只读能力，先调用 tool_search；Runtime 会在下一轮加入匹配工具的完整 schema。修改型工具即使目录可见，也只有当前请求获精确授权时才会装载和执行。
         \(capabilities)
+
+        \(compositions)
 
         \(assistantCapabilities)
 
@@ -103,8 +120,8 @@ public enum SystemPromptBuilder {
         无法完成这项 AI 任务"；播放器本身的搜索、播放、歌单、分类浏览等 App 内功能不受影响。
 
         ## Tool 与 Capability 区别
-        模型可见 Tool 列表不是 Auralis 全部能力；部分能力由 Trusted Runtime / Stateful Skill
-        完成。不要因为看不到某个内部 Tool 就断言能力不存在；判断系统能力以高层能力摘要为准。
+        工具目录只列 model-visible canonical Tool；部分能力由 Trusted Runtime / Stateful Skill
+        完成。不要因为看不到内部 Tool 就断言能力不存在，也不要尝试猜测或调用内部 Tool 名称。
 
         ## Recommendation Index（受控工作流）
         当推荐索引工作流被激活：Runtime 准备当前批次 → 模型只输出当前批次的结构化分类 →
@@ -124,6 +141,25 @@ public enum SystemPromptBuilder {
         - 不要主动引导用户把所有简单播放器操作都交给聊天框；普通功能简洁执行即可，不要把 AI 描述成"控制播放器的唯一入口"。
         - \(protocolRule)
         """
+    }
+
+    private static func awarenessSummary(
+        _ descriptors: [ToolDescriptor],
+        activeSkillID: String?,
+        environment: AgentCapabilityEnvironment,
+        authorizedOperations: Set<ToolAuthorizationOperation>?
+    ) -> String {
+        let entries = ToolCatalog(descriptors: descriptors).awarenessEntries(
+            activeSkillID: activeSkillID,
+            environment: environment,
+            authorizedOperations: authorizedOperations
+        )
+        guard !entries.isEmpty else { return "当前没有可向模型公开的 Auralis 工具。" }
+        let grouped = Dictionary(grouping: entries, by: \.namespace)
+        return grouped.keys.sorted().compactMap { namespace in
+            guard let rows = grouped[namespace] else { return nil }
+            return (["### \(namespace)"] + rows.map(\.renderedLine)).joined(separator: "\n")
+        }.joined(separator: "\n")
     }
 
     /// 文本 ACTION 协议的参数契约：只给本轮 selected tools 生成紧凑说明，

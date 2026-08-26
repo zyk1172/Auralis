@@ -18,7 +18,20 @@
       }
     },
     "Auralis 旧版推荐索引" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis Legacy Recommendation Index"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis 舊版推薦索引"
+          }
+        }
+      }
     },
     "CFBundleDisplayName" : {
       "comment" : "Bundle display name",

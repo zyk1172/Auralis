@@ -307,6 +307,8 @@ struct AIConnectionSettings: Sendable {
             streaming: diagnostics.streaming,
             nativeTools: diagnostics.nativeTools == .unavailable ? .notTested : diagnostics.nativeTools,
             toolChoice: diagnostics.toolChoice == .unavailable ? .notTested : diagnostics.toolChoice,
+            jsonMode: diagnostics.jsonMode == .unavailable ? .notTested : diagnostics.jsonMode,
+            jsonSchema: diagnostics.jsonSchema == .unavailable ? .notTested : diagnostics.jsonSchema,
             details: diagnostics.details
         )
         let saved = VerifiedProviderCapabilities(
@@ -356,6 +358,8 @@ struct AIConnectionSettings: Sendable {
             // override it only after an explicit `stream` rejection; transient
             // EOF/timeout/5xx are persisted as `.degraded` health telemetry.
             usesStreaming: !(verifiedCapabilities?.streamingExplicitlyRejected ?? false),
+            supportsJSONMode: verifiedCapabilities?.jsonMode == .passed,
+            supportsJSONSchema: verifiedCapabilities?.jsonSchema == .passed,
             // 已知协议默认可尝试原生工具；自定义 path 只有已经观测到真实
             // native tool 调用成功时才启用。一次不确定结果绝不能关闭标准
             // Provider 的真实工具路径。

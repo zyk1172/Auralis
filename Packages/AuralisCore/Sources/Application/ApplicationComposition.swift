@@ -125,7 +125,7 @@ public enum ApplicationComposition {
             // 不要吞掉真实错误：正式库打不开时记录完整原因（含 SQLiteDatabase 的
             // OPEN/WAL/FOREIGN_KEYS/BUSY_TIMEOUT 分阶段诊断），便于定位。
             // 注意：**不自动删除/重建 catalog.sqlite**——里面除曲目外还可能有
-            // 本地不喜欢状态、推荐索引、AI 标签等本地数据，先抓根因再决定修复。
+            // 本地不喜欢状态、推荐索引等本地数据，先抓根因再决定修复。
             AuralisLog.library.error(
                 """
                 catalogPrimaryOpenFailed \

@@ -375,7 +375,15 @@ struct AgentToolOrchestrationV2Tests {
         tracker.recordSearchOutcome(toolName: "library_search", foundNewEvidence: false, policy: policy)
         #expect(tracker.isSearchExhausted("library_search", under: policy), "library_search 连续 3 次无新应收敛")
         #expect(!tracker.isSearchExhausted("web_search", under: policy), "web_search 只累计 1 次，不受 library_search 污染")
+        // Search-only tasks stop with a diagnosable reason.
         #expect(tracker.stopReason(under: policy) == .noNewEvidence)
+        // Exhausting one search path removes that path, but must not terminate
+        // a task while another canonical path (for example music_appreciate)
+        // remains available.
+        #expect(tracker.stopReason(
+            under: policy,
+            tolerateSearchExhaustion: true
+        ) == nil)
     }
 
     // MARK: P10 推荐索引长任务不受影响

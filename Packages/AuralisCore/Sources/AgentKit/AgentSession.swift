@@ -65,6 +65,8 @@ public struct AgentSession: Codable, Sendable, Identifiable {
         case let .text(value): return value.count / 2
         case let .trackCards(cards): return cards.count * 12
         case let .albumCards(cards): return cards.count * 8
+        case let .playlistCards(cards): return cards.reduce(0) { $0 + $1.name.count / 2 + 8 }
+        case let .artistCards(cards): return cards.reduce(0) { $0 + $1.name.count / 2 + 6 }
         case let .webSources(sources): return sources.count * 20
         case let .playlistProposal(name, tracks): return name.count / 2 + tracks.count * 12
         case let .actionPreview(title, _): return title.count / 2

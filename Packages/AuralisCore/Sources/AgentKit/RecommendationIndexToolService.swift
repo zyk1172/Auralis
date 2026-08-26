@@ -10,6 +10,8 @@ enum RecommendationIndexToolService {
     static let toolNames: Set<String> = [
         "library_index_status",
         "library_index_read",
+        "recommendation_taxonomy_list",
+        "recommendation_taxonomy_search",
         "recommendation_index_commit",
     ]
 
@@ -26,7 +28,7 @@ enum RecommendationIndexToolService {
         case "library_index_status":
             let status = try await catalog.recommendationIndexStatus(serverID: serverID)
             let executionState = await executionRegistry.snapshot(serverID: serverID)
-            let text = "推荐索引数据：共 \(status.totalTracks) 首；已完成固定分类 \(status.indexedTracks) 首；固定分类待处理 \(status.pendingTracks) 首；已处理语义标签 \(status.semanticProcessedTracks) 首；语义标签待处理 \(status.pendingSemanticTagTracks) 首。\n执行状态：\(executionState.userFacingSummary)。"
+            let text = "推荐索引数据：共 \(status.totalTracks) 首；已完成固定分类 \(status.indexedTracks) 首；固定分类待处理 \(status.pendingTracks) 首。\n执行状态：\(executionState.userFacingSummary)。"
             return .ok(call, descriptor, text, .text(text), facts: statusFacts(status, executionState: executionState))
 
         case "library_index_read":
@@ -56,6 +58,35 @@ enum RecommendationIndexToolService {
                 .text("以下是已完成的推荐索引记录（含分类标签）：\n\(payload)")
             )
 
+        case "recommendation_taxonomy_list":
+            let dimension = normalized(call.optionalString("dimension"))
+            let limit = min(max((try? call.int("limit")) ?? 200, 1), 500)
+            let definitions: [TagDefinition]
+            if let dimension, let tagDimension = TagDimension(rawValue: dimension) {
+                definitions = Array(RecommendationIndexTaxonomy.definitions(for: tagDimension).prefix(limit))
+            } else {
+                definitions = Array(RecommendationIndexTaxonomy.all.prefix(limit))
+            }
+            let payload = String(decoding: try JSONEncoder().encode(definitions), as: UTF8.self)
+            return .ok(
+                call,
+                descriptor,
+                "已返回 \(definitions.count) 个固定 taxonomy 标签",
+                .text(payload)
+            )
+
+        case "recommendation_taxonomy_search":
+            let query = normalized(call.optionalString("query")) ?? ""
+            let limit = min(max((try? call.int("limit")) ?? 12, 1), 50)
+            let definitions = RecommendationIndexTaxonomy.search(query, limit: limit)
+            let payload = String(decoding: try JSONEncoder().encode(definitions), as: UTF8.self)
+            return .ok(
+                call,
+                descriptor,
+                "已匹配 \(definitions.count) 个固定 taxonomy 标签",
+                .text(payload)
+            )
+
         case "recommendation_index_commit":
             guard let items = decodeClassifications(call.arguments["items"]) else {
                 throw AgentToolError.invalidParameter("items", "items 必须是结构化分类数组")
@@ -77,14 +108,12 @@ enum RecommendationIndexToolService {
                   running.runID == ToolExecutionContext.lease?.runID,
                   running.batchID == batchID,
                   running.batchRevision == UInt64(revisionValue),
-                  let expectedMode = running.batchMode,
                   !running.batchTrackIDs.isEmpty else {
                 return .fail(call, descriptor, "推荐索引提交已过期或不属于当前运行，未写入任何数据")
             }
             let actualIDs = items.map(\.id)
             let expectedIDs = running.batchTrackIDs
-            guard items.allSatisfy({ $0.mode == expectedMode }),
-                  actualIDs.count == expectedIDs.count,
+            guard actualIDs.count == expectedIDs.count,
                   Set(actualIDs).count == actualIDs.count,
                   Set(actualIDs) == Set(expectedIDs) else {
                 return .fail(call, descriptor, "推荐索引提交未完整覆盖当前批次，未写入任何数据")
@@ -131,7 +160,6 @@ enum RecommendationIndexToolService {
             "recommendation.index.total": "\(status.totalTracks)",
             "recommendation.index.indexed": "\(status.indexedTracks)",
             "recommendation.index.pending": "\(status.pendingTracks)",
-            "recommendation.index.pendingSemantic": "\(status.pendingSemanticTagTracks)",
             "recommendation.index.pendingUnique": "\(status.pendingUniqueTracks)",
             "recommendation.index.nextBatchAvailable": status.pendingUniqueTracks > 0 ? "true" : "false",
         ]

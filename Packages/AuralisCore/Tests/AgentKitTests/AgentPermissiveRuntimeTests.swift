@@ -22,11 +22,19 @@ private actor InvocationGate {
 /// 记录副作用的最小 AgentBridge 实现。
 private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     let activeServerIDValue: ServerID?
-    init(activeServerID: ServerID? = nil) { self.activeServerIDValue = activeServerID }
+    let deleteSideEffect: (@Sendable (GlobalID) async throws -> Void)?
+    init(
+        activeServerID: ServerID? = nil,
+        deleteSideEffect: (@Sendable (GlobalID) async throws -> Void)? = nil
+    ) {
+        self.activeServerIDValue = activeServerID
+        self.deleteSideEffect = deleteSideEffect
+    }
     var activeServerID: ServerID? { activeServerIDValue }
     var lyricsStateValue: AgentLyricsState = .unknown
+    var currentTrackValue: Track?
     func lyricsState(for globalID: GlobalID) async -> AgentLyricsState { lyricsStateValue }
-    func currentTrack() -> Track? { nil }
+    func currentTrack() -> Track? { currentTrackValue }
     func currentQueue() -> [Track] { [] }
 
     private(set) var playedTracks: [GlobalID] = []
@@ -99,7 +107,11 @@ private final class PermissiveBridge: AgentBridge, @unchecked Sendable {
     func reorderPlaylist(playlistGID: GlobalID, from: Int, to: Int) async -> AgentMutationResult { .confirmed("ok") }
     func duplicatePlaylist(playlistGID: GlobalID) async -> AgentMutationResult { .confirmed("ok") }
     func mergePlaylists(sourceGIDs: [GlobalID], into name: String) async -> AgentMutationResult { .confirmed("ok") }
-    func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult { deletedPlaylists.append(globalID); return .confirmed("ok") }
+    func deletePlaylist(globalID: GlobalID) async -> AgentMutationResult {
+        try? await deleteSideEffect?(globalID)
+        deletedPlaylists.append(globalID)
+        return .confirmed("ok")
+    }
 
     func likeTrack(globalID: GlobalID) async -> AgentMutationResult { likedTracks.append(globalID); return .confirmed("已收藏") }
     func unlikeTrack(globalID: GlobalID) async -> AgentMutationResult { .confirmed("已取消收藏") }
@@ -761,7 +773,9 @@ struct AgentPermissiveRuntimeTests {
     func deleteSamePlaylistTwiceNoCrash() async throws {
         let store = try makePermStore()
         try await store.upsertPlaylist(Playlist(id: "pl-a", serverID: "test-server", name: "跑步", trackIDs: []), serverID: "test-server")
-        let bridge = PermissiveBridge()
+        let bridge = PermissiveBridge(deleteSideEffect: { gid in
+            try await store.deletePlaylist(gid)
+        })
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"deletePlaylist","args":{"playlistID":"test-server:pl-a"}}"#,
@@ -1478,6 +1492,54 @@ struct AgentPermissiveRuntimeTests {
         // 无证据的“大众共识”不能作为成功回答输出。
         #expect(await collector.containsError("没有满足确定性完成条件"))
         #expect(await collector.containsText("广受好评") == false)
+    }
+
+    @Test("鉴赏当前歌曲的真实执行链先执行 music_appreciate")
+    func currentTrackAppreciationExecutesCanonicalToolFirst() async throws {
+        let store = try makePermStore()
+        let track = makePermTrack(serverID: "test-server", remoteID: "t1", title: "夜曲")
+        try await seedPerm(store, [track])
+        let bridge = PermissiveBridge()
+        bridge.currentTrackValue = track
+        let collector = PermissiveCollector()
+        let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"music_appreciate","args":{}}"#,
+            """
+            ## 《夜曲》鉴赏
+            ### 【已核验事实】
+            本地元数据已核验。
+            ### 【模型分析】
+            旋律和节奏有明显的夜间氛围。
+            ### 【我的私人数据】
+            暂无播放记录。
+            ### 【大众评价】
+            暂无可核验的大众评价数据。
+            """,
+        ])
+
+        await AgentRunner.run(
+            userText: "鉴赏这首歌",
+            provider: provider,
+            model: "scripted-model",
+            bridge: bridge,
+            catalog: store,
+            context: .init(serverID: "test-server", currentTrackTitle: track.title, queueCount: 0),
+            intent: .musicAppreciation,
+            confirm: { _ in true },
+            emit: { await collector.record($0) }
+        )
+
+        // The second model turn must contain the real tool observation; this is
+        // stronger than asserting that the descriptor was merely shortlisted.
+        let requests = provider.requests
+        #expect(requests.count >= 2)
+        // Legacy textual ACTION transcripts project the observation into the
+        // next user turn; native tool calls use role=.tool. Either way, the
+        // second request must carry both canonical tool identity and result.
+        let secondTranscript = requests[1].messages.map(\.content).joined(separator: "\n")
+        #expect(secondTranscript.contains("music_appreciate"))
+        #expect(secondTranscript.contains("已准备《夜曲》的鉴赏素材"))
+        #expect(await collector.containsText("【已核验事实】"))
     }
 
     @Test("TEST-50 超过 50 首的任务在建立边界 fail-fast")

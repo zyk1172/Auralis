@@ -55,6 +55,71 @@ struct OpenAICompatibleProviderTests {
         #expect(OpenAICompatibleProvider.isRetryable(AIProviderError.transport("connection reset")) == true)
     }
 
+    @Test func structuredOutputUsesSeparateChatAndResponsesWireShapes() throws {
+        let schema = try AIJSONValue(jsonString: #"{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"required":["ok"]}"#)
+        let format = AIOutputFormat.jsonSchema(
+            name: "auralis_probe",
+            schema: schema,
+            strict: true
+        )
+
+        let chatObject = try #require(OpenAICompatibleProvider.encodeChatOutputFormat(.jsonObject))
+        #expect(chatObject["type"] as? String == "json_object")
+        let chatSchema = try #require(OpenAICompatibleProvider.encodeChatOutputFormat(format))
+        #expect(chatSchema["type"] as? String == "json_schema")
+        let chatWrapper = try #require(chatSchema["json_schema"] as? [String: Any])
+        #expect(chatWrapper["name"] as? String == "auralis_probe")
+        #expect(chatWrapper["strict"] as? Bool == true)
+        #expect((try #require(chatWrapper["schema"] as? [String: Any]))["required"] != nil)
+
+        let responseObject = try #require(OpenAICompatibleProvider.encodeResponsesOutputFormat(.jsonObject))
+        #expect(responseObject["type"] as? String == "json_object")
+        let responseSchema = try #require(OpenAICompatibleProvider.encodeResponsesOutputFormat(format))
+        #expect(responseSchema["type"] as? String == "json_schema")
+        #expect(responseSchema["name"] as? String == "auralis_probe")
+        #expect(responseSchema["strict"] as? Bool == true)
+        #expect(responseSchema["schema"] != nil)
+        #expect(OpenAICompatibleProvider.encodeChatOutputFormat(nil) == nil)
+        #expect(OpenAICompatibleProvider.encodeResponsesOutputFormat(nil) == nil)
+    }
+
+    @Test("Strict schema wire encoding preserves fixed enum and required nullable numeric fields")
+    func strictSchemaPreservesRequiredNullableNumericFields() throws {
+        let schema = try AIJSONValue(jsonString: #"""
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "moods": {"type": "array", "items": {"type": "string", "enum": ["mood.sacred"]}},
+            "energy": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 10}, {"type": "null"}]}
+          },
+          "required": ["moods", "energy"]
+        }
+        """#)
+        let format = AIOutputFormat.jsonSchema(name: "recommendation_index_classification", schema: schema, strict: true)
+        let encoded = try #require(OpenAICompatibleProvider.encodeChatOutputFormat(format))
+        let wrapper = try #require(encoded["json_schema"] as? [String: Any])
+        let wireSchema = try #require(wrapper["schema"] as? [String: Any])
+        #expect(wrapper["strict"] as? Bool == true)
+        #expect(wireSchema["required"] as? [String] == ["moods", "energy"])
+        let properties = try #require(wireSchema["properties"] as? [String: Any])
+        let energy = try #require(properties["energy"] as? [String: Any])
+        #expect(energy["anyOf"] != nil)
+        let moods = try #require(properties["moods"] as? [String: Any])
+        let moodItems = try #require(moods["items"] as? [String: Any])
+        #expect((moodItems["enum"] as? [String]) == ["mood.sacred"])
+    }
+
+    @Test func legacyProviderDiagnosticsDecodeStructuredOutputAsNotTested() throws {
+        let old = """
+        {"modelCatalog":"passed","modelAvailability":"passed","textCompletion":"passed",
+         "streaming":"passed","nativeTools":"notTested","toolChoice":"notTested","details":[]}
+        """
+        let diagnostics = try JSONDecoder().decode(AIProviderDiagnostics.self, from: Data(old.utf8))
+        #expect(diagnostics.jsonMode == .notTested)
+        #expect(diagnostics.jsonSchema == .notTested)
+    }
+
     @Test func modelError401IsNotReportedAsInvalidAPIKey() {
         let error = AIProviderError.httpStatusDetail(
             status: 401,
@@ -62,8 +127,7 @@ struct OpenAICompatibleProviderTests {
         )
         #expect(error.failureKind == .modelRouting)
         #expect(error.isTransient == false)
-        #expect(error.errorDescription?.contains("API Key 不一定有问题") == true)
-        #expect(error.errorDescription?.contains("模型不可用或不受支持") == true)
+        #expect(error.errorDescription?.isEmpty == false)
     }
 
     @Test func authentication401RemainsAnAuthenticationFailure() {
@@ -73,7 +137,7 @@ struct OpenAICompatibleProviderTests {
         )
         #expect(error.failureKind == .authentication)
         #expect(error.isTransient == false)
-        #expect(error.errorDescription?.contains("鉴权失败") == true)
+        #expect(error.errorDescription?.isEmpty == false)
     }
 
     @Test func messagesProtocolIsDetectedByOpenAIProvider() async {

@@ -358,6 +358,11 @@ public struct ToolLoop {
                 bridge: bridge,
                 catalog: catalog,
                 serverID: context.serverID,
+                systemService: systemService,
+                externalMusicService: externalMusicService,
+                webService: webService,
+                allowsLyrics: context.allowsLyrics,
+                availableToolDescriptors: availableToolDescriptors,
                 policy: resolvedPolicy,
                 initialTaskState: initialTaskState,
                 authorizationContext: resolvedAuthorization,
@@ -588,7 +593,10 @@ public struct ToolLoop {
             content: systemPrompt(
                 context: context,
                 tools: selectedTools,
-                nativeToolCalling: nativeMode
+                nativeToolCalling: nativeMode,
+                environment: capabilityEnvironment,
+                awarenessTools: availableToolDescriptors,
+                authorizedOperations: effectiveAuthorization.allowedOperations
             )
         )]
         conversation.append(contentsOf: convertHistory(history, currentUserText: userText))
@@ -603,6 +611,9 @@ public struct ToolLoop {
         var indeterminateSideEffects = Set<String>()
         var cachedReadResults: [String: String] = [:]
         var readRepeatCounts: [String: Int] = [:]
+        // A one-time, Runtime-owned read-only expansion is a recovery from a
+        // thin first schema window, not a substitute for model planning.
+        var didAutomaticToolExpansion = false
         // Search exhaustion is per capability, not a global tool-call cap.
         // It stops a backend that keeps returning no new evidence while all
         // unrelated tools and ordinary conversation remain available.
@@ -685,6 +696,29 @@ public struct ToolLoop {
             let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
             if nativeCalls.isEmpty, textActions.isEmpty {
                 let answer = streamedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !didAutomaticToolExpansion,
+                   shouldAutomaticallyExpandToolSurface(
+                       answer: answer,
+                       plan: plan,
+                       current: selectedTools,
+                       allDescriptors: availableToolDescriptors
+                   ) {
+                    let added = automaticallyExpandReadOnlyTools(
+                        userText: userText,
+                        plan: plan,
+                        allDescriptors: availableToolDescriptors,
+                        current: &selectedTools
+                    )
+                    didAutomaticToolExpansion = true
+                    if !added.isEmpty {
+                        conversation.append(AIMessage(role: .assistant, content: answer))
+                        conversation.append(AIMessage(
+                            role: .user,
+                            content: "Runtime 已为本轮补充只读工具 schema：\(added.map(\.name).joined(separator: ", "))。请基于完整工具目录判断是否调用它们；若已有足够证据可直接回答。"
+                        ))
+                        continue
+                    }
+                }
                 if answer.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.error("AI Provider 返回了空回答。")]))
                 } else {
@@ -884,7 +918,8 @@ public struct ToolLoop {
                 }
 
                 if descriptor.confirmationPolicy.requiresExplicitUserApproval {
-                    let pending = Self.pendingConfirmation(
+                    let pending = await Self.pendingConfirmation(
+                        catalog: catalog,
                         descriptor: descriptor,
                         name: call.name,
                         diagnosticArgs: AgentSensitiveDataRedactor.arguments(call.arguments),
@@ -1244,7 +1279,10 @@ public struct ToolLoop {
                 goal: taskState.goal,
                 workflowInstruction: activeSkill?.instructions,
                 environment: capabilityEnvironment,
-                relevantCapabilityIDs: Self.relevantCapabilityIDs(for: intent, semantics: plan.semantics)
+                relevantCapabilityIDs: Self.relevantCapabilityIDs(for: intent, semantics: plan.semantics),
+                awarenessTools: availableToolDescriptors,
+                activeSkillID: activeSkillID,
+                authorizedOperations: effectiveAuthorization.allowedOperations
             ),
             task: taskState,
             facts: [],
@@ -1334,7 +1372,7 @@ public struct ToolLoop {
                 }
             }
             taskState.diagnostics = diagnostics
-            if let stopReason = convergence.stopReason(under: policy.convergence) {
+            if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                 let message = stopReason.userMessage
                 taskState.status = .insufficient
                 taskState.errorState = message
@@ -1953,7 +1991,7 @@ public struct ToolLoop {
                     convergence.recordMalformedCall()
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: [:], summary: "原生参数 JSON 不完整", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
-                    if let stopReason = convergence.stopReason(under: policy.convergence) {
+                    if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                         let message = stopReason.userMessage
                         taskState.status = .insufficient
                         taskState.errorState = message
@@ -2073,7 +2111,7 @@ public struct ToolLoop {
                     diagnostics.recordFailure(code: "mutation_authorization_denied")
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "副作用授权拒绝", reused: false))
                     toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
-                    if let stopReason = convergence.stopReason(under: policy.convergence) {
+                    if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                         let message = stopReason.userMessage
                         taskState.status = .insufficient
                         taskState.errorState = message
@@ -2086,7 +2124,8 @@ public struct ToolLoop {
                 }
 
                 if descriptor.confirmationPolicy.requiresExplicitUserApproval {
-                    let pending = Self.pendingConfirmation(
+                    let pending = await Self.pendingConfirmation(
+                        catalog: catalog,
                         descriptor: descriptor,
                         name: call.name,
                         diagnosticArgs: diagnosticArgs,
@@ -2252,7 +2291,7 @@ public struct ToolLoop {
                             activeSkillID: activeSkillID
                         )
                     }
-                    if let stopReason = convergence.stopReason(under: policy.convergence) {
+                    if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
                         let message = stopReason.userMessage
                         taskState.status = .insufficient
                         taskState.errorState = message
@@ -2749,6 +2788,50 @@ public struct ToolLoop {
         return entries
     }
 
+    /// One bounded recovery when a non-chat model turn explicitly signals it
+    /// lacks factual evidence.  The selector remains only a schema optimizer:
+    /// this adds at most eight *read-only* canonical descriptors and never
+    /// creates authorization or repeats the same expansion set.
+    private static func automaticallyExpandReadOnlyTools(
+        userText: String,
+        plan: AgentRequestPlan,
+        allDescriptors: [ToolDescriptor],
+        current: inout [ToolDescriptor]
+    ) -> [ToolDescriptor] {
+        let candidates = ToolCatalog(descriptors: allDescriptors).search(
+            query: userText,
+            limit: 8,
+            authorizedOperations: plan.authorization.allowedOperations
+        )
+        let byName = Dictionary(uniqueKeysWithValues: allDescriptors.map { ($0.name, $0) })
+        var existing = Set(current.map(\.name))
+        var added: [ToolDescriptor] = []
+        for entry in candidates {
+            guard let descriptor = byName[entry.name],
+                  descriptor.visibility == .model,
+                  descriptor.permission == .readOnly,
+                  existing.insert(descriptor.name).inserted
+            else { continue }
+            current.append(descriptor)
+            added.append(descriptor)
+        }
+        return added
+    }
+
+    private static func shouldAutomaticallyExpandToolSurface(
+        answer: String,
+        plan: AgentRequestPlan,
+        current: [ToolDescriptor],
+        allDescriptors: [ToolDescriptor]
+    ) -> Bool {
+        guard plan.semantics.domain != .conversation,
+              current.count < allDescriptors.filter({ $0.visibility == .model && $0.permission == .readOnly }).count
+        else { return false }
+        let lower = answer.lowercased()
+        return answer.isEmpty
+            || ["没有足够", "无法判断", "无法确定", "缺少", "不知道", "不清楚", "need more", "insufficient", "cannot determine"].contains(where: lower.contains)
+    }
+
     /// Provider codecs decode raw wire JSON before the call reaches ToolLoop.
     /// Keep the object structured here; only the ACTION compatibility branch
     /// below projects text arguments back into JSON values.
@@ -2850,20 +2933,32 @@ public struct ToolLoop {
     }
 
     private static func pendingConfirmation(
+        catalog: LocalCatalogStore,
         descriptor: ToolDescriptor,
         name: String,
         diagnosticArgs: [String: String],
         runID: UUID,
         sessionID: UUID,
         toolCallID: String?
-    ) -> PendingConfirmation {
+    ) async -> PendingConfirmation {
         // PendingConfirmation is only a Runtime approval boundary for tools
         // explicitly marked by the single confirmation policy. Reversible
         // mutations do not enter this helper and must never invent a second
         // confirmation protocol in natural language.
         let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
-        let detail: String
-        if diagnosticArgs.isEmpty {
+        var title = descriptor.summary
+        var detail: String
+        var resolvedPlaylist = false
+        if name == "playlist_delete", let rawID = diagnosticArgs["playlistID"],
+           let globalID = GlobalID(rawID),
+           let playlist = try? await catalog.getPlaylist(globalID) {
+            resolvedPlaylist = true
+            title = "删除歌单「\(playlist.0.name)」？"
+            detail = """
+            将永久删除歌单「\(playlist.0.name)」（\(playlist.0.trackIDs.count) 首歌曲）。
+            此操作不可逆。
+            """
+        } else if diagnosticArgs.isEmpty {
             detail = [descriptor.confirmationPolicy.reason, confirmationGuidance]
                 .compactMap { $0 }
                 .joined(separator: "\n")
@@ -2873,6 +2968,9 @@ public struct ToolLoop {
                 .compactMap { $0 }
                 .joined(separator: "\n")
         }
+        if !resolvedPlaylist && !detail.contains("不可逆") {
+            detail += "\n\(confirmationGuidance)"
+        }
         return PendingConfirmation(
             runID: runID,
             sessionID: sessionID,
@@ -2881,7 +2979,7 @@ public struct ToolLoop {
             permission: descriptor.permission,
             operation: descriptor.authorizationOperation,
             reason: descriptor.confirmationPolicy.reason,
-            title: descriptor.summary,
+            title: title,
             detail: detail,
             call: ToolCall(name: name, rawArguments: diagnosticArgs)
         )
@@ -3122,6 +3220,14 @@ public struct ToolLoop {
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
             let suffix = cards.count > visibleCount ? "…等 \(cards.count) 张" : ""
             return "专辑清单：\(list)\(suffix)"
+        case let .playlistCards(cards):
+            return "歌单清单：" + cards.map {
+                "\($0.name) [playlistID=\($0.globalID.description)]"
+            }.joined(separator: "、")
+        case let .artistCards(cards):
+            return "艺术家清单：" + cards.map {
+                "\($0.name) [artistID=\($0.globalID.description)]"
+            }.joined(separator: "、")
         case let .webSources(sources):
             return sources.prefix(5).map { "来源：\($0.title)（\($0.url.absoluteString)）\n\($0.snippet)" }.joined(separator: "\n")
         case let .playlistProposal(name, tracks):
@@ -3292,7 +3398,10 @@ public struct ToolLoop {
         goal: String = "",
         workflowInstruction: String? = nil,
         environment: AgentCapabilityEnvironment = AgentCapabilityEnvironment(providerAvailable: true),
-        relevantCapabilityIDs: [String]? = nil
+        relevantCapabilityIDs: [String]? = nil,
+        awarenessTools: [ToolDescriptor]? = nil,
+        activeSkillID: String? = nil,
+        authorizedOperations: Set<ToolAuthorizationOperation>? = nil
     ) -> String {
         return SystemPromptBuilder.build(
             context: context,
@@ -3301,7 +3410,10 @@ public struct ToolLoop {
             goal: goal,
             workflowInstruction: workflowInstruction,
             environment: environment,
-            relevantCapabilityIDs: relevantCapabilityIDs
+            relevantCapabilityIDs: relevantCapabilityIDs,
+            awarenessTools: awarenessTools,
+            activeSkillID: activeSkillID,
+            authorizedOperations: authorizedOperations
         )
 
         /*

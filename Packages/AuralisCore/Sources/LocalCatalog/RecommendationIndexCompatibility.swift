@@ -12,8 +12,8 @@ public typealias RecommendationIndexV2 = RecommendationIndex
 public typealias RecommendationIndexV2Status = RecommendationIndexStatus
 @available(*, deprecated, renamed: "RecommendationIndexBatch")
 public typealias RecommendationIndexV2Batch = RecommendationIndexBatch
-@available(*, deprecated, renamed: "RecommendationIndexClassification")
-public typealias RecommendationIndexV2Classification = RecommendationIndexClassification
+@available(*, deprecated, message: "Use RecommendationIndexClassification for live v3 or LegacyRecommendationIndexClassificationV2 for v2 import")
+public typealias RecommendationIndexV2Classification = LegacyRecommendationIndexClassificationV2
 @available(*, deprecated, renamed: "RecommendationIndexIndexedTrack")
 public typealias RecommendationIndexV2IndexedTrack = RecommendationIndexIndexedTrack
 @available(*, deprecated, renamed: "RecommendationIndexCategory")
@@ -49,11 +49,15 @@ extension LocalCatalogStore {
 
     @available(*, deprecated, renamed: "writeRecommendationIndex(_:serverID:classifier:)")
     public func writeRecommendationIndexV2(
-        _ classifications: [RecommendationIndexClassification],
+        _ classifications: [LegacyRecommendationIndexClassificationV2],
         serverID: ServerID?,
         classifier: String = "configured-agent"
     ) throws -> Int {
-        try writeRecommendationIndex(classifications, serverID: serverID, classifier: classifier)
+        try writeRecommendationIndex(
+            classifications.map(\.fixedTaxonomyClassification),
+            serverID: serverID,
+            classifier: classifier
+        )
     }
 
     @available(*, deprecated, renamed: "recommendationIndexTrackIDs(serverID:query:limit:)")

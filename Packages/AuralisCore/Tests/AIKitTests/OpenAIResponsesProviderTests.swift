@@ -569,6 +569,8 @@ struct OpenAIResponsesNetworkTests {
             .response(data: Data(text.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(stream.utf8)),
+            .response(data: Data(text.utf8)),
+            .response(data: Data(text.utf8)),
         ])
         let provider = makeChatProvider(session: makeMockSession())
 
@@ -578,11 +580,17 @@ struct OpenAIResponsesNetworkTests {
         #expect(diagnostics.toolChoice == .notTested)
         #expect(diagnostics.supportsOrdinaryChat)
 
-        let nativeProbe = try requestObject(from: try #require(AIKitMockURLProtocol.requests.last))
+        let requests = AIKitMockURLProtocol.requests
+        try #require(requests.count >= 6)
+        let nativeProbe = try requestObject(from: requests[3])
         #expect(nativeProbe["stream"] as? Bool == true)
         #expect(nativeProbe["tools"] != nil)
         #expect(nativeProbe["tool_choice"] == nil)
         #expect(nativeProbe["max_tokens"] as? Int == auralisDefaultMaxOutputTokens)
+        let jsonModeProbe = try requestObject(from: requests[4])
+        #expect((jsonModeProbe["response_format"] as? [String: Any])?["type"] as? String == "json_object")
+        let schemaProbe = try requestObject(from: requests[5])
+        #expect(((schemaProbe["response_format"] as? [String: Any])?["json_schema"] as? [String: Any])?["name"] as? String == "auralis_probe")
     }
 
     @Test func verifiedModelRoutingErrorRefreshesCatalogAndRecovers() async throws {
@@ -792,6 +800,8 @@ struct OpenAIResponsesNetworkTests {
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
             .response(headers: ["Content-Type": "text/event-stream"], data: Data(toolBody.utf8)),
+            .response(data: Data(stubBody.utf8)),
+            .response(data: Data(stubBody.utf8)),
         ])
         let provider = makeProvider(session: makeMockSession())
 
@@ -800,7 +810,7 @@ struct OpenAIResponsesNetworkTests {
         #expect(result.model == "gpt-4.1")
 
         let requests = AIKitMockURLProtocol.requests
-        #expect(requests.count == 5)
+        #expect(requests.count == 7)
         let object = try requestObject(from: requests[1])
         #expect(object["max_output_tokens"] as? Int == 32)
         #expect(object["input"] != nil)
@@ -810,6 +820,10 @@ struct OpenAIResponsesNetworkTests {
         #expect(nativeProbe["tools"] != nil)
         #expect(nativeProbe["tool_choice"] == nil)
         #expect(nativeProbe["max_output_tokens"] as? Int == auralisDefaultMaxOutputTokens)
+        let jsonModeProbe = try requestObject(from: requests[5])
+        #expect(((jsonModeProbe["text"] as? [String: Any])?["format"] as? [String: Any])?["type"] as? String == "json_object")
+        let schemaProbe = try requestObject(from: requests[6])
+        #expect(((schemaProbe["text"] as? [String: Any])?["format"] as? [String: Any])?["name"] as? String == "auralis_probe")
         let toolChoiceProbe = try requestObject(from: requests[4])
         #expect(toolChoiceProbe["tool_choice"] as? String == "required")
     }

@@ -175,6 +175,13 @@ public enum ToolSelector {
             return selected
         }
 
+        // Appreciation has one canonical evidence collector. Keep it explicitly
+        // admitted so weak models do not mistake a generic library search for
+        // the first step of “鉴赏这首歌”.
+        if semantics.isMusicAppreciation {
+            append(visible.filter { $0.name == "music_appreciate" })
+        }
+
         append(visible.filter { descriptor in
             matches(descriptor, semantics: semantics, allowedOperations: allowedOperations)
         })
@@ -339,6 +346,9 @@ public enum ToolSelector {
     ) -> Int {
         var score = 0
         let lower = userText.lowercased()
+        if semantics.isMusicAppreciation, descriptor.name == "music_appreciate" {
+            score += 10_000
+        }
         // 1) 精确授权操作命中（最相关）。
         if let operation = descriptor.authorizationOperation,
            semantics.requestedOperations.contains(operation) {

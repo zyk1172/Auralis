@@ -229,7 +229,8 @@ public actor LocalCatalogStore: LibrarySyncStore {
             rules_version TEXT NOT NULL,
             classifier TEXT NOT NULL,
             classified_at REAL NOT NULL,
-            source_hash_version INTEGER NOT NULL DEFAULT 0
+            source_hash_version INTEGER NOT NULL DEFAULT 0,
+            semantic_tag_rules_version INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS recommendation_index_v2_tags (
             global_id TEXT NOT NULL,
@@ -323,7 +324,9 @@ public actor LocalCatalogStore: LibrarySyncStore {
     /// 不再用一组必然失败的 ALTER TABLE 作为列存在性探测。
     nonisolated private func runAdditiveSchemaMigrations() throws {
         let key = "catalog_additive_columns"
-        let targetVersion: Int64 = 1
+        // Bumped to 2 because semantic_tag_rules_version was added after some
+        // databases had already recorded version = 1; those must re-run.
+        let targetVersion: Int64 = 2
         let applied = try db.query(
             "SELECT version FROM catalog_migrations WHERE key = ?",
             [.text(key)]
