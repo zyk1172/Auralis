@@ -12,8 +12,8 @@ public enum RecommendationIndex {
         "instrumentalness", "liveness", "speechiness", "valence", "complexity",
     ]
     public static let rulesVersion = "3.0"
-    /// 开放语义标签规则版本：只描述“开放标签生成/规范化规则”的版本，与
-    /// rulesVersion（固定分类 taxonomy）相互独立。旧数据无开放标签视为 semanticTagRulesVersion = 0。
+    /// Legacy database-column compatibility value. Fixed taxonomy v3 never
+    /// produces open semantic tags, so persisted rows use zero.
     @available(*, deprecated, message: "Open semantic tags are no longer produced by Recommendation Index")
     public static let semanticTagRulesVersion = 0
     /// 内容指纹算法版本：只描述“判断歌曲内容是否变化”的指纹算法，与
@@ -92,7 +92,8 @@ private struct RecommendationIndexPendingState {
 extension LocalCatalogStore {
     /// 清空一个服务器的 Recommendation Index 结果。
     /// 只删除该服务器的 state / tag 行，不触碰歌曲、封面、下载、播放历史或其他服务器的索引。
-    /// 语义标签词表是跨服务器共享的 canonical 化辅助数据，因此保留，避免影响其他服务器。
+    /// Legacy open-tag rows are removed by the v3 migration; fixed taxonomy
+    /// rows are scoped by the server's state table and remain untouched here.
     public func clearRecommendationIndex(serverID: ServerID) throws {
         try db.transaction {
             // tags 表没有 server_id，必须先由 state 表限定身份再删除，防止跨服务器误删。
@@ -274,7 +275,7 @@ extension LocalCatalogStore {
         return valid.count
     }
 
-    /// 用 V2 场景/情绪标签取候选；未完成索引时调用方可回退到原有流派推荐。
+    /// 用固定 taxonomy 的 scene/mood 标签取候选；未完成索引时调用方可回退到原有流派推荐。
     public func recommendationIndexTrackIDs(serverID: ServerID, query: String, limit: Int = 200) throws -> [GlobalID] {
         let tagID = Self.resolvedTagID(query) ?? query
         let rows = try db.query(
@@ -452,9 +453,8 @@ extension LocalCatalogStore {
         .map { $0 }
     }
 
-    /// 返回资料库「分类」页所需的 V2 标签及各自歌曲数。
-    /// `dimensions` 非空时只返回指定维度（例如固定维度），用于避免把全部开放语义标签
-    /// 一次读进内存；开放标签用 `recommendationIndexTagCatalog` 按需分页。
+    /// 返回资料库「分类」页所需的固定 taxonomy 标签及各自歌曲数。
+    /// dimensions 非空时只返回指定维度，用于限制分类页的查询范围。
     /// 与推荐查询保持同一可见范围：当前规则版本、当前服务器，且不暴露歌词/路径/播放地址。
     public func recommendationIndexCategories(
         serverID: ServerID?,
@@ -491,7 +491,8 @@ extension LocalCatalogStore {
         }
     }
 
-    /// 开放语义标签词库分页（真正 SQL 分页，总量不受页大小限制）。
+    /// Legacy open semantic-tag catalog compatibility surface. v3 returns no
+    /// open-tag rows; the database migration removes their vocabulary table.
     @available(*, deprecated, message: "Open semantic tag catalog is no longer used")
     public func recommendationIndexTagCatalog(
         serverID: ServerID?,
@@ -503,7 +504,7 @@ extension LocalCatalogStore {
         return RecommendationIndexTagPage(items: [], nextOffset: nil, hasMore: false)
     }
 
-    /// 读取某个 V2 分类下的真实曲目，供资料库详情页直接播放与加入队列。
+    /// 读取某个固定 taxonomy 分类下的真实曲目，供资料库详情页直接播放与加入队列。
     public func recommendationIndexTracks(
         serverID: ServerID?,
         dimension: String,
@@ -773,7 +774,7 @@ extension LocalCatalogStore {
         return true
     }
 
-    /// V2 内容指纹：只包含相对稳定的音乐内容身份字段。
+    /// Recommendation Index 内容指纹：只包含相对稳定的音乐内容身份字段。
     ///
     /// 明确**不**包含 favorite / rating / playCount / skipCount / completionRate /
     /// 下载状态等个人行为数据——用户收藏、评分、播放次数改变不应让 mood / scene /

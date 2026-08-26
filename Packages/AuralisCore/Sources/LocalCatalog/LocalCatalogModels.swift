@@ -299,16 +299,42 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
         instruments = try Self.decodeStringArray(.instruments, from: container)
         textures = try Self.decodeStringArray(.textures, from: container)
         rhythms = try Self.decodeStringArray(.rhythms, from: container)
-        energy = try container.decodeIfPresent(Int.self, forKey: .energy)
-        tempo = try container.decodeIfPresent(Int.self, forKey: .tempo)
-        acousticness = try container.decodeIfPresent(Int.self, forKey: .acousticness)
-        danceability = try container.decodeIfPresent(Int.self, forKey: .danceability)
-        instrumentalness = try container.decodeIfPresent(Int.self, forKey: .instrumentalness)
-        liveness = try container.decodeIfPresent(Int.self, forKey: .liveness)
-        speechiness = try container.decodeIfPresent(Int.self, forKey: .speechiness)
-        valence = try container.decodeIfPresent(Int.self, forKey: .valence)
-        complexity = try container.decodeIfPresent(Int.self, forKey: .complexity)
+        energy = try Self.decodeOptionalInteger(.energy, from: container)
+        tempo = try Self.decodeOptionalInteger(.tempo, from: container)
+        acousticness = try Self.decodeOptionalInteger(.acousticness, from: container)
+        danceability = try Self.decodeOptionalInteger(.danceability, from: container)
+        instrumentalness = try Self.decodeOptionalInteger(.instrumentalness, from: container)
+        liveness = try Self.decodeOptionalInteger(.liveness, from: container)
+        speechiness = try Self.decodeOptionalInteger(.speechiness, from: container)
+        valence = try Self.decodeOptionalInteger(.valence, from: container)
+        complexity = try Self.decodeOptionalInteger(.complexity, from: container)
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
+    }
+
+    /// Non-strict OpenAI-compatible providers sometimes encode an integer as
+    /// a quoted value. Accept that deterministic representation, while still
+    /// surfacing floats, objects, arrays, and booleans as repairable shape
+    /// errors instead of inventing a numeric value.
+    private static func decodeOptionalInteger(
+        _ key: CodingKeys,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Int? {
+        guard container.contains(key) else { return nil }
+        if try container.decodeNil(forKey: key) { return nil }
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return value
+        }
+        if let raw = try? container.decode(String.self, forKey: key),
+           let value = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return value
+        }
+        throw DecodingError.typeMismatch(
+            Int.self,
+            DecodingError.Context(
+                codingPath: container.codingPath + [key],
+                debugDescription: "\(key.stringValue) 必须是 integer、整数字符串或 null"
+            )
+        )
     }
 
     private static func decodeStringArray(
@@ -660,7 +686,8 @@ public struct RecommendationIndexQuery: Sendable, Hashable {
     }
 }
 
-/// AI 标签（dimension='tag'）的一页结果：offset 游标分页，总量不受页大小限制。
+/// Legacy open semantic-tag page compatibility surface. Fixed taxonomy v3
+/// no longer exposes or produces dimension='tag' rows.
 @available(*, deprecated, message: "Open semantic tags are no longer used")
 public struct RecommendationIndexTagPage: Sendable, Hashable {
     public let items: [RecommendationIndexCategory]

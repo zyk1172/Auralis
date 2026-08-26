@@ -140,6 +140,47 @@ struct AgentBudgetAndBatchPolicyTests {
         )
     }
 
+    @Test("推荐索引请求预算包含完整输入和输出预留")
+    func recommendationRequestBudgetIncludesFullRequest() {
+        let budget = RecommendationIndexBatchPolicy.requestBudget(
+            systemPromptBytes: 9_000,
+            payloadBytes: 3_000,
+            outputSchemaBytes: 6_000,
+            requestWrapperBytes: 1_000,
+            maxContextTokens: 10_000,
+            reservedOutputTokens: 2_000
+        )
+
+        #expect(budget.requestBytes == 19_000)
+        #expect(budget.estimatedInputTokens == 6_334)
+        #expect(budget.estimatedTotalTokens == 8_846)
+        #expect(budget.fits)
+    }
+
+    @Test("未知 Provider 使用保守字节预算并保留完整请求诊断")
+    func unknownProviderUsesConservativeByteFallback() {
+        let fits = RecommendationIndexBatchPolicy.requestBudget(
+            systemPromptBytes: 20_000,
+            payloadBytes: 20_000,
+            outputSchemaBytes: 8_000,
+            requestWrapperBytes: 0,
+            maxContextTokens: nil,
+            reservedOutputTokens: 4_096
+        )
+        let exceeds = RecommendationIndexBatchPolicy.requestBudget(
+            systemPromptBytes: 20_000,
+            payloadBytes: 20_001,
+            outputSchemaBytes: 8_000,
+            requestWrapperBytes: 0,
+            maxContextTokens: nil,
+            reservedOutputTokens: 4_096
+        )
+
+        #expect(fits.fits)
+        #expect(!exceeds.fits)
+        #expect(exceeds.summary.contains("estimated_total_with_reserve_bytes"))
+    }
+
     @Test("输出截断仍然会逐级缩小批次直到单项")
     func recommendationBatchCanRecoverFromTruncation() {
         var value = 100

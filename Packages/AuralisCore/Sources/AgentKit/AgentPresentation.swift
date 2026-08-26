@@ -5,29 +5,91 @@ import LocalCatalog
 /// Last-line redaction for user-visible prose. Structured tool payloads and
 /// provider transcripts keep IDs so playback and follow-up mutations still work.
 public enum AgentUserFacingSanitizer {
-    private static let labeledID = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:playlistID|trackID|albumID|artistID|serverID|GlobalID)\s*=\s*[^\s，。；、）)]+"#
+    private static let labeledEntityID = try! NSRegularExpression(
+        pattern: #"(?i)\b(?:playlistID|trackID|albumID|artistID)\s*=\s*([^\s,.;，。；、（）()\[\]{}<>\"']+)"#
     )
-    private static let genericLabeledID = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:id|uuid|rawValue)\s*=\s*[^\s，。；、）)]+"#
+    private static let labeledServerID = try! NSRegularExpression(
+        pattern: #"(?i)\bserverID\s*=\s*([^\s,.;，。；、（）()\[\]{}<>\"']+)"#
     )
     private static let globalIDCall = try! NSRegularExpression(
         pattern: #"(?i)\bGlobalID\s*\([^)]*\)"#
     )
     private static let bareGlobalID = try! NSRegularExpression(
-        pattern: #"\b(?:server|srv)-[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*"#
+        pattern: #"(?i)\b(?:server|srv|opensubsonic)-[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*"#
+    )
+    private static let internalServerID = try! NSRegularExpression(
+        pattern: #"(?i)^(?:server|srv|opensubsonic)-[A-Za-z0-9][A-Za-z0-9._-]*$"#
     )
 
     public static func text(_ value: String) -> String {
         let replacement = "[内部标识]"
-        return [labeledID, genericLabeledID, globalIDCall, bareGlobalID]
-            .reduce(value) { current, regex in
-                regex.stringByReplacingMatches(
-                    in: current,
-                    range: NSRange(current.startIndex..., in: current),
-                    withTemplate: replacement
-                )
+        var result = replacingMatches(in: value, regex: labeledEntityID) { rawValue in
+            isAuralisEntityIdentifier(rawValue)
+        }
+        result = replacingMatches(in: result, regex: labeledServerID) { rawValue in
+            isInternalServerIdentifier(rawValue)
+        }
+        result = globalIDCall.stringByReplacingMatches(
+            in: result,
+            range: NSRange(result.startIndex..., in: result),
+            withTemplate: replacement
+        )
+        return bareGlobalID.stringByReplacingMatches(
+            in: result,
+            range: NSRange(result.startIndex..., in: result),
+            withTemplate: replacement
+        )
+    }
+
+    private static func replacingMatches(
+        in value: String,
+        regex: NSRegularExpression,
+        shouldReplace: (String) -> Bool
+    ) -> String {
+        let fullRange = NSRange(value.startIndex..., in: value)
+        let matches = regex.matches(in: value, range: fullRange)
+        guard !matches.isEmpty else { return value }
+
+        let nsValue = value as NSString
+        var output: [String] = []
+        var cursor = 0
+        for match in matches {
+            let matchRange = match.range
+            guard matchRange.location >= cursor else { continue }
+            if matchRange.location > cursor {
+                output.append(nsValue.substring(with: NSRange(
+                    location: cursor,
+                    length: matchRange.location - cursor
+                )))
             }
+            let rawValue: String
+            if match.numberOfRanges > 1, match.range(at: 1).location != NSNotFound {
+                rawValue = nsValue.substring(with: match.range(at: 1))
+            } else {
+                rawValue = nsValue.substring(with: matchRange)
+            }
+            if shouldReplace(rawValue) {
+                output.append("[内部标识]")
+            } else {
+                output.append(nsValue.substring(with: matchRange))
+            }
+            cursor = NSMaxRange(matchRange)
+        }
+        if cursor < nsValue.length {
+            output.append(nsValue.substring(from: cursor))
+        }
+        return output.joined()
+    }
+
+    private static func isAuralisEntityIdentifier(_ rawValue: String) -> Bool {
+        let normalized = rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return GlobalID(normalized) != nil
+    }
+
+    private static func isInternalServerIdentifier(_ rawValue: String) -> Bool {
+        let normalized = rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        let range = NSRange(normalized.startIndex..., in: normalized)
+        return internalServerID.firstMatch(in: normalized, range: range) != nil
     }
 
     public static func confirmation(_ pending: PendingConfirmation) -> PendingConfirmation {

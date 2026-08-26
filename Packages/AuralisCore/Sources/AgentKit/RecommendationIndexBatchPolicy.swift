@@ -15,8 +15,77 @@ enum RecommendationIndexBatchPolicy {
     static let maximumTracksPerBatch = 100
 
     /// Tool Result 本身允许约 60K 字符。
-    /// 这里保留额外包装、中文说明及 JSON 开销，不能直接顶到 60K。
+    /// 未声明上下文窗口时，完整分类请求仍使用这个保守上限。
     static let safePayloadBytes = 48_000
+
+    /// UTF-8 bytes / 3 is intentionally conservative for mixed Chinese and
+    /// JSON input. This is a budget guard, not a tokenizer replacement.
+    static let estimatedBytesPerToken = 3
+    /// Leaves room for roles, request wrappers, provider-specific fields and
+    /// small tokenization differences beyond the measured request bodies.
+    static let contextSafetyMarginTokens = 512
+
+    struct RequestBudget: Equatable, Sendable {
+        let requestBytes: Int
+        let estimatedInputTokens: Int
+        let reservedOutputTokens: Int
+        let maxContextTokens: Int?
+
+        var estimatedTotalTokens: Int {
+            estimatedInputTokens + reservedOutputTokens + contextSafetyMarginTokens
+        }
+
+        var estimatedTotalBytes: Int {
+            requestBytes
+                + (reservedOutputTokens + contextSafetyMarginTokens) * estimatedBytesPerToken
+        }
+
+        var fits: Bool {
+            if let maxContextTokens {
+                return estimatedTotalTokens <= maxContextTokens
+            }
+            // There is no trustworthy token-window fact to compare against
+            // for an unrecognised endpoint. Keep the serialized input under
+            // the conservative transport envelope; the output reserve remains
+            // visible in estimatedTotalTokens/estimatedTotalBytes and is
+            // enforced whenever a real context window is declared.
+            return requestBytes <= safePayloadBytes
+        }
+
+        var summary: String {
+            if let maxContextTokens {
+                return "estimated_input_tokens=\(estimatedInputTokens), reserved_output_tokens=\(reservedOutputTokens), safety_margin_tokens=\(contextSafetyMarginTokens), max_context_tokens=\(maxContextTokens)"
+            }
+            return "estimated_request_bytes=\(requestBytes), estimated_total_with_reserve_bytes=\(estimatedTotalBytes), fallback_safe_bytes=\(safePayloadBytes)"
+        }
+    }
+
+    /// Measure the complete classification request, including system prompt,
+    /// taxonomy/evidence payload, and a strict output schema when present.
+    /// `maxContextTokens == nil` deliberately selects the legacy conservative
+    /// byte fallback for providers that do not declare a context window.
+    static func requestBudget(
+        systemPromptBytes: Int,
+        payloadBytes: Int,
+        outputSchemaBytes: Int,
+        requestWrapperBytes: Int = 0,
+        maxContextTokens: Int?,
+        reservedOutputTokens: Int
+    ) -> RequestBudget {
+        let requestBytes = max(0, systemPromptBytes)
+            + max(0, payloadBytes)
+            + max(0, outputSchemaBytes)
+            + max(0, requestWrapperBytes)
+        let estimatedInputTokens = requestBytes == 0
+            ? 0
+            : (requestBytes + estimatedBytesPerToken - 1) / estimatedBytesPerToken
+        return RequestBudget(
+            requestBytes: requestBytes,
+            estimatedInputTokens: estimatedInputTokens,
+            reservedOutputTokens: max(0, reservedOutputTokens),
+            maxContextTokens: maxContextTokens
+        )
+    }
 
     static func recommendedLimit(
         maxOutputTokens: Int

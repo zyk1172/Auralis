@@ -233,6 +233,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         // LM Studio 等端点可按实际模型修改。
         ModelCapabilities(
             maxContextTokens: configuration.maxContextTokens,
+            hasKnownContextWindow: configuration.maxContextTokens != auralisDefaultMaxContextTokens,
             maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: supportsToolCalling,
             supportsParallelTools: configuration.supportsParallelTools,

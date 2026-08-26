@@ -14,7 +14,40 @@ struct AgentUserFacingSanitizerTests {
         #expect(!output.contains("server-c"))
         #expect(output.contains("18 首"))
         #expect(output.contains("12:34"))
+        #expect(output.contains("id=normal-name"))
         #expect(output.contains("[内部标识]"))
+    }
+
+    @Test("Ordinary technical id and uuid values are preserved")
+    func preservesOrdinaryTechnicalIdentifiers() {
+        let input = #"HTML: <div id="main">；API 参数 id=user_123；数据库 id=42；uuid=550e8400-e29b-41d4-a716-446655440000"#
+        #expect(AgentUserFacingSanitizer.text(input) == input)
+    }
+
+    @Test("Entity labels redact only values that are valid Auralis GlobalIDs")
+    func entityLabelsRequireGlobalIDShape() {
+        let input = "playlistID=server-a:123；trackID=server-a:456；albumID=not-an-id；serverID=server-a；serverID=main"
+        let output = AgentUserFacingSanitizer.text(input)
+        #expect(!output.contains("playlistID=server-a:123"))
+        #expect(!output.contains("trackID=server-a:456"))
+        #expect(output.contains("albumID=not-an-id"))
+        #expect(!output.contains("serverID=server-a"))
+        #expect(output.contains("serverID=main"))
+    }
+
+    @Test("User-authored identifiers remain verbatim")
+    func preservesUserAuthoredMessage() {
+        let message = AgentChatMessage(
+            role: .user,
+            messages: [.text("playlistID=server-a:123 id=user_123 uuid=550e8400-e29b-41d4-a716-446655440000")]
+        )
+        let sanitized = AgentUserFacingSanitizer.chatMessage(message)
+        #expect(sanitized.role == .user)
+        guard case let .text(value) = sanitized.messages.first else {
+            Issue.record("expected the user text message to remain text")
+            return
+        }
+        #expect(value == "playlistID=server-a:123 id=user_123 uuid=550e8400-e29b-41d4-a716-446655440000")
     }
 
     @Test("Confirmation text is sanitized while the exact call is preserved")

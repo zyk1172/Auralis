@@ -144,6 +144,10 @@ public enum AIProviderToolMode: String, Codable, Hashable, Sendable {
 /// 只服务于旧配置迁移和未声明能力的兼容端点。
 public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var maxContextTokens: Int
+    /// Whether the context window is an endpoint/model fact. When false,
+    /// callers must use their conservative byte budget instead of treating
+    /// the default value as a precise provider limit.
+    public var hasKnownContextWindow: Bool
     public var maxOutputTokens: Int
     public var supportsToolCalling: Bool
     public var supportsParallelTools: Bool
@@ -159,6 +163,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
 
     public init(
         maxContextTokens: Int = 256_000,
+        hasKnownContextWindow: Bool? = nil,
         maxOutputTokens: Int = auralisDefaultMaxOutputTokens,
         supportsToolCalling: Bool = false,
         supportsParallelTools: Bool = true,
@@ -173,6 +178,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         toolMode: AIProviderToolMode? = nil
     ) {
         self.maxContextTokens = max(4_096, maxContextTokens)
+        self.hasKnownContextWindow = hasKnownContextWindow ?? (maxContextTokens != auralisDefaultMaxContextTokens)
         // 不再把输出硬性限制为「上下文的一半」：上下文与输出各自按用户配置取值，
         // 由服务端 / Provider 实际能力决定，Auralis 不自设比例限制。
         self.maxOutputTokens = max(512, maxOutputTokens)
@@ -190,7 +196,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case maxContextTokens, maxOutputTokens, supportsToolCalling
+        case maxContextTokens, hasKnownContextWindow, maxOutputTokens, supportsToolCalling
         case supportsParallelTools, supportsToolChoice, supportsStrictSchema
         case supportsStreaming, supportsJSONMode, supportsJSONSchema
         case supportsHostedWebSearch, supportsHostedWebFetch, supportsReasoningMetadata
@@ -201,6 +207,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             maxContextTokens: try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? 256_000,
+            hasKnownContextWindow: try container.decodeIfPresent(Bool.self, forKey: .hasKnownContextWindow),
             maxOutputTokens: try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens) ?? auralisDefaultMaxOutputTokens,
             supportsToolCalling: try container.decodeIfPresent(Bool.self, forKey: .supportsToolCalling) ?? false,
             supportsParallelTools: try container.decodeIfPresent(Bool.self, forKey: .supportsParallelTools) ?? true,

@@ -636,7 +636,6 @@ public enum AgentToolRegistry {
           "speechiness": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
           "valence": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
           "complexity": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 5}, {"type": "null"}]},
-          "mode": {"type": "string", "enum": ["full"]},
           "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         },
         "required": ["id"]
