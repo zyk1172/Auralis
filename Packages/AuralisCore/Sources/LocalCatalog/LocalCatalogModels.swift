@@ -284,7 +284,7 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
         self.speechiness = speechiness
         self.valence = valence
         self.complexity = complexity
-        self.confidence = confidence
+        self.confidence = Self.normalizedConfidence(confidence)
     }
 
     public init(from decoder: any Decoder) throws {
@@ -308,7 +308,7 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
         speechiness = try Self.decodeOptionalInteger(.speechiness, from: container)
         valence = try Self.decodeOptionalInteger(.valence, from: container)
         complexity = try Self.decodeOptionalInteger(.complexity, from: container)
-        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
+        confidence = Self.decodeConfidence(from: container)
     }
 
     /// Non-strict OpenAI-compatible providers sometimes encode an integer as
@@ -335,6 +335,30 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
                 debugDescription: "\(key.stringValue) 必须是 integer、整数字符串或 null"
             )
         )
+    }
+
+    /// Confidence is advisory metadata, not an identity or coverage field.
+    /// Providers commonly quote numbers or return an occasional out-of-range
+    /// value; normalize those cases without making the whole item repairable.
+    private static func decodeConfidence(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> Double {
+        guard container.contains(.confidence),
+              (try? container.decodeNil(forKey: .confidence)) != true
+        else { return 0.5 }
+
+        if let value = try? container.decode(Double.self, forKey: .confidence) {
+            return normalizedConfidence(value)
+        }
+        if let raw = try? container.decode(String.self, forKey: .confidence),
+           let value = Double(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return normalizedConfidence(value)
+        }
+        return 0.5
+    }
+
+    private static func normalizedConfidence(_ value: Double) -> Double {
+        value.isFinite && (0...1).contains(value) ? value : 0.5
     }
 
     private static func decodeStringArray(

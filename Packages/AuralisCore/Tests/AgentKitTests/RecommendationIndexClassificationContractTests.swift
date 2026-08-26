@@ -107,6 +107,63 @@ struct RecommendationIndexClassificationContractTests {
         #expect(value.complexity == nil)
     }
 
+    @Test("Confidence accepts quoted values and falls back for invalid values")
+    func confidenceIsTolerantAndBounded() throws {
+        let current = batch(["quoted", "high", "low", "invalid", "null", "missing"])
+        let values = try RecommendationIndexClassificationParser.parse(
+            envelope(
+                current,
+                items: [
+                    #"{"id":"quoted","confidence":"0.8"}"#,
+                    #"{"id":"high","confidence":2}"#,
+                    #"{"id":"low","confidence":-1}"#,
+                    #"{"id":"invalid","confidence":true}"#,
+                    #"{"id":"null","confidence":null}"#,
+                    #"{"id":"missing"}"#
+                ]
+            ),
+            for: current
+        ).get().items
+
+        let confidenceByID = Dictionary(uniqueKeysWithValues: values.map { ($0.id, $0.confidence) })
+        #expect(confidenceByID["quoted"] == 0.8)
+        #expect(confidenceByID["high"] == 0.5)
+        #expect(confidenceByID["low"] == 0.5)
+        #expect(confidenceByID["invalid"] == 0.5)
+        #expect(confidenceByID["null"] == 0.5)
+        #expect(confidenceByID["missing"] == 0.5)
+    }
+
+    @Test("Classifier track serialization excludes personal library state")
+    func classifierTrackDoesNotSerializePersonalState() throws {
+        let source = CatalogTrackLine(
+            id: "server-a:track-1",
+            title: "Song",
+            artist: "Artist",
+            album: "Album",
+            year: 2024,
+            genres: ["genre.pop"],
+            language: "zh",
+            duration: 180,
+            isFavorite: true,
+            rating: 5,
+            playCount: 99,
+            isDownloaded: true
+        )
+        let evidence = RecommendationIndexTrackEvidence(
+            track: RecommendationIndexClassifierTrack(source),
+            evidence: []
+        )
+        let json = String(decoding: try JSONEncoder().encode(evidence), as: UTF8.self)
+
+        #expect(json.contains("server-a:track-1"))
+        #expect(json.contains("Song"))
+        #expect(!json.contains("isFavorite"))
+        #expect(!json.contains("rating"))
+        #expect(!json.contains("playCount"))
+        #expect(!json.contains("isDownloaded"))
+    }
+
     @Test("Numeric values keep valid integers and drop only out-of-range values")
     func numericValuesAreTolerantAndBounded() throws {
         let current = batch(["max", "tooHigh", "tooLow", "tempoMax", "tempoTooHigh", "string", "null", "missing"])

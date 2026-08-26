@@ -56,8 +56,42 @@ public struct RecommendationIndexEvidenceRecord: Codable, Sendable, Equatable {
 }
 
 public struct RecommendationIndexTrackEvidence: Codable, Sendable, Equatable {
-    public let track: CatalogTrackLine
+    public let track: RecommendationIndexClassifierTrack
     public let evidence: [RecommendationIndexEvidenceRecord]
+
+    public init(
+        track: RecommendationIndexClassifierTrack,
+        evidence: [RecommendationIndexEvidenceRecord]
+    ) {
+        self.track = track
+        self.evidence = evidence
+    }
+}
+
+/// The only track representation that may cross the Recommendation Index AI
+/// boundary.  Personal library state is intentionally absent: it must never
+/// become an accidental classification signal or leave the device in the
+/// request payload.
+public struct RecommendationIndexClassifierTrack: Codable, Sendable, Equatable {
+    public let id: String
+    public let title: String
+    public let artist: String
+    public let album: String
+    public let year: Int?
+    public let genres: [String]
+    public let language: String?
+    public let duration: Int
+
+    public init(_ track: CatalogTrackLine) {
+        id = track.id
+        title = track.title
+        artist = track.artist
+        album = track.album
+        year = track.year
+        genres = track.genres
+        language = track.language
+        duration = track.duration
+    }
 }
 
 /// The sole model-produced value in the closed Recommendation Index chain.
@@ -657,6 +691,17 @@ public enum RecommendationIndexSkillRuntime {
 
     private static let maximumEvidenceRecordsPerTrack = 4
     private static let maximumEvidenceTextCharacters = 720
+    private static let reservedEvidenceRecordsPerTrack = 1
+    private static let reservedEvidenceTextCharacters = 256
+    private static let personalStateEvidenceTools: Set<String> = [
+        "library_get_song",
+        "music_appreciate",
+    ]
+    private static let historySensitiveEvidenceTools: Set<String> = [
+        "library_get_most_played",
+        "library_get_recently_played",
+        "library_get_starred",
+    ]
 
     public static func outputSchema() -> AIJSONValue {
         // Strict structured-output dialects commonly require every declared
@@ -705,7 +750,7 @@ public enum RecommendationIndexSkillRuntime {
               \#(numericJSON("speechiness", 5)),
               \#(numericJSON("valence", 5)),
               \#(numericJSON("complexity", 5)),
-              "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+              "confidence": {"anyOf":[{"type":"number"},{"type":"string"},{"type":"null"}]}
             },
             "required": \#(itemRequired)
           }
@@ -758,7 +803,9 @@ public enum RecommendationIndexSkillRuntime {
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
         webService: (any AgentWebService)? = nil,
+        allowsMetadata: Bool = true,
         allowsLyrics: Bool = false,
+        allowsHistory: Bool = false,
         availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
@@ -777,6 +824,33 @@ public enum RecommendationIndexSkillRuntime {
         modelName: String? = nil
     ) async {
         var taskState = initialTaskState ?? AgentTaskState(intent: .libraryManagement, goal: userText)
+        guard allowsMetadata else {
+            let message = "推荐索引需要允许发送歌曲元数据；当前未发送任何元数据或 AI 请求。"
+            taskState.status = .failed
+            taskState.completionState = .failed
+            taskState.errorState = message
+            taskState.errors.append(message)
+            taskState.pendingActions = []
+            await state(taskState)
+            await progress(ToolLoop.AgentProgress(
+                toolSteps: taskState.progress.toolCalls,
+                currentStep: message,
+                inputTokens: taskState.progress.inputTokens,
+                outputTokens: taskState.progress.outputTokens
+            ))
+            await observe(.init(
+                kind: .failed,
+                runID: executionLease.runID,
+                sessionID: executionLease.sessionID,
+                serverID: serverID,
+                phase: .readingStatus,
+                provider: providerName,
+                model: modelName ?? model,
+                message: message
+            ))
+            await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
+            return
+        }
         let restored = decodeCheckpoint(taskState.facts["recommendation.index.checkpoint"])
         let generation = (restored?.checkpointGeneration ?? 0) &+ 1
         var revision = restored?.currentBatchRevision ?? 0
@@ -1160,7 +1234,7 @@ public enum RecommendationIndexSkillRuntime {
             taskState.pendingActions = ["推荐索引：正在补充歌曲证据"]
             await publish(phase: .gatheringEvidence, currentBatch: prepared)
             await emitObservation(.evidenceStarted, phase: .gatheringEvidence, batch: prepared)
-            let evidence = await gatherEvidence(
+            var evidence = await gatherEvidence(
                 userText: userText,
                 provider: provider,
                 model: model,
@@ -1172,6 +1246,7 @@ public enum RecommendationIndexSkillRuntime {
                 externalMusicService: externalMusicService,
                 webService: webService,
                 allowsLyrics: allowsLyrics,
+                allowsHistory: allowsHistory,
                 availableToolDescriptors: availableToolDescriptors,
                 executionLease: executionLease,
                 resourceLeaseRegistry: resourceLeaseRegistry,
@@ -1188,6 +1263,7 @@ public enum RecommendationIndexSkillRuntime {
                 batch: prepared,
                 message: "records=\(evidence.reduce(0) { $0 + $1.evidence.count })"
             )
+            var evidenceWasCompacted = false
 
             taskState.status = .waitingForModel
             taskState.pendingActions = ["推荐索引：已完成 \(status.indexedTracks) / \(status.totalTracks)，正在分类当前批次 \(prepared.tracks.count) 首"]
@@ -1364,6 +1440,23 @@ public enum RecommendationIndexSkillRuntime {
                     // A transport retry may replay the request, but it does not
                     // discard the still-unwritten prepared batch identity.
                     continue
+                }
+                if failureDiagnostic.stage == .contextBudget, !evidenceWasCompacted {
+                    let compactedEvidence = Self.compactEvidence(evidence)
+                    if compactedEvidence != evidence {
+                        evidence = compactedEvidence
+                        evidenceWasCompacted = true
+                        taskState.status = .waitingForModel
+                        taskState.pendingActions = ["推荐索引正在压缩证据后重试当前批次…"]
+                        await publish(
+                            phase: .retrying,
+                            currentBatch: prepared,
+                            stoppedReason: "真实证据超过上下文预算，复用已取得证据压缩重试",
+                            terminal: false,
+                            attempt: classificationAttempt
+                        )
+                        continue
+                    }
                 }
                 switch Self.disposition(for: error) {
                 case .shrinkBatch:
@@ -1667,6 +1760,7 @@ public enum RecommendationIndexSkillRuntime {
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
         allowsLyrics: Bool,
+        allowsHistory: Bool,
         availableToolDescriptors: [ToolDescriptor],
         executionLease: ToolExecutionLease,
         resourceLeaseRegistry: MutationResourceLeaseRegistry,
@@ -1686,10 +1780,18 @@ public enum RecommendationIndexSkillRuntime {
             systemServiceAvailable: systemService != nil
         )
         let allReadOnly = availableToolDescriptors.filter {
-            $0.visibility == .model && $0.permission == .readOnly
+                $0.visibility == .model
+                && $0.permission == .readOnly
+                && !personalStateEvidenceTools.contains($0.name)
+                && (allowsHistory || !historySensitiveEvidenceTools.contains($0.name))
         }
+        let permittedReadOnlyNames = Set(allReadOnly.map(\.name))
         var selected = ToolSelector.select(for: userText, all: availableToolDescriptors)
-            .filter { $0.visibility == .model && $0.permission == .readOnly }
+            .filter {
+                $0.visibility == .model
+                    && $0.permission == .readOnly
+                    && permittedReadOnlyNames.contains($0.name)
+            }
         if let search = allReadOnly.first(where: { $0.name == "tool_search" }),
            !selected.contains(where: { $0.name == search.name }) {
             selected.append(search)
@@ -1701,21 +1803,21 @@ public enum RecommendationIndexSkillRuntime {
             // Textual ACTION providers cannot participate in the native
             // evidence loop. Skipping avoids a guaranteed zero-tool request
             // that costs one model round per batch without adding evidence.
-            return batch.tracks.map { .init(track: $0, evidence: []) }
+            return batch.tracks.map { .init(track: RecommendationIndexClassifierTrack($0), evidence: []) }
         }
         let hasTrackAttributableTool = allReadOnly.contains { descriptor in
             descriptor.name != "tool_search"
                 && descriptor.parameters.contains { $0.name == "trackID" || $0.name == "id" }
         }
         guard hasTrackAttributableTool else {
-            return batch.tracks.map { .init(track: $0, evidence: []) }
+            return batch.tracks.map { .init(track: RecommendationIndexClassifierTrack($0), evidence: []) }
         }
         var conversation: [AIMessage] = [
             .init(
                 role: .system,
                 content: "你是 Recommendation Index 的内部证据阶段。只可调用只读 Auralis 工具；不要输出分类 JSON，不要写入、修改播放、歌单、收藏、评分、服务器、下载或记忆。\n\n\(ToolCatalog(descriptors: availableToolDescriptors).awarenessEntries(environment: environment).map(\.renderedLine).joined(separator: "\\n"))\n\n\(ToolCompositionExamples.promptSection(examples: ToolCompositionExamples.readOnlyExamples))\n\n当前直接可调用的 schema 是 Runtime 已加载的只读工具；可用 tool_search 发现其它只读工具。若批次元数据已经足够或证据已补齐，直接停止调用工具。"
             ),
-            .init(role: .user, content: "为以下批次决定是否需要只读补证；不需要时不要调用工具。\n\(String(decoding: (try? JSONEncoder().encode(batch.tracks)) ?? Data(), as: UTF8.self))"),
+            .init(role: .user, content: "为以下批次决定是否需要只读补证；不需要时不要调用工具。\n\(String(decoding: (try? JSONEncoder().encode(batch.tracks.map(RecommendationIndexClassifierTrack.init))) ?? Data(), as: UTF8.self))"),
         ]
         var records: [String: [RecommendationIndexEvidenceRecord]] = [:]
         var seenCalls = Set<String>()
@@ -1802,7 +1904,7 @@ public enum RecommendationIndexSkillRuntime {
             }
             conversation.append(contentsOf: results)
         }
-        return batch.tracks.map { .init(track: $0, evidence: records[$0.id] ?? []) }
+        return batch.tracks.map { .init(track: RecommendationIndexClassifierTrack($0), evidence: records[$0.id] ?? []) }
     }
 
     private static func evidencePayloadProjection(_ payload: AgentMessage?) -> String? {
@@ -1881,36 +1983,55 @@ public enum RecommendationIndexSkillRuntime {
         let payload = String(decoding: try JSONEncoder().encode(input), as: UTF8.self)
         let system = classificationSystemPrompt(repairDiagnostic: repairDiagnostic)
         let outputFormat = classificationOutputFormat(for: provider.capabilities)
-        let request = AICompletionRequest(
-            model: model,
-            messages: [
-                AIMessage(role: .system, content: system),
-                AIMessage(role: .user, content: payload),
-            ],
-            temperature: 0.1,
-            maxTokens: provider.capabilities.maxOutputTokens,
-            tools: [],
-            toolChoice: nil,
-            hostedTools: [],
-            outputFormat: outputFormat
-        )
         let outputFormatBytes = outputFormat.flatMap {
             try? JSONEncoder().encode($0).count
         } ?? 0
-        let budget = RecommendationIndexBatchPolicy.requestBudget(
-            systemPromptBytes: system.utf8.count,
-            payloadBytes: payload.utf8.count,
-            outputSchemaBytes: outputFormatBytes,
-            requestWrapperBytes: requestWrapperBytes(
+        let maxContextTokens = provider.capabilities.hasKnownContextWindow
+            ? provider.capabilities.maxContextTokens
+            : nil
+
+        func makeParts(maxTokens: Int) -> ClassificationRequestParts {
+            let request = AICompletionRequest(
                 model: model,
-                maxTokens: request.maxTokens
-            ),
-            maxContextTokens: provider.capabilities.hasKnownContextWindow
-                ? provider.capabilities.maxContextTokens
-                : nil,
-            reservedOutputTokens: request.maxTokens
+                messages: [
+                    AIMessage(role: .system, content: system),
+                    AIMessage(role: .user, content: payload),
+                ],
+                temperature: 0.1,
+                maxTokens: maxTokens,
+                tools: [],
+                toolChoice: nil,
+                hostedTools: [],
+                outputFormat: outputFormat
+            )
+            let budget = RecommendationIndexBatchPolicy.requestBudget(
+                systemPromptBytes: system.utf8.count,
+                payloadBytes: payload.utf8.count,
+                outputSchemaBytes: outputFormatBytes,
+                requestWrapperBytes: requestWrapperBytes(
+                    model: model,
+                    maxTokens: request.maxTokens
+                ),
+                maxContextTokens: maxContextTokens,
+                reservedOutputTokens: request.maxTokens
+            )
+            return ClassificationRequestParts(request: request, budget: budget)
+        }
+
+        let outputCeiling = RecommendationIndexBatchPolicy.effectiveClassificationOutputTokens(
+            providerMaxOutputTokens: provider.capabilities.maxOutputTokens,
+            batchSize: batch.tracks.count
         )
-        return ClassificationRequestParts(request: request, budget: budget)
+        let initial = makeParts(maxTokens: outputCeiling)
+        guard let maxContextTokens else { return initial }
+
+        let contextRemaining = maxContextTokens
+            - initial.budget.estimatedInputTokens
+            - RecommendationIndexBatchPolicy.contextSafetyMarginTokens
+        let contextLimitedOutput = min(outputCeiling, max(1, contextRemaining))
+        return contextLimitedOutput == outputCeiling
+            ? initial
+            : makeParts(maxTokens: contextLimitedOutput)
     }
 
     private static func classificationSystemPrompt(
@@ -1935,7 +2056,7 @@ public enum RecommendationIndexSkillRuntime {
         固定维度为 moods/scenes/themes/genres/styles/vocals/instruments/textures/rhythms；数值为 energy(1-10)、tempo/acousticness/danceability/instrumentalness/liveness/speechiness/valence/complexity(1-5)。
         数组中的每一项必须使用下面完整 catalog 中存在的固定 taxonomy ID。没有足够证据时 categorical 返回 []，numeric 返回 null，不要伪造中间值。
         genre 与 style 分开，mood 与 scene/theme 分开，instrument 与 texture 分开。不要为了完整而强行选择标签。
-        JSON 类型必须严格遵守：categorical 都是 string[]；数值是 integer 或 null；batchID/id 是 string；revision/confidence 是 number。不要输出 semanticTags 或 mode。
+        JSON 类型必须严格遵守：categorical 都是 string[]；数值是 integer 或 null；batchID/id 是 string；revision 是 number；confidence 是 number、数字字符串或 null。不要输出 semanticTags 或 mode。
 
         完整固定 taxonomy catalog（只允许使用这些 TagID；等号右侧是显示语义）：
         \(RecommendationIndexTaxonomy.compactClassifierCatalog)
@@ -1979,9 +2100,56 @@ public enum RecommendationIndexSkillRuntime {
         }
     }
 
+    /// Reserve the complete bounded evidence envelope while sizing a fresh
+    /// batch. The real evidence loop can add at most this many records and
+    /// characters, so classification does not first over-size a batch and
+    /// then repeat evidence gathering after a budget failure.
+    private static func evidenceBudget(for tracks: [CatalogTrackLine]) -> [RecommendationIndexTrackEvidence] {
+        let boundedText = String(repeating: "😀", count: reservedEvidenceTextCharacters)
+        return tracks.map { track in
+            RecommendationIndexTrackEvidence(
+                track: RecommendationIndexClassifierTrack(track),
+                evidence: (0..<reservedEvidenceRecordsPerTrack).map { index in
+                    RecommendationIndexEvidenceRecord(
+                        toolName: "evidence-\(index)",
+                        targetTrackID: track.id,
+                        kind: "bounded",
+                        summaryForModel: boundedText,
+                        payloadProjection: boundedText
+                    )
+                }
+            )
+        }
+    }
+
     private static func boundedEvidenceText(_ value: String) -> String {
         guard value.count > maximumEvidenceTextCharacters else { return value }
         return String(value.prefix(maximumEvidenceTextCharacters - 1)) + "…"
+    }
+
+    /// If the real evidence is larger than the sizing allowance, reuse the
+    /// already gathered facts in memory before shrinking the track batch. This
+    /// avoids paying for another evidence loop merely because the estimate was
+    /// smaller than the actual bounded response.
+    private static func compactEvidence(
+        _ evidence: [RecommendationIndexTrackEvidence]
+    ) -> [RecommendationIndexTrackEvidence] {
+        evidence.map { trackEvidence in
+            RecommendationIndexTrackEvidence(
+                track: trackEvidence.track,
+                evidence: Array(trackEvidence.evidence.prefix(reservedEvidenceRecordsPerTrack)).map { record in
+                    RecommendationIndexEvidenceRecord(
+                        toolName: record.toolName,
+                        targetTrackID: record.targetTrackID,
+                        kind: record.kind,
+                        summaryForModel: String(record.summaryForModel.prefix(reservedEvidenceTextCharacters)),
+                        payloadProjection: record.payloadProjection.map {
+                            String($0.prefix(reservedEvidenceTextCharacters))
+                        }
+                    )
+                }
+            )
+        }
     }
 
     private static func requestWrapperBytes(model: String, maxTokens: Int) -> Int {
@@ -2095,13 +2263,17 @@ public enum RecommendationIndexSkillRuntime {
                 pendingFixed: 0
             )
             let candidateEvidence = candidateTracks.map {
-                RecommendationIndexTrackEvidence(track: $0, evidence: [])
+                RecommendationIndexTrackEvidence(
+                    track: RecommendationIndexClassifierTrack($0),
+                    evidence: []
+                )
             }
+            let budgetEvidence = evidenceBudget(for: candidateTracks)
             let budget = try classificationRequestParts(
                 provider: provider,
                 model: model,
                 batch: candidate,
-                evidence: candidateEvidence,
+                evidence: budgetEvidence.isEmpty ? candidateEvidence : budgetEvidence,
                 repairDiagnostic: nil
             ).budget
             if budget.fits {
@@ -2121,13 +2293,17 @@ public enum RecommendationIndexSkillRuntime {
                 pendingFixed: 0
             )
             let candidateEvidence = singleTrack.map {
-                RecommendationIndexTrackEvidence(track: $0, evidence: [])
+                RecommendationIndexTrackEvidence(
+                    track: RecommendationIndexClassifierTrack($0),
+                    evidence: []
+                )
             }
+            let budgetEvidence = evidenceBudget(for: singleTrack)
             let budget = try classificationRequestParts(
                 provider: provider,
                 model: model,
                 batch: candidate,
-                evidence: candidateEvidence,
+                evidence: budgetEvidence.isEmpty ? candidateEvidence : budgetEvidence,
                 repairDiagnostic: nil
             ).budget
             throw RecommendationIndexClassificationDiagnostics(

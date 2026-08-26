@@ -136,7 +136,29 @@ struct AgentBudgetAndBatchPolicyTests {
             RecommendationIndexBatchPolicy
                 .recommendedLimit(
                     maxOutputTokens: 100_000
-                ) == 100
+        ) == 100
+        )
+    }
+
+    @Test("分类输出上限按批次估算，不预留 Provider 的完整 ceiling")
+    func classificationOutputCeilingScalesWithBatch() {
+        #expect(
+            RecommendationIndexBatchPolicy.effectiveClassificationOutputTokens(
+                providerMaxOutputTokens: 16_000,
+                batchSize: 1
+            ) == 512
+        )
+        #expect(
+            RecommendationIndexBatchPolicy.effectiveClassificationOutputTokens(
+                providerMaxOutputTokens: 16_000,
+                batchSize: 16
+            ) == 4_096
+        )
+        #expect(
+            RecommendationIndexBatchPolicy.effectiveClassificationOutputTokens(
+                providerMaxOutputTokens: 16_000,
+                batchSize: 100
+            ) == 16_000
         )
     }
 

@@ -345,6 +345,33 @@ func textOnlyProviderSkipsEvidencePhase() async throws {
     #expect(provider.requests().count == 1)
 }
 
+@Test("Recommendation Index refuses to start when metadata permission is disabled")
+func recommendationIndexRequiresMetadataPermission() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 1)
+    let provider = ClosedIndexProvider()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "closed-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID, allowsMetadata: false),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    #expect(provider.requests().isEmpty)
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
+}
+
 @Test("Recommendation Index codable contract repair retries the exact batch without shrinking")
 func recommendationIndexCodableFailureRetriesExactBatch() async throws {
     let (store, serverID) = try await closedIndexStore(trackCount: 16)

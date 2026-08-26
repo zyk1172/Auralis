@@ -24,7 +24,7 @@ struct AgentUserFacingSanitizerTests {
         #expect(AgentUserFacingSanitizer.text(input) == input)
     }
 
-    @Test("Entity labels redact only values that are valid Auralis GlobalIDs")
+    @Test("Entity and server labels redact only semantic Auralis identifiers")
     func entityLabelsRequireGlobalIDShape() {
         let input = "playlistID=server-a:123；trackID=server-a:456；albumID=not-an-id；serverID=server-a；serverID=main"
         let output = AgentUserFacingSanitizer.text(input)
@@ -32,7 +32,21 @@ struct AgentUserFacingSanitizerTests {
         #expect(!output.contains("trackID=server-a:456"))
         #expect(output.contains("albumID=not-an-id"))
         #expect(!output.contains("serverID=server-a"))
-        #expect(output.contains("serverID=main"))
+        #expect(!output.contains("serverID=main"))
+    }
+
+    @Test("Quoted and JSON-style labels redact their parsed values")
+    func quotedAndJSONLabelsAreSanitized() {
+        let input = #"serverID="internal"; "serverID":"opaque-server"; playlistID="xxx:123"; "trackID":"srv:456" id="main""#
+        let output = AgentUserFacingSanitizer.text(input)
+
+        #expect(!output.contains("internal"))
+        #expect(!output.contains("opaque-server"))
+        #expect(!output.contains("xxx:123"))
+        #expect(!output.contains("srv:456"))
+        #expect(output.contains("id=\"main\""))
+        #expect(output.contains("serverID=\"[内部标识]\""))
+        #expect(output.contains(#""serverID":"[内部标识]""#))
     }
 
     @Test("User-authored identifiers remain verbatim")

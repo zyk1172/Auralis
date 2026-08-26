@@ -25,6 +25,25 @@ enum RecommendationIndexBatchPolicy {
     /// small tokenization differences beyond the measured request bodies.
     static let contextSafetyMarginTokens = 512
 
+    /// `ModelCapabilities.maxOutputTokens` is a provider ceiling, not a
+    /// reservation that every small classification batch must consume. Keep
+    /// enough room for a compact v3 item while scaling the requested ceiling
+    /// with the number of tracks in this batch.
+    static let minimumClassificationOutputTokens = 512
+    static let estimatedClassificationOutputTokensPerTrack = 256
+
+    static func effectiveClassificationOutputTokens(
+        providerMaxOutputTokens: Int,
+        batchSize: Int
+    ) -> Int {
+        let providerLimit = max(1, providerMaxOutputTokens)
+        let estimatedNeeded = max(
+            minimumClassificationOutputTokens,
+            max(1, batchSize) * estimatedClassificationOutputTokensPerTrack
+        )
+        return min(providerLimit, estimatedNeeded)
+    }
+
     struct RequestBudget: Equatable, Sendable {
         let requestBytes: Int
         let estimatedInputTokens: Int
