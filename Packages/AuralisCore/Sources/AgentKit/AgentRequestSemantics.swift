@@ -591,11 +591,16 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
                 #"((?:名叫|名为|叫)\s*)([^，。；；,\n]+?)\s*的?\s*((?:歌单|playlist|播放列表))"#,
                 "$1实体 的 $3"
             ),
-            // 删除这个歌单 暂停，然后暂停播放：mask the entity but keep the next
-            // clause. Action verbs terminate the entity span so post-position
-            // orders like “把歌单 通勤 删除” keep the real verb visible.
+            // 删除歌单暂停 / 删掉歌单删除服务器：直接动作 + 歌单 + 无空格名称。
             (
-                #"((?:歌单|playlist|播放列表)\s+)(?:叫|名叫|名为)?\s*([^，。；；,\n]+?)(?=\s*(?:，|。|；|;|,|\n|然后|再|接着|之后|删除|删掉|清除|重命名|改名|暂停|播放|下一首|上一首|$))"#,
+                #"((?:删除|删掉|创建|新建|加入|添加到|放到|重命名|改名|移除|复制|合并)\s*(?:这个|那个)?\s*((?:歌单|playlist|播放列表)))(?!并|且|然后|再|接着|之后|并且|以及|和)\s*(?:叫|名叫|名为)?\s*([^，。；；,\n]+?)(?=$|然后|再|接着|之后|并且|以及|并|且|和|，|。|；|;|,|\n)"#,
+                "$1实体"
+            ),
+            // 删除这个歌单 暂停：mask the entity but keep the next clause.
+            // Action verbs terminate the entity span so post-position orders
+            // like “把歌单 通勤 删除” keep the real verb visible.
+            (
+                #"((?:歌单|playlist|播放列表)\s+)(?!并|且|然后|再|接着|之后|并且|以及|和)(?:叫|名叫|名为)?\s*([^，。；；,\n]+?)(?=\s*(?:，|。|；|;|,|\n|然后|再|接着|之后|并且|以及|并|且|和|删除|删掉|清除|重命名|改名|暂停|播放|下一首|上一首|$))"#,
                 "$1实体"
             ),
         ]

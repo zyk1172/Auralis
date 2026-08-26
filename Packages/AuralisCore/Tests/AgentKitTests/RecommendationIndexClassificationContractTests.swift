@@ -93,7 +93,10 @@ struct RecommendationIndexClassificationContractTests {
         let current = batch(["track"])
         let json = """
         {"batchID":"\(current.batchID.uuidString)","revision":7,"mode":"full",
-         "items":[{"id":"track","semanticTags":"怀旧","mode":"full","confidence":0.9}]}
+         "items":[{"id":"track","moods":["忧郁"],"scenes":["深夜"],"energy":3,
+          "tempo":3,"acousticness":3,"danceability":3,"vocals":["女声"],
+          "textures":["钢琴"],"styles":["流行"],"semanticTags":"怀旧",
+          "mode":"full","confidence":0.9}]}
         """
         let result = RecommendationIndexClassificationParser.parse(json, for: current)
         guard case let .failure(diagnostic) = result else {
@@ -192,5 +195,72 @@ struct RecommendationIndexClassificationContractTests {
             return
         }
         #expect(diagnostic.stage == .codableDecode)
+    }
+
+    @Test("Full classification rejects missing fixed fields before Codable defaults")
+    func fullClassificationMissingFieldsFailCodable() throws {
+        let current = batch(["track"])
+        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[{"id":"track","mode":"full"}]}"#
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        guard case let .failure(diagnostic) = result else {
+            Issue.record("expected codableDecode failure for missing fields")
+            return
+        }
+        #expect(diagnostic.stage == .codableDecode)
+        #expect(diagnostic.fieldPath == "items[0].moods")
+    }
+
+    @Test("Full classification rejects null required fields")
+    func fullClassificationNullFieldsFailCodable() throws {
+        let current = batch(["track"])
+        let json = """
+        {"batchID":"\(current.batchID.uuidString)","revision":7,"mode":"full","items":[
+          {"id":"track","moods":["忧郁"],"scenes":["深夜"],"energy":3,
+           "acousticness":3,"danceability":3,"vocals":["女声"],"textures":[],
+           "styles":[],"semanticTags":[],"mode":"full","confidence":0.5,"tempo":null}
+        ]}
+        """
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        guard case let .failure(diagnostic) = result else {
+            Issue.record("expected codableDecode failure for null field")
+            return
+        }
+        #expect(diagnostic.stage == .codableDecode)
+        #expect(diagnostic.fieldPath == "items[0].tempo")
+    }
+
+    @Test("semanticTagsOnly still requires its full item contract")
+    func semanticTagsOnlyMissingFieldsFailCodable() throws {
+        let tracks = [CatalogTrackLine(
+            id: "track",
+            title: "track",
+            artist: "Artist",
+            album: "Album",
+            year: nil,
+            genres: [],
+            language: nil,
+            duration: 180,
+            isFavorite: false,
+            rating: nil,
+            playCount: 0,
+            isDownloaded: false
+        )]
+        let current = RecommendationIndexPreparedBatch(
+            batchID: UUID(),
+            revision: 7,
+            checkpointGeneration: 1,
+            mode: "semanticTagsOnly",
+            tracks: tracks,
+            pendingFixed: 0,
+            pendingSemantic: 1
+        )
+        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"semanticTagsOnly","items":[{"id":"track","semanticTags":[],"mode":"semanticTagsOnly"}]}"#
+        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        guard case let .failure(diagnostic) = result else {
+            Issue.record("expected codableDecode failure for semanticTagsOnly missing confidence")
+            return
+        }
+        #expect(diagnostic.stage == .codableDecode)
+        #expect(diagnostic.fieldPath == "items[0].confidence")
     }
 }

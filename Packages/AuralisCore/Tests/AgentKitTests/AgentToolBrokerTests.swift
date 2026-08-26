@@ -112,13 +112,17 @@ struct AgentToolBrokerTests {
             "删除歌单 暂停",
             "帮我删除一下歌单 暂停",
             "删除这个歌单 暂停",
+            "删除歌单暂停",
+            "删除歌单下一首",
+            "删掉歌单删除服务器",
+            "删除歌单播放",
             "把名叫“暂停”的歌单删除",
             "把歌单“下一首”删除",
         ]
         for command in commands {
             let plan = makePlan(command)
             #expect(plan.semantics.domain == .playlist)
-            #expect(plan.authorization.allowedOperations == [.playlistDelete])
+            #expect(plan.authorization.allowedOperations == [.playlistDelete], "\(command) 实际：\(plan.authorization.allowedOperations)")
         }
 
         // Post-position verb order must not regress (P1 from review round 3).

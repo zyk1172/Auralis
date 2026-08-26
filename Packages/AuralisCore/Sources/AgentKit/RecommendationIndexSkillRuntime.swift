@@ -42,6 +42,23 @@ public struct RecommendationIndexEvidenceRecord: Codable, Sendable, Equatable {
     public let targetTrackID: String?
     public let kind: String
     public let summaryForModel: String
+    /// Compact structured projection of the tool payload. Kept bounded and
+    /// never persisted; it gives the closed classifier more than a summary.
+    public let payloadProjection: String?
+
+    public init(
+        toolName: String,
+        targetTrackID: String?,
+        kind: String,
+        summaryForModel: String,
+        payloadProjection: String? = nil
+    ) {
+        self.toolName = toolName
+        self.targetTrackID = targetTrackID
+        self.kind = kind
+        self.summaryForModel = summaryForModel
+        self.payloadProjection = payloadProjection
+    }
 }
 
 public struct RecommendationIndexTrackEvidence: Codable, Sendable, Equatable {
@@ -261,6 +278,21 @@ public enum RecommendationIndexClassificationParser {
                 message: "JSON 语法无效"
             ))
         }
+        // Missing keys must fail before Codable can inject defaults. Scalar
+        // string-to-array compatibility is still allowed, but "missing" is not
+        // the same as "wrong shape".
+        if let violation = requiredKeyViolation(in: parsedJSON, mode: batch.mode) {
+            return .failure(.init(
+                stage: .codableDecode,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "缺少必填字段 \(violation.key)",
+                fieldPath: violation.fieldPath,
+                expectedType: "required",
+                actualType: "missing"
+            ))
+        }
         let envelope: RecommendationIndexClassificationEnvelope
         do {
             envelope = try JSONDecoder().decode(RecommendationIndexClassificationEnvelope.self, from: data)
@@ -350,6 +382,34 @@ public enum RecommendationIndexClassificationParser {
             ))
         }
         return .success(envelope)
+    }
+
+    private static func requiredKeyViolation(
+        in json: AIJSONValue,
+        mode: String
+    ) -> (fieldPath: String, key: String)? {
+        guard case let .object(root) = json,
+              case let .array(items)? = root["items"]
+        else { return nil }
+        let required: [String]
+        if mode == "semanticTagsOnly" {
+            required = ["id", "semanticTags", "mode", "confidence"]
+        } else {
+            required = [
+                "id", "moods", "scenes", "energy", "tempo", "acousticness",
+                "danceability", "vocals", "textures", "styles", "semanticTags",
+                "mode", "confidence",
+            ]
+        }
+        for (index, item) in items.enumerated() {
+            guard case let .object(fields) = item else {
+                return ("items[\(index)]", "object")
+            }
+            for key in required where fields[key] == nil || fields[key] == .null {
+                return ("items[\(index)].\(key)", key)
+            }
+        }
+        return nil
     }
 
     /// Returns the first fixed-dimension violation (field path + offending
@@ -1550,6 +1610,19 @@ public enum RecommendationIndexSkillRuntime {
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
+        guard nativeMode else {
+            // Textual ACTION providers cannot participate in the native
+            // evidence loop. Skipping avoids a guaranteed zero-tool request
+            // that costs one model round per batch without adding evidence.
+            return batch.tracks.map { .init(track: $0, evidence: []) }
+        }
+        let hasTrackAttributableTool = allReadOnly.contains { descriptor in
+            descriptor.name != "tool_search"
+                && descriptor.parameters.contains { $0.name == "trackID" || $0.name == "id" }
+        }
+        guard hasTrackAttributableTool else {
+            return batch.tracks.map { .init(track: $0, evidence: []) }
+        }
         var conversation: [AIMessage] = [
             .init(
                 role: .system,
@@ -1619,7 +1692,13 @@ public enum RecommendationIndexSkillRuntime {
                 let summary = String(result.summary.prefix(1_200))
                 let target = stringArgument(arguments["trackID"]) ?? stringArgument(arguments["id"])
                 if let target, batch.tracks.contains(where: { $0.id == target }) {
-                    records[target, default: []].append(.init(toolName: raw.name, targetTrackID: target, kind: descriptor.namespace, summaryForModel: summary))
+                    records[target, default: []].append(.init(
+                        toolName: raw.name,
+                        targetTrackID: target,
+                        kind: descriptor.namespace,
+                        summaryForModel: summary,
+                        payloadProjection: evidencePayloadProjection(result.payload)
+                    ))
                 }
                 if raw.name == "tool_search", result.success {
                     let query = stringArgument(arguments["query"]) ?? ""
@@ -1637,6 +1716,28 @@ public enum RecommendationIndexSkillRuntime {
             conversation.append(contentsOf: results)
         }
         return batch.tracks.map { .init(track: $0, evidence: records[$0.id] ?? []) }
+    }
+
+    private static func evidencePayloadProjection(_ payload: AgentMessage?) -> String? {
+        guard let payload else { return nil }
+        let projection: String
+        switch payload {
+        case let .text(value), let .streaming(value):
+            projection = value
+        case let .trackCards(cards):
+            projection = cards.prefix(20).map { "《\($0.title)》-\($0.artistName)" }.joined(separator: "、")
+        case let .albumCards(cards):
+            projection = cards.prefix(20).map { "《\($0.title)》-\($0.artistName)" }.joined(separator: "、")
+        case let .playlistCards(cards):
+            projection = cards.prefix(20).map { "\($0.name)（\($0.trackCount) 首）" }.joined(separator: "、")
+        case let .artistCards(cards):
+            projection = cards.prefix(20).map { "\($0.name)（\($0.albumCount) 张专辑）" }.joined(separator: "、")
+        default:
+            return nil
+        }
+        let trimmed = projection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed.prefix(1_200))
     }
 
     private static func stringArgument(_ value: AIJSONValue?) -> String? {

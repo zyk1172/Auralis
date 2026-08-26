@@ -185,6 +185,83 @@ private final class ClosedIndexProvider: AIProvider, @unchecked Sendable {
     }
 }
 
+/// Text-only Recommendation Index provider. It cannot use native tool calling,
+/// so the evidence phase must be skipped and only the closed classification
+/// request should be sent.
+private final class TextOnlyIndexProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [AICompletionRequest] = []
+
+    let capabilities = ModelCapabilities(
+        maxContextTokens: 32_000,
+        maxOutputTokens: 4_096,
+        supportsToolCalling: false,
+        supportsStreaming: true,
+        supportsJSONMode: false,
+        supportsJSONSchema: false,
+        toolMode: .textualToolProtocol
+    )
+
+    var supportsToolCalling: Bool { false }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "text-index", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        lock.withLock { recorded.append(request) }
+        return AICompletionResponse(model: request.model, content: Self.envelope(for: request))
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func requests() -> [AICompletionRequest] {
+        lock.withLock { recorded }
+    }
+
+    private static func envelope(for request: AICompletionRequest) -> String {
+        guard let payload = request.messages.last?.content.data(using: .utf8),
+              let input = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let batchID = input["batchID"] as? String,
+              let revision = input["revision"] as? NSNumber,
+              let mode = input["mode"] as? String,
+              let tracks = input["tracks"] as? [[String: Any]] else {
+            return "{}"
+        }
+        let items: [[String: Any]] = tracks.compactMap { entry in
+            let track = (entry["track"] as? [String: Any]) ?? entry
+            guard let id = track["id"] as? String else { return nil }
+            return [
+                "id": id,
+                "mode": mode,
+                "moods": ["平静"],
+                "scenes": ["深夜"],
+                "energy": 3,
+                "tempo": 2,
+                "acousticness": 4,
+                "danceability": 2,
+                "vocals": ["器乐"],
+                "textures": ["钢琴"],
+                "styles": ["轻音乐"],
+                "semanticTags": [["value": "夜行感", "confidence": 0.8]],
+                "confidence": 0.9,
+            ]
+        }
+        let object: [String: Any] = [
+            "batchID": batchID,
+            "revision": revision,
+            "mode": mode,
+            "items": items,
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object)
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 @Test("A single-track malformed batch terminates instead of shrinking forever")
 func recommendationIndexStopsAtMinimumBatchSize() async throws {
     let (store, serverID) = try await closedIndexStore(trackCount: 1)
@@ -213,6 +290,33 @@ func recommendationIndexStopsAtMinimumBatchSize() async throws {
     #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 1)
     #expect(provider.requests().count == 2) // evidence + closed classification
     #expect(await events.kinds().contains(.failed))
+}
+
+@Test("Text-only Recommendation Index skips the evidence phase and still classifies")
+func textOnlyProviderSkipsEvidencePhase() async throws {
+    let (store, serverID) = try await closedIndexStore(trackCount: 1)
+    let provider = TextOnlyIndexProvider()
+    let runID = UUID()
+    let lease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
+
+    await ConversationEngine().run(
+        userText: "构建完整推荐索引",
+        provider: provider,
+        model: "text-index",
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        context: .init(serverID: serverID),
+        intent: .libraryManagement,
+        policy: .policy(for: .libraryManagement),
+        executionLineage: .newRequest(text: "构建完整推荐索引"),
+        runID: runID,
+        executionLease: lease,
+        confirm: { _ in true },
+        emit: { _ in }
+    )
+
+    #expect(try await store.recommendationIndexStatus(serverID: serverID).pendingUniqueTracks == 0)
+    #expect(provider.requests().count == 1)
 }
 
 @Test("Recommendation Index codable contract failure does not shrink the batch")
