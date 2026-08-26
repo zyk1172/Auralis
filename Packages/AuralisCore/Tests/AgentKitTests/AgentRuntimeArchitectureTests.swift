@@ -407,7 +407,7 @@ struct AgentRuntimeArchitectureTests {
         #expect(AgentCompletionEvaluator.factsSatisfied(state: state, policy: .policy(for: .playlistManagement)))
     }
 
-    @Test func indexCompletionRequiresBothFixedAndSemanticPendingZero() {
+    @Test func indexCompletionUsesAuthoritativeFixedPendingOnly() {
         var state = AgentTaskState(intent: .libraryManagement, goal: "index")
         let policy = AgentTaskPolicy(
             intent: .libraryManagement,
@@ -416,14 +416,9 @@ struct AgentRuntimeArchitectureTests {
             allowedPermissions: [.readOnly, .reversible],
             completion: .indexPendingCountIsZero
         )
-        // 固定分类完成但开放标签待处理 4000 → 不能宣布完成。
+        // 旧任务事实可能仍携带 semantic pending，但 v3 完成判定不再读取它。
         state.facts["recommendation.index.pending"] = "0"
         state.facts["recommendation.index.pendingSemantic"] = "4000"
-        let incomplete = AgentCompletionEvaluator.evaluateModelAnswer("完成", state: &state, policy: policy, repairAttempts: 0)
-        #expect(incomplete != .accept)
-
-        // 开放标签也归零 → 完成。
-        state.facts["recommendation.index.pendingSemantic"] = "0"
         let complete = AgentCompletionEvaluator.evaluateModelAnswer("完成", state: &state, policy: policy, repairAttempts: 0)
         #expect(complete == .accept)
         #expect(state.completionState == .satisfied)

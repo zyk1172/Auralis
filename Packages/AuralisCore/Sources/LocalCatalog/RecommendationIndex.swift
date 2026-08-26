@@ -69,8 +69,20 @@ public enum RecommendationIndexWriteError: Error, LocalizedError, Sendable, Equa
     }
 }
 
-/// V2 pending 统一语义：fixed / semantic 是两类工作集合，unique 是至少有一项工作未完成的
-/// 唯一歌曲数（新歌同时缺两类只计一次）。
+/// A hard include filter must fail closed when any requested tag cannot be
+/// resolved. Silently dropping one include value would widen the result set.
+public enum RecommendationIndexQueryError: Error, LocalizedError, Sendable, Equatable {
+    case invalidTag(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidTag(value):
+            return "推荐索引硬过滤标签无法解析：\(value)"
+        }
+    }
+}
+
+/// V3 pending state is owned by fixed taxonomy classification only.
 private struct RecommendationIndexPendingState {
     let fixed: Set<String>
 
@@ -124,9 +136,6 @@ extension LocalCatalogStore {
             indexedTracks: indexed,
             pendingTracks: pending.fixed.count,
             rulesVersion: RecommendationIndex.rulesVersion,
-            semanticTaggedTracks: 0,
-            semanticProcessedTracks: 0,
-            pendingSemanticTagTracks: 0,
             pendingUniqueTracks: pending.unique.count
         )
     }
@@ -186,10 +195,8 @@ extension LocalCatalogStore {
             return RecommendationIndexBatch(
                 tracks: [],
                 pendingFixedTracks: 0,
-                pendingSemanticTagTracks: 0,
                 pendingUniqueTracks: 0,
-                rulesVersion: RecommendationIndex.rulesVersion,
-                mode: "done"
+                rulesVersion: RecommendationIndex.rulesVersion
             )
         }
         let source = snapshot.lines.filter { pending.fixed.contains($0.id) }
@@ -197,10 +204,8 @@ extension LocalCatalogStore {
         return RecommendationIndexBatch(
             tracks: batch,
             pendingFixedTracks: pending.fixed.count,
-            pendingSemanticTagTracks: 0,
             pendingUniqueTracks: pending.unique.count,
-            rulesVersion: RecommendationIndex.rulesVersion,
-            mode: "full"
+            rulesVersion: RecommendationIndex.rulesVersion
         )
     }
 
@@ -290,15 +295,21 @@ extension LocalCatalogStore {
         serverID: ServerID,
         matching query: RecommendationIndexQuery
     ) throws -> [GlobalID] {
-        let includeIDs = query.includeTags.compactMap(Self.resolvedTagID)
-        let excludeIDs = query.excludeTags.compactMap(Self.resolvedTagID)
-        let preferIDs = query.preferTags.compactMap(Self.resolvedTagID)
+        // Include is a hard filter. Resolve every requested value before
+        // constructing SQL so an unknown/ambiguous tag can never disappear and
+        // widen the query.
+        let includeIDs = try Self.resolvedHardTagIDs(query.includeTags)
+        let excludeIDs = Self.resolvedTagIDs(query.excludeTags)
+        let preferIDs = Self.resolvedTagIDs(query.preferTags)
+        let preferenceScore: String
+        if preferIDs.isEmpty {
+            preferenceScore = "0"
+        } else {
+            preferenceScore = "COALESCE((SELECT COUNT(*) FROM recommendation_index_v2_tags p WHERE p.global_id = s.global_id AND p.value IN (\(preferIDs.map { _ in "?" }.joined(separator: ",")))), 0)"
+        }
         var sql = """
             SELECT s.global_id,
-                   COALESCE((
-                       SELECT COUNT(*) FROM recommendation_index_v2_tags p
-                       WHERE p.global_id = s.global_id AND p.value IN (\(preferIDs.map { _ in "?" }.joined(separator: ",")))
-                   ), 0) AS preference_score
+                   \(preferenceScore) AS preference_score
             FROM recommendation_index_v2_state s
             JOIN recommendation_index_v2_tags t ON t.global_id = s.global_id
             WHERE s.server_id = ? AND s.rules_version = ?
@@ -306,8 +317,9 @@ extension LocalCatalogStore {
         var values: [SQLiteValue] = preferIDs.map { SQLiteValue.text($0) }
         values.append(contentsOf: [.text(serverID.rawValue), .text(RecommendationIndex.rulesVersion)])
         if !includeIDs.isEmpty {
-            sql += " AND s.global_id IN (SELECT global_id FROM recommendation_index_v2_tags WHERE value IN (\(includeIDs.map { _ in "?" }.joined(separator: ","))))"
+            sql += " AND s.global_id IN (SELECT global_id FROM recommendation_index_v2_tags WHERE value IN (\(includeIDs.map { _ in "?" }.joined(separator: ","))) GROUP BY global_id HAVING COUNT(DISTINCT value) = ?)"
             values.append(contentsOf: includeIDs.map { SQLiteValue.text($0) })
+            values.append(.integer(Int64(includeIDs.count)))
         }
         if !excludeIDs.isEmpty {
             sql += " AND s.global_id NOT IN (SELECT global_id FROM recommendation_index_v2_tags WHERE value IN (\(excludeIDs.map { _ in "?" }.joined(separator: ","))))"
@@ -341,6 +353,26 @@ extension LocalCatalogStore {
         values.append(.integer(Int64(query.limit)))
         let rows = try db.query(sql, values)
         return rows.compactMap { $0["global_id"]?.string }.compactMap(GlobalID.init)
+    }
+
+    private static func resolvedHardTagIDs(_ values: [String]) throws -> [String] {
+        var seen = Set<String>()
+        var resolved: [String] = []
+        for raw in values {
+            guard let tagID = resolvedTagID(raw) else {
+                throw RecommendationIndexQueryError.invalidTag(raw)
+            }
+            if seen.insert(tagID).inserted { resolved.append(tagID) }
+        }
+        return resolved
+    }
+
+    private static func resolvedTagIDs(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { raw in
+            guard let tagID = resolvedTagID(raw), seen.insert(tagID).inserted else { return nil }
+            return tagID
+        }
     }
 
     /// 读取已完成且仍与当前曲目元数据匹配的索引记录。
@@ -382,22 +414,31 @@ extension LocalCatalogStore {
         }
 
         let normalizedDimension = dimension?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalizedValue = value.flatMap(Self.resolvedTagID) ?? value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedDimension = normalizedDimension.flatMap(TagDimension.init(rawValue:))
+        let normalizedValue = value.flatMap { raw in
+            Self.resolvedTagID(raw, expectedDimension: expectedDimension)
+        } ?? value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        func resolvedDisplayID(_ raw: String) -> String? {
+            if let expectedDimension {
+                return RecommendationIndexTaxonomy.resolve(raw, expectedDimension: expectedDimension).definition?.id.rawValue
+            }
+            return RecommendationIndexTaxonomy.resolve(raw)?.id.rawValue
+        }
         return tagsByID.compactMap { id, tags -> RecommendationIndexIndexedTrack? in
             guard let line = validLines[id] else { return nil }
             if let normalizedDimension {
                 guard let values = tags[normalizedDimension] else { return nil }
                 if let normalizedValue,
-                   !values.contains(where: {
-                       $0.localizedCaseInsensitiveCompare(normalizedValue) == .orderedSame
-                           || RecommendationIndexTaxonomy.resolve($0)?.id.rawValue == normalizedValue
-                   }) {
+                    !values.contains(where: {
+                        $0.localizedCaseInsensitiveCompare(normalizedValue) == .orderedSame
+                           || resolvedDisplayID($0) == normalizedValue
+                    }) {
                     return nil
                 }
             } else if let normalizedValue,
                       !tags.values.joined().contains(where: {
                           $0.localizedCaseInsensitiveCompare(normalizedValue) == .orderedSame
-                              || RecommendationIndexTaxonomy.resolve($0)?.id.rawValue == normalizedValue
+                              || resolvedDisplayID($0) == normalizedValue
                       }) {
                 return nil
             }
@@ -468,7 +509,9 @@ extension LocalCatalogStore {
         dimension: String,
         value: String
     ) throws -> [Track] {
-        let resolved = Self.resolvedTagID(value) ?? value
+        let expectedDimension = TagDimension(rawValue: dimension.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        let normalizedDimension = dimension.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let resolved = Self.resolvedTagID(value, expectedDimension: expectedDimension) ?? value
         let rows = try db.query(
             """
             SELECT tr.payload
@@ -479,8 +522,8 @@ extension LocalCatalogStore {
             \(serverID == nil ? "" : "AND s.server_id = ?")
             ORDER BY t.confidence DESC, t.global_id ASC
             """,
-            serverID.map { [.text(RecommendationIndex.rulesVersion), .text(dimension), .text(resolved), .text($0.rawValue)] }
-                ?? [.text(RecommendationIndex.rulesVersion), .text(dimension), .text(resolved)]
+            serverID.map { [.text(RecommendationIndex.rulesVersion), .text(normalizedDimension), .text(resolved), .text($0.rawValue)] }
+                ?? [.text(RecommendationIndex.rulesVersion), .text(normalizedDimension), .text(resolved)]
         )
         // 分类详情必须只解码命中的 Track payload。此前先全量 allTracks(limit: 20_000)
         // 再在内存映射，不仅每次点击都会扫描整个曲库，超过 20,000 首还会静默漏歌。
@@ -490,11 +533,14 @@ extension LocalCatalogStore {
         }
     }
 
-    private static func resolvedTagID(_ value: String) -> String? {
+    private static func resolvedTagID(
+        _ value: String,
+        expectedDimension: TagDimension? = nil
+    ) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if RecommendationIndexTaxonomy.byID[TagID(rawValue: trimmed)] != nil {
-            return trimmed
+        if let expectedDimension {
+            return RecommendationIndexTaxonomy.resolve(trimmed, expectedDimension: expectedDimension).definition?.id.rawValue
         }
         return RecommendationIndexTaxonomy.resolve(trimmed)?.id.rawValue
     }
@@ -516,17 +562,16 @@ extension LocalCatalogStore {
         }.sorted { lhs, rhs in lhs.id < rhs.id }
         let rows: [[String: SQLiteValue]]
         if let serverID {
-            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version, semantic_tag_rules_version FROM recommendation_index_v2_state WHERE server_id = ?", [.text(serverID.rawValue)])
+            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version FROM recommendation_index_v2_state WHERE server_id = ?", [.text(serverID.rawValue)])
         } else {
-            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version, semantic_tag_rules_version FROM recommendation_index_v2_state")
+            rows = try db.query("SELECT global_id, source_hash, rules_version, source_hash_version FROM recommendation_index_v2_state")
         }
         var states: [String: RecommendationIndexStoredState] = [:]
         for row in rows where row["rules_version"]?.string == RecommendationIndex.rulesVersion {
             if let id = row["global_id"]?.string, let hash = row["source_hash"]?.string {
                 states[id] = RecommendationIndexStoredState(
                     hash: hash,
-                    hashVersion: Int(row["source_hash_version"]?.int ?? 0),
-                    semanticTagRulesVersion: Int(row["semantic_tag_rules_version"]?.int ?? 0)
+                    hashVersion: Int(row["source_hash_version"]?.int ?? 0)
                 )
             }
         }
@@ -623,8 +668,8 @@ extension LocalCatalogStore {
         var textures: [String] = []
         var rhythms: [String] = []
         func route(_ raw: String, to expected: TagDimension) {
-            guard let definition = RecommendationIndexTaxonomy.resolve(raw) else { return }
-            let destination = definition.dimension == expected ? expected : definition.dimension
+            guard let definition = RecommendationIndexTaxonomy.resolve(raw, expectedDimension: expected).definition else { return }
+            let destination = definition.dimension
             switch destination {
             case .mood: moods.append(definition.id.rawValue)
             case .scene: scenes.append(definition.id.rawValue)
@@ -657,7 +702,6 @@ extension LocalCatalogStore {
             vocals: Array(Set(vocals)).sorted(),
             textures: Array(Set(textures)).sorted(),
             styles: Array(Set(styles)).sorted(),
-            mode: item.mode,
             confidence: item.confidence,
             themes: Array(Set(themes)).sorted(),
             genres: Array(Set(genres)).sorted(),
@@ -672,12 +716,21 @@ extension LocalCatalogStore {
     }
 
     private static func hasOnlyResolvableTaxonomy(_ item: RecommendationIndexClassification) -> Bool {
-        let arrays: [[String]] = [
-            item.moods, item.scenes, item.themes, item.genres, item.styles,
-            item.vocals, item.instruments, item.textures, item.rhythms,
+        let categorical: [(TagDimension, [String])] = [
+            (.mood, item.moods),
+            (.scene, item.scenes),
+            (.theme, item.themes),
+            (.genre, item.genres),
+            (.style, item.styles),
+            (.vocal, item.vocals),
+            (.instrument, item.instruments),
+            (.texture, item.textures),
+            (.rhythm, item.rhythms),
         ]
-        return arrays.allSatisfy { values in
-            values.allSatisfy { RecommendationIndexTaxonomy.resolve($0) != nil }
+        return categorical.allSatisfy { dimension, values in
+            values.allSatisfy {
+                RecommendationIndexTaxonomy.resolve($0, expectedDimension: dimension).definition != nil
+            }
         }
     }
 
@@ -751,10 +804,10 @@ extension LocalCatalogStore {
     }
 }
 
-/// 一条已入库的推荐索引状态：内容 hash + hash 算法版本 + 语义标签规则版本。
+/// 一条已入库的 v3 推荐索引状态：内容 hash + hash 算法版本。
+/// `semantic_tag_rules_version` remains only as a database compatibility
+/// column; it is intentionally not part of this runtime model.
 struct RecommendationIndexStoredState {
     var hash: String
     var hashVersion: Int
-    /// 该曲目的开放语义标签是按哪个 semanticTagRulesVersion 生成的（0 = 尚未生成）。
-    var semanticTagRulesVersion: Int
 }

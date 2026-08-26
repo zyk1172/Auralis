@@ -45,11 +45,9 @@ func recommendationIndexCheckpointPersistsAcrossReload() throws {
         total: 42,
         indexed: 16,
         pending: 26,
-        pendingSemantic: 0,
         totalWrittenThisRun: 16,
         lastSuccessfulBatchCount: 16,
         currentBatchIDs: ["server:track-17"],
-        currentBatchMode: "full",
         preferredBatchSize: 16,
         status: .classifyingBatch,
         stoppedReason: "Provider 暂时不可用"

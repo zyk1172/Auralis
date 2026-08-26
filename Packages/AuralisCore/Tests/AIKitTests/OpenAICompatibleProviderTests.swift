@@ -83,6 +83,33 @@ struct OpenAICompatibleProviderTests {
         #expect(OpenAICompatibleProvider.encodeResponsesOutputFormat(nil) == nil)
     }
 
+    @Test("Strict schema wire encoding preserves fixed enum and required nullable numeric fields")
+    func strictSchemaPreservesRequiredNullableNumericFields() throws {
+        let schema = try AIJSONValue(jsonString: #"""
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "moods": {"type": "array", "items": {"type": "string", "enum": ["mood.sacred"]}},
+            "energy": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 10}, {"type": "null"}]}
+          },
+          "required": ["moods", "energy"]
+        }
+        """#)
+        let format = AIOutputFormat.jsonSchema(name: "recommendation_index_classification", schema: schema, strict: true)
+        let encoded = try #require(OpenAICompatibleProvider.encodeChatOutputFormat(format))
+        let wrapper = try #require(encoded["json_schema"] as? [String: Any])
+        let wireSchema = try #require(wrapper["schema"] as? [String: Any])
+        #expect(wrapper["strict"] as? Bool == true)
+        #expect(wireSchema["required"] as? [String] == ["moods", "energy"])
+        let properties = try #require(wireSchema["properties"] as? [String: Any])
+        let energy = try #require(properties["energy"] as? [String: Any])
+        #expect(energy["anyOf"] != nil)
+        let moods = try #require(properties["moods"] as? [String: Any])
+        let moodItems = try #require(moods["items"] as? [String: Any])
+        #expect((moodItems["enum"] as? [String]) == ["mood.sacred"])
+    }
+
     @Test func legacyProviderDiagnosticsDecodeStructuredOutputAsNotTested() throws {
         let old = """
         {"modelCatalog":"passed","modelAvailability":"passed","textCompletion":"passed",

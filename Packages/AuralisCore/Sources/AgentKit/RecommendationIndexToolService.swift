@@ -108,14 +108,12 @@ enum RecommendationIndexToolService {
                   running.runID == ToolExecutionContext.lease?.runID,
                   running.batchID == batchID,
                   running.batchRevision == UInt64(revisionValue),
-                  let expectedMode = running.batchMode,
                   !running.batchTrackIDs.isEmpty else {
                 return .fail(call, descriptor, "推荐索引提交已过期或不属于当前运行，未写入任何数据")
             }
             let actualIDs = items.map(\.id)
             let expectedIDs = running.batchTrackIDs
-            guard items.allSatisfy({ $0.mode == expectedMode }),
-                  actualIDs.count == expectedIDs.count,
+            guard actualIDs.count == expectedIDs.count,
                   Set(actualIDs).count == actualIDs.count,
                   Set(actualIDs) == Set(expectedIDs) else {
                 return .fail(call, descriptor, "推荐索引提交未完整覆盖当前批次，未写入任何数据")

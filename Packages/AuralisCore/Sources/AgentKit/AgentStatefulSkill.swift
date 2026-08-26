@@ -199,11 +199,9 @@ public struct RecommendationIndexCheckpoint: Codable, Sendable, Equatable {
     public var total: Int
     public var indexed: Int
     public var pending: Int
-    public var pendingSemantic: Int
     public var totalWrittenThisRun: Int
     public var lastSuccessfulBatchCount: Int
     public var currentBatchIDs: [String]
-    public var currentBatchMode: String?
     public var preferredBatchSize: Int
     public var status: RecommendationIndexWorkflow.State
     public var stoppedReason: String?
@@ -216,11 +214,9 @@ public struct RecommendationIndexCheckpoint: Codable, Sendable, Equatable {
         total: Int = 0,
         indexed: Int = 0,
         pending: Int = 0,
-        pendingSemantic: Int = 0,
         totalWrittenThisRun: Int = 0,
         lastSuccessfulBatchCount: Int = 0,
         currentBatchIDs: [String] = [],
-        currentBatchMode: String? = nil,
         preferredBatchSize: Int = 16,
         status: RecommendationIndexWorkflow.State = .readingStatus,
         stoppedReason: String? = nil,
@@ -232,11 +228,9 @@ public struct RecommendationIndexCheckpoint: Codable, Sendable, Equatable {
         self.total = total
         self.indexed = indexed
         self.pending = pending
-        self.pendingSemantic = pendingSemantic
         self.totalWrittenThisRun = totalWrittenThisRun
         self.lastSuccessfulBatchCount = lastSuccessfulBatchCount
         self.currentBatchIDs = currentBatchIDs
-        self.currentBatchMode = currentBatchMode
         self.preferredBatchSize = preferredBatchSize
         self.status = status
         self.stoppedReason = stoppedReason
@@ -245,8 +239,8 @@ public struct RecommendationIndexCheckpoint: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case checkpointGeneration, currentBatchID, currentBatchRevision
-        case total, indexed, pending, pendingSemantic, totalWrittenThisRun
-        case lastSuccessfulBatchCount, currentBatchIDs, currentBatchMode
+        case total, indexed, pending, totalWrittenThisRun
+        case lastSuccessfulBatchCount, currentBatchIDs
         case preferredBatchSize, status, stoppedReason, updatedAt
     }
 
@@ -258,11 +252,9 @@ public struct RecommendationIndexCheckpoint: Codable, Sendable, Equatable {
         total = try container.decodeIfPresent(Int.self, forKey: .total) ?? 0
         indexed = try container.decodeIfPresent(Int.self, forKey: .indexed) ?? 0
         pending = try container.decodeIfPresent(Int.self, forKey: .pending) ?? 0
-        pendingSemantic = try container.decodeIfPresent(Int.self, forKey: .pendingSemantic) ?? 0
         totalWrittenThisRun = try container.decodeIfPresent(Int.self, forKey: .totalWrittenThisRun) ?? 0
         lastSuccessfulBatchCount = try container.decodeIfPresent(Int.self, forKey: .lastSuccessfulBatchCount) ?? 0
         currentBatchIDs = try container.decodeIfPresent([String].self, forKey: .currentBatchIDs) ?? []
-        currentBatchMode = try container.decodeIfPresent(String.self, forKey: .currentBatchMode)
         preferredBatchSize = try container.decodeIfPresent(Int.self, forKey: .preferredBatchSize) ?? 16
         status = try container.decodeIfPresent(RecommendationIndexWorkflow.State.self, forKey: .status) ?? .readingStatus
         stoppedReason = try container.decodeIfPresent(String.self, forKey: .stoppedReason)

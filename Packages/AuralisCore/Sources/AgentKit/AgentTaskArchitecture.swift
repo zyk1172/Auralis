@@ -819,7 +819,6 @@ public enum AgentCompletionEvaluator {
                 || state.facts["sideEffect.queue"] == "success"
         case .indexPendingCountIsZero:
             return state.facts["recommendation.index.pending"] == "0"
-                && state.facts["recommendation.index.pendingSemantic"] == "0"
         }
     }
 
@@ -890,10 +889,9 @@ public enum AgentCompletionEvaluator {
             satisfied = state.facts["sideEffect.playback"] == "success" || state.facts["sideEffect.queue"] == "success"
             continuation = "播放操作尚未得到成功工具结果。请执行获准的播放工具；不要仅用文字声称已经完成。"
         case .indexPendingCountIsZero:
-            // 完整完成 = 固定分类待处理 == 0 且 开放语义标签待处理 == 0。
+            // v3 完整完成只由固定 taxonomy 分类的 authoritative pending 决定。
             let pendingFixed = state.facts["recommendation.index.pending"]
-            let pendingSemantic = state.facts["recommendation.index.pendingSemantic"] ?? "0"
-            satisfied = pendingFixed == "0" && pendingSemantic == "0"
+            satisfied = pendingFixed == "0"
             continuation = pendingFixed == nil
                 ? "推荐索引尚未获得状态事实。"
                 : "推荐索引仍有待处理歌曲；专用 Runtime 会继续处理并核验。"

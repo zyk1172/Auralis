@@ -58,12 +58,84 @@ struct RecommendationIndexFixedTaxonomyTests {
         return tracks.map { GlobalID(serverID: serverID, remoteID: $0.id.rawValue) }
     }
 
-    @Test("Taxonomy is internally valid and sacred is a fixed mood")
+    @Test("Taxonomy validation preserves candidates and reports global ambiguity")
     func taxonomyValidationAndSacred() {
-        #expect(RecommendationIndexTaxonomy.validate().isEmpty)
+        let issues = RecommendationIndexTaxonomy.validate()
+        #expect(issues.contains { $0.contains("global display ambiguity 温暖") })
+        #expect(RecommendationIndexTaxonomy.globalDisplayAmbiguities["温暖"]?.contains(TagID(rawValue: "mood.warm")) == true)
+        #expect(RecommendationIndexTaxonomy.globalDisplayAmbiguities["温暖"]?.contains(TagID(rawValue: "texture.warm")) == true)
         #expect(RecommendationIndexTaxonomy.byID[TagID(rawValue: "mood.sacred")] != nil)
         #expect(RecommendationIndexTaxonomy.byID[TagID(rawValue: "instrument.piano")] != nil)
         #expect(RecommendationIndexTaxonomy.byID[TagID(rawValue: "vocal.instrumental")] != nil)
+    }
+
+    @Test("Dimension-aware taxonomy resolution is reversible and canonical IDs are unambiguous")
+    func dimensionAwareTaxonomyResolution() {
+        #expect(
+            RecommendationIndexTaxonomy.resolve("温暖", expectedDimension: .mood).definition?.id
+                == TagID(rawValue: "mood.warm")
+        )
+        #expect(
+            RecommendationIndexTaxonomy.resolve("温暖", expectedDimension: .texture).definition?.id
+                == TagID(rawValue: "texture.warm")
+        )
+        #expect(
+            RecommendationIndexTaxonomy.resolve("温暖") == nil
+        )
+        #expect(
+            RecommendationIndexTaxonomy.resolve("instrument.piano", expectedDimension: .mood).definition?.id
+                == TagID(rawValue: "instrument.piano")
+        )
+    }
+
+    @Test("Compact classifier catalog is deterministic, complete, and bounded")
+    func compactClassifierCatalogIsStable() {
+        let catalog = RecommendationIndexTaxonomy.compactClassifierCatalog
+        #expect(!catalog.isEmpty)
+        #expect(catalog == RecommendationIndexTaxonomy.compactClassifierCatalog)
+        #expect(catalog.contains("MOOD:\n"))
+        #expect(catalog.contains("mood.sacred=神圣"))
+        #expect(catalog.contains("SCENE:\n"))
+        #expect(catalog.contains("scene.late_night=深夜"))
+        #expect(catalog.contains("STYLE:\n"))
+        #expect(catalog.contains("style.city_pop=City Pop"))
+        #expect(catalog.contains("INSTRUMENT:\n"))
+        #expect(catalog.contains("instrument.piano=钢琴"))
+        for dimension in TagDimension.allCases {
+            #expect(catalog.contains("\(dimension.rawValue.uppercased()):\n"))
+        }
+        #expect(RecommendationIndexTaxonomy.compactClassifierCatalogByteCount < 32_000)
+    }
+
+    @Test("LocalCatalog canonicalizes display names and cross-dimension IDs once")
+    func localCatalogUsesDimensionAwareCanonicalizer() async throws {
+        let store = try makeStore()
+        let serverID: ServerID = "fixed-v3-canonicalizer"
+        let gid = try await seedTrack(store, serverID: serverID, remoteID: "t1", title: "Canonicalizer")
+        let classification = RecommendationIndexClassification(
+            id: gid.description,
+            moods: ["温暖", "instrument.piano"],
+            textures: ["温暖"],
+            confidence: 0.9
+        )
+
+        #expect(try await store.writeRecommendationIndex(
+            [classification], serverID: serverID, requireExact: true
+        ) == 1)
+        let rows = try (await store.db).query(
+            "SELECT dimension, value FROM recommendation_index_v2_tags WHERE global_id = ? ORDER BY dimension, value",
+            [.text(gid.description)]
+        )
+        let stored = Set(rows.compactMap { row -> String? in
+            guard let dimension = row["dimension"]?.string,
+                  let value = row["value"]?.string else { return nil }
+            return "\(dimension):\(value)"
+        })
+        #expect(stored == [
+            "mood:mood.warm",
+            "texture:texture.warm",
+            "instrument:instrument.piano",
+        ])
     }
 
     @Test("Taxonomy search resolves common user language to stable IDs")
@@ -175,6 +247,30 @@ struct RecommendationIndexFixedTaxonomyTests {
             )
         )
         #expect(Set(excluded) == Set([lateSacred]))
+
+        let allOf = try await store.recommendationIndexTrackIDs(
+            serverID: serverID,
+            matching: RecommendationIndexQuery(
+                includeTags: ["scene.late_night", "mood.sacred"],
+                limit: 10
+            )
+        )
+        #expect(allOf == [lateSacred])
+
+        do {
+            try await store.recommendationIndexTrackIDs(
+                serverID: serverID,
+                matching: RecommendationIndexQuery(
+                    includeTags: ["scene.late_night", "mood.not_exists"],
+                    limit: 10
+                )
+            )
+            Issue.record("unknown hard include unexpectedly widened the query")
+        } catch let error as RecommendationIndexQueryError {
+            #expect(error == .invalidTag("mood.not_exists"))
+        } catch {
+            Issue.record("unexpected hard include error: \(error)")
+        }
     }
 
     @Test("Migration removes legacy semantic tag rows and keeps fixed taxonomy")

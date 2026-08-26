@@ -220,7 +220,6 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
               let input = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let batchID = input["batchID"] as? String,
               let revision = input["revision"] as? NSNumber,
-              let mode = input["mode"] as? String,
               let tracks = input["tracks"] as? [[String: Any]]
         else {
             throw AIProviderError.malformedResponse(detail: "测试分类输入无法解析", retryable: false)
@@ -236,7 +235,6 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
             guard let id = track["id"] as? String else { return nil }
             return [
                 "id": id,
-                "mode": mode,
                 "moods": ["平静"],
                 "scenes": ["深夜"],
                 "energy": 3,
@@ -250,14 +248,12 @@ private final class ResumeIndexProvider: AIProvider, @unchecked Sendable {
                 "styles": ["轻音乐"],
                 "instruments": [],
                 "rhythms": [],
-                "semanticTags": [["value": "夜行感", "confidence": 0.8]],
                 "confidence": 0.9,
             ]
         }
         let response: [String: Any] = [
             "batchID": batchID,
             "revision": revision,
-            "mode": mode,
             "items": items,
         ]
         let data = try JSONSerialization.data(withJSONObject: response)
@@ -1094,7 +1090,7 @@ func recommendationIndexExactChineseBuildRequestUsesRealRuntime() async throws {
     #expect(!coordinator.isRunning)
     #expect(coordinator.activeTask?.status == .completed)
     #expect(finalStatus.pendingUniqueTracks == 0)
-    #expect(finalStatus.pendingSemanticTagTracks == 0)
+    #expect(finalStatus.pendingUniqueTracks == 0)
 
     let requests = provider.requests
     let evidenceRequests = requests.filter { $0.outputFormat == nil }
@@ -1184,7 +1180,7 @@ func recommendationIndexProcessesThreeBatchesThroughCoordinator() async throws {
     #expect(!coordinator.isRunning)
     #expect(coordinator.activeTask?.status == .completed)
     #expect(finalStatus.pendingUniqueTracks == 0)
-    #expect(finalStatus.pendingSemanticTagTracks == 0)
+    #expect(finalStatus.pendingUniqueTracks == 0)
     #expect(provider.completionCount == 4)
     #expect(provider.batchSizes == [8, 8, 4])
 }

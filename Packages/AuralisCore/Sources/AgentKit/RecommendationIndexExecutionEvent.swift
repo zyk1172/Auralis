@@ -46,7 +46,6 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
     public let totalTracks: Int?
     public let indexedTracks: Int?
     public let pendingTracks: Int?
-    public let pendingSemanticTracks: Int?
     public let durationMilliseconds: Int?
     public let requestPayloadBytes: Int?
     public let outputBytes: Int?
@@ -71,7 +70,6 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
         totalTracks: Int? = nil,
         indexedTracks: Int? = nil,
         pendingTracks: Int? = nil,
-        pendingSemanticTracks: Int? = nil,
         durationMilliseconds: Int? = nil,
         requestPayloadBytes: Int? = nil,
         outputBytes: Int? = nil,
@@ -93,7 +91,6 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
         self.totalTracks = totalTracks
         self.indexedTracks = indexedTracks
         self.pendingTracks = pendingTracks
-        self.pendingSemanticTracks = pendingSemanticTracks
         self.durationMilliseconds = durationMilliseconds
         self.requestPayloadBytes = requestPayloadBytes
         self.outputBytes = outputBytes
@@ -121,7 +118,6 @@ public struct RecommendationIndexExecutionEvent: Sendable, Equatable, Codable {
         if let totalTracks { fields.append("total=\(totalTracks)") }
         if let indexedTracks { fields.append("indexed=\(indexedTracks)") }
         if let pendingTracks { fields.append("pending=\(pendingTracks)") }
-        if let pendingSemanticTracks { fields.append("pending_semantic=\(pendingSemanticTracks)") }
         if let durationMilliseconds { fields.append("duration_ms=\(durationMilliseconds)") }
         if let requestPayloadBytes { fields.append("request_bytes=\(requestPayloadBytes)") }
         if let outputBytes { fields.append("output_bytes=\(outputBytes)") }

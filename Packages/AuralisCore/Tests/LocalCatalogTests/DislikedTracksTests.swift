@@ -150,10 +150,6 @@ struct DislikedTracksTests {
                 id: id,
                 moods: ["平静"],
                 energy: 3,
-                semanticTags: [
-                    .init(value: "夜行感", confidence: 0.8),
-                    .init(value: "#公路感", confidence: 0.6),
-                ],
                 confidence: 0.9,
                 instruments: ["钢琴"]
             )
@@ -175,7 +171,6 @@ struct DislikedTracksTests {
 
         let status = try await store.recommendationIndexStatus(serverID: serverID)
         #expect(status.indexedTracks == 1)
-        #expect(status.semanticTaggedTracks == 0)
-        #expect(status.pendingSemanticTagTracks == 0)
+        #expect(status.pendingUniqueTracks == 0)
     }
 }

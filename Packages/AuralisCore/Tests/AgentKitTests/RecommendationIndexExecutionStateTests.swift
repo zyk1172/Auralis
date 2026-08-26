@@ -31,7 +31,6 @@ struct RecommendationIndexExecutionStateTests {
             totalTracks: 100,
             indexedTracks: 24,
             pendingTracks: 76,
-            pendingSemanticTagTracks: 10,
             currentBatchSize: 8,
             processedThisRun: 24
         )

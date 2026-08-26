@@ -19,10 +19,8 @@ enum RecommendationIndexBatchPolicy {
     static let safePayloadBytes = 48_000
 
     static func recommendedLimit(
-        maxOutputTokens: Int,
-        mode: String? = nil
+        maxOutputTokens: Int
     ) -> Int {
-        _ = mode
         let base: Int
 
         switch maxOutputTokens {

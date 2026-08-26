@@ -358,10 +358,18 @@ extension LocalCatalogStore {
             switch rawDimension {
             case "mood", "scene", "theme", "genre", "style", "vocal", "instrument", "texture", "rhythm":
                 guard let dimension = TagDimension(rawValue: rawDimension),
-                      let definition = RecommendationIndexTaxonomy.resolve(rawValue),
-                      definition.dimension == dimension
+                      let definition = RecommendationIndexTaxonomy.resolve(rawValue, expectedDimension: dimension).definition
                 else { continue }
+                // A canonical ID owns its dimension. The explicit expected
+                // dimension disambiguates display/alias values, while a
+                // cross-dimension canonical ID is safely routed to its owner.
                 rawValue = definition.id.rawValue
+                let destination = definition.dimension.rawValue
+                let key = destination + "\u{1F}" + rawValue
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                result.append((destination, rawValue))
+                continue
             case "energy":
                 guard let number = Int(rawValue), (1...10).contains(number) else { continue }
             case "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity":

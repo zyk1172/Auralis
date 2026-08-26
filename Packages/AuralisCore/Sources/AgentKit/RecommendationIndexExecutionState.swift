@@ -12,13 +12,11 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
         public let phase: RecommendationIndexWorkflow.State
         public let batchID: UUID?
         public let batchRevision: UInt64?
-        public let batchMode: String?
         public let batchTrackIDs: [String]
         public let attempt: Int
         public let totalTracks: Int
         public let indexedTracks: Int
         public let pendingTracks: Int
-        public let pendingSemanticTagTracks: Int
         public let currentBatchSize: Int
         public let processedThisRun: Int
         public let message: String?
@@ -31,13 +29,11 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
             phase: RecommendationIndexWorkflow.State,
             batchID: UUID? = nil,
             batchRevision: UInt64? = nil,
-            batchMode: String? = nil,
             batchTrackIDs: [String] = [],
             attempt: Int = 0,
             totalTracks: Int = 0,
             indexedTracks: Int = 0,
             pendingTracks: Int = 0,
-            pendingSemanticTagTracks: Int = 0,
             currentBatchSize: Int = 0,
             processedThisRun: Int = 0,
             message: String? = nil,
@@ -49,13 +45,11 @@ public enum RecommendationIndexExecutionState: Sendable, Equatable, Codable {
             self.phase = phase
             self.batchID = batchID
             self.batchRevision = batchRevision
-            self.batchMode = batchMode
             self.batchTrackIDs = batchTrackIDs
             self.attempt = attempt
             self.totalTracks = totalTracks
             self.indexedTracks = indexedTracks
             self.pendingTracks = pendingTracks
-            self.pendingSemanticTagTracks = pendingSemanticTagTracks
             self.currentBatchSize = currentBatchSize
             self.processedThisRun = processedThisRun
             self.message = message
@@ -142,13 +136,11 @@ public actor RecommendationIndexExecutionRegistry {
         phase: RecommendationIndexWorkflow.State,
         batchID: UUID? = nil,
         batchRevision: UInt64? = nil,
-        batchMode: String? = nil,
         batchTrackIDs: [String] = [],
         attempt: Int = 0,
         totalTracks: Int,
         indexedTracks: Int,
         pendingTracks: Int,
-        pendingSemanticTagTracks: Int,
         currentBatchSize: Int,
         processedThisRun: Int,
         message: String? = nil
@@ -163,13 +155,11 @@ public actor RecommendationIndexExecutionRegistry {
             phase: phase,
             batchID: batchID,
             batchRevision: batchRevision,
-            batchMode: batchMode,
             batchTrackIDs: batchTrackIDs,
             attempt: attempt,
             totalTracks: totalTracks,
             indexedTracks: indexedTracks,
             pendingTracks: pendingTracks,
-            pendingSemanticTagTracks: pendingSemanticTagTracks,
             currentBatchSize: currentBatchSize,
             processedThisRun: processedThisRun,
             message: message,

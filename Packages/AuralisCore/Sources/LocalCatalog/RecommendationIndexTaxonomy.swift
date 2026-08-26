@@ -58,6 +58,20 @@ public struct TagDefinition: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
+/// Result of resolving a model/user value against the fixed taxonomy.
+/// Ambiguity is explicit so a caller can drop a value instead of silently
+/// assigning it to an unrelated dimension.
+public enum TaxonomyResolution: Equatable, Hashable, Sendable {
+    case resolved(TagDefinition)
+    case ambiguous([TagDefinition])
+    case unknown
+
+    public var definition: TagDefinition? {
+        guard case let .resolved(definition) = self else { return nil }
+        return definition
+    }
+}
+
 public enum RecommendationIndexTaxonomy {
     public static let all: [TagDefinition] = {
         var result: [TagDefinition] = []
@@ -73,40 +87,71 @@ public enum RecommendationIndexTaxonomy {
         return result
     }()
 
-    public static let byID: [TagID: TagDefinition] = Dictionary(
-        uniqueKeysWithValues: all.map { ($0.id, $0) }
-    )
+    public static let byID: [TagID: TagDefinition] = all.reduce(into: [:]) { result, tag in
+        // Keep the first definition deterministic. `validate()` reports the
+        // duplicate instead of allowing Dictionary construction to trap.
+        if result[tag.id] == nil { result[tag.id] = tag }
+    }
 
     public static let byDimension: [TagDimension: [TagDefinition]] = Dictionary(
         grouping: all,
         by: \.dimension
     )
 
-    public static let displayIndex: [String: TagDefinition] = {
-        var index: [String: TagDefinition] = [:]
-        for tag in all {
-            index[normalize(tag.displayName)] = tag
-        }
-        return index
+    /// Every normalized display/alias key keeps all candidates. A single
+    /// `[String: TagDefinition]` would overwrite valid cross-dimension values
+    /// such as mood.warm and texture.warm.
+    public static let byNormalizedDisplay: [String: [TagDefinition]] = {
+        Dictionary(grouping: all, by: { normalize($0.displayName) })
+            .mapValues { $0.sorted { $0.id.rawValue < $1.id.rawValue } }
     }()
 
-    public static let aliasIndex: [String: TagDefinition] = {
-        var index: [String: TagDefinition] = [:]
+    public static let byNormalizedAlias: [String: [TagDefinition]] = {
+        var index: [String: [TagDefinition]] = [:]
         for tag in all {
             for alias in tag.aliases {
-                index[normalize(alias)] = tag
+                index[normalize(alias), default: []].append(tag)
             }
         }
-        return index
+        return index.mapValues {
+            $0.sorted { $0.id.rawValue < $1.id.rawValue }
+        }
+    }()
+
+    /// Explicit diagnostics for values that are not globally unique. These
+    /// are public so validation/tests can prove no candidate was lost by an
+    /// index overwrite.
+    public static let globalDisplayAmbiguities: [String: [TagID]] = ambiguousIDs(in: byNormalizedDisplay)
+    public static let globalAliasAmbiguities: [String: [TagID]] = ambiguousIDs(in: byNormalizedAlias)
+    public static let globalDisplayAliasCollisions: [String: [TagID]] = {
+        var candidates: [String: Set<TagID>] = [:]
+        for (key, definitions) in byNormalizedDisplay {
+            candidates[key, default: []].formUnion(definitions.map(\.id))
+        }
+        for (key, definitions) in byNormalizedAlias {
+            candidates[key, default: []].formUnion(definitions.map(\.id))
+        }
+        return candidates.compactMapValues { ids in
+            guard ids.count > 1 else { return nil }
+            return ids.sorted { $0.rawValue < $1.rawValue }
+        }
     }()
 
     public static func resolve(_ raw: String) -> TagDefinition? {
-        let normalized = normalize(raw)
-        let id = TagID(rawValue: raw)
-        if let byExactID = byID[id] {
-            return byExactID
+        switch resolution(raw, expectedDimension: nil) {
+        case let .resolved(definition): return definition
+        case .ambiguous, .unknown: return nil
         }
-        return displayIndex[normalized] ?? aliasIndex[normalized]
+    }
+
+    /// Resolve within the expected dimension first. A complete canonical ID
+    /// always wins and is rerouted to its owning dimension. Display names and
+    /// aliases may cross dimensions only when the global candidate is unique.
+    public static func resolve(
+        _ raw: String,
+        expectedDimension: TagDimension
+    ) -> TaxonomyResolution {
+        resolution(raw, expectedDimension: expectedDimension)
     }
 
     public static func displayName(for id: TagID) -> String? {
@@ -126,10 +171,10 @@ public enum RecommendationIndexTaxonomy {
     public static func search(_ query: String, limit: Int = 12) -> [TagDefinition] {
         let needle = normalize(query)
         guard !needle.isEmpty else { return [] }
-        let exact = displayIndex[needle] ?? aliasIndex[needle]
+        let exact = uniqueDefinitions(for: needle)
         var ranked: [(score: Int, tag: TagDefinition)] = []
-        if let exact {
-            ranked.append((0, exact))
+        for tag in exact {
+            ranked.append((0, tag))
         }
         for tag in all {
             if ranked.contains(where: { $0.tag.id == tag.id }) { continue }
@@ -152,8 +197,8 @@ public enum RecommendationIndexTaxonomy {
     public static func validate() -> [String] {
         var issues: [String] = []
         var seenIDs = Set<TagID>()
-        var seenByDimension = [TagDimension: Set<String>]()
-        var seenAlias = [String: TagID]()
+        var displaysByDimension: [TagDimension: [String: [TagID]]] = [:]
+        var aliasesByDimension: [TagDimension: [String: [TagID]]] = [:]
         for tag in all {
             if tag.id.rawValue.isEmpty {
                 issues.append("empty id")
@@ -169,19 +214,120 @@ public enum RecommendationIndexTaxonomy {
                 issues.append("duplicate id \(tag.id.rawValue)")
             }
             let displayKey = normalize(tag.displayName)
-            if !seenByDimension[tag.dimension, default: []].insert(displayKey).inserted {
-                issues.append("duplicate display \(tag.displayName) in \(tag.dimension.rawValue)")
-            }
+            if displayKey.isEmpty { issues.append("\(tag.id.rawValue) empty display") }
+            displaysByDimension[tag.dimension, default: [:]][displayKey, default: []].append(tag.id)
             for alias in tag.aliases {
                 let key = normalize(alias)
-                if let previous = seenAlias[key] {
-                    issues.append("alias \(alias) maps to both \(previous.rawValue) and \(tag.id.rawValue)")
-                } else {
-                    seenAlias[key] = tag.id
+                if key.isEmpty { issues.append("\(tag.id.rawValue) empty alias") }
+                guard byID[tag.id] != nil else {
+                    issues.append("alias \(alias) points to invalid tag \(tag.id.rawValue)")
+                    continue
+                }
+                aliasesByDimension[tag.dimension, default: [:]][key, default: []].append(tag.id)
+            }
+        }
+
+        for dimension in TagDimension.allCases {
+            for (key, ids) in displaysByDimension[dimension] ?? [:] where Set(ids).count > 1 {
+                issues.append("duplicate display \(key) in \(dimension.rawValue): \(ids.map(\.rawValue).sorted().joined(separator: ","))")
+            }
+            for (key, ids) in aliasesByDimension[dimension] ?? [:] where Set(ids).count > 1 {
+                issues.append("ambiguous alias \(key) in \(dimension.rawValue): \(ids.map(\.rawValue).sorted().joined(separator: ","))")
+            }
+            let displayKeys = Set((displaysByDimension[dimension] ?? [:]).keys)
+            for (key, aliasIDs) in aliasesByDimension[dimension] ?? [:] where displayKeys.contains(key) {
+                let displayIDs = Set(displaysByDimension[dimension]?[key] ?? [])
+                if displayIDs != Set(aliasIDs) {
+                    issues.append("alias/display collision \(key) in \(dimension.rawValue)")
                 }
             }
         }
+
+        // Every canonical ID, display name, and alias must resolve back to
+        // the definition that owns it when the expected dimension is known.
+        // This catches a future index/normalization change before it can turn
+        // a valid taxonomy entry into an unresolvable write value.
+        for tag in all {
+            if byID[tag.id]?.id != tag.id {
+                issues.append("canonical id (tag.id.rawValue) is not uniquely resolvable")
+            }
+            if Self.resolve(tag.displayName, expectedDimension: tag.dimension).definition?.id != tag.id {
+                issues.append("display (tag.displayName) is not reversible for (tag.id.rawValue)")
+            }
+            for alias in tag.aliases
+                where Self.resolve(alias, expectedDimension: tag.dimension).definition?.id != tag.id {
+                issues.append("alias (alias) is not reversible for (tag.id.rawValue)")
+            }
+        }
+
+        for (key, ids) in globalDisplayAmbiguities {
+            issues.append("global display ambiguity \(key): \(ids.map(\.rawValue).joined(separator: ","))")
+        }
+        for (key, ids) in globalAliasAmbiguities {
+            issues.append("global alias ambiguity \(key): \(ids.map(\.rawValue).joined(separator: ","))")
+        }
+        for (key, ids) in globalDisplayAliasCollisions {
+            issues.append("global display/alias collision \(key): \(ids.map(\.rawValue).joined(separator: ","))")
+        }
         return issues
+    }
+
+    /// Compact, deterministic classifier catalog for providers that cannot
+    /// consume the JSON Schema enum. It intentionally contains only TagID and
+    /// displayName; aliases and long documentation remain local sanitizer data.
+    public static let compactClassifierCatalog: String = TagDimension.allCases.map { dimension in
+        let entries = definitions(for: dimension)
+            .map { "\($0.id.rawValue)=\($0.displayName)" }
+            .joined(separator: "\n")
+        return "\(dimension.rawValue.uppercased()):\n\(entries)"
+    }.joined(separator: "\n")
+
+    public static var compactClassifierCatalogByteCount: Int {
+        compactClassifierCatalog.utf8.count
+    }
+
+    private static func ambiguousIDs(
+        in index: [String: [TagDefinition]]
+    ) -> [String: [TagID]] {
+        index.compactMapValues { definitions in
+            let ids = Set(definitions.map(\.id))
+            guard ids.count > 1 else { return nil }
+            return ids.sorted { $0.rawValue < $1.rawValue }
+        }
+    }
+
+    private static func uniqueDefinitions(for normalized: String) -> [TagDefinition] {
+        var byID: [TagID: TagDefinition] = [:]
+        for definition in (byNormalizedDisplay[normalized] ?? []) + (byNormalizedAlias[normalized] ?? []) {
+            byID[definition.id] = definition
+        }
+        return byID.values.sorted { $0.id.rawValue < $1.id.rawValue }
+    }
+
+    private static func resolution(
+        _ raw: String,
+        expectedDimension: TagDimension?
+    ) -> TaxonomyResolution {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .unknown }
+        if let canonical = byID[TagID(rawValue: trimmed)] {
+            return .resolved(canonical)
+        }
+
+        let global = uniqueDefinitions(for: normalize(trimmed))
+        if let expectedDimension {
+            let expected = global.filter { $0.dimension == expectedDimension }
+            if expected.count == 1, let definition = expected.first {
+                return .resolved(definition)
+            }
+            if expected.count > 1 {
+                return .ambiguous(expected)
+            }
+        }
+        if global.count == 1, let definition = global.first {
+            return .resolved(definition)
+        }
+        return global.isEmpty ? .unknown : .ambiguous(global)
     }
 
     private static func normalize(_ value: String) -> String {

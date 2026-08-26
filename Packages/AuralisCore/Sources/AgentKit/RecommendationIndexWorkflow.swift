@@ -28,9 +28,7 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
 
     public private(set) var state: State
     public private(set) var pending = 0
-    public private(set) var pendingSemantic = 0
     public private(set) var currentBatchIDs: [String] = []
-    public private(set) var currentBatchMode: String?
     public private(set) var preferredBatchSize: Int
     public private(set) var retryCount = 0
 
@@ -55,12 +53,10 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     }
 
     @discardableResult
-    public mutating func applyStatus(pending: Int, pendingSemantic: Int) -> State {
+    public mutating func applyStatus(pending: Int) -> State {
         self.pending = max(0, pending)
-        self.pendingSemantic = max(0, pendingSemantic)
         currentBatchIDs = []
-        currentBatchMode = nil
-        state = self.pending == 0 && self.pendingSemantic == 0 ? .completed : .fetchingBatch
+        state = self.pending == 0 ? .completed : .fetchingBatch
         return state
     }
 
@@ -72,14 +68,10 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     @discardableResult
     public mutating func applyBatch(
         ids: [String],
-        mode: String,
-        pending: Int,
-        pendingSemantic: Int
+        pending: Int
     ) -> State {
         self.pending = max(0, pending)
-        self.pendingSemantic = max(0, pendingSemantic)
         currentBatchIDs = ids
-        currentBatchMode = mode
         state = ids.isEmpty ? .verifying : .classifyingBatch
         return state
     }
@@ -99,11 +91,9 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     }
 
     @discardableResult
-    public mutating func applyWrite(pending: Int, pendingSemantic: Int) -> State {
+    public mutating func applyWrite(pending: Int) -> State {
         self.pending = max(0, pending)
-        self.pendingSemantic = max(0, pendingSemantic)
         currentBatchIDs = []
-        currentBatchMode = nil
         state = .verifying
         return state
     }
@@ -127,10 +117,9 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     }
 
     @discardableResult
-    public mutating func verify(pending: Int, pendingSemantic: Int) -> State {
+    public mutating func verify(pending: Int) -> State {
         self.pending = max(0, pending)
-        self.pendingSemantic = max(0, pendingSemantic)
-        state = self.pending == 0 && self.pendingSemantic == 0 ? .completed : .fetchingBatch
+        state = self.pending == 0 ? .completed : .fetchingBatch
         return state
     }
 
@@ -140,7 +129,6 @@ public struct RecommendationIndexWorkflow: Sendable, Equatable {
     public mutating func shrinkBatch() -> Int {
         preferredBatchSize = max(1, preferredBatchSize / 2)
         currentBatchIDs = []
-        currentBatchMode = nil
         retryCount += 1
         state = .fetchingBatch
         return preferredBatchSize

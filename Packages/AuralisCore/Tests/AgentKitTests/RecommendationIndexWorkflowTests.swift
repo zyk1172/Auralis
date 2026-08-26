@@ -7,15 +7,15 @@ struct RecommendationIndexWorkflowTests {
     func completesFromFacts() {
         var workflow = WorkflowEngine.recommendationIndexWorkflow(preferredBatchSize: 8)
         #expect(workflow.state == .readingStatus)
-        #expect(workflow.applyStatus(pending: 20, pendingSemantic: 0) == .fetchingBatch)
-        #expect(workflow.applyBatch(ids: ["a", "b"], mode: "full", pending: 20, pendingSemantic: 0) == .classifyingBatch)
+        #expect(workflow.applyStatus(pending: 20) == .fetchingBatch)
+        #expect(workflow.applyBatch(ids: ["a", "b"], pending: 20) == .classifyingBatch)
         workflow.beginWritingBatch()
         #expect(workflow.state == .writingBatch)
-        #expect(workflow.applyWrite(pending: 12, pendingSemantic: 0) == .verifying)
-        #expect(workflow.verify(pending: 12, pendingSemantic: 0) == .fetchingBatch)
-        #expect(workflow.applyBatch(ids: ["c"], mode: "full", pending: 4, pendingSemantic: 0) == .classifyingBatch)
-        #expect(workflow.applyWrite(pending: 0, pendingSemantic: 0) == .verifying)
-        #expect(workflow.verify(pending: 0, pendingSemantic: 0) == .completed)
+        #expect(workflow.applyWrite(pending: 12) == .verifying)
+        #expect(workflow.verify(pending: 12) == .fetchingBatch)
+        #expect(workflow.applyBatch(ids: ["c"], pending: 4) == .classifyingBatch)
+        #expect(workflow.applyWrite(pending: 0) == .verifying)
+        #expect(workflow.verify(pending: 0) == .completed)
         #expect(workflow.isCompleted)
     }
 

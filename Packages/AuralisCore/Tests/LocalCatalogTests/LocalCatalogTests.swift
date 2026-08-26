@@ -272,10 +272,10 @@ func clearRecommendationIndexIsScopedAndPreservesLibrary() async throws {
     try await seed(store, [betaTrack])
 
     try await store.writeRecommendationIndex([
-        .init(id: alphaID.description, moods: ["平静"], scenes: ["深夜"], semanticTags: [.init(value: "夜行", confidence: 0.9)], confidence: 0.9),
+        .init(id: alphaID.description, moods: ["平静"], scenes: ["深夜"], confidence: 0.9),
     ], serverID: alpha)
     try await store.writeRecommendationIndex([
-        .init(id: betaID.description, moods: ["明亮"], scenes: ["清晨"], semanticTags: [.init(value: "晨跑", confidence: 0.8)], confidence: 0.8),
+        .init(id: betaID.description, moods: ["明亮"], scenes: ["清晨"], confidence: 0.8),
     ], serverID: beta)
 
     try await store.clearRecommendationIndex(serverID: alpha)

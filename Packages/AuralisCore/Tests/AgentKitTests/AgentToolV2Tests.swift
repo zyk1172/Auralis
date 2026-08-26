@@ -524,15 +524,14 @@ func recommendationIndexThousandTrackRecovery() async throws {
             RecommendationIndexClassification(
                 id: $0.id, moods: ["平静"], scenes: ["深夜"], energy: 3,
                 tempo: 2, acousticness: 4, danceability: 2, vocals: ["器乐"],
-                textures: ["钢琴"], styles: ["轻音乐"],
-                semanticTags: [.init(value: "夜行感", confidence: 0.8)], confidence: 0.9
+                textures: ["钢琴"], styles: ["轻音乐"], confidence: 0.9
             )
         }
         #expect(try await store.writeRecommendationIndex(items, serverID: serverID) == items.count)
     }
     let status = try await store.recommendationIndexStatus(serverID: serverID)
     #expect(status.pendingTracks == 0)
-    #expect(status.pendingSemanticTagTracks == 0)
+        #expect(status.pendingUniqueTracks == 0)
     #expect(status.pendingUniqueTracks == 0)
 }
 

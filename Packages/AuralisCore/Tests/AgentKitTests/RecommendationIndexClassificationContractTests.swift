@@ -1,4 +1,5 @@
 import AgentKit
+import AIKit
 import Foundation
 import LocalCatalog
 import Testing
@@ -25,61 +26,143 @@ struct RecommendationIndexClassificationContractTests {
             batchID: UUID(),
             revision: 7,
             checkpointGeneration: 1,
-            mode: "full",
             tracks: tracks,
-            pendingFixed: tracks.count,
-            pendingSemantic: tracks.count
+            pendingFixed: tracks.count
         )
     }
 
-    private func envelopeJSON(
-        _ id: String,
-        moods: String,
-        scenes: String,
-        vocals: String,
-        textures: String,
-        styles: String,
-        themes: String = "[]",
-        genres: String = "[]",
-        instruments: String = "[]",
-        rhythms: String = "[]"
-    ) -> String {
-        """
-        {"id":"\(id)","moods":\(moods),"scenes":\(scenes),"energy":3,"tempo":3,
-         "acousticness":3,"danceability":3,"vocals":\(vocals),"textures":\(textures),
-         "styles":\(styles),"themes":\(themes),"genres":\(genres),
-         "instruments":\(instruments),"rhythms":\(rhythms),
-         "semanticTags":[{"value":"夜行感","confidence":0.8}],
-         "mode":"full","confidence":0.9}
-        """
+    private func envelope(_ current: RecommendationIndexPreparedBatch, item: String) -> String {
+        #"{"batchID":"\#(current.batchID.uuidString)","revision":\#(current.revision),"items":[\#(item)]}"#
     }
 
-    @Test("Scalar taxonomy values decode as single-element string arrays")
-    func scalarTaxonomyValuesAreCompatible() throws {
+    @Test("DeepSeek-style v3 output without item mode parses successfully")
+    func deepSeekStyleOutputWithoutItemModeSucceeds() throws {
         let current = batch(["track"])
-        let item = envelopeJSON(
-            "track",
-            moods: #""mood.nostalgic""#,
-            scenes: #""scene.late_night""#,
-            vocals: #""vocal.female_lead""#,
-            textures: #""texture.spacious""#,
-            styles: #""style.city_pop""#
+        let json = envelope(
+            current,
+            item: #"{"id":"track","moods":["mood.sacred"],"genres":["genre.classical"],"instruments":["instrument.piano"]}"#
         )
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        let value = try result.get()
-        #expect(value.items[0].moods == ["mood.nostalgic"])
-        #expect(value.items[0].scenes == ["scene.late_night"])
-        #expect(value.items[0].vocals == ["vocal.female_lead"])
-        #expect(value.items[0].textures == ["texture.spacious"])
-        #expect(value.items[0].styles == ["style.city_pop"])
+
+        let value = try RecommendationIndexClassificationParser.parse(json, for: current).get().items[0]
+        #expect(value.moods == ["mood.sacred"])
+        #expect(value.genres == ["genre.classical"])
+        #expect(value.instruments == ["instrument.piano"])
+        #expect(value.scenes.isEmpty)
+        #expect(value.themes.isEmpty)
+        #expect(value.styles.isEmpty)
+        #expect(value.vocals.isEmpty)
+        #expect(value.textures.isEmpty)
+        #expect(value.rhythms.isEmpty)
+        #expect(value.energy == nil)
+        #expect(value.tempo == nil)
+        #expect(value.acousticness == nil)
+        #expect(value.danceability == nil)
+        #expect(value.instrumentalness == nil)
+        #expect(value.liveness == nil)
+        #expect(value.speechiness == nil)
+        #expect(value.valence == nil)
+        #expect(value.complexity == nil)
+        #expect(value.confidence == 0.5)
     }
 
-    @Test("Object taxonomy values remain a codable contract failure")
-    func objectTaxonomyValueIsRejected() throws {
+    @Test("Missing categorical fields default to empty arrays")
+    func missingCategoricalFieldsDefaultToEmptyArrays() throws {
         let current = batch(["track"])
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(envelopeJSON("track", moods:"[]", scenes:"[]", vocals:"{}", textures:"[]", styles:"[]"))]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(current, item: #"{"id":"track"}"#),
+            for: current
+        ).get().items[0]
+
+        #expect(value.moods.isEmpty)
+        #expect(value.scenes.isEmpty)
+        #expect(value.themes.isEmpty)
+        #expect(value.genres.isEmpty)
+        #expect(value.styles.isEmpty)
+        #expect(value.vocals.isEmpty)
+        #expect(value.instruments.isEmpty)
+        #expect(value.textures.isEmpty)
+        #expect(value.rhythms.isEmpty)
+    }
+
+    @Test("Missing numeric fields remain nil")
+    func missingNumericFieldsRemainNil() throws {
+        let current = batch(["track"])
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(current, item: #"{"id":"track","moods":["mood.calm"]}"#),
+            for: current
+        ).get().items[0]
+
+        #expect(value.energy == nil)
+        #expect(value.tempo == nil)
+        #expect(value.acousticness == nil)
+        #expect(value.danceability == nil)
+        #expect(value.instrumentalness == nil)
+        #expect(value.liveness == nil)
+        #expect(value.speechiness == nil)
+        #expect(value.valence == nil)
+        #expect(value.complexity == nil)
+    }
+
+    @Test("Null categorical fields also default to empty arrays")
+    func nullCategoricalFieldsDefaultToEmptyArrays() throws {
+        let current = batch(["track"])
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(
+                current,
+                item: #"{"id":"track","moods":null,"scenes":null,"themes":null,"genres":null,"styles":null,"vocals":null,"instruments":null,"textures":null,"rhythms":null}"#
+            ),
+            for: current
+        ).get().items[0]
+
+        #expect(value.moods.isEmpty)
+        #expect(value.scenes.isEmpty)
+        #expect(value.themes.isEmpty)
+        #expect(value.genres.isEmpty)
+        #expect(value.styles.isEmpty)
+        #expect(value.vocals.isEmpty)
+        #expect(value.instruments.isEmpty)
+        #expect(value.textures.isEmpty)
+        #expect(value.rhythms.isEmpty)
+    }
+
+    @Test("Missing confidence uses the safe fallback")
+    func missingConfidenceUsesSafeFallback() throws {
+        let current = batch(["track"])
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(current, item: #"{"id":"track","moods":["mood.calm"]}"#),
+            for: current
+        ).get().items[0]
+        #expect(value.confidence == 0.5)
+    }
+
+    @Test("Legacy semanticTags and mode extras cannot affect v3 parsing")
+    func legacyExtrasAreIgnoredByV3Parser() throws {
+        let current = batch(["track"])
+        let json = envelope(
+            current,
+            item: #"{"id":"track","moods":["mood.sacred"],"semanticTags":["夜行感"],"mode":"semanticTagsOnly"}"#
+        )
+        let value = try RecommendationIndexClassificationParser.parse(json, for: current).get()
+        #expect(value.items[0].moods == ["mood.sacred"])
+    }
+
+    @Test("Scalar categorical values remain a local compatibility repair")
+    func scalarCategoricalValuesAreCompatible() throws {
+        let current = batch(["track"])
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(current, item: #"{"id":"track","moods":"mood.sacred"}"#),
+            for: current
+        ).get().items[0]
+        #expect(value.moods == ["mood.sacred"])
+    }
+
+    @Test("Wrong categorical object shape remains a repairable Codable diagnostic")
+    func wrongCategoricalObjectShapeIsDiagnosed() throws {
+        let current = batch(["track"])
+        let result = RecommendationIndexClassificationParser.parse(
+            envelope(current, item: #"{"id":"track","vocals":{}}"#),
+            for: current
+        )
 
         guard case let .failure(diagnostic) = result else {
             Issue.record("expected codableDecode failure")
@@ -89,34 +172,121 @@ struct RecommendationIndexClassificationContractTests {
         #expect(diagnostic.fieldPath == "items[0].vocals")
         #expect(diagnostic.expectedType == "string[]")
         #expect(diagnostic.actualType == "object")
-        #expect(diagnostic.compactSummary.contains("field=items[0].vocals"))
-        #expect(diagnostic.compactSummary.contains("expected=string[]"))
-        #expect(diagnostic.compactSummary.contains("actual=object"))
     }
 
-    @Test("semanticTags remains strict and rejects scalar compatibility")
-    func semanticTagsRemainStrict() throws {
+    @Test("Canonical display and alias values resolve to one fixed TagID")
+    func fixedTaxonomyNamesCanonicalize() throws {
         let current = batch(["track"])
-        let json = """
-        {"batchID":"\(current.batchID.uuidString)","revision":7,"mode":"full",
-         "items":[{"id":"track","moods":["忧郁"],"scenes":["深夜"],"energy":3,
-          "tempo":3,"acousticness":3,"danceability":3,"vocals":["女声"],
-          "textures":["钢琴"],"styles":["流行"],"themes":[],"genres":[],
-          "instruments":[],"rhythms":[],
-          "semanticTags":"怀旧","mode":"full","confidence":0.9}]}
-        """
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(
+                current,
+                item: #"{"id":"track","moods":["mood.sacred","神圣","圣洁"]}"#
+            ),
+            for: current
+        ).get().items[0]
+        #expect(value.moods == ["mood.sacred"])
+    }
+
+    @Test("Canonical IDs reroute to their owning dimension and unknown values drop")
+    func canonicalIDsRerouteAndUnknownValuesDrop() throws {
+        let current = batch(["track"])
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(
+                current,
+                item: #"{"id":"track","moods":["instrument.piano","仙气飘飘神曲感"]}"#
+            ),
+            for: current
+        ).get().items[0]
+        #expect(value.moods.isEmpty)
+        #expect(value.instruments == ["instrument.piano"])
+    }
+
+    @Test("Dimension-aware warm display names resolve independently")
+    func warmDisplayNamesResolveByExpectedDimension() throws {
+        let current = batch(["track"])
+        let value = try RecommendationIndexClassificationParser.parse(
+            envelope(
+                current,
+                item: #"{"id":"track","moods":["温暖"],"textures":["温暖"]}"#
+            ),
+            for: current
+        ).get().items[0]
+        #expect(value.moods == ["mood.warm"])
+        #expect(value.textures == ["texture.warm"])
+    }
+
+    @Test("Missing required identity is diagnosed before Codable defaults")
+    func missingIdentityIsFatal() throws {
+        let current = batch(["track"])
+        let result = RecommendationIndexClassificationParser.parse(
+            envelope(current, item: #"{"moods":[]}"#),
+            for: current
+        )
         guard case let .failure(diagnostic) = result else {
-            Issue.record("expected codableDecode failure")
+            Issue.record("expected missing id failure")
             return
         }
         #expect(diagnostic.stage == .codableDecode)
-        #expect(diagnostic.fieldPath?.hasSuffix("semanticTags") == true)
-        #expect(diagnostic.expectedType == "object[]")
-        #expect(diagnostic.actualType == "string")
+        #expect(diagnostic.fieldPath == "items[0].id")
+        #expect(diagnostic.expectedType == "required")
+        #expect(diagnostic.actualType == "missing")
     }
 
-    @Test("Legacy diagnostics JSON decodes structured shape fields as not tested defaults")
+    @Test("V3 Codable output has no legacy semanticTags or mode keys")
+    func v3CodableOutputHasNoLegacyKeys() throws {
+        let item = RecommendationIndexClassification(id: "track", moods: ["mood.sacred"])
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any]
+        )
+        #expect(object["semanticTags"] == nil)
+        #expect(object["legacySemanticTags"] == nil)
+        #expect(object["mode"] == nil)
+
+        let current = batch(["track"])
+        let envelopeObject = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(
+                    RecommendationIndexClassificationEnvelope(
+                        batchID: current.batchID,
+                        revision: current.revision,
+                        items: [item]
+                    )
+                )
+            ) as? [String: Any]
+        )
+        #expect(envelopeObject["mode"] == nil)
+    }
+
+    @Test("Strict schema contains fixed enums and requires nullable numeric properties")
+    func strictSchemaUsesFixedTaxonomyAndNullableRequiredNumerics() throws {
+        let schema = try #require(
+            JSONSerialization.jsonObject(
+                with: RecommendationIndexSkillRuntime.outputSchema().jsonData
+            ) as? [String: Any]
+        )
+        let rootRequired = try #require(schema["required"] as? [String])
+        #expect(rootRequired == ["batchID", "revision", "items"])
+        let rootProperties = try #require(schema["properties"] as? [String: Any])
+        #expect(rootProperties["mode"] == nil)
+
+        let items = try #require(rootProperties["items"] as? [String: Any])
+        let itemSchema = try #require(items["items"] as? [String: Any])
+        let itemProperties = try #require(itemSchema["properties"] as? [String: Any])
+        let itemRequired = try #require(itemSchema["required"] as? [String])
+        #expect(itemProperties["mode"] == nil)
+        #expect(itemProperties["semanticTags"] == nil)
+        for key in ["energy", "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity"] {
+            #expect(itemRequired.contains(key))
+            let numeric = try #require(itemProperties[key] as? [String: Any])
+            #expect(numeric["anyOf"] != nil)
+        }
+        let moods = try #require(itemProperties["moods"] as? [String: Any])
+        let moodItems = try #require(moods["items"] as? [String: Any])
+        let moodEnum = try #require(moodItems["enum"] as? [String])
+        #expect(moodEnum.contains("mood.sacred"))
+    }
+
+    @Test("Legacy diagnostics still decode optional shape metadata")
     func legacyDiagnosticsDecode() throws {
         let old = """
         {"stage":"codableDecode","batchSize":1,"rawLength":8,"jsonFound":true,
@@ -129,170 +299,5 @@ struct RecommendationIndexClassificationContractTests {
         #expect(diagnostic.fieldPath == nil)
         #expect(diagnostic.expectedType == nil)
         #expect(diagnostic.actualType == nil)
-    }
-
-    // MARK: - Taxonomy pre-validation
-
-    @Test("Canonical taxonomy values pass parser validation")
-    func canonicalTaxonomyPasses() throws {
-        let current = batch(["track"])
-        let item = envelopeJSON("track", moods: #"["忧郁"]"#, scenes: #"["深夜"]"#, vocals: #"["女声"]"#, textures: #"["氛围"]"#, styles: #"["流行"]"#)
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        #expect(try result.get().items.count == 1)
-    }
-
-    @Test("Unknown values are dropped and cross-dimension tags are rerouted")
-    func unknownAndCrossDimensionValuesAreSanitized() throws {
-        let current = batch(["track"])
-        let item = envelopeJSON(
-            "track",
-            moods: #"["instrument.piano","仙气飘飘神曲感"]"#,
-            scenes: #"["深夜"]"#,
-            vocals: #"["女声"]"#,
-            textures: #"[]"#,
-            styles: #"[]"#
-        )
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        let value = try result.get()
-        #expect(value.items[0].moods.isEmpty)
-        #expect(value.items[0].instruments.contains("instrument.piano"))
-    }
-
-    @Test("Synonym values canonicalize through taxonomy aliases")
-    func synonymTaxonomyCanonicalizes() throws {
-        let current = batch(["track"])
-        let item = envelopeJSON("track", moods: #"["伤感"]"#, scenes: #"["夜晚"]"#, vocals: #"["女声"]"#, textures: #"["柔和"]"#, styles: #"["流行音乐"]"#)
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        let value = try result.get()
-        #expect(value.items[0].moods.contains("mood.sad"))
-        #expect(value.items[0].scenes.contains("scene.night"))
-        #expect(value.items[0].vocals.contains("vocal.female_lead"))
-    }
-
-    @Test("Mixed canonical and synonym values are accepted and canonicalized")
-    func mixedTaxonomyIsAccepted() throws {
-        let current = batch(["track"])
-        let item = envelopeJSON("track", moods: #"["忧郁","伤感"]"#, scenes: #"["深夜"]"#, vocals: #"["女声"]"#, textures: #"[]"#, styles: #"[]"#)
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        let value = try result.get()
-        #expect(value.items[0].moods.contains("mood.gloomy"))
-        #expect(value.items[0].moods.contains("mood.sad"))
-    }
-
-    @Test("Vocals-only categorical classification is valid")
-    func vocalsOnlyIsValid() throws {
-        let current = batch(["track"])
-        let item = envelopeJSON("track", moods: "[]", scenes: "[]", vocals: #"["器乐"]"#, textures: "[]", styles: "[]")
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        #expect(try result.get().items.count == 1)
-    }
-
-    @Test("Empty categorical arrays are valid when numeric dimensions pass")
-    func emptyCategoricalArraysAreValid() throws {
-        let current = batch(["track"])
-        let item = envelopeJSON("track", moods: "[]", scenes: "[]", vocals: "[]", textures: "[]", styles: "[]")
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[\#(item)]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        #expect(try result.get().items.count == 1)
-    }
-
-    @Test("semanticTags as plain string array fails at codableDecode stage")
-    func semanticTagsStringArrayFailsCodable() throws {
-        let current = batch(["track"])
-        let json = """
-        {"batchID":"\(current.batchID.uuidString)","revision":7,"mode":"full","items":[
-          {"id":"track","moods":["忧郁"],"scenes":["深夜"],"energy":3,"tempo":3,
-           "acousticness":3,"danceability":3,"vocals":["女声"],"textures":["钢琴"],
-           "styles":["流行"],"themes":[],"genres":[],"instruments":[],"rhythms":[],
-           "semanticTags":["夜行感"],"mode":"full","confidence":0.9}
-        ]}
-        """
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        guard case let .failure(diagnostic) = result else {
-            Issue.record("expected codableDecode failure")
-            return
-        }
-        #expect(diagnostic.stage == .codableDecode)
-    }
-
-    @Test("Full classification rejects missing fixed fields before Codable defaults")
-    func fullClassificationMissingFieldsFailCodable() throws {
-        let current = batch(["track"])
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[{"id":"track","mode":"full"}]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        guard case let .failure(diagnostic) = result else {
-            Issue.record("expected codableDecode failure for missing fields")
-            return
-        }
-        #expect(diagnostic.stage == .codableDecode)
-        #expect(diagnostic.fieldPath == "items[0].moods")
-    }
-
-    @Test("Null numeric fields are accepted instead of fabricated defaults")
-    func nullNumericFieldsAreAccepted() throws {
-        let current = batch(["track"])
-        let json = """
-        {"batchID":"\(current.batchID.uuidString)","revision":7,"mode":"full","items":[
-          {"id":"track","moods":["忧郁"],"scenes":["深夜"],"energy":3,
-           "acousticness":3,"danceability":3,"vocals":["女声"],"textures":[],
-           "styles":[],"themes":[],"genres":[],"instruments":[],"rhythms":[],
-           "semanticTags":[],"mode":"full","confidence":0.5,"tempo":null}
-        ]}
-        """
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        let value = try result.get()
-        #expect(value.items[0].tempo == nil)
-    }
-
-    @Test("Full classification missing confidence fails at codableDecode")
-    func fullClassificationMissingConfidenceFailsCodable() throws {
-        let tracks = [CatalogTrackLine(
-            id: "track",
-            title: "track",
-            artist: "Artist",
-            album: "Album",
-            year: nil,
-            genres: [],
-            language: nil,
-            duration: 180,
-            isFavorite: false,
-            rating: nil,
-            playCount: 0,
-            isDownloaded: false
-        )]
-        let current = RecommendationIndexPreparedBatch(
-            batchID: UUID(),
-            revision: 7,
-            checkpointGeneration: 1,
-            mode: "full",
-            tracks: tracks,
-            pendingFixed: 0,
-            pendingSemantic: 0
-        )
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[{"id":"track","moods":[],"scenes":[],"themes":[],"genres":[],"styles":[],"vocals":[],"instruments":[],"textures":[],"rhythms":[],"mode":"full"}]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        guard case let .failure(diagnostic) = result else {
-            Issue.record("expected codableDecode failure for missing confidence")
-            return
-        }
-        #expect(diagnostic.stage == .codableDecode)
-        #expect(diagnostic.fieldPath == "items[0].confidence")
-    }
-
-    @Test("Legacy semanticTagsOnly mode is rejected")
-    func semanticTagsOnlyModeIsRejected() throws {
-        let current = batch(["track"])
-        let json = #"{"batchID":"\#(current.batchID.uuidString)","revision":7,"mode":"full","items":[{"id":"track","moods":[],"scenes":[],"themes":[],"genres":[],"styles":[],"vocals":[],"instruments":[],"textures":[],"rhythms":[],"mode":"semanticTagsOnly","confidence":0.8}]}"#
-        let result = RecommendationIndexClassificationParser.parse(json, for: current)
-        guard case let .failure(diagnostic) = result else {
-            Issue.record("expected mode failure")
-            return
-        }
-        #expect(diagnostic.stage == .mode)
     }
 }
