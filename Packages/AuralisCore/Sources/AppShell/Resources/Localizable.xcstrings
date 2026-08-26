@@ -498,7 +498,6 @@
       }
     },
     "%@：%+.1f dB" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1299,6 +1298,7 @@
       }
     },
     "AI 标签" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2716,6 +2716,22 @@
         }
       }
     },
+    "乐器" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instrument"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "樂器"
+          }
+        }
+      }
+    },
     "人声" : {
       "localizations" : {
         "en" : {
@@ -2728,6 +2744,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "人聲"
+          }
+        }
+      }
+    },
+    "人声密度" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speechiness"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "人聲密度"
           }
         }
       }
@@ -4589,6 +4621,7 @@
       }
     },
     "加载更多标签" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -5448,6 +5481,22 @@
         }
       }
     },
+    "器乐性" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instrumentalness"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "器樂性"
+          }
+        }
+      }
+    },
     "在专辑中查找" : {
       "localizations" : {
         "en" : {
@@ -5960,6 +6009,22 @@
         }
       }
     },
+    "复杂度" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complexity"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複雜度"
+          }
+        }
+      }
+    },
     "外网地址" : {
       "localizations" : {
         "en" : {
@@ -6377,6 +6442,7 @@
       }
     },
     "将删除当前服务器的所有分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -6388,6 +6454,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "將刪除目前伺服器的所有分類與 AI 標籤。音樂庫、下載、播放記錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
+          }
+        }
+      }
+    },
+    "将删除当前服务器的所有分类标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This removes all classification tags for the current server. Your library, downloads, playback history, and other servers' indexes are unaffected; you can rebuild the index later."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將刪除目前伺服器的所有分類標籤。音樂庫、下載、播放紀錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
           }
         }
       }
@@ -7770,6 +7852,22 @@
         }
       }
     },
+    "情感正负" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Valence"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "情感正負"
+          }
+        }
+      }
+    },
     "情绪" : {
       "localizations" : {
         "en" : {
@@ -8385,6 +8483,7 @@
       }
     },
     "搜索标签" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -8836,6 +8935,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "支援 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通義千問、Kimi、Ollama、LM Studio\n和相容 OpenAI 協議的中轉服務。\nAPI Key 僅儲存於系統 Keychain。"
+          }
+        }
+      }
+    },
+    "支持 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio\n和兼容 OpenAI 协议的中转服务。Anthropic Messages\n也支持原生流式与工具调用；不同网关的能力诊断会单独显示。\nAPI Key 仅保存于系统 Keychain。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supports OpenAI Chat Completions and the OpenAI Responses API,\nplus DeepSeek, Qwen, Kimi, Ollama, LM Studio,\nand OpenAI-protocol-compatible relay services. Anthropic Messages\nalso supports native streaming and tool calls; gateway capability diagnostics\nare shown separately.\nYour API Key is stored only in the system Keychain."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支援 OpenAI Chat Completions 與 OpenAI Responses API，\n以及 DeepSeek、通義千問、Kimi、Ollama、LM Studio\n和相容 OpenAI 協議的中轉服務。Anthropic Messages\n也支援原生串流與工具呼叫；不同閘道的能力診斷會分開顯示。\nAPI Key 僅儲存於系統 Keychain。"
           }
         }
       }
@@ -12313,6 +12428,22 @@
         }
       }
     },
+    "现场感" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liveness"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現場感"
+          }
+        }
+      }
+    },
     "生成备份" : {
       "localizations" : {
         "en" : {
@@ -12841,6 +12972,22 @@
         }
       }
     },
+    "类型" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Genre"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "類型"
+          }
+        }
+      }
+    },
     "系统" : {
       "localizations" : {
         "en" : {
@@ -13323,6 +13470,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "藝術家完成"
+          }
+        }
+      }
+    },
+    "节奏" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rhythm"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "節奏"
           }
         }
       }
@@ -14715,150 +14878,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "通用"
-          }
-        }
-      }
-    },
-    "器乐性" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Instrumentalness"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "器樂性"
-          }
-        }
-      }
-    },
-    "现场感" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Liveness"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "現場感"
-          }
-        }
-      }
-    },
-    "人声密度" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Speechiness"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "人聲密度"
-          }
-        }
-      }
-    },
-    "情感正负" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Valence"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "情感正負"
-          }
-        }
-      }
-    },
-    "复杂度" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Complexity"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "複雜度"
-          }
-        }
-      }
-    },
-    "类型" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Genre"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "類型"
-          }
-        }
-      }
-    },
-    "乐器" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Instrument"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "樂器"
-          }
-        }
-      }
-    },
-    "节奏" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rhythm"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "節奏"
-          }
-        }
-      }
-    },
-    "将删除当前服务器的所有分类标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This removes all classification tags for the current server. Your library, downloads, playback history, and other servers' indexes are unaffected; you can rebuild the index later."
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "將刪除目前伺服器的所有分類標籤。音樂庫、下載、播放紀錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
           }
         }
       }
