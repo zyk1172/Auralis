@@ -81,6 +81,22 @@ struct AgentAssistantV2Tests {
         #expect(!definitions.contains { !$0.strict })
     }
 
+    @Test("无 utteranceExample 的合成只读工具仍可被 tool_search 发现并装载 schema")
+    func syntheticDescriptorWithoutPresetKeywordsIsDiscoverable() throws {
+        let descriptor = ToolDescriptor(
+            name: "test_obscure_music_analysis",
+            group: .catalog,
+            permission: .readOnly,
+            summary: "分析特殊音乐元数据并返回结构化只读证据"
+        )
+        let entries = ToolCatalog(descriptors: [descriptor]).search(query: "特殊音乐分析")
+        #expect(entries.first?.name == descriptor.name)
+
+        let definitions = ToolSelector.toolDefinitions(from: [descriptor], strict: true)
+        #expect(definitions.contains { $0.name == descriptor.name })
+        #expect(definitions.contains { !$0.strict } == false)
+    }
+
     @Test("legacy tools remain executable but never enter model discovery")
     func legacyToolsAreHiddenFromModel() throws {
         let legacy = try #require(AgentToolRegistry.descriptor(for: "music_download"))

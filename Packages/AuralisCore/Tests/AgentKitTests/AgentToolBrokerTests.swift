@@ -29,6 +29,28 @@ func modelToolSummariesAreMeaningful() {
     }
 }
 
+@Test("高价值工具 summary 说明真实用途、目标实体与使用场景")
+func keyToolSummariesExplainPurposeAndContext() throws {
+    let checks: [(tool: String, required: [String])] = [
+        ("library_get_album", ["本地音乐资料库", "专辑分析", "实体确认"]),
+        ("library_get_artist", ["真实本地资料", "专辑概况", "实体确认"]),
+        ("library_get_song", ["真实元数据", "实体确认", "播放"]),
+        ("library_get_playlist", ["真实名称", "歌单确认", "修改前核对"]),
+        ("library_get_similar_songs", ["真实内容", "相似歌曲"]),
+        ("playback_get_state", ["当前播放器状态", "规划播放操作"]),
+        ("queue_get", ["真实歌曲与顺序", "队列修改"]),
+        ("playlist_add_songs", ["已解析的真实歌曲", "准确的 PlaylistID", "TrackID"]),
+        ("music_appreciate", ["分层鉴赏证据", "外部大众评价"]),
+        ("music_get_public_evidence", ["真实公开音乐资料证据", "不得编造"]),
+    ]
+    for check in checks {
+        let descriptor = try #require(AgentToolRegistry.descriptor(for: check.tool))
+        for fragment in check.required {
+            #expect(descriptor.summary.contains(fragment), "\(check.tool) 的 summary 缺少「\(fragment)」")
+        }
+    }
+}
+
 @Test("未授权 mutation 留在目录但不进入 executable schema")
 func unauthorizedMutationIsAwareButNotExecutable() {
     let delete = AgentToolRegistry.descriptor(for: "playlist_delete")!

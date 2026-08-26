@@ -36,6 +36,7 @@ public enum SystemPromptBuilder {
             authorizedOperations: authorizedOperations
         )
         let capabilities = capabilitySummary(tools)
+        let compositions = ToolCompositionExamples.promptSection()
         // 高层能力摘要：来自单一 canonical AgentCapabilityCatalog（与 capabilities_get
         // 同源）。模型据此自省"系统能完成什么"，而不是只看 model-visible tools。
         let assistantCapabilities = AgentCapabilityCatalog.systemPromptSummary(environment: environment, relevantIDs: relevantCapabilityIDs)
@@ -95,6 +96,8 @@ public enum SystemPromptBuilder {
         上面的目录说明 Auralis 存在的能力；它不是本轮完整 JSON Schema。下面才是 Runtime 已装载、可直接调用的工具。
         若需要目录中尚未装载的只读能力，先调用 tool_search；Runtime 会在下一轮加入匹配工具的完整 schema。修改型工具即使目录可见，也只有当前请求获精确授权时才会装载和执行。
         \(capabilities)
+
+        \(compositions)
 
         \(assistantCapabilities)
 
