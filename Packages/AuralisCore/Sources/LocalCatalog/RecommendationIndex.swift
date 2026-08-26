@@ -251,7 +251,8 @@ extension LocalCatalogStore {
                     [.text(item.id), .text(GlobalID(item.id)?.serverID.rawValue ?? ""), .text(recommendationIndexContentHash(line)),
                      .text(RecommendationIndex.rulesVersion), .text(classifier), .real(Date.now.timeIntervalSince1970),
                      .integer(Int64(RecommendationIndex.contentHashVersion)),
-                     .integer(Int64(RecommendationIndex.semanticTagRulesVersion))]
+                     // The legacy state column remains for old databases; v3 never produces open tags.
+                     .integer(0)]
                 )
                 try recommendationIndexInsertTags(item.moods, dimension: .mood, id: item.id, confidence: confidence)
                 try recommendationIndexInsertTags(item.scenes, dimension: .scene, id: item.id, confidence: confidence)

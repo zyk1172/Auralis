@@ -211,6 +211,11 @@ public struct RecommendationIndexSemanticTag: Codable, Sendable, Hashable {
 /// 推荐索引由已配置的 Agent 模型生成、由 Runtime 写入的多维标签。
 /// 这些标签只基于曲目元数据，不保存歌词、文件路径或播放地址。
 public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
+    private struct LegacySemanticTagPayload: Codable, Sendable, Hashable {
+        let value: String
+        let confidence: Double
+    }
+
     public let id: String
     /// Canonical fixed-taxonomy IDs, for example "mood.sacred".
     public let moods: [String]
@@ -232,10 +237,16 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
     public let valence: Int?
     public let complexity: Int?
     /// Legacy open semantic tags. Deprecated and never written by the v3 chain.
-    public let semanticTags: [RecommendationIndexSemanticTag]
+    @available(*, deprecated, message: "Open semantic tags are no longer produced; retained only for legacy decode")
+    public var semanticTags: [RecommendationIndexSemanticTag] {
+        legacySemanticTags.map {
+            RecommendationIndexSemanticTag(value: $0.value, confidence: $0.confidence)
+        }
+    }
     /// Legacy mode retained for decoding old persisted envelopes.
     public let mode: String
     public let confidence: Double
+    private var legacySemanticTags: [LegacySemanticTagPayload]
 
     private enum CodingKeys: String, CodingKey {
         case id, moods, scenes, energy, tempo, acousticness, danceability
@@ -255,7 +266,6 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
         vocals: [String] = [],
         textures: [String] = [],
         styles: [String] = [],
-        semanticTags: [RecommendationIndexSemanticTag] = [],
         mode: String = "full",
         confidence: Double = 0.5,
         themes: [String] = [],
@@ -287,9 +297,65 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
         self.instruments = instruments
         self.textures = textures
         self.rhythms = rhythms
-        self.semanticTags = semanticTags
         self.mode = mode
         self.confidence = confidence
+        self.legacySemanticTags = []
+    }
+
+    /// Legacy source-compatible initializer. New code must use the initializer
+    /// above; the old semantic tag values are retained only for compatibility
+    /// decoding and are never emitted by the v3 write path.
+    @available(*, deprecated, message: "Open semantic tags are no longer produced; retained only for legacy decode")
+    public init(
+        id: String,
+        moods: [String] = [],
+        scenes: [String] = [],
+        energy: Int? = nil,
+        tempo: Int? = nil,
+        acousticness: Int? = nil,
+        danceability: Int? = nil,
+        vocals: [String] = [],
+        textures: [String] = [],
+        styles: [String] = [],
+        semanticTags: [RecommendationIndexSemanticTag],
+        mode: String = "full",
+        confidence: Double = 0.5,
+        themes: [String] = [],
+        genres: [String] = [],
+        instruments: [String] = [],
+        rhythms: [String] = [],
+        instrumentalness: Int? = nil,
+        liveness: Int? = nil,
+        speechiness: Int? = nil,
+        valence: Int? = nil,
+        complexity: Int? = nil
+    ) {
+        self.init(
+            id: id,
+            moods: moods,
+            scenes: scenes,
+            energy: energy,
+            tempo: tempo,
+            acousticness: acousticness,
+            danceability: danceability,
+            vocals: vocals,
+            textures: textures,
+            styles: styles,
+            mode: mode,
+            confidence: confidence,
+            themes: themes,
+            genres: genres,
+            instruments: instruments,
+            rhythms: rhythms,
+            instrumentalness: instrumentalness,
+            liveness: liveness,
+            speechiness: speechiness,
+            valence: valence,
+            complexity: complexity
+        )
+        self.legacySemanticTags = semanticTags.map {
+            LegacySemanticTagPayload(value: $0.value, confidence: $0.confidence)
+        }
     }
 
     public init(from decoder: any Decoder) throws {
@@ -313,7 +379,7 @@ public struct RecommendationIndexClassification: Codable, Sendable, Hashable {
         speechiness = try container.decodeIfPresent(Int.self, forKey: .speechiness)
         valence = try container.decodeIfPresent(Int.self, forKey: .valence)
         complexity = try container.decodeIfPresent(Int.self, forKey: .complexity)
-        semanticTags = try container.decodeIfPresent([RecommendationIndexSemanticTag].self, forKey: .semanticTags) ?? []
+        legacySemanticTags = try container.decodeIfPresent([LegacySemanticTagPayload].self, forKey: .semanticTags) ?? []
         mode = (try container.decodeIfPresent(String.self, forKey: .mode)) ?? "full"
         confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.5
     }
@@ -392,7 +458,7 @@ public struct RecommendationIndexStatus: Sendable, Hashable {
         indexedTracks: Int,
         pendingTracks: Int,
         rulesVersion: String,
-        semanticTagRulesVersion: Int = RecommendationIndex.semanticTagRulesVersion,
+        semanticTagRulesVersion: Int = 0,
         semanticTaggedTracks: Int = 0,
         semanticProcessedTracks: Int = 0,
         pendingSemanticTagTracks: Int = 0,
