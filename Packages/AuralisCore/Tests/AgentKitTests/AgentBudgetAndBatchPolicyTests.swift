@@ -152,7 +152,7 @@ struct AgentBudgetAndBatchPolicyTests {
             RecommendationIndexBatchPolicy.effectiveClassificationOutputTokens(
                 providerMaxOutputTokens: 16_000,
                 batchSize: 16
-            ) == 4_096
+            ) == 4_224
         )
         #expect(
             RecommendationIndexBatchPolicy.effectiveClassificationOutputTokens(
@@ -160,6 +160,44 @@ struct AgentBudgetAndBatchPolicyTests {
                 batchSize: 100
             ) == 16_000
         )
+    }
+
+    @Test("分类预算保留 envelope 与每首歌曲的最低可用输出")
+    func classificationOutputHasMinimumViableReserve() {
+        #expect(
+            RecommendationIndexBatchPolicy.minimumRequiredClassificationOutputTokens(batchSize: 1)
+                == 512
+        )
+        #expect(
+            RecommendationIndexBatchPolicy.minimumRequiredClassificationOutputTokens(batchSize: 16)
+                == 4_224
+        )
+        #expect(
+            RecommendationIndexBatchPolicy.minimumRequiredClassificationOutputTokens(batchSize: 0)
+                == 512
+        )
+        #expect(
+            RecommendationIndexBatchPolicy.viableClassificationOutputTokens(
+                providerMaxOutputTokens: 16_000,
+                batchSize: 1,
+                availableOutputTokens: 511
+            ) == nil
+        )
+        #expect(
+            RecommendationIndexBatchPolicy.viableClassificationOutputTokens(
+                providerMaxOutputTokens: 16_000,
+                batchSize: 1,
+                availableOutputTokens: 512
+            ) == 512
+        )
+        #expect(
+            RecommendationIndexBatchPolicy.viableClassificationOutputTokens(
+                providerMaxOutputTokens: 512,
+                batchSize: 8,
+                availableOutputTokens: 16_000
+            ) == nil
+        )
+        #expect(RecommendationIndexBatchPolicy.minimumEvidenceOutputTokens == 512)
     }
 
     @Test("推荐索引请求预算包含完整输入和输出预留")

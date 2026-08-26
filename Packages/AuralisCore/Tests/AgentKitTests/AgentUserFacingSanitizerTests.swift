@@ -45,8 +45,18 @@ struct AgentUserFacingSanitizerTests {
         #expect(!output.contains("xxx:123"))
         #expect(!output.contains("srv:456"))
         #expect(output.contains("id=\"main\""))
-        #expect(output.contains("serverID=\"[内部标识]\""))
-        #expect(output.contains(#""serverID":"[内部标识]""#))
+        #expect(output.contains("[内部标识]"))
+        #expect(!output.contains("serverID="))
+        #expect(output.contains(#""serverID":"[内部标识]"#))
+    }
+
+    @Test("Only valid GlobalID call syntax is redacted")
+    func invalidGlobalIDCallIsPreserved() {
+        let input = "GlobalID(foo)；data-trackID=\"server-a:1\"；trackID=server-a:1"
+        let output = AgentUserFacingSanitizer.text(input)
+        #expect(output.contains("GlobalID(foo)"))
+        #expect(output.contains(#"data-trackID="server-a:1""#))
+        #expect(!output.contains("trackID=server-a:1"))
     }
 
     @Test("User-authored identifiers remain verbatim")

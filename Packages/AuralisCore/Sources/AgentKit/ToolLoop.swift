@@ -41,6 +41,8 @@ public struct ToolLoop {
         public let allowsLyrics: Bool
         /// 隐私：是否允许发送最近播放历史（对应设置页「允许发送播放历史摘要」）。
         public let allowsHistory: Bool
+        /// 隐私：是否允许发送收藏与评分（对应设置页「允许发送收藏和评分」）。
+        public let allowsFavoritesAndRatings: Bool
         /// 跨会话记忆：主人告诉 Agent 的个人信息（由 memory_* 工具维护，注入提示词）。
         public let memories: [AgentMemoryEntry]
         /// 已创建的技能列表（由 skill_* 工具维护，注入提示词）。
@@ -75,6 +77,7 @@ public struct ToolLoop {
             allowsMetadata: Bool = true,
             allowsLyrics: Bool = false,
             allowsHistory: Bool = false,
+            allowsFavoritesAndRatings: Bool = false,
             memories: [AgentMemoryEntry] = [],
             skills: [AgentSkillEntry] = [],
             mutationResourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry(),
@@ -98,6 +101,7 @@ public struct ToolLoop {
             self.allowsMetadata = allowsMetadata
             self.allowsLyrics = allowsLyrics
             self.allowsHistory = allowsHistory
+            self.allowsFavoritesAndRatings = allowsFavoritesAndRatings
             self.memories = memories
             self.skills = skills
             self.mutationResourceLeaseRegistry = mutationResourceLeaseRegistry
@@ -798,6 +802,7 @@ public struct ToolLoop {
                     systemService: systemService,
                     externalMusicService: externalMusicService,
                     allowsLyrics: context.allowsLyrics,
+                    allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                     providerCapabilities: provider.capabilities,
                     webService: webService,
                     authorizationContext: effectiveAuthorization,
@@ -952,6 +957,7 @@ public struct ToolLoop {
                             systemService: systemService,
                             externalMusicService: externalMusicService,
                             allowsLyrics: context.allowsLyrics,
+                            allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
                             authorizationContext: authorizationForCall,
@@ -1250,6 +1256,7 @@ public struct ToolLoop {
         privacy.allowsMetadata = context.allowsMetadata
         privacy.allowsLyrics = context.allowsLyrics
         privacy.allowsPlaybackHistory = context.allowsHistory
+        privacy.allowsFavoritesAndRatings = context.allowsFavoritesAndRatings
 
         // 统一解析真正的 Provider 预算：Agent 不再自带第二套 256K/16K 硬限制，
         // 输入/输出直接跟随 Provider capabilities（即用户在设置页填写的模型能力），
@@ -2180,6 +2187,7 @@ public struct ToolLoop {
                             systemService: systemService,
                             externalMusicService: externalMusicService,
                             allowsLyrics: context.allowsLyrics,
+                            allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                             providerCapabilities: provider.capabilities,
                             webService: webService,
                             authorizationContext: authorizationForCall,
@@ -3530,7 +3538,7 @@ public struct ToolLoop {
 
         ## 当前状态
         - 服务器：\(serverLine)
-        - 资料（本地缓存）：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.favoriteCount) 首收藏
+        - 资料（本地缓存）：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.allowsFavoritesAndRatings ? context.favoriteCount : 0) 首收藏
         - 播放：\(trackLine)；队列 \(context.queueCount) 首；\(context.isShuffled ? "随机模式" : "顺序模式")；循环 \(context.repeatMode)
         - 最近播放：\(recentLine)
 

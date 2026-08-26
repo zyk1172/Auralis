@@ -570,7 +570,8 @@ func v2FavoriteSet() async throws {
     let gid = GlobalID(serverID: "test-server", remoteID: "v2-1")
     let result = await AgentToolkit.executeV2(
         ToolCall(name: "favorite_set", arguments: ["targetType": "song", "targetID": gid.description, "value": "true"]),
-        bridge: bridge, catalog: store, serverID: "test-server", systemService: nil
+        bridge: bridge, catalog: store, serverID: "test-server", systemService: nil,
+        allowsFavoritesAndRatings: true
     )
     #expect(result.success)
     #expect(await bridge.likedTracks.contains(gid))
@@ -617,6 +618,61 @@ func v2AppContext() async throws {
     )
     #expect(result.success)
     #expect(result.summary.contains("Test Server"))
+}
+
+@Test("歌曲详情不在收藏/评分权限关闭时外发个人状态")
+func v2FavoriteAndRatingPrivacyGate() async throws {
+    let store = try makeV2Store()
+    let serverID: ServerID = "s"
+    var track = makeV2Track(serverID: serverID, remoteID: "private-track", title: "Private Track")
+    track.isFavorite = true
+    track.rating = 5
+    try await seedV2(store, [track])
+    let call = ToolCall(
+        name: "library_get_song",
+        arguments: ["trackID": .string("s:private-track")]
+    )
+
+    let hidden = await AgentToolkit.executeV2(
+        call,
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        serverID: serverID,
+        systemService: nil,
+        allowsFavoritesAndRatings: false
+    )
+    let hiddenText = if case let .text(value) = hidden.payload { value } else { "" }
+    #expect(hidden.success)
+    #expect(!hiddenText.contains("已收藏"))
+    #expect(!hiddenText.contains("评分 5"))
+
+    let visible = await AgentToolkit.executeV2(
+        call,
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        serverID: serverID,
+        systemService: nil,
+        allowsFavoritesAndRatings: true
+    )
+    let visibleText = if case let .text(value) = visible.payload { value } else { "" }
+    #expect(visible.success)
+    #expect(visibleText.contains("已收藏"))
+    #expect(visibleText.contains("评分 5"))
+
+    let deniedBridge = MockAgentBridge(activeServerID: serverID)
+    let deniedMutation = await AgentToolkit.executeV2(
+        ToolCall(
+            name: "favorite_set",
+            arguments: ["targetType": "song", "targetID": "s:private-track", "value": "true"]
+        ),
+        bridge: deniedBridge,
+        catalog: store,
+        serverID: serverID,
+        systemService: nil,
+        allowsFavoritesAndRatings: false
+    )
+    #expect(!deniedMutation.success)
+    #expect(await deniedBridge.likedTracks.isEmpty)
 }
 
 @Test("lyrics_get 在系统工具层遵守正文隐私开关")

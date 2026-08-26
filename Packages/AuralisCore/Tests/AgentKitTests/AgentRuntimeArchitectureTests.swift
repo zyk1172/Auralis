@@ -221,6 +221,22 @@ struct AgentRuntimeArchitectureTests {
         #expect(!text.contains("hidden history"))
     }
 
+    @Test("收藏和评分权限从 UserDefaults 进入 Context 时默认关闭并可显式开启")
+    func privacyReadsFavoritesAndRatingsSetting() {
+        let suiteName = "AgentRuntimeArchitectureTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(AIPrivacyPermissions.current(defaults: defaults).allowsFavoritesAndRatings == false)
+        defaults.set(true, forKey: AIPrivacyPermissions.favoritesAndRatingsDefaultsKey)
+        #expect(AIPrivacyPermissions.current(defaults: defaults).allowsFavoritesAndRatings == true)
+
+        let context = ToolLoop.Context(favoriteCount: 7, allowsFavoritesAndRatings: false)
+        #expect(context.allowsFavoritesAndRatings == false)
+        let allowedContext = ToolLoop.Context(favoriteCount: 7, allowsFavoritesAndRatings: true)
+        #expect(allowedContext.allowsFavoritesAndRatings == true)
+    }
+
     @Test func legalToolPairsArePreserved() {
         let call = AIToolCall(id: "call-1", name: "library_search", arguments: "{}")
         let assistant = AIMessage(role: .assistant, content: "", toolCalls: [call])

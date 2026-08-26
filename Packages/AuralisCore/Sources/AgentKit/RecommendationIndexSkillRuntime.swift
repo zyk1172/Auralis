@@ -1812,6 +1812,13 @@ public enum RecommendationIndexSkillRuntime {
         guard hasTrackAttributableTool else {
             return batch.tracks.map { .init(track: RecommendationIndexClassifierTrack($0), evidence: []) }
         }
+        guard provider.capabilities.maxOutputTokens >= RecommendationIndexBatchPolicy.minimumEvidenceOutputTokens else {
+            return batch.tracks.map { .init(track: RecommendationIndexClassifierTrack($0), evidence: []) }
+        }
+        let evidenceOutputTokens = min(
+            provider.capabilities.maxOutputTokens,
+            1_024
+        )
         var conversation: [AIMessage] = [
             .init(
                 role: .system,
@@ -1831,7 +1838,7 @@ public enum RecommendationIndexSkillRuntime {
                 model: model,
                 transcript: AITranscript(messages: conversation),
                 temperature: 0,
-                maxTokens: min(provider.capabilities.maxOutputTokens, 1_024),
+                maxTokens: evidenceOutputTokens,
                 tools: nativeMode ? definitions : nil,
                 toolChoice: nil,
                 hostedTools: nil
@@ -1941,6 +1948,22 @@ public enum RecommendationIndexSkillRuntime {
         evidence: [RecommendationIndexTrackEvidence],
         repairDiagnostic: RecommendationIndexClassificationDiagnostics? = nil
     ) async throws -> AICompletionRequest {
+        let minimumRequiredOutput = RecommendationIndexBatchPolicy
+            .minimumRequiredClassificationOutputTokens(batchSize: batch.tracks.count)
+        guard provider.capabilities.maxOutputTokens >= minimumRequiredOutput else {
+            throw RecommendationIndexClassificationDiagnostics(
+                stage: .contextBudget,
+                batchSize: batch.tracks.count,
+                rawLength: 0,
+                jsonFound: false,
+                message: "Provider 输出上限不足以生成完整分类结果（required_output_tokens=\(minimumRequiredOutput), provider_max_output_tokens=\(provider.capabilities.maxOutputTokens)）",
+                expectedBatchID: batch.batchID,
+                expectedRevision: batch.revision,
+                fieldPath: "request.maxTokens",
+                expectedType: "provider max output tokens >= minimum viable classification output",
+                actualType: "provider max output tokens = \(provider.capabilities.maxOutputTokens)"
+            )
+        }
         let parts = try classificationRequestParts(
             provider: provider,
             model: model,
@@ -2028,7 +2051,19 @@ public enum RecommendationIndexSkillRuntime {
         let contextRemaining = maxContextTokens
             - initial.budget.estimatedInputTokens
             - RecommendationIndexBatchPolicy.contextSafetyMarginTokens
-        let contextLimitedOutput = min(outputCeiling, max(1, contextRemaining))
+        // A provider ceiling below the minimum viable envelope, or a context
+        // window that cannot leave that much output room, is not a sendable
+        // request. Returning the untrimmed budget makes classificationRequest
+        // fail closed before calling the provider; in particular it must not
+        // turn a negative/short remainder into maxTokens=1.
+        guard let contextLimitedOutput = RecommendationIndexBatchPolicy
+            .viableClassificationOutputTokens(
+                providerMaxOutputTokens: provider.capabilities.maxOutputTokens,
+                batchSize: batch.tracks.count,
+                availableOutputTokens: contextRemaining
+            ) else {
+            return initial
+        }
         return contextLimitedOutput == outputCeiling
             ? initial
             : makeParts(maxTokens: contextLimitedOutput)

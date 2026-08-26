@@ -27,21 +27,48 @@ enum RecommendationIndexBatchPolicy {
 
     /// `ModelCapabilities.maxOutputTokens` is a provider ceiling, not a
     /// reservation that every small classification batch must consume. Keep
-    /// enough room for a compact v3 item while scaling the requested ceiling
-    /// with the number of tracks in this batch.
+    /// enough room for the response envelope and a compact v3 item while
+    /// scaling the requested ceiling with the number of tracks in this batch.
+    static let classificationEnvelopeReserveTokens = 128
     static let minimumClassificationOutputTokens = 512
     static let estimatedClassificationOutputTokensPerTrack = 256
+    /// Evidence is optional, but a native tool-call envelope still needs a
+    /// meaningful response budget. Below this threshold skip evidence rather
+    /// than paying for a request that can only be truncated.
+    static let minimumEvidenceOutputTokens = 512
+
+    static func minimumRequiredClassificationOutputTokens(batchSize: Int) -> Int {
+        let normalizedBatchSize = max(1, batchSize)
+        return max(
+            minimumClassificationOutputTokens,
+            classificationEnvelopeReserveTokens
+                + normalizedBatchSize * estimatedClassificationOutputTokensPerTrack
+        )
+    }
 
     static func effectiveClassificationOutputTokens(
         providerMaxOutputTokens: Int,
         batchSize: Int
     ) -> Int {
         let providerLimit = max(1, providerMaxOutputTokens)
-        let estimatedNeeded = max(
-            minimumClassificationOutputTokens,
-            max(1, batchSize) * estimatedClassificationOutputTokensPerTrack
-        )
+        let estimatedNeeded = minimumRequiredClassificationOutputTokens(batchSize: batchSize)
         return min(providerLimit, estimatedNeeded)
+    }
+
+    /// Returns a sendable output budget only when it can form the complete
+    /// classification envelope. A short context remainder is not converted
+    /// into a technically valid but business-useless one-token request.
+    static func viableClassificationOutputTokens(
+        providerMaxOutputTokens: Int,
+        batchSize: Int,
+        availableOutputTokens: Int?
+    ) -> Int? {
+        let minimumRequired = minimumRequiredClassificationOutputTokens(batchSize: batchSize)
+        guard providerMaxOutputTokens >= minimumRequired else { return nil }
+        if let availableOutputTokens, availableOutputTokens < minimumRequired {
+            return nil
+        }
+        return min(providerMaxOutputTokens, availableOutputTokens ?? minimumRequired)
     }
 
     struct RequestBudget: Equatable, Sendable {

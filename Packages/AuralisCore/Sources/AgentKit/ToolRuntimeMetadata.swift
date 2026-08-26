@@ -114,6 +114,7 @@ public struct ToolExecutorContext: Sendable {
     public let systemService: (any AgentSystemService)?
     public let externalMusicService: (any AgentExternalMusicService)?
     public let allowsLyrics: Bool
+    public let allowsFavoritesAndRatings: Bool
     public let providerCapabilities: ModelCapabilities?
     public let webService: (any AgentWebService)?
     public let authorizationContext: SideEffectAuthorizationContext?
@@ -135,6 +136,7 @@ public struct ToolExecutorContext: Sendable {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
         allowsLyrics: Bool,
+        allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities?,
         webService: (any AgentWebService)?,
         authorizationContext: SideEffectAuthorizationContext?,
@@ -153,6 +155,7 @@ public struct ToolExecutorContext: Sendable {
         self.systemService = systemService
         self.externalMusicService = externalMusicService
         self.allowsLyrics = allowsLyrics
+        self.allowsFavoritesAndRatings = allowsFavoritesAndRatings
         self.providerCapabilities = providerCapabilities
         self.webService = webService
         self.authorizationContext = authorizationContext
@@ -178,6 +181,7 @@ public struct ToolExecutorContext: Sendable {
             systemService: systemService,
             externalMusicService: externalMusicService,
             allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
             webService: webService,
             authorizationContext: authorizationContext,
@@ -200,6 +204,7 @@ public struct ToolExecutorContext: Sendable {
             systemService: systemService,
             externalMusicService: externalMusicService,
             allowsLyrics: allowsLyrics,
+            allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
             webService: webService,
             authorizationContext: authorizationContext?.granting(operations: operations),

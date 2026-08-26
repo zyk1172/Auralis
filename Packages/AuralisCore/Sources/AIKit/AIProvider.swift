@@ -550,14 +550,15 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
     public var allowsFilePaths = false
     public init() {}
 
-    /// 设置页三个隐私开关对应的 UserDefaults 键，与 SettingsView /
+    /// 设置页隐私开关对应的 UserDefaults 键，与 SettingsView /
     /// MacSettingsWindow 的 @AppStorage 保持一致。
     public static let metadataDefaultsKey = "auralis.ai.allowsMetadata"
     public static let lyricsDefaultsKey = "auralis.ai.allowsLyrics"
     public static let historyDefaultsKey = "auralis.ai.allowsHistory"
+    public static let favoritesAndRatingsDefaultsKey = "auralis.ai.allowsFavoritesAndRatings"
 
     /// 读取用户当前的隐私权限（UserDefaults）。键缺失时按 PrivacyModel 的默认值：
-    /// 元数据默认允许（true）、歌词与播放历史默认关闭（false）。
+    /// 元数据默认允许（true）、歌词、播放历史与收藏/评分默认关闭（false）。
     /// 用 `object(forKey:)` 区分「从未设置」与「显式 false」，
     /// 避免 `bool(forKey:)` 把缺失键一律当成 false 而覆盖元数据的默认 true。
     public static func current(defaults: UserDefaults = .standard) -> AIPrivacyPermissions {
@@ -570,6 +571,9 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
         }
         if let value = defaults.object(forKey: historyDefaultsKey) as? Bool {
             permissions.allowsPlaybackHistory = value
+        }
+        if let value = defaults.object(forKey: favoritesAndRatingsDefaultsKey) as? Bool {
+            permissions.allowsFavoritesAndRatings = value
         }
         return permissions
     }

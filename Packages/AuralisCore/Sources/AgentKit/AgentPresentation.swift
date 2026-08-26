@@ -5,39 +5,73 @@ import LocalCatalog
 /// Last-line redaction for user-visible prose. Structured tool payloads and
 /// provider transcripts keep IDs so playback and follow-up mutations still work.
 public enum AgentUserFacingSanitizer {
-    /// Match the value after a known semantic label, including JSON's colon
-    /// separator and quoted values. The value is captured separately so the
-    /// label, separator and surrounding syntax remain intact when redacted.
+    /// Match a known semantic label, including JSON's colon separator and
+    /// quoted values. The value is captured separately so the match is only
+    /// redacted after it has been validated as an Auralis identifier.
+    private static let jsonLabeledEntityID = try! NSRegularExpression(
+        pattern: #"(?i)\"(?:playlistID|trackID|albumID|artistID)\"\s*:\s*\"([^\"\\]*(?:\\.[^\"\\]*)*)\""#
+    )
+    private static let jsonLabeledServerID = try! NSRegularExpression(
+        pattern: #"(?i)\"serverID\"\s*:\s*\"([^\"\\]*(?:\\.[^\"\\]*)*)\""#
+    )
     private static let labeledEntityID = try! NSRegularExpression(
-        pattern: #"(?i)(?<![A-Za-z0-9_])(?:playlistID|trackID|albumID|artistID)[\"']?\s*(?:=|:)\s*[\"']?([^\s,.;，。；、（）()\[\]{}<>\"']+)"#
+        pattern: #"(?i)(?<![A-Za-z0-9_-])(?:playlistID|trackID|albumID|artistID)[\"']?\s*(?:=|:)\s*[\"']?([^\s,.;，。；、（）()\[\]{}<>\"']+)[\"']?"#
     )
     private static let labeledServerID = try! NSRegularExpression(
-        pattern: #"(?i)(?<![A-Za-z0-9_])serverID[\"']?\s*(?:=|:)\s*[\"']?([^\s,.;，。；、（）()\[\]{}<>\"']+)"#
+        pattern: #"(?i)(?<![A-Za-z0-9_])serverID[\"']?\s*(?:=|:)\s*[\"']?([^\s,.;，。；、（）()\[\]{}<>\"']+)[\"']?"#
     )
     private static let globalIDCall = try! NSRegularExpression(
-        pattern: #"(?i)\bGlobalID\s*\([^)]*\)"#
+        pattern: #"(?i)\bGlobalID\s*\(\s*([^)]*?)\s*\)"#
     )
     private static let bareGlobalID = try! NSRegularExpression(
         pattern: #"(?i)\b(?:server|srv|opensubsonic)-[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*"#
     )
     public static func text(_ value: String) -> String {
         let replacement = "[内部标识]"
-        var result = replacingCapturedValues(in: value, regex: labeledEntityID) { rawValue in
+        // JSON keeps its key/value delimiters intact; only a validated value
+        // is replaced. This avoids emitting malformed JSON into a visible
+        // transcript while the legacy prose form below removes the whole
+        // semantic label/value pair so `playlistID=` does not survive.
+        var result = replacingCapturedValues(in: value, regex: jsonLabeledEntityID) { rawValue in
             isAuralisEntityIdentifier(rawValue)
         }
-        result = replacingCapturedValues(in: result, regex: labeledServerID) { rawValue in
+        result = replacingCapturedValues(in: result, regex: jsonLabeledServerID) { rawValue in
             isAuralisServerIdentifier(rawValue)
         }
-        result = globalIDCall.stringByReplacingMatches(
-            in: result,
-            range: NSRange(result.startIndex..., in: result),
-            withTemplate: replacement
-        )
-        return bareGlobalID.stringByReplacingMatches(
-            in: result,
-            range: NSRange(result.startIndex..., in: result),
-            withTemplate: replacement
-        )
+        result = replacingLabeledMatches(in: result, regex: labeledEntityID) { rawValue in
+            isAuralisEntityIdentifier(rawValue)
+        }
+        result = replacingLabeledMatches(in: result, regex: labeledServerID) { rawValue in
+            isAuralisServerIdentifier(rawValue)
+        }
+        result = replacingCapturedValues(in: result, regex: globalIDCall) { rawValue in
+            GlobalID(rawValue.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+        }
+        return replacingBareGlobalIDs(in: result, replacement: replacement)
+    }
+
+    private static func replacingLabeledMatches(
+        in value: String,
+        regex: NSRegularExpression,
+        shouldReplace: (String) -> Bool
+    ) -> String {
+        let fullRange = NSRange(value.startIndex..., in: value)
+        let matches = regex.matches(in: value, range: fullRange)
+        guard !matches.isEmpty else { return value }
+
+        var output = value
+        // Replace the complete semantic label/value pair from the end so
+        // legacy user-facing prose cannot retain `playlistID=` after the ID
+        // itself is hidden. Ordinary id=/uuid= text never reaches this path.
+        for match in matches.reversed() {
+            guard match.numberOfRanges > 1,
+                  match.range(at: 1).location != NSNotFound
+            else { continue }
+            let rawValue = (value as NSString).substring(with: match.range(at: 1))
+            guard shouldReplace(rawValue) else { continue }
+            output = (output as NSString).replacingCharacters(in: match.range, with: "[内部标识]")
+        }
+        return output
     }
 
     private static func replacingCapturedValues(
@@ -50,16 +84,37 @@ public enum AgentUserFacingSanitizer {
         guard !matches.isEmpty else { return value }
 
         var output = value
-        // Replace from the end so every capture range remains valid even
-        // when several labeled values occur in one sentence or JSON object.
         for match in matches.reversed() {
             guard match.numberOfRanges > 1,
                   match.range(at: 1).location != NSNotFound
             else { continue }
-            let valueRange = match.range(at: 1)
-            let rawValue = (value as NSString).substring(with: valueRange)
+            let rawValue = (value as NSString).substring(with: match.range(at: 1))
             guard shouldReplace(rawValue) else { continue }
-            output = (output as NSString).replacingCharacters(in: valueRange, with: "[内部标识]")
+            output = (output as NSString).replacingCharacters(in: match.range(at: 1), with: "[内部标识]")
+        }
+        return output
+    }
+
+    private static func replacingBareGlobalIDs(in value: String, replacement: String) -> String {
+        let fullRange = NSRange(value.startIndex..., in: value)
+        let matches = bareGlobalID.matches(in: value, range: fullRange)
+        guard !matches.isEmpty else { return value }
+
+        var output = value
+        for match in matches.reversed() {
+            let rawValue = (value as NSString).substring(with: match.range)
+            let prefixRange = NSRange(location: 0, length: match.range.location)
+            let prefix = (value as NSString).substring(with: prefixRange)
+            // HTML/data attributes are technical payload, not user-facing
+            // semantic IDs. Keep their markup and value intact.
+            let isDataAttributeValue = prefix.range(
+                of: #"(?i)data-[A-Za-z0-9_-]+\s*=\s*[\"']$"#,
+                options: .regularExpression
+            ) != nil
+            guard !isDataAttributeValue,
+                  GlobalID(rawValue) != nil
+            else { continue }
+            output = (output as NSString).replacingCharacters(in: match.range, with: replacement)
         }
         return output
     }
