@@ -393,7 +393,11 @@ public struct AnthropicMessagesProvider: AIProvider {
                 ],
             ]
         }
-        if let tools = request.tools, !tools.isEmpty {
+        let toolChoiceDisablesTools = request.toolChoice.map { choice in
+            if case .none = choice { return true }
+            return false
+        } ?? false
+        if let tools = request.tools, !tools.isEmpty, !toolChoiceDisablesTools {
             body["tools"] = try tools.map { tool in
                 var item: [String: Any] = ["name": tool.name, "description": tool.description]
                 if let schema = tool.parametersJSON,

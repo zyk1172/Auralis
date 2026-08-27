@@ -27,6 +27,12 @@ public enum SystemPromptBuilder {
         let server = serverSummary(context: context, language: language)
         let nowPlaying = nowPlayingSummary(context: context, language: language)
         let recent = recentSummary(context: context, language: language)
+        let librarySummary = context.allowsMetadata
+            ? "\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单"
+            : "歌曲元数据：已隐藏"
+        let favoriteSummary = context.allowsFavoritesAndRatings
+            ? "\(context.favoriteCount) 首收藏"
+            : "收藏与评分：已隐藏"
         let memories = memorySummary(context.memories, language: language, goal: goal)
         let skills = skillSummary(context.skills, language: language)
         let awareness = awarenessSummary(
@@ -79,7 +85,7 @@ public enum SystemPromptBuilder {
 
         ## 当前 Auralis 状态
         - 服务器：\(server)
-        - 本地资料库：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.allowsFavoritesAndRatings ? context.favoriteCount : 0) 首收藏
+        - 本地资料库：\(librarySummary)、\(favoriteSummary)
         - 播放：\(nowPlaying)；队列 \(context.queueCount) 首；\(context.isShuffled ? "随机模式" : "顺序模式")；循环 \(context.repeatMode)
         - 最近播放：\(recent)
 

@@ -87,6 +87,7 @@ public struct ToolRuntime {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool = false,
         allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
@@ -101,6 +102,11 @@ public struct ToolRuntime {
         availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
         capabilityEnvironment: AgentCapabilityEnvironment? = nil
     ) async -> ToolResult {
+        var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
+        if privacyPermissions == nil {
+            resolvedPrivacy.allowsLyrics = allowsLyrics
+            resolvedPrivacy.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+        }
         let descriptor: ToolDescriptor?
         if let builtIn = AgentToolRegistry.descriptor(for: call.name) {
             descriptor = builtIn
@@ -169,6 +175,7 @@ public struct ToolRuntime {
                 serverID: serverID,
                 systemService: systemService,
                 externalMusicService: externalMusicService,
+                privacyPermissions: resolvedPrivacy,
                 allowsLyrics: allowsLyrics,
                 allowsFavoritesAndRatings: allowsFavoritesAndRatings,
                 providerCapabilities: providerCapabilities,
@@ -204,6 +211,7 @@ public struct ToolRuntime {
                         serverID: serverID,
                         systemService: systemService,
                         externalMusicService: externalMusicService,
+                        privacyPermissions: resolvedPrivacy,
                         allowsLyrics: allowsLyrics,
                         allowsFavoritesAndRatings: allowsFavoritesAndRatings,
                         providerCapabilities: providerCapabilities,
@@ -224,6 +232,7 @@ public struct ToolRuntime {
                     serverID: serverID,
                     systemService: systemService,
                     externalMusicService: externalMusicService,
+                    privacyPermissions: resolvedPrivacy,
                     allowsLyrics: allowsLyrics,
                     allowsFavoritesAndRatings: allowsFavoritesAndRatings,
                     providerCapabilities: providerCapabilities,
@@ -258,6 +267,7 @@ public struct ToolRuntime {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool = false,
         allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
@@ -297,6 +307,7 @@ public struct ToolRuntime {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
@@ -349,6 +360,7 @@ public struct ToolRuntime {
                     serverID: context.serverID,
                     systemService: context.systemService,
                     externalMusicService: context.externalMusicService,
+                    privacyPermissions: context.privacyPermissions,
                     allowsLyrics: context.allowsLyrics,
                     allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                     providerCapabilities: context.providerCapabilities,
@@ -394,6 +406,7 @@ public struct ToolRuntime {
                     serverID: context.serverID,
                     systemService: context.systemService,
                     externalMusicService: context.externalMusicService,
+                    privacyPermissions: context.privacyPermissions,
                     allowsLyrics: context.allowsLyrics,
                     allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                     providerCapabilities: context.providerCapabilities,
@@ -426,6 +439,7 @@ public struct ToolRuntime {
                         serverID: context.serverID,
                         systemService: context.systemService,
                         externalMusicService: context.externalMusicService,
+                        privacyPermissions: context.privacyPermissions,
                         allowsLyrics: context.allowsLyrics,
                         allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                         providerCapabilities: context.providerCapabilities,

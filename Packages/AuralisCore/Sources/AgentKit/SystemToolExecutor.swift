@@ -1,4 +1,5 @@
 import Domain
+import AIKit
 import Foundation
 import LocalCatalog
 
@@ -54,12 +55,34 @@ public enum SystemToolNames {
 /// 系统服务工具的固定执行器：参数校验 → 调用 AgentSystemService → 返回结构化摘要。
 /// 所有结果都是简洁、脱敏的文本，不包含凭据 / 完整认证地址 / Token。
 public struct SystemToolExecutor {
+    private static let metadataDisclosureToolNames: Set<String> = [
+        "app_get_context", "recommend_by_mood", "recommend_by_constraints",
+        "stats_get_listening_summary", "stats_get_top_items",
+        "library_get_recently_added", "library_get_most_played", "diagnostics_now_playing",
+        "diagnostics_playback", "library_find_broken_artwork",
+        "library_find_stale_cache", "diagnostics_get_recent_errors",
+    ]
+    private static let historyDisclosureToolNames: Set<String> = [
+        "library_get_most_played",
+    ]
+
     public static func execute(
         _ call: ToolCall,
         descriptor: ToolDescriptor,
         systemService: any AgentSystemService,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool = false
     ) async -> ToolResult {
+        var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
+        if privacyPermissions == nil {
+            resolvedPrivacy.allowsLyrics = allowsLyrics
+        }
+        if !resolvedPrivacy.allowsMetadata, metadataDisclosureToolNames.contains(call.name) {
+            return .fail(call, descriptor, "歌曲元数据已按隐私设置隐藏。")
+        }
+        if !resolvedPrivacy.allowsPlaybackHistory, historyDisclosureToolNames.contains(call.name) {
+            return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
+        }
         do {
             switch call.name {
             case "app_get_context":
@@ -209,7 +232,7 @@ public struct SystemToolExecutor {
                 let result = await systemService.lyrics(for: TrackID(rawValue: gid.remoteID))
                 let text: String
                 if result.hasLyrics {
-                    guard allowsLyrics else {
+                    guard resolvedPrivacy.allowsLyrics else {
                         text = "有歌词，但正文已按隐私设置隐藏。"
                         return .ok(call, descriptor, text, .text(text))
                     }
@@ -231,10 +254,15 @@ public struct SystemToolExecutor {
                 let text = "封面 \(Self.bytes(status.artworkBytes))（\(status.artworkCount)） · 歌词 \(Self.bytes(status.lyricsBytes)) · 离线音频 \(Self.bytes(status.offlineAudioBytes))（\(status.offlineAudioCount)） · 临时音频 \(Self.bytes(status.tempAudioBytes))"
                 return .ok(call, descriptor, text, .text(text))
             case "stats_get_listening_summary":
+                guard resolvedPrivacy.allowsPlaybackHistory else {
+                    return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
+                }
                 let summary = await systemService.listeningSummary()
                 var text = "累计播放 \(summary.totalPlays) 次 · \(summary.uniqueTracks) 首 · \(Int(summary.totalListeningSeconds / 60)) 分钟"
                 if let artist = summary.topArtist { text += " · 最常听 \(artist)" }
-                text += " · 收藏 \(summary.totalFavorites) 首"
+                if resolvedPrivacy.allowsFavoritesAndRatings {
+                    text += " · 收藏 \(summary.totalFavorites) 首"
+                }
                 return .ok(call, descriptor, text, .text(text))
             case "recommend_by_mood":
                 let mood = try require(call, "mood")
@@ -256,6 +284,12 @@ public struct SystemToolExecutor {
                     losslessOnly: (try? boolParam(call, "losslessOnly")) ?? false,
                     limit: (try? intParam(call, "limit")) ?? 20
                 )
+                if constraints.favoritesOnly && !resolvedPrivacy.allowsFavoritesAndRatings {
+                    return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
+                }
+                if constraints.excludeRecentlyPlayed && !resolvedPrivacy.allowsPlaybackHistory {
+                    return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
+                }
                 let result = await systemService.recommendByConstraints(constraints)
                 let text = "约束推荐 \(result.tracks.count) 首"
                 return .ok(call, descriptor, text, .trackCards(result.tracks))
@@ -271,6 +305,9 @@ public struct SystemToolExecutor {
                 let text = "最常播放 \(cards.count) 首"
                 return .ok(call, descriptor, text, .trackCards(cards))
             case "stats_get_top_items":
+                guard resolvedPrivacy.allowsPlaybackHistory else {
+                    return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
+                }
                 let kind = try require(call, "kind")
                 let limit = (try? intParam(call, "limit")) ?? 10
                 let items = await systemService.topItems(kind: kind, limit: limit)

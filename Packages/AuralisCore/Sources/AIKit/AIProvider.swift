@@ -550,6 +550,15 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
     public var allowsFilePaths = false
     public init() {}
 
+    /// Persisted assistant prose has no structured provenance. Replaying it
+    /// is safe only when every local disclosure category remains enabled.
+    public var allowPersistedAssistantText: Bool {
+        allowsMetadata
+            && allowsPlaybackHistory
+            && allowsFavoritesAndRatings
+            && allowsLyrics
+    }
+
     /// 设置页隐私开关对应的 UserDefaults 键，与 SettingsView /
     /// MacSettingsWindow 的 @AppStorage 保持一致。
     public static let metadataDefaultsKey = "auralis.ai.allowsMetadata"

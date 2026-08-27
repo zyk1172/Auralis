@@ -231,10 +231,46 @@ struct AgentRuntimeArchitectureTests {
         defaults.set(true, forKey: AIPrivacyPermissions.favoritesAndRatingsDefaultsKey)
         #expect(AIPrivacyPermissions.current(defaults: defaults).allowsFavoritesAndRatings == true)
 
-        let context = ToolLoop.Context(favoriteCount: 7, allowsFavoritesAndRatings: false)
+        let context = ToolLoop.Context(
+            totalTracks: 800,
+            totalArtists: 120,
+            totalAlbums: 200,
+            totalPlaylists: 24,
+            favoriteCount: 7,
+            allowsMetadata: false,
+            allowsFavoritesAndRatings: false
+        )
         #expect(context.allowsFavoritesAndRatings == false)
         let allowedContext = ToolLoop.Context(favoriteCount: 7, allowsFavoritesAndRatings: true)
         #expect(allowedContext.allowsFavoritesAndRatings == true)
+
+        let hiddenPrompt = SystemPromptBuilder.build(
+            context: context,
+            tools: [],
+            nativeToolCalling: false
+        )
+        #expect(hiddenPrompt.contains("收藏与评分：已隐藏"))
+        #expect(hiddenPrompt.contains("歌曲元数据：已隐藏"))
+        #expect(!hiddenPrompt.contains("800 首歌曲"))
+        #expect(!hiddenPrompt.contains("7 首收藏"))
+    }
+
+    @Test("权限关闭时 completedActions 只保留计数，不把旧动作详情回灌模型")
+    func completedActionsArePrivacyFiltered() {
+        var task = AgentTaskState(intent: .conversation, goal: "hello")
+        task.completedActions = ["已播放《私密歌曲》37次并加入收藏"]
+        let messages = AgentContextBuilder.build(
+            systemPrompt: "system",
+            task: task,
+            facts: [],
+            history: [],
+            permissions: AIPrivacyPermissions(),
+            capabilities: .conservative,
+            inputBudget: 8_000
+        )
+        let text = messages.map(\.content).joined()
+        #expect(!text.contains("私密歌曲"))
+        #expect(text.contains("1 项"))
     }
 
     @Test func legalToolPairsArePreserved() {

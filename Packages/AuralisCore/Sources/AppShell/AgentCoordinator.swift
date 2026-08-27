@@ -554,6 +554,7 @@ public final class AgentCoordinator: ObservableObject {
             recentlyPlayedTitles: recentlyPlayedTitles,
             isShuffled: model.isShuffled,
             repeatMode: model.repeatMode.title,
+            privacyPermissions: permissions,
             allowsMetadata: permissions.allowsMetadata,
             allowsLyrics: permissions.allowsLyrics,
             allowsHistory: permissions.allowsPlaybackHistory,

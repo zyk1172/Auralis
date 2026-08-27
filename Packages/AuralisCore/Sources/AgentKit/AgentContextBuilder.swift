@@ -39,10 +39,15 @@ public enum AgentContextBuilder {
         var system = systemPrompt
         system += "\n\n当前任务：\(task.intent.rawValue)；目标：\(task.goal)"
         if !task.completedActions.isEmpty {
-            system += "\n已完成动作：" + task.completedActions.suffix(12).joined(separator: "；")
+            if permissions.allowPersistedAssistantText {
+                system += "\n已完成动作：" + task.completedActions.suffix(12).joined(separator: "；")
+            } else {
+                system += "\n已完成动作：\(task.completedActions.count) 项（详细内容已按隐私设置隐藏）"
+            }
         }
-        if !task.evidence.isEmpty {
-            let claims = task.evidence.suffix(12).map {
+        let allowedEvidence = task.evidence.filter { isAllowed($0.source, permissions: permissions) }
+        if !allowedEvidence.isEmpty {
+            let claims = allowedEvidence.suffix(12).map {
                 "[\($0.source.rawValue)/\(String(format: "%.2f", $0.confidence))] \($0.claim)"
             }
             system += "\n已有证据：" + claims.joined(separator: "；")
@@ -120,6 +125,17 @@ public enum AgentContextBuilder {
         case .favoritesAndRatings: permissions.allowsFavoritesAndRatings
         case .externalDiscovery: permissions.allowsExternalDiscovery
         case .credential: false
+        }
+    }
+
+    private static func isAllowed(_ source: AgentEvidenceSource, permissions: AIPrivacyPermissions) -> Bool {
+        switch source {
+        case .derivedLocalStatistic:
+            return permissions.allowsPlaybackHistory || permissions.allowsFavoritesAndRatings
+        case .localCatalog, .playbackState:
+            return permissions.allowsMetadata
+        case .server, .externalAPI, .musicBrainz, .listenBrainz, .critiqueBrainz, .userStatement, .modelInference:
+            return true
         }
     }
 }

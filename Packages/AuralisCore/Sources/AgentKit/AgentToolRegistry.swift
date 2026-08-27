@@ -1462,6 +1462,7 @@ public enum AgentToolRegistry {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool = false,
         allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
@@ -1512,6 +1513,7 @@ public enum AgentToolRegistry {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
@@ -1545,6 +1547,7 @@ public enum AgentToolRegistry {
         let systemService = context.systemService
         let activeSkillID = context.activeSkillID
         let externalMusicService = context.externalMusicService
+        let privacyPermissions = context.privacyPermissions
         let allowsLyrics = context.allowsLyrics
         let allowsFavoritesAndRatings = context.allowsFavoritesAndRatings
         let bridge = context.bridge
@@ -1725,6 +1728,7 @@ public enum AgentToolRegistry {
                 ToolCall(name: "music_download", arguments: legacyArguments),
                 descriptor: legacyDescriptor,
                 systemService: systemService,
+                privacyPermissions: privacyPermissions,
                 allowsLyrics: allowsLyrics
             )
         default:
@@ -1738,6 +1742,7 @@ public enum AgentToolRegistry {
                 canonicalCall,
                 descriptor: canonicalDescriptor,
                 systemService: systemService,
+                privacyPermissions: privacyPermissions,
                 allowsLyrics: allowsLyrics
             )
         }
@@ -1748,6 +1753,7 @@ public enum AgentToolRegistry {
             catalog: catalog,
             serverID: serverID,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
@@ -1766,6 +1772,7 @@ public enum AgentToolRegistry {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool = false,
         allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
@@ -1782,6 +1789,7 @@ public enum AgentToolRegistry {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
