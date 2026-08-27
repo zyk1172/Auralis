@@ -161,7 +161,7 @@ struct CompactMiniPlayerContent: View {
 }
 
 struct NowPlayingView: View {
-    static let musicHapticsMenuTitle = "音乐震动"
+    static let musicHapticsMenuIdentifier = "auralis.nowPlaying.musicHaptics"
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
@@ -285,6 +285,7 @@ struct NowPlayingView: View {
             } label: {
                 Text(String(localized: "音乐震动", bundle: .module))
             }
+            .accessibilityIdentifier(Self.musicHapticsMenuIdentifier)
 #endif
             Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         }

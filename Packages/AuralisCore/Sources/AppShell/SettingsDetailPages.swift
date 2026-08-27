@@ -67,7 +67,7 @@ struct ThemeSettingsPage: View {
 }
 
 struct PlaybackSettingsPage: View {
-    static let musicHapticsSectionTitle = "音乐震动反馈"
+    static let musicHapticsSettingsIdentifier = "auralis.settings.musicHaptics"
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @AppStorage("auralis.audio.highQualityWiFi") private var highQualityWiFi = true
@@ -120,6 +120,7 @@ struct PlaybackSettingsPage: View {
             Section(String(localized: "音乐震动反馈", bundle: .module)) {
                 if model.musicHaptics.supportsHaptics {
                     Toggle(String(localized: "自动开启音乐震动", bundle: .module), isOn: $musicHapticsEnabled)
+                        .accessibilityIdentifier(Self.musicHapticsSettingsIdentifier)
                     Text(String(localized: "支持的歌曲优先使用系统 Music Haptics；其它歌曲会在首次播放时后台生成触觉轨道，之后播放时使用。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(.secondary)

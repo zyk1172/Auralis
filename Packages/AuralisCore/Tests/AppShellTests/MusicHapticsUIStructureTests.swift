@@ -6,10 +6,10 @@ import Testing
 /// iOS setting or the Now Playing submenu before a device build is installed.
 @Suite("Music Haptics iOS UI structure")
 struct MusicHapticsUIStructureTests {
-    @Test("播放设置页 and Now Playing submenu retain their product labels")
+    @Test("播放设置页 and Now Playing submenu retain stable iOS identifiers")
     @MainActor
     func hapticsEntryPointsRemainAvailable() {
-        #expect(PlaybackSettingsPage.musicHapticsSectionTitle == "音乐震动反馈")
-        #expect(NowPlayingView.musicHapticsMenuTitle == "音乐震动")
+        #expect(PlaybackSettingsPage.musicHapticsSettingsIdentifier == "auralis.settings.musicHaptics")
+        #expect(NowPlayingView.musicHapticsMenuIdentifier == "auralis.nowPlaying.musicHaptics")
     }
 }
