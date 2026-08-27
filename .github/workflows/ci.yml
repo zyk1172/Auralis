@@ -138,8 +138,8 @@ jobs:
           set -euo pipefail
           simulator_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')"
           if [ -z "$simulator_id" ]; then
-            echo "::warning::No available iPhone Simulator runtime on this runner; generic iOS build already passed."
-            exit 0
+            echo "::error::An established iPhone Simulator is required for this PR's iOS UI smoke gate."
+            exit 1
           fi
           xcodebuild \
             -project Auralis.xcodeproj \
@@ -155,9 +155,10 @@ jobs:
           set -euo pipefail
           simulator_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')"
           if [ -z "$simulator_id" ]; then
-            echo "::warning::No available iPhone Simulator runtime on this runner; UI smoke tests require an established simulator."
-            exit 0
+            echo "::error::An established iPhone Simulator is required for this PR's iOS UI smoke gate."
+            exit 1
           fi
+          test_log="$RUNNER_TEMP/auralis-ui-smoke.log"
           xcodebuild \
             -project Auralis.xcodeproj \
             -scheme Auralis \
@@ -165,7 +166,11 @@ jobs:
             -destination "platform=iOS Simulator,id=$simulator_id" \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:AuralisUITests \
-            test
+            test | tee "$test_log"
+          if ! grep -Eq 'Executed [1-9][0-9]* tests, with 0 failures' "$test_log"; then
+            echo "::error::AuralisUITests did not report an executed passing test run."
+            exit 1
+          fi
 
   # AVFoundation 真实播放边界测试需要能驱动 AVPlayer 的 run loop。
   # Swift Testing 的无界面 runner 在 GitHub macOS 环境中不会持续驱动该
