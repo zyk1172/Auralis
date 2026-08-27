@@ -7,6 +7,28 @@ import MediaAccessibility
 
 public enum MusicHapticsSource: Sendable, Equatable { case none, system, custom, analyzing }
 
+/// Values exposed by the in-app diagnostic screen.  Deliberately excludes URLs,
+/// server names and any authentication material.
+public struct MusicHapticsDiagnostics: Sendable, Equatable {
+    public var supportsCustomHaptics: Bool
+    public var systemMusicHapticsActive: Bool
+    public var globalEnabled: Bool
+    public var trackPreference: TrackHapticsPreference
+    public var effectiveEnabled: Bool
+    public var source: MusicHapticsSource
+    public var hasReliableISRC: Bool
+
+    public init(supportsCustomHaptics: Bool, systemMusicHapticsActive: Bool, globalEnabled: Bool, trackPreference: TrackHapticsPreference, effectiveEnabled: Bool, source: MusicHapticsSource, hasReliableISRC: Bool) {
+        self.supportsCustomHaptics = supportsCustomHaptics
+        self.systemMusicHapticsActive = systemMusicHapticsActive
+        self.globalEnabled = globalEnabled
+        self.trackPreference = trackPreference
+        self.effectiveEnabled = effectiveEnabled
+        self.source = source
+        self.hasReliableISRC = hasReliableISRC
+    }
+}
+
 @MainActor
 public final class SystemMusicHapticsAdapter {
     public init() {}
@@ -19,6 +41,14 @@ public final class SystemMusicHapticsAdapter {
         return await manager.isHapticTrackAvailable(forMediaMatching: isrc)
         #else
         return false
+        #endif
+    }
+
+    public var isActive: Bool {
+        #if os(iOS)
+        MAMusicHapticsManager.shared.isActive
+        #else
+        false
         #endif
     }
 }
@@ -107,7 +137,13 @@ final class CustomMusicHapticsEngine {
 public final class MusicHapticsCoordinator {
     public static let enabledDefaultsKey = "auralis.playback.musicHaptics.enabled"
     public private(set) var source: MusicHapticsSource = .none
-    public var onReliableISRCChanged: (@MainActor @Sendable (String?) -> Void)?
+
+    private struct CurrentContext {
+        var identity: MusicHapticsIdentity
+        var sourceURL: URL?
+        var favorite: Bool
+        var position: TimeInterval
+    }
 
     private let store: MusicHapticsStore
     private let system = SystemMusicHapticsAdapter()
@@ -116,6 +152,7 @@ public final class MusicHapticsCoordinator {
     private var currentTimeline: MusicHapticsTimeline?
     private var analysisTask: Task<Void, Never>?
     private var currentFavorite = false
+    private var currentContext: CurrentContext?
 
     public init(store: MusicHapticsStore = MusicHapticsStore()) { self.store = store }
     public var supportsHaptics: Bool { custom.supportsHaptics }
@@ -123,6 +160,7 @@ public final class MusicHapticsCoordinator {
     public func begin(identity: MusicHapticsIdentity, sourceURL: URL?, favorite: Bool, position: TimeInterval) {
         stop()
         currentIdentity = identity; currentFavorite = favorite
+        currentContext = CurrentContext(identity: identity, sourceURL: sourceURL, favorite: favorite, position: position)
         Task { [weak self] in await self?.resolve(identity: identity, sourceURL: sourceURL, favorite: favorite, position: position) }
     }
 
@@ -133,16 +171,27 @@ public final class MusicHapticsCoordinator {
     public func playbackFailed() { stop() }
 
     public func stop() {
-        analysisTask?.cancel(); analysisTask = nil; custom.stop(); currentTimeline = nil; currentIdentity = nil; source = .none; onReliableISRCChanged?(nil)
+        analysisTask?.cancel(); analysisTask = nil; custom.stop(); currentTimeline = nil; currentIdentity = nil; currentContext = nil; source = .none
     }
 
     public func setPreference(_ preference: TrackHapticsPreference) {
         guard let identity = currentIdentity else { return }
-        Task { try? await store.setPreference(preference, for: identity) }
+        Task { [weak self] in
+            try? await self?.store.setPreference(preference, for: identity)
+            await self?.resolveCurrentTrack()
+        }
+    }
+
+    /// The settings switch takes effect for the current item immediately.  A
+    /// per-track override still has precedence over this value.
+    public func setGlobalEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: Self.enabledDefaultsKey)
+        Task { [weak self] in await self?.resolveCurrentTrack() }
     }
 
     public func favoriteChanged(_ favorite: Bool, identity: MusicHapticsIdentity) {
         currentFavorite = favorite
+        if currentIdentity == identity { currentContext?.favorite = favorite }
         Task { try? await store.updateFavorite(favorite, for: identity) }
     }
 
@@ -157,23 +206,71 @@ public final class MusicHapticsCoordinator {
         try? await store.reconcile(with: tracks, authoritative: authoritative)
     }
 
+    public func diagnostics() async -> MusicHapticsDiagnostics {
+        let preference: TrackHapticsPreference
+        if let currentIdentity {
+            preference = (try? await store.preference(for: currentIdentity)) ?? .inherit
+        } else {
+            preference = .inherit
+        }
+        let globalEnabled = UserDefaults.standard.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        return MusicHapticsDiagnostics(
+            supportsCustomHaptics: custom.supportsHaptics,
+            systemMusicHapticsActive: system.isActive,
+            globalEnabled: globalEnabled,
+            trackPreference: preference,
+            effectiveEnabled: preference.effective(globalEnabled: globalEnabled),
+            source: source,
+            hasReliableISRC: currentIdentity?.isrc != nil
+        )
+    }
+
+    /// Creates the optional analysis sidecar before AVPlayer starts an item.
+    /// The returned object receives only decoded PCM from that item's existing
+    /// playback pipeline; it never owns a URLSession or a stream URL.
+    public func makeStreamingAnalysisSink(identity: MusicHapticsIdentity, favorite: Bool, duration: TimeInterval) async -> (any MusicHapticsAnalysisSink)? {
+        let preference = (try? await store.preference(for: identity)) ?? .inherit
+        let globalEnabled = UserDefaults.standard.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        guard preference.effective(globalEnabled: globalEnabled), custom.supportsHaptics, duration > 0 else { return nil }
+        source = .analyzing
+        return StreamingMusicHapticsAnalyzer(identity: identity, duration: duration) { [store] timeline in
+            Task.detached(priority: .utility) {
+                try? await store.store(timeline, favorite: favorite)
+            }
+        }
+    }
+
+    private func resolveCurrentTrack() async {
+        guard let context = currentContext else { return }
+        custom.stop()
+        currentTimeline = nil
+        source = .none
+        await resolve(identity: context.identity, sourceURL: context.sourceURL, favorite: context.favorite, position: context.position)
+    }
+
     private func resolve(identity: MusicHapticsIdentity, sourceURL: URL?, favorite: Bool, position: TimeInterval) async {
         guard currentIdentity == identity else { return }
         let preference = (try? await store.preference(for: identity)) ?? .inherit
-        guard preference.effective(globalEnabled: UserDefaults.standard.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false), custom.supportsHaptics else { return }
-        onReliableISRCChanged?(identity.isrc)
+        guard preference.effective(globalEnabled: UserDefaults.standard.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false) else { return }
+        // System Music Haptics does not depend on custom Core Haptics support.
+        // An iPhone can have the system path available even when app-generated
+        // patterns are unavailable or intentionally disabled.
         if await system.canUseSystemTimeline(isrc: identity.isrc) {
             guard currentIdentity == identity else { return }
             source = .system
             return
         }
-        onReliableISRCChanged?(nil)
+        guard custom.supportsHaptics else { return }
         if let timeline = try? await store.timeline(for: identity) {
             guard currentIdentity == identity else { return }
             do { try custom.play(timeline, offset: position); currentTimeline = timeline; source = .custom } catch { source = .none }
             return
         }
-        guard let sourceURL, sourceURL.isFileURL else { source = .none; return }
+        // HTTP streams are fed by the PlaybackEngine sidecar.  The old
+        // isFileURL guard made this branch permanently unreachable for
+        // Navidrome/OpenSubsonic playback.
+        guard let sourceURL else { source = .none; return }
+        guard sourceURL.isFileURL else { source = .analyzing; return }
         source = .analyzing
         analysisTask = Task.detached(priority: .utility) { [store] in
             do {

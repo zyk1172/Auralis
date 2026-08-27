@@ -23,7 +23,7 @@ let package = Package(
         .target(name: "OpenSubsonicKit", dependencies: ["Domain", "SecurityKit"], resources: [.process("Resources")]),
         .target(name: "MusicLibrary", dependencies: ["Domain"]),
         .target(name: "PlaybackQueue", dependencies: ["Domain"]),
-        .target(name: "PlaybackEngine", dependencies: ["Domain", "PlaybackQueue", "Observability"]),
+        .target(name: "PlaybackEngine", dependencies: ["Domain", "PlaybackQueue", "Observability", "MusicHaptics"]),
         .target(name: "OfflineManager", dependencies: ["Domain"], resources: [.process("Resources")]),
         .target(name: "ImagePipeline", dependencies: ["Domain"]),
         .target(name: "LyricsKit", dependencies: ["Domain"]),

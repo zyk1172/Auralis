@@ -67,12 +67,14 @@ struct ThemeSettingsPage: View {
 }
 
 struct PlaybackSettingsPage: View {
+    static let musicHapticsSectionTitle = "音乐震动反馈"
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
     @AppStorage("auralis.audio.highQualityWiFi") private var highQualityWiFi = true
     @AppStorage("auralis.audio.cellularTranscoding") private var cellularTranscoding = true
     @AppStorage(MusicHapticsCoordinator.enabledDefaultsKey) private var musicHapticsEnabled = false
     @State private var musicHapticsUsage = MusicHapticsUsage()
+    @State private var musicHapticsDiagnostics: MusicHapticsDiagnostics?
 
     var body: some View {
         SettingsDetailForm(title: String(localized: "播放与音质", bundle: .module), theme: theme) {
@@ -126,6 +128,16 @@ struct PlaybackSettingsPage: View {
                     Button(String(localized: "清理普通震动缓存", bundle: .module), role: .destructive) {
                         Task { await model.musicHaptics.clearTransientCache(); musicHapticsUsage = await model.musicHaptics.usage() }
                     }
+#if DEBUG
+                    if let diagnostics = musicHapticsDiagnostics {
+                        let customState = diagnostics.supportsCustomHaptics ? "可用" : "不可用"
+                        let systemState = diagnostics.systemMusicHapticsActive ? "已启用" : "未启用"
+                        let isrcState = diagnostics.hasReliableISRC ? "已验证" : "缺失/未验证"
+                        Text("诊断 · 自定义硬件：\(customState)；系统 Music Haptics：\(systemState)；当前来源：\(String(describing: diagnostics.source))；ISRC：\(isrcState)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+#endif
                 } else {
                     Text(String(localized: "此设备不支持 Core Haptics 音乐触觉。", bundle: .module))
                         .font(.caption)
@@ -134,7 +146,14 @@ struct PlaybackSettingsPage: View {
             }
 #endif
         }
-        .task { musicHapticsUsage = await model.musicHaptics.usage() }
+        .task {
+            musicHapticsUsage = await model.musicHaptics.usage()
+            musicHapticsDiagnostics = await model.musicHaptics.diagnostics()
+            musicHapticsEnabled = UserDefaults.standard.object(forKey: MusicHapticsCoordinator.enabledDefaultsKey) as? Bool ?? false
+        }
+        .onChange(of: musicHapticsEnabled) { _, enabled in
+            model.setMusicHapticsEnabled(enabled)
+        }
     }
 }
 

@@ -857,9 +857,6 @@ public final class AuralisAppModel: ObservableObject {
         activity.isEligibleForSearch = false
         activity.requiredUserInfoKeys = ["serverID", "currentTrackID", "queueTrackIDs", "position"]
         handoffActivity = activity
-        musicHaptics.onReliableISRCChanged = { [weak self] isrc in
-            self?.mediaIntegration.setInternationalStandardRecordingCode(isrc)
-        }
         startMediaIntegration()
         // 兼容现有观察模型的视图：领域 Store 在变更前转发一次全局失效通知。
         // 新视图可以直接观察具体 Store，逐步缩小重绘范围；这里不复制任何状态。
@@ -1934,6 +1931,9 @@ public final class AuralisAppModel: ObservableObject {
     private func selectAndPlay(_ track: Track, reconcileQueue: Bool) {
         CrashLog.shared.log("selectAndPlay 开始: \(track.title) (id=\(track.id.rawValue))")
         musicHaptics.stop()
+        // Do not leave the previous recording's ISRC attached while the new
+        // track is still resolving its trusted LocalCatalog metadata.
+        mediaIntegration.setInternationalStandardRecordingCode(nil)
         actualDuration = nil
         streamRetryAttempts.removeValue(forKey: queueIdentity(track))
         playbackHistoryStore.resetSelection()
@@ -1985,6 +1985,18 @@ public final class AuralisAppModel: ObservableObject {
                 return
             }
             let hapticsIdentity = await self.musicHapticsIdentity(for: track)
+            // ISRC is playback metadata, not a haptics opt-in.  Keep it in
+            // Now Playing whenever LocalCatalog has verified it so the system
+            // can decide whether Music Haptics is available.
+            self.mediaIntegration.setInternationalStandardRecordingCode(hapticsIdentity.isrc)
+            if let engine = self.engine as? AVFoundationPlaybackEngine {
+                let sink = await self.musicHaptics.makeStreamingAnalysisSink(
+                    identity: hapticsIdentity,
+                    favorite: self.currentTrack.isFavorite,
+                    duration: max(self.effectivePlaybackDuration, track.duration)
+                )
+                engine.setMusicHapticsAnalysisSink(sink)
+            }
             // 只记录脱敏后的流地址（去掉查询串与主机信息，查询串含认证参数）。
             let safeURL = playable.streamURL.map { AVFoundationPlaybackEngine.redactedURL($0) } ?? "nil"
             CrashLog.shared.log("准备调用 engine.play，streamURL=\(safeURL)")
@@ -3487,6 +3499,10 @@ public final class AuralisAppModel: ObservableObject {
         musicHaptics.setPreference(preference)
     }
 
+    public func setMusicHapticsEnabled(_ enabled: Bool) {
+        musicHaptics.setGlobalEnabled(enabled)
+    }
+
     /// 可等待的收藏切换（含与不喜欢的互斥）；测试直接调用以同步断言。
     func toggleFavoritePersisted(_ track: Track) async -> Bool {
         // 收藏与不喜欢互斥：点击收藏时若歌曲处于“不喜欢”，先取消不喜欢再收藏。
@@ -3505,9 +3521,10 @@ public final class AuralisAppModel: ObservableObject {
             catalog.tracks[index].isFavorite = updated.isFavorite
         }
         favoritesRevision &+= 1
+        let hapticsIdentity = await musicHapticsIdentity(for: updated)
+        musicHaptics.favoriteChanged(updated.isFavorite, identity: hapticsIdentity)
         if currentTrack.isSame(as: track) {
             currentTrack = updated
-            musicHaptics.currentTrackFavoriteChanged(updated.isFavorite)
         }
         refreshHomeSnapshots()
         return await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: updated.isFavorite)
@@ -3589,6 +3606,8 @@ public final class AuralisAppModel: ObservableObject {
             catalog.tracks[index].isFavorite = false
         }
         if currentTrack.isSame(as: track) { currentTrack = updated }
+        let hapticsIdentity = await musicHapticsIdentity(for: updated)
+        musicHaptics.favoriteChanged(false, identity: hapticsIdentity)
         refreshHomeSnapshots()
         _ = await connector.setFavorite(serverID: updated.serverID, trackID: updated.id, isFavorite: false)
     }

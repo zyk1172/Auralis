@@ -33,3 +33,28 @@ import Testing
     #expect(usage.favoriteBytes > 0)
     #expect(try await store.timeline(for: identity) == timeline)
 }
+
+private actor TimelineCapture {
+    var timeline: MusicHapticsTimeline?
+    func record(_ timeline: MusicHapticsTimeline) { self.timeline = timeline }
+}
+
+@Test func streamingPCMCompletesAfterCoverageThreshold() async {
+    let identity = MusicHapticsIdentity(title: "Stream", artist: "Artist", durationMilliseconds: 10_000)
+    let capture = TimelineCapture()
+    let analyzer = StreamingMusicHapticsAnalyzer(identity: identity, duration: 10) { timeline in
+        Task { await capture.record(timeline) }
+    }
+    let samples = Array(repeating: Int16(1_200), count: 10)
+    let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    for second in 0..<10 {
+        analyzer.consumePCM(bytes, time: Double(second), sampleRate: 10, channels: 1)
+    }
+    analyzer.finish()
+    for _ in 0..<40 where await capture.timeline == nil {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    let timeline = await capture.timeline
+    #expect(timeline?.isComplete == true)
+    #expect(timeline?.analysisCoverage ?? 0 >= 0.95)
+}

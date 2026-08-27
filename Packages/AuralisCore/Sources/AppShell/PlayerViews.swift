@@ -161,6 +161,7 @@ struct CompactMiniPlayerContent: View {
 }
 
 struct NowPlayingView: View {
+    static let musicHapticsMenuTitle = "音乐震动"
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
@@ -271,14 +272,18 @@ struct NowPlayingView: View {
             Button(String(localized: "歌曲鉴赏", bundle: .module)) { appreciateCurrentSong() }
             Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
 #if os(iOS)
-            Button(String(localized: "音乐震动：跟随全局设置", bundle: .module)) {
-                model.setMusicHapticsPreference(.inherit)
-            }
-            Button(String(localized: "音乐震动：为此歌曲开启", bundle: .module)) {
-                model.setMusicHapticsPreference(.enabled)
-            }
-            Button(String(localized: "音乐震动：为此歌曲关闭", bundle: .module)) {
-                model.setMusicHapticsPreference(.disabled)
+            Menu {
+                Button(String(localized: "跟随全局设置", bundle: .module)) {
+                    model.setMusicHapticsPreference(.inherit)
+                }
+                Button(String(localized: "为此歌曲开启", bundle: .module)) {
+                    model.setMusicHapticsPreference(.enabled)
+                }
+                Button(String(localized: "为此歌曲关闭", bundle: .module), role: .destructive) {
+                    model.setMusicHapticsPreference(.disabled)
+                }
+            } label: {
+                Text(String(localized: "音乐震动", bundle: .module))
             }
 #endif
             Button(String(localized: "取消", bundle: .module), role: .cancel) {}
