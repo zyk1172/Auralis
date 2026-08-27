@@ -1,15 +1,31 @@
 import AgentKit
 import AIKit
 import Foundation
+import SecurityKit
 import Testing
 
 private final class WebFixtureURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (HTTPURLResponse, Data))?
+    nonisolated(unsafe) static var lastRequest: URLRequest?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        var capturedRequest = request
+        if capturedRequest.httpBody == nil, let stream = capturedRequest.httpBodyStream {
+            stream.open()
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4_096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                data.append(buffer, count: count)
+            }
+            stream.close()
+            capturedRequest.httpBody = data
+        }
+        Self.lastRequest = capturedRequest
         guard let handler = Self.handler, let client else {
             client?.urlProtocolDidFinishLoading(self)
             return
@@ -238,6 +254,50 @@ struct WebCapabilityTests {
         #expect(source.publishedAt == "2026-08-23")
         #expect(source.backend == "fixture")
         #expect(source.sourceType == "search")
+    }
+
+    @Test("Tavily 搜索走 Keychain、映射来源并编码域名过滤")
+    func tavilySearchMapsSourcesAndDomains() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebFixtureURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let vault = InMemoryCredentialVault()
+        try await vault.store("tavily-secret", for: TavilyWebSearchService.defaultCredentialID)
+        let response = HTTPURLResponse(
+            url: TavilyWebSearchService.defaultEndpoint,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        WebFixtureURLProtocol.lastRequest = nil
+        WebFixtureURLProtocol.handler = { _ in
+            let payload = #"{"results":[{"title":"夜曲","url":"https://music.163.com/song?id=1","content":"公开音乐资料"}]}"#
+            return (response, Data(payload.utf8))
+        }
+        defer {
+            WebFixtureURLProtocol.handler = nil
+            WebFixtureURLProtocol.lastRequest = nil
+        }
+
+        let result = try await TavilyWebSearchService(
+            credentialVault: vault,
+            session: session,
+            policy: policy()
+        ).search(
+            query: "周杰伦 夜曲",
+            options: WebSearchOptions(limit: 2, includeDomains: ["music.163.com"])
+        )
+
+        let source = try #require(result.sources.first)
+        #expect(source.backend == TavilyWebSearchService.backendIdentifier)
+        #expect(source.title == "夜曲")
+        #expect(source.snippet == "公开音乐资料")
+        let request = try #require(WebFixtureURLProtocol.lastRequest)
+        let body = try #require(request.httpBody)
+        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(object["api_key"] as? String == "tavily-secret")
+        #expect(object["include_domains"] as? [String] == ["music.163.com"])
+        #expect(!result.sources.map(\.snippet).contains { $0.contains("tavily-secret") })
     }
 
     @Test("WebCapabilityRouter 按 hosted、configured、instant fallback 优先级选择")

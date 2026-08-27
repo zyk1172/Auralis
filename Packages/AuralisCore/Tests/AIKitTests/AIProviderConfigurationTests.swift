@@ -110,3 +110,26 @@ func modelCapabilitiesPreserveLargeContextLimit() {
             == 200_000
     )
 }
+
+@Test("Reasoning configuration round trips and old completion requests remain decodable")
+func reasoningConfigurationIsProviderNeutralAndBackwardCompatible() throws {
+    for effort in AIReasoningEffort.allCases {
+        let configuration = AIReasoningConfiguration(enabled: true, effort: effort)
+        let decoded = try JSONDecoder().decode(
+            AIReasoningConfiguration.self,
+            from: JSONEncoder().encode(configuration)
+        )
+        #expect(decoded == configuration)
+    }
+
+    let oldRequest = AICompletionRequest(
+        model: "legacy-model",
+        messages: [AIMessage(role: .user, content: "hello")],
+        maxTokens: 32
+    )
+    let decodedOldRequest = try JSONDecoder().decode(
+        AICompletionRequest.self,
+        from: JSONEncoder().encode(oldRequest)
+    )
+    #expect(decodedOldRequest.reasoning == nil)
+}

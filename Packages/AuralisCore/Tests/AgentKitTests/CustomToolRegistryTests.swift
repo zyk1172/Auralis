@@ -135,6 +135,40 @@ struct CustomToolRegistryTests {
         #expect((await registry.history(id: first.id)).map(\.version) == [1, 2, 3])
     }
 
+    @Test("Custom Tool snapshots advance atomically and remove disabled/deleted tools")
+    func snapshotsTrackRegistryMutations() async throws {
+        let registry = makeRegistry()
+        let initial = await registry.modelSnapshot()
+        #expect(initial.revision == 0)
+        #expect(initial.descriptors.isEmpty)
+
+        let saved = try await registry.create(CustomToolManifest(
+            name: "快照工具",
+            description: "验证运行中刷新",
+            implementation: .httpRead(CustomHTTPReadToolDefinition(allowedHosts: ["example.com"]))
+        ))
+        let created = await registry.modelSnapshot()
+        #expect(created.revision == initial.revision + 1)
+        #expect(created.descriptors.contains { $0.customToolID == saved.id && $0.customToolVersion == 1 })
+
+        var changed = saved
+        changed.description = "更新后的工具"
+        _ = try await registry.update(changed)
+        let updated = await registry.modelSnapshot()
+        #expect(updated.revision == created.revision + 1)
+        #expect(updated.descriptors.first(where: { $0.customToolID == saved.id })?.customToolVersion == 2)
+
+        _ = try await registry.setEnabled(id: saved.id, enabled: false)
+        let disabled = await registry.modelSnapshot()
+        #expect(disabled.revision == updated.revision + 1)
+        #expect(!disabled.descriptors.contains { $0.customToolID == saved.id })
+
+        try await registry.delete(id: saved.id)
+        let deleted = await registry.modelSnapshot()
+        #expect(deleted.revision == disabled.revision + 1)
+        #expect(!deleted.descriptors.contains { $0.customToolID == saved.id })
+    }
+
     @Test("Custom Tool validation rejects a legacy or nested child")
     func rejectsUnsafeComposition() async throws {
         let registry = makeRegistry()

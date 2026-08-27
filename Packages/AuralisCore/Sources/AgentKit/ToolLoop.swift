@@ -43,6 +43,8 @@ public struct ToolLoop {
         public let allowsHistory: Bool
         /// 隐私：是否允许发送收藏与评分（对应设置页「允许发送收藏和评分」）。
         public let allowsFavoritesAndRatings: Bool
+        /// 隐私：是否允许将歌曲内容元数据用于公开网络检索。
+        public let allowsExternalDiscovery: Bool
         /// Complete run-scoped privacy policy propagated to every tool result.
         /// The individual fields above remain as source-compatible projections.
         public let privacyPermissions: AIPrivacyPermissions
@@ -61,6 +63,9 @@ public struct ToolLoop {
         /// catalog at the run boundary. Discovery and execution receive the
         /// same registry snapshot for this run.
         public let customToolRegistry: CustomToolRegistry
+        /// User-selected reasoning intent. Provider codecs decide whether the
+        /// selected endpoint can project it onto a request.
+        public let reasoning: AIReasoningConfiguration
 
         public init(
             serverID: ServerID? = nil,
@@ -82,11 +87,13 @@ public struct ToolLoop {
             allowsLyrics: Bool = false,
             allowsHistory: Bool = false,
             allowsFavoritesAndRatings: Bool = false,
+            allowsExternalDiscovery: Bool = false,
             memories: [AgentMemoryEntry] = [],
             skills: [AgentSkillEntry] = [],
             mutationResourceLeaseRegistry: MutationResourceLeaseRegistry = MutationResourceLeaseRegistry(),
             recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
-            customToolRegistry: CustomToolRegistry = .shared
+            customToolRegistry: CustomToolRegistry = .shared,
+            reasoning: AIReasoningConfiguration = AIReasoningConfiguration()
         ) {
             var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
             if privacyPermissions == nil {
@@ -94,6 +101,7 @@ public struct ToolLoop {
                 resolvedPrivacy.allowsLyrics = allowsLyrics
                 resolvedPrivacy.allowsPlaybackHistory = allowsHistory
                 resolvedPrivacy.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+                resolvedPrivacy.allowsExternalDiscovery = allowsExternalDiscovery
             }
             self.privacyPermissions = resolvedPrivacy
             self.serverID = serverID
@@ -114,11 +122,13 @@ public struct ToolLoop {
             self.allowsLyrics = resolvedPrivacy.allowsLyrics
             self.allowsHistory = resolvedPrivacy.allowsPlaybackHistory
             self.allowsFavoritesAndRatings = resolvedPrivacy.allowsFavoritesAndRatings
+            self.allowsExternalDiscovery = resolvedPrivacy.allowsExternalDiscovery
             self.memories = memories
             self.skills = skills
             self.mutationResourceLeaseRegistry = mutationResourceLeaseRegistry
             self.recommendationIndexExecutionRegistry = recommendationIndexExecutionRegistry
             self.customToolRegistry = customToolRegistry
+            self.reasoning = reasoning
         }
     }
 
@@ -274,11 +284,8 @@ public struct ToolLoop {
         // snapshot is used by selector, provider schema, tool_search and
         // ToolRuntime so discovery cannot advertise a different set than the
         // executor can actually run.
-        var availableToolDescriptors = AgentToolRegistry.all
-        let customDescriptors = await context.customToolRegistry.modelDescriptors()
-        for descriptor in customDescriptors where !availableToolDescriptors.contains(where: { $0.name == descriptor.name }) {
-            availableToolDescriptors.append(descriptor)
-        }
+        let customSnapshot = await context.customToolRegistry.modelSnapshot()
+        let availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
         let workflowRoute = WorkflowEngine.route(
             intent: resolvedIntent,
             text: userText,
@@ -419,6 +426,7 @@ public struct ToolLoop {
                     webService: webService,
                     plan: plan,
                     availableToolDescriptors: availableToolDescriptors,
+                    initialCustomToolRevision: customSnapshot.revision,
                     sideEffectAuthorization: resolvedAuthorization,
                     convergencePolicy: convergencePolicy ?? .interactive,
                     runID: runID,
@@ -443,6 +451,7 @@ public struct ToolLoop {
                     webService: webService,
                     plan: plan,
                     availableToolDescriptors: availableToolDescriptors,
+                    initialCustomToolRevision: customSnapshot.revision,
                     intent: resolvedIntent,
                     policy: resolvedPolicy,
                     initialTaskState: initialTaskState,
@@ -573,7 +582,8 @@ public struct ToolLoop {
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
         plan: AgentRequestPlan,
-        availableToolDescriptors: [ToolDescriptor],
+        availableToolDescriptors initialAvailableToolDescriptors: [ToolDescriptor],
+        initialCustomToolRevision: UInt64,
         sideEffectAuthorization: SideEffectAuthorizationContext,
         convergencePolicy: AgentConvergencePolicy,
         runID: UUID,
@@ -584,6 +594,12 @@ public struct ToolLoop {
         log: @escaping @Sendable (AgentActionRecord) async -> Void,
         progress: @escaping @Sendable (AgentProgress) async -> Void
     ) async {
+        var availableToolDescriptors = initialAvailableToolDescriptors
+        // The initial selector already consumed this exact snapshot. Do not
+        // treat it as a hot-reload event: doing so would append every custom
+        // tool to the first schema and bypass tool_search's on-demand
+        // discovery contract.
+        var loadedCustomToolRevision: UInt64? = initialCustomToolRevision
         var selectedTools = ToolSelector.select(plan: plan, all: availableToolDescriptors)
         let directReadToolName = plan.semantics.directReadCapability?.toolName
         let effectiveAuthorization = sideEffectAuthorization
@@ -645,6 +661,31 @@ public struct ToolLoop {
         // once alongside the natural final answer.
         var presentation = AgentPresentationState()
         while true {
+            let customSnapshot = await context.customToolRegistry.modelSnapshot()
+            if loadedCustomToolRevision != customSnapshot.revision {
+                availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
+                loadedCustomToolRevision = customSnapshot.revision
+                selectedTools.removeAll { $0.customToolID != nil }
+                for descriptor in customSnapshot.descriptors where
+                    descriptor.permission == .readOnly
+                    || descriptor.isAuthorizedForModelExposure(
+                        allowedOperations: effectiveAuthorization.allowedOperations
+                    ) {
+                    guard !selectedTools.contains(where: { $0.name == descriptor.name }) else { continue }
+                    selectedTools.append(descriptor)
+                }
+                conversation[0] = AIMessage(
+                    role: .system,
+                    content: Self.systemPrompt(
+                        context: context,
+                        tools: selectedTools,
+                        nativeToolCalling: nativeMode,
+                        environment: capabilityEnvironment,
+                        awarenessTools: availableToolDescriptors,
+                        authorizedOperations: effectiveAuthorization.allowedOperations
+                    )
+                )
+            }
             if Task.isCancelled {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                 return
@@ -685,7 +726,8 @@ public struct ToolLoop {
                 maxTokens: provider.capabilities.maxOutputTokens,
                 tools: nativeMode ? toolDefinitions : nil,
                 toolChoice: nativeMode ? toolChoice : nil,
-                hostedTools: hostedTools.isEmpty ? nil : hostedTools
+                hostedTools: hostedTools.isEmpty ? nil : hostedTools,
+                reasoning: context.reasoning
             )
             let outcome: StreamOutcome
             do {
@@ -959,6 +1001,7 @@ public struct ToolLoop {
                 }
                 let authorizationForCall = effectiveAuthorization
                 let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
+                let descriptorsForExecution = availableToolDescriptors
                 let result: ToolResult
                 do {
                     result = if let parallelResult = parallelResultsByID[parallelResultKey(for: call, index: index)] {
@@ -982,7 +1025,7 @@ public struct ToolLoop {
                             resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
                             recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                             customToolRegistry: context.customToolRegistry,
-                            availableToolDescriptors: availableToolDescriptors,
+                            availableToolDescriptors: descriptorsForExecution,
                             runID: runID,
                             callID: call.id
                         )
@@ -1185,7 +1228,8 @@ public struct ToolLoop {
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
         plan: AgentRequestPlan,
-        availableToolDescriptors: [ToolDescriptor],
+        availableToolDescriptors initialAvailableToolDescriptors: [ToolDescriptor],
+        initialCustomToolRevision: UInt64,
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
@@ -1203,6 +1247,10 @@ public struct ToolLoop {
         // 动态工具加载：只向模型暴露与本次意图相关的工具，降低 schema 对上下文的占用。
         // 每轮使用同一份共享 AgentRequestPlan（不允许 ToolSelector 重新分析用户文本），
         // 任务中途的新工具需求通过 tool_search（授权过滤）与已执行工具补入。
+        var availableToolDescriptors = initialAvailableToolDescriptors
+        // The initial selector already consumed this exact snapshot. A reload
+        // is only meaningful after a later registry revision changes.
+        var loadedCustomToolRevision: UInt64? = initialCustomToolRevision
         let requestTimeout = roundTimeout
         let effectiveAuthorization = sideEffectAuthorization
         let nativeMode = provider.supportsToolCalling
@@ -1371,6 +1419,35 @@ public struct ToolLoop {
         let buffersProvisionalText = Self.policyRequiresToolExecution(policy)
 
         while true {
+            let customSnapshot = await context.customToolRegistry.modelSnapshot()
+            if loadedCustomToolRevision != customSnapshot.revision {
+                availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
+                loadedCustomToolRevision = customSnapshot.revision
+                selectedTools.removeAll { $0.customToolID != nil }
+                for descriptor in customSnapshot.descriptors where
+                    descriptor.permission == .readOnly
+                    || descriptor.isAuthorizedForModelExposure(
+                        allowedOperations: effectiveAuthorization.allowedOperations
+                    ) {
+                    guard !selectedTools.contains(where: { $0.name == descriptor.name }) else { continue }
+                    selectedTools.append(descriptor)
+                }
+                conversation[0] = AIMessage(
+                    role: .system,
+                    content: Self.systemPrompt(
+                        context: context,
+                        tools: selectedTools,
+                        nativeToolCalling: nativeMode,
+                        goal: taskState.goal,
+                        workflowInstruction: activeSkill?.instructions,
+                        environment: capabilityEnvironment,
+                        relevantCapabilityIDs: Self.relevantCapabilityIDs(for: intent, semantics: plan.semantics),
+                        awarenessTools: availableToolDescriptors,
+                        activeSkillID: activeSkillID,
+                        authorizedOperations: effectiveAuthorization.allowedOperations
+                    )
+                )
+            }
             if Task.isCancelled {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                 return
@@ -1543,7 +1620,8 @@ public struct ToolLoop {
                     maxTokens: reservedOutput,
                     tools: nativeMode ? toolDefinitions : nil,
                     toolChoice: nativeMode ? toolChoice : nil,
-                    hostedTools: hostedTools.isEmpty ? nil : hostedTools
+                    hostedTools: hostedTools.isEmpty ? nil : hostedTools,
+                    reasoning: context.reasoning
                 )
                 do {
                     // 确定性 mutation 任务：模型正文是 provisional，工具成功前不
@@ -2187,6 +2265,7 @@ public struct ToolLoop {
                 let authorizationForCall = effectiveAuthorization
                 let effectiveToolTimeout = Self.effectiveToolTimeout(descriptor, requested: toolTimeout)
                 let executionCallID = call.id
+                let descriptorsForExecution = availableToolDescriptors
                 // 真正执行：identical signature streak 只在执行处累计；
                 // totalToolCalls 已在调用层 recordTotalCall() 计过一次，这里不再计。
                 convergence.recordToolExecution(signature: convergenceSignature)
@@ -2210,7 +2289,7 @@ public struct ToolLoop {
                             resourceLeaseRegistry: context.mutationResourceLeaseRegistry,
                             recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                             customToolRegistry: context.customToolRegistry,
-                            availableToolDescriptors: availableToolDescriptors,
+                            availableToolDescriptors: descriptorsForExecution,
                             capabilityEnvironment: capabilityEnvironment,
                             runID: runID,
                             callID: executionCallID
@@ -3552,7 +3631,7 @@ public struct ToolLoop {
 
         ## 当前状态
         - 服务器：\(serverLine)
-        - 资料（本地缓存）：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.allowsFavoritesAndRatings ? context.favoriteCount : 0) 首收藏
+        - 资料（本地缓存）：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.allowsFavoritesAndRatings ? "\(context.favoriteCount) 首收藏" : "收藏与评分已隐藏")
         - 播放：\(trackLine)；队列 \(context.queueCount) 首；\(context.isShuffled ? "随机模式" : "顺序模式")；循环 \(context.repeatMode)
         - 最近播放：\(recentLine)
 
@@ -3618,6 +3697,14 @@ public struct ToolLoop {
         15. 技能：需要执行已存技能时，先用 skill_read 读取完整指令再执行；技能名以 skill_list 或上面的「可用技能」为准。主人要求「记住这段流程 / 创建一个技能」时，用 skill_create(name, instructions) 存成本地 skill 文件。
         """
         */
+    }
+
+    private static func descriptorsWithCustomTools(_ customDescriptors: [ToolDescriptor]) -> [ToolDescriptor] {
+        var descriptors = AgentToolRegistry.all
+        for descriptor in customDescriptors where !descriptors.contains(where: { $0.name == descriptor.name }) {
+            descriptors.append(descriptor)
+        }
+        return descriptors
     }
 
     /// 生成按分组的工具清单，突出服务器/查询/播放等常用工具。

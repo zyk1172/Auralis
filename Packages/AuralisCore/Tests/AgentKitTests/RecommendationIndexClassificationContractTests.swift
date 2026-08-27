@@ -362,8 +362,8 @@ struct RecommendationIndexClassificationContractTests {
         #expect(diagnostic.actualType == "missing")
     }
 
-    @Test("V3 Codable output has no legacy semanticTags or mode keys")
-    func v3CodableOutputHasNoLegacyKeys() throws {
+    @Test("V4 Codable output has no legacy semanticTags or mode keys")
+    func v4CodableOutputHasNoLegacyKeys() throws {
         let item = RecommendationIndexClassification(id: "track", moods: ["mood.sacred"])
         let object = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any]
@@ -398,15 +398,15 @@ struct RecommendationIndexClassificationContractTests {
         #expect(!itemsSchema.contains("\"mode\""))
     }
 
-    @Test("Strict schema contains fixed enums and requires nullable numeric properties")
-    func strictSchemaUsesFixedTaxonomyAndNullableRequiredNumerics() throws {
+    @Test("V4 schema keeps only item identity required")
+    func v4SchemaKeepsOnlyItemIdentityRequired() throws {
         let schema = try #require(
             JSONSerialization.jsonObject(
                 with: RecommendationIndexSkillRuntime.outputSchema().jsonData
             ) as? [String: Any]
         )
         let rootRequired = try #require(schema["required"] as? [String])
-        #expect(rootRequired == ["batchID", "revision", "items"])
+        #expect(rootRequired == ["items"])
         let rootProperties = try #require(schema["properties"] as? [String: Any])
         #expect(rootProperties["mode"] == nil)
 
@@ -414,17 +414,12 @@ struct RecommendationIndexClassificationContractTests {
         let itemSchema = try #require(items["items"] as? [String: Any])
         let itemProperties = try #require(itemSchema["properties"] as? [String: Any])
         let itemRequired = try #require(itemSchema["required"] as? [String])
+        #expect(itemRequired == ["id"])
         #expect(itemProperties["mode"] == nil)
         #expect(itemProperties["semanticTags"] == nil)
-        for key in ["energy", "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity"] {
-            #expect(itemRequired.contains(key))
-            let numeric = try #require(itemProperties[key] as? [String: Any])
-            #expect(numeric["anyOf"] != nil)
-        }
-        let moods = try #require(itemProperties["moods"] as? [String: Any])
-        let moodItems = try #require(moods["items"] as? [String: Any])
-        let moodEnum = try #require(moodItems["enum"] as? [String])
-        #expect(moodEnum.contains("mood.sacred"))
+        #expect(itemProperties["tags"] != nil)
+        #expect(itemProperties["features"] != nil)
+        #expect(itemProperties["confidence"] != nil)
     }
 
     @Test("Legacy diagnostics still decode optional shape metadata")

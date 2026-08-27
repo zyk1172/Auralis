@@ -1020,10 +1020,13 @@ func recommendationIndexExactChineseBuildRequestUsesRealRuntime() async throws {
         connector: RestoringConnector(result: makeResult(tracks: tracks)),
         catalogStore: catalogStore
     )
+    var privacyPermissions = AIPrivacyPermissions()
+    privacyPermissions.allowsExternalDiscovery = true
     let coordinator = AgentCoordinator(
         model: model,
         coordinator: model.catalogCoordinator,
-        directory: temporaryAgentDirectory()
+        directory: temporaryAgentDirectory(),
+        privacyPermissionsOverride: privacyPermissions
     )
     await model.connect(to: .init(
         displayName: "Test Library",

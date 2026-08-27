@@ -46,6 +46,20 @@ public struct WebSearchResult: Codable, Hashable, Sendable {
     }
 }
 
+/// Provider-neutral search options. Backends that do not support domain
+/// filters or depth simply use `limit` through the compatibility extension.
+public struct WebSearchOptions: Sendable, Hashable {
+    public var limit: Int
+    public var includeDomains: [String]
+    public var searchDepth: String
+
+    public init(limit: Int = 5, includeDomains: [String] = [], searchDepth: String = "basic") {
+        self.limit = min(max(limit, 1), 10)
+        self.includeDomains = includeDomains
+        self.searchDepth = searchDepth == "advanced" ? "advanced" : "basic"
+    }
+}
+
 public struct WebDocument: Codable, Hashable, Sendable {
     public let source: WebSource
     public let text: String
@@ -89,14 +103,14 @@ public enum WebCapabilityError: Error, LocalizedError, Sendable, Equatable {
     }
 }
 
-private enum BoundedLoadResult {
+enum BoundedLoadResult {
     case response(HTTPURLResponse, Data)
     case redirect(URL)
 }
 
 /// A one-request URLSession delegate. URLSession's default redirect behavior is
 /// intentionally disabled; the caller validates and follows one hop at a time.
-private final class BoundedURLDataLoader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+final class BoundedURLDataLoader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let configuration: URLSessionConfiguration
     private let maxBytes: Int
     private let allowedContentTypes: Set<String>

@@ -3,9 +3,9 @@ import Domain
 import Foundation
 import LocalCatalog
 
-/// A batch owned by one Recommendation Index Runtime generation.  The model
-/// receives this identity as data and must echo it; only the Runtime can turn
-/// a matching envelope into a catalog commit.
+/// A batch owned by one Recommendation Index Runtime generation. The model
+/// produces only classification content; the Runtime retains this identity
+/// and binds any accepted partial result to it before committing.
 public struct RecommendationIndexPreparedBatch: Sendable, Equatable {
     public let batchID: UUID
     public let revision: UInt64
@@ -121,7 +121,7 @@ public enum RecommendationIndexValidationError: Error, LocalizedError, Equatable
         switch self {
         case .staleBatch: "分类结果不属于当前批次"
         case .duplicateIDs: "分类结果包含重复歌曲 ID"
-        case .incompleteCoverage: "分类结果没有恰好覆盖当前批次"
+        case .incompleteCoverage: "分类结果包含当前批次之外的歌曲 ID"
         }
     }
 }
@@ -301,9 +301,13 @@ public enum RecommendationIndexClassificationParser {
                 message: "JSON 语法无效"
             ))
         }
-        // Only identity/coverage keys are fatal at the wire boundary. Missing
-        // categorical/numeric/confidence values are handled by the v3 DTO's
-        // safe defaults below.
+        // v4 deliberately removes batch identity from the model contract. The
+        // Runtime still owns the identity and attaches it after parsing.
+        if isV4Payload(parsedJSON) {
+            return parseV4(parsedJSON, rawLength: rawLength, batch: batch)
+        }
+        // Keep accepting the previous v3 envelope for already-running or
+        // persisted workflows, but all new requests use v4 below.
         if let violation = requiredKeyViolation(in: parsedJSON) {
             return .failure(.init(
                 stage: .codableDecode,
@@ -398,6 +402,182 @@ public enum RecommendationIndexClassificationParser {
         let expectedType: String
         let actualType: String
         let message: String
+    }
+
+    private static func isV4Payload(_ json: AIJSONValue) -> Bool {
+        guard case let .object(root) = json else { return false }
+        return root["batchID"] == nil && root["revision"] == nil
+    }
+
+    private static func parseV4(
+        _ json: AIJSONValue,
+        rawLength: Int,
+        batch: RecommendationIndexPreparedBatch
+    ) -> Result<RecommendationIndexClassificationEnvelope, RecommendationIndexClassificationDiagnostics> {
+        guard case let .object(root) = json else {
+            return .failure(.init(
+                stage: .codableDecode,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "v4 根输出必须是 object",
+                fieldPath: "root",
+                expectedType: "object",
+                actualType: typeName(json)
+            ))
+        }
+        guard case let .array(rawItems)? = root["items"] else {
+            return .failure(.init(
+                stage: .codableDecode,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "v4 根字段 items 必须是 array",
+                fieldPath: "items",
+                expectedType: "array",
+                actualType: root["items"].map(typeName) ?? "missing"
+            ))
+        }
+        guard !rawItems.isEmpty else {
+            return .failure(.init(
+                stage: .trackCoverage,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "v4 items 不能为空",
+                fieldPath: "items",
+                expectedType: "object[]",
+                actualType: "empty"
+            ))
+        }
+
+        var classifications: [RecommendationIndexClassification] = []
+        classifications.reserveCapacity(rawItems.count)
+        var ids: [String] = []
+        for (index, rawItem) in rawItems.enumerated() {
+            guard case let .object(fields) = rawItem else {
+                return .failure(.init(
+                    stage: .codableDecode,
+                    batchSize: batch.tracks.count,
+                    rawLength: rawLength,
+                    jsonFound: true,
+                    message: "v4 items[\(index)] 必须是 object",
+                    fieldPath: "items[\(index)]",
+                    expectedType: "object",
+                    actualType: typeName(rawItem)
+                ))
+            }
+            guard case let .string(rawID)? = fields["id"],
+                  !rawID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .failure(.init(
+                    stage: .codableDecode,
+                    batchSize: batch.tracks.count,
+                    rawLength: rawLength,
+                    jsonFound: true,
+                    message: "v4 每个 item 必须包含非空 id",
+                    fieldPath: "items[\(index)].id",
+                    expectedType: "string",
+                    actualType: fields["id"].map(typeName) ?? "missing"
+                ))
+            }
+            let id = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+            ids.append(id)
+            classifications.append(v4Classification(id: id, fields: fields))
+        }
+
+        let duplicateIDs = Dictionary(grouping: ids, by: { $0 })
+            .filter { $0.value.count > 1 }
+            .map(\.key)
+            .sorted()
+        let expected = Set(batch.tracks.map(\.id))
+        let actual = Set(ids)
+        let extra = actual.subtracting(expected).sorted()
+        guard duplicateIDs.isEmpty, extra.isEmpty else {
+            return .failure(.init(
+                stage: .trackCoverage,
+                batchSize: batch.tracks.count,
+                rawLength: rawLength,
+                jsonFound: true,
+                message: "v4 结果包含重复或不属于当前批次的歌曲 ID",
+                extraIDs: extra,
+                duplicateIDs: duplicateIDs,
+                fieldPath: "items[].id",
+                expectedType: "当前 batch 的唯一 ID",
+                actualType: "ids=\(ids.count)"
+            ))
+        }
+        // Missing IDs are intentionally accepted. They remain pending and are
+        // not sent through another evidence/classification round as a side
+        // effect of one malformed or omitted item.
+        return .success(RecommendationIndexClassificationEnvelope(
+            batchID: batch.batchID,
+            revision: batch.revision,
+            items: classifications
+        ))
+    }
+
+    private static func v4Classification(
+        id: String,
+        fields: [String: AIJSONValue]
+    ) -> RecommendationIndexClassification {
+        var buckets: [TagDimension: [String]] = [:]
+        if case let .array(values)? = fields["tags"] {
+            for value in values.prefix(64) {
+                guard case let .string(raw) = value,
+                      let definition = RecommendationIndexTaxonomy.resolve(raw) else { continue }
+                buckets[definition.dimension, default: []].append(definition.id.rawValue)
+            }
+        }
+        func feature(_ name: String, upperBound: Int) -> Int? {
+            guard case let value? = (fields["features"].flatMap { value -> AIJSONValue? in
+                guard case let .object(featureFields) = value else { return nil }
+                return featureFields[name]
+            }) else { return nil }
+            let number: Int?
+            switch value {
+            case let .number(raw): number = raw.rounded() == raw ? Int(raw) : nil
+            case let .string(raw): number = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+            default: number = nil
+            }
+            guard let number, (1...upperBound).contains(number) else { return nil }
+            return number
+        }
+        func confidence() -> Double {
+            guard let value = fields["confidence"] else { return 0.5 }
+            let number: Double?
+            switch value {
+            case let .number(raw): number = raw
+            case let .string(raw): number = Double(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+            default: number = nil
+            }
+            guard let number, number.isFinite, (0...1).contains(number) else { return 0.5 }
+            return number
+        }
+        func tags(_ dimension: TagDimension) -> [String] {
+            Array(Set(buckets[dimension] ?? [])).sorted()
+        }
+        return RecommendationIndexClassification(
+            id: id,
+            moods: tags(.mood),
+            scenes: tags(.scene),
+            energy: feature("energy", upperBound: 10),
+            tempo: feature("tempo", upperBound: 5),
+            acousticness: feature("acousticness", upperBound: 5),
+            danceability: feature("danceability", upperBound: 5),
+            vocals: tags(.vocal),
+            textures: tags(.texture),
+            styles: tags(.style),
+            confidence: confidence(),
+            themes: tags(.theme),
+            genres: tags(.genre),
+            instruments: tags(.instrument),
+            rhythms: tags(.rhythm),
+            instrumentalness: feature("instrumentalness", upperBound: 5),
+            liveness: feature("liveness", upperBound: 5),
+            speechiness: feature("speechiness", upperBound: 5),
+            valence: feature("valence", upperBound: 5),
+            complexity: feature("complexity", upperBound: 5)
+        )
     }
 
     private static func requiredKeyViolation(
@@ -679,7 +859,10 @@ public enum RecommendationIndexSkillRuntime {
     public static let skillID = "recommendation-index"
 
     private struct ClassificationInput: Codable, Sendable {
-        let batchID: UUID
+        // The input envelope keeps a runtime correlation key for providers and
+        // in-flight compatibility clients. It is never part of the v4 model
+        // output contract; the parser owns the returned identity.
+        let batchID: String
         let revision: UInt64
         let tracks: [RecommendationIndexTrackEvidence]
     }
@@ -712,59 +895,32 @@ public enum RecommendationIndexSkillRuntime {
     ]
 
     public static func outputSchema() -> AIJSONValue {
-        // Strict structured-output dialects commonly require every declared
-        // property to be required. Numeric values remain nullable so strict
-        // providers return null, while tolerant decoding accepts omission.
-        let itemRequired = #"["id", "moods", "scenes", "themes", "genres", "styles", "vocals", "instruments", "textures", "rhythms", "energy", "tempo", "acousticness", "danceability", "instrumentalness", "liveness", "speechiness", "valence", "complexity", "confidence"]"#
-        let enumJSON: (TagDimension, Int) -> String = { dimension, maxItems in
-            let ids = RecommendationIndexTaxonomy.ids(for: dimension).map(\.rawValue)
-            let enumBody = ids.map { "\"\($0)\"" }.joined(separator: ",")
-            return #"{"type":"array","maxItems":\#(maxItems),"items":{"type":"string","enum":[\#(enumBody)]}}"#
-        }
-        let numericJSON: (String, Int) -> String = { name, maximum in
-            #""\#(name)":{"anyOf":[{"type":"integer","minimum":1,"maximum":\#(maximum)},{"type":"null"}]}"#
-        }
+        // v4 keeps the wire contract intentionally small. Taxonomy ownership
+        // and numeric bounds are enforced by the Runtime sanitizer, not by a
+        // huge strict schema that makes one omitted optional field fatal.
         return try! AIJSONValue(jsonString: #"""
     {
       "type": "object",
-      "additionalProperties": false,
-        "properties": {
-          "batchID": {"type": "string"},
-          "revision": {"type": "integer", "minimum": 1},
-          "items": {
+      "additionalProperties": true,
+      "properties": {
+        "items": {
           "type": "array",
           "minItems": 1,
           "maxItems": 100,
           "items": {
             "type": "object",
-            "additionalProperties": false,
+            "additionalProperties": true,
             "properties": {
               "id": {"type": "string"},
-              "moods": \#(enumJSON(.mood, 5)),
-              "scenes": \#(enumJSON(.scene, 6)),
-              "themes": \#(enumJSON(.theme, 5)),
-              "genres": \#(enumJSON(.genre, 3)),
-              "styles": \#(enumJSON(.style, 5)),
-              "vocals": \#(enumJSON(.vocal, 4)),
-              "instruments": \#(enumJSON(.instrument, 8)),
-              "textures": \#(enumJSON(.texture, 6)),
-              "rhythms": \#(enumJSON(.rhythm, 4)),
-              \#(numericJSON("energy", 10)),
-              \#(numericJSON("tempo", 5)),
-              \#(numericJSON("acousticness", 5)),
-              \#(numericJSON("danceability", 5)),
-              \#(numericJSON("instrumentalness", 5)),
-              \#(numericJSON("liveness", 5)),
-              \#(numericJSON("speechiness", 5)),
-              \#(numericJSON("valence", 5)),
-              \#(numericJSON("complexity", 5)),
+              "tags": {"type": "array", "maxItems": 64, "items": {"type": "string"}},
+              "features": {"type": "object", "additionalProperties": true},
               "confidence": {"anyOf":[{"type":"number"},{"type":"string"},{"type":"null"}]}
             },
-            "required": \#(itemRequired)
+            "required": ["id"]
           }
         }
       },
-      "required": ["batchID", "revision", "items"]
+      "required": ["items"]
     }
     """#)
     }
@@ -792,11 +948,11 @@ public enum RecommendationIndexSkillRuntime {
             throw RecommendationIndexValidationError.staleBatch
         }
         let ids = envelope.items.map(\.id)
-        guard ids.count == Set(ids).count else {
+        guard !ids.isEmpty, ids.count == Set(ids).count else {
             throw RecommendationIndexValidationError.duplicateIDs
         }
-        let expected = batch.tracks.map(\.id)
-        guard ids.count == expected.count, Set(ids) == Set(expected) else {
+        let expected = Set(batch.tracks.map(\.id))
+        guard Set(ids).isSubset(of: expected) else {
             throw RecommendationIndexValidationError.incompleteCoverage
         }
     }
@@ -816,6 +972,7 @@ public enum RecommendationIndexSkillRuntime {
         allowsLyrics: Bool = false,
         allowsHistory: Bool = false,
         allowsFavoritesAndRatings: Bool = false,
+        reasoning: AIReasoningConfiguration? = nil,
         availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
@@ -1266,8 +1423,10 @@ public enum RecommendationIndexSkillRuntime {
                 allowsLyrics: allowsLyrics,
                 allowsHistory: allowsHistory,
                 allowsFavoritesAndRatings: allowsFavoritesAndRatings,
+                reasoning: reasoning,
                 availableToolDescriptors: availableToolDescriptors,
                 executionLease: executionLease,
+                executionAuthority: authority,
                 resourceLeaseRegistry: resourceLeaseRegistry,
                 executionStateRegistry: executionStateRegistry,
                 observe: observe,
@@ -1318,7 +1477,8 @@ public enum RecommendationIndexSkillRuntime {
                     model: model,
                     batch: prepared,
                     evidence: evidence,
-                    repairDiagnostic: repairDiagnostic
+                    repairDiagnostic: repairDiagnostic,
+                    reasoning: reasoning
                 )
                 await emitObservation(.canonicalTagsLoadCompleted, phase: .loadingCanonicalTags, batch: prepared)
                 // Hard invariant: this model turn is a closed transform.
@@ -1637,11 +1797,11 @@ public enum RecommendationIndexSkillRuntime {
                 durationSince: commitStartedAt,
                 message: result.summary
             )
-            totalWrittenThisRun += prepared.tracks.count
+            totalWrittenThisRun += envelope.items.count
             taskState.successfulToolNames.append(commitCall.name)
             taskState.successfulToolCount += 1
             taskState.pendingActions = ["正在核验推荐索引写入结果"]
-            taskState.recordProgress(action: "推荐索引写入 \(prepared.tracks.count) 首")
+            taskState.recordProgress(action: "推荐索引写入 \(envelope.items.count) 首（批次部分成功）")
             await log(AgentActionRecord(
                 toolName: commitCall.name,
                 permission: .reversible,
@@ -1783,8 +1943,10 @@ public enum RecommendationIndexSkillRuntime {
         allowsLyrics: Bool,
         allowsHistory: Bool,
         allowsFavoritesAndRatings: Bool,
+        reasoning: AIReasoningConfiguration?,
         availableToolDescriptors: [ToolDescriptor],
         executionLease: ToolExecutionLease,
+        executionAuthority: ToolExecutionAuthority,
         resourceLeaseRegistry: MutationResourceLeaseRegistry,
         executionStateRegistry: RecommendationIndexExecutionRegistry,
         observe: @escaping @Sendable (RecommendationIndexExecutionEvent) async -> Void,
@@ -1807,20 +1969,34 @@ public enum RecommendationIndexSkillRuntime {
             downloadServiceAvailable: systemService != nil,
             systemServiceAvailable: systemService != nil
         )
+        // External evidence is opt-in. Do not even start the evidence model
+        // loop when the user has disabled public discovery; the local
+        // classifier can proceed with content metadata alone.
+        guard resolvedPrivacy.allowsMetadata, resolvedPrivacy.allowsExternalDiscovery else {
+            return batch.tracks.map { .init(track: RecommendationIndexClassifierTrack($0), evidence: []) }
+        }
         let allReadOnly = availableToolDescriptors.filter {
-                $0.visibility == .model
+                $0.isVisible(toSkillID: skillID)
                 && $0.permission == .readOnly
                 && !personalStateEvidenceTools.contains($0.name)
                 && (resolvedPrivacy.allowsPlaybackHistory || !historySensitiveEvidenceTools.contains($0.name))
                 && (resolvedPrivacy.allowsFavoritesAndRatings || !favoritesSensitiveEvidenceTools.contains($0.name))
+                && ToolPrivacyPolicy.missingDisclosureCategories(for: $0, permissions: resolvedPrivacy).isEmpty
         }
         let permittedReadOnlyNames = Set(allReadOnly.map(\.name))
         var selected = ToolSelector.select(for: userText, all: availableToolDescriptors)
             .filter {
-                $0.visibility == .model
+                $0.isVisible(toSkillID: skillID)
                     && $0.permission == .readOnly
                     && permittedReadOnlyNames.contains($0.name)
             }
+        // ToolSelector's compatibility overload intentionally has no skill
+        // parameter. Add the built-in skill-owned evidence tools explicitly
+        // after the shared visibility predicate has admitted them.
+        for descriptor in allReadOnly where descriptor.requiredSkillID == skillID {
+            guard !selected.contains(where: { $0.name == descriptor.name }) else { continue }
+            selected.append(descriptor)
+        }
         if let search = allReadOnly.first(where: { $0.name == "tool_search" }),
            !selected.contains(where: { $0.name == search.name }) {
             selected.append(search)
@@ -1859,6 +2035,8 @@ public enum RecommendationIndexSkillRuntime {
         var seenCalls = Set<String>()
         var discovered = Set<String>()
         var totalCalls = 0
+        var searchedTrackIDs = Set<String>()
+        var fetchedTrackIDs = Set<String>()
         for round in 0..<3 {
             let definitions = nativeMode
                 ? ToolSelector.toolDefinitions(from: selected, strict: provider.capabilities.supportsStrictSchema)
@@ -1870,7 +2048,8 @@ public enum RecommendationIndexSkillRuntime {
                 maxTokens: evidenceOutputTokens,
                 tools: nativeMode ? definitions : nil,
                 toolChoice: nil,
-                hostedTools: nil
+                hostedTools: nil,
+                reasoning: reasoning
             )
             await observe(.init(
                 kind: .providerRequestStarted, runID: runID, sessionID: sessionID, serverID: serverID,
@@ -1902,6 +2081,19 @@ public enum RecommendationIndexSkillRuntime {
                     results.append(.init(role: .tool, content: "相同证据查询已执行；请使用现有结果。", toolCallID: raw.id))
                     continue
                 }
+                let target = stringArgument(arguments["trackID"]) ?? stringArgument(arguments["id"])
+                if raw.name == "recommendation_evidence_search",
+                   let target,
+                   searchedTrackIDs.contains(target) {
+                    results.append(.init(role: .tool, content: "当前歌曲的公开搜索已达到单首上限；请使用现有证据。", toolCallID: raw.id))
+                    continue
+                }
+                if raw.name == "recommendation_evidence_fetch",
+                   let target,
+                   fetchedTrackIDs.contains(target) {
+                    results.append(.init(role: .tool, content: "当前歌曲的网页读取已达到单首上限；请使用现有证据。", toolCallID: raw.id))
+                    continue
+                }
                 totalCalls += 1
                 await observe(.init(kind: .evidenceToolStarted, runID: runID, sessionID: sessionID, serverID: serverID,
                     phase: .gatheringEvidence, batchID: batch.batchID, batchRevision: batch.revision, batchSize: batch.tracks.count,
@@ -1911,13 +2103,18 @@ public enum RecommendationIndexSkillRuntime {
                     systemService: systemService, externalMusicService: externalMusicService,
                     privacyPermissions: resolvedPrivacy, allowsLyrics: allowsLyrics,
                     providerCapabilities: provider.capabilities, webService: webService, authorizationContext: nil,
+                    activeSkillID: skillID, executionAuthority: executionAuthority,
                     executionLease: executionLease, resourceLeaseRegistry: resourceLeaseRegistry,
                     recommendationIndexExecutionRegistry: executionStateRegistry,
                     availableToolDescriptors: availableToolDescriptors, capabilityEnvironment: environment
                 )
                 let summary = String(result.summary.prefix(1_200))
-                let target = stringArgument(arguments["trackID"]) ?? stringArgument(arguments["id"])
-                if let target, batch.tracks.contains(where: { $0.id == target }) {
+                if raw.name == "recommendation_evidence_search", let target {
+                    searchedTrackIDs.insert(target)
+                } else if raw.name == "recommendation_evidence_fetch", let target {
+                    fetchedTrackIDs.insert(target)
+                }
+                if result.success, let target, batch.tracks.contains(where: { $0.id == target }) {
                     records[target, default: []].append(.init(
                         toolName: raw.name,
                         targetTrackID: target,
@@ -1976,7 +2173,8 @@ public enum RecommendationIndexSkillRuntime {
         model: String,
         batch: RecommendationIndexPreparedBatch,
         evidence: [RecommendationIndexTrackEvidence],
-        repairDiagnostic: RecommendationIndexClassificationDiagnostics? = nil
+        repairDiagnostic: RecommendationIndexClassificationDiagnostics? = nil,
+        reasoning: AIReasoningConfiguration? = nil
     ) async throws -> AICompletionRequest {
         let minimumRequiredOutput = RecommendationIndexBatchPolicy
             .minimumRequiredClassificationOutputTokens(batchSize: batch.tracks.count)
@@ -1999,7 +2197,8 @@ public enum RecommendationIndexSkillRuntime {
             model: model,
             batch: batch,
             evidence: evidence,
-            repairDiagnostic: repairDiagnostic
+            repairDiagnostic: repairDiagnostic,
+            reasoning: reasoning
         )
         guard parts.budget.fits else {
             throw RecommendationIndexClassificationDiagnostics(
@@ -2025,11 +2224,12 @@ public enum RecommendationIndexSkillRuntime {
         model: String,
         batch: RecommendationIndexPreparedBatch,
         evidence: [RecommendationIndexTrackEvidence],
-        repairDiagnostic: RecommendationIndexClassificationDiagnostics?
+        repairDiagnostic: RecommendationIndexClassificationDiagnostics?,
+        reasoning: AIReasoningConfiguration? = nil
     ) throws -> ClassificationRequestParts {
         let boundedEvidence = boundedEvidence(evidence)
         let input = ClassificationInput(
-            batchID: batch.batchID,
+            batchID: batch.batchID.uuidString,
             revision: batch.revision,
             tracks: boundedEvidence
         )
@@ -2055,7 +2255,8 @@ public enum RecommendationIndexSkillRuntime {
                 tools: [],
                 toolChoice: nil,
                 hostedTools: [],
-                outputFormat: outputFormat
+                outputFormat: outputFormat,
+                reasoning: reasoning
             )
             let budget = RecommendationIndexBatchPolicy.requestBudget(
                 systemPromptBytes: system.utf8.count,
@@ -2105,23 +2306,21 @@ public enum RecommendationIndexSkillRuntime {
         let repairInstruction: String
         if let repairDiagnostic {
             let field = repairDiagnostic.fieldPath ?? "结构化输出"
-            let expected = repairDiagnostic.expectedType ?? "当前 v3 契约"
+            let expected = repairDiagnostic.expectedType ?? "当前 v4 契约"
             let actual = repairDiagnostic.actualType ?? "缺失或无效"
             repairInstruction = """
-            上一轮同一批次只发现一个结构性契约问题，请修复后重新输出：
+            上一轮只发现一个结构性契约问题，请修复后重新输出：
             field=\(field); expected=\(expected); received=\(actual)。
-            只修复该结构，不要更换 batchID、revision 或 tracks 中的 id；不要输出原始上一轮内容。
+            只修复该结构，不要更换输入 tracks 中的 id；不要输出原始上一轮内容。
             """
         } else {
             repairInstruction = ""
         }
         return """
         你是 Auralis FIXED TAXONOMY CLASSIFIER。你只能从 Auralis 已定义的固定 taxonomy 中选择标签，不能发明新标签、不能创建自由文本标签。
-        返回且只返回一个 JSON 对象，必须原样回传 batchID、revision，并让 items 恰好覆盖输入 tracks 的每个 id 一次且不得重复。
-        固定维度为 moods/scenes/themes/genres/styles/vocals/instruments/textures/rhythms；数值为 energy(1-10)、tempo/acousticness/danceability/instrumentalness/liveness/speechiness/valence/complexity(1-5)。
-        数组中的每一项必须使用下面完整 catalog 中存在的固定 taxonomy ID。没有足够证据时 categorical 返回 []，numeric 返回 null，不要伪造中间值。
-        genre 与 style 分开，mood 与 scene/theme 分开，instrument 与 texture 分开。不要为了完整而强行选择标签。
-        JSON 类型必须严格遵守：categorical 都是 string[]；数值是 integer 或 null；batchID/id 是 string；revision 是 number；confidence 是 number、数字字符串或 null。不要输出 semanticTags 或 mode。
+        返回且只返回一个 JSON 对象，根字段只有 items。每个 item 必须包含输入 tracks 中的 id；如果无法判断某首歌，可以省略该 item，Runtime 会保留它为 pending，不要伪造分类。
+        tags 是固定 taxonomy ID 数组；features 只填写有根据的 energy(1-10) 或其它 1-5 数值；confidence 可省略。未知标签、未知字段或没有足够证据的字段不要强行填写。
+        Runtime 会自行拥有 batch identity，不要输出 batchID 或 revision。不要输出 semanticTags、mode 或解释文字。
 
         完整固定 taxonomy catalog（只允许使用这些 TagID；等号右侧是显示语义）：
         \(RecommendationIndexTaxonomy.compactClassifierCatalog)
@@ -2137,7 +2336,7 @@ public enum RecommendationIndexSkillRuntime {
             return .jsonSchema(
                 name: "recommendation_index_classification",
                 schema: outputSchema(),
-                strict: true
+                strict: false
             )
         }
         if capabilities.supportsJSONMode {

@@ -14,6 +14,27 @@ public let auralisDefaultRequestTimeout: TimeInterval = 180
 /// 用户可在 Provider「高级设置」中按实际模型修改 maxContextTokens / maxOutputTokens。
 public let auralisDefaultMaxContextTokens = 256_000
 
+/// Provider-neutral reasoning intensity. The value is intentionally limited to
+/// the common effort vocabulary; individual codecs map it to their own wire
+/// parameter without leaking provider-specific names into AgentKit or the UI.
+public enum AIReasoningEffort: String, Codable, Hashable, Sendable, CaseIterable {
+    case low
+    case medium
+    case high
+    case xhigh
+    case max
+}
+
+public struct AIReasoningConfiguration: Codable, Hashable, Sendable {
+    public var enabled: Bool
+    public var effort: AIReasoningEffort
+
+    public init(enabled: Bool = true, effort: AIReasoningEffort = .medium) {
+        self.enabled = enabled
+        self.effort = effort
+    }
+}
+
 /// 原生工具调用的请求偏好。`required` 只在 Runtime 已确认需要真实工具时使用；
 /// `named` 用于确定性 Workflow 强制当前步骤的唯一工具，避免模型跳到旁路工具。
 /// Provider 协议在请求前确定，工具能力被拒绝时必须报告原协议错误。
@@ -159,6 +180,9 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
     public var supportsHostedWebSearch: Bool
     public var supportsHostedWebFetch: Bool
     public var supportsReasoningMetadata: Bool
+    /// Whether the endpoint explicitly supports a request-side reasoning
+    /// control. This is separate from response reasoning metadata.
+    public var supportsReasoningControl: Bool
     public var toolMode: AIProviderToolMode
 
     public init(
@@ -175,6 +199,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         supportsHostedWebSearch: Bool = false,
         supportsHostedWebFetch: Bool = false,
         supportsReasoningMetadata: Bool = false,
+        supportsReasoningControl: Bool = false,
         toolMode: AIProviderToolMode? = nil
     ) {
         self.maxContextTokens = max(4_096, maxContextTokens)
@@ -192,6 +217,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         self.supportsHostedWebSearch = supportsHostedWebSearch
         self.supportsHostedWebFetch = supportsHostedWebFetch
         self.supportsReasoningMetadata = supportsReasoningMetadata
+        self.supportsReasoningControl = supportsReasoningControl
         self.toolMode = toolMode ?? (supportsToolCalling ? .openAIChat : .textualToolProtocol)
     }
 
@@ -200,6 +226,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         case supportsParallelTools, supportsToolChoice, supportsStrictSchema
         case supportsStreaming, supportsJSONMode, supportsJSONSchema
         case supportsHostedWebSearch, supportsHostedWebFetch, supportsReasoningMetadata
+        case supportsReasoningControl
         case toolMode
     }
 
@@ -219,6 +246,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
             supportsHostedWebSearch: try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebSearch) ?? false,
             supportsHostedWebFetch: try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebFetch) ?? false,
             supportsReasoningMetadata: try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningMetadata) ?? false,
+            supportsReasoningControl: try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningControl) ?? false,
             toolMode: try container.decodeIfPresent(AIProviderToolMode.self, forKey: .toolMode)
         )
     }
@@ -424,6 +452,10 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     public var maxTokens: Int
     /// 模型上下文窗口。默认 256K，用户可按实际模型修改；不参与累计任务预算。
     public var maxContextTokens: Int
+    /// Provenance of `maxContextTokens`; equality with the default is not
+    /// enough to tell whether the user explicitly configured a real 256K
+    /// model window.
+    public var hasKnownContextWindow: Bool
     public var timeout: TimeInterval
     public var usesStreaming: Bool
     public var supportsJSONMode: Bool
@@ -438,6 +470,9 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     public var supportsHostedWebSearch: Bool
     public var supportsHostedWebFetch: Bool
     public var supportsReasoningMetadata: Bool
+    /// Request-side reasoning is opt-in per protocol/model. Do not infer it
+    /// from the presence of response reasoning metadata.
+    public var supportsReasoningControl: Bool
     public var supportsImageInput: Bool
 
     public init(
@@ -453,6 +488,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         temperature: Double = 0.4,
         maxTokens: Int = auralisDefaultMaxOutputTokens,
         maxContextTokens: Int = auralisDefaultMaxContextTokens,
+        hasKnownContextWindow: Bool = false,
         timeout: TimeInterval = auralisDefaultRequestTimeout,
         usesStreaming: Bool = true,
         supportsJSONMode: Bool = false,
@@ -465,6 +501,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsHostedWebSearch: Bool = false,
         supportsHostedWebFetch: Bool = false,
         supportsReasoningMetadata: Bool = false,
+        supportsReasoningControl: Bool = false,
         supportsImageInput: Bool = false
     ) {
         self.id = id
@@ -479,6 +516,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.maxContextTokens = max(4_096, maxContextTokens)
+        self.hasKnownContextWindow = hasKnownContextWindow
         self.timeout = timeout
         self.usesStreaming = usesStreaming
         self.supportsJSONMode = supportsJSONMode
@@ -491,6 +529,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         self.supportsHostedWebSearch = supportsHostedWebSearch
         self.supportsHostedWebFetch = supportsHostedWebFetch
         self.supportsReasoningMetadata = supportsReasoningMetadata
+        self.supportsReasoningControl = supportsReasoningControl
         self.supportsImageInput = supportsImageInput
     }
 
@@ -498,11 +537,11 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     /// 保证已有用户升级后行为不变。
     private enum CodingKeys: String, CodingKey {
         case id, name, baseURL, apiPath, credentialID, model, customHeaders
-        case organization, project, temperature, maxTokens, maxContextTokens
+        case organization, project, temperature, maxTokens, maxContextTokens, hasKnownContextWindow
         case timeout, usesStreaming, supportsJSONMode, supportsJSONSchema
         case supportsToolCalling, hasVerifiedModelAvailability, supportsParallelTools, supportsToolChoice
         case supportsStrictSchema, supportsHostedWebSearch, supportsHostedWebFetch
-        case supportsReasoningMetadata, supportsImageInput
+        case supportsReasoningMetadata, supportsReasoningControl, supportsImageInput
     }
 
     public init(from decoder: any Decoder) throws {
@@ -519,6 +558,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? auralisDefaultMaxOutputTokens
         maxContextTokens = max(4_096, try container.decodeIfPresent(Int.self, forKey: .maxContextTokens) ?? auralisDefaultMaxContextTokens)
+        hasKnownContextWindow = try container.decodeIfPresent(Bool.self, forKey: .hasKnownContextWindow) ?? false
         timeout = try container.decodeIfPresent(TimeInterval.self, forKey: .timeout) ?? auralisDefaultRequestTimeout
         usesStreaming = try container.decodeIfPresent(Bool.self, forKey: .usesStreaming) ?? true
         supportsJSONMode = try container.decodeIfPresent(Bool.self, forKey: .supportsJSONMode) ?? false
@@ -534,6 +574,7 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
         supportsHostedWebSearch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebSearch) ?? false
         supportsHostedWebFetch = try container.decodeIfPresent(Bool.self, forKey: .supportsHostedWebFetch) ?? false
         supportsReasoningMetadata = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningMetadata) ?? false
+        supportsReasoningControl = try container.decodeIfPresent(Bool.self, forKey: .supportsReasoningControl) ?? false
         supportsImageInput = try container.decodeIfPresent(Bool.self, forKey: .supportsImageInput) ?? false
     }
 
@@ -583,6 +624,7 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
     public static let lyricsDefaultsKey = "auralis.ai.allowsLyrics"
     public static let historyDefaultsKey = "auralis.ai.allowsHistory"
     public static let favoritesAndRatingsDefaultsKey = "auralis.ai.allowsFavoritesAndRatings"
+    public static let externalDiscoveryDefaultsKey = "auralis.ai.allowsExternalDiscovery"
 
     /// 读取用户当前的隐私权限（UserDefaults）。键缺失时按 PrivacyModel 的默认值：
     /// 元数据默认允许（true）、歌词、播放历史与收藏/评分默认关闭（false）。
@@ -601,6 +643,9 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
         }
         if let value = defaults.object(forKey: favoritesAndRatingsDefaultsKey) as? Bool {
             permissions.allowsFavoritesAndRatings = value
+        }
+        if let value = defaults.object(forKey: externalDiscoveryDefaultsKey) as? Bool {
+            permissions.allowsExternalDiscovery = value
         }
         return permissions
     }
@@ -735,9 +780,12 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
     /// Provider-neutral output contract.  Nil and `.text` both mean an
     /// unconstrained natural-language response for compatibility.
     public let outputFormat: AIOutputFormat?
+    /// Provider-neutral reasoning intent for this request. A codec must omit
+    /// its provider-specific field when the endpoint has not declared support.
+    public let reasoning: AIReasoningConfiguration?
 
     private enum CodingKeys: String, CodingKey {
-        case model, transcript, messages, temperature, maxTokens, tools, toolChoice, hostedTools, outputFormat
+        case model, transcript, messages, temperature, maxTokens, tools, toolChoice, hostedTools, outputFormat, reasoning
     }
 
     public init(
@@ -748,7 +796,8 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         tools: [AIToolDefinition]? = nil,
         toolChoice: AIToolChoice? = nil,
         hostedTools: [AIHostedTool]? = nil,
-        outputFormat: AIOutputFormat? = nil
+        outputFormat: AIOutputFormat? = nil,
+        reasoning: AIReasoningConfiguration? = nil
     ) {
         self.model = model
         self.transcript = AITranscript(messages: messages)
@@ -758,6 +807,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.toolChoice = toolChoice
         self.hostedTools = hostedTools
         self.outputFormat = outputFormat
+        self.reasoning = reasoning
     }
 
     public init(
@@ -768,7 +818,8 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         tools: [AIToolDefinition]? = nil,
         toolChoice: AIToolChoice? = nil,
         hostedTools: [AIHostedTool]? = nil,
-        outputFormat: AIOutputFormat? = nil
+        outputFormat: AIOutputFormat? = nil,
+        reasoning: AIReasoningConfiguration? = nil
     ) {
         self.model = model
         self.transcript = transcript
@@ -778,6 +829,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.toolChoice = toolChoice
         self.hostedTools = hostedTools
         self.outputFormat = outputFormat
+        self.reasoning = reasoning
     }
 
     public init(from decoder: any Decoder) throws {
@@ -794,6 +846,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         self.toolChoice = try container.decodeIfPresent(AIToolChoice.self, forKey: .toolChoice)
         self.hostedTools = try container.decodeIfPresent([AIHostedTool].self, forKey: .hostedTools)
         self.outputFormat = try container.decodeIfPresent(AIOutputFormat.self, forKey: .outputFormat)
+        self.reasoning = try container.decodeIfPresent(AIReasoningConfiguration.self, forKey: .reasoning)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -807,6 +860,7 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
         try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
         try container.encodeIfPresent(hostedTools, forKey: .hostedTools)
         try container.encodeIfPresent(outputFormat, forKey: .outputFormat)
+        try container.encodeIfPresent(reasoning, forKey: .reasoning)
     }
 }
 
@@ -871,6 +925,9 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
     public let toolChoice: AIProbeStatus
     public let jsonMode: AIProbeStatus
     public let jsonSchema: AIProbeStatus
+    /// Health/compatibility observation for request-side reasoning controls.
+    /// Missing metadata is not treated as a negative capability.
+    public let reasoning: AIProbeStatus
     public let details: [String]
 
     public init(
@@ -882,6 +939,7 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
         toolChoice: AIProbeStatus = .notTested,
         jsonMode: AIProbeStatus = .notTested,
         jsonSchema: AIProbeStatus = .notTested,
+        reasoning: AIProbeStatus = .notTested,
         details: [String] = []
     ) {
         self.modelCatalog = modelCatalog
@@ -892,12 +950,13 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
         self.toolChoice = toolChoice
         self.jsonMode = jsonMode
         self.jsonSchema = jsonSchema
+        self.reasoning = reasoning
         self.details = details
     }
 
     private enum CodingKeys: String, CodingKey {
         case modelCatalog, modelAvailability, textCompletion, streaming
-        case nativeTools, toolChoice, jsonMode, jsonSchema, details
+        case nativeTools, toolChoice, jsonMode, jsonSchema, reasoning, details
     }
 
     public init(from decoder: any Decoder) throws {
@@ -910,6 +969,7 @@ public struct AIProviderDiagnostics: Codable, Hashable, Sendable {
         toolChoice = try container.decodeIfPresent(AIProbeStatus.self, forKey: .toolChoice) ?? .notTested
         jsonMode = try container.decodeIfPresent(AIProbeStatus.self, forKey: .jsonMode) ?? .notTested
         jsonSchema = try container.decodeIfPresent(AIProbeStatus.self, forKey: .jsonSchema) ?? .notTested
+        reasoning = try container.decodeIfPresent(AIProbeStatus.self, forKey: .reasoning) ?? .notTested
         details = try container.decodeIfPresent([String].self, forKey: .details) ?? []
     }
 

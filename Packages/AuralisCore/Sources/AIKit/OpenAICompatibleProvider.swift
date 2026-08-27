@@ -76,6 +76,22 @@ public extension AIProviderError {
                 || text.contains("unknown parameter"))
     }
 
+    /// Only an explicit unsupported/unknown reasoning parameter is a negative
+    /// capability observation. Empty reasoning metadata or transient failures
+    /// must not disable the user's reasoning preference.
+    var explicitlyRejectsReasoning: Bool {
+        guard case let .httpStatusDetail(_, detail) = self else { return false }
+        let text = detail.lowercased()
+        let mentionsReasoning = text.contains("reasoning")
+            || text.contains("thinking")
+            || text.contains("reasoning_effort")
+        return mentionsReasoning
+            && (text.contains("not supported")
+                || text.contains("unsupported")
+                || text.contains("unknown parameter")
+                || text.contains("invalid parameter"))
+    }
+
     var explicitlyRejectsStructuredOutput: Bool {
         guard case let .httpStatusDetail(_, detail) = self else { return false }
         let text = detail.lowercased()
@@ -233,7 +249,7 @@ public struct OpenAICompatibleProvider: AIProvider {
         // LM Studio 等端点可按实际模型修改。
         ModelCapabilities(
             maxContextTokens: configuration.maxContextTokens,
-            hasKnownContextWindow: configuration.maxContextTokens != auralisDefaultMaxContextTokens,
+            hasKnownContextWindow: configuration.hasKnownContextWindow,
             maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: supportsToolCalling,
             supportsParallelTools: configuration.supportsParallelTools,
@@ -250,6 +266,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             // not a separate Auralis-style web_fetch contract.
             supportsHostedWebFetch: false,
             supportsReasoningMetadata: configuration.supportsReasoningMetadata,
+            supportsReasoningControl: configuration.supportsReasoningControl,
             toolMode: usesResponsesAPI
                 ? (supportsToolCalling ? .openAIResponses : AIProviderToolMode.none)
                 : (supportsToolCalling ? .openAIChat : AIProviderToolMode.none)
@@ -303,6 +320,8 @@ public struct OpenAICompatibleProvider: AIProvider {
         details.append(contentsOf: jsonModeProbe.details)
         let jsonSchemaProbe = await probeJSONSchema()
         details.append(contentsOf: jsonSchemaProbe.details)
+        let reasoningProbe = await probeReasoning()
+        details.append(contentsOf: reasoningProbe.details)
         return AIConnectionResult(
             latency: Date().timeIntervalSince(started),
             model: response.model,
@@ -316,6 +335,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                 toolChoice: tools.toolChoice,
                 jsonMode: jsonModeProbe.status,
                 jsonSchema: jsonSchemaProbe.status,
+                reasoning: reasoningProbe.status,
                 details: details
             )
         )
@@ -337,6 +357,24 @@ public struct OpenAICompatibleProvider: AIProvider {
                 remainingModelRoutingRetries -= 1
                 try await Self.sleepBackoff(attempt: retryIndex)
             }
+        }
+    }
+
+    private func probeReasoning() async -> (status: AIProbeStatus, details: [String]) {
+        guard configuration.supportsReasoningControl else { return (.notTested, []) }
+        do {
+            _ = try await complete(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: "只回答 OK。")],
+                temperature: 0,
+                maxTokens: 64,
+                reasoning: AIReasoningConfiguration(enabled: true, effort: .low)
+            ))
+            return (.passed, ["reasoning 参数已被端点接受；是否返回思考元数据不作为能力判定。"])
+        } catch let error as AIProviderError where error.explicitlyRejectsReasoning {
+            return (.failed, ["服务端明确拒绝 reasoning 参数：\(error.localizedDescription)"])
+        } catch {
+            return (.degraded, ["reasoning 探测未完成：\(error.localizedDescription)；不会据此永久关闭 reasoning。"])
         }
     }
 
@@ -1230,6 +1268,11 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let output = Self.encodeChatOutputFormat(request.outputFormat) {
             body["response_format"] = output
         }
+        if let reasoning = request.reasoning,
+           reasoning.enabled,
+           configuration.supportsReasoningControl {
+            body["reasoning_effort"] = reasoning.effort.rawValue
+        }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
             if configuration.supportsToolChoice, let toolChoice = request.toolChoice {
@@ -1298,6 +1341,11 @@ public struct OpenAICompatibleProvider: AIProvider {
         if stream { body["stream"] = true }
         if let output = Self.encodeResponsesOutputFormat(request.outputFormat) {
             body["text"] = ["format": output]
+        }
+        if let reasoning = request.reasoning,
+           reasoning.enabled,
+           configuration.supportsReasoningControl {
+            body["reasoning"] = ["effort": reasoning.effort.rawValue]
         }
         let functionTools = request.tools ?? []
         let hostedTools = request.hostedTools ?? []

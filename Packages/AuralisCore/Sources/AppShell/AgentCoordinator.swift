@@ -104,6 +104,9 @@ public final class AgentCoordinator: ObservableObject {
     /// Authoritative live state for Recommendation Index runs. Unlike catalog
     /// counts, this registry can prove whether a run is actually active.
     private let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
+    /// Optional test/dependency-injection override. Production callers leave
+    /// this nil so every run reads the user's persisted privacy settings.
+    private let privacyPermissionsOverride: AIPrivacyPermissions?
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
     public let memoryStore: AgentMemoryStore
 
@@ -163,10 +166,12 @@ public final class AgentCoordinator: ObservableObject {
         coordinator: CatalogCoordinator,
         directory: URL? = nil,
         musicEnrichment: MusicEnrichmentService? = nil,
-        webService: (any AgentWebService)? = nil
+        webService: (any AgentWebService)? = nil,
+        privacyPermissionsOverride: AIPrivacyPermissions? = nil
     ) {
         self.model = model
         self.catalog = coordinator.store
+        self.privacyPermissionsOverride = privacyPermissionsOverride
         self.bridge = AuralisAgentBridge(model: model, coordinator: coordinator)
         let dir = directory ?? Self.defaultDirectory()
         let memoryStore = AgentMemoryStore(directory: dir)
@@ -174,7 +179,11 @@ public final class AgentCoordinator: ObservableObject {
         self.systemService = AuralisSystemToolService(model: model, memoryStore: memoryStore)
         // UI / Agent / 歌词补全共用同一个 MusicEnrichmentService；未传入时自建（测试用）。
         self.externalMusicService = musicEnrichment ?? MusicEnrichmentService(catalog: coordinator.store)
+        let tavily: (any AgentWebSearchBackend)? = UserDefaults.standard.bool(forKey: TavilySettings.enabledKey)
+            ? TavilyWebSearchService()
+            : nil
         self.webService = webService ?? WebCapabilityRouter(
+            configuredFullSearch: tavily,
             instantAnswerFallback: DuckDuckGoInstantAnswerService()
         )
         self.mutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
@@ -527,7 +536,7 @@ public final class AgentCoordinator: ObservableObject {
         let modelName = aiSettings.model.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 隐私 gating（B2）：按用户权限过滤上下文；权限关闭的字段不进入 Context。
-        let permissions = AIPrivacyPermissions.current()
+        let permissions = privacyPermissionsOverride ?? AIPrivacyPermissions.current()
         let cat = model.catalog
         let currentTrackTitle = permissions.allowsMetadata
             ? (cat.isConnected ? model.currentTrack.title : nil)
@@ -559,10 +568,12 @@ public final class AgentCoordinator: ObservableObject {
             allowsLyrics: permissions.allowsLyrics,
             allowsHistory: permissions.allowsPlaybackHistory,
             allowsFavoritesAndRatings: permissions.allowsFavoritesAndRatings,
+            allowsExternalDiscovery: permissions.allowsExternalDiscovery,
             memories: memoryStore.memories,
             skills: memoryStore.skills,
             mutationResourceLeaseRegistry: mutationResourceLeaseRegistry,
-            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
+            reasoning: aiSettings.reasoning
         )
         let bridge = self.bridge
         let catalog = self.catalog
@@ -1382,6 +1393,9 @@ public final class AgentCoordinator: ObservableObject {
         }
         if permissions.allowsLyrics {
             fields.append(String(localized: "歌词（查询到时）", bundle: .module))
+        }
+        if permissions.allowsExternalDiscovery {
+            fields.append(String(localized: "公开网络检索（仅发送歌曲内容元数据）", bundle: .module))
         }
         fields.append(String(localized: "服务器名称与资料库统计（运行基础信息）", bundle: .module))
         return AIPrivacyConsentRequest(
