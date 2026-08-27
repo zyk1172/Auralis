@@ -462,7 +462,11 @@ struct OpenAIResponsesProviderTests {
 
 @Suite("OpenAI Responses network tests", .serialized)
 struct OpenAIResponsesNetworkTests {
-    private func makeProvider(session: URLSession, apiPath: String = "/v1/responses") -> OpenAICompatibleProvider {
+    private func makeProvider(
+        session: URLSession,
+        apiPath: String = "/v1/responses",
+        supportsReasoningControl: Bool = false
+    ) -> OpenAICompatibleProvider {
         OpenAICompatibleProvider(
             configuration: AIProviderConfiguration(
                 name: "test",
@@ -470,7 +474,8 @@ struct OpenAIResponsesNetworkTests {
                 apiPath: apiPath,
                 model: "test-model",
                 supportsToolCalling: true,
-                supportsToolChoice: true
+                supportsToolChoice: true,
+                supportsReasoningControl: supportsReasoningControl
             ),
             credentialVault: KeychainCredentialVault(),
             session: session
@@ -481,7 +486,8 @@ struct OpenAIResponsesNetworkTests {
         session: URLSession,
         baseURL: String = "https://api.openai.com",
         model: String = "test-model",
-        verifiedModelAvailability: Bool = false
+        verifiedModelAvailability: Bool = false,
+        supportsReasoningControl: Bool = false
     ) -> OpenAICompatibleProvider {
         OpenAICompatibleProvider(
             configuration: AIProviderConfiguration(
@@ -489,7 +495,8 @@ struct OpenAIResponsesNetworkTests {
                 baseURL: URL(string: baseURL)!,
                 apiPath: "/v1/chat/completions",
                 model: model,
-                hasVerifiedModelAvailability: verifiedModelAvailability
+                hasVerifiedModelAvailability: verifiedModelAvailability,
+                supportsReasoningControl: supportsReasoningControl
             ),
             credentialVault: KeychainCredentialVault(),
             session: session
@@ -698,6 +705,56 @@ struct OpenAIResponsesNetworkTests {
         #expect(toolsBody[0]["description"] as? String == "搜索曲目")
         #expect(toolsBody[0]["parameters"] is [String: Any])
         #expect(toolsBody[0]["function"] == nil)
+    }
+
+    @Test("Responses reasoning mode is projected explicitly")
+    func responsesReasoningModesAreProjected() async throws {
+        let stubBody = #"{"id":"resp_reasoning","object":"response","model":"test-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"完成"}]}]}"#
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(data: Data(stubBody.utf8)),
+            .response(data: Data(stubBody.utf8)),
+            .response(data: Data(stubBody.utf8)),
+        ])
+        let provider = makeProvider(session: makeMockSession(), supportsReasoningControl: true)
+
+        for mode in [AIReasoningMode.enabled, .disabled, .automatic] {
+            _ = try await provider.complete(AICompletionRequest(
+                model: "test-model",
+                messages: [AIMessage(role: .user, content: "hi")],
+                maxTokens: 256,
+                reasoning: AIReasoningConfiguration(mode: mode, effort: .high)
+            ))
+        }
+
+        let bodies = try AIKitMockURLProtocol.requests.map(requestObject(from:))
+        #expect((bodies[0]["reasoning"] as? [String: Any])?["effort"] as? String == "high")
+        #expect((bodies[1]["reasoning"] as? [String: Any])?["effort"] as? String == "none")
+        #expect(bodies[2]["reasoning"] == nil)
+    }
+
+    @Test("Chat reasoning mode is projected explicitly")
+    func chatReasoningModesAreProjected() async throws {
+        let stubBody = #"{"model":"test-model","choices":[{"message":{"role":"assistant","content":"完成"}}]}"#
+        AIKitMockURLProtocol.reset(stubs: [
+            .response(data: Data(stubBody.utf8)),
+            .response(data: Data(stubBody.utf8)),
+            .response(data: Data(stubBody.utf8)),
+        ])
+        let provider = makeChatProvider(session: makeMockSession(), supportsReasoningControl: true)
+
+        for mode in [AIReasoningMode.enabled, .disabled, .automatic] {
+            _ = try await provider.complete(AICompletionRequest(
+                model: "test-model",
+                messages: [AIMessage(role: .user, content: "hi")],
+                maxTokens: 256,
+                reasoning: AIReasoningConfiguration(mode: mode, effort: .high)
+            ))
+        }
+
+        let bodies = try AIKitMockURLProtocol.requests.map(requestObject(from:))
+        #expect(bodies[0]["reasoning_effort"] as? String == "high")
+        #expect(bodies[1]["reasoning_effort"] as? String == "none")
+        #expect(bodies[2]["reasoning_effort"] == nil)
     }
 
     @Test func surfacesRejectedToolChoiceInsteadOfSilentlyRemovingTools() async throws {

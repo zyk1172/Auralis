@@ -144,9 +144,23 @@ public actor TavilyWebSearchService: AgentWebRunScopedService, AgentWebSearchOpt
         try await policy.validateInitialURL(url)
         var request = URLRequest(url: url, timeoutInterval: 20)
         request.setValue("Auralis/1.0", forHTTPHeaderField: "User-Agent")
-        let (data, response, finalURL) = try await load(request: request, allowedContentTypes: [
-            "text/html", "text/plain", "application/xhtml+xml", "application/json",
-        ])
+        let data: Data
+        let response: HTTPURLResponse
+        let finalURL: URL
+        do {
+            (data, response, finalURL) = try await load(request: request, allowedContentTypes: [
+                "text/html", "text/plain", "application/xhtml+xml", "application/json",
+            ])
+        } catch WebCapabilityError.unsupportedContentType {
+            // A Tavily search result already contains bounded public content.
+            // If the target page is an image, paywall, or bot-check response,
+            // keep that snippet as evidence instead of turning the whole run
+            // into a fetch failure.
+            if let source = await fetchScope.source(for: url), !source.snippet.isEmpty {
+                return WebDocument(source: source, text: source.snippet)
+            }
+            throw WebCapabilityError.invalidResponse
+        }
         guard (200...299).contains(response.statusCode) else { throw WebCapabilityError.httpStatus(response.statusCode) }
         try await policy.validateFinalURL(finalURL)
         guard await fetchScope.allows(finalURL) else {
@@ -169,7 +183,7 @@ public actor TavilyWebSearchService: AgentWebRunScopedService, AgentWebSearchOpt
 
     private func record(_ sources: [WebSource]) async {
         guard let runID = await fetchScope.currentRunID() else { return }
-        await fetchScope.record(sources.map(\.url), runID: runID)
+        await fetchScope.register(sources: sources, runID: runID)
     }
 
     private func load(

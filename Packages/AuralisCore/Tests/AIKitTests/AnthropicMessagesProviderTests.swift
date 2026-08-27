@@ -76,7 +76,7 @@ struct AnthropicMessagesProviderTests {
         return URLSession(configuration: configuration)
     }
 
-    private func makeProvider() -> AnthropicMessagesProvider {
+    private func makeProvider(supportsReasoningControl: Bool = false) -> AnthropicMessagesProvider {
         AnthropicMessagesProvider(
             configuration: AIProviderConfiguration(
                 name: "test",
@@ -84,7 +84,8 @@ struct AnthropicMessagesProviderTests {
                 apiPath: "/v1/messages",
                 model: "claude-test",
                 supportsToolCalling: true,
-                supportsToolChoice: true
+                supportsToolChoice: true,
+                supportsReasoningControl: supportsReasoningControl
             ),
             credentialVault: KeychainCredentialVault(),
             session: makeSession()
@@ -176,6 +177,25 @@ struct AnthropicMessagesProviderTests {
         let body = try requestObject(request)
         #expect(body["tools"] == nil)
         #expect(body["tool_choice"] == nil)
+    }
+
+    @Test("Anthropic reasoning uses a viable thinking budget")
+    func reasoningRequestUsesViableThinkingBudget() async throws {
+        AnthropicMockURLProtocol.reset(data: Data(#"{"id":"msg_reasoning","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"完成"}],"stop_reason":"end_turn"}"#.utf8))
+
+        _ = try await makeProvider(supportsReasoningControl: true).complete(AICompletionRequest(
+            model: "claude-test",
+            messages: [AIMessage(role: .user, content: "只回答文本")],
+            maxTokens: 2_048,
+            reasoning: AIReasoningConfiguration(mode: .enabled, effort: .low)
+        ))
+
+        let request = try #require(AnthropicMockURLProtocol.requests.first)
+        let body = try requestObject(request)
+        #expect(body["max_tokens"] as? Int == 2_048)
+        let thinking = try #require(body["thinking"] as? [String: Any])
+        #expect(thinking["type"] as? String == "enabled")
+        #expect(thinking["budget_tokens"] as? Int == 1_024)
     }
 
     /// 并行 tool_use 的 id 与 content_block.index 顺序不一致时，必须按 index

@@ -200,6 +200,9 @@ struct AIConnectionSettings: Sendable {
         static let endpointMode = "auralis.ai.endpointMode"
         static let maxContextTokens = "auralis.ai.maxContextTokens"
         static let maxOutputTokens = "auralis.ai.maxOutputTokens"
+        static let reasoningMode = "auralis.ai.reasoningMode"
+        /// Legacy bool retained for migration of settings written before the
+        /// provider-neutral three-state reasoning mode existed.
         static let reasoningEnabled = "auralis.ai.reasoningEnabled"
         static let reasoningEffort = "auralis.ai.reasoningEffort"
         static let hasKnownContextWindow = "auralis.ai.hasKnownContextWindow"
@@ -231,8 +234,12 @@ struct AIConnectionSettings: Sendable {
         } else {
             maxOutputTokens = Self.defaultMaxOutputTokens
         }
+        let legacyReasoningEnabled = defaults.object(forKey: Keys.reasoningEnabled) as? Bool ?? true
+        let reasoningMode = AIReasoningMode(
+            rawValue: defaults.string(forKey: Keys.reasoningMode) ?? ""
+        ) ?? (legacyReasoningEnabled ? .enabled : .disabled)
         reasoning = AIReasoningConfiguration(
-            enabled: defaults.object(forKey: Keys.reasoningEnabled) as? Bool ?? true,
+            mode: reasoningMode,
             effort: AIReasoningEffort(rawValue: defaults.string(forKey: Keys.reasoningEffort) ?? "") ?? .medium
         )
         hasKnownContextWindow = defaults.object(forKey: Keys.hasKnownContextWindow) as? Bool

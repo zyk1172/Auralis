@@ -114,13 +114,26 @@ func modelCapabilitiesPreserveLargeContextLimit() {
 @Test("Reasoning configuration round trips and old completion requests remain decodable")
 func reasoningConfigurationIsProviderNeutralAndBackwardCompatible() throws {
     for effort in AIReasoningEffort.allCases {
-        let configuration = AIReasoningConfiguration(enabled: true, effort: effort)
-        let decoded = try JSONDecoder().decode(
-            AIReasoningConfiguration.self,
-            from: JSONEncoder().encode(configuration)
-        )
-        #expect(decoded == configuration)
+        for mode in AIReasoningMode.allCases {
+            let configuration = AIReasoningConfiguration(mode: mode, effort: effort)
+            let decoded = try JSONDecoder().decode(
+                AIReasoningConfiguration.self,
+                from: JSONEncoder().encode(configuration)
+            )
+            #expect(decoded == configuration)
+        }
     }
+
+    let oldEnabled = try #require(#"{"enabled":true,"effort":"high"}"#.data(using: .utf8))
+    let oldDisabled = try #require(#"{"enabled":false,"effort":"low"}"#.data(using: .utf8))
+    #expect(try JSONDecoder().decode(AIReasoningConfiguration.self, from: oldEnabled).mode == .enabled)
+    #expect(try JSONDecoder().decode(AIReasoningConfiguration.self, from: oldDisabled).mode == .disabled)
+
+    let automatic = AIReasoningConfiguration(mode: .automatic, effort: .max)
+    #expect(automatic.enabled == false)
+    var projected = automatic
+    projected.enabled = true
+    #expect(projected.mode == .enabled)
 
     let oldRequest = AICompletionRequest(
         model: "legacy-model",
@@ -132,4 +145,17 @@ func reasoningConfigurationIsProviderNeutralAndBackwardCompatible() throws {
         from: JSONEncoder().encode(oldRequest)
     )
     #expect(decodedOldRequest.reasoning == nil)
+}
+
+@Test("Legacy reasoning bool remains an explicit disabled request")
+func legacyDisabledReasoningMapsToDisabledMode() throws {
+    let configuration = AIReasoningConfiguration(enabled: false, effort: .high)
+    #expect(configuration.mode == .disabled)
+    #expect(configuration.enabled == false)
+    let decoded = try JSONDecoder().decode(
+        AIReasoningConfiguration.self,
+        from: JSONEncoder().encode(configuration)
+    )
+    #expect(decoded.mode == .disabled)
+    #expect(decoded.effort == .high)
 }

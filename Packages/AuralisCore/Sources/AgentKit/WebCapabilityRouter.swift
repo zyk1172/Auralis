@@ -42,6 +42,7 @@ public protocol AgentWebRunScopedService: AgentWebService {
 /// allowed into the default fetch path when IP pinning is unavailable.
 public actor WebFetchURLScope {
     private var urls: Set<String> = []
+    private var sources: [String: WebSource] = [:]
     private var activeRunID: UUID?
 
     public init() {}
@@ -49,6 +50,7 @@ public actor WebFetchURLScope {
     public func beginRun(_ runID: UUID) {
         activeRunID = runID
         urls.removeAll(keepingCapacity: true)
+        sources.removeAll(keepingCapacity: true)
     }
 
     public func currentRunID() -> UUID? { activeRunID }
@@ -66,11 +68,44 @@ public actor WebFetchURLScope {
     public func register(sources: [WebSource], runID: UUID) {
         guard activeRunID == runID else { return }
         record(sources.map(\.url))
+        for source in sources {
+            self.sources[WebSource.canonicalURL(source.url).absoluteString] = source
+        }
     }
 
     public func allows(_ url: URL) -> Bool {
         guard activeRunID != nil else { return false }
         return urls.contains(WebSource.canonicalURL(url).absoluteString)
+    }
+
+    public func source(for url: URL) -> WebSource? {
+        guard activeRunID != nil else { return nil }
+        return sources[WebSource.canonicalURL(url).absoluteString]
+    }
+}
+
+/// Reference storage lets a long-lived value-type router refresh its backend
+/// without replacing the Coordinator or invalidating its run-scoped fetch
+/// state. The lock only protects the short backend snapshot/set operations;
+/// backend requests themselves remain fully asynchronous.
+private final class WebCapabilityRouterState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var backend: (any AgentWebSearchBackend)?
+
+    init(backend: (any AgentWebSearchBackend)?) {
+        self.backend = backend
+    }
+
+    func get() -> (any AgentWebSearchBackend)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return backend
+    }
+
+    func set(_ backend: (any AgentWebSearchBackend)?) {
+        lock.lock()
+        self.backend = backend
+        lock.unlock()
     }
 }
 
@@ -78,7 +113,7 @@ public actor WebFetchURLScope {
 /// implementation visibly separate from a real full-search backend.
 public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptionsBackend, Sendable {
     private let hostedSearchAvailable: Bool
-    private let configuredFullSearch: (any AgentWebSearchBackend)?
+    private let configuredState: WebCapabilityRouterState
     private let instantAnswerFallback: (any AgentWebSearchBackend)?
     private let fetchScope: WebFetchURLScope
 
@@ -89,15 +124,23 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
         fetchScope: WebFetchURLScope = WebFetchURLScope()
     ) {
         self.hostedSearchAvailable = hostedSearchAvailable
-        self.configuredFullSearch = configuredFullSearch
+        self.configuredState = WebCapabilityRouterState(backend: configuredFullSearch)
         self.instantAnswerFallback = instantAnswerFallback
         self.fetchScope = fetchScope
+    }
+
+    /// Refresh the configured full-search backend in place. Copies of this
+    /// router share the same state, so a Coordinator can keep its long-lived
+    /// service while settings changes take effect on the next run.
+    public func setConfiguredFullSearch(_ backend: (any AgentWebSearchBackend)?) {
+        configuredState.set(backend)
     }
 
     /// The capability that should be advertised to a model-facing caller.
     /// Hosted search has priority even though the local `search` method is only
     /// used when the caller has chosen the local fallback path.
     public var capability: WebSearchCapability {
+        let configuredFullSearch = configuredState.get()
         if hostedSearchAvailable { return .hostedFullSearch }
         if configuredFullSearch != nil { return .configuredFullSearch }
         if instantAnswerFallback != nil { return .instantAnswerFallback }
@@ -107,6 +150,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
     /// Capability available through this local service, excluding a Provider's
     /// server-side tool. Useful for diagnostics and tests.
     public var localCapability: WebSearchCapability {
+        let configuredFullSearch = configuredState.get()
         if configuredFullSearch != nil { return .configuredFullSearch }
         if instantAnswerFallback != nil { return .instantAnswerFallback }
         return .unavailable
@@ -114,6 +158,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
 
     public func beginRun(_ runID: UUID) async {
         await fetchScope.beginRun(runID)
+        let configuredFullSearch = configuredState.get()
         if let scoped = configuredFullSearch as? any AgentWebRunScopedService {
             await scoped.beginRun(runID)
         }
@@ -124,6 +169,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
 
     public func register(sources: [WebSource], runID: UUID) async {
         await fetchScope.register(sources: sources, runID: runID)
+        let configuredFullSearch = configuredState.get()
         if let scoped = configuredFullSearch as? any AgentWebRunScopedService {
             await scoped.register(sources: sources, runID: runID)
         }
@@ -138,6 +184,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
 
     public func search(query: String, options: WebSearchOptions) async throws -> WebSearchResult {
         let runID = await fetchScope.currentRunID()
+        let configuredFullSearch = configuredState.get()
         if let configuredFullSearch {
             do {
                 let result: WebSearchResult
@@ -146,7 +193,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
                 } else {
                     result = try await configuredFullSearch.search(query: query, limit: options.limit)
                 }
-                if let runID { await fetchScope.record(result.sources.map(\.url), runID: runID) }
+                if let runID { await fetchScope.register(sources: result.sources, runID: runID) }
                 return result
             } catch {
                 // A configured backend is preferred, but its missing key,
@@ -154,7 +201,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
                 // fallback from ordinary App operation.
                 guard let instantAnswerFallback else { throw error }
                 let result = try await instantAnswerFallback.search(query: query, limit: options.limit)
-                if let runID { await fetchScope.record(result.sources.map(\.url), runID: runID) }
+                if let runID { await fetchScope.register(sources: result.sources, runID: runID) }
                 return result
             }
         }
@@ -162,7 +209,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
             throw WebCapabilityError.invalidResponse
         }
         let result = try await instantAnswerFallback.search(query: query, limit: options.limit)
-        if let runID { await fetchScope.record(result.sources.map(\.url), runID: runID) }
+        if let runID { await fetchScope.register(sources: result.sources, runID: runID) }
         return result
     }
 
@@ -170,6 +217,7 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
         guard await fetchScope.allows(url) else {
             throw WebCapabilityError.fetchRequiresSearchResult
         }
+        let configuredFullSearch = configuredState.get()
         if let configuredFullSearch {
             do {
                 return try await configuredFullSearch.fetch(url: url)
@@ -181,6 +229,17 @@ public struct WebCapabilityRouter: AgentWebRunScopedService, AgentWebSearchOptio
                     return try await instantAnswerFallback.fetch(url: url)
                 }
                 throw WebCapabilityError.fetchRequiresSearchResult
+            } catch WebCapabilityError.unsupportedContentType {
+                // Search snippets are already bounded, attributed, and in the
+                // current run's scope. Prefer that evidence over failing the
+                // entire tool call when a source serves an unsupported MIME.
+                if let source = await fetchScope.source(for: url), !source.snippet.isEmpty {
+                    return WebDocument(source: source, text: source.snippet)
+                }
+                if let instantAnswerFallback {
+                    return try await instantAnswerFallback.fetch(url: url)
+                }
+                throw WebCapabilityError.invalidResponse
             }
         }
         guard let instantAnswerFallback else {

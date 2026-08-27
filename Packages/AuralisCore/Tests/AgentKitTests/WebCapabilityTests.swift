@@ -64,6 +64,24 @@ private struct FixtureSearchBackend: AgentWebSearchBackend {
     }
 }
 
+private struct UnsupportedFetchBackend: AgentWebSearchBackend {
+    let capability: WebSearchCapability = .configuredFullSearch
+
+    func search(query: String, limit: Int) async throws -> WebSearchResult {
+        WebSearchResult(query: query, sources: [WebSource(
+            title: "Music source",
+            url: URL(string: "https://example.com/music")!,
+            snippet: "Tavily bounded search evidence",
+            backend: "fixture-tavily",
+            sourceType: "search"
+        )])
+    }
+
+    func fetch(url: URL) async throws -> WebDocument {
+        throw WebCapabilityError.unsupportedContentType("image/png")
+    }
+}
+
 @Suite("Web capability security", .serialized)
 struct WebCapabilityTests {
     private let publicAddress = SafeWebIPAddress.ipv4([93, 184, 216, 34])
@@ -300,6 +318,50 @@ struct WebCapabilityTests {
         #expect(!result.sources.map(\.snippet).contains { $0.contains("tavily-secret") })
     }
 
+    @Test("Tavily fetch 遇到不支持 MIME 时保留搜索摘要")
+    func tavilyFetchUsesSnippetForUnsupportedContentType() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebFixtureURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let vault = InMemoryCredentialVault()
+        try await vault.store("tavily-secret", for: TavilyWebSearchService.defaultCredentialID)
+        let runID = UUID()
+        WebFixtureURLProtocol.handler = { request in
+            let url = request.url!
+            if url == TavilyWebSearchService.defaultEndpoint {
+                let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                let payload = #"{"results":[{"title":"夜曲","url":"https://music.163.com/song?id=1","content":"公开音乐资料"}]}"#
+                return (response, Data(payload.utf8))
+            }
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "image/png"]
+            )!
+            return (response, Data([0, 1, 2, 3]))
+        }
+        defer { WebFixtureURLProtocol.handler = nil }
+
+        let service = TavilyWebSearchService(
+            credentialVault: vault,
+            session: session,
+            policy: policy()
+        )
+        await service.beginRun(runID)
+        let result = try await service.search(query: "周杰伦 夜曲", limit: 1)
+        let source = try #require(result.sources.first)
+
+        let document = try await service.fetch(url: source.url)
+        #expect(document.text == "公开音乐资料")
+        #expect(document.source.id == source.id)
+    }
+
     @Test("WebCapabilityRouter 按 hosted、configured、instant fallback 优先级选择")
     func routesByCapabilityPriority() async throws {
         let configured = FixtureSearchBackend(capability: .configuredFullSearch, label: "configured")
@@ -324,6 +386,38 @@ struct WebCapabilityTests {
         let fallbackOnly = WebCapabilityRouter(instantAnswerFallback: fallback)
         #expect(fallbackOnly.capability == .instantAnswerFallback)
         #expect(try await fallbackOnly.search(query: "q", limit: 1).sources.first?.backend == "fallback")
+    }
+
+    @Test("configured web backend can be refreshed without replacing the router")
+    func refreshesConfiguredBackendInPlace() async throws {
+        let configured = FixtureSearchBackend(capability: .configuredFullSearch, label: "configured")
+        let fallback = FixtureSearchBackend(capability: .instantAnswerFallback, label: "fallback")
+        let router = WebCapabilityRouter(instantAnswerFallback: fallback)
+
+        #expect(router.localCapability == .instantAnswerFallback)
+        router.setConfiguredFullSearch(configured)
+        #expect(router.localCapability == .configuredFullSearch)
+        #expect(try await router.search(query: "q", limit: 1).sources.first?.backend == "configured")
+
+        router.setConfiguredFullSearch(nil)
+        #expect(router.localCapability == .instantAnswerFallback)
+        #expect(try await router.search(query: "q", limit: 1).sources.first?.backend == "fallback")
+    }
+
+    @Test("unsupported fetch falls back to the bounded search snippet")
+    func unsupportedFetchUsesSearchSnippet() async throws {
+        let runID = UUID()
+        let router = WebCapabilityRouter(
+            configuredFullSearch: UnsupportedFetchBackend(),
+            fetchScope: WebFetchURLScope()
+        )
+        await router.beginRun(runID)
+        let result = try await router.search(query: "music", limit: 1)
+        let source = try #require(result.sources.first)
+
+        let document = try await router.fetch(url: source.url)
+        #expect(document.text == "Tavily bounded search evidence")
+        #expect(document.source.id == source.id)
     }
 
     @Test("web fetch scope is cleared between runs and accepts hosted citations")

@@ -87,7 +87,7 @@ public struct AnthropicMessagesProvider: AIProvider {
                 model: configuration.model,
                 messages: [AIMessage(role: .user, content: "只回答 OK。")],
                 temperature: 0,
-                maxTokens: 64,
+                maxTokens: 2_048,
                 reasoning: AIReasoningConfiguration(enabled: true, effort: .low)
             ))
             return (.passed, ["thinking 参数已被端点接受；是否返回思考元数据不作为能力判定。"])

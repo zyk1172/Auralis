@@ -1268,10 +1268,15 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let output = Self.encodeChatOutputFormat(request.outputFormat) {
             body["response_format"] = output
         }
-        if let reasoning = request.reasoning,
-           reasoning.enabled,
-           configuration.supportsReasoningControl {
-            body["reasoning_effort"] = reasoning.effort.rawValue
+        if configuration.supportsReasoningControl, let reasoning = request.reasoning {
+            switch reasoning.mode {
+            case .automatic:
+                break
+            case .disabled:
+                body["reasoning_effort"] = "none"
+            case .enabled:
+                body["reasoning_effort"] = reasoning.effort.rawValue
+            }
         }
         if let tools = request.tools, !tools.isEmpty {
             body["tools"] = Self.encodeTools(tools)
@@ -1342,10 +1347,15 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let output = Self.encodeResponsesOutputFormat(request.outputFormat) {
             body["text"] = ["format": output]
         }
-        if let reasoning = request.reasoning,
-           reasoning.enabled,
-           configuration.supportsReasoningControl {
-            body["reasoning"] = ["effort": reasoning.effort.rawValue]
+        if configuration.supportsReasoningControl, let reasoning = request.reasoning {
+            switch reasoning.mode {
+            case .automatic:
+                break
+            case .disabled:
+                body["reasoning"] = ["effort": "none"]
+            case .enabled:
+                body["reasoning"] = ["effort": reasoning.effort.rawValue]
+            }
         }
         let functionTools = request.tools ?? []
         let hostedTools = request.hostedTools ?? []

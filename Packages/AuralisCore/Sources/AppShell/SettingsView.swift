@@ -646,7 +646,7 @@ struct AIProviderSettingsPage: View {
     @AppStorage(AIConnectionSettings.Keys.endpointMode) private var aiEndpointModeRaw = AIEndpointMode.chatCompletions.rawValue
     @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
     @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
-    @AppStorage(AIConnectionSettings.Keys.reasoningEnabled) private var aiReasoningEnabled = true
+    @AppStorage(AIConnectionSettings.Keys.reasoningMode) private var aiReasoningModeRaw = AIReasoningMode.enabled.rawValue
     @AppStorage(AIConnectionSettings.Keys.reasoningEffort) private var aiReasoningEffortRaw = AIReasoningEffort.medium.rawValue
     @AppStorage(AIConnectionSettings.Keys.hasKnownContextWindow) private var aiHasKnownContextWindow = false
     @State private var endpointMode: AIEndpointMode = .chatCompletions
@@ -765,13 +765,20 @@ struct AIProviderSettingsPage: View {
                         value: $aiMaxOutputTokens
                     )
                     .frame(maxWidth: .infinity)
-                    Toggle(String(localized: "启用思考模式", bundle: .module), isOn: $aiReasoningEnabled)
+                    Picker(String(localized: "思考模式", bundle: .module), selection: $aiReasoningModeRaw) {
+                        ForEach(AIReasoningMode.allCases, id: \.rawValue) { mode in
+                            Text(reasoningModeLabel(mode)).tag(mode.rawValue)
+                        }
+                    }
                     Picker(String(localized: "思考强度", bundle: .module), selection: $aiReasoningEffortRaw) {
                         ForEach(AIReasoningEffort.allCases, id: \.rawValue) { effort in
                             Text(effortLabel(effort)).tag(effort.rawValue)
                         }
                     }
-                    .disabled(!AIConnectionSettings().supportsReasoningControl || !aiReasoningEnabled)
+                    .disabled(!AIConnectionSettings().supportsReasoningControl || selectedReasoningMode != .enabled)
+                    Text(String(localized: "自动使用 Provider 默认策略；关闭仅在 Provider 支持显式关闭时发送关闭指令。", bundle: .module))
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
                     Toggle(String(localized: "上下文窗口已按模型实际值确认", bundle: .module), isOn: $aiHasKnownContextWindow)
                     Text(String(localized: "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。", bundle: .module))
                         .font(.caption)
@@ -979,13 +986,20 @@ API Key 仅保存于系统 Keychain。
                     presets: AITokenLimitPresets.output,
                     value: $aiMaxOutputTokens
                 )
-                Toggle(String(localized: "启用思考模式", bundle: .module), isOn: $aiReasoningEnabled)
+                Picker(String(localized: "思考模式", bundle: .module), selection: $aiReasoningModeRaw) {
+                    ForEach(AIReasoningMode.allCases, id: \.rawValue) { mode in
+                        Text(reasoningModeLabel(mode)).tag(mode.rawValue)
+                    }
+                }
                 Picker(String(localized: "思考强度", bundle: .module), selection: $aiReasoningEffortRaw) {
                     ForEach(AIReasoningEffort.allCases, id: \.rawValue) { effort in
                         Text(effortLabel(effort)).tag(effort.rawValue)
                     }
                 }
-                .disabled(!AIConnectionSettings().supportsReasoningControl || !aiReasoningEnabled)
+                .disabled(!AIConnectionSettings().supportsReasoningControl || selectedReasoningMode != .enabled)
+                Text(String(localized: "自动使用 Provider 默认策略；关闭仅在 Provider 支持显式关闭时发送关闭指令。", bundle: .module))
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
                 Toggle(String(localized: "上下文窗口已按模型实际值确认", bundle: .module), isOn: $aiHasKnownContextWindow)
                 Text(String(localized: "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。", bundle: .module))
                     .font(.caption)
@@ -1039,8 +1053,14 @@ API Key 仅保存于系统 Keychain。
         .navigationBarTitleDisplayMode(.inline)
 #endif
         .onAppear {
+            migrateLegacyReasoningModeIfNeeded()
             endpointMode = AIConnectionSettings().endpointMode
             syncEndpointFromModelIfNeeded()
+        }
+        .onChange(of: aiReasoningModeRaw) { _, newValue in
+            let mode = AIReasoningMode(rawValue: newValue) ?? .enabled
+            UserDefaults.standard.set(mode == .enabled, forKey: AIConnectionSettings.Keys.reasoningEnabled)
+            AIConnectionSettings.clearPersistedDiagnostics()
         }
         .onChange(of: aiModel) { _, _ in
             AIConnectionSettings.clearPersistedDiagnostics()
@@ -1143,6 +1163,28 @@ API Key 仅保存于系统 Keychain。
               recommended != endpointMode
         else { return }
         applyEndpointConfiguration(recommended)
+    }
+
+    private var selectedReasoningMode: AIReasoningMode {
+        AIReasoningMode(rawValue: aiReasoningModeRaw) ?? .enabled
+    }
+
+    private func migrateLegacyReasoningModeIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: AIConnectionSettings.Keys.reasoningMode) == nil else { return }
+        let legacyEnabled = defaults.object(forKey: AIConnectionSettings.Keys.reasoningEnabled) as? Bool ?? true
+        aiReasoningModeRaw = (legacyEnabled ? AIReasoningMode.enabled : AIReasoningMode.disabled).rawValue
+    }
+
+    private func reasoningModeLabel(_ mode: AIReasoningMode) -> String {
+        switch mode {
+        case .automatic:
+            return String(localized: "自动（Provider 默认）", bundle: .module)
+        case .disabled:
+            return String(localized: "关闭", bundle: .module)
+        case .enabled:
+            return String(localized: "开启", bundle: .module)
+        }
     }
 
     /// Keep the model preset, protocol and path in one state transaction.

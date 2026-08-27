@@ -25,13 +25,60 @@ public enum AIReasoningEffort: String, Codable, Hashable, Sendable, CaseIterable
     case max
 }
 
+/// Provider-neutral reasoning intent. `automatic` intentionally means that
+/// the request does not override the provider default; it is not displayed as
+/// "off" by the settings UI.
+public enum AIReasoningMode: String, Codable, Hashable, Sendable, CaseIterable {
+    case automatic
+    case disabled
+    case enabled
+}
+
 public struct AIReasoningConfiguration: Codable, Hashable, Sendable {
-    public var enabled: Bool
+    public var mode: AIReasoningMode
     public var effort: AIReasoningEffort
 
-    public init(enabled: Bool = true, effort: AIReasoningEffort = .medium) {
-        self.enabled = enabled
+    public init(mode: AIReasoningMode = .enabled, effort: AIReasoningEffort = .medium) {
+        self.mode = mode
         self.effort = effort
+    }
+
+    /// Source-compatible initializer for callers using the pre-three-state
+    /// API. `enabled: false` now means an explicit disabled intent.
+    public init(enabled: Bool, effort: AIReasoningEffort = .medium) {
+        self.mode = enabled ? .enabled : .disabled
+        self.effort = effort
+    }
+
+    /// Source-compatible projection for existing request builders and tests.
+    public var enabled: Bool {
+        get { mode == .enabled }
+        set { mode = newValue ? .enabled : .disabled }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode, enabled, effort
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.effort = try container.decodeIfPresent(AIReasoningEffort.self, forKey: .effort) ?? .medium
+        if let mode = try container.decodeIfPresent(AIReasoningMode.self, forKey: .mode) {
+            self.mode = mode
+        } else {
+            // Preserve persisted requests/configuration from the old bool
+            // representation. Missing legacy state retained the old default.
+            self.mode = (try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true)
+                ? .enabled
+                : .disabled
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(mode == .enabled, forKey: .enabled)
+        try container.encode(effort, forKey: .effort)
     }
 }
 
