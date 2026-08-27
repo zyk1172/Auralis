@@ -1,6 +1,7 @@
 import AVFoundation
 import Domain
 import Foundation
+import MusicHaptics
 import Observability
 
 /// 真实 AVFoundation 音频输出引擎。
@@ -17,6 +18,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var preparedItem: AVPlayerItem?
     private var preparedTrack: Track?
     private var preparedTrackStartedHandler: (@Sendable (Track) -> Void)?
+    /// Optional, sidecar-only decoded PCM analysis for the current item.
+    /// It is installed as an AVAudioMix tap and never owns the AVQueuePlayer.
+    private var pendingMusicHapticsSink: (any MusicHapticsAnalysisSink)?
+    private var activeMusicHapticsSink: (any MusicHapticsAnalysisSink)?
 
     // MARK: - Observers
     private var endObserver: NSObjectProtocol?
@@ -94,6 +99,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedTrackStartedHandler = handler
     }
 
+    /// Must be called before `play(track:)`. Passing nil leaves the audio path
+    /// completely unchanged.
+    public func setMusicHapticsAnalysisSink(_ sink: (any MusicHapticsAnalysisSink)?) {
+        pendingMusicHapticsSink?.cancel()
+        pendingMusicHapticsSink = sink
+    }
+
     public func configureReplayGain(_ settings: ReplayGainSettings) {
         replayGainSettings = settings
         updateReplayGain(for: currentTrack)
@@ -104,6 +116,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         playGeneration += 1
         let generation = playGeneration
         pauseRequestedDuringPreparing = false
+        activeMusicHapticsSink?.cancel()
+        activeMusicHapticsSink = nil
         // 复用 AVQueuePlayer：保留单一长期存在的 player，避免每次切歌销毁重建 CoreAudio 链路。
         // 仅清理旧 item/观察者，不销毁 player 本体。
         let stopStart = ContinuousClock.now
@@ -164,7 +178,18 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         // 只记录脱敏后的地址（去掉查询串，查询串含认证参数）。
         CrashLog.shared.log("创建 AVPlayerItem，URL: \(Self.redactedURL(streamURL))")
         let itemStart = ContinuousClock.now
-        let item = AVPlayerItem(url: streamURL)
+        let item: AVPlayerItem
+        if let sink = pendingMusicHapticsSink,
+           let tappedItem = await Self.makeTappedItem(url: streamURL, sink: sink) {
+            item = tappedItem
+            activeMusicHapticsSink = sink
+            pendingMusicHapticsSink = nil
+        } else {
+            pendingMusicHapticsSink?.cancel()
+            pendingMusicHapticsSink = nil
+            activeMusicHapticsSink = nil
+            item = AVPlayerItem(url: streamURL)
+        }
         let itemMs = durationMs(itemStart.duration(to: .now))
         AuralisLog.playback.debug("ENGINE_CREATE_ITEM_MS duration_ms=\(itemMs, privacy: .public)")
         let player: AVQueuePlayer
@@ -262,6 +287,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         guard playbackState == .playing || playbackState == .buffering || playbackState == .stalled else { return }
         cancelStallTimeout()
         avPlayer?.pause()
+        activeMusicHapticsSink?.pause()
         playbackState = .paused
     }
 
@@ -283,6 +309,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     }
 
     public func stop() {
+        activeMusicHapticsSink?.cancel()
+        pendingMusicHapticsSink?.cancel()
+        activeMusicHapticsSink = nil
+        pendingMusicHapticsSink = nil
         stopAll()
         playbackState = .idle
         currentTrack = nil
@@ -292,6 +322,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     public func seek(to position: TimeInterval) async {
         let time = CMTime(seconds: max(0, position), preferredTimescale: 600)
         await avPlayer?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        activeMusicHapticsSink?.seek(to: position)
     }
 
     /// AVPlayer 的真实播放位置（秒）。
@@ -366,6 +397,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         timeControlObservation?.invalidate()
         timeControlObservation = nil
         avPlayer?.pause()
+        activeMusicHapticsSink?.cancel()
+        activeMusicHapticsSink = nil
         avPlayer = nil
         preparedItem = nil
         preparedTrack = nil
@@ -399,6 +432,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// DidPlayToEnd 的确定性处理：不依赖 Task.yield 猜测 AVQueuePlayer 是否推进，
     /// 全部交给边界协调器决定（exactly-once）。
     private func handleItemDidPlayToEnd(_ item: AVPlayerItem) {
+        activeMusicHapticsSink?.finish()
+        activeMusicHapticsSink = nil
         let hasPrepared = preparedItem != nil
             && avPlayer?.items().contains(where: { $0 === preparedItem }) == true
         let currentIsPrepared = avPlayer?.currentItem === preparedItem
@@ -694,6 +729,90 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             AuralisLog.playback.error("AVAudioSession 配置失败：\(error.localizedDescription)")
         }
         #endif
+    }
+
+    private static func makeTappedItem(url: URL, sink: any MusicHapticsAnalysisSink) async -> AVPlayerItem? {
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
+              let mix = MusicHapticsAudioTap.makeMix(track: track, sink: sink)
+        else { return nil }
+        let item = AVPlayerItem(asset: asset)
+        item.audioMix = mix
+        return item
+    }
+}
+
+/// Keeps the C callback details out of the player state machine.  The callback
+/// first asks AVFoundation for source audio, then performs one bounded `Data`
+/// copy into the sink's queue; all analysis happens off this thread.
+private enum MusicHapticsAudioTap {
+    private final class Context: @unchecked Sendable {
+        let sink: any MusicHapticsAnalysisSink
+        var sampleRate: Double = 0
+        var channels = 0
+        init(sink: any MusicHapticsAnalysisSink) { self.sink = sink }
+    }
+
+    static func makeMix(track: AVAssetTrack, sink: any MusicHapticsAnalysisSink) -> AVAudioMix? {
+        let context = Context(sink: sink)
+        var callbacks = MTAudioProcessingTapCallbacks(
+            version: kMTAudioProcessingTapCallbacksVersion_0,
+            clientInfo: Unmanaged.passRetained(context).toOpaque(),
+            init: nil,
+            finalize: { tap in
+                let clientInfo = MTAudioProcessingTapGetStorage(tap)
+                Unmanaged<Context>.fromOpaque(clientInfo).release()
+            },
+            prepare: { tap, maxFrames, processingFormat in
+                let clientInfo = MTAudioProcessingTapGetStorage(tap)
+                let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
+                context.sampleRate = processingFormat.pointee.mSampleRate
+                context.channels = Int(processingFormat.pointee.mChannelsPerFrame)
+                context.sink.begin(sampleRate: context.sampleRate, channels: context.channels)
+            },
+            unprepare: nil,
+            process: { tap, numberFrames, flags, timeRange, numberFramesOut, flagsOut in
+                var buffers = AudioBufferList(
+                    mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(mNumberChannels: 0, mDataByteSize: 0, mData: nil)
+                )
+                var localFlags = MTAudioProcessingTapFlags()
+                var localTimeRange = CMTimeRange.zero
+                var framesOut: CMItemCount = 0
+                let status = MTAudioProcessingTapGetSourceAudio(
+                    tap, numberFrames, &buffers, &localFlags, &localTimeRange, &framesOut
+                )
+                flagsOut.pointee = localFlags
+                numberFramesOut.pointee = framesOut
+                guard status == noErr else { return }
+                let clientInfo = MTAudioProcessingTapGetStorage(tap)
+                let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
+                let time = localTimeRange.start.seconds
+                guard time.isFinite else { return }
+                let count = Int(buffers.mNumberBuffers)
+                for index in 0..<count {
+                    let buffer = withUnsafePointer(to: &buffers.mBuffers) { pointer in
+                        pointer.withMemoryRebound(to: AudioBuffer.self, capacity: count) { $0[index] }
+                    }
+                    guard let data = buffer.mData, buffer.mDataByteSize > 0 else { continue }
+                    context.sink.consumePCM(
+                        Data(bytes: data, count: Int(buffer.mDataByteSize)),
+                        time: time,
+                        sampleRate: context.sampleRate,
+                        channels: max(1, Int(buffer.mNumberChannels))
+                    )
+                }
+            }
+        )
+        var tap: MTAudioProcessingTap?
+        guard MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap) == noErr,
+              let tap
+        else { return nil }
+        let parameters = AVMutableAudioMixInputParameters(track: track)
+        parameters.audioTapProcessor = tap
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = [parameters]
+        return mix
     }
 }
 

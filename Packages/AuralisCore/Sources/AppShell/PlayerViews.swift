@@ -3,6 +3,7 @@ import AgentKit
 import DesignSystem
 import Domain
 import LocalCatalog
+import MusicHaptics
 import SwiftUI
 import ThemeEngine
 
@@ -160,6 +161,8 @@ struct CompactMiniPlayerContent: View {
 }
 
 struct NowPlayingView: View {
+    static let musicHapticsMenuIdentifier = "auralis.nowPlaying.musicHaptics"
+    static let moreActionsButtonIdentifier = "auralis.nowPlaying.moreActions"
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
@@ -169,7 +172,6 @@ struct NowPlayingView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var page = NowPlayingPage.player
     @State private var isPlaylistSheetPresented = false
-    @State private var showsMoreActions = false
     @State private var showsAudioTechnicalInfo = false
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
@@ -247,30 +249,6 @@ struct NowPlayingView: View {
         .sheet(isPresented: $showsTrackInformation) {
             TrackInformationSheet(model: model, theme: theme, track: model.currentTrack)
         }
-        .confirmationDialog(String(localized: "更多操作", bundle: .module), isPresented: $showsMoreActions, titleVisibility: .visible) {
-            Button(String(localized: "添加到歌单", bundle: .module)) { isPlaylistSheetPresented = true }
-            if model.isDownloading(model.currentTrack) {
-                let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
-                Button(
-                    String(localized: "取消下载（\(Int(progress * 100))%）", bundle: .module),
-                    role: .destructive
-                ) {
-                    model.cancelDownload(model.currentTrack)
-                }
-            } else if model.isDownloaded(model.currentTrack) {
-                Button(String(localized: "删除下载", bundle: .module), role: .destructive) { model.removeDownload(model.currentTrack) }
-            } else {
-                Button(String(localized: "下载到本地", bundle: .module)) { model.download(model.currentTrack) }
-            }
-            Button(String(localized: "前往专辑", bundle: .module)) { openCurrentAlbum() }
-                .disabled(currentAlbum == nil)
-            Button(String(localized: "前往艺术家", bundle: .module)) { openCurrentArtist() }
-                .disabled(currentArtist == nil)
-            Button(String(localized: "由此继续播放", bundle: .module)) { continueWithSimilarQueue() }
-            Button(String(localized: "歌曲鉴赏", bundle: .module)) { appreciateCurrentSong() }
-            Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
-            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
-        }
         // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
         .onChange(of: currentTrackIdentity) { _, _ in
             pendingSeek = nil
@@ -305,10 +283,46 @@ struct NowPlayingView: View {
         }
     }
 
-    /// “更多”必须单击即展开；不用 Menu，避免在自定义按钮样式层级里退化为长按菜单。
+    /// 三点菜单直接使用系统 Menu，保证其子菜单在 iOS accessibility 树中真实可发现。
     private var moreMenu: some View {
-        Button {
-            showsMoreActions = true
+        Menu {
+            Button(String(localized: "添加到歌单", bundle: .module)) { isPlaylistSheetPresented = true }
+            if model.isDownloading(model.currentTrack) {
+                let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
+                Button(
+                    String(localized: "取消下载（\(Int(progress * 100))%）", bundle: .module),
+                    role: .destructive
+                ) {
+                    model.cancelDownload(model.currentTrack)
+                }
+            } else if model.isDownloaded(model.currentTrack) {
+                Button(String(localized: "删除下载", bundle: .module), role: .destructive) { model.removeDownload(model.currentTrack) }
+            } else {
+                Button(String(localized: "下载到本地", bundle: .module)) { model.download(model.currentTrack) }
+            }
+            Button(String(localized: "前往专辑", bundle: .module)) { openCurrentAlbum() }
+                .disabled(currentAlbum == nil)
+            Button(String(localized: "前往艺术家", bundle: .module)) { openCurrentArtist() }
+                .disabled(currentArtist == nil)
+            Button(String(localized: "由此继续播放", bundle: .module)) { continueWithSimilarQueue() }
+            Button(String(localized: "歌曲鉴赏", bundle: .module)) { appreciateCurrentSong() }
+            Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
+#if os(iOS)
+            Menu {
+                Button(String(localized: "跟随全局设置", bundle: .module)) {
+                    model.setMusicHapticsPreference(.inherit)
+                }
+                Button(String(localized: "为此歌曲开启", bundle: .module)) {
+                    model.setMusicHapticsPreference(.enabled)
+                }
+                Button(String(localized: "为此歌曲关闭", bundle: .module), role: .destructive) {
+                    model.setMusicHapticsPreference(.disabled)
+                }
+            } label: {
+                Text(String(localized: "音乐震动", bundle: .module))
+            }
+            .accessibilityIdentifier(Self.musicHapticsMenuIdentifier)
+#endif
         } label: {
             Image(systemName: "ellipsis")
                 .frame(minWidth: 44, minHeight: 44)
@@ -316,6 +330,7 @@ struct NowPlayingView: View {
         }
         .buttonStyle(HapticBorderedButtonStyle())
         .accessibilityLabel(String(localized: "更多操作", bundle: .module))
+        .accessibilityIdentifier(Self.moreActionsButtonIdentifier)
     }
 
     /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。

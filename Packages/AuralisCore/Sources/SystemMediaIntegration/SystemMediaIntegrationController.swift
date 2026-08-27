@@ -14,6 +14,10 @@ public final class SystemMediaIntegrationController {
     public let routes = AudioRouteCoordinator()
 
     private var started = false
+    /// Verified metadata for the current item.  It is retained across normal
+    /// track/progress snapshot refreshes, rather than being tied to a haptics
+    /// coordinator callback.
+    private var internationalStandardRecordingCode: String?
 
     public init() {}
 
@@ -64,7 +68,8 @@ public final class SystemMediaIntegrationController {
             rate: rate ?? (isPlaying ? 1 : 0),
             artworkData: artworkData,
             queueIndex: queueIndex,
-            queueCount: queueCount
+            queueCount: queueCount,
+            internationalStandardRecordingCode: internationalStandardRecordingCode
         ))
     }
 
@@ -80,6 +85,11 @@ public final class SystemMediaIntegrationController {
     /// 拖动进度后同步。
     public func seekCompleted(position: TimeInterval, isPlaying: Bool, rate: Float? = nil) {
         nowPlaying.updateProgress(elapsed: position, rate: rate ?? (isPlaying ? 1 : 0))
+    }
+
+    public func setInternationalStandardRecordingCode(_ isrc: String?) {
+        internationalStandardRecordingCode = isrc
+        nowPlaying.setInternationalStandardRecordingCode(isrc)
     }
 
     /// 封面异步加载完成后补一次刷新。
@@ -103,6 +113,7 @@ public final class SystemMediaIntegrationController {
 
     /// 停止播放或退出服务器：清理 Now Playing 与音频会话。
     public func stop() {
+        internationalStandardRecordingCode = nil
         nowPlaying.clear()
         let coordinator = audioSession
         Task { await coordinator.deactivate() }

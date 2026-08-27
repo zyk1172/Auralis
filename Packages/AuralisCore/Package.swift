@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "AppShell", targets: ["AppShell"]),
         .library(name: "Domain", targets: ["Domain"]),
         .library(name: "LocalCatalog", targets: ["LocalCatalog"]),
+        .library(name: "MusicHaptics", targets: ["MusicHaptics"]),
     ],
     targets: [
         .target(name: "Domain", resources: [.process("Resources")]),
@@ -22,7 +23,7 @@ let package = Package(
         .target(name: "OpenSubsonicKit", dependencies: ["Domain", "SecurityKit"], resources: [.process("Resources")]),
         .target(name: "MusicLibrary", dependencies: ["Domain"]),
         .target(name: "PlaybackQueue", dependencies: ["Domain"]),
-        .target(name: "PlaybackEngine", dependencies: ["Domain", "PlaybackQueue", "Observability"]),
+        .target(name: "PlaybackEngine", dependencies: ["Domain", "PlaybackQueue", "Observability", "MusicHaptics"]),
         .target(name: "OfflineManager", dependencies: ["Domain"], resources: [.process("Resources")]),
         .target(name: "ImagePipeline", dependencies: ["Domain"]),
         .target(name: "LyricsKit", dependencies: ["Domain"]),
@@ -31,6 +32,7 @@ let package = Package(
         .target(name: "RecommendationEngine", dependencies: ["Domain"]),
         .target(name: "Persistence", dependencies: ["Domain"]),
         .target(name: "SystemMediaIntegration", dependencies: ["Domain", "Observability"]),
+        .target(name: "MusicHaptics", dependencies: ["Domain"]),
         .target(name: "LocalCatalog", dependencies: ["Domain", "MusicLibrary", "Observability"]),
         .target(name: "AgentKit", dependencies: ["Domain", "AIKit", "LocalCatalog"], resources: [.process("Resources")]),
         .target(name: "TestSupport", dependencies: ["Domain"]),
@@ -48,7 +50,7 @@ let package = Package(
                 "Application", "Domain", "DesignSystem", "ThemeEngine", "MusicLibrary",
                 "PlaybackEngine", "PlaybackQueue", "OfflineManager", "LyricsKit", "ImagePipeline",
                 "MetadataKit", "AIKit", "RecommendationEngine", "Observability",
-                "SecurityKit", "SystemMediaIntegration", "LocalCatalog", "AgentKit",
+                "SecurityKit", "SystemMediaIntegration", "LocalCatalog", "AgentKit", "MusicHaptics",
             ],
             resources: [.process("Resources")]
         ),
@@ -77,6 +79,7 @@ let package = Package(
             name: "SystemMediaIntegrationTests",
             dependencies: ["SystemMediaIntegration", "Domain"]
         ),
+        .testTarget(name: "MusicHapticsTests", dependencies: ["MusicHaptics", "Domain", "TestSupport"]),
         .testTarget(name: "LocalCatalogTests", dependencies: ["LocalCatalog", "Domain", "TestSupport", "MusicLibrary"]),
         .testTarget(
             name: "AgentKitTests",

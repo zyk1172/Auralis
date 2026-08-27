@@ -92,6 +92,7 @@ actor 或 Sendable 值；音频实时线程不触碰数据库 / 网络 / SwiftUI
 
 ### 前置
 - 完整版 Xcode（非仅 Command Line Tools），并已配置你的开发者团队
+- XcodeGen 2.46.0（与 CI 一致；其它版本可能生成不同的 `.xcodeproj` 排序）
 - 一台 Navidrome（或兼容 OpenSubsonic）服务器
 
 ### 构建与运行

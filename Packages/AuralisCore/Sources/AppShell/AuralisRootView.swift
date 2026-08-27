@@ -210,7 +210,12 @@ public struct AuralisRootView: View {
         .buttonStyle(HapticButtonStyle())
         .animation(reduceMotion ? nil : .easeInOut(duration: themeStore.current.motion.standardDuration), value: themeStore.selectedID)
         .environment(\.auralisReduceTransparency, reduceTransparency)
-        .task { await model.restorePersistedLibrary() }
+        .task {
+            await model.restorePersistedLibrary()
+#if os(iOS)
+            configureUISmokeLaunchIfRequested()
+#endif
+        }
         .onOpenURL { url in
             model.handleIncomingURL(url)
         }
@@ -228,6 +233,24 @@ public struct AuralisRootView: View {
             model.handleHandoffActivity(userActivity)
         }
     }
+
+#if os(iOS)
+    /// Keeps UI smoke tests independent from a developer's persisted server
+    /// accounts. This is a test-only launch hook; production launches follow
+    /// the normal restore flow and never change navigation automatically.
+    private func configureUISmokeLaunchIfRequested() {
+        let arguments = Set(CommandLine.arguments)
+        guard arguments.contains("-auralis-ui-smoke")
+            || arguments.contains("-auralis-ui-smoke-now-playing") else { return }
+
+        // A fresh test installation has no server account, so the normal
+        // setup sheet would cover the shell before the UI test can inspect it.
+        model.shouldPresentServerSetup = false
+        if arguments.contains("-auralis-ui-smoke-now-playing") {
+            model.isNowPlayingPresented = true
+        }
+    }
+#endif
 }
 
 /// 统一 iOS UI 的布局视觉 token（iPhone 与 iPad 共用同一套 Shell）。

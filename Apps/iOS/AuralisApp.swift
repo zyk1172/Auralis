@@ -7,6 +7,12 @@ struct AuralisApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() {
+        // BuildProvenanceGenerated is emitted by the iOS target's build phase.
+        // It contains the exact checkout metadata used for this binary.
+        BuildProvenanceGenerated.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             AuralisRootView()
