@@ -340,8 +340,21 @@ public struct AgentEvidence: Codable, Identifiable, Sendable, Equatable {
     public let fetchedAt: Date
     public let entityID: String?
     public let claim: String
+    /// Exact disclosure domains required to replay this claim to a Provider.
+    /// The optional initializer input keeps old persisted evidence fail-closed:
+    /// legacy combined local statistics require both private domains.
+    public let requiredDisclosureCategories: Set<AIPrivacyCategory>
 
-    public init(id: UUID = UUID(), source: AgentEvidenceSource, provenance: String, confidence: Double, fetchedAt: Date = .now, entityID: String? = nil, claim: String) {
+    public init(
+        id: UUID = UUID(),
+        source: AgentEvidenceSource,
+        provenance: String,
+        confidence: Double,
+        fetchedAt: Date = .now,
+        entityID: String? = nil,
+        claim: String,
+        requiredDisclosureCategories: Set<AIPrivacyCategory>? = nil
+    ) {
         self.id = id
         self.source = source
         self.provenance = provenance
@@ -349,6 +362,62 @@ public struct AgentEvidence: Codable, Identifiable, Sendable, Equatable {
         self.fetchedAt = fetchedAt
         self.entityID = entityID
         self.claim = claim
+        self.requiredDisclosureCategories = requiredDisclosureCategories
+            ?? Self.legacyDisclosureCategories(for: source)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case source
+        case provenance
+        case confidence
+        case fetchedAt
+        case entityID
+        case claim
+        case requiredDisclosureCategories
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let source = try container.decode(AgentEvidenceSource.self, forKey: .source)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.source = source
+        self.provenance = try container.decode(String.self, forKey: .provenance)
+        let decodedConfidence = try container.decode(Double.self, forKey: .confidence)
+        self.confidence = min(max(decodedConfidence, 0), 1)
+        self.fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        self.entityID = try container.decodeIfPresent(String.self, forKey: .entityID)
+        self.claim = try container.decode(String.self, forKey: .claim)
+        self.requiredDisclosureCategories = try container.decodeIfPresent(
+            Set<AIPrivacyCategory>.self,
+            forKey: .requiredDisclosureCategories
+        ) ?? Self.legacyDisclosureCategories(for: source)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(source, forKey: .source)
+        try container.encode(provenance, forKey: .provenance)
+        try container.encode(confidence, forKey: .confidence)
+        try container.encode(fetchedAt, forKey: .fetchedAt)
+        try container.encodeIfPresent(entityID, forKey: .entityID)
+        try container.encode(claim, forKey: .claim)
+        try container.encode(requiredDisclosureCategories, forKey: .requiredDisclosureCategories)
+    }
+
+    private static func legacyDisclosureCategories(for source: AgentEvidenceSource) -> Set<AIPrivacyCategory> {
+        switch source {
+        case .localCatalog, .playbackState:
+            return [.metadata]
+        case .derivedLocalStatistic:
+            // PR #11 persisted one claim containing both play count and
+            // favorite/rating state. Replaying it needs both permissions.
+            return [.playbackHistory, .favoritesAndRatings]
+        case .server, .externalAPI, .musicBrainz, .listenBrainz, .critiqueBrainz,
+             .userStatement, .modelInference:
+            return []
+        }
     }
 }
 

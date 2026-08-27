@@ -700,7 +700,15 @@ public enum RecommendationIndexSkillRuntime {
     private static let historySensitiveEvidenceTools: Set<String> = [
         "library_get_most_played",
         "library_get_recently_played",
+        "library_get_least_played",
+        "getRecentHistory",
+        "getLeastPlayed",
+        "stats_get_listening_summary",
+        "stats_get_top_items",
+    ]
+    private static let favoritesSensitiveEvidenceTools: Set<String> = [
         "library_get_starred",
+        "getFavorites",
     ]
 
     public static func outputSchema() -> AIJSONValue {
@@ -803,9 +811,11 @@ public enum RecommendationIndexSkillRuntime {
         systemService: (any AgentSystemService)? = nil,
         externalMusicService: (any AgentExternalMusicService)? = nil,
         webService: (any AgentWebService)? = nil,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsMetadata: Bool = true,
         allowsLyrics: Bool = false,
         allowsHistory: Bool = false,
+        allowsFavoritesAndRatings: Bool = false,
         availableToolDescriptors: [ToolDescriptor] = AgentToolRegistry.all,
         policy: AgentTaskPolicy,
         initialTaskState: AgentTaskState?,
@@ -823,8 +833,15 @@ public enum RecommendationIndexSkillRuntime {
         providerName: String? = nil,
         modelName: String? = nil
     ) async {
+        var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
+        if privacyPermissions == nil {
+            resolvedPrivacy.allowsMetadata = allowsMetadata
+            resolvedPrivacy.allowsLyrics = allowsLyrics
+            resolvedPrivacy.allowsPlaybackHistory = allowsHistory
+            resolvedPrivacy.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+        }
         var taskState = initialTaskState ?? AgentTaskState(intent: .libraryManagement, goal: userText)
-        guard allowsMetadata else {
+        guard resolvedPrivacy.allowsMetadata else {
             let message = "推荐索引需要允许发送歌曲元数据；当前未发送任何元数据或 AI 请求。"
             taskState.status = .failed
             taskState.completionState = .failed
@@ -1245,8 +1262,10 @@ public enum RecommendationIndexSkillRuntime {
                 systemService: systemService,
                 externalMusicService: externalMusicService,
                 webService: webService,
+                privacyPermissions: resolvedPrivacy,
                 allowsLyrics: allowsLyrics,
                 allowsHistory: allowsHistory,
+                allowsFavoritesAndRatings: allowsFavoritesAndRatings,
                 availableToolDescriptors: availableToolDescriptors,
                 executionLease: executionLease,
                 resourceLeaseRegistry: resourceLeaseRegistry,
@@ -1580,6 +1599,7 @@ public enum RecommendationIndexSkillRuntime {
                 catalog: catalog,
                 serverID: serverID,
                 systemService: nil,
+                privacyPermissions: resolvedPrivacy,
                 providerCapabilities: provider.capabilities,
                 authorizationContext: authorizationContext,
                 activeSkillID: skillID,
@@ -1759,8 +1779,10 @@ public enum RecommendationIndexSkillRuntime {
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
         webService: (any AgentWebService)?,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool,
         allowsHistory: Bool,
+        allowsFavoritesAndRatings: Bool,
         availableToolDescriptors: [ToolDescriptor],
         executionLease: ToolExecutionLease,
         resourceLeaseRegistry: MutationResourceLeaseRegistry,
@@ -1771,6 +1793,12 @@ public enum RecommendationIndexSkillRuntime {
         runID: UUID,
         sessionID: UUID
     ) async -> [RecommendationIndexTrackEvidence] {
+        var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
+        if privacyPermissions == nil {
+            resolvedPrivacy.allowsLyrics = allowsLyrics
+            resolvedPrivacy.allowsPlaybackHistory = allowsHistory
+            resolvedPrivacy.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+        }
         let environment = AgentCapabilityEnvironment(
             providerAvailable: true,
             activeServer: (await bridge.getActiveServer()) != nil,
@@ -1783,7 +1811,8 @@ public enum RecommendationIndexSkillRuntime {
                 $0.visibility == .model
                 && $0.permission == .readOnly
                 && !personalStateEvidenceTools.contains($0.name)
-                && (allowsHistory || !historySensitiveEvidenceTools.contains($0.name))
+                && (resolvedPrivacy.allowsPlaybackHistory || !historySensitiveEvidenceTools.contains($0.name))
+                && (resolvedPrivacy.allowsFavoritesAndRatings || !favoritesSensitiveEvidenceTools.contains($0.name))
         }
         let permittedReadOnlyNames = Set(allReadOnly.map(\.name))
         var selected = ToolSelector.select(for: userText, all: availableToolDescriptors)
@@ -1879,7 +1908,8 @@ public enum RecommendationIndexSkillRuntime {
                     attempt: round + 1, provider: providerName, model: modelName, message: raw.name))
                 let result = await ToolRuntime.execute(
                     ToolCall(name: raw.name, arguments: arguments), bridge: bridge, catalog: catalog, serverID: serverID,
-                    systemService: systemService, externalMusicService: externalMusicService, allowsLyrics: allowsLyrics,
+                    systemService: systemService, externalMusicService: externalMusicService,
+                    privacyPermissions: resolvedPrivacy, allowsLyrics: allowsLyrics,
                     providerCapabilities: provider.capabilities, webService: webService, authorizationContext: nil,
                     executionLease: executionLease, resourceLeaseRegistry: resourceLeaseRegistry,
                     recommendationIndexExecutionRegistry: executionStateRegistry,

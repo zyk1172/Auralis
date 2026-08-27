@@ -20,8 +20,17 @@ struct AgentUserFacingSanitizerTests {
 
     @Test("Ordinary technical id and uuid values are preserved")
     func preservesOrdinaryTechnicalIdentifiers() {
-        let input = #"HTML: <div id="main">；API 参数 id=user_123；数据库 id=42；uuid=550e8400-e29b-41d4-a716-446655440000"#
+        let input = #"HTML: <div id="main">；HTML value: id="srv:pl"；API 参数 id=user_123；数据库 id=42；uuid=550e8400-e29b-41d4-a716-446655440000"#
         #expect(AgentUserFacingSanitizer.text(input) == input)
+    }
+
+    @Test("Opaque server IDs are redacted without prefix assumptions")
+    func redactsOpaqueBareGlobalIDs() {
+        let input = "srv:pl、abc123:track99、home:8273、12:34、https://example.com/path"
+        let output = AgentUserFacingSanitizer.text(input)
+        #expect(output.contains("[内部标识]、[内部标识]、[内部标识]"))
+        #expect(output.contains("12:34"))
+        #expect(output.contains("https://example.com/path"))
     }
 
     @Test("Entity and server labels redact only semantic Auralis identifiers")

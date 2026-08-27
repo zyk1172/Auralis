@@ -620,7 +620,7 @@ func v2AppContext() async throws {
     #expect(result.summary.contains("Test Server"))
 }
 
-@Test("歌曲详情不在收藏/评分权限关闭时外发个人状态")
+@Test("歌曲详情不在收藏/评分权限关闭时外发个人状态，修改权限另由 Runtime 授权")
 func v2FavoriteAndRatingPrivacyGate() async throws {
     let store = try makeV2Store()
     let serverID: ServerID = "s"
@@ -659,20 +659,55 @@ func v2FavoriteAndRatingPrivacyGate() async throws {
     #expect(visibleText.contains("已收藏"))
     #expect(visibleText.contains("评分 5"))
 
-    let deniedBridge = MockAgentBridge(activeServerID: serverID)
-    let deniedMutation = await AgentToolkit.executeV2(
+    // Disclosure permission must not block a trusted executor after the
+    // Runtime has already authorized the explicit mutation request.
+    let trustedBridge = MockAgentBridge(activeServerID: serverID)
+    let trustedMutation = await AgentToolkit.executeV2(
         ToolCall(
             name: "favorite_set",
             arguments: ["targetType": "song", "targetID": "s:private-track", "value": "true"]
         ),
-        bridge: deniedBridge,
+        bridge: trustedBridge,
         catalog: store,
         serverID: serverID,
         systemService: nil,
         allowsFavoritesAndRatings: false
     )
-    #expect(!deniedMutation.success)
-    #expect(await deniedBridge.likedTracks.isEmpty)
+    #expect(trustedMutation.success)
+    #expect(await trustedBridge.likedTracks.contains(GlobalID(serverID: serverID, remoteID: "private-track")))
+
+    // The canonical Runtime boundary still requires exact mutation
+    // authorization; the disclosure switch is not that authorization.
+    let mutationCall = ToolCall(
+        name: "favorite_set",
+        arguments: ["targetType": "song", "targetID": "s:private-track", "value": "true"]
+    )
+    let missingAuthorization = await ToolRuntime.execute(
+        mutationCall,
+        bridge: MockAgentBridge(activeServerID: serverID),
+        catalog: store,
+        serverID: serverID,
+        systemService: nil,
+        privacyPermissions: AIPrivacyPermissions(),
+        executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 1)
+    )
+    #expect(!missingAuthorization.success)
+
+    let authorizedBridge = MockAgentBridge(activeServerID: serverID)
+    let authorization = SideEffectAuthorizationContext(originalUserRequest: "收藏这首歌")
+    #expect(authorization.allowedOperations.contains(.favoriteSet))
+    let authorizedMutation = await ToolRuntime.execute(
+        mutationCall,
+        bridge: authorizedBridge,
+        catalog: store,
+        serverID: serverID,
+        systemService: nil,
+        privacyPermissions: AIPrivacyPermissions(),
+        authorizationContext: authorization,
+        executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 1)
+    )
+    #expect(authorizedMutation.success)
+    #expect(await authorizedBridge.likedTracks.contains(GlobalID(serverID: serverID, remoteID: "private-track")))
 }
 
 @Test("lyrics_get 在系统工具层遵守正文隐私开关")
@@ -704,6 +739,112 @@ func v2LyricsPrivacyGate() async throws {
     )
     #expect(visible.success)
     #expect(visible.summary.contains("绝密歌词正文"))
+}
+
+@Test("历史读取与个人筛选在对应隐私权限关闭时不执行")
+func v2PersonalStateToolsRequireDisclosurePermission() async throws {
+    let store = try makeV2Store()
+    try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "1", title: "Private Song")])
+    let bridge = MockAgentBridge(activeServerID: "s")
+
+    var permissions = AIPrivacyPermissions()
+    permissions.allowsMetadata = true
+
+    let recent = await AgentToolkit.executeV2(
+        ToolCall(name: "library_get_recently_played", arguments: ["limit": "5"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(!recent.success)
+    #expect(recent.summary.contains("播放历史已按隐私设置隐藏"))
+
+    let favoriteFilter = await AgentToolkit.executeV2(
+        ToolCall(name: "library_select_tracks", arguments: ["favoritesOnly": "true"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(!favoriteFilter.success)
+    #expect(favoriteFilter.summary.contains("收藏与评分已按隐私设置隐藏"))
+
+    let historySort = await AgentToolkit.executeV2(
+        ToolCall(name: "library_select_tracks", arguments: ["sort": "recentlyPlayed"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(!historySort.success)
+    #expect(historySort.summary.contains("播放历史已按隐私设置隐藏"))
+
+    try await store.setDisliked(GlobalID(serverID: "s", remoteID: "1"), value: true)
+    let personalStateHidden = await AgentToolkit.executeV2(
+        ToolCall(name: "library_select_tracks", arguments: ["limit": "5", "sort": "title"]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(personalStateHidden.success)
+    if case let .trackCards(cards)? = personalStateHidden.payload {
+        #expect(cards.contains { $0.globalID.remoteID == "1" })
+    } else {
+        #expect(Bool(false), "隐私关闭时仍应返回不受个人状态影响的候选")
+    }
+
+    var metadataPermissions = AIPrivacyPermissions()
+    metadataPermissions.allowsMetadata = false
+    let hiddenSummary = await AgentToolkit.executeV2(
+        ToolCall(name: "library_get_summary", arguments: [:]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: metadataPermissions
+    )
+    #expect(!hiddenSummary.success)
+    #expect(hiddenSummary.summary.contains("歌曲元数据已按隐私设置隐藏"))
+}
+
+@Test("元数据关闭时 queue_get 与 result_present_tracks 由 descriptor 统一拒绝")
+func v2MetadataDescriptorGuardsQueueAndPresentation() async throws {
+    let store = try makeV2Store()
+    let bridge = MockAgentBridge(activeServerID: "s")
+    var permissions = AIPrivacyPermissions()
+    permissions.allowsMetadata = false
+
+    let queueDescriptor = try #require(AgentToolRegistry.descriptor(for: "queue_get"))
+    #expect(queueDescriptor.requiredDisclosureCategories.contains(.metadata))
+    let queue = await AgentToolkit.executeV2(
+        ToolCall(name: "queue_get"),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(!queue.success)
+    #expect(queue.summary.contains("歌曲元数据已按隐私设置隐藏"))
+
+    let presentationDescriptor = try #require(AgentToolRegistry.descriptor(for: "result_present_tracks"))
+    #expect(presentationDescriptor.requiredDisclosureCategories.contains(.metadata))
+    let presentation = await AgentToolkit.executeV2(
+        ToolCall(name: "result_present_tracks", arguments: ["trackIDs": .array([.string("s:t1")])]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(!presentation.success)
+    #expect(presentation.summary.contains("歌曲元数据已按隐私设置隐藏"))
 }
 
 @Test("v2 server_test_connection reports real result")
@@ -915,7 +1056,8 @@ struct AgentP1GTests {
         let system = StubSystemService()
         let result = await AgentToolkit.executeV2(
             ToolCall(name: "recommend_by_constraints", arguments: ["favoritesOnly": "true", "limit": "5"]),
-            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system,
+            allowsFavoritesAndRatings: true
         )
         #expect(result.success)
     }
@@ -956,10 +1098,29 @@ struct StatsToolTests {
         let system = StubSystemService()
         let result = await AgentToolkit.executeV2(
             ToolCall(name: "stats_get_top_items", arguments: ["kind": "artist", "limit": "5"]),
-            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system,
+            privacyPermissions: {
+                var permissions = AIPrivacyPermissions()
+                permissions.allowsPlaybackHistory = true
+                return permissions
+            }()
         )
         #expect(result.success)
         #expect(result.summary.contains("最常听"))
+
+        var metadataHidden = AIPrivacyPermissions()
+        metadataHidden.allowsMetadata = false
+        metadataHidden.allowsPlaybackHistory = true
+        let hidden = await AgentToolkit.executeV2(
+            ToolCall(name: "stats_get_top_items", arguments: ["kind": "artist", "limit": "5"]),
+            bridge: bridge,
+            catalog: store,
+            serverID: ServerID(rawValue: "s"),
+            systemService: system,
+            privacyPermissions: metadataHidden
+        )
+        #expect(!hidden.success)
+        #expect(hidden.summary.contains("歌曲元数据已按隐私设置隐藏"))
     }
 
     @Test("stats_get_format_distribution 走系统服务")
@@ -1154,7 +1315,12 @@ struct RecentlyAddedAndMostPlayedTests {
         let system = StubSystemService()
         let result = await AgentToolkit.executeV2(
             ToolCall(name: "library_get_most_played", arguments: ["limit": "5"]),
-            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system
+            bridge: bridge, catalog: store, serverID: ServerID(rawValue: "s"), systemService: system,
+            privacyPermissions: {
+                var permissions = AIPrivacyPermissions()
+                permissions.allowsPlaybackHistory = true
+                return permissions
+            }()
         )
         #expect(result.success)
         #expect(result.summary.contains("最常播放"))

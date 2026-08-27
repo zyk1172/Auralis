@@ -43,6 +43,9 @@ public struct ToolLoop {
         public let allowsHistory: Bool
         /// 隐私：是否允许发送收藏与评分（对应设置页「允许发送收藏和评分」）。
         public let allowsFavoritesAndRatings: Bool
+        /// Complete run-scoped privacy policy propagated to every tool result.
+        /// The individual fields above remain as source-compatible projections.
+        public let privacyPermissions: AIPrivacyPermissions
         /// 跨会话记忆：主人告诉 Agent 的个人信息（由 memory_* 工具维护，注入提示词）。
         public let memories: [AgentMemoryEntry]
         /// 已创建的技能列表（由 skill_* 工具维护，注入提示词）。
@@ -74,6 +77,7 @@ public struct ToolLoop {
             recentlyPlayedTitles: [String] = [],
             isShuffled: Bool = false,
             repeatMode: String = "顺序",
+            privacyPermissions: AIPrivacyPermissions? = nil,
             allowsMetadata: Bool = true,
             allowsLyrics: Bool = false,
             allowsHistory: Bool = false,
@@ -84,6 +88,14 @@ public struct ToolLoop {
             recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry(),
             customToolRegistry: CustomToolRegistry = .shared
         ) {
+            var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
+            if privacyPermissions == nil {
+                resolvedPrivacy.allowsMetadata = allowsMetadata
+                resolvedPrivacy.allowsLyrics = allowsLyrics
+                resolvedPrivacy.allowsPlaybackHistory = allowsHistory
+                resolvedPrivacy.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+            }
+            self.privacyPermissions = resolvedPrivacy
             self.serverID = serverID
             self.serverName = serverName
             self.serverType = serverType
@@ -98,10 +110,10 @@ public struct ToolLoop {
             self.recentlyPlayedTitles = recentlyPlayedTitles
             self.isShuffled = isShuffled
             self.repeatMode = repeatMode
-            self.allowsMetadata = allowsMetadata
-            self.allowsLyrics = allowsLyrics
-            self.allowsHistory = allowsHistory
-            self.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+            self.allowsMetadata = resolvedPrivacy.allowsMetadata
+            self.allowsLyrics = resolvedPrivacy.allowsLyrics
+            self.allowsHistory = resolvedPrivacy.allowsPlaybackHistory
+            self.allowsFavoritesAndRatings = resolvedPrivacy.allowsFavoritesAndRatings
             self.memories = memories
             self.skills = skills
             self.mutationResourceLeaseRegistry = mutationResourceLeaseRegistry
@@ -365,9 +377,11 @@ public struct ToolLoop {
                 systemService: systemService,
                 externalMusicService: externalMusicService,
                 webService: webService,
+                privacyPermissions: context.privacyPermissions,
                 allowsMetadata: context.allowsMetadata,
                 allowsLyrics: context.allowsLyrics,
                 allowsHistory: context.allowsHistory,
+                allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                 availableToolDescriptors: availableToolDescriptors,
                 policy: resolvedPolicy,
                 initialTaskState: initialTaskState,
@@ -491,6 +505,7 @@ public struct ToolLoop {
                     serverID: context.serverID,
                     systemService: systemService,
                     externalMusicService: externalMusicService,
+                    privacyPermissions: context.privacyPermissions,
                     allowsLyrics: context.allowsLyrics,
                     providerCapabilities: providerCapabilities,
                     webService: webService,
@@ -605,7 +620,7 @@ public struct ToolLoop {
                 authorizedOperations: effectiveAuthorization.allowedOperations
             )
         )]
-        conversation.append(contentsOf: convertHistory(history, currentUserText: userText))
+        conversation.append(contentsOf: convertHistory(history, currentUserText: userText, permissions: context.privacyPermissions))
         conversation.append(AIMessage(role: .user, content: userText))
 
         var toolSteps = 0
@@ -801,6 +816,7 @@ public struct ToolLoop {
                     serverID: context.serverID,
                     systemService: systemService,
                     externalMusicService: externalMusicService,
+                    privacyPermissions: context.privacyPermissions,
                     allowsLyrics: context.allowsLyrics,
                     allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                     providerCapabilities: provider.capabilities,
@@ -956,6 +972,7 @@ public struct ToolLoop {
                             serverID: context.serverID,
                             systemService: systemService,
                             externalMusicService: externalMusicService,
+                            privacyPermissions: context.privacyPermissions,
                             allowsLyrics: context.allowsLyrics,
                             allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                             providerCapabilities: provider.capabilities,
@@ -1252,11 +1269,7 @@ public struct ToolLoop {
                 activeSkillID: activeSkillID
             )
             : []
-        var privacy = AIPrivacyPermissions()
-        privacy.allowsMetadata = context.allowsMetadata
-        privacy.allowsLyrics = context.allowsLyrics
-        privacy.allowsPlaybackHistory = context.allowsHistory
-        privacy.allowsFavoritesAndRatings = context.allowsFavoritesAndRatings
+        let privacy = context.privacyPermissions
 
         // 统一解析真正的 Provider 预算：Agent 不再自带第二套 256K/16K 硬限制，
         // 输入/输出直接跟随 Provider capabilities（即用户在设置页填写的模型能力），
@@ -1295,7 +1308,7 @@ public struct ToolLoop {
             ),
             task: taskState,
             facts: [],
-            history: Self.convertHistory(history, currentUserText: userText),
+            history: Self.convertHistory(history, currentUserText: userText, permissions: context.privacyPermissions),
             permissions: privacy,
             capabilities: provider.capabilities,
             inputBudget: resolvedInputBudget,
@@ -2186,6 +2199,7 @@ public struct ToolLoop {
                             serverID: context.serverID,
                             systemService: systemService,
                             externalMusicService: externalMusicService,
+                            privacyPermissions: context.privacyPermissions,
                             allowsLyrics: context.allowsLyrics,
                             allowsFavoritesAndRatings: context.allowsFavoritesAndRatings,
                             providerCapabilities: provider.capabilities,
@@ -3628,8 +3642,12 @@ public struct ToolLoop {
     /// 把完整会话历史转成模型可用的消息列表。历史不再按固定轮数截断，
     /// 错误、进度、确认和流式内容以可读摘要保留；最终 token 级裁剪统一由
     /// ContextManager 在发送前按 Provider 的真实上下文窗口执行。
-    private static func convertHistory(_ history: [AgentChatMessage], currentUserText: String) -> [AIMessage] {
-        AgentHistoryPolicy.modelMessages(from: history, for: currentUserText)
+    private static func convertHistory(
+        _ history: [AgentChatMessage],
+        currentUserText: String,
+        permissions: AIPrivacyPermissions
+    ) -> [AIMessage] {
+        AgentHistoryPolicy.modelMessages(from: history, for: currentUserText, permissions: permissions)
     }
 
     private static func descriptor(named name: String, in descriptors: [ToolDescriptor]) -> ToolDescriptor? {

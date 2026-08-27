@@ -113,6 +113,11 @@ public struct ToolExecutorContext: Sendable {
     public let serverID: ServerID?
     public let systemService: (any AgentSystemService)?
     public let externalMusicService: (any AgentExternalMusicService)?
+    /// The complete run-scoped disclosure policy. Mutation authorization is
+    /// deliberately kept separate and remains owned by ToolRuntime.
+    public let privacyPermissions: AIPrivacyPermissions
+    public let allowsMetadata: Bool
+    public let allowsHistory: Bool
     public let allowsLyrics: Bool
     public let allowsFavoritesAndRatings: Bool
     public let providerCapabilities: ModelCapabilities?
@@ -135,6 +140,7 @@ public struct ToolExecutorContext: Sendable {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)?,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool,
         allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities?,
@@ -154,8 +160,18 @@ public struct ToolExecutorContext: Sendable {
         self.serverID = serverID
         self.systemService = systemService
         self.externalMusicService = externalMusicService
-        self.allowsLyrics = allowsLyrics
-        self.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+        var resolvedPrivacy = privacyPermissions ?? AIPrivacyPermissions()
+        if privacyPermissions == nil {
+            // Preserve the pre-hotfix source API while making the complete
+            // policy the value carried by every production context.
+            resolvedPrivacy.allowsLyrics = allowsLyrics
+            resolvedPrivacy.allowsFavoritesAndRatings = allowsFavoritesAndRatings
+        }
+        self.privacyPermissions = resolvedPrivacy
+        self.allowsMetadata = resolvedPrivacy.allowsMetadata
+        self.allowsHistory = resolvedPrivacy.allowsPlaybackHistory
+        self.allowsLyrics = resolvedPrivacy.allowsLyrics
+        self.allowsFavoritesAndRatings = resolvedPrivacy.allowsFavoritesAndRatings
         self.providerCapabilities = providerCapabilities
         self.webService = webService
         self.authorizationContext = authorizationContext
@@ -180,6 +196,7 @@ public struct ToolExecutorContext: Sendable {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
@@ -203,6 +220,7 @@ public struct ToolExecutorContext: Sendable {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,

@@ -63,41 +63,78 @@ public enum AgentHistoryPolicy {
     public static func modelMessages(
         from history: [AgentChatMessage],
         for currentUserText: String?,
-        limit: Int = .max
+        limit: Int = .max,
+        permissions: AIPrivacyPermissions? = nil
     ) -> [AIMessage] {
         _ = currentUserText
         let source = limit == .max ? history : Array(history.suffix(max(limit, 0)))
-        return project(source)
+        return project(source, permissions: permissions ?? legacyDefaultPermissions)
     }
 
-    private static func project(_ history: [AgentChatMessage]) -> [AIMessage] {
+    private static var legacyDefaultPermissions: AIPrivacyPermissions {
+        var permissions = AIPrivacyPermissions()
+        permissions.allowsLyrics = true
+        permissions.allowsPlaybackHistory = true
+        permissions.allowsFavoritesAndRatings = true
+        return permissions
+    }
+
+    private static func project(_ history: [AgentChatMessage], permissions: AIPrivacyPermissions) -> [AIMessage] {
         let separator = "、"
         return history.compactMap { message in
             var content = ""
             for item in message.messages {
                 switch item {
                 case let .text(text):
-                    content += text + "\n"
+                    // Assistant text may be a persisted rendering of an older
+                    // tool result. Once a disclosure switch is closed, it is
+                    // no longer safe to replay opaque assistant prose whose
+                    // provenance cannot be recovered.
+                    if message.role == .user || permissions.allowPersistedAssistantText {
+                        content += text + "\n"
+                    }
                 case let .trackCards(cards):
+                    guard permissions.allowsMetadata else {
+                        content += "（歌曲结果已按隐私设置隐藏）\n"
+                        continue
+                    }
                     let tracks = cards.enumerated().map { index, card in
                         "\(index + 1).《\(card.title)》-\(card.artistName)（\(card.albumTitle)；id=\(card.globalID.description)）"
                     }.joined(separator: separator)
                     content += "（推荐 \(cards.count) 首：\(tracks)）\n"
                 case let .albumCards(cards):
+                    guard permissions.allowsMetadata else {
+                        content += "（专辑结果已按隐私设置隐藏）\n"
+                        continue
+                    }
                     let albums = cards.map { "《\($0.title)》-\($0.artistName)（id=\($0.globalID.description)）" }
                     content += "（专辑：\(albums.joined(separator: separator))）\n"
                 case let .playlistCards(cards):
+                    guard permissions.allowsMetadata else {
+                        content += "（歌单结果已按隐私设置隐藏）\n"
+                        continue
+                    }
                     let playlists = cards.map { "\($0.name)（playlistID=\($0.globalID.description)，\($0.trackCount) 首）" }
                     content += "（歌单：\(playlists.joined(separator: separator))）\n"
                 case let .artistCards(cards):
+                    guard permissions.allowsMetadata else {
+                        content += "（艺术家结果已按隐私设置隐藏）\n"
+                        continue
+                    }
                     let artists = cards.map { "\($0.name)（artistID=\($0.globalID.description)，\($0.albumCount) 张专辑）" }
                     content += "（艺术家：\(artists.joined(separator: separator))）\n"
                 case let .webSources(sources):
                     let links = sources.prefix(5).map { "\($0.title)（\($0.url.absoluteString)）" }
                     content += "（联网来源：\(links.joined(separator: separator))）\n"
                 case let .playlistProposal(name, tracks):
-                    content += "（歌单提案「\(name)」，\(tracks.count) 首）\n"
+                    content += permissions.allowsMetadata
+                        ? "（歌单提案「\(name)」，\(tracks.count) 首）\n"
+                        : "（歌单提案已按隐私设置隐藏）\n"
                 case let .actionPreview(title, detail):
+                    guard permissions.allowsMetadata else {
+                        content += "（操作结果已按隐私设置隐藏）\n"
+                        continue
+                    }
                     content += "（操作预览：\(title)；\(detail)）\n"
                 case .toolProgress, .error, .confirmation, .streaming:
                     // 这些是 UI/runtime 轨迹，不是对话事实。重新送入模型会把旧错误、

@@ -87,6 +87,56 @@ func modelHistoryPreservesTrackIdentity() {
     #expect(projected[0].content.contains("新地球"))
 }
 
+@Test("元数据关闭时模型历史不携带歌曲卡片内容")
+func modelHistoryHidesTrackCardsWithoutMetadataPermission() {
+    let card = TrackCard(
+        globalID: GlobalID(serverID: "opaque", remoteID: "private-track"),
+        title: "不应外发的歌",
+        artistName: "私人艺术家",
+        albumTitle: "私人专辑",
+        duration: 240,
+        isFavorite: true
+    )
+    var permissions = AIPrivacyPermissions()
+    permissions.allowsMetadata = false
+
+    let projected = AgentHistoryPolicy.modelMessages(
+        from: [AgentChatMessage(role: .assistant, messages: [.trackCards([card])])],
+        for: nil,
+        permissions: permissions
+    )
+
+    #expect(projected.count == 1)
+    #expect(projected[0].content.contains("歌曲结果已按隐私设置隐藏"))
+    #expect(!projected[0].content.contains("不应外发的歌"))
+    #expect(!projected[0].content.contains("opaque:private-track"))
+}
+
+@Test("权限收紧后不回放无结构化来源的 assistant 文本与 action preview")
+func modelHistoryHidesOpaqueAssistantTextAfterDisclosureRevocation() {
+    var permissions = AIPrivacyPermissions()
+    permissions.allowsMetadata = false
+    let history = [
+        AgentChatMessage(
+            role: .assistant,
+            messages: [
+                .text("播放《私密歌曲》；播放 37 次；已收藏"),
+                .actionPreview(title: "播放", detail: "《私密歌曲》"),
+            ]
+        ),
+    ]
+
+    let messages = AgentHistoryPolicy.modelMessages(
+        from: history,
+        for: nil,
+        permissions: permissions
+    )
+    let text = messages.map(\.content).joined()
+    #expect(!text.contains("私密歌曲"))
+    #expect(!text.contains("播放 37 次"))
+    #expect(text.contains("操作结果已按隐私设置隐藏"))
+}
+
 @Test("连续两次继续仍回溯到最初的完整任务")
 func repeatedContinuationKeepsSubstantiveTask() {
     let history = [

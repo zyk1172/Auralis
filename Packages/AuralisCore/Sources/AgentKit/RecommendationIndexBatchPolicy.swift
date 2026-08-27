@@ -91,11 +91,11 @@ enum RecommendationIndexBatchPolicy {
                 return estimatedTotalTokens <= maxContextTokens
             }
             // There is no trustworthy token-window fact to compare against
-            // for an unrecognised endpoint. Keep the serialized input under
-            // the conservative transport envelope; the output reserve remains
-            // visible in estimatedTotalTokens/estimatedTotalBytes and is
-            // enforced whenever a real context window is declared.
-            return requestBytes <= safePayloadBytes
+            // for an unrecognised endpoint. The conservative byte envelope
+            // must cover both serialized input and the output/safety reserve;
+            // checking requestBytes alone would admit a request whose response
+            // cannot fit at all.
+            return estimatedTotalBytes <= safePayloadBytes
         }
 
         var summary: String {

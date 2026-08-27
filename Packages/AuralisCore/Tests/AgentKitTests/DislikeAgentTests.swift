@@ -67,7 +67,14 @@ struct DislikeAgentTests {
         #expect(set.success)
         #expect((try await store.isDisliked(GlobalID(serverID: serverID, remoteID: "t1"))) == true)
 
-        let read = await execute("library_get_disliked", ["limit": "10"], catalog: store, bridge: bridge, serverID: serverID)
+        let read = await execute(
+            "library_get_disliked",
+            ["limit": "10"],
+            catalog: store,
+            bridge: bridge,
+            serverID: serverID,
+            allowsFavoritesAndRatings: true
+        )
         #expect(read.success)
         let cards = read.trackCards ?? []
         #expect(cards.map(\.globalID.remoteID).contains("t1"))
@@ -90,18 +97,39 @@ struct DislikeAgentTests {
         let bridge = MockAgentBridge(activeServerID: serverID)
 
         // library_select_tracks（默认 popularityProxy，随机源也过滤）。
-        let select = await execute("library_select_tracks", ["limit": "10", "sort": "random"], catalog: store, bridge: bridge, serverID: serverID)
+        let select = await execute(
+            "library_select_tracks",
+            ["limit": "10", "sort": "random"],
+            catalog: store,
+            bridge: bridge,
+            serverID: serverID,
+            allowsFavoritesAndRatings: true
+        )
         let selectCards = select.trackCards ?? []
         #expect(!selectCards.map(\.globalID.remoteID).contains("t1"))
         #expect(selectCards.count == 2)
 
         // library_get_random_songs
-        let random = await execute("library_get_random_songs", ["limit": "10"], catalog: store, bridge: bridge, serverID: serverID)
+        let random = await execute(
+            "library_get_random_songs",
+            ["limit": "10"],
+            catalog: store,
+            bridge: bridge,
+            serverID: serverID,
+            allowsFavoritesAndRatings: true
+        )
         let randomCards = random.trackCards ?? []
         #expect(!randomCards.map(\.globalID.remoteID).contains("t1"))
 
         // smart_queue_generate
-        let queue = await execute("smart_queue_generate", ["limit": "10"], catalog: store, bridge: bridge, serverID: serverID)
+        let queue = await execute(
+            "smart_queue_generate",
+            ["limit": "10"],
+            catalog: store,
+            bridge: bridge,
+            serverID: serverID,
+            allowsFavoritesAndRatings: true
+        )
         let queueCards = queue.trackCards ?? []
         #expect(!queueCards.map(\.globalID.remoteID).contains("t1"))
     }
@@ -118,11 +146,25 @@ struct DislikeAgentTests {
         let gid = GlobalID(serverID: serverID, remoteID: "t1")
 
         try await store.setDisliked(gid, value: true)
-        let excluded = await execute("library_select_tracks", ["limit": "10", "sort": "random"], catalog: store, bridge: bridge, serverID: serverID)
+        let excluded = await execute(
+            "library_select_tracks",
+            ["limit": "10", "sort": "random"],
+            catalog: store,
+            bridge: bridge,
+            serverID: serverID,
+            allowsFavoritesAndRatings: true
+        )
         #expect(!(excluded.trackCards ?? []).map(\.globalID.remoteID).contains("t1"))
 
         try await store.setDisliked(gid, value: false)
-        let included = await execute("library_select_tracks", ["limit": "10", "sort": "random"], catalog: store, bridge: bridge, serverID: serverID)
+        let included = await execute(
+            "library_select_tracks",
+            ["limit": "10", "sort": "random"],
+            catalog: store,
+            bridge: bridge,
+            serverID: serverID,
+            allowsFavoritesAndRatings: true
+        )
         #expect((included.trackCards ?? []).map(\.globalID.remoteID).contains("t1"))
     }
 

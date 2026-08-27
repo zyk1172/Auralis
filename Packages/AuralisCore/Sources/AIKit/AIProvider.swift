@@ -541,6 +541,14 @@ public struct AIProviderConfiguration: Codable, Hashable, Sendable, Identifiable
     public var maxOutputTokens: Int { maxTokens }
 }
 
+public enum AIPrivacyCategory: String, Codable, Hashable, Sendable, CaseIterable {
+    case metadata
+    case lyrics
+    case playbackHistory
+    case favoritesAndRatings
+    case externalDiscovery
+}
+
 public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
     public var allowsMetadata = true
     public var allowsLyrics = false
@@ -549,6 +557,25 @@ public struct AIPrivacyPermissions: Codable, Hashable, Sendable {
     public var allowsExternalDiscovery = false
     public var allowsFilePaths = false
     public init() {}
+
+    /// Persisted assistant prose has no structured provenance. Replaying it
+    /// is safe only when every local disclosure category remains enabled.
+    public var allowPersistedAssistantText: Bool {
+        allowsMetadata
+            && allowsPlaybackHistory
+            && allowsFavoritesAndRatings
+            && allowsLyrics
+    }
+
+    public func allows(_ category: AIPrivacyCategory) -> Bool {
+        switch category {
+        case .metadata: allowsMetadata
+        case .lyrics: allowsLyrics
+        case .playbackHistory: allowsPlaybackHistory
+        case .favoritesAndRatings: allowsFavoritesAndRatings
+        case .externalDiscovery: allowsExternalDiscovery
+        }
+    }
 
     /// 设置页隐私开关对应的 UserDefaults 键，与 SettingsView /
     /// MacSettingsWindow 的 @AppStorage 保持一致。

@@ -220,16 +220,16 @@ struct AgentBudgetAndBatchPolicyTests {
     @Test("未知 Provider 使用保守字节预算并保留完整请求诊断")
     func unknownProviderUsesConservativeByteFallback() {
         let fits = RecommendationIndexBatchPolicy.requestBudget(
-            systemPromptBytes: 20_000,
-            payloadBytes: 20_000,
+            systemPromptBytes: 14_000,
+            payloadBytes: 12_000,
             outputSchemaBytes: 8_000,
             requestWrapperBytes: 0,
             maxContextTokens: nil,
             reservedOutputTokens: 4_096
         )
         let exceeds = RecommendationIndexBatchPolicy.requestBudget(
-            systemPromptBytes: 20_000,
-            payloadBytes: 20_001,
+            systemPromptBytes: 14_000,
+            payloadBytes: 13_500,
             outputSchemaBytes: 8_000,
             requestWrapperBytes: 0,
             maxContextTokens: nil,

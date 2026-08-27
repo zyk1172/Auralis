@@ -160,6 +160,24 @@ struct AnthropicMessagesProviderTests {
         #expect(blocks.map { $0["tool_use_id"] as? String } == ["call-1", "call-2"])
     }
 
+    @Test("Anthropic 的 toolChoice.none 不发送 tools")
+    func noneToolChoiceOmitsTools() async throws {
+        AnthropicMockURLProtocol.reset(data: Data(#"{"id":"msg_none","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"完成"}],"stop_reason":"end_turn"}"#.utf8))
+
+        _ = try await makeProvider().complete(AICompletionRequest(
+            model: "claude-test",
+            messages: [AIMessage(role: .user, content: "只回答文本")],
+            maxTokens: 64,
+            tools: [AIToolDefinition(name: "library_search", description: "搜索")],
+            toolChoice: AIToolChoice.none
+        ))
+
+        let request = try #require(AnthropicMockURLProtocol.requests.first)
+        let body = try requestObject(request)
+        #expect(body["tools"] == nil)
+        #expect(body["tool_choice"] == nil)
+    }
+
     /// 并行 tool_use 的 id 与 content_block.index 顺序不一致时，必须按 index
     /// 恢复原始顺序（index 0 = firstTool，index 1 = secondTool），不能按
     /// tool_use.id 字典序（tool-a < tool-z）交换顺序。

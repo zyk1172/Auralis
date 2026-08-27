@@ -280,6 +280,58 @@ public enum ToolEvidencePolicy: String, Sendable, Hashable {
     case externalAPI
 }
 
+/// The single disclosure gate shared by ToolRuntime and every compatibility
+/// executor. A descriptor owns the data categories its result may expose;
+/// callers never maintain a parallel list of tool names.
+public enum ToolPrivacyPolicy {
+    public static func missingDisclosureCategories(
+        for descriptor: ToolDescriptor,
+        permissions: AIPrivacyPermissions
+    ) -> Set<AIPrivacyCategory> {
+        descriptor.requiredDisclosureCategories.filter { !permissions.allows($0) }
+    }
+
+    public static func denialResult(
+        for descriptor: ToolDescriptor,
+        call: ToolCall,
+        permissions: AIPrivacyPermissions
+    ) -> ToolResult? {
+        let missing = missingDisclosureCategories(for: descriptor, permissions: permissions)
+        guard !missing.isEmpty else { return nil }
+        let summary: String
+        if missing.contains(.metadata) {
+            summary = "歌曲元数据已按隐私设置隐藏。"
+        } else if missing.contains(.playbackHistory) {
+            summary = "播放历史已按隐私设置隐藏。"
+        } else if missing.contains(.favoritesAndRatings) {
+            summary = "收藏与评分已按隐私设置隐藏。"
+        } else if missing.contains(.lyrics) {
+            summary = "歌词已按隐私设置隐藏。"
+        } else {
+            summary = "该工具所需的数据已按隐私设置隐藏。"
+        }
+        return ToolResult(
+            call: call,
+            permission: descriptor.permission,
+            success: false,
+            summary: summary
+        )
+    }
+
+    static func inferredCategories(
+        permission: ToolPermission,
+        evidencePolicy: ToolEvidencePolicy
+    ) -> Set<AIPrivacyCategory> {
+        guard permission == .readOnly else { return [] }
+        switch evidencePolicy {
+        case .localCatalog, .playbackState:
+            return [.metadata]
+        case .none, .server, .externalAPI:
+            return []
+        }
+    }
+}
+
 /// Controls which boundary may expose a registered tool.
 ///
 /// Visibility is not an execution permission. Runtime lookup deliberately
@@ -307,6 +359,11 @@ public struct ToolDescriptor: Sendable, Hashable {
     public let sideEffectPolicy: ToolSideEffectPolicy
     public let authorizationOperation: ToolAuthorizationOperation?
     public let evidencePolicy: ToolEvidencePolicy
+    /// Result disclosure requirements are part of the descriptor contract.
+    /// An empty set is intentional for non-content state such as capabilities
+    /// or a sleep timer; read-only local catalog/playback descriptors infer
+    /// `.metadata` unless they explicitly override this with `[]`.
+    public let requiredDisclosureCategories: Set<AIPrivacyCategory>
     /// 执行该工具必须具备的任务能力域（deprecated / diagnostics-only）：
     /// permissive runtime 不再因缺少 scope 拒绝已注册工具，保留仅为迁移/日志兼容。
     public let requiredScopes: Set<GrantedScope>
@@ -352,6 +409,7 @@ public struct ToolDescriptor: Sendable, Hashable {
         permission: ToolPermission,
         confirmationPolicy: ToolConfirmationPolicy = .none,
         summary: String,
+        requiredDisclosureCategories: Set<AIPrivacyCategory>? = nil,
         parameters: [ToolParameter] = [],
         cachePolicy: ToolCachePolicy? = nil,
         sideEffectPolicy: ToolSideEffectPolicy? = nil,
@@ -391,7 +449,13 @@ public struct ToolDescriptor: Sendable, Hashable {
         let resolvedSideEffectPolicy = sideEffectPolicy ?? Self.defaultSideEffectPolicy(name: name, group: group, permission: permission)
         self.sideEffectPolicy = resolvedSideEffectPolicy
         self.authorizationOperation = authorizationOperation ?? Self.defaultAuthorizationOperation(name: name, group: group, permission: permission)
-        self.evidencePolicy = evidencePolicy ?? Self.defaultEvidencePolicy(group: group, permission: permission)
+        let resolvedEvidencePolicy = evidencePolicy ?? Self.defaultEvidencePolicy(group: group, permission: permission)
+        self.evidencePolicy = resolvedEvidencePolicy
+        self.requiredDisclosureCategories = requiredDisclosureCategories
+            ?? ToolPrivacyPolicy.inferredCategories(
+                permission: permission,
+                evidencePolicy: resolvedEvidencePolicy
+            )
         self.requiredScopes = requiredScopes ?? Self.defaultRequiredScopes(
             name: name,
             group: group,
@@ -648,6 +712,7 @@ public enum AgentToolRegistry {
         // MARK: Runtime discovery and generic capabilities
         .init(name: "tool_search", group: .catalog, permission: .readOnly,
               summary: "按名称、描述、标签或命名空间发现可用工具；发现后下一轮即可使用其完整 schema",
+              requiredDisclosureCategories: [],
               parameters: [
                 .init(name: "query", required: true, description: "工具名称、能力或自然语言描述"),
                 .init(name: "namespace", required: false, description: "可选命名空间，如 catalog/playback/web"),
@@ -658,6 +723,7 @@ public enum AgentToolRegistry {
               aliases: ["tools_list"]),
         .init(name: "capabilities_get", group: .catalog, permission: .readOnly,
               summary: "查询当前 Provider、原生工具、联网与主要 App 能力摘要",
+              requiredDisclosureCategories: [],
               tags: ["core", "capability", "provider", "web", "能力"]),
         .init(name: "memory_search", group: .memory, permission: .readOnly,
               summary: "按关键词搜索长期记忆，只返回与当前问题相关的记忆",
@@ -773,20 +839,25 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "albumID", required: true, description: "GlobalAlbumID")]),
         .init(name: "getArtist", group: .catalog, permission: .readOnly, summary: "获取艺术家详情",
               parameters: [.init(name: "artistID", required: true, description: "GlobalArtistID")]),
-        .init(name: "getFavorites", group: .catalog, permission: .readOnly, summary: "获取收藏的单曲"),
+        .init(name: "getFavorites", group: .catalog, permission: .readOnly, summary: "获取收藏的单曲",
+              requiredDisclosureCategories: [.metadata, .favoritesAndRatings]),
         .init(name: "getRecentHistory", group: .catalog, permission: .readOnly, summary: "获取最近播放历史",
+              requiredDisclosureCategories: [.metadata, .playbackHistory],
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 50")]),
         .init(name: "getLeastPlayed", group: .catalog, permission: .readOnly, summary: "获取最少播放的单曲",
+              requiredDisclosureCategories: [.metadata, .playbackHistory],
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 50")]),
         .init(name: "getDownloadedTracks", group: .catalog, permission: .readOnly, summary: "获取已下载的单曲"),
         .init(name: "getSimilarTracks", group: .catalog, permission: .readOnly, summary: "获取相似单曲",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "getCurrentTrack", group: .catalog, permission: .readOnly, summary: "获取当前播放的单曲"),
-        .init(name: "getCurrentQueue", group: .catalog, permission: .readOnly, summary: "获取当前播放队列"),
+        .init(name: "getCurrentQueue", group: .catalog, permission: .readOnly, summary: "获取当前播放队列",
+              requiredDisclosureCategories: []),
 
         // MARK: 最终展示协议（确定性 Presentation，模型不能决定 UI）
         .init(name: "result_present_tracks", group: .catalog, permission: .readOnly,
               summary: "明确把一组歌曲作为本次任务的最终展示结果（只传入真正打算展示给用户的最终歌曲，不要传整个候选池）",
+              requiredDisclosureCategories: [.metadata],
               parameters: [
                 .init(name: "trackIDs", required: true, description: "最终歌曲的 GlobalTrackID 数组",
                       schemaJSON: #"{"type":"array","items":{"type":"string"}}"#),
@@ -797,6 +868,7 @@ public enum AgentToolRegistry {
 
         // MARK: Canonical 新式工具（旧别名仍注册，仅供执行兼容；schema 只暴露 canonical）
         .init(name: "library_get_least_played", group: .catalog, permission: .readOnly, summary: "读取本地播放记录中最少播放的真实歌曲，用于发现和推荐候选",
+              requiredDisclosureCategories: [.metadata, .playbackHistory],
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 50")]),
         .init(name: "library_get_downloaded", group: .catalog, permission: .readOnly, summary: "读取已下载到本地的真实歌曲，用于离线浏览和播放规划"),
         .init(name: "queue_remove", group: .playback, permission: .reversible, summary: "从当前播放队列移除指定位置的歌曲",
@@ -957,10 +1029,10 @@ public enum AgentToolRegistry {
         .init(name: "app_get_context", group: .catalog, permission: .readOnly, summary: "获取 App 上下文（页面/服务器/当前歌曲/播放状态/网络）", tags: ["core", "context", "app"]),
         .init(name: "app_open_page", group: .catalog, permission: .readOnly, summary: "打开 Auralis App 内指定页面，用于用户需要直接查看某界面时",
               parameters: [.init(name: "page", required: true, description: "首页/音乐库/搜索/AI助手/设置/当前播放/歌词/播放队列/下载管理/服务器管理")]),
-        .init(name: "app_get_feature_status", group: .catalog, permission: .readOnly, summary: "查询后台播放/Siri/快捷指令/本地网络等系统能力是否可用"),
-        .init(name: "device_get_network_status", group: .catalog, permission: .readOnly, summary: "读取当前网络类型与音乐服务器可达性，用于诊断或选择在线操作"),
-        .init(name: "device_get_audio_route", group: .catalog, permission: .readOnly, summary: "读取当前音频输出设备（耳机/扬声器等），用于播放状态诊断"),
-        .init(name: "device_get_storage_status", group: .catalog, permission: .readOnly, summary: "读取设备存储占用与剩余空间，用于缓存/下载规划或诊断"),
+        .init(name: "app_get_feature_status", group: .catalog, permission: .readOnly, summary: "查询后台播放/Siri/快捷指令/本地网络等系统能力是否可用", requiredDisclosureCategories: []),
+        .init(name: "device_get_network_status", group: .catalog, permission: .readOnly, summary: "读取当前网络类型与音乐服务器可达性，用于诊断或选择在线操作", requiredDisclosureCategories: []),
+        .init(name: "device_get_audio_route", group: .catalog, permission: .readOnly, summary: "读取当前音频输出设备（耳机/扬声器等），用于播放状态诊断", requiredDisclosureCategories: []),
+        .init(name: "device_get_storage_status", group: .catalog, permission: .readOnly, summary: "读取设备存储占用与剩余空间，用于缓存/下载规划或诊断", requiredDisclosureCategories: []),
 
         // 服务器
         .init(name: "server_list", group: .server, permission: .readOnly, summary: "列出 Auralis 已配置的音乐服务器及基础信息"),
@@ -971,6 +1043,7 @@ public enum AgentToolRegistry {
         .init(name: "server_sync_status", group: .server, permission: .readOnly, summary: "读取资料库同步状态与上次同步时间，用于判断本地数据是否可能陈旧"),
         .init(name: "server_sync_start", group: .server, permission: .reversible, summary: "触发一次音乐库增量同步（后台执行，本地未找到歌曲时可先同步）"),
         .init(name: "server_search", group: .server, permission: .readOnly, summary: "在服务器上在线搜索真实歌曲（HTTP），本地资料库无结果时用于查找远端曲目",
+              requiredDisclosureCategories: [.metadata],
               parameters: [
                 .init(name: "query", required: true, description: "搜索关键词"),
                 .init(name: "limit", required: false, description: "返回数量，默认 20"),
@@ -1011,6 +1084,7 @@ public enum AgentToolRegistry {
               ], maxResultCharacters: 24_000, tags: ["recommendation-index", "index", "read", "catalog"], aliases: [RecommendationIndexCompatibility.legacyReadTool]),
         .init(name: "recommendation_taxonomy_list", group: .catalog, permission: .readOnly,
               summary: "列出 Auralis 固定推荐 taxonomy（情绪/场景/主题/类型/风格/人声/乐器/质感/节奏），返回稳定 TagID 与展示名",
+              requiredDisclosureCategories: [],
               parameters: [
                 .init(name: "dimension", required: false, description: "可选 mood/scene/theme/genre/style/vocal/instrument/texture/rhythm"),
                 .init(name: "limit", required: false, description: "返回数量，默认 200，最多 500"),
@@ -1018,6 +1092,7 @@ public enum AgentToolRegistry {
               tags: ["recommendation-index", "taxonomy", "list", "fixed"]),
         .init(name: "recommendation_taxonomy_search", group: .catalog, permission: .readOnly,
               summary: "在 Auralis 固定推荐 taxonomy 中搜索 TagID、展示名或别名；只能返回已定义标签，不能创建新标签",
+              requiredDisclosureCategories: [],
               parameters: [
                 .init(name: "query", required: true, description: "自然语言或别名，如 开车/伤感/纯音乐/神圣"),
                 .init(name: "limit", required: false, description: "返回数量，默认 12，最多 50"),
@@ -1084,10 +1159,13 @@ public enum AgentToolRegistry {
                 .init(name: "limit", required: false, description: "返回数量，默认 20"),
               ]),
         .init(name: "library_get_most_played", group: .catalog, permission: .readOnly, summary: "读取本地播放记录中最常播放的真实歌曲，用于用户偏好分析和推荐候选",
+              requiredDisclosureCategories: [.metadata, .playbackHistory],
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 20")]),
         .init(name: "library_get_recently_played", group: .catalog, permission: .readOnly, summary: "读取最近播放过的真实歌曲，用于上下文恢复和推荐候选",
+              requiredDisclosureCategories: [.metadata, .playbackHistory],
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 20")]),
-        .init(name: "library_get_starred", group: .catalog, permission: .readOnly, summary: "读取用户收藏的真实歌曲，用于收藏浏览、筛选和推荐候选"),
+        .init(name: "library_get_starred", group: .catalog, permission: .readOnly, summary: "读取用户收藏的真实歌曲，用于收藏浏览、筛选和推荐候选",
+              requiredDisclosureCategories: [.metadata, .favoritesAndRatings]),
         .init(name: "library_get_random_songs", group: .catalog, permission: .readOnly, summary: "从本地资料库随机读取真实歌曲，用于随机播放、发现和候选生成",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 10")]),
         .init(name: "library_get_similar_songs", group: .catalog, permission: .readOnly, summary: "按指定歌曲的真实内容/元数据读取相似歌曲，用于相似推荐和发现",
@@ -1136,10 +1214,11 @@ public enum AgentToolRegistry {
                 .init(name: "minutes", required: false, description: "afterMinutes 时分钟数，默认 30"),
               ]),
         .init(name: "playback_cancel_sleep_timer", group: .playback, permission: .reversible, summary: "取消睡眠定时"),
-        .init(name: "playback_get_sleep_timer", group: .playback, permission: .readOnly, summary: "查询睡眠定时状态"),
+        .init(name: "playback_get_sleep_timer", group: .playback, permission: .readOnly, summary: "查询睡眠定时状态", requiredDisclosureCategories: []),
 
         // 队列
-        .init(name: "queue_get", group: .playback, permission: .readOnly, summary: "读取当前播放队列中的真实歌曲与顺序，用于确认队列或规划队列修改"),
+        .init(name: "queue_get", group: .playback, permission: .readOnly, summary: "读取当前播放队列中的真实歌曲与顺序，用于确认队列或规划队列修改",
+              requiredDisclosureCategories: [.metadata]),
         .init(name: "queue_append", group: .playback, permission: .reversible, summary: "把歌曲追加到队列末尾",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "queue_append_many", group: .playback, permission: .reversible, summary: "一次把多首歌曲追加到队列末尾",
@@ -1194,6 +1273,7 @@ public enum AgentToolRegistry {
                 .init(name: "value", required: true, description: "true=标记不喜欢 / false=取消不喜欢"),
               ]),
         .init(name: "library_get_disliked", group: .catalog, permission: .readOnly, summary: "读取已标记“不喜欢”的歌曲（含标题/艺术家/专辑）",
+              requiredDisclosureCategories: [.metadata, .favoritesAndRatings],
               parameters: [
                 .init(name: "limit", required: false, description: "返回数量，默认 50，最大 200"),
               ]),
@@ -1203,10 +1283,11 @@ public enum AgentToolRegistry {
                 .init(name: "refresh", required: false, description: "true=忽略缓存强制刷新，默认 false"),
               ]),
         .init(name: "lyrics_get", group: .catalog, permission: .readOnly, summary: "获取歌词状态与正文（仅在隐私设置允许时回传正文）",
+              requiredDisclosureCategories: [],
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
         .init(name: "media_download_offline", group: .catalog, permission: .reversible, summary: "下载歌曲到本地离线缓存",
               parameters: [.init(name: "trackID", required: true, description: "GlobalTrackID")]),
-        .init(name: "cache_get_status", group: .catalog, permission: .readOnly, summary: "获取缓存容量（封面/歌词/离线音频）"),
+        .init(name: "cache_get_status", group: .catalog, permission: .readOnly, summary: "获取缓存容量（封面/歌词/离线音频）", requiredDisclosureCategories: []),
         .init(name: "recommend_by_mood", group: .catalog, permission: .readOnly, summary: "按情绪推荐歌曲（深夜/放松/通勤/学习/运动/伤感/治愈/怀旧/安静/高能量）",
               parameters: [
                 .init(name: "mood", required: true, description: "情绪：深夜/放松/通勤/学习/运动/伤感/治愈/怀旧/安静/高能量"),
@@ -1231,10 +1312,10 @@ public enum AgentToolRegistry {
               ]),
         .init(name: "smart_queue_generate", group: .catalog, permission: .readOnly, summary: "生成智能队列预览（不替换队列；确认后请用 queue_replace）",
               parameters: [.init(name: "limit", required: false, description: "数量，默认 20")]),
-        .init(name: "diagnostics_export_report", group: .catalog, permission: .readOnly, summary: "导出脱敏诊断报告"),
+        .init(name: "diagnostics_export_report", group: .catalog, permission: .readOnly, summary: "导出脱敏诊断报告", requiredDisclosureCategories: []),
         .init(name: "diagnostics_now_playing", group: .catalog, permission: .readOnly, summary: "对比控制中心/锁屏与 App 内播放状态"),
-        .init(name: "ios_siri_get_status", group: .catalog, permission: .readOnly, summary: "查询 Siri 集成状态"),
-        .init(name: "ios_shortcuts_list", group: .catalog, permission: .readOnly, summary: "列出快捷指令 App 中可用的操作"),
+        .init(name: "ios_siri_get_status", group: .catalog, permission: .readOnly, summary: "查询 Siri 集成状态", requiredDisclosureCategories: []),
+        .init(name: "ios_shortcuts_list", group: .catalog, permission: .readOnly, summary: "列出快捷指令 App 中可用的操作", requiredDisclosureCategories: []),
         .init(name: "library_find_duplicates", group: .catalog, permission: .readOnly, summary: "查找疑似重复歌曲（只报告，不删除）",
               parameters: [.init(name: "limit", required: false, description: "最多报告组数，默认 10")]),
         .init(name: "library_find_metadata_issues", group: .catalog, permission: .readOnly, summary: "查找元数据问题（缺艺术家/专辑/年份/流派/封面/异常时长）",
@@ -1246,13 +1327,15 @@ public enum AgentToolRegistry {
         .init(name: "library_find_unplayable", group: .catalog, permission: .readOnly, summary: "查找无播放地址且未离线的歌曲",
               parameters: [.init(name: "limit", required: false, description: "最多报告条数，默认 10")]),
         .init(name: "stats_get_top_items", group: .catalog, permission: .readOnly, summary: "获取最常听的艺术家/专辑/歌曲",
+              requiredDisclosureCategories: [.metadata, .playbackHistory],
               parameters: [
                 .init(name: "kind", required: true, description: "artist/album/track"),
                 .init(name: "limit", required: false, description: "返回数量，默认 10"),
               ]),
-        .init(name: "stats_get_format_distribution", group: .catalog, permission: .readOnly, summary: "获取音频格式分布"),
-        .init(name: "stats_get_storage_distribution", group: .catalog, permission: .readOnly, summary: "获取存储/缓存分布"),
-        .init(name: "stats_get_listening_summary", group: .catalog, permission: .readOnly, summary: "获取收听统计摘要"),
+        .init(name: "stats_get_format_distribution", group: .catalog, permission: .readOnly, summary: "获取音频格式分布", requiredDisclosureCategories: []),
+        .init(name: "stats_get_storage_distribution", group: .catalog, permission: .readOnly, summary: "获取存储/缓存分布", requiredDisclosureCategories: []),
+        .init(name: "stats_get_listening_summary", group: .catalog, permission: .readOnly, summary: "获取收听统计摘要",
+              requiredDisclosureCategories: [.metadata, .playbackHistory]),
         .init(name: "diagnostics_playback", group: .catalog, permission: .readOnly, summary: "诊断播放器状态（缓冲/来源/错误/音频会话/队列）"),
         .init(name: "diagnostics_get_recent_errors", group: .catalog, permission: .readOnly, summary: "获取最近脱敏错误记录",
               parameters: [.init(name: "limit", required: false, description: "返回数量，默认 20")]),
@@ -1297,6 +1380,7 @@ public enum AgentToolRegistry {
               declaredRisk: .irreversibleDelete),
         .init(name: "tool_diagnose", group: .catalog, permission: .readOnly,
               summary: "诊断工具定义、参数 schema、执行器和最近一次结构化失败",
+              requiredDisclosureCategories: [],
               parameters: [.init(name: "toolName", required: true, description: "canonical 工具名")],
               namespace: "tool_builder", tags: ["custom", "diagnostics", "tool_doctor"]),
         .init(name: "tool_repair", group: .memory, permission: .reversible,
@@ -1462,6 +1546,7 @@ public enum AgentToolRegistry {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool = false,
         allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
@@ -1512,6 +1597,7 @@ public enum AgentToolRegistry {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,
@@ -1527,6 +1613,13 @@ public enum AgentToolRegistry {
             resourceLeaseRegistry: MutationResourceLeaseRegistry(),
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
+        if let denial = ToolPrivacyPolicy.denialResult(
+            for: descriptor,
+            call: call,
+            permissions: context.privacyPermissions
+        ) {
+            return denial
+        }
         return await definition.executor(context, call)
     }
 
@@ -1545,6 +1638,7 @@ public enum AgentToolRegistry {
         let systemService = context.systemService
         let activeSkillID = context.activeSkillID
         let externalMusicService = context.externalMusicService
+        let privacyPermissions = context.privacyPermissions
         let allowsLyrics = context.allowsLyrics
         let allowsFavoritesAndRatings = context.allowsFavoritesAndRatings
         let bridge = context.bridge
@@ -1725,6 +1819,7 @@ public enum AgentToolRegistry {
                 ToolCall(name: "music_download", arguments: legacyArguments),
                 descriptor: legacyDescriptor,
                 systemService: systemService,
+                privacyPermissions: privacyPermissions,
                 allowsLyrics: allowsLyrics
             )
         default:
@@ -1738,6 +1833,7 @@ public enum AgentToolRegistry {
                 canonicalCall,
                 descriptor: canonicalDescriptor,
                 systemService: systemService,
+                privacyPermissions: privacyPermissions,
                 allowsLyrics: allowsLyrics
             )
         }
@@ -1748,6 +1844,7 @@ public enum AgentToolRegistry {
             catalog: catalog,
             serverID: serverID,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
@@ -1766,6 +1863,7 @@ public enum AgentToolRegistry {
         serverID: ServerID?,
         systemService: (any AgentSystemService)?,
         externalMusicService: (any AgentExternalMusicService)? = nil,
+        privacyPermissions: AIPrivacyPermissions? = nil,
         allowsLyrics: Bool = false,
         allowsFavoritesAndRatings: Bool = false,
         providerCapabilities: ModelCapabilities? = nil,
@@ -1782,6 +1880,7 @@ public enum AgentToolRegistry {
             serverID: serverID,
             systemService: systemService,
             externalMusicService: externalMusicService,
+            privacyPermissions: privacyPermissions,
             allowsLyrics: allowsLyrics,
             allowsFavoritesAndRatings: allowsFavoritesAndRatings,
             providerCapabilities: providerCapabilities,

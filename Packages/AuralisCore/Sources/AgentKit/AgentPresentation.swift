@@ -24,7 +24,9 @@ public enum AgentUserFacingSanitizer {
         pattern: #"(?i)\bGlobalID\s*\(\s*([^)]*?)\s*\)"#
     )
     private static let bareGlobalID = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:server|srv|opensubsonic)-[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*"#
+        // ServerID is intentionally opaque. Do not infer its validity from a
+        // prefix; validate the complete X:Y candidate with GlobalID below.
+        pattern: #"(?i)(?<![A-Za-z0-9_./-])[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._:-]*(?![A-Za-z0-9._:/-])"#
     )
     public static func text(_ value: String) -> String {
         let replacement = "[内部标识]"
@@ -108,15 +110,30 @@ public enum AgentUserFacingSanitizer {
             // HTML/data attributes are technical payload, not user-facing
             // semantic IDs. Keep their markup and value intact.
             let isDataAttributeValue = prefix.range(
-                of: #"(?i)data-[A-Za-z0-9_-]+\s*=\s*[\"']$"#,
+                of: #"(?i)(?:id|uuid|data-[A-Za-z0-9_-]+)\s*=\s*[\"']$"#,
                 options: .regularExpression
             ) != nil
             guard !isDataAttributeValue,
-                  GlobalID(rawValue) != nil
+                  isBareAuralisGlobalID(rawValue)
             else { continue }
             output = (output as NSString).replacingCharacters(in: match.range, with: replacement)
         }
         return output
+    }
+
+    private static func isBareAuralisGlobalID(_ rawValue: String) -> Bool {
+        guard GlobalID(rawValue) != nil else { return false }
+        let parts = rawValue.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return false }
+        // Preserve clock-like prose such as 12:34. Auralis IDs are opaque,
+        // but a bare all-numeric X:Y token is overwhelmingly a duration and
+        // is not enough evidence to redact user-facing text.
+        guard !(parts[0].allSatisfy(\.isNumber) && parts[1].allSatisfy(\.isNumber)) else {
+            return false
+        }
+        // URI schemes are technical text rather than Auralis GlobalIDs.
+        let scheme = parts[0].lowercased()
+        return !["http", "https", "ftp", "mailto", "file", "data"].contains(scheme)
     }
 
     private static func isAuralisEntityIdentifier(_ rawValue: String) -> Bool {
