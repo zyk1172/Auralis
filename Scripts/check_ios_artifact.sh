@@ -26,9 +26,13 @@ if [ "${#binaries[@]}" -eq 0 ]; then
 fi
 
 contains() {
-    needle="$1"
+    local needle="$1"
+    local candidate
     for candidate in "${binaries[@]}"; do
-        if strings "${candidate}" | rg -F --quiet -- "${needle}"; then
+        # GitHub's macOS runner does not guarantee ripgrep.  Use the
+        # system-provided grep and consume the complete strings output so
+        # strings does not receive a broken pipe when a match is found.
+        if strings "${candidate}" | grep -F -- "${needle}" >/dev/null; then
             return 0
         fi
     done
