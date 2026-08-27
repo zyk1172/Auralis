@@ -118,31 +118,28 @@ struct PlaybackSettingsPage: View {
             }
 #if os(iOS)
             Section(String(localized: "音乐震动反馈", bundle: .module)) {
-                if model.musicHaptics.supportsHaptics {
-                    Toggle(String(localized: "自动开启音乐震动", bundle: .module), isOn: $musicHapticsEnabled)
-                        .accessibilityIdentifier(Self.musicHapticsSettingsIdentifier)
-                    Text(String(localized: "支持的歌曲优先使用系统 Music Haptics；其它歌曲会在首次播放时后台生成触觉轨道，之后播放时使用。", bundle: .module))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    LabeledContent(String(localized: "普通震动缓存", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.transientBytes, countStyle: .file) + " / 200 MB")
-                    LabeledContent(String(localized: "收藏震动数据", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.favoriteBytes, countStyle: .file))
-                    Button(String(localized: "清理普通震动缓存", bundle: .module), role: .destructive) {
-                        Task { await model.musicHaptics.clearTransientCache(); musicHapticsUsage = await model.musicHaptics.usage() }
-                    }
+                Toggle(String(localized: "自动开启音乐震动", bundle: .module), isOn: $musicHapticsEnabled)
+                    .disabled(!model.musicHaptics.supportsHaptics)
+                    .accessibilityIdentifier(Self.musicHapticsSettingsIdentifier)
 #if DEBUG
-                    if let diagnostics = musicHapticsDiagnostics {
-                        let customState = diagnostics.supportsCustomHaptics ? "可用" : "不可用"
-                        let systemState = diagnostics.systemMusicHapticsActive ? "已启用" : "未启用"
-                        let isrcState = diagnostics.hasReliableISRC ? "已验证" : "缺失/未验证"
-                        Text("诊断 · 自定义硬件：\(customState)；系统 Music Haptics：\(systemState)；当前来源：\(String(describing: diagnostics.source))；ISRC：\(isrcState)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                NavigationLink(String(localized: "Music Haptics 调试诊断", bundle: .module)) {
+                    MusicHapticsDiagnosticsPage(model: model, theme: theme, diagnostics: musicHapticsDiagnostics)
+                }
 #endif
-                } else {
-                    Text(String(localized: "此设备不支持 Core Haptics 音乐触觉。", bundle: .module))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                LabeledContent(String(localized: "设备支持 Core Haptics", bundle: .module), value: model.musicHaptics.supportsHaptics ? String(localized: "支持", bundle: .module) : String(localized: "不支持", bundle: .module))
+                LabeledContent(
+                    String(localized: "系统 Music Haptics", bundle: .module),
+                    value: musicHapticsDiagnostics.map {
+                        Self.systemHapticsState($0, supportsCustomHaptics: model.musicHaptics.supportsHaptics)
+                    } ?? String(localized: "检查中", bundle: .module)
+                )
+                Text(String(localized: "支持的歌曲优先使用系统 Music Haptics；其它歌曲会在首次播放时后台生成触觉轨道，之后播放时使用。", bundle: .module))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LabeledContent(String(localized: "普通震动缓存", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.transientBytes, countStyle: .file) + " / 200 MB")
+                LabeledContent(String(localized: "收藏震动数据", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.favoriteBytes, countStyle: .file))
+                Button(String(localized: "清理普通震动缓存", bundle: .module), role: .destructive) {
+                    Task { await model.musicHaptics.clearTransientCache(); musicHapticsUsage = await model.musicHaptics.usage() }
                 }
             }
 #endif
@@ -156,7 +153,77 @@ struct PlaybackSettingsPage: View {
             model.setMusicHapticsEnabled(enabled)
         }
     }
+
+    private static func systemHapticsState(
+        _ diagnostics: MusicHapticsDiagnostics,
+        supportsCustomHaptics: Bool
+    ) -> String {
+        if diagnostics.systemMusicHapticsActive {
+            return String(localized: "已启用", bundle: .module)
+        }
+        // MediaAccessibility exposes the system setting as a boolean.  When
+        // it is inactive, the Core Haptics capability is the only local
+        // availability signal we can show without guessing at a track.
+        return supportsCustomHaptics
+            ? String(localized: "未启用", bundle: .module)
+            : String(localized: "不可用", bundle: .module)
+    }
 }
+
+#if DEBUG && os(iOS)
+private struct MusicHapticsDiagnosticsPage: View {
+    @ObservedObject var model: AuralisAppModel
+    let theme: BuiltInTheme
+    let initialDiagnostics: MusicHapticsDiagnostics?
+    @State private var diagnostics: MusicHapticsDiagnostics?
+
+    init(model: AuralisAppModel, theme: BuiltInTheme, diagnostics: MusicHapticsDiagnostics?) {
+        self.model = model
+        self.theme = theme
+        self.initialDiagnostics = diagnostics
+        _diagnostics = State(initialValue: diagnostics)
+    }
+
+    var body: some View {
+        SettingsDetailForm(title: "Music Haptics", theme: theme) {
+            Section("Build provenance") {
+                LabeledContent("Commit", value: BuildProvenance.gitCommit)
+                LabeledContent("Branch", value: BuildProvenance.gitBranch)
+                LabeledContent("Configuration", value: BuildProvenance.buildConfiguration)
+                LabeledContent("Version / build", value: "\(BuildProvenance.appVersion) (\(BuildProvenance.buildNumber))")
+            }
+            Section("Runtime") {
+                LabeledContent("supportsCoreHaptics", value: displayDiagnostics.supportsCustomHaptics ? "true" : "false")
+                LabeledContent("systemMusicHapticsActive", value: displayDiagnostics.systemMusicHapticsActive ? "true" : "false")
+                LabeledContent("globalEnabled", value: displayDiagnostics.globalEnabled ? "true" : "false")
+                LabeledContent("currentTrackPreference", value: displayDiagnostics.trackPreference.rawValue)
+                LabeledContent("effectiveEnabled", value: displayDiagnostics.effectiveEnabled ? "true" : "false")
+                LabeledContent("source", value: String(describing: displayDiagnostics.source))
+                LabeledContent("analysisState", value: displayDiagnostics.analysisState)
+                LabeledContent(
+                    "coverage",
+                    value: displayDiagnostics.coverage.map { "\(Int(($0 * 100).rounded()))%" } ?? "unknown"
+                )
+                LabeledContent("timelineExists", value: displayDiagnostics.timelineExists ? "true" : "false")
+            }
+        }
+        .task { diagnostics = await model.musicHaptics.diagnostics() }
+    }
+
+    private var displayDiagnostics: MusicHapticsDiagnostics {
+        diagnostics ?? MusicHapticsDiagnostics(
+            supportsCustomHaptics: false,
+            systemMusicHapticsActive: false,
+            globalEnabled: false,
+            trackPreference: .inherit,
+            effectiveEnabled: false,
+            source: .none,
+            hasReliableISRC: false,
+            analysisState: "loading"
+        )
+    }
+}
+#endif
 
 struct DataSettingsPage: View {
     @ObservedObject var model: AuralisAppModel

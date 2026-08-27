@@ -107,6 +107,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Inspect iOS app artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          products_dir="$(xcodebuild -project Auralis.xcodeproj -scheme Auralis -configuration Debug -destination 'generic/platform=iOS' -showBuildSettings | awk -F ' = ' '$1 ~ /^[[:space:]]*TARGET_BUILD_DIR$/ { print $2; exit }')"
+          if [ -z "$products_dir" ] || [ ! -d "$products_dir/Auralis.app" ]; then
+            echo "::error::Debug iOS app product directory was not found"
+            exit 1
+          fi
+          expected_commit="$(git rev-parse --short=8 HEAD)"
+          bash Scripts/check_ios_artifact.sh "$products_dir/Auralis.app" "$expected_commit"
+
       - name: Build iOS app (Release, generic)
         run: |
           xcodebuild \
@@ -117,9 +129,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      # R08：Auralis scheme 没有 Testables，不能把 SPM 单测伪装成 iOS UI 测试；
-      # 这里仍使用真实可用的 Simulator destination 编译 app，覆盖 iOS Simulator SDK
-      # 与扩展链接。若 runner 没有已安装 runtime，明确记录并跳过，不阻塞其它构建。
+      # UI smoke tests run through the Auralis scheme's real AuralisUITests
+      # TestableReference.  This is separate evidence from the generic build:
+      # it launches the app and queries rendered accessibility elements.
       - name: Build iOS app (Simulator)
         shell: bash
         run: |
@@ -136,6 +148,24 @@ jobs:
             -destination "platform=iOS Simulator,id=$simulator_id" \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - name: Run iOS UI smoke tests (Simulator)
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_id="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')"
+          if [ -z "$simulator_id" ]; then
+            echo "::warning::No available iPhone Simulator runtime on this runner; UI smoke tests require an established simulator."
+            exit 0
+          fi
+          xcodebuild \
+            -project Auralis.xcodeproj \
+            -scheme Auralis \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AuralisUITests \
+            test
 
   # AVFoundation 真实播放边界测试需要能驱动 AVPlayer 的 run loop。
   # Swift Testing 的无界面 runner 在 GitHub macOS 环境中不会持续驱动该

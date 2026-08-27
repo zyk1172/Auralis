@@ -162,6 +162,7 @@ struct CompactMiniPlayerContent: View {
 
 struct NowPlayingView: View {
     static let musicHapticsMenuIdentifier = "auralis.nowPlaying.musicHaptics"
+    static let moreActionsButtonIdentifier = "auralis.nowPlaying.moreActions"
     @ObservedObject var model: AuralisAppModel
     @ObservedObject private var playbackStore: PlaybackStore
     @ObservedObject private var queueStore: PlaybackQueuePresentationStore
@@ -171,7 +172,6 @@ struct NowPlayingView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var page = NowPlayingPage.player
     @State private var isPlaylistSheetPresented = false
-    @State private var showsMoreActions = false
     @State private var showsAudioTechnicalInfo = false
     @State private var showsTrackInformation = false
     @State private var lyricScrollTarget: Int?
@@ -249,7 +249,43 @@ struct NowPlayingView: View {
         .sheet(isPresented: $showsTrackInformation) {
             TrackInformationSheet(model: model, theme: theme, track: model.currentTrack)
         }
-        .confirmationDialog(String(localized: "更多操作", bundle: .module), isPresented: $showsMoreActions, titleVisibility: .visible) {
+        // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
+        .onChange(of: currentTrackIdentity) { _, _ in
+            pendingSeek = nil
+        }
+    }
+
+    private var header: some View {
+        HStack {
+#if os(iOS)
+            // iOS：全屏弹窗支持下拉关闭，不显示返回按钮。
+#else
+            Button(action: dismiss.callAsFunction) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(HapticBorderedButtonStyle())
+            .accessibilityLabel(String(localized: "关闭", bundle: .module))
+#endif
+            Spacer(minLength: 0)
+            VStack {
+                Text(String(localized: "正在播放", bundle: .module)).font(.caption.weight(.semibold))
+                Text(model.currentTrack.albumTitle)
+                    .font(.caption2)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+#if os(iOS)
+            // 右侧无内容，保持标题居中；更多操作已移到播放控制区。
+#else
+            Color.clear.frame(width: 28, height: 28)
+#endif
+        }
+    }
+
+    /// 三点菜单直接使用系统 Menu，保证其子菜单在 iOS accessibility 树中真实可发现。
+    private var moreMenu: some View {
+        Menu {
             Button(String(localized: "添加到歌单", bundle: .module)) { isPlaylistSheetPresented = true }
             if model.isDownloading(model.currentTrack) {
                 let progress = model.downloadingProgress[model.currentTrack.id] ?? 0
@@ -287,46 +323,6 @@ struct NowPlayingView: View {
             }
             .accessibilityIdentifier(Self.musicHapticsMenuIdentifier)
 #endif
-            Button(String(localized: "取消", bundle: .module), role: .cancel) {}
-        }
-        // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。
-        .onChange(of: currentTrackIdentity) { _, _ in
-            pendingSeek = nil
-        }
-    }
-
-    private var header: some View {
-        HStack {
-#if os(iOS)
-            // iOS：全屏弹窗支持下拉关闭，不显示返回按钮。
-#else
-            Button(action: dismiss.callAsFunction) {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(HapticBorderedButtonStyle())
-            .accessibilityLabel(String(localized: "关闭", bundle: .module))
-#endif
-            Spacer(minLength: 0)
-            VStack {
-                Text(String(localized: "正在播放", bundle: .module)).font(.caption.weight(.semibold))
-                Text(model.currentTrack.albumTitle)
-                    .font(.caption2)
-                    .foregroundStyle(theme.colorTokens.secondaryText.color)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-#if os(iOS)
-            // 右侧无内容，保持标题居中；更多操作已移到播放控制区。
-#else
-            Color.clear.frame(width: 28, height: 28)
-#endif
-        }
-    }
-
-    /// “更多”必须单击即展开；不用 Menu，避免在自定义按钮样式层级里退化为长按菜单。
-    private var moreMenu: some View {
-        Button {
-            showsMoreActions = true
         } label: {
             Image(systemName: "ellipsis")
                 .frame(minWidth: 44, minHeight: 44)
@@ -334,6 +330,7 @@ struct NowPlayingView: View {
         }
         .buttonStyle(HapticBorderedButtonStyle())
         .accessibilityLabel(String(localized: "更多操作", bundle: .module))
+        .accessibilityIdentifier(Self.moreActionsButtonIdentifier)
     }
 
     /// 三个页面只替换上方内容区；曲目信息、进度和控制区始终是同一套视图固定在底部。

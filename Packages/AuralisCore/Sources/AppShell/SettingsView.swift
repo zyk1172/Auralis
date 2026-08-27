@@ -90,6 +90,12 @@ struct SettingsView: View {
             }
             Section(String(localized: "关于", bundle: .module)) {
                 LabeledContent(String(localized: "版本", bundle: .module), value: AppVersionInfo.display)
+#if os(iOS)
+                LabeledContent("Git commit", value: BuildProvenance.gitCommit)
+                LabeledContent("Git branch", value: BuildProvenance.gitBranch)
+                LabeledContent("Build configuration", value: BuildProvenance.buildConfiguration)
+                LabeledContent("Build number", value: BuildProvenance.buildNumber)
+#endif
             }
         }
         .scrollContentBackground(.hidden)

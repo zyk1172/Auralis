@@ -34,6 +34,7 @@ targets:
           - Info.plist
           - Intents
           - LiveActivity
+          - UITests
       - path: Apps/Shared
         excludes:
           - Resources/Localizable.xcstrings
@@ -43,6 +44,52 @@ targets:
       - sdk: AppIntents.framework
       - target: AuralisIntents
       - target: AuralisLiveActivity
+    preBuildScripts:
+      - name: Generate build provenance
+        script: |
+          set -eu
+          # This file belongs to the application target, not the AppShell
+          # package.  The app target's pre-build phase runs before its Swift
+          # sources compile, whereas package products may already have been
+          # built as dependencies.
+          provenance_file="${SRCROOT}/Apps/iOS/BuildProvenance.generated.swift"
+          commit="$(git -C "${SRCROOT}" rev-parse --short=8 HEAD 2>/dev/null || true)"
+          branch="$(git -C "${SRCROOT}" symbolic-ref --quiet --short HEAD 2>/dev/null || echo detached)"
+          [ -n "${commit}" ] || commit="unknown"
+          configuration="${CONFIGURATION:-Unknown}"
+          version="${MARKETING_VERSION:-Unknown}"
+          build_number="${CURRENT_PROJECT_VERSION:-Unknown}"
+          # User script sandboxing permits declared outputs and DerivedFiles;
+          # do not create an undeclared sibling next to a source file.
+          mkdir -p "${DERIVED_FILE_DIR}"
+          tmp_file="${DERIVED_FILE_DIR}/BuildProvenance.generated.swift.tmp"
+          cat > "${tmp_file}" <<EOF
+          // Generated during the Auralis application build phase. Do not edit by hand.
+          import AppShell
+
+          enum BuildProvenanceGenerated {
+              static let gitCommit = "${commit}"
+              static let gitBranch = "${branch}"
+              static let buildConfiguration = "${configuration}"
+              static let appVersion = "${version}"
+              static let buildNumber = "${build_number}"
+
+              @MainActor
+              static func install() {
+                  BuildProvenance.install(
+                      commit: gitCommit,
+                      branch: gitBranch,
+                      configuration: buildConfiguration,
+                      version: appVersion,
+                      buildNumber: buildNumber
+                  )
+              }
+          }
+          EOF
+          mv "${tmp_file}" "${provenance_file}"
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Apps/iOS/BuildProvenance.generated.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios
@@ -52,9 +99,30 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Apps/iOS/Info.plist
         CODE_SIGN_ENTITLEMENTS: Apps/iOS/Auralis.entitlements
+        # The provenance phase reads the checkout's .git metadata.  Keep the
+        # rest of the project sandboxed, but explicitly opt this target's
+        # declared build phase out so the source -> binary proof is reliable.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: "JUQXD87P93"
         DEVELOPMENT_LANGUAGE: "zh-Hans"
+  AuralisUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Apps/iOS/UITests
+    dependencies:
+      - target: Auralis
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auralis.player.ios.uitests
+        PRODUCT_NAME: AuralisUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Auralis
+        DEVELOPMENT_TEAM: "JUQXD87P93"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
   AuralisMac:
     type: application
     platform: macOS
@@ -150,6 +218,10 @@ schemes:
         AuralisLiveActivity: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: AuralisUITests
     archive:
       config: Release
   AuralisMac:

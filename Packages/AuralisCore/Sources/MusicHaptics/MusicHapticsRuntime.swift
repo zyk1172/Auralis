@@ -17,8 +17,22 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
     public var effectiveEnabled: Bool
     public var source: MusicHapticsSource
     public var hasReliableISRC: Bool
+    public var analysisState: String
+    public var coverage: Double?
+    public var timelineExists: Bool
 
-    public init(supportsCustomHaptics: Bool, systemMusicHapticsActive: Bool, globalEnabled: Bool, trackPreference: TrackHapticsPreference, effectiveEnabled: Bool, source: MusicHapticsSource, hasReliableISRC: Bool) {
+    public init(
+        supportsCustomHaptics: Bool,
+        systemMusicHapticsActive: Bool,
+        globalEnabled: Bool,
+        trackPreference: TrackHapticsPreference,
+        effectiveEnabled: Bool,
+        source: MusicHapticsSource,
+        hasReliableISRC: Bool,
+        analysisState: String = "unknown",
+        coverage: Double? = nil,
+        timelineExists: Bool = false
+    ) {
         self.supportsCustomHaptics = supportsCustomHaptics
         self.systemMusicHapticsActive = systemMusicHapticsActive
         self.globalEnabled = globalEnabled
@@ -26,6 +40,9 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         self.effectiveEnabled = effectiveEnabled
         self.source = source
         self.hasReliableISRC = hasReliableISRC
+        self.analysisState = analysisState
+        self.coverage = coverage
+        self.timelineExists = timelineExists
     }
 }
 
@@ -221,8 +238,19 @@ public final class MusicHapticsCoordinator {
             trackPreference: preference,
             effectiveEnabled: preference.effective(globalEnabled: globalEnabled),
             source: source,
-            hasReliableISRC: currentIdentity?.isrc != nil
+            hasReliableISRC: currentIdentity?.isrc != nil,
+            analysisState: analysisState,
+            coverage: currentTimeline?.analysisCoverage,
+            timelineExists: currentTimeline != nil
         )
+    }
+
+    private var analysisState: String {
+        switch source {
+        case .analyzing: "analyzing"
+        case .custom, .system: "complete"
+        case .none: custom.supportsHaptics ? "idle" : "unavailable"
+        }
     }
 
     /// Creates the optional analysis sidecar before AVPlayer starts an item.
