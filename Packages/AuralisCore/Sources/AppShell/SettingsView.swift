@@ -646,6 +646,9 @@ struct AIProviderSettingsPage: View {
     @AppStorage(AIConnectionSettings.Keys.endpointMode) private var aiEndpointModeRaw = AIEndpointMode.chatCompletions.rawValue
     @AppStorage(AIConnectionSettings.Keys.maxContextTokens) private var aiMaxContextTokens = AIConnectionSettings.defaultMaxContextTokens
     @AppStorage(AIConnectionSettings.Keys.maxOutputTokens) private var aiMaxOutputTokens = AIConnectionSettings.defaultMaxOutputTokens
+    @AppStorage(AIConnectionSettings.Keys.reasoningMode) private var aiReasoningModeRaw = AIReasoningMode.enabled.rawValue
+    @AppStorage(AIConnectionSettings.Keys.reasoningEffort) private var aiReasoningEffortRaw = AIReasoningEffort.medium.rawValue
+    @AppStorage(AIConnectionSettings.Keys.hasKnownContextWindow) private var aiHasKnownContextWindow = false
     @State private var endpointMode: AIEndpointMode = .chatCompletions
     @State private var isApplyingEndpointConfiguration = false
     @State private var isConfiguringAPIKey = false
@@ -762,6 +765,21 @@ struct AIProviderSettingsPage: View {
                         value: $aiMaxOutputTokens
                     )
                     .frame(maxWidth: .infinity)
+                    Picker(String(localized: "思考模式", bundle: .module), selection: $aiReasoningModeRaw) {
+                        ForEach(AIReasoningMode.allCases, id: \.rawValue) { mode in
+                            Text(reasoningModeLabel(mode)).tag(mode.rawValue)
+                        }
+                    }
+                    Picker(String(localized: "思考强度", bundle: .module), selection: $aiReasoningEffortRaw) {
+                        ForEach(AIReasoningEffort.allCases, id: \.rawValue) { effort in
+                            Text(effortLabel(effort)).tag(effort.rawValue)
+                        }
+                    }
+                    .disabled(!AIConnectionSettings().supportsReasoningControl || selectedReasoningMode != .enabled)
+                    Text(String(localized: "自动使用 Provider 默认策略；关闭仅在 Provider 支持显式关闭时发送关闭指令。", bundle: .module))
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                    Toggle(String(localized: "上下文窗口已按模型实际值确认", bundle: .module), isOn: $aiHasKnownContextWindow)
                     Text(String(localized: "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。", bundle: .module))
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -968,6 +986,21 @@ API Key 仅保存于系统 Keychain。
                     presets: AITokenLimitPresets.output,
                     value: $aiMaxOutputTokens
                 )
+                Picker(String(localized: "思考模式", bundle: .module), selection: $aiReasoningModeRaw) {
+                    ForEach(AIReasoningMode.allCases, id: \.rawValue) { mode in
+                        Text(reasoningModeLabel(mode)).tag(mode.rawValue)
+                    }
+                }
+                Picker(String(localized: "思考强度", bundle: .module), selection: $aiReasoningEffortRaw) {
+                    ForEach(AIReasoningEffort.allCases, id: \.rawValue) { effort in
+                        Text(effortLabel(effort)).tag(effort.rawValue)
+                    }
+                }
+                .disabled(!AIConnectionSettings().supportsReasoningControl || selectedReasoningMode != .enabled)
+                Text(String(localized: "自动使用 Provider 默认策略；关闭仅在 Provider 支持显式关闭时发送关闭指令。", bundle: .module))
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                Toggle(String(localized: "上下文窗口已按模型实际值确认", bundle: .module), isOn: $aiHasKnownContextWindow)
                 Text(String(localized: "上下文档位为 4K、8K、16K、32K、64K、128K、200K、256K、512K、1M；输出档位为 512 至 128K。当前值会保留，使用箭头时跳到上一档或下一档。", bundle: .module))
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
@@ -1020,8 +1053,14 @@ API Key 仅保存于系统 Keychain。
         .navigationBarTitleDisplayMode(.inline)
 #endif
         .onAppear {
+            migrateLegacyReasoningModeIfNeeded()
             endpointMode = AIConnectionSettings().endpointMode
             syncEndpointFromModelIfNeeded()
+        }
+        .onChange(of: aiReasoningModeRaw) { _, newValue in
+            let mode = AIReasoningMode(rawValue: newValue) ?? .enabled
+            UserDefaults.standard.set(mode == .enabled, forKey: AIConnectionSettings.Keys.reasoningEnabled)
+            AIConnectionSettings.clearPersistedDiagnostics()
         }
         .onChange(of: aiModel) { _, _ in
             AIConnectionSettings.clearPersistedDiagnostics()
@@ -1077,6 +1116,16 @@ API Key 仅保存于系统 Keychain。
         }
     }
 
+    private func effortLabel(_ effort: AIReasoningEffort) -> String {
+        switch effort {
+        case .low: return String(localized: "低", bundle: .module)
+        case .medium: return String(localized: "中", bundle: .module)
+        case .high: return String(localized: "高", bundle: .module)
+        case .xhigh: return String(localized: "极高", bundle: .module)
+        case .max: return String(localized: "最大", bundle: .module)
+        }
+    }
+
     private func diagnosticSummary(
         _ diagnostics: AIProviderDiagnostics,
         model: String,
@@ -1114,6 +1163,28 @@ API Key 仅保存于系统 Keychain。
               recommended != endpointMode
         else { return }
         applyEndpointConfiguration(recommended)
+    }
+
+    private var selectedReasoningMode: AIReasoningMode {
+        AIReasoningMode(rawValue: aiReasoningModeRaw) ?? .enabled
+    }
+
+    private func migrateLegacyReasoningModeIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: AIConnectionSettings.Keys.reasoningMode) == nil else { return }
+        let legacyEnabled = defaults.object(forKey: AIConnectionSettings.Keys.reasoningEnabled) as? Bool ?? true
+        aiReasoningModeRaw = (legacyEnabled ? AIReasoningMode.enabled : AIReasoningMode.disabled).rawValue
+    }
+
+    private func reasoningModeLabel(_ mode: AIReasoningMode) -> String {
+        switch mode {
+        case .automatic:
+            return String(localized: "自动（Provider 默认）", bundle: .module)
+        case .disabled:
+            return String(localized: "关闭", bundle: .module)
+        case .enabled:
+            return String(localized: "开启", bundle: .module)
+        }
     }
 
     /// Keep the model preset, protocol and path in one state transaction.
@@ -1160,7 +1231,20 @@ struct AIProviderSettingsSheet: View {
 struct APIKeyPage: View {
     let theme: BuiltInTheme
     let hasExistingKey: Bool
+    let title: String
     let onSave: (String) async throws -> Void
+
+    init(
+        theme: BuiltInTheme,
+        hasExistingKey: Bool,
+        title: String = String(localized: "AI Provider API Key", bundle: .module),
+        onSave: @escaping (String) async throws -> Void
+    ) {
+        self.theme = theme
+        self.hasExistingKey = hasExistingKey
+        self.title = title
+        self.onSave = onSave
+    }
     @Environment(\.dismiss) private var dismiss
     @State private var apiKey = ""
     @State private var isSaving = false
@@ -1168,7 +1252,7 @@ struct APIKeyPage: View {
 
     var body: some View {
         Form {
-            Section(String(localized: "AI Provider API Key", bundle: .module)) {
+            Section(title) {
                 SecureField(String(localized: "sk-...", bundle: .module), text: $apiKey)
 #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -1188,7 +1272,7 @@ struct APIKeyPage: View {
                 }
             }
         }
-        .navigationTitle(hasExistingKey ? String(localized: "更新 API Key", bundle: .module) : String(localized: "配置 API Key", bundle: .module))
+        .navigationTitle(hasExistingKey ? "更新 (title)" : "配置 (title)")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button(String(localized: "存储到 Keychain", bundle: .module), action: save)
@@ -1220,12 +1304,25 @@ struct APIKeyPage: View {
 struct APIKeySheet: View {
     let theme: BuiltInTheme
     let hasExistingKey: Bool
+    let title: String
     let onSave: (String) async throws -> Void
     @Environment(\.dismiss) private var dismiss
 
+    init(
+        theme: BuiltInTheme,
+        hasExistingKey: Bool,
+        title: String = String(localized: "AI Provider API Key", bundle: .module),
+        onSave: @escaping (String) async throws -> Void
+    ) {
+        self.theme = theme
+        self.hasExistingKey = hasExistingKey
+        self.title = title
+        self.onSave = onSave
+    }
+
     var body: some View {
         NavigationStack {
-            APIKeyPage(theme: theme, hasExistingKey: hasExistingKey, onSave: onSave)
+            APIKeyPage(theme: theme, hasExistingKey: hasExistingKey, title: title, onSave: onSave)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button(String(localized: "取消", bundle: .module)) { dismiss() }

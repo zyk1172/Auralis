@@ -113,10 +113,10 @@ enum RecommendationIndexToolService {
             }
             let actualIDs = items.map(\.id)
             let expectedIDs = running.batchTrackIDs
-            guard actualIDs.count == expectedIDs.count,
+            guard !actualIDs.isEmpty,
                   Set(actualIDs).count == actualIDs.count,
-                  Set(actualIDs) == Set(expectedIDs) else {
-                return .fail(call, descriptor, "推荐索引提交未完整覆盖当前批次，未写入任何数据")
+                  Set(actualIDs).isSubset(of: Set(expectedIDs)) else {
+                return .fail(call, descriptor, "推荐索引提交包含重复或不属于当前批次的 ID，未写入任何数据")
             }
             let written = try await catalog.writeRecommendationIndex(
                 items,
@@ -131,7 +131,7 @@ enum RecommendationIndexToolService {
             return .ok(
                 call,
                 descriptor,
-                "已写入 \(written) 首，仍待处理 \(status.pendingUniqueTracks) 首",
+                "已写入 \(written) 首（当前批次允许部分成功），仍待处理 \(status.pendingUniqueTracks) 首",
                 .text("推荐索引已写入 \(written) 首。"),
                 facts: statusFacts(status, executionState: verifiedExecutionState)
             )

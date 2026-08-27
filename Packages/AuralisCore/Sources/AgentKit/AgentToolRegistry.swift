@@ -751,6 +751,34 @@ public enum AgentToolRegistry {
               evidencePolicy: .externalAPI,
               namespace: "web",
               tags: ["web", "fetch", "internet", "网页"]),
+        .init(name: "recommendation_evidence_search", group: .server, permission: .readOnly,
+              summary: "为 Recommendation Index 的指定歌曲检索受控的公开音乐证据；结果只用于分类，不会执行写操作",
+              requiredDisclosureCategories: [.metadata, .externalDiscovery],
+              parameters: [
+                  .init(name: "trackID", required: true, description: "当前索引批次中的真实 GlobalTrackID"),
+                  .init(name: "query", required: true, description: "由歌曲元数据构成的公开音乐检索词"),
+                  .init(name: "domains", required: false, description: "可选公开音乐域名数组",
+                        schemaJSON: #"{"type":"array","maxItems":8,"items":{"type":"string"}}"#),
+                  .init(name: "limit", required: false, description: "返回数量，最多 5",
+                        schemaJSON: #"{"type":"integer","minimum":1,"maximum":5}"#),
+              ],
+              evidencePolicy: .externalAPI,
+              namespace: "recommendation",
+              tags: ["recommendation-index", "evidence", "music", "search", "联网"],
+              visibility: .skillOnly,
+              requiredSkillID: RecommendationIndexSkillRuntime.skillID),
+        .init(name: "recommendation_evidence_fetch", group: .server, permission: .readOnly,
+              summary: "读取 Recommendation Index 本轮歌曲证据搜索返回的一个公开网页；继续受 URL scope 限制",
+              requiredDisclosureCategories: [.metadata, .externalDiscovery],
+              parameters: [
+                  .init(name: "trackID", required: true, description: "当前索引批次中的真实 GlobalTrackID"),
+                  .init(name: "url", required: true, description: "当前歌曲本轮证据搜索返回的 HTTPS URL"),
+              ],
+              evidencePolicy: .externalAPI,
+              namespace: "recommendation",
+              tags: ["recommendation-index", "evidence", "music", "fetch", "网页"],
+              visibility: .skillOnly,
+              requiredSkillID: RecommendationIndexSkillRuntime.skillID),
         .init(name: "library_resolve_entity", group: .catalog, permission: .readOnly,
               summary: "按自然语言解析歌曲、专辑、艺术家或歌单，并返回真实 Global ID",
               parameters: [
@@ -1620,6 +1648,21 @@ public enum AgentToolRegistry {
         ) {
             return denial
         }
+        if let requiredSkillID = descriptor.requiredSkillID,
+           context.executionAuthority?.skillID != requiredSkillID {
+            return ToolResult(
+                call: call,
+                permission: descriptor.permission,
+                success: false,
+                summary: ToolRuntimeError.skillUnavailable(call.name).localizedDescription,
+                failure: ToolFailureEnvelope(
+                    toolName: descriptor.name,
+                    phase: .authorization,
+                    code: "skill_only_tool",
+                    retryable: false
+                )
+            )
+        }
         return await definition.executor(context, call)
     }
 
@@ -1797,6 +1840,21 @@ public enum AgentToolRegistry {
             } catch {
                 return .fail(canonicalCall, canonicalDescriptor, "网页读取失败：\(error.localizedDescription)")
             }
+        case "recommendation_evidence_search":
+            return await RecommendationIndexEvidenceTool.execute(
+                canonicalCall,
+                descriptor: canonicalDescriptor,
+                catalog: catalog,
+                webService: webService,
+                externalMusicService: externalMusicService
+            )
+        case "recommendation_evidence_fetch":
+            return await RecommendationIndexEvidenceTool.fetch(
+                canonicalCall,
+                descriptor: canonicalDescriptor,
+                catalog: catalog,
+                webService: webService
+            )
         case "music_download_search", "music_download_submit", "music_download_status",
              "music_download_tasks", "music_download_history", "music_download_history_remove",
              "music_download_history_clean":

@@ -31,19 +31,44 @@ Auralis 的 Recommendation Index 是 **固定 taxonomy 分类索引**。AI 只�
 - JSON Schema enum、LocalCatalog 写入校验、UI displayName、Agent taxonomy
   search 全部从同一份数据生成。
 
-## AI 分类协议
+## AI 分类协议 v4
 
-模型只返回固定 TagID。Runtime 处理顺序：
+分类模型只返回内容，不拥有批次身份。最小 wire contract 是：
 
-1. JSON extraction / Codable decode。
-2. batchID / revision / track coverage / mode 校验。
-3. Deterministic Taxonomy Sanitizer：
+```json
+{"items":[{"id":"server:track","tags":["genre.pop"],"features":{"energy":6},"confidence":0.8}]}
+```
+
+`items` 与每个 item 的 `id` 必须存在；`tags`、`features`、`confidence` 都可省略。
+模型不再返回 `batchID`、`revision` 或九个维度数组，未知字段忽略。Runtime 使用准备批次
+自己的 identity，处理顺序为：
+
+1. JSON extraction / tolerant decode。
+2. item ID 去重、当前批次范围校验。
+3. 允许 partial coverage：返回的有效歌曲立即提交，遗漏歌曲继续 pending。
+4. Deterministic Taxonomy Sanitizer：
    - 合法 TagID 接受。
    - displayName / alias 转换为 TagID。
    - 放错维度时归位到 owner dimension。
    - 未知字符串丢弃，不写数据库，不整批失败。
-4. Hidden `recommendation_index_commit`。
-5. SQLite 写入层再次校验；未知 TagID 在 strict path 拒绝。
+5. Runtime-owned hidden `recommendation_index_commit`。
+6. SQLite 写入层再次校验；未知 TagID 在 strict path 拒绝。
+
+数值字段接受安全的整数字符串；越界或不可用值仅丢弃该值。`confidence` 缺失、null、越界
+或不可用时使用中性默认值，不使整个批次失败。
+
+## 外部 Evidence
+
+分类请求保持封闭 transform（`tools=[]`、无 hosted tools、无 tool choice）。需要补证时，
+`RecommendationIndexSkillRuntime` 在分类前运行只读 Evidence 阶段，通过 skill-only 的
+`recommendation_evidence_search` / `recommendation_evidence_fetch` 将结果绑定到具体歌曲。
+本地元数据优先，Apple iTunes 先于定向网页检索；Tavily 是可选的 configured backend，
+网易云等来源通过 `include_domains` 约束。公开检索必须同时满足 `allowsMetadata` 和
+`allowsExternalDiscovery`；失败时继续使用本地资料，不阻断索引。
+
+网页内容始终标记为 `externalUntrusted`，限制为本轮搜索得到的 URL、大小、超时和重定向范围，
+不能成为工具创建、歌单修改或其它 mutation authorization 的来源。外部搜索按歌曲和批次
+限制调用次数，并缓存成功结果；API Key 只在 Keychain 中保存。
 
 ## 数值特征
 

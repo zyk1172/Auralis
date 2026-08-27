@@ -1,4 +1,5 @@
 import AIKit
+import AgentKit
 import Domain
 import Foundation
 import SecurityKit
@@ -169,6 +170,11 @@ private struct VerifiedProviderCapabilities: Codable, Sendable {
     let checkedAt: Date
 }
 
+enum TavilySettings {
+    static let enabledKey = "auralis.web.tavily.enabled"
+    static let credentialID = TavilyWebSearchService.defaultCredentialID
+}
+
 /// 设置页与 AI 助手共用的接口配置。普通字段存 UserDefaults，
 /// API Key 只存系统 Keychain（见 `credentialID`）。
 struct AIConnectionSettings: Sendable {
@@ -180,6 +186,10 @@ struct AIConnectionSettings: Sendable {
     var maxContextTokens: Int
     /// 单次回复输出上限（token）。
     var maxOutputTokens: Int
+    var reasoning: AIReasoningConfiguration
+    /// Whether the configured context value is an explicit model fact rather
+    /// than the legacy/default placeholder.
+    var hasKnownContextWindow: Bool
 
     static let credentialID = CredentialID(rawValue: "ai.provider.api-key")
 
@@ -190,6 +200,12 @@ struct AIConnectionSettings: Sendable {
         static let endpointMode = "auralis.ai.endpointMode"
         static let maxContextTokens = "auralis.ai.maxContextTokens"
         static let maxOutputTokens = "auralis.ai.maxOutputTokens"
+        static let reasoningMode = "auralis.ai.reasoningMode"
+        /// Legacy bool retained for migration of settings written before the
+        /// provider-neutral three-state reasoning mode existed.
+        static let reasoningEnabled = "auralis.ai.reasoningEnabled"
+        static let reasoningEffort = "auralis.ai.reasoningEffort"
+        static let hasKnownContextWindow = "auralis.ai.hasKnownContextWindow"
         static let verifiedCapabilities = "auralis.ai.verifiedProviderCapabilities"
     }
 
@@ -218,6 +234,16 @@ struct AIConnectionSettings: Sendable {
         } else {
             maxOutputTokens = Self.defaultMaxOutputTokens
         }
+        let legacyReasoningEnabled = defaults.object(forKey: Keys.reasoningEnabled) as? Bool ?? true
+        let reasoningMode = AIReasoningMode(
+            rawValue: defaults.string(forKey: Keys.reasoningMode) ?? ""
+        ) ?? (legacyReasoningEnabled ? .enabled : .disabled)
+        reasoning = AIReasoningConfiguration(
+            mode: reasoningMode,
+            effort: AIReasoningEffort(rawValue: defaults.string(forKey: Keys.reasoningEffort) ?? "") ?? .medium
+        )
+        hasKnownContextWindow = defaults.object(forKey: Keys.hasKnownContextWindow) as? Bool
+            ?? defaults.object(forKey: Keys.maxContextTokens) != nil
     }
 
     /// 把用户可能漏写协议的地址补全为合法 URL。
@@ -309,6 +335,7 @@ struct AIConnectionSettings: Sendable {
             toolChoice: diagnostics.toolChoice == .unavailable ? .notTested : diagnostics.toolChoice,
             jsonMode: diagnostics.jsonMode == .unavailable ? .notTested : diagnostics.jsonMode,
             jsonSchema: diagnostics.jsonSchema == .unavailable ? .notTested : diagnostics.jsonSchema,
+            reasoning: diagnostics.reasoning == .unavailable ? .notTested : diagnostics.reasoning,
             details: diagnostics.details
         )
         let saved = VerifiedProviderCapabilities(
@@ -353,6 +380,7 @@ struct AIConnectionSettings: Sendable {
             model: model.trimmingCharacters(in: .whitespacesAndNewlines),
             maxTokens: maxOutputTokens,
             maxContextTokens: maxContextTokens,
+            hasKnownContextWindow: hasKnownContextWindow,
             timeout: Self.defaultTimeout,
             // Protocol declaration owns production capability. A probe can
             // override it only after an explicit `stream` rejection; transient
@@ -367,11 +395,32 @@ struct AIConnectionSettings: Sendable {
                 || verifiedCapabilities?.nativeTools == .passed)
                 && !(verifiedCapabilities?.nativeToolsExplicitlyRejected ?? false),
             hasVerifiedModelAvailability: verifiedCapabilities?.modelAvailability == .passed,
-            supportsToolChoice: verifiedCapabilities?.toolChoice == .passed
+            supportsToolChoice: verifiedCapabilities?.toolChoice == .passed,
+            // Responses has a stable request-side reasoning field. Anthropic
+            // is enabled only for model families that expose thinking; generic
+            // Chat Completions gateways remain opt-out until explicitly known.
+            supportsReasoningControl: supportsReasoningControl
+                && verifiedCapabilities?.reasoning != .failed
         )
         if effectiveEndpointMode == .anthropicMessages {
             return AnthropicMessagesProvider(configuration: configuration, credentialVault: credentialVault, session: session)
         }
         return OpenAICompatibleProvider(configuration: configuration, credentialVault: credentialVault, session: session)
+    }
+
+    var supportsReasoningControl: Bool {
+        switch effectiveEndpointMode {
+        case .responses:
+            return true
+        case .anthropicMessages:
+            let value = model.lowercased()
+            return value.contains("claude-3-7")
+                || value.contains("claude-3.7")
+                || value.contains("claude-4")
+                || value.contains("claude_opus_4")
+                || value.contains("claude-sonnet-4")
+        case .chatCompletions, .custom:
+            return false
+        }
     }
 }

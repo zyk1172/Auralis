@@ -1,15 +1,31 @@
 import AgentKit
 import AIKit
 import Foundation
+import SecurityKit
 import Testing
 
 private final class WebFixtureURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (HTTPURLResponse, Data))?
+    nonisolated(unsafe) static var lastRequest: URLRequest?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        var capturedRequest = request
+        if capturedRequest.httpBody == nil, let stream = capturedRequest.httpBodyStream {
+            stream.open()
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4_096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                data.append(buffer, count: count)
+            }
+            stream.close()
+            capturedRequest.httpBody = data
+        }
+        Self.lastRequest = capturedRequest
         guard let handler = Self.handler, let client else {
             client?.urlProtocolDidFinishLoading(self)
             return
@@ -45,6 +61,24 @@ private struct FixtureSearchBackend: AgentWebSearchBackend {
             source: WebSource(title: label, url: url, snippet: "fixture", backend: label, sourceType: "fixture"),
             text: "fixture"
         )
+    }
+}
+
+private struct UnsupportedFetchBackend: AgentWebSearchBackend {
+    let capability: WebSearchCapability = .configuredFullSearch
+
+    func search(query: String, limit: Int) async throws -> WebSearchResult {
+        WebSearchResult(query: query, sources: [WebSource(
+            title: "Music source",
+            url: URL(string: "https://example.com/music")!,
+            snippet: "Tavily bounded search evidence",
+            backend: "fixture-tavily",
+            sourceType: "search"
+        )])
+    }
+
+    func fetch(url: URL) async throws -> WebDocument {
+        throw WebCapabilityError.unsupportedContentType("image/png")
     }
 }
 
@@ -240,6 +274,94 @@ struct WebCapabilityTests {
         #expect(source.sourceType == "search")
     }
 
+    @Test("Tavily 搜索走 Keychain、映射来源并编码域名过滤")
+    func tavilySearchMapsSourcesAndDomains() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebFixtureURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let vault = InMemoryCredentialVault()
+        try await vault.store("tavily-secret", for: TavilyWebSearchService.defaultCredentialID)
+        let response = HTTPURLResponse(
+            url: TavilyWebSearchService.defaultEndpoint,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        WebFixtureURLProtocol.lastRequest = nil
+        WebFixtureURLProtocol.handler = { _ in
+            let payload = #"{"results":[{"title":"夜曲","url":"https://music.163.com/song?id=1","content":"公开音乐资料"}]}"#
+            return (response, Data(payload.utf8))
+        }
+        defer {
+            WebFixtureURLProtocol.handler = nil
+            WebFixtureURLProtocol.lastRequest = nil
+        }
+
+        let result = try await TavilyWebSearchService(
+            credentialVault: vault,
+            session: session,
+            policy: policy()
+        ).search(
+            query: "周杰伦 夜曲",
+            options: WebSearchOptions(limit: 2, includeDomains: ["music.163.com"])
+        )
+
+        let source = try #require(result.sources.first)
+        #expect(source.backend == TavilyWebSearchService.backendIdentifier)
+        #expect(source.title == "夜曲")
+        #expect(source.snippet == "公开音乐资料")
+        let request = try #require(WebFixtureURLProtocol.lastRequest)
+        let body = try #require(request.httpBody)
+        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(object["api_key"] as? String == "tavily-secret")
+        #expect(object["include_domains"] as? [String] == ["music.163.com"])
+        #expect(!result.sources.map(\.snippet).contains { $0.contains("tavily-secret") })
+    }
+
+    @Test("Tavily fetch 遇到不支持 MIME 时保留搜索摘要")
+    func tavilyFetchUsesSnippetForUnsupportedContentType() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WebFixtureURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let vault = InMemoryCredentialVault()
+        try await vault.store("tavily-secret", for: TavilyWebSearchService.defaultCredentialID)
+        let runID = UUID()
+        WebFixtureURLProtocol.handler = { request in
+            let url = request.url!
+            if url == TavilyWebSearchService.defaultEndpoint {
+                let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                let payload = #"{"results":[{"title":"夜曲","url":"https://music.163.com/song?id=1","content":"公开音乐资料"}]}"#
+                return (response, Data(payload.utf8))
+            }
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "image/png"]
+            )!
+            return (response, Data([0, 1, 2, 3]))
+        }
+        defer { WebFixtureURLProtocol.handler = nil }
+
+        let service = TavilyWebSearchService(
+            credentialVault: vault,
+            session: session,
+            policy: policy()
+        )
+        await service.beginRun(runID)
+        let result = try await service.search(query: "周杰伦 夜曲", limit: 1)
+        let source = try #require(result.sources.first)
+
+        let document = try await service.fetch(url: source.url)
+        #expect(document.text == "公开音乐资料")
+        #expect(document.source.id == source.id)
+    }
+
     @Test("WebCapabilityRouter 按 hosted、configured、instant fallback 优先级选择")
     func routesByCapabilityPriority() async throws {
         let configured = FixtureSearchBackend(capability: .configuredFullSearch, label: "configured")
@@ -264,6 +386,38 @@ struct WebCapabilityTests {
         let fallbackOnly = WebCapabilityRouter(instantAnswerFallback: fallback)
         #expect(fallbackOnly.capability == .instantAnswerFallback)
         #expect(try await fallbackOnly.search(query: "q", limit: 1).sources.first?.backend == "fallback")
+    }
+
+    @Test("configured web backend can be refreshed without replacing the router")
+    func refreshesConfiguredBackendInPlace() async throws {
+        let configured = FixtureSearchBackend(capability: .configuredFullSearch, label: "configured")
+        let fallback = FixtureSearchBackend(capability: .instantAnswerFallback, label: "fallback")
+        let router = WebCapabilityRouter(instantAnswerFallback: fallback)
+
+        #expect(router.localCapability == .instantAnswerFallback)
+        router.setConfiguredFullSearch(configured)
+        #expect(router.localCapability == .configuredFullSearch)
+        #expect(try await router.search(query: "q", limit: 1).sources.first?.backend == "configured")
+
+        router.setConfiguredFullSearch(nil)
+        #expect(router.localCapability == .instantAnswerFallback)
+        #expect(try await router.search(query: "q", limit: 1).sources.first?.backend == "fallback")
+    }
+
+    @Test("unsupported fetch falls back to the bounded search snippet")
+    func unsupportedFetchUsesSearchSnippet() async throws {
+        let runID = UUID()
+        let router = WebCapabilityRouter(
+            configuredFullSearch: UnsupportedFetchBackend(),
+            fetchScope: WebFetchURLScope()
+        )
+        await router.beginRun(runID)
+        let result = try await router.search(query: "music", limit: 1)
+        let source = try #require(result.sources.first)
+
+        let document = try await router.fetch(url: source.url)
+        #expect(document.text == "Tavily bounded search evidence")
+        #expect(document.source.id == source.id)
     }
 
     @Test("web fetch scope is cleared between runs and accepts hosted citations")

@@ -29,6 +29,11 @@ User intent
 路径、模型、Header、温度、Token、超时与能力声明。密钥只使用 `CredentialID` 间接引用；
 Provider 请求层从 Keychain 读取后直接构造请求，不向日志或 UI 回传明文。
 
+用户的思考设置使用 Provider-neutral 的 `AIReasoningConfiguration`（默认开启、中等强度），
+由 `AICompletionRequest` 随单次请求传递。Responses 使用 `reasoning.effort`，支持的 Chat
+兼容端点才使用 `reasoning_effort`，Anthropic 使用自己的 `thinking` 映射；未知或不支持的
+协议不发送未知字段。一次没有返回 reasoning metadata 只代表未观察到，不会被缓存为永久不支持。
+
 Phase 5 默认接入 `/v1/chat/completions`，并保留未来 `/v1/responses` adapter。SSE parser
 支持分块和多行 data；网络层将补齐 Task cancellation、指数退避、代理与生产环境证书策略。
 

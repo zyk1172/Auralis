@@ -265,6 +265,19 @@ public struct ToolDoctorReport: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+/// Atomic run-boundary view of the enabled declarative tools.  The revision
+/// lets ToolLoop refresh the descriptor set after a builder mutation without
+/// observing a mismatched revision and descriptor list.
+public struct CustomToolRegistrySnapshot: Sendable, Equatable {
+    public let revision: UInt64
+    public let descriptors: [ToolDescriptor]
+
+    public init(revision: UInt64, descriptors: [ToolDescriptor]) {
+        self.revision = revision
+        self.descriptors = descriptors
+    }
+}
+
 /// Versioned, persisted registry for safe declarative tools.  The actor owns
 /// all mutations and retains prior versions so a bad update can be rolled
 /// back without modifying the signed app or executing generated code.
@@ -273,10 +286,12 @@ public actor CustomToolRegistry {
 
     private struct StoredState: Codable {
         var versions: [UUID: [CustomToolManifest]]
+        var revision: UInt64?
     }
 
     private let storageURL: URL?
     private var versions: [UUID: [CustomToolManifest]]
+    private var revision: UInt64
 
     public init(storageURL: URL? = nil) {
         self.storageURL = storageURL
@@ -284,8 +299,10 @@ public actor CustomToolRegistry {
            let data = try? Data(contentsOf: storageURL),
            let state = try? JSONDecoder().decode(StoredState.self, from: data) {
             self.versions = state.versions
+            self.revision = state.revision ?? 0
         } else {
             self.versions = [:]
+            self.revision = 0
         }
     }
 
@@ -313,6 +330,14 @@ public actor CustomToolRegistry {
 
     public func modelDescriptors() -> [ToolDescriptor] {
         list(enabledOnly: true).compactMap { materialize($0) }
+    }
+
+    public func currentRevision() -> UInt64 {
+        revision
+    }
+
+    public func modelSnapshot() -> CustomToolRegistrySnapshot {
+        CustomToolRegistrySnapshot(revision: revision, descriptors: modelDescriptors())
     }
 
     public func descriptor(named name: String) -> ToolDescriptor? {
@@ -348,6 +373,7 @@ public actor CustomToolRegistry {
         nextVersions[normalized.id] = [normalized]
         try persist(nextVersions)
         versions = nextVersions
+        revision &+= 1
         return normalized
     }
 
@@ -363,6 +389,7 @@ public actor CustomToolRegistry {
         nextVersions[manifest.id, default: []].append(next)
         try persist(nextVersions)
         versions = nextVersions
+        revision &+= 1
         return next
     }
 
@@ -377,6 +404,7 @@ public actor CustomToolRegistry {
     @discardableResult
     public func setEnabled(id: UUID, enabled: Bool) throws -> CustomToolManifest {
         guard let current = manifest(id: id) else { throw CustomToolRegistryError.notFound(id) }
+        guard current.enabled != enabled else { return current }
         var next = current
         next.enabled = enabled
         return try update(next)
@@ -388,6 +416,7 @@ public actor CustomToolRegistry {
         nextVersions[id] = nil
         try persist(nextVersions)
         versions = nextVersions
+        revision &+= 1
     }
 
     public func derivedMetadata(for manifest: CustomToolManifest) -> CustomToolDerivedMetadata {
@@ -914,7 +943,7 @@ public actor CustomToolRegistry {
         guard let storageURL else { return }
         do {
             try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(StoredState(versions: state))
+            let data = try JSONEncoder().encode(StoredState(versions: state, revision: revision &+ 1))
             try data.write(to: storageURL, options: .atomic)
         } catch {
             throw CustomToolRegistryError.persistenceFailed

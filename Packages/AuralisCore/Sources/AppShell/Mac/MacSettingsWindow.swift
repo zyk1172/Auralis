@@ -1,4 +1,6 @@
 #if os(macOS)
+import AIKit
+import AgentKit
 import DesignSystem
 import Domain
 import LocalCatalog
@@ -143,6 +145,8 @@ public struct MacSettingsWindow: View {
     @AppStorage("auralis.ai.allowsLyrics") private var allowsLyrics = false
     @AppStorage("auralis.ai.allowsHistory") private var allowsHistory = false
     @AppStorage("auralis.ai.allowsFavoritesAndRatings") private var allowsFavoritesAndRatings = false
+    @AppStorage(AIPrivacyPermissions.externalDiscoveryDefaultsKey) private var allowsExternalDiscovery = false
+    @AppStorage(TavilySettings.enabledKey) private var tavilyEnabled = false
     @AppStorage(ExternalMusicPreferences.Keys.enabled) private var externalMusicEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.musicBrainz) private var musicBrainzEnabled = true
     @AppStorage(ExternalMusicPreferences.Keys.critiqueBrainz) private var critiqueBrainzEnabled = true
@@ -161,6 +165,10 @@ public struct MacSettingsWindow: View {
     @State private var indexTransferMessage: String?
     @State private var isConfirmingIndexClear = false
     @State private var isClearingIndex = false
+    @State private var hasTavilyKey = false
+    @State private var isConfiguringTavilyKey = false
+    @State private var isTestingTavily = false
+    @State private var tavilyTestMessage: String?
 
     private let credentialVault = KeychainCredentialVault()
 
@@ -172,6 +180,54 @@ public struct MacSettingsWindow: View {
                 Toggle(String(localized: "允许发送歌词", bundle: .module), isOn: $allowsLyrics)
                 Toggle(String(localized: "允许发送播放历史摘要", bundle: .module), isOn: $allowsHistory)
                 Toggle(String(localized: "允许发送收藏和评分", bundle: .module), isOn: $allowsFavoritesAndRatings)
+                Toggle(String(localized: "允许 AI 使用歌曲元数据进行公开网络检索", bundle: .module), isOn: $allowsExternalDiscovery)
+                Text(String(localized: "开启后，歌曲标题、艺术家和专辑等内容元数据可能发送给已配置的 AI Provider、Apple iTunes 或 Tavily；不会发送播放历史、收藏、评分、本地路径、流媒体地址或凭据。", bundle: .module))
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+            }
+            Section(String(localized: "联网搜索", bundle: .module)) {
+                Toggle(String(localized: "启用 Tavily 公开搜索", bundle: .module), isOn: $tavilyEnabled)
+                    .disabled(!hasTavilyKey)
+                HStack {
+                    LabeledContent(
+                        String(localized: "Tavily API Key", bundle: .module),
+                        value: hasTavilyKey
+                            ? String(localized: "已配置 · 存于系统 Keychain", bundle: .module)
+                            : String(localized: "未配置", bundle: .module)
+                    )
+                    Spacer()
+                    Button(hasTavilyKey ? String(localized: "更新", bundle: .module) : String(localized: "配置", bundle: .module)) {
+                        isConfiguringTavilyKey = true
+                    }
+                    if hasTavilyKey {
+                        Button(String(localized: "删除", bundle: .module), role: .destructive) {
+                            Task {
+                                try? await credentialVault.delete(id: TavilySettings.credentialID)
+                                hasTavilyKey = false
+                                tavilyEnabled = false
+                                tavilyTestMessage = nil
+                            }
+                        }
+                    }
+                }
+                Button {
+                    Task { await testTavilyConnection() }
+                } label: {
+                    if isTestingTavily {
+                        HStack { ProgressView().controlSize(.small); Text(String(localized: "正在测试…", bundle: .module)) }
+                    } else {
+                        Label(String(localized: "测试连接", bundle: .module), systemImage: "checkmark.circle")
+                    }
+                }
+                .disabled(!hasTavilyKey || isTestingTavily)
+                if let tavilyTestMessage {
+                    Text(tavilyTestMessage)
+                        .font(.caption)
+                        .foregroundStyle(theme.colorTokens.secondaryText.color)
+                }
+                Text(String(localized: "Tavily Key 仅保存于系统 Keychain。启用后优先用于 Recommendation Index 的定向公开音乐补证；未配置或失败时继续使用本地元数据。", bundle: .module))
+                    .font(.caption)
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
             Section(String(localized: "大模型", bundle: .module)) {
                 let settings = AIConnectionSettings()
@@ -272,6 +328,19 @@ public struct MacSettingsWindow: View {
         .sheet(isPresented: $isEditingAIProviderSettings) {
             AIProviderSettingsSheet(theme: theme, hasAPIKey: $hasAPIKey)
         }
+                .sheet(isPresented: $isConfiguringTavilyKey) {
+            APIKeySheet(
+                theme: theme,
+                hasExistingKey: hasTavilyKey,
+                title: "Tavily API Key",
+                onSave: { key in
+                    try await credentialVault.store(key, for: TavilySettings.credentialID)
+                    hasTavilyKey = true
+                    tavilyEnabled = true
+                    tavilyTestMessage = nil
+                }
+            )
+        }
         .fileExporter(
             isPresented: $isExportingIndex,
             document: indexExportFile,
@@ -295,6 +364,7 @@ public struct MacSettingsWindow: View {
         }
         .task {
             hasAPIKey = (try? await credentialVault.retrieve(id: AIConnectionSettings.credentialID)) != nil
+            hasTavilyKey = (try? await credentialVault.retrieve(id: TavilySettings.credentialID)) != nil
             await refreshIndexStatus()
         }
         .task(id: model.catalog.activeServerID) { await refreshIndexStatus() }
@@ -322,6 +392,20 @@ public struct MacSettingsWindow: View {
         isLoadingIndexStatus = true
         indexStatus = try? await model.catalogCoordinator.store.recommendationIndexStatus(serverID: serverID)
         isLoadingIndexStatus = false
+    }
+
+    private func testTavilyConnection() async {
+        isTestingTavily = true
+        tavilyTestMessage = nil
+        defer { isTestingTavily = false }
+        do {
+            let result = try await TavilyWebSearchService().testConnection()
+            tavilyTestMessage = result.sources.isEmpty
+                ? String(localized: "连接成功，但服务没有返回结果。", bundle: .module)
+                : String(localized: "连接成功。", bundle: .module)
+        } catch {
+            tavilyTestMessage = String(localized: "连接失败：\(error.localizedDescription)", bundle: .module)
+        }
     }
 
     private func clearRecommendationIndex() async {

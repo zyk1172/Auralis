@@ -98,12 +98,18 @@ public final class AgentCoordinator: ObservableObject {
     private let externalMusicService: MusicEnrichmentService
     /// Provider 没有托管联网工具时使用的可替换 WebCapability 实现。
     private let webService: any AgentWebService
+    /// Non-nil only for the Coordinator-owned router. It keeps the web
+    /// backend live when Tavily settings change after app launch.
+    private let webRouter: WebCapabilityRouter?
     /// All runs owned by this coordinator share resource-level mutation
     /// ownership; unrelated ToolLoop instances do not share this registry.
     private let mutationResourceLeaseRegistry: MutationResourceLeaseRegistry
     /// Authoritative live state for Recommendation Index runs. Unlike catalog
     /// counts, this registry can prove whether a run is actually active.
     private let recommendationIndexExecutionRegistry: RecommendationIndexExecutionRegistry
+    /// Optional test/dependency-injection override. Production callers leave
+    /// this nil so every run reads the user's persisted privacy settings.
+    private let privacyPermissionsOverride: AIPrivacyPermissions?
     /// 跨会话记忆与技能存储：会话开始时注入提示词；memory_*/skill_* 工具读写同一实例。
     public let memoryStore: AgentMemoryStore
 
@@ -158,15 +164,23 @@ public final class AgentCoordinator: ObservableObject {
     /// 设置接口的展示名（与 AIConnectionSettings.makeProvider 的配置名保持一致）。
     private static let providerDisplayName = String(localized: "OpenAI 兼容接口", bundle: .module)
 
+    private static func configuredTavilyBackend() -> (any AgentWebSearchBackend)? {
+        UserDefaults.standard.bool(forKey: TavilySettings.enabledKey)
+            ? TavilyWebSearchService()
+            : nil
+    }
+
     public init(
         model: AuralisAppModel,
         coordinator: CatalogCoordinator,
         directory: URL? = nil,
         musicEnrichment: MusicEnrichmentService? = nil,
-        webService: (any AgentWebService)? = nil
+        webService: (any AgentWebService)? = nil,
+        privacyPermissionsOverride: AIPrivacyPermissions? = nil
     ) {
         self.model = model
         self.catalog = coordinator.store
+        self.privacyPermissionsOverride = privacyPermissionsOverride
         self.bridge = AuralisAgentBridge(model: model, coordinator: coordinator)
         let dir = directory ?? Self.defaultDirectory()
         let memoryStore = AgentMemoryStore(directory: dir)
@@ -174,9 +188,17 @@ public final class AgentCoordinator: ObservableObject {
         self.systemService = AuralisSystemToolService(model: model, memoryStore: memoryStore)
         // UI / Agent / 歌词补全共用同一个 MusicEnrichmentService；未传入时自建（测试用）。
         self.externalMusicService = musicEnrichment ?? MusicEnrichmentService(catalog: coordinator.store)
-        self.webService = webService ?? WebCapabilityRouter(
-            instantAnswerFallback: DuckDuckGoInstantAnswerService()
-        )
+        if let webService {
+            self.webService = webService
+            self.webRouter = nil
+        } else {
+            let router = WebCapabilityRouter(
+                configuredFullSearch: Self.configuredTavilyBackend(),
+                instantAnswerFallback: DuckDuckGoInstantAnswerService()
+            )
+            self.webService = router
+            self.webRouter = router
+        }
         self.mutationResourceLeaseRegistry = MutationResourceLeaseRegistry()
         self.recommendationIndexExecutionRegistry = RecommendationIndexExecutionRegistry()
         self.sessionStore = SessionStore(fileURL: dir.appendingPathComponent("agent-sessions.json"))
@@ -517,6 +539,10 @@ public final class AgentCoordinator: ObservableObject {
         guard !trimmed.isEmpty, runIDsBySession[sessionID] == nil else { return }
 
         isRunning = true
+        // The router is long-lived, but its configured backend is not. Read
+        // the setting for every new run so enabling/disabling Tavily in
+        // Settings takes effect without rebuilding the Coordinator.
+        webRouter?.setConfiguredFullSearch(Self.configuredTavilyBackend())
         let aiSettings = AIConnectionSettings()
         let resolvedProvider = provider ?? aiSettings.makeProvider()
         // 首次外发确认只对「从用户设置解析出的真实 provider」生效；注入的 provider
@@ -527,7 +553,7 @@ public final class AgentCoordinator: ObservableObject {
         let modelName = aiSettings.model.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 隐私 gating（B2）：按用户权限过滤上下文；权限关闭的字段不进入 Context。
-        let permissions = AIPrivacyPermissions.current()
+        let permissions = privacyPermissionsOverride ?? AIPrivacyPermissions.current()
         let cat = model.catalog
         let currentTrackTitle = permissions.allowsMetadata
             ? (cat.isConnected ? model.currentTrack.title : nil)
@@ -559,10 +585,12 @@ public final class AgentCoordinator: ObservableObject {
             allowsLyrics: permissions.allowsLyrics,
             allowsHistory: permissions.allowsPlaybackHistory,
             allowsFavoritesAndRatings: permissions.allowsFavoritesAndRatings,
+            allowsExternalDiscovery: permissions.allowsExternalDiscovery,
             memories: memoryStore.memories,
             skills: memoryStore.skills,
             mutationResourceLeaseRegistry: mutationResourceLeaseRegistry,
-            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
+            recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry,
+            reasoning: aiSettings.reasoning
         )
         let bridge = self.bridge
         let catalog = self.catalog
@@ -1382,6 +1410,9 @@ public final class AgentCoordinator: ObservableObject {
         }
         if permissions.allowsLyrics {
             fields.append(String(localized: "歌词（查询到时）", bundle: .module))
+        }
+        if permissions.allowsExternalDiscovery {
+            fields.append(String(localized: "公开网络检索（仅发送歌曲内容元数据）", bundle: .module))
         }
         fields.append(String(localized: "服务器名称与资料库统计（运行基础信息）", bundle: .module))
         return AIPrivacyConsentRequest(

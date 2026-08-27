@@ -27,7 +27,7 @@ public struct AnthropicMessagesProvider: AIProvider {
     public var capabilities: ModelCapabilities {
         ModelCapabilities(
             maxContextTokens: configuration.maxContextTokens,
-            hasKnownContextWindow: configuration.maxContextTokens != auralisDefaultMaxContextTokens,
+            hasKnownContextWindow: configuration.hasKnownContextWindow,
             maxOutputTokens: configuration.maxOutputTokens,
             supportsToolCalling: supportsToolCalling,
             supportsParallelTools: configuration.supportsParallelTools,
@@ -43,6 +43,7 @@ public struct AnthropicMessagesProvider: AIProvider {
             supportsHostedWebSearch: false,
             supportsHostedWebFetch: false,
             supportsReasoningMetadata: configuration.supportsReasoningMetadata,
+            supportsReasoningControl: configuration.supportsReasoningControl,
             toolMode: supportsToolCalling ? .anthropicMessages : AIProviderToolMode.none
         )
     }
@@ -60,6 +61,8 @@ public struct AnthropicMessagesProvider: AIProvider {
         details.append(contentsOf: streaming.details)
         let tools = await probeNativeTools()
         details.append(contentsOf: tools.details)
+        let reasoning = await probeReasoning()
+        details.append(contentsOf: reasoning.details)
         return AIConnectionResult(
             latency: Date().timeIntervalSince(started),
             model: response.model,
@@ -71,9 +74,28 @@ public struct AnthropicMessagesProvider: AIProvider {
                 streaming: streaming.status,
                 nativeTools: tools.native,
                 toolChoice: tools.toolChoice,
+                reasoning: reasoning.status,
                 details: details
             )
         )
+    }
+
+    private func probeReasoning() async -> (status: AIProbeStatus, details: [String]) {
+        guard configuration.supportsReasoningControl else { return (.notTested, []) }
+        do {
+            _ = try await complete(AICompletionRequest(
+                model: configuration.model,
+                messages: [AIMessage(role: .user, content: "只回答 OK。")],
+                temperature: 0,
+                maxTokens: 2_048,
+                reasoning: AIReasoningConfiguration(enabled: true, effort: .low)
+            ))
+            return (.passed, ["thinking 参数已被端点接受；是否返回思考元数据不作为能力判定。"])
+        } catch let error as AIProviderError where error.explicitlyRejectsReasoning {
+            return (.failed, ["服务端明确拒绝 thinking 参数：\(error.localizedDescription)"])
+        } catch {
+            return (.degraded, ["thinking 探测未完成：\(error.localizedDescription)；不会据此永久关闭 reasoning。"])
+        }
     }
 
     private func probeStreaming() async -> (status: AIProbeStatus, details: [String]) {
@@ -163,7 +185,8 @@ public struct AnthropicMessagesProvider: AIProvider {
         let body = try Self.requestBody(
             request,
             stream: false,
-            supportsToolChoice: configuration.supportsToolChoice
+            supportsToolChoice: configuration.supportsToolChoice,
+            supportsReasoningControl: configuration.supportsReasoningControl
         )
         let (data, response) = try await perform(body: body)
         try Self.validate(response, body: data)
@@ -177,7 +200,8 @@ public struct AnthropicMessagesProvider: AIProvider {
                     let body = try Self.requestBody(
                         request,
                         stream: true,
-                        supportsToolChoice: configuration.supportsToolChoice
+                        supportsToolChoice: configuration.supportsToolChoice,
+                        supportsReasoningControl: configuration.supportsReasoningControl
                     )
                     let (bytes, response) = try await performBytes(body: body)
                     try Self.validate(response)
@@ -355,7 +379,8 @@ public struct AnthropicMessagesProvider: AIProvider {
     private static func requestBody(
         _ request: AICompletionRequest,
         stream: Bool,
-        supportsToolChoice: Bool
+        supportsToolChoice: Bool,
+        supportsReasoningControl: Bool
     ) throws -> [String: Any] {
         guard request.hostedTools?.isEmpty != false else {
             throw AIProviderError.unsupportedEndpointProtocol("Anthropic hosted web tools are not enabled")
@@ -373,8 +398,23 @@ public struct AnthropicMessagesProvider: AIProvider {
             "max_tokens": request.maxTokens,
         ]
         if !system.isEmpty { body["system"] = system.joined(separator: "\n\n") }
-        if request.temperature >= 0 { body["temperature"] = request.temperature }
+        let reasoningEnabled = request.reasoning?.enabled == true && supportsReasoningControl
+        if !reasoningEnabled, request.temperature >= 0 { body["temperature"] = request.temperature }
         if stream { body["stream"] = true }
+        if reasoningEnabled, let effort = request.reasoning?.effort {
+            let suggestedBudget: Int
+            switch effort {
+            case .low: suggestedBudget = 1_024
+            case .medium: suggestedBudget = 2_048
+            case .high: suggestedBudget = 4_096
+            case .xhigh: suggestedBudget = 8_192
+            case .max: suggestedBudget = 16_384
+            }
+            body["thinking"] = [
+                "type": "enabled",
+                "budget_tokens": min(suggestedBudget, max(1, request.maxTokens - 1)),
+            ]
+        }
         switch request.outputFormat {
         case nil, .text:
             break
