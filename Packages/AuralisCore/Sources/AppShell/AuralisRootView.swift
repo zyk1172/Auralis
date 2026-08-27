@@ -211,10 +211,15 @@ public struct AuralisRootView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: themeStore.current.motion.standardDuration), value: themeStore.selectedID)
         .environment(\.auralisReduceTransparency, reduceTransparency)
         .task {
-            await model.restorePersistedLibrary()
 #if os(iOS)
-            configureUISmokeLaunchIfRequested()
+            // Smoke launches must not wait for persisted-account restoration or
+            // briefly present the normal server setup sheet before configuring
+            // their deterministic shell.
+            if configureUISmokeLaunchIfRequested() {
+                return
+            }
 #endif
+            await model.restorePersistedLibrary()
         }
         .onOpenURL { url in
             model.handleIncomingURL(url)
@@ -238,17 +243,20 @@ public struct AuralisRootView: View {
     /// Keeps UI smoke tests independent from a developer's persisted server
     /// accounts. This is a test-only launch hook; production launches follow
     /// the normal restore flow and never change navigation automatically.
-    private func configureUISmokeLaunchIfRequested() {
+    @discardableResult
+    private func configureUISmokeLaunchIfRequested() -> Bool {
         let arguments = Set(CommandLine.arguments)
         guard arguments.contains("-auralis-ui-smoke")
-            || arguments.contains("-auralis-ui-smoke-now-playing") else { return }
+            || arguments.contains("-auralis-ui-smoke-now-playing") else { return false }
 
-        // A fresh test installation has no server account, so the normal
-        // setup sheet would cover the shell before the UI test can inspect it.
+        // A fresh test installation has no server account. Skip normal restore
+        // entirely so neither the setup sheet nor a persisted-account probe can
+        // block the shell before the UI test inspects it.
         model.shouldPresentServerSetup = false
         if arguments.contains("-auralis-ui-smoke-now-playing") {
             model.isNowPlayingPresented = true
         }
+        return true
     }
 #endif
 }
