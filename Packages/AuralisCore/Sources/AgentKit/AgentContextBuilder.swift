@@ -45,7 +45,7 @@ public enum AgentContextBuilder {
                 system += "\n已完成动作：\(task.completedActions.count) 项（详细内容已按隐私设置隐藏）"
             }
         }
-        let allowedEvidence = task.evidence.filter { isAllowed($0.source, permissions: permissions) }
+        let allowedEvidence = task.evidence.filter { isAllowed($0, permissions: permissions) }
         if !allowedEvidence.isEmpty {
             let claims = allowedEvidence.suffix(12).map {
                 "[\($0.source.rawValue)/\(String(format: "%.2f", $0.confidence))] \($0.claim)"
@@ -128,14 +128,7 @@ public enum AgentContextBuilder {
         }
     }
 
-    private static func isAllowed(_ source: AgentEvidenceSource, permissions: AIPrivacyPermissions) -> Bool {
-        switch source {
-        case .derivedLocalStatistic:
-            return permissions.allowsPlaybackHistory || permissions.allowsFavoritesAndRatings
-        case .localCatalog, .playbackState:
-            return permissions.allowsMetadata
-        case .server, .externalAPI, .musicBrainz, .listenBrainz, .critiqueBrainz, .userStatement, .modelInference:
-            return true
-        }
+    private static func isAllowed(_ evidence: AgentEvidence, permissions: AIPrivacyPermissions) -> Bool {
+        evidence.requiredDisclosureCategories.allSatisfy(permissions.allows)
     }
 }

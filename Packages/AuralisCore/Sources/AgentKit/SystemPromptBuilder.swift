@@ -242,7 +242,10 @@ public enum SystemPromptBuilder {
     }
 
     private static func nowPlayingSummary(context: ToolLoop.Context, language: String) -> String {
-        guard context.allowsMetadata, let title = context.currentTrackTitle else {
+        guard context.allowsMetadata else {
+            return language == "en" ? "track information hidden" : language == "zh-Hant" ? "播放曲目資訊已隱藏" : "当前播放曲目信息已隐藏"
+        }
+        guard let title = context.currentTrackTitle else {
             return language == "en" ? "not playing" : language == "zh-Hant" ? "目前未播放" : "当前未播放"
         }
         let artist = context.currentTrackArtist ?? (language == "en" ? "unknown artist" : "未知艺术家")

@@ -221,6 +221,80 @@ struct AgentRuntimeArchitectureTests {
         #expect(!text.contains("hidden history"))
     }
 
+    @Test("Evidence 的播放历史与收藏评分权限撤销互不串域")
+    func evidenceDisclosureCategoriesAreIndependent() {
+        var task = AgentTaskState(intent: .musicAppreciation, goal: "appreciate")
+        task.evidence = [
+            AgentEvidence(
+                source: .derivedLocalStatistic,
+                provenance: "test",
+                confidence: 1,
+                claim: "播放 37 次",
+                requiredDisclosureCategories: [.playbackHistory]
+            ),
+            AgentEvidence(
+                source: .derivedLocalStatistic,
+                provenance: "test",
+                confidence: 1,
+                claim: "已收藏，个人评分 5/5",
+                requiredDisclosureCategories: [.favoritesAndRatings]
+            ),
+        ]
+
+        var historyOnly = AIPrivacyPermissions()
+        historyOnly.allowsPlaybackHistory = true
+        let historyText = AgentContextBuilder.build(
+            systemPrompt: "system",
+            task: task,
+            facts: [],
+            history: [],
+            permissions: historyOnly,
+            capabilities: .conservative,
+            inputBudget: 8_000
+        ).map(\.content).joined()
+        #expect(historyText.contains("播放 37 次"))
+        #expect(!historyText.contains("个人评分 5/5"))
+
+        var favoritesOnly = AIPrivacyPermissions()
+        favoritesOnly.allowsFavoritesAndRatings = true
+        let favoritesText = AgentContextBuilder.build(
+            systemPrompt: "system",
+            task: task,
+            facts: [],
+            history: [],
+            permissions: favoritesOnly,
+            capabilities: .conservative,
+            inputBudget: 8_000
+        ).map(\.content).joined()
+        #expect(!favoritesText.contains("播放 37 次"))
+        #expect(favoritesText.contains("个人评分 5/5"))
+    }
+
+    @Test("旧版合并私人 Evidence 在撤销任一权限后默认不回放")
+    func legacyCombinedEvidenceFailsClosed() {
+        var task = AgentTaskState(intent: .musicAppreciation, goal: "appreciate")
+        task.evidence = [
+            AgentEvidence(
+                source: .derivedLocalStatistic,
+                provenance: "legacy",
+                confidence: 1,
+                claim: "本地私人数据：播放 37 次，已收藏，个人评分 5/5。"
+            ),
+        ]
+        var permissions = AIPrivacyPermissions()
+        permissions.allowsPlaybackHistory = true
+        let text = AgentContextBuilder.build(
+            systemPrompt: "system",
+            task: task,
+            facts: [],
+            history: [],
+            permissions: permissions,
+            capabilities: .conservative,
+            inputBudget: 8_000
+        ).map(\.content).joined()
+        #expect(!text.contains("本地私人数据"))
+    }
+
     @Test("收藏和评分权限从 UserDefaults 进入 Context 时默认关闭并可显式开启")
     func privacyReadsFavoritesAndRatingsSetting() {
         let suiteName = "AgentRuntimeArchitectureTests-\(UUID().uuidString)"
@@ -253,6 +327,21 @@ struct AgentRuntimeArchitectureTests {
         #expect(hiddenPrompt.contains("歌曲元数据：已隐藏"))
         #expect(!hiddenPrompt.contains("800 首歌曲"))
         #expect(!hiddenPrompt.contains("7 首收藏"))
+
+        let hiddenNowPlayingPrompt = SystemPromptBuilder.build(
+            context: ToolLoop.Context(
+                currentTrackTitle: "Private Song",
+                allowsMetadata: false
+            ),
+            tools: [],
+            nativeToolCalling: false
+        )
+        #expect(
+            ["track information hidden", "播放曲目資訊已隱藏", "当前播放曲目信息已隐藏"].contains {
+                hiddenNowPlayingPrompt.contains($0)
+            }
+        )
+        #expect(!hiddenNowPlayingPrompt.contains("当前未播放"))
     }
 
     @Test("权限关闭时 completedActions 只保留计数，不把旧动作详情回灌模型")

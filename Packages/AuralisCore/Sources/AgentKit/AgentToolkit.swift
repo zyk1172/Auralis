@@ -117,11 +117,12 @@ public struct AgentToolkit {
         let allowsHistory = privacyPermissions.allowsPlaybackHistory
         let allowsLyrics = privacyPermissions.allowsLyrics
         let allowsFavoritesAndRatings = privacyPermissions.allowsFavoritesAndRatings
-        if !allowsMetadata, Self.metadataDisclosureToolNames.contains(call.name) {
-            return .fail(call, descriptor, "歌曲元数据已按隐私设置隐藏。")
-        }
-        if !allowsFavoritesAndRatings, Self.favoritesAndRatingsDisclosureToolNames.contains(call.name) {
-            return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
+        if let denial = ToolPrivacyPolicy.denialResult(
+            for: descriptor,
+            call: call,
+            permissions: privacyPermissions
+        ) {
+            return denial
         }
         if RecommendationIndexToolService.handles(call.name) {
             return try await RecommendationIndexToolService.execute(
@@ -849,17 +850,24 @@ public struct AgentToolkit {
                     claim: "已从本地目录核验《\(track.title)》的曲目元数据。"
                 ),
             ]
-            if allowsHistory || allowsFavoritesAndRatings {
-                let claims = [
-                    allowsHistory ? "播放 \(popularity?.playCount ?? 0) 次" : nil,
-                    allowsFavoritesAndRatings ? "\(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { "，个人评分 \($0)/5" } ?? "")\(isDisliked ? "，已标记不喜欢" : "")" : nil,
-                ].compactMap { $0 }
+            if allowsHistory {
                 evidence.append(AgentEvidence(
                     source: .derivedLocalStatistic,
                     provenance: "localCatalog:authorized-user-state",
                     confidence: 1,
                     entityID: gid.description,
-                    claim: "本地私人数据：" + claims.joined(separator: "，") + "."
+                    claim: "本地播放数据：播放 \(popularity?.playCount ?? 0) 次。",
+                    requiredDisclosureCategories: [.playbackHistory]
+                ))
+            }
+            if allowsFavoritesAndRatings {
+                evidence.append(AgentEvidence(
+                    source: .derivedLocalStatistic,
+                    provenance: "localCatalog:authorized-user-state",
+                    confidence: 1,
+                    entityID: gid.description,
+                    claim: "本地偏好数据：\(track.isFavorite ? "已收藏" : "未收藏")\(track.rating.map { "，个人评分 \($0)/5" } ?? "")\(isDisliked ? "，已标记不喜欢" : "")。",
+                    requiredDisclosureCategories: [.favoritesAndRatings]
                 ))
             }
             if let external {
@@ -1501,27 +1509,6 @@ public struct AgentToolkit {
             .split(whereSeparator: { $0.isWhitespace })
             .joined()
     }
-
-    /// Tools whose successful result contains song/entity metadata. A closed
-    /// metadata permission stops the tool before it can read local state, so
-    /// neither summary nor payload can enter the next Provider transcript.
-    private static let metadataDisclosureToolNames: Set<String> = [
-        "searchTracks", "searchAlbums", "searchArtists", "getTrack", "getAlbum", "getArtist",
-        "getFavorites", "getRecentHistory", "getLeastPlayed", "library_get_least_played",
-        "getDownloadedTracks", "library_get_downloaded", "getSimilarTracks", "getCurrentTrack",
-        "server_search", "library_get_artists", "library_get_albums", "library_search",
-        "library_resolve_entity", "library_get_songs_batch", "library_select_tracks",
-        "library_get_summary",
-        "library_get_song", "music_appreciate", "library_get_album", "library_get_artist",
-        "library_get_playlist", "library_get_recently_played", "library_get_starred",
-        "library_get_random_songs", "library_get_similar_songs", "library_get_genres",
-        "library_get_tracks_by_genre", "library_get_catalog_index", "library_get_catalog_tracks",
-        "library_get_disliked", "library_find_duplicates", "library_find_metadata_issues",
-        "library_find_unplayable", "smart_queue_generate", "playback_get_state",
-    ]
-    private static let favoritesAndRatingsDisclosureToolNames: Set<String> = [
-        "getFavorites", "library_get_starred", "library_get_disliked",
-    ]
 
     private static func songDetailLine(
         _ track: Track,

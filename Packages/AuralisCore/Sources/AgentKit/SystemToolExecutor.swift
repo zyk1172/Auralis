@@ -55,17 +55,6 @@ public enum SystemToolNames {
 /// 系统服务工具的固定执行器：参数校验 → 调用 AgentSystemService → 返回结构化摘要。
 /// 所有结果都是简洁、脱敏的文本，不包含凭据 / 完整认证地址 / Token。
 public struct SystemToolExecutor {
-    private static let metadataDisclosureToolNames: Set<String> = [
-        "app_get_context", "recommend_by_mood", "recommend_by_constraints",
-        "stats_get_listening_summary", "stats_get_top_items",
-        "library_get_recently_added", "library_get_most_played", "diagnostics_now_playing",
-        "diagnostics_playback", "library_find_broken_artwork",
-        "library_find_stale_cache", "diagnostics_get_recent_errors",
-    ]
-    private static let historyDisclosureToolNames: Set<String> = [
-        "library_get_most_played",
-    ]
-
     public static func execute(
         _ call: ToolCall,
         descriptor: ToolDescriptor,
@@ -77,11 +66,12 @@ public struct SystemToolExecutor {
         if privacyPermissions == nil {
             resolvedPrivacy.allowsLyrics = allowsLyrics
         }
-        if !resolvedPrivacy.allowsMetadata, metadataDisclosureToolNames.contains(call.name) {
-            return .fail(call, descriptor, "歌曲元数据已按隐私设置隐藏。")
-        }
-        if !resolvedPrivacy.allowsPlaybackHistory, historyDisclosureToolNames.contains(call.name) {
-            return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
+        if let denial = ToolPrivacyPolicy.denialResult(
+            for: descriptor,
+            call: call,
+            permissions: resolvedPrivacy
+        ) {
+            return denial
         }
         do {
             switch call.name {

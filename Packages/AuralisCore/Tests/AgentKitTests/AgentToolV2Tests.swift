@@ -813,6 +813,40 @@ func v2PersonalStateToolsRequireDisclosurePermission() async throws {
     #expect(hiddenSummary.summary.contains("歌曲元数据已按隐私设置隐藏"))
 }
 
+@Test("元数据关闭时 queue_get 与 result_present_tracks 由 descriptor 统一拒绝")
+func v2MetadataDescriptorGuardsQueueAndPresentation() async throws {
+    let store = try makeV2Store()
+    let bridge = MockAgentBridge(activeServerID: "s")
+    var permissions = AIPrivacyPermissions()
+    permissions.allowsMetadata = false
+
+    let queueDescriptor = try #require(AgentToolRegistry.descriptor(for: "queue_get"))
+    #expect(queueDescriptor.requiredDisclosureCategories.contains(.metadata))
+    let queue = await AgentToolkit.executeV2(
+        ToolCall(name: "queue_get"),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(!queue.success)
+    #expect(queue.summary.contains("歌曲元数据已按隐私设置隐藏"))
+
+    let presentationDescriptor = try #require(AgentToolRegistry.descriptor(for: "result_present_tracks"))
+    #expect(presentationDescriptor.requiredDisclosureCategories.contains(.metadata))
+    let presentation = await AgentToolkit.executeV2(
+        ToolCall(name: "result_present_tracks", arguments: ["trackIDs": .array([.string("s:t1")])]),
+        bridge: bridge,
+        catalog: store,
+        serverID: "s",
+        systemService: nil,
+        privacyPermissions: permissions
+    )
+    #expect(!presentation.success)
+    #expect(presentation.summary.contains("歌曲元数据已按隐私设置隐藏"))
+}
+
 @Test("v2 server_test_connection reports real result")
 func v2ServerTestConnection() async throws {
     let store = try makeV2Store()
