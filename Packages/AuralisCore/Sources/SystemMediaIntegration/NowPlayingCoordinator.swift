@@ -21,6 +21,8 @@ public struct NowPlayingSnapshot: Sendable, Equatable {
     /// 队列中的当前位置与总数（控制中心 / 锁屏显示）。
     public var queueIndex: Int?
     public var queueCount: Int?
+    /// Only a verified ISRC is supplied here; arbitrary server metadata must not opt into system haptics.
+    public var internationalStandardRecordingCode: String?
 
     public init(
         title: String,
@@ -31,7 +33,8 @@ public struct NowPlayingSnapshot: Sendable, Equatable {
         rate: Float,
         artworkData: Data? = nil,
         queueIndex: Int? = nil,
-        queueCount: Int? = nil
+        queueCount: Int? = nil,
+        internationalStandardRecordingCode: String? = nil
     ) {
         self.title = title
         self.artist = artist
@@ -42,6 +45,7 @@ public struct NowPlayingSnapshot: Sendable, Equatable {
         self.artworkData = artworkData
         self.queueIndex = queueIndex
         self.queueCount = queueCount
+        self.internationalStandardRecordingCode = internationalStandardRecordingCode
     }
 }
 
@@ -73,6 +77,9 @@ public final class NowPlayingCoordinator {
         }
         if let queueCount = snapshot.queueCount {
             info[MPNowPlayingInfoPropertyPlaybackQueueCount] = NSNumber(value: queueCount)
+        }
+        if let isrc = snapshot.internationalStandardRecordingCode, !isrc.isEmpty {
+            info[MPNowPlayingInfoPropertyInternationalStandardRecordingCode] = isrc
         }
         if let data = snapshot.artworkData, let image = platformImage(from: data),
            image.size.width > 0, image.size.height > 0 {
@@ -113,6 +120,13 @@ public final class NowPlayingCoordinator {
         base[MPNowPlayingInfoPropertyPlaybackRate] = rate
         lastInfo = base
         dispatchNowPlaying(base)
+    }
+
+    /// Updates only the verified Music Haptics matching code without replacing title/artwork/progress.
+    public func setInternationalStandardRecordingCode(_ isrc: String?) {
+        guard var snapshot = current else { return }
+        snapshot.internationalStandardRecordingCode = isrc
+        update(snapshot)
     }
 
     /// MPNowPlayingInfoCenter 在 iOS 上必须从主线程访问；非主线程调用会触发

@@ -82,6 +82,10 @@ public final class SystemMediaIntegrationController {
         nowPlaying.updateProgress(elapsed: position, rate: rate ?? (isPlaying ? 1 : 0))
     }
 
+    public func setInternationalStandardRecordingCode(_ isrc: String?) {
+        nowPlaying.setInternationalStandardRecordingCode(isrc)
+    }
+
     /// 封面异步加载完成后补一次刷新。
     public func artworkLoaded(_ data: Data, position: TimeInterval, isPlaying: Bool) {
         guard var snapshot = nowPlaying.current else { return }

@@ -3,6 +3,7 @@ import AgentKit
 import DesignSystem
 import Domain
 import LocalCatalog
+import MusicHaptics
 import SwiftUI
 import ThemeEngine
 
@@ -269,6 +270,17 @@ struct NowPlayingView: View {
             Button(String(localized: "由此继续播放", bundle: .module)) { continueWithSimilarQueue() }
             Button(String(localized: "歌曲鉴赏", bundle: .module)) { appreciateCurrentSong() }
             Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
+#if os(iOS)
+            Button(String(localized: "音乐震动：跟随全局设置", bundle: .module)) {
+                model.setMusicHapticsPreference(.inherit)
+            }
+            Button(String(localized: "音乐震动：为此歌曲开启", bundle: .module)) {
+                model.setMusicHapticsPreference(.enabled)
+            }
+            Button(String(localized: "音乐震动：为此歌曲关闭", bundle: .module)) {
+                model.setMusicHapticsPreference(.disabled)
+            }
+#endif
             Button(String(localized: "取消", bundle: .module), role: .cancel) {}
         }
         // 切歌时旧歌曲的 pendingSeek 不能污染下一首歌（拖动中切歌保护）。

@@ -4,6 +4,7 @@ import AgentKit
 import DesignSystem
 import Domain
 import LocalCatalog
+import MusicHaptics
 import SecurityKit
 import SwiftUI
 import ThemeEngine
@@ -70,6 +71,8 @@ struct PlaybackSettingsPage: View {
     let theme: BuiltInTheme
     @AppStorage("auralis.audio.highQualityWiFi") private var highQualityWiFi = true
     @AppStorage("auralis.audio.cellularTranscoding") private var cellularTranscoding = true
+    @AppStorage(MusicHapticsCoordinator.enabledDefaultsKey) private var musicHapticsEnabled = false
+    @State private var musicHapticsUsage = MusicHapticsUsage()
 
     var body: some View {
         SettingsDetailForm(title: String(localized: "播放与音质", bundle: .module), theme: theme) {
@@ -111,7 +114,27 @@ struct PlaybackSettingsPage: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+#if os(iOS)
+            Section(String(localized: "音乐震动反馈", bundle: .module)) {
+                if model.musicHaptics.supportsHaptics {
+                    Toggle(String(localized: "自动开启音乐震动", bundle: .module), isOn: $musicHapticsEnabled)
+                    Text(String(localized: "支持的歌曲优先使用系统 Music Haptics；其它歌曲会在首次播放时后台生成触觉轨道，之后播放时使用。", bundle: .module))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    LabeledContent(String(localized: "普通震动缓存", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.transientBytes, countStyle: .file) + " / 200 MB")
+                    LabeledContent(String(localized: "收藏震动数据", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.favoriteBytes, countStyle: .file))
+                    Button(String(localized: "清理普通震动缓存", bundle: .module), role: .destructive) {
+                        Task { await model.musicHaptics.clearTransientCache(); musicHapticsUsage = await model.musicHaptics.usage() }
+                    }
+                } else {
+                    Text(String(localized: "此设备不支持 Core Haptics 音乐触觉。", bundle: .module))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+#endif
         }
+        .task { musicHapticsUsage = await model.musicHaptics.usage() }
     }
 }
 
