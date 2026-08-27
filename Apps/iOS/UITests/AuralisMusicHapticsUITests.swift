@@ -9,9 +9,16 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         app.terminate()
     }
 
-    func testPlaybackSettingsAlwaysExposeMusicHaptics() throws {
-        app.launchArguments = ["-auralis-ui-smoke"]
+    private func launchSmokeApp(with arguments: String...) {
+        app.launchArguments = [
+            "-AppleLanguages", "(zh-Hans)",
+            "-AppleLocale", "zh_CN",
+        ] + arguments
         app.launch()
+    }
+
+    func testPlaybackSettingsAlwaysExposeMusicHaptics() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke")
 
         let library = app.buttons["音乐库"].firstMatch
         XCTAssertTrue(library.waitForExistence(timeout: 15), "iOS AppShell did not expose the library entry point")
@@ -52,8 +59,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
     }
 
     func testNowPlayingExposesMusicHapticsSubmenu() throws {
-        app.launchArguments = ["-auralis-ui-smoke-now-playing"]
-        app.launch()
+        launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
 
         XCTAssertTrue(app.staticTexts["正在播放"].waitForExistence(timeout: 15), "Now Playing sheet did not open from the deterministic smoke-test route")
         let more = app.buttons["auralis.nowPlaying.moreActions"].firstMatch
