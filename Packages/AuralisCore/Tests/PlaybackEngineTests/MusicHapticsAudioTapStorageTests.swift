@@ -67,11 +67,13 @@ struct MusicHapticsAudioTapStorageTests {
 }
 
 private final class NoopMusicHapticsSink: MusicHapticsAnalysisSink, @unchecked Sendable {
+    func tapAttached() {}
     func begin(format: MusicHapticsPCMFormat) {}
     func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int) {}
     func pause() {}
     func seek(to position: TimeInterval) {}
     func finish() {}
+    func finishPartial(reason: MusicHapticsAnalysisFinishReason) {}
     func cancel() {}
 }
 

@@ -444,6 +444,10 @@ public final class AuralisAppModel: ObservableObject {
     @Published public private(set) var volume: Float
     @Published public private(set) var replayGainSettings: ReplayGainSettings
     private var prepareNextTask: Task<Void, Never>?
+    /// The plan/sink resolved for the item currently being prepared by the
+    /// AVQueuePlayer. It is transferred to the engine together with the
+    /// prepared item, then consumed by the seamless transition callback.
+    private var preparedMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
     /// 本次随机播放轮次中已随机播放过的曲目（TrackID）。
     /// 随机 + 不循环：一轮随机播完即停；随机 + 列表循环：一轮播完重置继续。
     /// 队列变更 / 重新开启随机时清空，避免旧轮次污染新队列。
@@ -1930,7 +1934,13 @@ public final class AuralisAppModel: ObservableObject {
 
     private func selectAndPlay(_ track: Track, reconcileQueue: Bool) {
         CrashLog.shared.log("selectAndPlay 开始: \(track.title) (id=\(track.id.rawValue))")
-        musicHaptics.stop()
+        musicHaptics.finishPartial(reason: .trackSwitch)
+        preparedMusicHapticsPreparation = nil
+        // A cancelled preparation task must not leave a plan for the old
+        // track waiting in the engine's pre-play slot.
+        if let avEngine = engine as? AVFoundationPlaybackEngine {
+            avEngine.setMusicHapticsPlaybackPreparation(nil)
+        }
         // Do not leave the previous recording's ISRC attached while the new
         // track is still resolving its trusted LocalCatalog metadata.
         mediaIntegration.setInternationalStandardRecordingCode(nil)
@@ -1989,13 +1999,15 @@ public final class AuralisAppModel: ObservableObject {
             // Now Playing whenever LocalCatalog has verified it so the system
             // can decide whether Music Haptics is available.
             self.mediaIntegration.setInternationalStandardRecordingCode(hapticsIdentity.isrc)
+            var hapticsPreparation = await self.musicHaptics.preparePlayback(
+                identity: hapticsIdentity,
+                favorite: playable.isFavorite,
+                duration: max(playable.duration, track.duration)
+            )
+            guard !Task.isCancelled,
+                  self.queueIdentity(self.currentTrack) == self.queueIdentity(track) else { return }
             if let engine = self.engine as? AVFoundationPlaybackEngine {
-                let sink = await self.musicHaptics.makeStreamingAnalysisSink(
-                    identity: hapticsIdentity,
-                    favorite: self.currentTrack.isFavorite,
-                    duration: max(self.effectivePlaybackDuration, track.duration)
-                )
-                engine.setMusicHapticsAnalysisSink(sink)
+                engine.setMusicHapticsPlaybackPreparation(hapticsPreparation)
             }
             // 只记录脱敏后的流地址（去掉查询串与主机信息，查询串含认证参数）。
             let safeURL = playable.streamURL.map { AVFoundationPlaybackEngine.redactedURL($0) } ?? "nil"
@@ -2021,6 +2033,16 @@ public final class AuralisAppModel: ObservableObject {
                    let freshURL = await self.connector.refreshStreamURL(serverID: track.serverID, trackID: track.id) {
                     playable.streamURL = freshURL
                     do {
+                        hapticsPreparation = await self.musicHaptics.preparePlayback(
+                            identity: hapticsIdentity,
+                            favorite: playable.isFavorite,
+                            duration: max(playable.duration, track.duration)
+                        )
+                        guard !Task.isCancelled,
+                              self.queueIdentity(self.currentTrack) == self.queueIdentity(track) else { return }
+                        if let engine = self.engine as? AVFoundationPlaybackEngine {
+                            engine.setMusicHapticsPlaybackPreparation(hapticsPreparation)
+                        }
                         try await self.engine.play(track: playable)
                         self.playbackError = nil
                         CrashLog.shared.log("自动刷新流地址后播放成功")
@@ -2037,6 +2059,16 @@ public final class AuralisAppModel: ObservableObject {
                 if !autoSucceeded, self.catalog.activeServerID != nil,
                    let fresh = try? await self.connector.serverTrack(serverID: track.serverID, trackID: track.id) {
                     do {
+                        hapticsPreparation = await self.musicHaptics.preparePlayback(
+                            identity: hapticsIdentity,
+                            favorite: fresh.isFavorite,
+                            duration: max(fresh.duration, track.duration)
+                        )
+                        guard !Task.isCancelled,
+                              self.queueIdentity(self.currentTrack) == self.queueIdentity(track) else { return }
+                        if let engine = self.engine as? AVFoundationPlaybackEngine {
+                            engine.setMusicHapticsPlaybackPreparation(hapticsPreparation)
+                        }
                         try await self.engine.play(track: fresh)
                         self.playbackError = nil
                         CrashLog.shared.log("服务器在线曲目兜底播放成功")
@@ -2067,10 +2099,8 @@ public final class AuralisAppModel: ObservableObject {
             self.syncProgressTimer()
             self.syncNowPlayingTrack()
             if self.playbackState == .playing || self.playbackState == .buffering {
+                self.musicHaptics.activate(hapticsPreparation, position: self.playbackPosition)
                 self.schedulePreparedNext()
-            }
-            if self.playbackState == .playing {
-                self.musicHaptics.begin(identity: hapticsIdentity, sourceURL: playable.streamURL, favorite: self.currentTrack.isFavorite, position: self.playbackPosition)
             }
         }
     }
@@ -3257,6 +3287,7 @@ public final class AuralisAppModel: ObservableObject {
         // engine.play() / engine.pause() 内部触发 FIG/MediaRemote 断言，必须 defer 到主线程。
         DispatchQueue.main.async {
             Task { @MainActor in
+                var restoredHapticsPreparation: MusicHapticsPlaybackPreparation?
                 if self.playbackState == .playing {
                     self.lastStopReason = .userPaused
                     await self.engine.pause()
@@ -3271,6 +3302,17 @@ public final class AuralisAppModel: ObservableObject {
                             guard let playable = await self.resolvePlayableTrack(self.currentTrack) else {
                                 throw PlaybackError.engineFailure(String(localized: "无法取得可播放地址", bundle: .module))
                             }
+                            let hapticsIdentity = await self.musicHapticsIdentity(for: self.currentTrack)
+                            self.mediaIntegration.setInternationalStandardRecordingCode(hapticsIdentity.isrc)
+                            let preparation = await self.musicHaptics.preparePlayback(
+                                identity: hapticsIdentity,
+                                favorite: playable.isFavorite,
+                                duration: max(playable.duration, self.currentTrack.duration)
+                            )
+                            restoredHapticsPreparation = preparation
+                            if let avEngine = self.engine as? AVFoundationPlaybackEngine {
+                                avEngine.setMusicHapticsPlaybackPreparation(preparation)
+                            }
                             try await self.engine.play(track: playable)
                             if self.playbackPosition > 0 {
                                 await self.engine.seek(to: self.playbackPosition)
@@ -3284,7 +3326,13 @@ public final class AuralisAppModel: ObservableObject {
                 }
                 self.playbackState = await self.engine.state()
                 if self.playbackState == .playing {
-                    self.musicHaptics.resume(position: self.playbackPosition)
+                    // A restored idle player has no active haptics plan yet;
+                    // normal resume keeps using the already active plan.
+                    if let restoredHapticsPreparation {
+                        self.musicHaptics.activate(restoredHapticsPreparation, position: self.playbackPosition)
+                    } else {
+                        self.musicHaptics.resume(position: self.playbackPosition)
+                    }
                 } else {
                     self.musicHaptics.pause()
                 }
@@ -4037,6 +4085,8 @@ public final class AuralisAppModel: ObservableObject {
     /// history and platform metadata; calling selectAndPlay here would tear
     /// down the prebuffered player and reintroduce the gap we just removed.
     private func handlePreparedTrackStarted(_ prepared: Track) {
+        let preparedHaptics = preparedMusicHapticsPreparation
+        preparedMusicHapticsPreparation = nil
         // gapless A→B：B 的前几个 UI tick 不得沿用 A 的真实时长。
         actualDuration = nil
         let finished = currentTrack
@@ -4070,6 +4120,15 @@ public final class AuralisAppModel: ObservableObject {
         setCurrentTrackWithoutQueueUpdate(canonical)
         playbackPosition = 0
         playbackState = .playing
+        if let preparedHaptics {
+            mediaIntegration.setInternationalStandardRecordingCode(preparedHaptics.identity.isrc)
+            musicHaptics.activate(preparedHaptics, position: 0)
+        } else {
+            // A prepared AV item without a corresponding plan is an invalid
+            // integration state. Stop the previous sidecar rather than
+            // letting haptics for A continue into B.
+            musicHaptics.finishPartial(reason: .trackSwitch)
+        }
         loadLyricsIfNeeded(for: canonical)
         refillLargeWindowIfNeeded()
         syncProgressTimer()
@@ -4098,11 +4157,16 @@ public final class AuralisAppModel: ObservableObject {
 
     private func schedulePreparedNext() {
         prepareNextTask?.cancel()
+        preparedMusicHapticsPreparation = nil
         let target = seamlessNextTarget()
         guard let target,
               playbackState == .playing || playbackState == .buffering || playbackState == .preparing
         else {
-            prepareNextTask = Task { [engine] in await engine.prepareNext(track: nil) }
+            if let avEngine = engine as? AVFoundationPlaybackEngine {
+                avEngine.prepareNext(track: nil, musicHapticsPreparation: nil)
+            } else {
+                prepareNextTask = Task { [engine] in await engine.prepareNext(track: nil) }
+            }
             return
         }
         let candidate = target.track
@@ -4110,12 +4174,33 @@ public final class AuralisAppModel: ObservableObject {
         let candidateIdentity = queueIdentity(candidate)
         prepareNextTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            guard let playable = await resolvePlayableTrack(candidate) else { return }
+            guard let playable = await resolvePlayableTrack(candidate) else {
+                if let avEngine = self.engine as? AVFoundationPlaybackEngine {
+                    avEngine.prepareNext(track: nil, musicHapticsPreparation: nil)
+                } else {
+                    await self.engine.prepareNext(track: nil)
+                }
+                return
+            }
             guard !Task.isCancelled,
                   queueIdentity(currentTrack) == currentIdentity,
                   seamlessNextCandidate().map(queueIdentity) == candidateIdentity,
                   playable.streamURL != nil else { return }
-            await engine.prepareNext(track: playable)
+            let hapticsIdentity = await self.musicHapticsIdentity(for: candidate)
+            let preparation = await self.musicHaptics.preparePlayback(
+                identity: hapticsIdentity,
+                favorite: playable.isFavorite,
+                duration: max(playable.duration, candidate.duration)
+            )
+            guard !Task.isCancelled,
+                  queueIdentity(currentTrack) == currentIdentity,
+                  seamlessNextCandidate().map(queueIdentity) == candidateIdentity else { return }
+            self.preparedMusicHapticsPreparation = preparation
+            if let avEngine = self.engine as? AVFoundationPlaybackEngine {
+                avEngine.prepareNext(track: playable, musicHapticsPreparation: preparation)
+            } else {
+                await self.engine.prepareNext(track: playable)
+            }
         }
     }
 
@@ -4127,6 +4212,7 @@ public final class AuralisAppModel: ObservableObject {
         lastStopReason = .queueEnded
         playbackPosition = 0
         actualDuration = nil
+        musicHaptics.finishPartial(reason: .naturalEnd)
         Task { await liveActivityManager.endPlayback() }
         Task {
             await engine.pause()
@@ -4171,9 +4257,21 @@ public final class AuralisAppModel: ObservableObject {
                 return
             }
             do {
+                let hapticsIdentity = await self.musicHapticsIdentity(for: track)
+                let hapticsPreparation = await self.musicHaptics.preparePlayback(
+                    identity: hapticsIdentity,
+                    favorite: refreshed.isFavorite,
+                    duration: max(refreshed.duration, track.duration)
+                )
+                if let avEngine = self.engine as? AVFoundationPlaybackEngine {
+                    avEngine.setMusicHapticsPlaybackPreparation(hapticsPreparation)
+                }
                 try await self.engine.play(track: refreshed)
                 self.playbackError = nil
                 self.playbackState = await self.engine.state()
+                if self.playbackState == .playing || self.playbackState == .buffering {
+                    self.musicHaptics.activate(hapticsPreparation, position: self.playbackPosition)
+                }
                 self.syncProgressTimer()
                 self.syncNowPlayingTrack()
             } catch {

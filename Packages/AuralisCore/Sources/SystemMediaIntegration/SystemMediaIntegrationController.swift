@@ -1,6 +1,9 @@
 import Domain
 import Foundation
 import MediaPlayer
+#if os(iOS)
+import AVFoundation
+#endif
 
 /// 系统媒体集成总控：音频会话、Now Playing、远程命令、中断与路由。
 /// AppModel 在播放状态变化时调用 update* 系列方法；
@@ -18,6 +21,9 @@ public final class SystemMediaIntegrationController {
     /// track/progress snapshot refreshes, rather than being tied to a haptics
     /// coordinator callback.
     private var internationalStandardRecordingCode: String?
+#if os(iOS)
+    private var mediaServicesResetObserver: NSObjectProtocol?
+#endif
 
     public init() {}
 
@@ -35,14 +41,40 @@ public final class SystemMediaIntegrationController {
         started = true
         let coordinator = audioSession
         Task { await coordinator.configure() }
+#if os(iOS)
+        mediaServicesResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.audioSession.invalidateForSystemAudioEvent()
+                await self.audioSession.activate()
+            }
+        }
+#endif
         remoteCommands.register(handlers: handlers)
+        let interruptionBegan = onInterruptionBegan ?? { handlers.onPause() }
+        let interruptionShouldResume = onInterruptionShouldResume ?? { handlers.onPlay() }
+        let outputDetached = onOutputDetached ?? { handlers.onPause() }
+        let routeChanged = onRouteChanged ?? {}
         interruptions.start(
-            onBegan: onInterruptionBegan ?? { handlers.onPause() },
-            onShouldResume: onInterruptionShouldResume ?? { handlers.onPlay() }
+            onBegan: { [weak self] in
+                self?.audioSession.invalidateForSystemAudioEvent()
+                interruptionBegan()
+            },
+            onShouldResume: interruptionShouldResume
         )
         routes.start(
-            onOutputDetached: onOutputDetached ?? { handlers.onPause() },
-            onRouteChanged: onRouteChanged ?? {}
+            onOutputDetached: { [weak self] in
+                self?.audioSession.invalidateForSystemAudioEvent()
+                outputDetached()
+            },
+            onRouteChanged: { [weak self] in
+                self?.audioSession.invalidateForSystemAudioEvent()
+                routeChanged()
+            }
         )
     }
 
@@ -115,6 +147,12 @@ public final class SystemMediaIntegrationController {
     public func stop() {
         internationalStandardRecordingCode = nil
         nowPlaying.clear()
+#if os(iOS)
+        if let mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(mediaServicesResetObserver)
+            self.mediaServicesResetObserver = nil
+        }
+#endif
         let coordinator = audioSession
         Task { await coordinator.deactivate() }
     }

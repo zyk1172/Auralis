@@ -205,6 +205,28 @@ private struct MusicHapticsDiagnosticsPage: View {
                     value: displayDiagnostics.coverage.map { "\(Int(($0 * 100).rounded()))%" } ?? "unknown"
                 )
                 LabeledContent("timelineExists", value: displayDiagnostics.timelineExists ? "true" : "false")
+                LabeledContent("hapticsPlan", value: displayDiagnostics.playbackPlan.rawValue)
+                LabeledContent("planReason", value: displayDiagnostics.planReason)
+                LabeledContent("hasISRC", value: displayDiagnostics.hasReliableISRC ? "true" : "false")
+                LabeledContent("systemTimelineAvailable", value: displayDiagnostics.systemTimelineAvailable ? "true" : "false")
+                LabeledContent("fullTimelineExists", value: displayDiagnostics.fullTimelineExists ? "true" : "false")
+                LabeledContent("partialExists", value: displayDiagnostics.partialExists ? "true" : "false")
+                LabeledContent("tapAttached", value: displayDiagnostics.tapAttached ? "true" : "false")
+                LabeledContent(
+                    "PCMFormat",
+                    value: displayDiagnostics.pcmFormat.map {
+                        "\($0.sampleRate)Hz/\($0.channels)ch/\($0.sampleType.rawValue)/\($0.interleaved ? "interleaved" : "planar")"
+                    } ?? "none"
+                )
+                LabeledContent("eventCount", value: "\(displayDiagnostics.eventCount)")
+                LabeledContent(
+                    "eventDensity",
+                    value: displayDiagnostics.eventDensity.map { String(format: "%.3f/s", $0) } ?? "unknown"
+                )
+                LabeledContent("droppedFrames", value: "\(displayDiagnostics.droppedFrames)")
+                LabeledContent("finishReason", value: displayDiagnostics.finishReason?.rawValue ?? "none")
+                LabeledContent("timelineSuspiciouslySparse", value: displayDiagnostics.timelineSuspiciouslySparse ? "true" : "false")
+                LabeledContent("analyzedRanges", value: analyzedRangesDescription)
             }
         }
         .task { diagnostics = await model.musicHaptics.diagnostics() }
@@ -221,6 +243,14 @@ private struct MusicHapticsDiagnosticsPage: View {
             hasReliableISRC: false,
             analysisState: "loading"
         )
+    }
+
+    private var analyzedRangesDescription: String {
+        let value = displayDiagnostics.analyzedRanges
+            .prefix(12)
+            .map { String(format: "%.2f-%.2f", $0.lowerBound, $0.upperBound) }
+            .joined(separator: ", ")
+        return value.isEmpty ? "none" : value
     }
 }
 #endif
