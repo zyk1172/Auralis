@@ -1572,6 +1572,38 @@
         }
       }
     },
+    "Build configuration" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Build Configuration"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建置組態"
+          }
+        }
+      }
+    },
+    "Build number" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Build Number"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建置編號"
+          }
+        }
+      }
+    },
     "CritiqueBrainz" : {
       "localizations" : {
         "en" : {
@@ -1632,6 +1664,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Disc %lld"
+          }
+        }
+      }
+    },
+    "Git branch" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git Branch"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 分支"
+          }
+        }
+      }
+    },
+    "Git commit" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git Commit"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 提交"
           }
         }
       }
@@ -1912,7 +1976,20 @@
       }
     },
     "Tavily Key 仅保存于系统 Keychain。启用后优先用于 Recommendation Index 的定向公开音乐补证；未配置或失败时继续使用本地元数据。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Tavily Key is stored only in the system Keychain. When enabled, it is preferred for targeted public-music evidence in Recommendation Index; local metadata remains the fallback when it is not configured or fails."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tavily Key 僅儲存於系統 Keychain。啟用後優先用於 Recommendation Index 的定向公開音樂補證；未設定或失敗時仍使用本機中繼資料。"
+          }
+        }
+      }
     },
     "token" : {
       "extractionState" : "stale",
@@ -2074,7 +2151,20 @@
       }
     },
     "上下文窗口已按模型实际值确认" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context window confirmed against the model's actual value"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已依模型實際值確認上下文視窗"
+          }
+        }
+      }
     },
     "上次同步" : {
       "localizations" : {
@@ -2428,6 +2518,22 @@
         }
       }
     },
+    "不可用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unavailable"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法使用"
+          }
+        }
+      }
+    },
     "不同 OpenAI 兼容端点上下文窗口不同（OpenAI 128K/200K、DeepSeek 64K/128K、Ollama/LM Studio 取决于模型）。默认 256K / 16K 维持旧行为，可按实际模型修改。" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2489,6 +2595,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不循環"
+          }
+        }
+      }
+    },
+    "不支持" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unsupported"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不支援"
           }
         }
       }
@@ -2644,7 +2766,20 @@
       }
     },
     "中" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medium"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中等"
+          }
+        }
+      }
     },
     "临时音频缓存" : {
       "localizations" : {
@@ -2674,6 +2809,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "為保護隱私，本次要求未傳送至模型。首次外發需要確認：確認後將把以下內容傳送至「%@」（模型：%@）：\n%@\n用途：%@\n請在彈窗中選擇「允許一次」或「允許並記住」，或前往「設定 → OpenAI 相容介面」檢視隱私選項。"
+          }
+        }
+      }
+    },
+    "为此歌曲关闭" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn Off for This Song"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為此歌曲關閉"
+          }
+        }
+      }
+    },
+    "为此歌曲开启" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn On for This Song"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為此歌曲開啟"
           }
         }
       }
@@ -3047,7 +3214,20 @@
       }
     },
     "低" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Low"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "低"
+          }
+        }
+      }
     },
     "你可以创建播放列表，也可以使用音乐服务器中已经存在的播放列表。" : {
       "localizations" : {
@@ -3194,7 +3374,20 @@
       }
     },
     "允许 AI 使用歌曲元数据进行公开网络检索" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow AI to use song metadata for public web searches"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允許 AI 使用歌曲中繼資料進行公開網路搜尋"
+          }
+        }
+      }
     },
     "允许一次" : {
       "localizations" : {
@@ -3245,7 +3438,20 @@
       }
     },
     "允许发送收藏和评分" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Sending Favorites and Ratings"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允許傳送收藏與評分"
+          }
+        }
+      }
     },
     "允许发送歌曲元数据" : {
       "localizations" : {
@@ -3424,7 +3630,20 @@
       }
     },
     "公开网络检索（仅发送歌曲内容元数据）" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Public Web Search (Song Content Metadata Only)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公開網路搜尋（僅傳送歌曲內容中繼資料）"
+          }
+        }
+      }
     },
     "公开音乐数据" : {
       "localizations" : {
@@ -3683,7 +3902,20 @@
       }
     },
     "最大" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maximum"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最大"
+          }
+        }
+      }
     },
     "最常听" : {
       "localizations" : {
@@ -5459,7 +5691,20 @@
       }
     },
     "启用 Tavily 公开搜索" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable Tavily Public Search"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用 Tavily 公開搜尋"
+          }
+        }
+      }
     },
     "启用公开音乐数据" : {
       "localizations" : {
@@ -7304,7 +7549,20 @@
       }
     },
     "开启" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟"
+          }
+        }
+      }
     },
     "开启后 Wi-Fi / 有线网络下优先使用服务器原始质量；关闭则限制码率（MP3 320kbps）以节省带宽。" : {
       "localizations" : {
@@ -7323,7 +7581,20 @@
       }
     },
     "开启后，歌曲标题、艺术家和专辑等内容元数据可能发送给已配置的 AI Provider、Apple iTunes 或 Tavily；不会发送播放历史、收藏、评分、本地路径、流媒体地址或凭据。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When enabled, content metadata such as song titles, artists, and albums may be sent to the configured AI Provider, Apple iTunes, or Tavily; playback history, favorites, ratings, local paths, stream URLs, and credentials are not sent."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用後，歌曲標題、藝人與專輯等內容中繼資料可能傳送給已設定的 AI Provider、Apple iTunes 或 Tavily；不會傳送播放記錄、收藏、評分、本機路徑、串流位址或認證資料。"
+          }
+        }
+      }
     },
     "开始/继续全量索引" : {
       "localizations" : {
@@ -7759,10 +8030,36 @@
       }
     },
     "思考强度" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking Intensity"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考強度"
+          }
+        }
+      }
     },
     "思考模式" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking Mode"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考模式"
+          }
+        }
+      }
     },
     "总收听次数" : {
       "localizations" : {
@@ -8962,6 +9259,22 @@
         }
       }
     },
+    "支持" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supported"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支援"
+          }
+        }
+      }
+    },
     "支持 OpenAI Chat Completions、OpenAI Responses API，\n以及 DeepSeek、通义千问、Kimi、Ollama、LM Studio\n和兼容 OpenAI 协议的中转服务。\nAPI Key 仅保存于系统 Keychain。" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -9007,6 +9320,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "支援 OpenAI Chat Completions 與 OpenAI Responses API，\n以及 DeepSeek、通義千問、Kimi、Ollama、LM Studio\n和相容 OpenAI 協議的中轉服務。Anthropic Messages\n尚未支援；選擇此協議時不會傳送要求。\nAPI Key 僅儲存於系統 Keychain。"
+          }
+        }
+      }
+    },
+    "支持的歌曲优先使用系统 Music Haptics；其它歌曲会在首次播放时后台生成触觉轨道，之后播放时使用。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Songs with support use system Music Haptics first; for other songs, a haptic track is generated in the background on first playback and used thereafter."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支援的歌曲優先使用系統 Music Haptics；其他歌曲會在首次播放時於背景產生觸覺軌道，之後播放時使用。"
           }
         }
       }
@@ -9060,7 +9389,20 @@
       }
     },
     "收藏与个人评分" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Favorites and Personal Ratings"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收藏與個人評分"
+          }
+        }
+      }
     },
     "收藏专辑" : {
       "localizations" : {
@@ -9138,6 +9480,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收藏裡隨便聽"
+          }
+        }
+      }
+    },
+    "收藏震动数据" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved Haptics Data"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收藏震動資料"
           }
         }
       }
@@ -9590,6 +9948,22 @@
         }
       }
     },
+    "普通震动缓存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standard Haptics Cache"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一般震動快取"
+          }
+        }
+      }
+    },
     "暂停" : {
       "localizations" : {
         "en" : {
@@ -9895,7 +10269,20 @@
       }
     },
     "更新 (title)" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新"
+          }
+        }
+      }
     },
     "更新 API Key" : {
       "localizations" : {
@@ -10329,6 +10716,22 @@
         }
       }
     },
+    "未启用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Enabled"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未啟用"
+          }
+        }
+      }
+    },
     "未在播放" : {
       "localizations" : {
         "en" : {
@@ -10746,7 +11149,20 @@
       }
     },
     "极高" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Very High"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "極高"
+          }
+        }
+      }
     },
     "构建" : {
       "localizations" : {
@@ -10921,6 +11337,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "檔位"
+          }
+        }
+      }
+    },
+    "检查中" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檢查中"
           }
         }
       }
@@ -11550,7 +11982,20 @@
       }
     },
     "正在测试…" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testing…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在測試…"
+          }
+        }
+      }
     },
     "正在测试连接…" : {
       "localizations" : {
@@ -12124,6 +12569,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清理歷史歌詞"
+          }
+        }
+      }
+    },
+    "清理普通震动缓存" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Standard Haptics Cache"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理一般震動快取"
           }
         }
       }
@@ -13056,6 +13517,22 @@
         }
       }
     },
+    "系统 Music Haptics" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System Music Haptics"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系統 Music Haptics"
+          }
+        }
+      }
+    },
     "系统集成" : {
       "localizations" : {
         "en" : {
@@ -13313,7 +13790,20 @@
       }
     },
     "联网搜索" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Online Search"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路搜尋"
+          }
+        }
+      }
     },
     "联网来源" : {
       "localizations" : {
@@ -13380,10 +13870,52 @@
       }
     },
     "自动（Provider 默认）" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic (Provider Default)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動（Provider 預設）"
+          }
+        }
+      }
     },
     "自动使用 Provider 默认策略；关闭仅在 Provider 支持显式关闭时发送关闭指令。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatically use the Provider's default policy; send a disable command only when the Provider supports an explicit disable option."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動使用 Provider 預設策略；僅在 Provider 支援明確停用時傳送停用指令。"
+          }
+        }
+      }
+    },
+    "自动开启音乐震动" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatically Enable Music Haptics"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動開啟音樂震動"
+          }
+        }
+      }
     },
     "自定义" : {
       "localizations" : {
@@ -13659,6 +14191,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "權限：%@"
+          }
+        }
+      }
+    },
+    "设备支持 Core Haptics" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Device Supports Core Haptics"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "裝置支援 Core Haptics"
           }
         }
       }
@@ -14123,6 +14671,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "資料類型"
+          }
+        }
+      }
+    },
+    "跟随全局设置" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow Global Settings"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遵循全域設定"
           }
         }
       }
@@ -14736,10 +15300,36 @@
       }
     },
     "连接成功，但服务没有返回结果。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected, but the service returned no result."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已連線，但服務未傳回結果。"
+          }
+        }
+      }
     },
     "连接成功。" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已連線。"
+          }
+        }
+      }
     },
     "连接服务器并同步后，这里会列出全部歌曲；也可以从「首页」先随机播放几首。" : {
       "localizations" : {
@@ -15014,7 +15604,20 @@
       }
     },
     "配置 (title)" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configure"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定"
+          }
+        }
+      }
     },
     "配置 API Key" : {
       "localizations" : {
@@ -15033,7 +15636,20 @@
       }
     },
     "配置 Tavily API Key…" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configure Tavily API Key…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定 Tavily API Key…"
+          }
+        }
+      }
     },
     "配置大模型…" : {
       "localizations" : {
@@ -15531,6 +16147,38 @@
         }
       }
     },
+    "音乐震动" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Music Haptics"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音樂震動"
+          }
+        }
+      }
+    },
+    "音乐震动反馈" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Music Haptics Feedback"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音樂震動回饋"
+          }
+        }
+      }
+    },
     "音质" : {
       "localizations" : {
         "en" : {
@@ -15725,7 +16373,20 @@
       }
     },
     "高" : {
-
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "High"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高"
+          }
+        }
+      }
     },
     "高级设置" : {
       "localizations" : {

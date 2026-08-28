@@ -743,26 +743,66 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     }
 }
 
-private enum MusicHapticsAudioTap {
-    private final class Context: @unchecked Sendable {
+/// Bridges the retained callback context into the storage owned by an audio tap.
+/// `MTAudioProcessingTapCallbacks.clientInfo` is only an input to `init`; the
+/// processing callbacks must retrieve the same pointer from tap storage.
+enum MusicHapticsAudioTapStorage {
+    static func initialize(
+        clientInfo: UnsafeMutableRawPointer?,
+        tapStorageOut: UnsafeMutablePointer<UnsafeMutableRawPointer?>
+    ) {
+        tapStorageOut.pointee = clientInfo
+    }
+
+    static func object<T: AnyObject>(
+        from storage: UnsafeMutableRawPointer?,
+        as _: T.Type
+    ) -> T? {
+        guard let storage, Int(bitPattern: storage) != 0 else { return nil }
+        return Unmanaged<T>.fromOpaque(storage).takeUnretainedValue()
+    }
+
+    static func releaseRetained<T: AnyObject>(
+        from storage: UnsafeMutableRawPointer?,
+        as _: T.Type
+    ) {
+        guard let storage, Int(bitPattern: storage) != 0 else { return }
+        Unmanaged<T>.fromOpaque(storage).release()
+    }
+}
+
+enum MusicHapticsAudioTap {
+    final class Context: @unchecked Sendable {
         let sink: any MusicHapticsAnalysisSink
         var format: MusicHapticsPCMFormat?
         init(sink: any MusicHapticsAnalysisSink) { self.sink = sink }
     }
 
-    static func makeMix(track: AVAssetTrack, sink: any MusicHapticsAnalysisSink) -> AVAudioMix? {
+    static func makeCallbacks(
+        sink: any MusicHapticsAnalysisSink
+    ) -> (callbacks: MTAudioProcessingTapCallbacks, retainedContext: Unmanaged<Context>) {
         let context = Context(sink: sink)
-        var callbacks = MTAudioProcessingTapCallbacks(
+        let retainedContext = Unmanaged.passRetained(context)
+        let callbacks = MTAudioProcessingTapCallbacks(
             version: kMTAudioProcessingTapCallbacksVersion_0,
-            clientInfo: Unmanaged.passRetained(context).toOpaque(),
-            init: nil,
+            clientInfo: retainedContext.toOpaque(),
+            init: { _, clientInfo, tapStorageOut in
+                MusicHapticsAudioTapStorage.initialize(
+                    clientInfo: clientInfo,
+                    tapStorageOut: tapStorageOut
+                )
+            },
             finalize: { tap in
-                let clientInfo = MTAudioProcessingTapGetStorage(tap)
-                Unmanaged<Context>.fromOpaque(clientInfo).release()
+                MusicHapticsAudioTapStorage.releaseRetained(
+                    from: MTAudioProcessingTapGetStorage(tap),
+                    as: Context.self
+                )
             },
             prepare: { tap, _, processingFormat in
-                let clientInfo = MTAudioProcessingTapGetStorage(tap)
-                let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
+                guard let context = MusicHapticsAudioTapStorage.object(
+                    from: MTAudioProcessingTapGetStorage(tap),
+                    as: Context.self
+                ) else { return }
                 guard let format = MusicHapticsPCMBridge.makeFormat(from: processingFormat.pointee) else {
                     context.format = nil
                     context.sink.cancel()
@@ -780,8 +820,10 @@ private enum MusicHapticsAudioTap {
                     tap, numberFrames, bufferListInOut, flagsOut, &localTimeRange, numberFramesOut
                 )
                 guard status == noErr else { return }
-                let clientInfo = MTAudioProcessingTapGetStorage(tap)
-                let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
+                guard let context = MusicHapticsAudioTapStorage.object(
+                    from: MTAudioProcessingTapGetStorage(tap),
+                    as: Context.self
+                ) else { return }
                 guard let format = context.format else { return }
                 let time = localTimeRange.start.seconds
                 guard time.isFinite else { return }
@@ -794,10 +836,26 @@ private enum MusicHapticsAudioTap {
                 context.sink.consumePCM(payload, time: time, format: format, frameCount: framesOut)
             }
         )
+        return (callbacks, retainedContext)
+    }
+
+    static func makeMix(track: AVAssetTrack, sink: any MusicHapticsAnalysisSink) -> AVAudioMix? {
+        var callbacks: MTAudioProcessingTapCallbacks
+        let retainedContext: Unmanaged<Context>
+        (callbacks, retainedContext) = makeCallbacks(sink: sink)
         var tap: MTAudioProcessingTap?
-        guard MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap) == noErr,
-              let tap
-        else { return nil }
+        let status = MTAudioProcessingTapCreate(
+            kCFAllocatorDefault,
+            &callbacks,
+            kMTAudioProcessingTapCreationFlag_PostEffects,
+            &tap
+        )
+        guard status == noErr, let tap else {
+            // No tap owns the retained context when creation fails, so balance
+            // passRetained here. On success, finalize is the sole release site.
+            retainedContext.release()
+            return nil
+        }
         let parameters = AVMutableAudioMixInputParameters(track: track)
         parameters.audioTapProcessor = tap
         let mix = AVMutableAudioMix()
