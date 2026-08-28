@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioToolbox
 import Domain
 import Foundation
 import MusicHaptics
@@ -745,11 +746,53 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 /// Keeps the C callback details out of the player state machine.  The callback
 /// first asks AVFoundation for source audio, then performs one bounded `Data`
 /// copy into the sink's queue; all analysis happens off this thread.
+private func makeMusicHapticsPCMFormat(from description: AudioStreamBasicDescription) -> MusicHapticsPCMFormat? {
+    guard description.mFormatID == kAudioFormatLinearPCM else { return nil }
+    let channels = Int(description.mChannelsPerFrame)
+    let sampleRate = description.mSampleRate
+    let bitsPerChannel = Int(description.mBitsPerChannel)
+    guard channels > 0, sampleRate.isFinite, sampleRate > 0 else { return nil }
+
+    let flags = description.mFormatFlags
+    let sampleType: MusicHapticsPCMSampleType
+    let bytesPerSample: Int
+    if flags & kAudioFormatFlagIsFloat != 0, bitsPerChannel == 32 {
+        sampleType = .float32
+        bytesPerSample = MemoryLayout<Float32>.size
+    } else if flags & kAudioFormatFlagIsSignedInteger != 0, bitsPerChannel == 16 {
+        sampleType = .int16
+        bytesPerSample = MemoryLayout<Int16>.size
+    } else {
+        return nil
+    }
+
+    let nonInterleaved = flags & kAudioFormatFlagIsNonInterleaved != 0
+    let rawBytesPerFrame = Int(description.mBytesPerFrame)
+    guard rawBytesPerFrame > 0 else { return nil }
+    let sourceBytesPerSample: Int
+    if nonInterleaved {
+        sourceBytesPerSample = rawBytesPerFrame
+    } else {
+        guard rawBytesPerFrame % channels == 0 else { return nil }
+        sourceBytesPerSample = rawBytesPerFrame / channels
+    }
+    guard sourceBytesPerSample == bytesPerSample else { return nil }
+
+    return MusicHapticsPCMFormat(
+        sampleRate: sampleRate,
+        channels: channels,
+        sampleType: sampleType,
+        interleaved: !nonInterleaved,
+        bytesPerFrame: bytesPerSample * channels,
+        bytesPerSample: bytesPerSample,
+        isBigEndian: flags & kAudioFormatFlagIsBigEndian != 0
+    )
+}
+
 private enum MusicHapticsAudioTap {
     private final class Context: @unchecked Sendable {
         let sink: any MusicHapticsAnalysisSink
-        var sampleRate: Double = 0
-        var channels = 0
+        var format: MusicHapticsPCMFormat?
         init(sink: any MusicHapticsAnalysisSink) { self.sink = sink }
     }
 
@@ -766,9 +809,13 @@ private enum MusicHapticsAudioTap {
             prepare: { tap, maxFrames, processingFormat in
                 let clientInfo = MTAudioProcessingTapGetStorage(tap)
                 let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
-                context.sampleRate = processingFormat.pointee.mSampleRate
-                context.channels = Int(processingFormat.pointee.mChannelsPerFrame)
-                context.sink.begin(sampleRate: context.sampleRate, channels: context.channels)
+                guard let format = makeMusicHapticsPCMFormat(from: processingFormat.pointee) else {
+                    context.format = nil
+                    context.sink.cancel()
+                    return
+                }
+                context.format = format
+                context.sink.begin(format: format)
             },
             unprepare: nil,
             process: { tap, numberFrames, flags, timeRange, numberFramesOut, flagsOut in
@@ -787,21 +834,21 @@ private enum MusicHapticsAudioTap {
                 guard status == noErr else { return }
                 let clientInfo = MTAudioProcessingTapGetStorage(tap)
                 let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
+                guard let format = context.format else { return }
                 let time = localTimeRange.start.seconds
                 guard time.isFinite else { return }
                 let count = Int(buffers.mNumberBuffers)
+                guard count > 0, framesOut > 0 else { return }
+                var payload = Data()
                 for index in 0..<count {
                     let buffer = withUnsafePointer(to: &buffers.mBuffers) { pointer in
                         pointer.withMemoryRebound(to: AudioBuffer.self, capacity: count) { $0[index] }
                     }
                     guard let data = buffer.mData, buffer.mDataByteSize > 0 else { continue }
-                    context.sink.consumePCM(
-                        Data(bytes: data, count: Int(buffer.mDataByteSize)),
-                        time: time,
-                        sampleRate: context.sampleRate,
-                        channels: max(1, Int(buffer.mNumberChannels))
-                    )
+                    payload.append(Data(bytes: data, count: Int(buffer.mDataByteSize)))
                 }
+                guard !payload.isEmpty else { return }
+                context.sink.consumePCM(payload, time: time, format: format, frameCount: Int(framesOut))
             }
         )
         var tap: MTAudioProcessingTap?
@@ -814,6 +861,7 @@ private enum MusicHapticsAudioTap {
         mix.inputParameters = [parameters]
         return mix
     }
+
 }
 
 /// AVAudioSession 必须在主线程调用（内部 dispatch_assert_queue 断言，

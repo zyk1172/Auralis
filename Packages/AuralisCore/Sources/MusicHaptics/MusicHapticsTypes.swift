@@ -1,6 +1,57 @@
 import Domain
 import Foundation
 
+public enum MusicHapticsPCMSampleType: String, Codable, Hashable, Sendable {
+    case float32
+    case int16
+}
+
+/// Describes the decoded PCM layout handed from an audio tap to the haptics
+/// analyzer.  `bytesPerFrame` is the complete frame stride (all channels),
+/// while `bytesPerSample` is the stride of one channel sample.  For
+/// non-interleaved PCM, the payload is laid out as one complete channel plane
+/// after another.
+public struct MusicHapticsPCMFormat: Hashable, Sendable {
+    public let sampleRate: Double
+    public let channels: Int
+    public let sampleType: MusicHapticsPCMSampleType
+    public let interleaved: Bool
+    public let bytesPerFrame: Int
+    public let bytesPerSample: Int
+    public let isBigEndian: Bool
+
+    public init?(
+        sampleRate: Double,
+        channels: Int,
+        sampleType: MusicHapticsPCMSampleType,
+        interleaved: Bool,
+        bytesPerFrame: Int,
+        bytesPerSample: Int,
+        isBigEndian: Bool = false
+    ) {
+        guard sampleRate.isFinite, sampleRate > 0,
+              channels > 0,
+              bytesPerFrame > 0,
+              bytesPerSample > 0,
+              bytesPerFrame >= bytesPerSample * channels
+        else { return nil }
+        self.sampleRate = sampleRate
+        self.channels = channels
+        self.sampleType = sampleType
+        self.interleaved = interleaved
+        self.bytesPerFrame = bytesPerFrame
+        self.bytesPerSample = bytesPerSample
+        self.isBigEndian = isBigEndian
+    }
+
+    public var isValid: Bool {
+        switch sampleType {
+        case .float32: bytesPerSample == MemoryLayout<Float32>.size
+        case .int16: bytesPerSample == MemoryLayout<Int16>.size
+        }
+    }
+}
+
 /// Privacy-safe identity used to bind a timeline to the correct recording.
 public struct MusicHapticsIdentity: Codable, Hashable, Sendable {
     public var globalID: String?
