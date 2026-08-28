@@ -11,6 +11,11 @@ import AVFoundation
 @MainActor
 public final class AudioSessionCoordinator {
     public private(set) var isActive = false
+    #if os(iOS)
+    private var isConfigured = false
+    private var configurationAttempted = false
+    private var configurationTask: Task<Void, Never>?
+    #endif
 
     public init() {}
 
@@ -18,23 +23,82 @@ public final class AudioSessionCoordinator {
     /// 注意：AVAudioSession 必须在主线程调用，本类型已是 @MainActor，直接执行。
     public func configure() async {
         #if os(iOS)
-        do {
-            try await performSession(category: .playback)
-        } catch {
-            // 配置失败不致命：记录并继续，播放仍可能在前台工作
-            AuralisLog.playback.error("音频会话配置分类失败：\(error.localizedDescription)")
+        if isConfigured || configurationAttempted {
+            logConfiguration(
+                duration: .zero,
+                skipped: true,
+                active: isActive,
+                operation: "configure"
+            )
+            return
         }
+        if let configurationTask {
+            await configurationTask.value
+            return
+        }
+
+        configurationAttempted = true
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let startedAt = ContinuousClock.now
+            do {
+                try await self.performSession(category: .playback)
+                self.isConfigured = true
+            } catch {
+                // 配置失败不致命：记录并继续，播放仍可能在前台工作。
+                // 不再对非法 category/options 组合做静默 fallback；调用方可以
+                // 从这条日志确认真实的系统错误，而不是把 -50 隐藏掉。
+                AuralisLog.playback.error("音频会话配置分类失败：\(error.localizedDescription)")
+            }
+            self.logConfiguration(
+                duration: self.durationMs(startedAt.duration(to: .now)),
+                skipped: false,
+                active: self.isActive,
+                operation: "configure"
+            )
+        }
+        configurationTask = task
+        await task.value
+        configurationTask = nil
         #endif
     }
 
     /// 播放开始前激活音频会话。必须在主线程（本类型已是 @MainActor）。
     public func activate() async {
         #if os(iOS)
+        // Do not even enter the configuration method for an already settled
+        // session. The in-flight case still waits so activation cannot race
+        // the initial setCategory call.
+        if configurationTask != nil || (!isConfigured && !configurationAttempted) {
+            await configure()
+        }
+        guard !isActive else {
+            logConfiguration(
+                duration: .zero,
+                skipped: true,
+                active: true,
+                operation: "activate"
+            )
+            return
+        }
+        let startedAt = ContinuousClock.now
         do {
             try await performSession(active: true)
             isActive = true
+            logConfiguration(
+                duration: durationMs(startedAt.duration(to: .now)),
+                skipped: false,
+                active: true,
+                operation: "activate"
+            )
         } catch {
             AuralisLog.playback.error("音频会话激活失败：\(error.localizedDescription)")
+            logConfiguration(
+                duration: durationMs(startedAt.duration(to: .now)),
+                skipped: false,
+                active: false,
+                operation: "activate"
+            )
         }
         #endif
     }
@@ -42,11 +106,48 @@ public final class AudioSessionCoordinator {
     /// 停止播放时挂起会话，把音频焦点还给系统。必须在主线程（本类型已是 @MainActor）。
     public func deactivate() async {
         #if os(iOS)
+        guard isActive else {
+            logConfiguration(
+                duration: .zero,
+                skipped: true,
+                active: false,
+                operation: "deactivate"
+            )
+            return
+        }
+        let startedAt = ContinuousClock.now
         do {
             try await performSession(active: false, options: .notifyOthersOnDeactivation)
+            logConfiguration(
+                duration: durationMs(startedAt.duration(to: .now)),
+                skipped: false,
+                active: false,
+                operation: "deactivate"
+            )
         } catch {
             AuralisLog.playback.error("音频会话挂起失败：\(error.localizedDescription)")
+            logConfiguration(
+                duration: durationMs(startedAt.duration(to: .now)),
+                skipped: false,
+                active: true,
+                operation: "deactivate"
+            )
+            return
         }
+        #endif
+        isActive = false
+    }
+
+    /// Route/interruption/media-service events can invalidate the underlying
+    /// AVAudioSession outside this object's control. The next activation may
+    /// configure it once again; ordinary track switches never call this.
+    public func invalidateForSystemAudioEvent() {
+        #if os(iOS)
+        // Do not cancel a checked continuation inside an in-flight async
+        // activation/configuration. Let that operation settle, then allow a
+        // later caller to configure again.
+        isConfigured = false
+        configurationAttempted = false
         #endif
         isActive = false
     }
@@ -65,6 +166,23 @@ public final class AudioSessionCoordinator {
     ) async throws {
         try await performAudioSession(category: category, mode: mode, active: active, options: options)
     }
+
+    private func durationMs(_ duration: Duration) -> Double {
+        let components = duration.components
+        return Double(components.seconds) * 1_000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    private func logConfiguration(
+        duration: Double,
+        skipped: Bool,
+        active: Bool,
+        operation: String
+    ) {
+        AuralisLog.playback.debug(
+            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) attempted=\(self.configurationAttempted, privacy: .public)"
+        )
+    }
     #endif
 }
 
@@ -81,20 +199,10 @@ internal func performAudioSession(
     options: AVAudioSession.SetActiveOptions = []
 ) async throws {
     let session = AVAudioSession.sharedInstance()
-    // allowAirPlay / allowBluetooth 让音频在隔空播放、蓝牙耳机等路由下也能持续，
-    // 避免后台或外设切换时音频会话被系统挂起导致 App 被回收。
-    // 注意：不要用已废弃的 allowBluetoothHFP，它只能用于 .record / .playAndRecord，
-    // 搭配 .playback 分类会返回 OSStatus -50（paramErr）。
+    // 只使用与 category 合法匹配的 options。allowBluetoothHFP 只能用于
+    // .record / .playAndRecord；搭配 .playback 会返回 OSStatus -50 (paramErr)。
     if let category {
-        let requestedOptions = categoryOptions(for: category)
-        do {
-            try session.setCategory(category, mode: mode, options: requestedOptions)
-        } catch {
-            // 极端系统/外设组合仍可能拒绝个别选项（OSStatus -50 paramErr）：
-            // 降级为不带选项也要把分类配上，避免配置失败影响播放。
-            AuralisLog.playback.error("音频会话分类选项设置失败：\(error.localizedDescription)，降级为无选项")
-            try session.setCategory(category, mode: mode)
-        }
+        try session.setCategory(category, mode: mode, options: categoryOptions(for: category))
     }
     if let active {
         if active {

@@ -21,8 +21,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var preparedTrackStartedHandler: (@Sendable (Track) -> Void)?
     /// Optional, sidecar-only decoded PCM analysis for the current item.
     /// It is installed as an AVAudioMix tap and never owns the AVQueuePlayer.
-    private var pendingMusicHapticsSink: (any MusicHapticsAnalysisSink)?
-    private var activeMusicHapticsSink: (any MusicHapticsAnalysisSink)?
+    /// The plan is resolved by MusicHapticsCoordinator before play(); this
+    /// engine only consumes that decision.
+    private var pendingMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
+    private var activeMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
+    private var preparedMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
+    private var currentTapSetupTask: Task<Void, Never>?
+    private var preparedTapSetupTask: Task<Void, Never>?
 
     // MARK: - Observers
     private var endObserver: NSObjectProtocol?
@@ -100,11 +105,14 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedTrackStartedHandler = handler
     }
 
-    /// Must be called before `play(track:)`. Passing nil leaves the audio path
-    /// completely unchanged.
-    public func setMusicHapticsAnalysisSink(_ sink: (any MusicHapticsAnalysisSink)?) {
-        pendingMusicHapticsSink?.cancel()
-        pendingMusicHapticsSink = sink
+    /// Must be called before `play(track:)`. The plan is already authoritative
+    /// at this point; this method does not inspect the track or perform I/O.
+    public func setMusicHapticsPlaybackPreparation(_ preparation: MusicHapticsPlaybackPreparation?) {
+        if let previous = pendingMusicHapticsPreparation,
+           previous.id != preparation?.id {
+            previous.analysisSink?.cancel()
+        }
+        pendingMusicHapticsPreparation = preparation
     }
 
     public func configureReplayGain(_ settings: ReplayGainSettings) {
@@ -117,8 +125,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         playGeneration += 1
         let generation = playGeneration
         pauseRequestedDuringPreparing = false
-        activeMusicHapticsSink?.cancel()
-        activeMusicHapticsSink = nil
+        // A track switch is a checkpoint boundary, not an analysis failure.
+        // Let the sidecar drain and persist its real ranges before the old
+        // item is removed; never throw its already analyzed PCM away.
+        finishActiveMusicHaptics(reason: .trackSwitch)
+        finishPreparedMusicHaptics(reason: .preparationReplaced)
+        cancelTapSetupTasks()
         // 复用 AVQueuePlayer：保留单一长期存在的 player，避免每次切歌销毁重建 CoreAudio 链路。
         // 仅清理旧 item/观察者，不销毁 player 本体。
         let stopStart = ContinuousClock.now
@@ -155,17 +167,19 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             preparedItem = nil
             preparedTrack = nil
         } else {
-            stopAll(invalidateGeneration: false)
+            // The preparation was resolved by AppModel before entering this
+            // method. Keep that one pending plan while clearing the old
+            // player; stopAll otherwise treats it as a user stop and cancels
+            // the sidecar before AVPlayerItem is even created.
+            stopAll(invalidateGeneration: false, preservePendingMusicHaptics: true)
         }
         let stopMs = durationMs(stopStart.duration(to: .now))
         AuralisLog.playback.debug("ENGINE_STOP_OLD_PLAYER_MS duration_ms=\(stopMs, privacy: .public) reused=\(reusedPlayer != nil, privacy: .public)")
 
         currentTrack = track
         playbackState = .preparing
-        CrashLog.shared.log("配置 AVAudioSession...")
-        await configureSession()
-
-        // configureSession() 在 iOS 上会挂起；恢复时旧 play() 绝不能再触碰共享播放器。
+        // AudioSession is owned by SystemMediaIntegrationController and is
+        // configured/activated idempotently outside this per-track hot path.
         try Task.checkCancellation()
         guard generation == playGeneration else { return }
 
@@ -179,18 +193,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         // 只记录脱敏后的地址（去掉查询串，查询串含认证参数）。
         CrashLog.shared.log("创建 AVPlayerItem，URL: \(Self.redactedURL(streamURL))")
         let itemStart = ContinuousClock.now
-        let item: AVPlayerItem
-        if let sink = pendingMusicHapticsSink,
-           let tappedItem = await Self.makeTappedItem(url: streamURL, sink: sink) {
-            item = tappedItem
-            activeMusicHapticsSink = sink
-            pendingMusicHapticsSink = nil
-        } else {
-            pendingMusicHapticsSink?.cancel()
-            pendingMusicHapticsSink = nil
-            activeMusicHapticsSink = nil
-            item = AVPlayerItem(url: streamURL)
-        }
+        // AVPlayerItem(url:) is intentionally created synchronously. Resolving
+        // remote AVAsset tracks belongs to the asynchronous tap setup below;
+        // it must not sit between a user tap and player.play().
+        let item = AVPlayerItem(url: streamURL)
+        let preparation = pendingMusicHapticsPreparation
+        pendingMusicHapticsPreparation = nil
+        activeMusicHapticsPreparation = preparation
         let itemMs = durationMs(itemStart.duration(to: .now))
         AuralisLog.playback.debug("ENGINE_CREATE_ITEM_MS duration_ms=\(itemMs, privacy: .public)")
         let player: AVQueuePlayer
@@ -199,6 +208,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             player = existing
             player.automaticallyWaitsToMinimizeStalling = true
             guard player.canInsert(item, after: nil) else {
+                finishActiveMusicHaptics(reason: .playbackFailure)
                 playbackState = .failed(.engineFailure("播放器无法插入当前歌曲"))
                 throw PlaybackError.engineFailure("播放器无法插入当前歌曲")
             }
@@ -229,6 +239,14 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observeCurrentItem(for: player)
         observeDuration(for: item)
 
+        if let preparation,
+           case .analyze = preparation.plan,
+           let sink = preparation.analysisSink {
+            scheduleTapSetup(for: item, sink: sink, isPrepared: false, generation: generation)
+        } else {
+            logSkippedTapSetup(for: preparation?.plan)
+        }
+
         CrashLog.shared.log("调用 player.play()")
         let playStart = ContinuousClock.now
         player.play()
@@ -256,10 +274,23 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// This is true preloading, but remote HTTP/codec behaviour remains
     /// best-effort seamless rather than a sample-perfect guarantee.
     public func prepareNext(track: Track?) {
+        prepareNext(track: track, musicHapticsPreparation: nil)
+    }
+
+    /// Inserts a prepared item together with the already-resolved Haptics
+    /// plan. Track metadata/tap setup can now be warmed while the current item
+    /// plays, without changing the existing AVQueuePlayer boundary state.
+    public func prepareNext(
+        track: Track?,
+        musicHapticsPreparation: MusicHapticsPlaybackPreparation?
+    ) {
         // 边界未决（上一首已结束、正在等待 preloaded item 推进）时不允许替换
         // prepared item，避免 currentItem KVO 的匹配目标漂移导致漏过渡。
         if boundaryCoordinator.state == .waitingForPreparedAdvance { return }
         clearPreparedItemFailureObserver()
+        finishPreparedMusicHaptics(reason: .preparationReplaced)
+        preparedTapSetupTask?.cancel()
+        preparedTapSetupTask = nil
         if let preparedItem, avPlayer?.items().contains(where: { $0 === preparedItem }) == true {
             avPlayer?.remove(preparedItem)
         }
@@ -272,8 +303,16 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         guard player.canInsert(item, after: nil) else { return }
         preparedItem = item
         preparedTrack = track
+        preparedMusicHapticsPreparation = musicHapticsPreparation
         player.insert(item, after: nil)
         observePreparedItemFailure(for: item)
+        if let preparation = musicHapticsPreparation,
+           case .analyze = preparation.plan,
+           let sink = preparation.analysisSink {
+            scheduleTapSetup(for: item, sink: sink, isPrepared: true, generation: playGeneration)
+        } else {
+            logSkippedTapSetup(for: musicHapticsPreparation?.plan)
+        }
     }
 
     // MARK: - Controls
@@ -288,7 +327,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         guard playbackState == .playing || playbackState == .buffering || playbackState == .stalled else { return }
         cancelStallTimeout()
         avPlayer?.pause()
-        activeMusicHapticsSink?.pause()
+        activeMusicHapticsPreparation?.analysisSink?.pause()
         playbackState = .paused
     }
 
@@ -310,10 +349,6 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     }
 
     public func stop() {
-        activeMusicHapticsSink?.cancel()
-        pendingMusicHapticsSink?.cancel()
-        activeMusicHapticsSink = nil
-        pendingMusicHapticsSink = nil
         stopAll()
         playbackState = .idle
         currentTrack = nil
@@ -323,7 +358,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     public func seek(to position: TimeInterval) async {
         let time = CMTime(seconds: max(0, position), preferredTimescale: 600)
         await avPlayer?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-        activeMusicHapticsSink?.seek(to: position)
+        activeMusicHapticsPreparation?.analysisSink?.seek(to: position)
     }
 
     /// AVPlayer 的真实播放位置（秒）。
@@ -366,10 +401,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         resolvedDuration = nil
     }
 
-    private func stopAll(invalidateGeneration: Bool = true) {
+    private func stopAll(
+        invalidateGeneration: Bool = true,
+        preservePendingMusicHaptics: Bool = false
+    ) {
         CrashLog.shared.log("AVFoundationPlaybackEngine.stopAll")
         if invalidateGeneration {
-            // stop 可能发生在 configureSession() 等待期间；让旧任务恢复后直接失效。
+            // stop 可能发生在异步 AVFoundation 工作期间；让旧任务恢复后直接失效。
             playGeneration += 1
         }
         failureReported = false
@@ -398,8 +436,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         timeControlObservation?.invalidate()
         timeControlObservation = nil
         avPlayer?.pause()
-        activeMusicHapticsSink?.cancel()
-        activeMusicHapticsSink = nil
+        cancelTapSetupTasks()
+        finishActiveMusicHaptics(reason: .stopped)
+        finishPreparedMusicHaptics(reason: .preparationReplaced)
+        if !preservePendingMusicHaptics {
+            pendingMusicHapticsPreparation?.analysisSink?.cancel()
+            pendingMusicHapticsPreparation = nil
+        }
         avPlayer = nil
         preparedItem = nil
         preparedTrack = nil
@@ -433,8 +476,11 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// DidPlayToEnd 的确定性处理：不依赖 Task.yield 猜测 AVQueuePlayer 是否推进，
     /// 全部交给边界协调器决定（exactly-once）。
     private func handleItemDidPlayToEnd(_ item: AVPlayerItem) {
-        activeMusicHapticsSink?.finish()
-        activeMusicHapticsSink = nil
+        // Natural end is the only path that promotes a complete timeline.
+        // The coordinator receives the same idempotent completion through the
+        // sink callback; a later queue transition may call finishPartial too.
+        activeMusicHapticsPreparation?.analysisSink?.finish()
+        activeMusicHapticsPreparation = nil
         let hasPrepared = preparedItem != nil
             && avPlayer?.items().contains(where: { $0 === preparedItem }) == true
         let currentIsPrepared = avPlayer?.currentItem === preparedItem
@@ -502,6 +548,9 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                    avPlayer?.items().contains(where: { $0 === preparedItem }) == true {
                     avPlayer?.remove(preparedItem)
                 }
+                preparedTapSetupTask?.cancel()
+                preparedTapSetupTask = nil
+                finishPreparedMusicHaptics(reason: .preparationReplaced)
                 clearPreparedItemFailureObserver()
                 preparedItem = nil
                 preparedTrack = nil
@@ -555,6 +604,16 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private func finishPreparedTransition(item: AVPlayerItem, track: Track) {
         cancelBoundaryFallback()
         boundaryCoordinator.reset()
+        // A prepared item can become current before the old item's end
+        // notification arrives. Complete the old sidecar exactly once before
+        // transferring the prepared sidecar to the active slot.
+        currentTapSetupTask?.cancel()
+        currentTapSetupTask = nil
+        activeMusicHapticsPreparation?.analysisSink?.finish()
+        activeMusicHapticsPreparation = preparedMusicHapticsPreparation
+        preparedMusicHapticsPreparation = nil
+        currentTapSetupTask = preparedTapSetupTask
+        preparedTapSetupTask = nil
         clearPreparedItemFailureObserver()
         clearItemObservers()
         resetDurationObservation()
@@ -679,6 +738,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         guard !failureReported else { return }
         failureReported = true
         cancelStallTimeout()
+        finishActiveMusicHaptics(reason: .playbackFailure)
         CrashLog.shared.log("播放中途失败（流地址失效/解码失败/网络错误），交由上层处理")
         playbackState = .failed(.engineFailure("播放中途失败"))
         playbackFailureHandler?()
@@ -719,27 +779,87 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         return Double(c.seconds) * 1_000 + Double(c.attoseconds) / 1_000_000_000_000_000
     }
 
-    // MARK: - Session
+    // MARK: - Music Haptics sidecar
 
-    private func configureSession() async {
-        #if os(iOS)
-        do {
-            // 主线程 + 异步 API：避免同步 setActive 在主线程触发 UI 卡顿告警（AVAudioSession_iOS.mm:978）
-            try await performAudioSession(category: .playback, active: true)
-        } catch {
-            AuralisLog.playback.error("AVAudioSession 配置失败：\(error.localizedDescription)")
+    /// Resolves the audio track after normal playback has started. This task
+    /// never creates another URL/asset stream: it only loads the track object
+    /// belonging to the already inserted AVPlayerItem, then attaches one
+    /// audio mix to that item.
+    private func scheduleTapSetup(
+        for item: AVPlayerItem,
+        sink: any MusicHapticsAnalysisSink,
+        isPrepared: Bool,
+        generation: Int
+    ) {
+        let setupStart = ContinuousClock.now
+        let task = Task { @MainActor [weak self, item, sink] in
+            let mix = await Self.makeAudioMix(for: item, sink: sink)
+            guard !Task.isCancelled else { return }
+            guard let self, self.playGeneration == generation else { return }
+
+            let itemIsStillRelevant: Bool
+            if isPrepared {
+                itemIsStillRelevant = self.preparedItem === item
+                    || self.avPlayer?.currentItem === item
+            } else {
+                itemIsStillRelevant = self.avPlayer?.currentItem === item
+            }
+            guard itemIsStillRelevant else { return }
+
+            let attached: Bool
+            if let mix {
+                item.audioMix = mix
+                sink.tapAttached()
+                attached = true
+            } else {
+                attached = false
+            }
+            let setupMs = self.durationMs(setupStart.duration(to: .now))
+            AuralisLog.playback.debug(
+                "HAPTICS_TAP_SETUP_MS duration_ms=\(setupMs, privacy: .public) attached=\(attached, privacy: .public) prepared=\(isPrepared, privacy: .public) plan=analyze"
+            )
         }
-        #endif
+        if isPrepared {
+            preparedTapSetupTask = task
+        } else {
+            currentTapSetupTask = task
+        }
     }
 
-    private static func makeTappedItem(url: URL, sink: any MusicHapticsAnalysisSink) async -> AVPlayerItem? {
-        let asset = AVURLAsset(url: url)
-        guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
-              let mix = MusicHapticsAudioTap.makeMix(track: track, sink: sink)
-        else { return nil }
-        let item = AVPlayerItem(asset: asset)
-        item.audioMix = mix
-        return item
+    private static func makeAudioMix(
+        for item: AVPlayerItem,
+        sink: any MusicHapticsAnalysisSink
+    ) async -> AVAudioMix? {
+        guard let track = try? await item.asset.loadTracks(withMediaType: .audio).first else {
+            return nil
+        }
+        return MusicHapticsAudioTap.makeMix(track: track, sink: sink)
+    }
+
+    private func logSkippedTapSetup(for plan: MusicHapticsPlaybackPlan?) {
+        let planKind = plan?.kind.rawValue ?? MusicHapticsPlanKind.disabled.rawValue
+        AuralisLog.playback.debug(
+            "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false skipped=true plan=\(planKind, privacy: .public)"
+        )
+    }
+
+    private func cancelTapSetupTasks() {
+        currentTapSetupTask?.cancel()
+        currentTapSetupTask = nil
+        preparedTapSetupTask?.cancel()
+        preparedTapSetupTask = nil
+    }
+
+    private func finishActiveMusicHaptics(reason: MusicHapticsAnalysisFinishReason) {
+        guard let preparation = activeMusicHapticsPreparation else { return }
+        preparation.analysisSink?.finishPartial(reason: reason)
+        activeMusicHapticsPreparation = nil
+    }
+
+    private func finishPreparedMusicHaptics(reason: MusicHapticsAnalysisFinishReason) {
+        guard let preparation = preparedMusicHapticsPreparation else { return }
+        preparation.analysisSink?.finishPartial(reason: reason)
+        preparedMusicHapticsPreparation = nil
     }
 }
 
@@ -826,7 +946,7 @@ enum MusicHapticsAudioTap {
                 ) else { return }
                 guard let format = context.format else { return }
                 let time = localTimeRange.start.seconds
-                guard time.isFinite else { return }
+                guard time.isFinite, time >= 0 else { return }
                 let framesOut = Int(numberFramesOut.pointee)
                 guard let payload = MusicHapticsPCMBridge.copyPayload(
                     from: bufferListInOut,
@@ -862,108 +982,4 @@ enum MusicHapticsAudioTap {
         mix.inputParameters = [parameters]
         return mix
     }
-
 }
-
-/// AVAudioSession 必须在主线程调用（内部 dispatch_assert_queue 断言，
-/// 后台线程调用会触发 _dispatch_assert_queue_fail + FIGApplicationStateMonitor 分配失败 err=-19431）。
-/// AVFoundationPlaybackEngine 已是 @MainActor，play() → configureSession() 本就在主线程；
-/// 但同步 setActive 在主线程会触发 UI 卡顿告警（AVAudioSession_iOS.mm:978），
-/// 因此走下方本文件的 performAudioSession 异步 API。
-
-#if os(iOS)
-/// 本目标内的 AVAudioSession 配置：在主线程用**异步** activate/deactivate API，
-/// 既满足 AVAudioSession 的主线程要求，又不阻塞 UI（避免 AVAudioSession_iOS.mm:978 告警）。
-private func performAudioSession(
-    category: AVAudioSession.Category? = nil,
-    mode: AVAudioSession.Mode = .default,
-    active: Bool? = nil,
-    options: AVAudioSession.SetActiveOptions = []
-) async throws {
-    let session = AVAudioSession.sharedInstance()
-    // allowAirPlay / allowBluetooth：保证隔空播放、蓝牙耳机等路由下后台音频不被中断。
-    if let category {
-        do {
-            try session.setCategory(category, mode: mode, options: [.allowAirPlay, .allowBluetoothHFP])
-        } catch {
-            // 个别系统/外设组合会拒绝某个选项（OSStatus -50 paramErr）：
-            // 降级为不带选项也要把分类配上，避免配置失败影响播放。
-            try session.setCategory(category, mode: mode)
-        }
-    }
-    if let active {
-        if active {
-            // 激活：异步 API 自 iOS 15 可用——激活在每次起播都会调用，同步 setActive
-            // 会在主线程阻塞到音频服务响应（mediaserverd 异常时可达数秒），
-            // 是「System gesture gate timed out」卡顿的主要来源，必须走异步。
-            if #available(iOS 27, *) {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    let completion: @Sendable (Bool, Error?) -> Void = { success, error in
-                        if success {
-                            continuation.resume()
-                        } else {
-                            continuation.resume(throwing: error
-                                ?? PlaybackSessionError(kind: .activation))
-                        }
-                    }
-                    session.activate(options: [], completionHandler: completion)
-                }
-            } else {
-                // iOS 15–26：setActive 是同步调用，官方明确警告主线程调用会阻塞 UI
-                // （AVAudioSession_iOS.mm:978）；派发到后台队列执行并等待，主线程不被卡。
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    let optionsCopy = options
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do {
-                            try session.setActive(true, options: optionsCopy)
-                            continuation.resume()
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
-            }
-        } else {
-            // 挂起：异步 deactivate 仅 iOS 27+ 可用；iOS 15–26 退回同步（用户主动暂停/停止时触发，频率低）。
-            if #available(iOS 27, *) {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    let completion: @Sendable (Bool, Error?) -> Void = { success, error in
-                        if success {
-                            continuation.resume()
-                        } else {
-                            continuation.resume(throwing: error
-                                ?? PlaybackSessionError(kind: .deactivation))
-                        }
-                    }
-                    let deactivationOptions = AVAudioSessionDeactivationOptions(rawValue: options.rawValue)
-                    session.deactivate(options: deactivationOptions, completionHandler: completion)
-                }
-            } else {
-                // iOS 15–26：挂起同样挪到后台队列，避免主线程阻塞。
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    let optionsCopy = options
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do {
-                            try session.setActive(false, options: optionsCopy)
-                            continuation.resume()
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct PlaybackSessionError: Error, CustomStringConvertible {
-    enum Kind { case activation, deactivation }
-    let kind: Kind
-    var description: String {
-        switch kind {
-        case .activation: return "AVAudioSession 激活失败"
-        case .deactivation: return "AVAudioSession 挂起失败"
-        }
-    }
-}
-#endif

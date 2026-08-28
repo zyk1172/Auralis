@@ -20,6 +20,135 @@ import Testing
     #expect(TrackHapticsPreference.inherit.effective(globalEnabled: true))
 }
 
+@Test func playbackPlanResolverHasOneAuthoritativeOrder() {
+    let identity = MusicHapticsIdentity(
+        title: "Plan",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+    let request = MusicHapticsAnalysisRequest(identity: identity, favorite: false, duration: 180)
+    let fullTimeline = MusicHapticsTimeline(
+        identity: identity,
+        duration: 180,
+        analyzedDuration: 180,
+        analysisCoverage: 1,
+        events: []
+    )
+
+    #expect(MusicHapticsPlaybackPlanResolver.resolve(
+        featureEnabled: false,
+        customHapticsSupported: true,
+        systemTimelineAvailable: false,
+        fullTimeline: fullTimeline,
+        partial: nil,
+        request: request
+    ).plan.kind == .disabled)
+    #expect(MusicHapticsPlaybackPlanResolver.resolve(
+        featureEnabled: true,
+        customHapticsSupported: true,
+        systemTimelineAvailable: true,
+        fullTimeline: fullTimeline,
+        partial: nil,
+        request: request
+    ).plan.kind == .system)
+    #expect(MusicHapticsPlaybackPlanResolver.resolve(
+        featureEnabled: true,
+        customHapticsSupported: true,
+        systemTimelineAvailable: false,
+        fullTimeline: fullTimeline,
+        partial: nil,
+        request: request
+    ).plan.kind == .custom)
+    #expect(MusicHapticsPlaybackPlanResolver.resolve(
+        featureEnabled: true,
+        customHapticsSupported: true,
+        systemTimelineAvailable: false,
+        fullTimeline: nil,
+        partial: nil,
+        request: request
+    ).plan.kind == .analyze)
+}
+
+@Test func partialCheckpointRoundTripPreservesHoles() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let identity = MusicHapticsIdentity(
+        serverID: "server",
+        remoteID: "track",
+        title: "Checkpoint",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+    let checkpoint = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 180,
+        analyzedRanges: [
+            MusicHapticsTimeRange(lowerBound: 0, upperBound: 42),
+            MusicHapticsTimeRange(lowerBound: 90, upperBound: 130),
+        ],
+        events: [MusicHapticsEvent(time: 4, intensity: 0.5, sharpness: 0.2, kind: .transient)]
+    )
+    let store = MusicHapticsStore(root: root)
+    try await store.storePartial(checkpoint)
+
+    let restored = try await store.partial(for: identity)
+    #expect(restored?.analyzedRanges == checkpoint.analyzedRanges)
+    #expect(restored?.events == checkpoint.events)
+    #expect(abs((restored?.coverage ?? 0) - (82.0 / 180.0)) < 0.0001)
+    #expect(try await store.timeline(for: identity) == nil)
+}
+
+@Test func promotingOneTrackDoesNotDeleteAnotherPartial() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let first = MusicHapticsIdentity(serverID: "server", remoteID: "first", title: "First", artist: "Artist", durationMilliseconds: 10_000)
+    let second = MusicHapticsIdentity(serverID: "server", remoteID: "second", title: "Second", artist: "Artist", durationMilliseconds: 10_000)
+    let store = MusicHapticsStore(root: root)
+    try await store.storePartial(MusicHapticsPartialCheckpoint(
+        identity: second,
+        duration: 10,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 2)],
+        events: []
+    ))
+    try await store.store(MusicHapticsTimeline(
+        identity: first,
+        duration: 10,
+        analyzedDuration: 10,
+        analysisCoverage: 1,
+        events: []
+    ), favorite: false)
+
+    #expect(try await store.partial(for: second)?.identity == second)
+}
+
+@Test func partialStoreMergesOutOfOrderRanges() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let identity = MusicHapticsIdentity(serverID: "server", remoteID: "same", title: "Same", artist: "Artist", durationMilliseconds: 20_000)
+    let store = MusicHapticsStore(root: root)
+
+    try await store.storePartial(MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 20,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 4)],
+        events: [MusicHapticsEvent(time: 1, intensity: 0.4, sharpness: 0.2, kind: .transient)]
+    ))
+    try await store.storePartial(MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 20,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 12, upperBound: 16)],
+        events: [MusicHapticsEvent(time: 13, intensity: 0.6, sharpness: 0.3, kind: .transient)]
+    ))
+
+    let merged = try await store.partial(for: identity)
+    #expect(merged?.analyzedRanges == [
+        MusicHapticsTimeRange(lowerBound: 0, upperBound: 4),
+        MusicHapticsTimeRange(lowerBound: 12, upperBound: 16),
+    ])
+    #expect(merged?.events.count == 2)
+    #expect(abs((merged?.coverage ?? 0) - 0.4) < 0.0001)
+}
+
 @Test func favoriteMigrationPreservesTimelineAndLeavesTransientBudget() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -37,6 +166,132 @@ import Testing
 private actor TimelineCapture {
     var timeline: MusicHapticsTimeline?
     func record(_ timeline: MusicHapticsTimeline) { self.timeline = timeline }
+}
+
+private actor AnalysisCapture {
+    var result: MusicHapticsAnalysisResult?
+
+    func record(_ result: MusicHapticsAnalysisResult) {
+        self.result = result
+    }
+}
+
+@Test func streamingAnalysisResumesAndMergesPartialRanges() async {
+    let identity = MusicHapticsIdentity(title: "Resume", artist: "Artist", durationMilliseconds: 10_000)
+    let partial = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 10,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 5)],
+        events: []
+    )
+    let capture = AnalysisCapture()
+    let analyzer = StreamingMusicHapticsAnalyzer(
+        identity: identity,
+        duration: 10,
+        partial: partial,
+        onResult: { result in Task { await capture.record(result) } }
+    )
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 10,
+        channels: 1,
+        sampleType: .int16,
+        interleaved: true,
+        bytesPerFrame: 2,
+        bytesPerSample: 2
+    )!
+    let samples = Array(repeating: Int16(1_200), count: 10)
+    let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+
+    analyzer.begin(format: format)
+    for second in 5..<10 {
+        analyzer.consumePCM(bytes, time: Double(second), format: format, frameCount: 10)
+    }
+    analyzer.finishPartial(reason: .trackSwitch)
+
+    for _ in 0..<80 where await capture.result == nil {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    let result = await capture.result
+    #expect(result?.finishReason == .trackSwitch)
+    #expect(result?.checkpoint.analyzedRanges == [MusicHapticsTimeRange(lowerBound: 0, upperBound: 10)])
+    #expect(result?.checkpoint.coverage == 1)
+    #expect(result?.timeline?.isComplete == true)
+}
+
+@Test func streamingAnalysisPreservesNonContiguousRanges() async {
+    let identity = MusicHapticsIdentity(title: "Holes", artist: "Artist", durationMilliseconds: 10_000)
+    let capture = AnalysisCapture()
+    let analyzer = StreamingMusicHapticsAnalyzer(
+        identity: identity,
+        duration: 10,
+        onResult: { result in Task { await capture.record(result) } }
+    )
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 10,
+        channels: 1,
+        sampleType: .int16,
+        interleaved: true,
+        bytesPerFrame: 2,
+        bytesPerSample: 2
+    )!
+    let samples = Array(repeating: Int16(1_200), count: 10)
+    let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    analyzer.consumePCM(bytes, time: 0, format: format, frameCount: 10)
+    analyzer.consumePCM(bytes, time: 8, format: format, frameCount: 10)
+    analyzer.finishPartial(reason: .trackSwitch)
+
+    for _ in 0..<80 where await capture.result == nil {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await capture.result?.checkpoint.analyzedRanges == [
+        MusicHapticsTimeRange(lowerBound: 0, upperBound: 1),
+        MusicHapticsTimeRange(lowerBound: 8, upperBound: 9),
+    ])
+}
+
+@Test func naturalEndKeepsIncompleteCheckpoint() async {
+    let identity = MusicHapticsIdentity(title: "Partial end", artist: "Artist", durationMilliseconds: 10_000)
+    let capture = AnalysisCapture()
+    let analyzer = StreamingMusicHapticsAnalyzer(
+        identity: identity,
+        duration: 10,
+        onResult: { result in Task { await capture.record(result) } }
+    )
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 10,
+        channels: 1,
+        sampleType: .int16,
+        interleaved: true,
+        bytesPerFrame: 2,
+        bytesPerSample: 2
+    )!
+    let samples = Array(repeating: Int16(1_200), count: 10)
+    let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    analyzer.begin(format: format)
+    analyzer.consumePCM(bytes, time: 0, format: format, frameCount: 10)
+    analyzer.consumePCM(bytes, time: 1, format: format, frameCount: 10)
+    analyzer.finish()
+
+    for _ in 0..<80 where await capture.result == nil {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    let result = await capture.result
+    #expect(result?.finishReason == .naturalEnd)
+    #expect(result?.checkpoint.coverage ?? 1 < 0.95)
+    #expect(result?.timeline == nil)
+}
+
+@Test func sparseTimelineIsVisibleAsDiagnosticOnly() {
+    let identity = MusicHapticsIdentity(title: "Sparse", artist: "Artist", durationMilliseconds: 180_000)
+    let sparse = MusicHapticsTimeline(
+        identity: identity,
+        duration: 180,
+        analyzedDuration: 180,
+        analysisCoverage: 1,
+        events: [MusicHapticsEvent(time: 1, intensity: 0.4, sharpness: 0.2, kind: .transient)]
+    )
+    #expect(sparse.timelineSuspiciouslySparse)
+    #expect(sparse.eventDensity > 0)
 }
 
 @Test func streamingPCMCompletesAfterCoverageThreshold() async {
