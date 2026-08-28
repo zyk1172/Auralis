@@ -57,7 +57,7 @@ let package = Package(
         .testTarget(name: "DomainTests", dependencies: ["Domain", "TestSupport"]),
         .testTarget(name: "OpenSubsonicKitTests", dependencies: ["OpenSubsonicKit", "Domain"]),
         .testTarget(name: "PlaybackQueueTests", dependencies: ["PlaybackQueue", "Domain", "TestSupport"]),
-        .testTarget(name: "PlaybackEngineTests", dependencies: ["PlaybackEngine", "Domain", "TestSupport"]),
+        .testTarget(name: "PlaybackEngineTests", dependencies: ["PlaybackEngine", "Domain", "MusicHaptics", "TestSupport"]),
         .testTarget(name: "MetadataKitTests", dependencies: ["MetadataKit", "Domain", "TestSupport"]),
         .testTarget(name: "LyricsKitTests", dependencies: ["LyricsKit", "Domain"]),
         .testTarget(name: "AIKitTests", dependencies: ["AIKit"]),
