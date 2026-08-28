@@ -45,10 +45,19 @@ private actor TimelineCapture {
     let analyzer = StreamingMusicHapticsAnalyzer(identity: identity, duration: 10) { timeline in
         Task { await capture.record(timeline) }
     }
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 10,
+        channels: 1,
+        sampleType: .int16,
+        interleaved: true,
+        bytesPerFrame: 2,
+        bytesPerSample: 2
+    )!
     let samples = Array(repeating: Int16(1_200), count: 10)
     let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    analyzer.begin(format: format)
     for second in 0..<10 {
-        analyzer.consumePCM(bytes, time: Double(second), sampleRate: 10, channels: 1)
+        analyzer.consumePCM(bytes, time: Double(second), format: format, frameCount: 10)
     }
     analyzer.finish()
     for _ in 0..<40 where await capture.timeline == nil {
@@ -57,4 +66,71 @@ private actor TimelineCapture {
     let timeline = await capture.timeline
     #expect(timeline?.isComplete == true)
     #expect(timeline?.analysisCoverage ?? 0 >= 0.95)
+}
+
+@Test func streamingPCMUsesDeclaredFloat32Format() async {
+    let identity = MusicHapticsIdentity(title: "Float stream", artist: "Artist", durationMilliseconds: 1_000)
+    let capture = TimelineCapture()
+    let analyzer = StreamingMusicHapticsAnalyzer(identity: identity, duration: 1) { timeline in
+        Task { await capture.record(timeline) }
+    }
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 10,
+        channels: 1,
+        sampleType: .float32,
+        interleaved: true,
+        bytesPerFrame: 4,
+        bytesPerSample: 4
+    )!
+    let samples = Array(repeating: Float32(0.05), count: 10)
+    let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+
+    analyzer.begin(format: format)
+    analyzer.consumePCM(bytes, time: 0, format: format, frameCount: samples.count)
+    analyzer.finish()
+    for _ in 0..<40 where await capture.timeline == nil {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    let event = await capture.timeline?.events.first
+    #expect(await capture.timeline?.isComplete == true)
+    #expect(event != nil)
+    #expect(event?.intensity ?? 1 < 0.65)
+}
+
+@Test func streamingPCMUsesDeclaredBigEndianNonInterleavedLayout() async {
+    let identity = MusicHapticsIdentity(title: "Planar stream", artist: "Artist", durationMilliseconds: 1_000)
+    let capture = TimelineCapture()
+    let analyzer = StreamingMusicHapticsAnalyzer(identity: identity, duration: 1) { timeline in
+        Task { await capture.record(timeline) }
+    }
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 10,
+        channels: 2,
+        sampleType: .int16,
+        interleaved: false,
+        bytesPerFrame: 4,
+        bytesPerSample: 2,
+        isBigEndian: true
+    )!
+    let samples = Array(repeating: Int16(1_200), count: 10)
+    let channelBytes = samples.reduce(into: Data()) { data, sample in
+        let bits = UInt16(bitPattern: sample)
+        data.append(UInt8(bits >> 8))
+        data.append(UInt8(bits & 0xFF))
+    }
+    var bytes = channelBytes
+    bytes.append(channelBytes)
+
+    analyzer.begin(format: format)
+    analyzer.consumePCM(bytes, time: 0, format: format, frameCount: samples.count)
+    analyzer.finish()
+    for _ in 0..<40 where await capture.timeline == nil {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+
+    let event = await capture.timeline?.events.first
+    #expect(await capture.timeline?.isComplete == true)
+    #expect(event != nil)
+    #expect(event?.intensity ?? 1 < 0.65)
 }

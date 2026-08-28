@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioToolbox
 import Domain
 import Foundation
 import MusicHaptics
@@ -742,14 +743,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     }
 }
 
-/// Keeps the C callback details out of the player state machine.  The callback
-/// first asks AVFoundation for source audio, then performs one bounded `Data`
-/// copy into the sink's queue; all analysis happens off this thread.
 private enum MusicHapticsAudioTap {
     private final class Context: @unchecked Sendable {
         let sink: any MusicHapticsAnalysisSink
-        var sampleRate: Double = 0
-        var channels = 0
+        var format: MusicHapticsPCMFormat?
         init(sink: any MusicHapticsAnalysisSink) { self.sink = sink }
     }
 
@@ -763,45 +760,38 @@ private enum MusicHapticsAudioTap {
                 let clientInfo = MTAudioProcessingTapGetStorage(tap)
                 Unmanaged<Context>.fromOpaque(clientInfo).release()
             },
-            prepare: { tap, maxFrames, processingFormat in
+            prepare: { tap, _, processingFormat in
                 let clientInfo = MTAudioProcessingTapGetStorage(tap)
                 let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
-                context.sampleRate = processingFormat.pointee.mSampleRate
-                context.channels = Int(processingFormat.pointee.mChannelsPerFrame)
-                context.sink.begin(sampleRate: context.sampleRate, channels: context.channels)
+                guard let format = MusicHapticsPCMBridge.makeFormat(from: processingFormat.pointee) else {
+                    context.format = nil
+                    context.sink.cancel()
+                    return
+                }
+                context.format = format
+                context.sink.begin(format: format)
             },
             unprepare: nil,
-            process: { tap, numberFrames, flags, timeRange, numberFramesOut, flagsOut in
-                var buffers = AudioBufferList(
-                    mNumberBuffers: 1,
-                    mBuffers: AudioBuffer(mNumberChannels: 0, mDataByteSize: 0, mData: nil)
-                )
-                var localFlags = MTAudioProcessingTapFlags()
+            process: { tap, numberFrames, _, bufferListInOut, numberFramesOut, flagsOut in
                 var localTimeRange = CMTimeRange.zero
-                var framesOut: CMItemCount = 0
+                numberFramesOut.pointee = 0
+                flagsOut.pointee = 0
                 let status = MTAudioProcessingTapGetSourceAudio(
-                    tap, numberFrames, &buffers, &localFlags, &localTimeRange, &framesOut
+                    tap, numberFrames, bufferListInOut, flagsOut, &localTimeRange, numberFramesOut
                 )
-                flagsOut.pointee = localFlags
-                numberFramesOut.pointee = framesOut
                 guard status == noErr else { return }
                 let clientInfo = MTAudioProcessingTapGetStorage(tap)
                 let context = Unmanaged<Context>.fromOpaque(clientInfo).takeUnretainedValue()
+                guard let format = context.format else { return }
                 let time = localTimeRange.start.seconds
                 guard time.isFinite else { return }
-                let count = Int(buffers.mNumberBuffers)
-                for index in 0..<count {
-                    let buffer = withUnsafePointer(to: &buffers.mBuffers) { pointer in
-                        pointer.withMemoryRebound(to: AudioBuffer.self, capacity: count) { $0[index] }
-                    }
-                    guard let data = buffer.mData, buffer.mDataByteSize > 0 else { continue }
-                    context.sink.consumePCM(
-                        Data(bytes: data, count: Int(buffer.mDataByteSize)),
-                        time: time,
-                        sampleRate: context.sampleRate,
-                        channels: max(1, Int(buffer.mNumberChannels))
-                    )
-                }
+                let framesOut = Int(numberFramesOut.pointee)
+                guard let payload = MusicHapticsPCMBridge.copyPayload(
+                    from: bufferListInOut,
+                    frameCount: framesOut,
+                    format: format
+                ) else { return }
+                context.sink.consumePCM(payload, time: time, format: format, frameCount: framesOut)
             }
         )
         var tap: MTAudioProcessingTap?
@@ -814,6 +804,7 @@ private enum MusicHapticsAudioTap {
         mix.inputParameters = [parameters]
         return mix
     }
+
 }
 
 /// AVAudioSession 必须在主线程调用（内部 dispatch_assert_queue 断言，

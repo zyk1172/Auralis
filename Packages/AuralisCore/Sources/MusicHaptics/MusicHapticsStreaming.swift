@@ -4,8 +4,8 @@ import Foundation
 /// real-time safe: `consumePCM` is called from AVFoundation's audio processing
 /// thread and may only make a bounded copy/enqueue operation.
 public protocol MusicHapticsAnalysisSink: AnyObject, Sendable {
-    func begin(sampleRate: Double, channels: Int)
-    func consumePCM(_ bytes: Data, time: TimeInterval, sampleRate: Double, channels: Int)
+    func begin(format: MusicHapticsPCMFormat)
+    func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int)
     func pause()
     func seek(to position: TimeInterval)
     func finish()
@@ -17,7 +17,7 @@ public protocol MusicHapticsAnalysisSink: AnyObject, Sendable {
 /// fetched by AVPlayer and analyzes them on a utility task.
 public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unchecked Sendable {
     private let lock = NSLock()
-    private var pending: [(Data, TimeInterval, Double, Int)] = []
+    private var pending: [(Data, TimeInterval, MusicHapticsPCMFormat, Int)] = []
     private var draining = false
     private var cancelled = false
     private var finished = false
@@ -32,18 +32,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         var lastRMS: Float = 0
         var lastEventTime: TimeInterval = -.infinity
 
-        func append(bytes: Data, time: TimeInterval, sampleRate: Double, channels: Int) {
-            guard sampleRate > 0, bytes.count >= 2 else { return }
-            let values = bytes.withUnsafeBytes { raw -> UnsafeBufferPointer<Int16> in
-                UnsafeBufferPointer(start: raw.bindMemory(to: Int16.self).baseAddress, count: bytes.count / MemoryLayout<Int16>.size)
-            }
-            guard !values.isEmpty else { return }
-            var sum = 0.0
-            for value in values {
-                let normalized = Double(value) / Double(Int16.max)
-                sum += normalized * normalized
-            }
-            let rms = Float(sqrt(sum / Double(values.count)))
+        func append(bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int) {
+            guard format.isValid, frameCount > 0,
+                  let rms = MusicHapticsPCMDecoder.rms(bytes: bytes, format: format, frameCount: frameCount)
+            else { return }
             let onset = max(0, rms - lastRMS)
             if time - lastEventTime >= 0.09, rms > 0.035, onset > 0.018 {
                 events.append(MusicHapticsEvent(
@@ -55,7 +47,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 lastEventTime = time
             }
             lastRMS = lastRMS * 0.7 + rms * 0.3
-            let frameDuration = Double(values.count) / (sampleRate * Double(max(1, channels)))
+            let frameDuration = Double(frameCount) / format.sampleRate
             insertRange(time..<max(time, time + frameDuration))
         }
 
@@ -94,15 +86,15 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         self.completion = completion
     }
 
-    public func begin(sampleRate: Double, channels: Int) {}
+    public func begin(format: MusicHapticsPCMFormat) {}
 
-    public func consumePCM(_ bytes: Data, time: TimeInterval, sampleRate: Double, channels: Int) {
-        guard !bytes.isEmpty, time.isFinite else { return }
+    public func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int) {
+        guard !bytes.isEmpty, time.isFinite, format.isValid, frameCount > 0 else { return }
         lock.lock()
         defer { lock.unlock() }
         guard !cancelled, !finished else { return }
         if pending.count == maximumPendingFrames { pending.removeFirst() }
-        pending.append((bytes, time, sampleRate, max(1, channels)))
+        pending.append((bytes, time, format, frameCount))
         guard !draining else { return }
         draining = true
         Task.detached(priority: .utility) { [weak self] in await self?.drain() }
@@ -125,13 +117,13 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
 
     private func drain() async {
         while true {
-            let (frame, shouldStop): ((Data, TimeInterval, Double, Int)?, Bool) = lock.withLock {
+            let (frame, shouldStop): ((Data, TimeInterval, MusicHapticsPCMFormat, Int)?, Bool) = lock.withLock {
                 let frame = pending.isEmpty ? nil : pending.removeFirst()
                 if frame == nil { draining = false }
                 return (frame, cancelled)
             }
             guard !shouldStop, let frame else { return }
-            await accumulator.append(bytes: frame.0, time: frame.1, sampleRate: frame.2, channels: frame.3)
+            await accumulator.append(bytes: frame.0, time: frame.1, format: frame.2, frameCount: frame.3)
         }
     }
 
@@ -142,5 +134,75 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         let timeline = await accumulator.timeline(identity: identity, duration: duration)
         guard timeline.isComplete else { return }
         completion(timeline)
+    }
+}
+
+private enum MusicHapticsPCMDecoder {
+    static func rms(bytes: Data, format: MusicHapticsPCMFormat, frameCount: Int) -> Float? {
+        let channels = format.channels
+        let sampleCount = frameCount.multipliedReportingOverflow(by: channels)
+        guard !sampleCount.overflow, sampleCount.partialValue > 0 else { return nil }
+        let expectedBytes: Int
+        if format.interleaved {
+            let result = frameCount.multipliedReportingOverflow(by: format.bytesPerFrame)
+            guard !result.overflow else { return nil }
+            expectedBytes = result.partialValue
+        } else {
+            let result = sampleCount.partialValue.multipliedReportingOverflow(by: format.bytesPerSample)
+            guard !result.overflow else { return nil }
+            expectedBytes = result.partialValue
+        }
+        guard bytes.count >= expectedBytes else { return nil }
+
+        return bytes.withUnsafeBytes { raw in
+            var sum = 0.0
+            var validSamples = 0
+            for sampleIndex in 0..<sampleCount.partialValue {
+                let frame = sampleIndex / channels
+                let channel = sampleIndex % channels
+                let offset: Int
+                if format.interleaved {
+                    offset = frame * format.bytesPerFrame + channel * format.bytesPerSample
+                } else {
+                    offset = channel * frameCount * format.bytesPerSample + frame * format.bytesPerSample
+                }
+                guard let value = decode(raw, offset: offset, format: format) else { continue }
+                let normalized = Double(value)
+                sum += normalized * normalized
+                validSamples += 1
+            }
+            guard validSamples > 0 else { return nil }
+            return Float(sqrt(sum / Double(validSamples)))
+        }
+    }
+
+    private static func decode(_ raw: UnsafeRawBufferPointer, offset: Int, format: MusicHapticsPCMFormat) -> Float? {
+        guard offset >= 0, offset + format.bytesPerSample <= raw.count else { return nil }
+        switch format.sampleType {
+        case .float32:
+            let bits: UInt32
+            if format.isBigEndian {
+                bits = UInt32(raw[offset]) << 24
+                    | UInt32(raw[offset + 1]) << 16
+                    | UInt32(raw[offset + 2]) << 8
+                    | UInt32(raw[offset + 3])
+            } else {
+                bits = UInt32(raw[offset])
+                    | UInt32(raw[offset + 1]) << 8
+                    | UInt32(raw[offset + 2]) << 16
+                    | UInt32(raw[offset + 3]) << 24
+            }
+            let value = Float32(bitPattern: bits)
+            guard value.isFinite else { return nil }
+            return min(max(value, -1), 1)
+        case .int16:
+            let bits: UInt16
+            if format.isBigEndian {
+                bits = UInt16(raw[offset]) << 8 | UInt16(raw[offset + 1])
+            } else {
+                bits = UInt16(raw[offset]) | UInt16(raw[offset + 1]) << 8
+            }
+            return Float32(Int16(bitPattern: bits)) / 32_768
+        }
     }
 }
