@@ -30,6 +30,7 @@ public struct MusicHapticsAnalyzer: Sendable {
         guard reader.startReading() else { throw reader.error ?? MusicHapticsAnalyzerError.cannotDecode }
 
         var processor = MusicHapticsDSPProcessor()
+        var mixer = MusicHapticsPerceptualMixer()
         var events: [MusicHapticsEvent] = []
         var observedDuration: TimeInterval = 0
         let format = MusicHapticsPCMFormat(
@@ -73,13 +74,16 @@ public struct MusicHapticsAnalyzer: Sendable {
                     ? sampleDuration
                     : Double(frameCount) / sampleRate)
             )
-            events.append(contentsOf: processor.process(
+            let candidates = processor.processCandidates(
                 monoSamples: mono,
                 startTime: time,
                 sampleRate: sampleRate
-            ))
+            )
+            events.append(contentsOf: mixer.mix(frames: candidates).events)
         }
-        events.append(contentsOf: processor.finish())
+        let finalCandidates = processor.finishCandidates()
+        events.append(contentsOf: mixer.mix(frames: finalCandidates).events)
+        events.append(contentsOf: mixer.finish().events)
         if reader.status == .failed { throw reader.error ?? MusicHapticsAnalyzerError.cannotDecode }
         let diagnostics = processor.diagnostics
         let merged = MusicHapticsEventDeduplicator.merge(events)

@@ -911,6 +911,11 @@ public final class AuralisAppModel: ObservableObject {
                     self?.handleStreamFailure()
                 }
             }
+            await engine.setPlaybackTimingHandler { [weak self] update in
+                Task { @MainActor [weak self] in
+                    self?.handlePlaybackTimingUpdate(update)
+                }
+            }
             await engine.setPreparedTrackStartedHandler { [weak self] track in
                 Task { @MainActor [weak self] in
                     self?.handlePreparedTrackStarted(track)
@@ -930,6 +935,47 @@ public final class AuralisAppModel: ObservableObject {
     /// 确保音频会话保持激活（进入后台/返回前台/输出设备切换时调用，防后台停止）。
     public func keepAudioSessionActive() async {
         await mediaIntegration.audioSession.activate()
+    }
+
+    /// AVPlayer timeControlStatus is the authoritative buffering/playback
+    /// signal for Music Haptics. UI progress remains a fallback display tick;
+    /// it is not used to decide whether future haptics may be committed.
+    private func handlePlaybackTimingUpdate(_ update: PlaybackTimingUpdate) {
+        if let position = update.position {
+            playbackPosition = position
+        }
+        switch update.state {
+        case .buffering, .stalled:
+            playbackState = update.state == .buffering ? .buffering : .stalled
+            musicHaptics.buffering()
+        case .playing:
+            playbackState = .playing
+            musicHaptics.audioResumed(position: playbackPosition, rate: Double(update.rate))
+        case .paused:
+            playbackState = .paused
+            musicHaptics.pause()
+        }
+        syncProgressTimer()
+    }
+
+    /// Scene lifecycle boundary. The coordinator preserves analysis state in
+    /// the background and rebases custom haptics only after an authoritative
+    /// AVPlayer position is available again.
+    public func applicationDidEnterBackground() {
+        musicHaptics.applicationDidEnterBackground()
+    }
+
+    public func applicationDidBecomeActive() async {
+        await keepAudioSessionActive()
+        let state = await engine.state()
+        let position = await engine.currentPosition() ?? playbackPosition
+        playbackPosition = max(0, position)
+        musicHaptics.applicationDidBecomeActive(
+            position: playbackPosition,
+            isPlaying: state == .playing,
+            rate: Double(playbackRate)
+        )
+        syncProgressTimer()
     }
 
     // MARK: - 灵动岛（Live Activity）
@@ -2109,7 +2155,11 @@ public final class AuralisAppModel: ObservableObject {
                self.playbackState == .playing || self.playbackState == .buffering {
                 let authoritativePosition = await self.engine.currentPosition() ?? self.playbackPosition
                 self.playbackPosition = max(0, authoritativePosition)
-                self.musicHaptics.activate(hapticsPreparation, position: self.playbackPosition)
+                self.musicHaptics.activate(
+                    hapticsPreparation,
+                    position: self.playbackPosition,
+                    rate: Double(self.playbackRate)
+                )
                 self.schedulePreparedNext()
             }
         }
@@ -3387,9 +3437,16 @@ public final class AuralisAppModel: ObservableObject {
                     // normal resume keeps using the already active plan.
                     if let restoredHapticsPreparation {
                         self.playbackPosition = await self.engine.currentPosition() ?? self.playbackPosition
-                        self.musicHaptics.activate(restoredHapticsPreparation, position: self.playbackPosition)
+                        self.musicHaptics.activate(
+                            restoredHapticsPreparation,
+                            position: self.playbackPosition,
+                            rate: Double(self.playbackRate)
+                        )
                     } else {
-                        self.musicHaptics.resume(position: self.playbackPosition)
+                        self.musicHaptics.resume(
+                            position: self.playbackPosition,
+                            rate: Double(self.playbackRate)
+                        )
                     }
                 } else {
                     self.musicHaptics.pause()
@@ -3456,7 +3513,11 @@ public final class AuralisAppModel: ObservableObject {
             // 用 GlobalID 比较，切换服务器后同 TrackID 不会误通过。
             guard queueIdentity(self.currentTrack) == identity else { return }
             await engine.seek(to: position)
-            musicHaptics.seek(position: position, playing: playbackState == .playing)
+            musicHaptics.seek(
+                position: position,
+                playing: playbackState == .playing,
+                rate: Double(playbackRate)
+            )
             mediaIntegration.seekCompleted(position: position, isPlaying: playbackState == .playing, rate: playbackState == .playing ? playbackRate : 0)
         }
     }
@@ -4023,7 +4084,8 @@ public final class AuralisAppModel: ObservableObject {
             }
             self.musicHaptics.updatePlaybackPosition(
                 self.playbackPosition,
-                isPlaying: self.playbackState == .playing
+                isPlaying: self.playbackState == .playing,
+                rate: Double(self.playbackRate)
             )
             // 注意：不在这里宣布“歌曲播完”。自然结束的唯一权威事件是
             // AVPlayerItemDidPlayToEndTime + PlayerItemBoundaryCoordinator。
@@ -4184,7 +4246,7 @@ public final class AuralisAppModel: ObservableObject {
         playbackState = .playing
         if let preparedHaptics {
             mediaIntegration.setInternationalStandardRecordingCode(preparedHaptics.identity.isrc)
-            musicHaptics.activate(preparedHaptics, position: 0)
+            musicHaptics.activate(preparedHaptics, position: 0, rate: Double(playbackRate))
         } else {
             // A prepared AV item without a corresponding plan is an invalid
             // integration state. Stop the previous sidecar rather than
@@ -4336,7 +4398,11 @@ public final class AuralisAppModel: ObservableObject {
                 if self.playbackState == .playing || self.playbackState == .buffering {
                     let authoritativePosition = await self.engine.currentPosition() ?? self.playbackPosition
                     self.playbackPosition = max(0, authoritativePosition)
-                    self.musicHaptics.activate(hapticsPreparation, position: self.playbackPosition)
+                    self.musicHaptics.activate(
+                        hapticsPreparation,
+                        position: self.playbackPosition,
+                        rate: Double(self.playbackRate)
+                    )
                 }
                 self.syncProgressTimer()
                 self.syncNowPlayingTrack()

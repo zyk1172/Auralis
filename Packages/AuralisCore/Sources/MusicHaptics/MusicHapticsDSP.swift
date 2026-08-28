@@ -5,17 +5,23 @@ public struct MusicHapticsAnalysisPerformancePolicy: Hashable, Sendable {
     public let fftFrameStride: Int
     public let targetLead: TimeInterval
     public let schedulingHorizon: TimeInterval
+    public let analysisLeadTarget: TimeInterval
+    public let hapticCommitHorizon: TimeInterval
     public let isLowPowerMode: Bool
 
     public init(
         fftFrameStride: Int = 1,
         targetLead: TimeInterval = 8,
         schedulingHorizon: TimeInterval = 18,
+        analysisLeadTarget: TimeInterval? = nil,
+        hapticCommitHorizon: TimeInterval = 3,
         isLowPowerMode: Bool = false
     ) {
         self.fftFrameStride = max(1, fftFrameStride)
         self.targetLead = max(0.5, targetLead)
         self.schedulingHorizon = max(self.targetLead, schedulingHorizon)
+        self.analysisLeadTarget = min(max(analysisLeadTarget ?? targetLead, 8), 20)
+        self.hapticCommitHorizon = min(max(hapticCommitHorizon, 2.5), 4)
         self.isLowPowerMode = isLowPowerMode
     }
 
@@ -25,10 +31,10 @@ public struct MusicHapticsAnalysisPerformancePolicy: Hashable, Sendable {
         let thermal = process.thermalState
         let lowPower = process.isLowPowerModeEnabled
         if thermal == .critical {
-            return Self(fftFrameStride: 4, targetLead: 3, schedulingHorizon: 8, isLowPowerMode: lowPower)
+            return Self(fftFrameStride: 4, targetLead: 3, schedulingHorizon: 8, analysisLeadTarget: 8, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
         }
         if thermal == .serious || lowPower {
-            return Self(fftFrameStride: 2, targetLead: 5, schedulingHorizon: 12, isLowPowerMode: lowPower)
+            return Self(fftFrameStride: 2, targetLead: 5, schedulingHorizon: 12, analysisLeadTarget: 8, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
         }
         #endif
         return Self()
@@ -64,6 +70,9 @@ public struct MusicHapticsDSPDiagnostics: Hashable, Sendable {
     public var beatConfidence: Double
     public var tempoBPM: Double?
     public var beatPhase: Double?
+    public var beatPhaseError: Double
+    public var beatPhaseAnchor: TimeInterval?
+    public var nextBeatTime: TimeInterval?
     public var analysisPosition: TimeInterval
     public var eventCount: Int
     public var transientCount: Int
@@ -73,6 +82,9 @@ public struct MusicHapticsDSPDiagnostics: Hashable, Sendable {
         beatConfidence: Double = 0,
         tempoBPM: Double? = nil,
         beatPhase: Double? = nil,
+        beatPhaseError: Double = 1,
+        beatPhaseAnchor: TimeInterval? = nil,
+        nextBeatTime: TimeInterval? = nil,
         analysisPosition: TimeInterval = 0,
         eventCount: Int = 0,
         transientCount: Int = 0,
@@ -81,6 +93,9 @@ public struct MusicHapticsDSPDiagnostics: Hashable, Sendable {
         self.beatConfidence = min(max(beatConfidence, 0), 1)
         self.tempoBPM = tempoBPM
         self.beatPhase = beatPhase
+        self.beatPhaseError = min(max(beatPhaseError.isFinite ? beatPhaseError : 1, 0), 1)
+        self.beatPhaseAnchor = beatPhaseAnchor?.isFinite == true ? beatPhaseAnchor : nil
+        self.nextBeatTime = nextBeatTime?.isFinite == true ? nextBeatTime : nil
         self.analysisPosition = max(0, analysisPosition)
         self.eventCount = max(0, eventCount)
         self.transientCount = max(0, transientCount)
@@ -108,16 +123,20 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     private var previousFastEnvelope: Float = 0
     private var slowEnvelope: Float = 0
     private var previousLogEnergy: Float?
-    private var lastSustainedBassTime: TimeInterval = -.infinity
+    private var activeTextureStart: TimeInterval?
+    private var activeTextureLastTime: TimeInterval?
+    private var activeTextureClass: MusicHapticsEventClass?
+    private var activeTexturePeak: Float = 0
+    private var activeTextureSharpness: Float = 0
+    private var activeTexturePoints: [MusicHapticsCurvePoint] = []
     private var rmsHistory: [Float] = []
     private var onsetHistory: [Float] = []
-    private var beatTimes: [TimeInterval] = []
-    private var beatIntervals: [TimeInterval] = []
-    private var lastBeatTime: TimeInterval = -.infinity
+    private var beatTracker = MusicHapticsBeatTracker()
     private var totalEventCount = 0
     private var totalTransientCount = 0
     private var totalContinuousCount = 0
     private var lastDiagnostics = MusicHapticsDSPDiagnostics()
+    private let maximumTextureSegmentDuration: TimeInterval = 8
 
     public init(configuration: MusicHapticsDSPConfiguration = .init()) {
         self.configuration = configuration
@@ -134,6 +153,18 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         startTime: TimeInterval,
         sampleRate: Double
     ) -> [MusicHapticsEvent] {
+        processCandidates(monoSamples: monoSamples, startTime: startTime, sampleRate: sampleRate)
+            .flatMap(\.events)
+    }
+
+    /// Returns DSP candidates with beat and energy context. The perceptual
+    /// mixer consumes this path; `process` remains as a compatibility API for
+    /// callers that only need raw events.
+    public mutating func processCandidates(
+        monoSamples: [Float],
+        startTime: TimeInterval,
+        sampleRate: Double
+    ) -> [MusicHapticsCandidateFrame] {
         guard !monoSamples.isEmpty,
               startTime.isFinite,
               startTime >= 0,
@@ -151,16 +182,19 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         }
         pending.append(contentsOf: monoSamples.map { min(max($0.isFinite ? $0 : 0, -1), 1) })
 
-        var events: [MusicHapticsEvent] = []
+        var frames: [MusicHapticsCandidateFrame] = []
         while pending.count >= frameSize, let frameStart = pendingStart {
             let frame = Array(pending.prefix(frameSize))
             if analysisFrameIndex % configuration.fftFrameStride == 0 {
-                events.append(contentsOf: analyze(frame: frame, time: frameStart))
+                frames.append(analyze(frame: frame, time: frameStart))
             } else {
                 lastDiagnostics = MusicHapticsDSPDiagnostics(
                     beatConfidence: lastDiagnostics.beatConfidence,
                     tempoBPM: lastDiagnostics.tempoBPM,
                     beatPhase: lastDiagnostics.beatPhase,
+                    beatPhaseError: lastDiagnostics.beatPhaseError,
+                    beatPhaseAnchor: lastDiagnostics.beatPhaseAnchor,
+                    nextBeatTime: lastDiagnostics.nextBeatTime,
                     analysisPosition: frameStart + Double(frameSize) / sampleRate,
                     eventCount: totalEventCount,
                     transientCount: totalTransientCount,
@@ -171,20 +205,59 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             pending.removeFirst(min(hopSize, pending.count))
             pendingStart = frameStart + Double(hopSize) / sampleRate
         }
-        return MusicHapticsEventDeduplicator.merge(events)
+        return frames
     }
 
     /// Flushes a final short buffer with zero padding.  It makes small local
     /// files and tap segments observable without weakening the real FFT frame
     /// size used by normal 22.05 kHz analysis.
     public mutating func finish() -> [MusicHapticsEvent] {
-        guard !pending.isEmpty, let frameStart = pendingStart else { return [] }
+        finishCandidates().flatMap(\.events)
+    }
+
+    public mutating func finishCandidates() -> [MusicHapticsCandidateFrame] {
+        guard !pending.isEmpty, let frameStart = pendingStart else {
+            guard let texture = finishTexture() else { return [] }
+            recordFinalizedEvent(texture)
+            return [MusicHapticsCandidateFrame(time: texture.time, events: [texture])]
+        }
         var frame = pending
         frame.append(contentsOf: repeatElement(0, count: max(0, frameSize - frame.count)))
-        let events = analyze(frame: Array(frame.prefix(frameSize)), time: frameStart)
+        var result = analyze(frame: Array(frame.prefix(frameSize)), time: frameStart)
+        if let texture = finishTexture() {
+            recordFinalizedEvent(texture)
+            result = MusicHapticsCandidateFrame(
+                time: result.time,
+                events: result.events + [texture],
+                energyLevel: result.energyLevel,
+                slowEnergy: result.slowEnergy,
+                onsetActivity: result.onsetActivity,
+                beat: result.beat,
+                isQuiet: result.isQuiet
+            )
+        }
         pending.removeAll(keepingCapacity: false)
         pendingStart = nil
-        return MusicHapticsEventDeduplicator.merge(events)
+        return [result]
+    }
+
+    private mutating func recordFinalizedEvent(_ event: MusicHapticsEvent) {
+        totalEventCount += 1
+        if event.kind == .transient { totalTransientCount += 1 }
+        if event.kind == .continuous { totalContinuousCount += 1 }
+        let beat = beatTracker.currentEstimate
+        lastDiagnostics = MusicHapticsDSPDiagnostics(
+            beatConfidence: beat.confidence,
+            tempoBPM: beat.tempoBPM,
+            beatPhase: beat.phase,
+            beatPhaseError: beat.phaseError,
+            beatPhaseAnchor: beat.phaseAnchor,
+            nextBeatTime: beat.nextBeatTime,
+            analysisPosition: lastDiagnostics.analysisPosition,
+            eventCount: totalEventCount,
+            transientCount: totalTransientCount,
+            continuousCount: totalContinuousCount
+        )
     }
 
     private mutating func configureIfNeeded(sampleRate: Double) {
@@ -222,17 +295,22 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         previousFastEnvelope = 0
         slowEnvelope = 0
         previousLogEnergy = nil
-        lastSustainedBassTime = -.infinity
+        activeTextureStart = nil
+        activeTextureLastTime = nil
+        activeTextureClass = nil
+        activeTexturePeak = 0
+        activeTextureSharpness = 0
+        activeTexturePoints.removeAll(keepingCapacity: true)
         rmsHistory.removeAll(keepingCapacity: true)
         onsetHistory.removeAll(keepingCapacity: true)
-        beatTimes.removeAll(keepingCapacity: true)
-        beatIntervals.removeAll(keepingCapacity: true)
-        lastBeatTime = -.infinity
+        beatTracker.reset()
         if !keepSampleRate { sampleRate = nil }
     }
 
-    private mutating func analyze(frame: [Float], time: TimeInterval) -> [MusicHapticsEvent] {
-        guard let sampleRate, frame.count == frameSize else { return [] }
+    private mutating func analyze(frame: [Float], time: TimeInterval) -> MusicHapticsCandidateFrame {
+        guard let sampleRate, frame.count == frameSize else {
+            return MusicHapticsCandidateFrame(time: time, events: [], isQuiet: true)
+        }
         let rms = vDSP.rootMeanSquare(frame)
         let safeRMS = max(rms, 0)
         let logEnergy = log(max(safeRMS, 0.00001))
@@ -260,7 +338,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let onsetThreshold = adaptiveThreshold(onsetHistory, multiplier: 2.8, floor: 0.0005)
         let rmsThreshold = adaptiveThreshold(rmsHistory, multiplier: 2.2, floor: 0.004)
         let isTransient = onset >= onsetThreshold && safeRMS >= rmsThreshold && safeRMS > 0.004
-        let beat = updateBeatTracking(time: time, onset: onset, threshold: onsetThreshold, energy: safeRMS)
+        let beat = beatTracker.update(time: time, onset: onset, threshold: onsetThreshold, energy: safeRMS)
         let classAndShape = classify(
             bands: bands,
             onset: onset,
@@ -291,41 +369,37 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
 
         let lowEnergy = bands[0] + bands[1]
         let sustainedBass = lowEnergy > max(0.0001, slowEnvelope * slowEnvelope * 0.14)
-            && safeRMS > rmsThreshold * 0.72
-            && !isTransient
-        if sustainedBass, time - lastSustainedBassTime >= 0.18 {
-            let bassIntensity = min(0.62, 0.18 + min(1, lowEnergy * 16) * 0.32)
-            events.append(MusicHapticsEvent(
-                time: time,
-                duration: 0.28,
-                intensity: bassIntensity,
-                sharpness: 0.16,
-                kind: .continuous,
-                classification: .sustainedBass,
-                curve: [
-                    MusicHapticsCurvePoint(timeOffset: 0, intensity: bassIntensity * 0.72, sharpness: 0.14),
-                    MusicHapticsCurvePoint(timeOffset: 0.14, intensity: bassIntensity, sharpness: 0.16),
-                    MusicHapticsCurvePoint(timeOffset: 0.28, intensity: bassIntensity * 0.76, sharpness: 0.14),
-                ]
-            ))
-            lastSustainedBassTime = time
-        }
-
+            && safeRMS > max(0.004, rmsThreshold * 0.72)
         let rising = previousFastEnvelope > slowEnvelope * 1.10 && flux > 0.002
-        if rising && !isTransient && safeRMS > rmsThreshold * 0.85 {
-            let buildIntensity = min(0.68, 0.22 + min(1, previousFastEnvelope * 7) * 0.38)
-            events.append(MusicHapticsEvent(
+        let buildTexture = rising && safeRMS > rmsThreshold * 0.85
+        if sustainedBass || buildTexture {
+            // Keep an open section bounded for realtime/tap consumers. This
+            // is a section rollover, not a fixed-rate vibration: adjacent
+            // segments touch without overlapping and each retains a curve.
+            if let activeStart = activeTextureStart,
+               time - activeStart >= maximumTextureSegmentDuration,
+               let texture = finishTexture() {
+                events.append(texture)
+            }
+            if let lastTextureTime = activeTextureLastTime,
+               time - lastTextureTime > 0.18,
+               let texture = finishTexture() {
+                events.append(texture)
+            }
+            let textureClass: MusicHapticsEventClass = buildTexture && !sustainedBass ? .buildTexture : .sustainedBass
+            let baseIntensity = textureClass == .buildTexture
+                ? min(0.68, 0.22 + min(1, previousFastEnvelope * 7) * 0.38)
+                : min(0.62, 0.18 + min(1, lowEnergy * 16) * 0.32)
+            appendTextureSample(
                 time: time,
-                duration: 0.36,
-                intensity: buildIntensity,
-                sharpness: 0.42,
-                kind: .continuous,
-                classification: .buildTexture,
-                curve: [
-                    MusicHapticsCurvePoint(timeOffset: 0, intensity: buildIntensity * 0.45, sharpness: 0.34),
-                    MusicHapticsCurvePoint(timeOffset: 0.36, intensity: buildIntensity, sharpness: 0.48),
-                ]
-            ))
+                eventClass: textureClass,
+                intensity: baseIntensity,
+                sharpness: textureClass == .buildTexture ? 0.42 : 0.16
+            )
+        } else if let lastTextureTime = activeTextureLastTime,
+                  time - lastTextureTime > 0.18,
+                  let texture = finishTexture() {
+            events.append(texture)
         }
 
         let climax = safeRMS > percentile(rmsHistory, percentile: 0.90)
@@ -335,10 +409,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             events.append(MusicHapticsEvent(
                 time: time,
                 duration: 0.11,
-                intensity: 0.82,
-                sharpness: min(0.78, classAndShape.sharpness + 0.10),
+                intensity: 0.60,
+                sharpness: min(0.78, classAndShape.sharpness + 0.06),
                 kind: .transient,
-                classification: .climax
+                classification: .climax,
+                climaxAmount: 0.60
             ))
         }
 
@@ -348,6 +423,9 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             beatConfidence: beat.confidence,
             tempoBPM: beat.tempoBPM,
             beatPhase: beat.phase,
+            beatPhaseError: beat.phaseError,
+            beatPhaseAnchor: beat.phaseAnchor,
+            nextBeatTime: beat.nextBeatTime,
             analysisPosition: time + Double(frameSize) / sampleRate,
             eventCount: totalEventCount + events.count,
             transientCount: totalTransientCount + events.filter { $0.kind == .transient }.count,
@@ -356,7 +434,95 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         totalEventCount += events.count
         totalTransientCount += events.filter { $0.kind == .transient }.count
         totalContinuousCount += events.filter { $0.kind == .continuous }.count
-        return events
+        let energyLevel = min(1, safeRMS / max(0.02, rmsThreshold * 4))
+        let isQuiet = safeRMS < max(0.003, rmsThreshold * 0.95)
+            && onset < onsetThreshold * 1.20
+        return MusicHapticsCandidateFrame(
+            time: time,
+            events: events,
+            energyLevel: energyLevel,
+            slowEnergy: min(1, slowEnvelope / max(0.02, rmsThreshold * 4)),
+            onsetActivity: min(1, onset / max(onsetThreshold, 0.0005)),
+            beat: beat,
+            isQuiet: isQuiet
+        )
+    }
+
+    private mutating func appendTextureSample(
+        time: TimeInterval,
+        eventClass: MusicHapticsEventClass,
+        intensity: Float,
+        sharpness: Float
+    ) {
+        if activeTextureStart == nil {
+            activeTextureStart = time
+            activeTextureClass = eventClass
+        }
+        if activeTextureClass == nil {
+            self.activeTextureClass = eventClass
+        }
+        activeTextureLastTime = time
+        activeTexturePeak = max(activeTexturePeak, intensity)
+        activeTextureSharpness = max(activeTextureSharpness, sharpness)
+        let offset = max(0, time - (activeTextureStart ?? time))
+        activeTexturePoints.append(MusicHapticsCurvePoint(
+            timeOffset: offset,
+            intensity: intensity,
+            sharpness: sharpness
+        ))
+        if activeTexturePoints.count > 96 {
+            activeTexturePoints = downsampleCurve(activeTexturePoints, limit: 96)
+        }
+    }
+
+    private func downsampleCurve(
+        _ points: [MusicHapticsCurvePoint],
+        limit: Int
+    ) -> [MusicHapticsCurvePoint] {
+        guard points.count > limit, limit > 1 else { return points }
+        return (0..<limit).map { index in
+            let sourceIndex = Int((Double(index) * Double(points.count - 1) / Double(limit - 1)).rounded())
+            return points[min(points.count - 1, max(0, sourceIndex))]
+        }
+    }
+
+    private mutating func finishTexture() -> MusicHapticsEvent? {
+        guard let start = activeTextureStart,
+              let last = activeTextureLastTime,
+              let eventClass = activeTextureClass
+        else { return nil }
+        let duration = max(0.16, last - start + Double(hopSize) / max(sampleRate ?? 1, 1))
+        var curve = activeTexturePoints
+            .map {
+                MusicHapticsCurvePoint(
+                    timeOffset: min(duration, max(0, $0.timeOffset)),
+                    intensity: $0.intensity,
+                    sharpness: $0.sharpness
+                )
+            }
+            .sorted { $0.timeOffset < $1.timeOffset }
+        if curve.first?.timeOffset != 0 {
+            curve.insert(MusicHapticsCurvePoint(timeOffset: 0, intensity: activeTexturePeak * 0.72, sharpness: activeTextureSharpness), at: 0)
+        }
+        if curve.last?.timeOffset != duration {
+            curve.append(MusicHapticsCurvePoint(timeOffset: duration, intensity: activeTexturePeak * 0.76, sharpness: activeTextureSharpness))
+        }
+        let event = MusicHapticsEvent(
+            time: start,
+            duration: duration,
+            intensity: activeTexturePeak,
+            sharpness: activeTextureSharpness,
+            kind: .continuous,
+            classification: eventClass,
+            curve: curve
+        )
+        activeTextureStart = nil
+        activeTextureLastTime = nil
+        activeTextureClass = nil
+        activeTexturePeak = 0
+        activeTextureSharpness = 0
+        activeTexturePoints.removeAll(keepingCapacity: true)
+        return event
     }
 
     private mutating func makeSpectrum(_ frame: [Float]) -> [Float] {
@@ -459,7 +625,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         flux: Float,
         flatness: Float,
         centroid: Float,
-        beat: BeatResult
+        beat: MusicHapticsBeatEstimate
     ) -> (eventClass: MusicHapticsEventClass, sharpness: Float) {
         let low = bands[0] + bands[1]
         let mid = bands[2] + bands[3]
@@ -491,44 +657,6 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             let delta = max(0, current - previous)
             return min(1, delta / max(0.0001, previous * 0.5 + 0.00005))
         }
-    }
-
-    private mutating func updateBeatTracking(
-        time: TimeInterval,
-        onset: Float,
-        threshold: Float,
-        energy: Float
-    ) -> BeatResult {
-        let rawCandidate = onset >= threshold && energy > 0.004
-        // An onset spans several overlapping FFT frames. Without a short
-        // refractory period every frame of one kick becomes a new "beat",
-        // which prevents tempo estimation and makes the haptic texture busy.
-        let candidate = rawCandidate
-            && (!lastBeatTime.isFinite || time - lastBeatTime >= 0.25)
-        if candidate {
-            if lastBeatTime.isFinite {
-                let interval = time - lastBeatTime
-                if interval >= 0.25, interval <= 1.50 {
-                    beatIntervals.append(interval)
-                    if beatIntervals.count > 12 { beatIntervals.removeFirst() }
-                }
-            }
-            lastBeatTime = time
-            beatTimes.append(time)
-            if beatTimes.count > 24 { beatTimes.removeFirst() }
-        }
-        let interval = beatIntervals.isEmpty ? nil : median(beatIntervals)
-        let tempo = interval.map { 60 / $0 }
-        let confidence: Double
-        if beatIntervals.count < 2 {
-            confidence = candidate ? 0.30 : 0
-        } else {
-            let medianInterval = median(beatIntervals)
-            let deviation = beatIntervals.reduce(0) { $0 + abs($1 - medianInterval) } / Double(beatIntervals.count)
-            confidence = min(1, max(0, 1 - deviation / max(0.001, medianInterval * 0.35)))
-        }
-        let phase = interval.map { (time.truncatingRemainder(dividingBy: $0)) / $0 }
-        return BeatResult(isBeat: candidate, confidence: confidence, tempoBPM: tempo, phase: phase)
     }
 
     private func adaptiveThreshold(_ values: [Float], multiplier: Float, floor: Float) -> Float {
@@ -577,12 +705,6 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         return result
     }
 
-    private struct BeatResult {
-        let isBeat: Bool
-        let confidence: Double
-        let tempoBPM: Double?
-        let phase: Double?
-    }
 }
 
 /// Event thinning is deliberately class-aware.  A kick and a hi-hat at the

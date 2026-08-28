@@ -47,6 +47,25 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
     public var tempoBPM: Double?
     public var transientCount: Int
     public var continuousCount: Int
+    public var dominantTransientCount: Int
+    public var suppressedTransientCount: Int
+    public var suppressedHighPercussionCount: Int
+    public var mergedCollisionCount: Int
+    public var activeTextureType: MusicHapticsEventClass?
+    public var continuousDutyCycle: Double
+    public var perceptualEventsPerSecond: Double
+    public var fatigueGain: Double
+    public var beatGridConfidence: Double
+    public var beatGridBPM: Double?
+    public var beatPhaseError: Double
+    public var hapticCommitHorizon: TimeInterval
+    public var hapticDriftSeconds: TimeInterval
+    public var driftGuardBand: MusicHapticsDriftGuardBand
+    public var audioBuffering: Bool
+    public var hapticEngineState: MusicHapticsEngineState
+    public var applicationSuspended: Bool
+    public var lastHapticStopReason: String?
+    public var foregroundRecoveryCount: Int
 
     public init(
         supportsCustomHaptics: Bool,
@@ -84,7 +103,26 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         beatConfidence: Double = 0,
         tempoBPM: Double? = nil,
         transientCount: Int = 0,
-        continuousCount: Int = 0
+        continuousCount: Int = 0,
+        dominantTransientCount: Int = 0,
+        suppressedTransientCount: Int = 0,
+        suppressedHighPercussionCount: Int = 0,
+        mergedCollisionCount: Int = 0,
+        activeTextureType: MusicHapticsEventClass? = nil,
+        continuousDutyCycle: Double = 0,
+        perceptualEventsPerSecond: Double = 0,
+        fatigueGain: Double = 1,
+        beatGridConfidence: Double = 0,
+        beatGridBPM: Double? = nil,
+        beatPhaseError: Double = 1,
+        hapticCommitHorizon: TimeInterval = 3,
+        hapticDriftSeconds: TimeInterval = 0,
+        driftGuardBand: MusicHapticsDriftGuardBand = .stable,
+        audioBuffering: Bool = false,
+        hapticEngineState: MusicHapticsEngineState = .notCreated,
+        applicationSuspended: Bool = false,
+        lastHapticStopReason: String? = nil,
+        foregroundRecoveryCount: Int = 0
     ) {
         self.supportsCustomHaptics = supportsCustomHaptics
         self.systemMusicHapticsActive = systemMusicHapticsActive
@@ -122,7 +160,33 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         self.tempoBPM = tempoBPM
         self.transientCount = max(0, transientCount)
         self.continuousCount = max(0, continuousCount)
+        self.dominantTransientCount = max(0, dominantTransientCount)
+        self.suppressedTransientCount = max(0, suppressedTransientCount)
+        self.suppressedHighPercussionCount = max(0, suppressedHighPercussionCount)
+        self.mergedCollisionCount = max(0, mergedCollisionCount)
+        self.activeTextureType = activeTextureType
+        self.continuousDutyCycle = min(max(continuousDutyCycle, 0), 1)
+        self.perceptualEventsPerSecond = max(0, perceptualEventsPerSecond)
+        self.fatigueGain = min(max(fatigueGain, 0), 1)
+        self.beatGridConfidence = min(max(beatGridConfidence, 0), 1)
+        self.beatGridBPM = beatGridBPM
+        self.beatPhaseError = min(max(beatPhaseError, 0), 1)
+        self.hapticCommitHorizon = max(0, hapticCommitHorizon)
+        self.hapticDriftSeconds = max(0, hapticDriftSeconds)
+        self.driftGuardBand = driftGuardBand
+        self.audioBuffering = audioBuffering
+        self.hapticEngineState = hapticEngineState
+        self.applicationSuspended = applicationSuspended
+        self.lastHapticStopReason = lastHapticStopReason
+        self.foregroundRecoveryCount = max(0, foregroundRecoveryCount)
     }
+}
+
+public enum MusicHapticsEngineState: String, Sendable, Equatable {
+    case notCreated
+    case running
+    case stopped
+    case needsRestart
 }
 
     /// Pure ordering rule for the one authoritative playback plan. The resolver
@@ -212,6 +276,10 @@ public final class SystemMusicHapticsAdapter {
 
 @MainActor
 final class CustomMusicHapticsEngine {
+    private(set) var state: MusicHapticsEngineState = .notCreated
+    private(set) var applicationSuspended = false
+    private(set) var lastStopReason: String?
+
     #if os(iOS)
     private var engine: CHHapticEngine?
     private var players: [CHHapticAdvancedPatternPlayer] = []
@@ -271,6 +339,8 @@ final class CustomMusicHapticsEngine {
             try player.start(atTime: CHHapticTimeImmediate)
         } catch {
             stop()
+            state = .stopped
+            lastStopReason = String(describing: error)
         }
         #endif
     }
@@ -289,6 +359,8 @@ final class CustomMusicHapticsEngine {
             try player.resume(atTime: CHHapticTimeImmediate)
         } catch {
             stop()
+            state = .stopped
+            lastStopReason = String(describing: error)
         }
         #endif
     }
@@ -301,6 +373,8 @@ final class CustomMusicHapticsEngine {
             if playing { try player.resume(atTime: CHHapticTimeImmediate) }
         } catch {
             stop()
+            state = .stopped
+            lastStopReason = String(describing: error)
         }
         #endif
     }
@@ -309,6 +383,39 @@ final class CustomMusicHapticsEngine {
         #if os(iOS)
         players.forEach { try? $0.stop(atTime: CHHapticTimeImmediate) }
         players.removeAll()
+        #endif
+    }
+
+    /// Mark the lifecycle transition explicitly. Audio background playback is
+    /// allowed to continue, but custom Core Haptics is not assumed to survive
+    /// suspension. The next foreground path owns the single restart attempt.
+    func applicationDidEnterBackground() {
+        applicationSuspended = true
+        lastStopReason = "applicationSuspended"
+        if state != .notCreated { state = .needsRestart }
+        stop()
+    }
+
+    /// iOS may suspend a custom haptic engine while audio continues. Recovery
+    /// is deliberately foreground-only and uses the coordinator's current
+    /// AVPlayer position to rebuild future output; it never starts haptics in
+    /// the background or relies on private lifecycle workarounds.
+    func restartIfNeeded() {
+        #if os(iOS)
+        guard applicationSuspended || state == .needsRestart || state == .stopped else { return }
+        guard engine != nil else {
+            applicationSuspended = false
+            return
+        }
+        do {
+            _ = try prepareEngine()
+            applicationSuspended = false
+        } catch {
+            state = .stopped
+            lastStopReason = String(describing: error)
+        }
+        #else
+        applicationSuspended = false
         #endif
     }
 
@@ -413,16 +520,35 @@ final class CustomMusicHapticsEngine {
     }
 
     private func prepareEngine() throws -> CHHapticEngine {
-        if let engine { return engine }
+        if let engine {
+            if state != .running || applicationSuspended {
+                try engine.start()
+                state = .running
+                applicationSuspended = false
+            }
+            return engine
+        }
         let engine = try CHHapticEngine()
-        engine.stoppedHandler = { [weak self] _ in
-            Task { @MainActor in self?.players.removeAll() }
+        engine.stoppedHandler = { [weak self] reasonValue in
+            let reason = String(describing: reasonValue)
+            Task { @MainActor in
+                self?.players.removeAll()
+                self?.lastStopReason = reason
+                let normalized = reason.lowercased()
+                self?.applicationSuspended = normalized.contains("suspend")
+                self?.state = self?.applicationSuspended == true ? .needsRestart : .stopped
+            }
         }
         engine.resetHandler = { [weak self] in
-            Task { @MainActor in try? self?.engine?.start() }
+            Task { @MainActor in
+                self?.lastStopReason = "reset"
+                self?.state = .needsRestart
+            }
         }
         try engine.start()
         self.engine = engine
+        state = .running
+        applicationSuspended = false
         return engine
     }
     #endif
@@ -499,7 +625,11 @@ public final class MusicHapticsCoordinator {
     private var activeAnalysisSink: (any MusicHapticsAnalysisSink)?
     private var currentFavorite = false
     private var currentPosition: TimeInterval = 0
+    private var playbackRate: Double = 1
     private var playbackIsPlaying = false
+    private var isInBackground = false
+    private var audioBuffering = false
+    private var foregroundRecoveryCount = 0
     private var currentPlan: MusicHapticsPlaybackPlan = .disabled
     private var currentPlanReason = "idle"
     private var currentSystemAvailability = MusicHapticsSystemAvailability(
@@ -526,8 +656,8 @@ public final class MusicHapticsCoordinator {
         self.analysisSourceProvider = analysisSourceProvider
         let policy = MusicHapticsAnalysisPerformancePolicy.current
         self.rollingScheduler = RollingMusicHapticsScheduler(
-            targetLead: policy.targetLead,
-            schedulingHorizon: policy.schedulingHorizon
+            analysisLeadTarget: policy.analysisLeadTarget,
+            hapticCommitHorizon: policy.hapticCommitHorizon
         )
     }
 
@@ -764,7 +894,8 @@ public final class MusicHapticsCoordinator {
     /// This method never creates a second analyzer or changes the resolved plan.
     public func activate(
         _ preparation: MusicHapticsPlaybackPreparation,
-        position: TimeInterval
+        position: TimeInterval,
+        rate: Double = 1
     ) {
         if currentPreparation?.id != preparation.id {
             activeAnalysisSink?.finishPartial(reason: .trackSwitch)
@@ -785,7 +916,9 @@ public final class MusicHapticsCoordinator {
         currentIdentity = preparation.identity
         currentFavorite = preparation.favorite
         currentPosition = max(0, position)
+        playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = true
+        audioBuffering = false
         currentPlan = preparation.plan
         currentSystemAvailability = preparation.systemAvailability
         fullTimelineExists = preparation.fullTimelineExists
@@ -804,7 +937,7 @@ public final class MusicHapticsCoordinator {
             source = .system
         case let .custom(timeline):
             do {
-                try custom.play(timeline, offset: position)
+                if !isInBackground { try custom.play(timeline, offset: position) }
                 currentTimeline = timeline
                 source = .custom
             } catch {
@@ -887,13 +1020,18 @@ public final class MusicHapticsCoordinator {
         }
     }
 
-    public func resume(position: TimeInterval) {
+    public func resume(position: TimeInterval, rate: Double = 1) {
         currentPosition = max(0, position)
+        playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = true
+        audioBuffering = false
+        guard !isInBackground else { return }
         if source == .custom {
             custom.resume(at: position)
         } else if case .analyzeLookahead = currentPlan {
-            pumpScheduler(position: position, isPlaying: true)
+            let windows = rollingScheduler.resume(position: position, rate: playbackRate)
+            if rollingScheduler.consumeHapticFlushRequest() { custom.stop() }
+            playScheduledWindows(windows, position: position)
         } else if case .analyze = currentPlan {
             // Realtime tap events are timestamped against the player. Drop
             // any pattern built before the pause and let the next PCM window
@@ -902,14 +1040,16 @@ public final class MusicHapticsCoordinator {
         }
     }
 
-    public func seek(position: TimeInterval, playing: Bool) {
+    public func seek(position: TimeInterval, playing: Bool, rate: Double = 1) {
         currentPosition = max(0, position)
+        playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = playing
+        guard !isInBackground else { return }
         if source == .custom {
             custom.seek(to: position, playing: playing)
         } else if case .analyzeLookahead = currentPlan {
             custom.stop()
-            let windows = rollingScheduler.seek(to: position, playing: playing)
+            let windows = rollingScheduler.seek(to: position, playing: playing, rate: playbackRate)
             playScheduledWindows(windows, position: position)
         } else if case .analyze = currentPlan {
             custom.stop()
@@ -917,19 +1057,89 @@ public final class MusicHapticsCoordinator {
         }
     }
 
-    public func updatePlaybackPosition(_ position: TimeInterval, isPlaying: Bool) {
+    public func updatePlaybackPosition(
+        _ position: TimeInterval,
+        isPlaying: Bool,
+        rate: Double = 1
+    ) {
         let previousPosition = currentPosition
         currentPosition = max(0, position)
+        playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = isPlaying
+        if isPlaying { audioBuffering = false }
         if currentPosition + 0.15 < previousPosition {
             custom.stop()
             activeAnalysisSink?.seek(to: currentPosition)
         }
-        guard case .analyzeLookahead = currentPlan else { return }
+        guard case .analyzeLookahead = currentPlan, !isInBackground else { return }
         pumpScheduler(position: currentPosition, isPlaying: isPlaying)
     }
 
-    public func buffering() { pause() }
+    /// AVPlayer's waiting/stalled state is authoritative. Stop future custom
+    /// output now; resume will rebase from the next AVPlayer position.
+    public func buffering() {
+        audioBuffering = true
+        pause()
+    }
+
+    public func audioResumed(position: TimeInterval, rate: Double = 1) {
+        audioBuffering = false
+        resume(position: position, rate: rate)
+    }
+
+    /// Background suspension is an expected iOS lifecycle outcome for custom
+    /// haptics. Preserve analysis/checkpoint state, stop future output, and do
+    /// not attempt to restart the engine while the app is suspended.
+    public func applicationDidEnterBackground() {
+        isInBackground = true
+        custom.applicationDidEnterBackground()
+        rollingScheduler.pause()
+        activeAnalysisSink?.pause()
+    }
+
+    /// Rebase all future output from the authoritative AVPlayer position after
+    /// the scene becomes active. A stopped custom engine is recreated only on
+    /// this foreground path.
+    public func applicationDidBecomeActive(
+        position: TimeInterval,
+        isPlaying: Bool,
+        rate: Double = 1
+    ) {
+        isInBackground = false
+        currentPosition = max(0, position)
+        playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
+        playbackIsPlaying = isPlaying
+        audioBuffering = false
+        foregroundRecoveryCount += 1
+        custom.restartIfNeeded()
+        guard isPlaying else {
+            custom.stop()
+            rollingScheduler.updateClock(position: currentPosition, isPlaying: false)
+            return
+        }
+        switch currentPlan {
+        case let .custom(timeline):
+            custom.stop()
+            do {
+                try custom.play(timeline, offset: currentPosition)
+                currentTimeline = timeline
+                source = .custom
+            } catch {
+                currentTimeline = nil
+                source = .none
+                currentPlanReason = "foreground_custom_haptics_restart_failed"
+            }
+        case .analyzeLookahead:
+            custom.stop()
+            let windows = rollingScheduler.seek(to: currentPosition, playing: true, rate: playbackRate)
+            playScheduledWindows(windows, position: currentPosition)
+        case .analyze:
+            custom.stop()
+            activeAnalysisSink?.seek(to: currentPosition)
+        case .disabled, .system:
+            break
+        }
+    }
 
     public func playbackFailed() {
         finishPartial(reason: .playbackFailure)
@@ -1084,13 +1294,32 @@ public final class MusicHapticsCoordinator {
             analysisPosition: analysisSnapshot.analysisPosition,
             analysisLeadSeconds: analysisSnapshot.analysisPosition - currentPosition,
             analysisSpeedX: analysisSnapshot.analysisSpeedX,
-            lookaheadTarget: rollingScheduler.targetLead,
+            lookaheadTarget: rollingScheduler.analysisLeadTarget,
             scheduledUntil: rollingScheduler.scheduledUntil,
             rollingWindowCount: rollingScheduler.rollingWindowCount,
             beatConfidence: analysisSnapshot.beatConfidence,
             tempoBPM: analysisSnapshot.tempoBPM,
             transientCount: transientCount,
-            continuousCount: continuousCount
+            continuousCount: continuousCount,
+            dominantTransientCount: analysisSnapshot.mixerDiagnostics.dominantTransientCount,
+            suppressedTransientCount: analysisSnapshot.mixerDiagnostics.suppressedTransientCount,
+            suppressedHighPercussionCount: analysisSnapshot.mixerDiagnostics.suppressedHighPercussionCount,
+            mergedCollisionCount: analysisSnapshot.mixerDiagnostics.mergedCollisionCount,
+            activeTextureType: analysisSnapshot.mixerDiagnostics.activeTextureType,
+            continuousDutyCycle: analysisSnapshot.mixerDiagnostics.continuousDutyCycle,
+            perceptualEventsPerSecond: analysisSnapshot.mixerDiagnostics.perceptualEventsPerSecond,
+            fatigueGain: analysisSnapshot.mixerDiagnostics.fatigueGain,
+            beatGridConfidence: analysisSnapshot.mixerDiagnostics.beatGridConfidence,
+            beatGridBPM: analysisSnapshot.mixerDiagnostics.beatGridBPM,
+            beatPhaseError: analysisSnapshot.mixerDiagnostics.beatPhaseError,
+            hapticCommitHorizon: rollingScheduler.hapticCommitHorizon,
+            hapticDriftSeconds: rollingScheduler.hapticDriftSeconds,
+            driftGuardBand: rollingScheduler.driftGuardBand,
+            audioBuffering: audioBuffering,
+            hapticEngineState: custom.state,
+            applicationSuspended: custom.applicationSuspended,
+            lastHapticStopReason: custom.lastStopReason,
+            foregroundRecoveryCount: foregroundRecoveryCount
         )
     }
 
@@ -1257,7 +1486,8 @@ public final class MusicHapticsCoordinator {
             tempoBPM: analysisSnapshot.tempoBPM,
             beatConfidence: analysisSnapshot.beatConfidence,
             transientCount: analysisSnapshot.transientCount,
-            continuousCount: analysisSnapshot.continuousCount
+            continuousCount: analysisSnapshot.continuousCount,
+            mixerDiagnostics: analysisSnapshot.mixerDiagnostics
         )
         realtimeFallbackHandler?(preparation.id, sink)
         musicHapticsLogger.debug(
@@ -1271,6 +1501,8 @@ public final class MusicHapticsCoordinator {
     ) {
         guard currentPreparation?.id == preparationID,
               playbackIsPlaying,
+              !isInBackground,
+              !audioBuffering,
               currentPlan.kind == .analyze || realtimeFallbackPreparationID == preparationID
         else { return }
         custom.play(window, from: currentPosition, intensity: .medium)
@@ -1291,7 +1523,8 @@ public final class MusicHapticsCoordinator {
             tempoBPM: window.tempoBPM ?? analysisSnapshot.tempoBPM,
             beatConfidence: max(analysisSnapshot.beatConfidence, window.beatConfidence),
             transientCount: max(analysisSnapshot.transientCount, max(window.transientCount, transientCount)),
-            continuousCount: max(analysisSnapshot.continuousCount, max(window.continuousCount, continuousCount))
+            continuousCount: max(analysisSnapshot.continuousCount, max(window.continuousCount, continuousCount)),
+            mixerDiagnostics: window.mixerDiagnostics
         )
         musicHapticsLogger.debug(
             "HAPTICS_REALTIME_FALLBACK playback=\(self.currentPosition, privacy: .public) analysis=\(window.analysisPosition, privacy: .public) lead=\(window.analysisPosition - self.currentPosition, privacy: .public) lookahead=false events=\(window.events.count, privacy: .public)"
@@ -1328,7 +1561,8 @@ public final class MusicHapticsCoordinator {
             tempoBPM: window.tempoBPM ?? analysisSnapshot.tempoBPM,
             beatConfidence: max(analysisSnapshot.beatConfidence, window.beatConfidence),
             transientCount: max(analysisSnapshot.transientCount, window.transientCount),
-            continuousCount: max(analysisSnapshot.continuousCount, window.continuousCount)
+            continuousCount: max(analysisSnapshot.continuousCount, window.continuousCount),
+            mixerDiagnostics: window.mixerDiagnostics
         )
         playScheduledWindows(scheduled, position: currentPosition)
         musicHapticsLogger.debug(
@@ -1337,8 +1571,16 @@ public final class MusicHapticsCoordinator {
     }
 
     private func pumpScheduler(position: TimeInterval, isPlaying: Bool) {
+        guard !isInBackground, !audioBuffering else { return }
         if position + 0.15 < currentPosition { custom.stop() }
-        let windows = rollingScheduler.updateClock(position: position, isPlaying: isPlaying)
+        let windows = rollingScheduler.updateClock(
+            position: position,
+            isPlaying: isPlaying,
+            rate: playbackRate
+        )
+        if rollingScheduler.consumeHapticFlushRequest() {
+            custom.stop()
+        }
         playScheduledWindows(windows, position: position)
     }
 
@@ -1346,6 +1588,7 @@ public final class MusicHapticsCoordinator {
         _ windows: [MusicHapticsAnalysisWindow],
         position: TimeInterval
     ) {
+        guard !isInBackground, !audioBuffering else { return }
         for window in windows {
             custom.play(window, from: position, intensity: .medium)
         }

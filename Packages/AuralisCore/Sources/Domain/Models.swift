@@ -567,6 +567,30 @@ public enum PlaybackState: Codable, Hashable, Sendable {
     case failed(PlaybackError)
 }
 
+/// Authoritative AVPlayer timing transitions consumed by sidecar features
+/// such as Music Haptics. Position is sampled from the player at the moment of
+/// the transition, not extrapolated from a UI timer.
+public enum PlaybackTimingState: String, Codable, Hashable, Sendable {
+    case buffering
+    case playing
+    case paused
+    case stalled
+}
+
+public struct PlaybackTimingUpdate: Codable, Hashable, Sendable {
+    public let state: PlaybackTimingState
+    public let position: TimeInterval?
+    public let rate: Float
+
+    public init(state: PlaybackTimingState, position: TimeInterval? = nil, rate: Float = 1) {
+        self.state = state
+        self.position = position.flatMap { value in
+            value.isFinite ? max(0, value) : nil
+        }
+        self.rate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
+    }
+}
+
 /// 最近一次播放停止的原因（诊断与后台播放审计用）。
 /// 区分用户操作、队列结束、服务器/网络/流/解码、系统中断、设备断开、进程终止等场景。
 public enum PlaybackStopReason: String, Codable, Hashable, Sendable, CaseIterable {

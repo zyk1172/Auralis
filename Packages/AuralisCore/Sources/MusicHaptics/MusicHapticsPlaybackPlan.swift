@@ -324,6 +324,7 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
     public var beatConfidence: Double
     public var transientCount: Int
     public var continuousCount: Int
+    public var mixerDiagnostics: MusicHapticsMixerDiagnostics
 
     public init(
         tapAttached: Bool = false,
@@ -340,7 +341,8 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
         tempoBPM: Double? = nil,
         beatConfidence: Double = 0,
         transientCount: Int = 0,
-        continuousCount: Int = 0
+        continuousCount: Int = 0,
+        mixerDiagnostics: MusicHapticsMixerDiagnostics = .init()
     ) {
         self.tapAttached = tapAttached
         self.pcmFormat = pcmFormat
@@ -357,6 +359,7 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
         self.beatConfidence = min(max(beatConfidence, 0), 1)
         self.transientCount = max(0, transientCount)
         self.continuousCount = max(0, continuousCount)
+        self.mixerDiagnostics = mixerDiagnostics
     }
 }
 

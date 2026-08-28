@@ -201,6 +201,9 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
     public var sharpness: Float
     public var kind: MusicHapticsEventKind
     public var classification: MusicHapticsEventClass
+    /// Climax is a perceptual modifier, never an additional voice. The mixer
+    /// applies this amount to the selected dominant transient.
+    public var climaxAmount: Float
     public var curve: [MusicHapticsCurvePoint]
 
     public init(
@@ -210,6 +213,7 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
         sharpness: Float,
         kind: MusicHapticsEventKind,
         classification: MusicHapticsEventClass = .unknown,
+        climaxAmount: Float = 0,
         curve: [MusicHapticsCurvePoint] = []
     ) {
         self.time = max(0, time)
@@ -218,11 +222,12 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
         self.sharpness = min(max(sharpness.isFinite ? sharpness : 0, 0), 1)
         self.kind = kind
         self.classification = classification
+        self.climaxAmount = min(max(climaxAmount.isFinite ? climaxAmount : 0, 0), 1)
         self.curve = curve.sorted { $0.timeOffset < $1.timeOffset }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case time, duration, intensity, sharpness, kind, classification, curve
+        case time, duration, intensity, sharpness, kind, classification, climaxAmount, curve
     }
 
     /// v1 files did not contain event classes or curves.  Missing fields are
@@ -237,6 +242,7 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
             sharpness: try container.decode(Float.self, forKey: .sharpness),
             kind: try container.decode(MusicHapticsEventKind.self, forKey: .kind),
             classification: try container.decodeIfPresent(MusicHapticsEventClass.self, forKey: .classification) ?? .unknown,
+            climaxAmount: try container.decodeIfPresent(Float.self, forKey: .climaxAmount) ?? 0,
             curve: try container.decodeIfPresent([MusicHapticsCurvePoint].self, forKey: .curve) ?? []
         )
     }
@@ -245,7 +251,7 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
 public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     public static let formatVersion = 1
     public static let legacyAlgorithmVersion = "auralis-haptics-v1"
-    public static let algorithmVersion = "auralis-haptics-v2"
+    public static let algorithmVersion = "auralis-haptics-v2.1"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity
