@@ -17,6 +17,7 @@ public struct MusicHapticsAnalysisWindow: Hashable, Sendable {
     public let eventCount: Int
     public let transientCount: Int
     public let continuousCount: Int
+    public let mixerDiagnostics: MusicHapticsMixerDiagnostics
 
     public init(
         startTime: TimeInterval,
@@ -31,7 +32,8 @@ public struct MusicHapticsAnalysisWindow: Hashable, Sendable {
         analysisStreamBitrate: Int? = nil,
         eventCount: Int? = nil,
         transientCount: Int? = nil,
-        continuousCount: Int? = nil
+        continuousCount: Int? = nil,
+        mixerDiagnostics: MusicHapticsMixerDiagnostics = .init()
     ) {
         self.startTime = max(0, startTime)
         self.endTime = max(self.startTime, endTime)
@@ -51,6 +53,82 @@ public struct MusicHapticsAnalysisWindow: Hashable, Sendable {
         self.continuousCount = max(
             events.filter { $0.kind == .continuous }.count,
             continuousCount ?? events.filter { $0.kind == .continuous }.count
+        )
+        self.mixerDiagnostics = mixerDiagnostics
+    }
+
+    /// Returns only the commit slice that is safe to hand to Core Haptics.
+    /// Continuous events are clipped and their curve offsets are rebased so a
+    /// scheduler can commit a bounded horizon without changing global time.
+    public func sliced(from lowerBound: TimeInterval, to upperBound: TimeInterval) -> Self {
+        let lower = max(startTime, lowerBound)
+        let upper = min(endTime, max(lower, upperBound))
+        guard upper > lower else {
+            return Self(
+                startTime: lower,
+                endTime: lower,
+                analysisPosition: analysisPosition,
+                events: [],
+                coverage: coverage,
+                analysisSpeedX: analysisSpeedX,
+                tempoBPM: tempoBPM,
+                beatConfidence: beatConfidence,
+                sourceMode: sourceMode,
+                analysisStreamBitrate: analysisStreamBitrate,
+                eventCount: eventCount,
+                transientCount: 0,
+                continuousCount: 0,
+                mixerDiagnostics: mixerDiagnostics
+            )
+        }
+        let clipped = events.compactMap { event -> MusicHapticsEvent? in
+            if event.kind == .transient {
+                guard event.time >= lower, event.time < upper else { return nil }
+                return event
+            }
+            let eventEnd = event.time + (event.duration ?? 0)
+            guard eventEnd > lower, event.time < upper else { return nil }
+            let segmentStart = max(lower, event.time)
+            let segmentEnd = min(upper, eventEnd)
+            let duration = segmentEnd - segmentStart
+            guard duration >= 0.02 else { return nil }
+            let offset = segmentStart - event.time
+            var curve = event.curve.map {
+                MusicHapticsCurvePoint(
+                    timeOffset: min(duration, max(0, $0.timeOffset - offset)),
+                    intensity: $0.intensity,
+                    sharpness: $0.sharpness
+                )
+            }
+            if curve.isEmpty {
+                curve = [MusicHapticsCurvePoint(timeOffset: 0, intensity: event.intensity, sharpness: event.sharpness)]
+            }
+            return MusicHapticsEvent(
+                time: segmentStart,
+                duration: duration,
+                intensity: event.intensity,
+                sharpness: event.sharpness,
+                kind: .continuous,
+                classification: event.classification,
+                climaxAmount: event.climaxAmount,
+                curve: curve
+            )
+        }
+        return Self(
+            startTime: lower,
+            endTime: upper,
+            analysisPosition: analysisPosition,
+            events: clipped,
+            coverage: coverage,
+            analysisSpeedX: analysisSpeedX,
+            tempoBPM: tempoBPM,
+            beatConfidence: beatConfidence,
+            sourceMode: sourceMode,
+            analysisStreamBitrate: analysisStreamBitrate,
+            eventCount: eventCount,
+            transientCount: clipped.filter { $0.kind == .transient }.count,
+            continuousCount: clipped.filter { $0.kind == .continuous }.count,
+            mixerDiagnostics: mixerDiagnostics
         )
     }
 }
@@ -327,6 +405,7 @@ public final class LookaheadMusicHapticsAnalyzer: @unchecked Sendable {
         private let identity: MusicHapticsIdentity
         private let duration: TimeInterval
         private var processor = MusicHapticsDSPProcessor()
+        private var mixer = MusicHapticsPerceptualMixer()
         private var events: [MusicHapticsEvent]
         private var newlyAnalyzedEvents: [MusicHapticsEvent] = []
         private var ranges: [MusicHapticsTimeRange]
@@ -362,9 +441,14 @@ public final class LookaheadMusicHapticsAnalyzer: @unchecked Sendable {
             let end = time + max(0, frameDuration)
             if needsProcessorReset || (lastProcessedEnd.isFinite && abs(time - lastProcessedEnd) > 0.5) {
                 processor = MusicHapticsDSPProcessor()
+                mixer.reset()
             }
             needsProcessorReset = false
-            let produced = processor.process(monoSamples: monoSamples, startTime: time, sampleRate: sampleRate)
+            let produced = mixer.mix(frames: processor.processCandidates(
+                monoSamples: monoSamples,
+                startTime: time,
+                sampleRate: sampleRate
+            )).events
             events.append(contentsOf: produced)
             newlyAnalyzedEvents.append(contentsOf: produced)
             insertRange(MusicHapticsTimeRange(lowerBound: time, upperBound: end))
@@ -387,7 +471,8 @@ public final class LookaheadMusicHapticsAnalyzer: @unchecked Sendable {
         }
 
         func flush() {
-            let produced = processor.finish()
+            let produced = mixer.mix(frames: processor.finishCandidates()).events
+                + mixer.finish().events
             events.append(contentsOf: produced)
             newlyAnalyzedEvents.append(contentsOf: produced)
         }
@@ -413,7 +498,8 @@ public final class LookaheadMusicHapticsAnalyzer: @unchecked Sendable {
                     tempoBPM: diagnostics.tempoBPM,
                     beatConfidence: diagnostics.beatConfidence,
                     transientCount: checkpoint.events.filter { $0.kind == .transient }.count,
-                    continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count
+                    continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count,
+                    mixerDiagnostics: mixer.diagnostics
                 ),
                 max(analysisPosition, min(sourceDuration, diagnostics.analysisPosition))
             )
@@ -430,14 +516,32 @@ public final class LookaheadMusicHapticsAnalyzer: @unchecked Sendable {
             let wall = durationSeconds(startedAt.duration(to: .now))
             let speed = wall > 0 ? sessionAnalyzedDuration / wall : 0
             let diagnostics = processor.diagnostics
+            let windowEnd = max(startTime, endTime)
+            // A section event is emitted when its end is known, which may be
+            // after the six-second bucket containing its start. Send that
+            // late event in a correction window beginning at its real start;
+            // the scheduler preserves its already-committed cursor when it
+            // replaces the older bucket.
+            let pendingBeforeEnd = newlyAnalyzedEvents.filter { $0.time < windowEnd }
+            let windowStart = min(
+                startTime,
+                pendingBeforeEnd.map(\.time).min() ?? startTime
+            )
+            let windowEvents = pendingBeforeEnd.filter { event in
+                if event.kind == .transient {
+                    return event.time >= windowStart
+                }
+                return event.time + (event.duration ?? 0) > windowStart
+            }
+            newlyAnalyzedEvents.removeAll { windowEvents.contains($0) }
             return MusicHapticsAnalysisWindow(
-                startTime: startTime,
-                endTime: max(startTime, endTime),
+                startTime: windowStart,
+                endTime: windowEnd,
                 analysisPosition: max(analysisPosition, diagnostics.analysisPosition),
                 // Existing partial events are deliberately excluded. A
                 // partial checkpoint is recovery data, not a formal playback
                 // timeline; only newly decoded windows may be scheduled.
-                events: newlyAnalyzedEvents.filter { $0.time >= startTime && $0.time < endTime },
+                events: windowEvents,
                 coverage: checkpoint.coverage,
                 analysisSpeedX: speed,
                 tempoBPM: diagnostics.tempoBPM,
@@ -446,7 +550,8 @@ public final class LookaheadMusicHapticsAnalyzer: @unchecked Sendable {
                 analysisStreamBitrate: analysisStreamBitrate,
                 eventCount: checkpoint.events.count,
                 transientCount: checkpoint.events.filter { $0.kind == .transient }.count,
-                continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count
+                continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count,
+                mixerDiagnostics: mixer.diagnostics
             )
         }
 
@@ -467,7 +572,8 @@ public final class LookaheadMusicHapticsAnalyzer: @unchecked Sendable {
                 tempoBPM: diagnostics.tempoBPM,
                 beatConfidence: diagnostics.beatConfidence,
                 transientCount: checkpoint.events.filter { $0.kind == .transient }.count,
-                continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count
+                continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count,
+                mixerDiagnostics: mixer.diagnostics
             )
             return MusicHapticsAnalysisResult(
                 checkpoint: checkpoint,

@@ -35,6 +35,9 @@ public protocol PlaybackControlling: Sendable {
     /// second `play(track:)` call, allowing the model and Now Playing state to
     /// follow the same continuous playback transition.
     func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) async
+    /// Authoritative AVPlayer timing transitions for sidecar consumers. The
+    /// callback carries the player's current position at the transition.
+    func setPlaybackTimingHandler(_ handler: (@Sendable (PlaybackTimingUpdate) -> Void)?) async
     func configureReplayGain(_ settings: ReplayGainSettings) async
 }
 
@@ -48,6 +51,7 @@ public extension PlaybackControlling {
     func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) async {}
     func prepareNext(track: Track?) async {}
     func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) async {}
+    func setPlaybackTimingHandler(_ handler: (@Sendable (PlaybackTimingUpdate) -> Void)?) async {}
     func configureReplayGain(_ settings: ReplayGainSettings) async {}
 }
 

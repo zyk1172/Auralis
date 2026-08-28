@@ -20,12 +20,15 @@ struct AuralisApp: App {
                     // 回到前台时静默做一次增量同步；进入后台/回前台时确保音频会话保持激活。
                     switch phase {
                     case .active:
-                        Task {
-                            await AuralisAppModel.shared.keepAudioSessionActive()
+                        Task { @MainActor in
+                            await AuralisAppModel.shared.applicationDidBecomeActive()
                             await AuralisAppModel.shared.refreshCatalogInBackground()
                         }
                     case .background:
-                        Task { await AuralisAppModel.shared.keepAudioSessionActive() }
+                        Task { @MainActor in
+                            AuralisAppModel.shared.applicationDidEnterBackground()
+                            await AuralisAppModel.shared.keepAudioSessionActive()
+                        }
                     default:
                         break
                     }

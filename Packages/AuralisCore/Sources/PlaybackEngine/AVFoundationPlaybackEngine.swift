@@ -39,6 +39,9 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var trackEndedHandler: (@Sendable () -> Void)?
     /// 播放中途失败（流地址失效 / 解码失败 / 网络错误）时通知 AppModel 刷新并重试。
     private var playbackFailureHandler: (@Sendable () -> Void)?
+    /// AVPlayer timeControlStatus transition callback for haptic scheduling
+    /// and other sidecars that must follow the real player clock.
+    private var playbackTimingHandler: (@Sendable (PlaybackTimingUpdate) -> Void)?
     /// 播放代际计数：快速切歌时被取代的旧 play() 任务不得再接管 AVPlayer/观察者（P1-7）。
     private var playGeneration = 0
     /// preparing 期间的暂停意图：AVPlayer 可能尚未创建，先记录，起播后立即生效（F13）。
@@ -100,6 +103,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     /// 注册播放中途失败回调（AVPlayerItem failed / FailedToPlayToEndTime / stalled 超时）。
     public func setPlaybackFailureHandler(_ handler: (@Sendable () -> Void)?) {
         playbackFailureHandler = handler
+    }
+
+    public func setPlaybackTimingHandler(_ handler: (@Sendable (PlaybackTimingUpdate) -> Void)?) {
+        playbackTimingHandler = handler
     }
 
     public func setPreparedTrackStartedHandler(_ handler: (@Sendable (Track) -> Void)?) {
@@ -214,14 +221,14 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         AuralisLog.playback.debug("ENGINE_STOP_OLD_PLAYER_MS duration_ms=\(stopMs, privacy: .public) reused=\(reusedPlayer != nil, privacy: .public)")
 
         currentTrack = track
-        playbackState = .preparing
+        setPlaybackState(.preparing)
         // AudioSession is owned by SystemMediaIntegrationController and is
         // configured/activated idempotently outside this per-track hot path.
         try Task.checkCancellation()
         guard generation == playGeneration else { return }
 
         guard let streamURL = track.streamURL else {
-            playbackState = .failed(.engineFailure("该歌曲没有可播放的地址"))
+            setPlaybackState(.failed(.engineFailure("该歌曲没有可播放的地址")))
             AuralisLog.playback.error("无法播放 \(track.title)：缺少 streamURL")
             CrashLog.shared.log("错误: streamURL 为 nil")
             throw PlaybackError.engineFailure("该歌曲没有可播放的地址")
@@ -247,7 +254,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             player.automaticallyWaitsToMinimizeStalling = true
             guard player.canInsert(item, after: nil) else {
                 finishActiveMusicHaptics(reason: .playbackFailure)
-                playbackState = .failed(.engineFailure("播放器无法插入当前歌曲"))
+                setPlaybackState(.failed(.engineFailure("播放器无法插入当前歌曲")))
                 throw PlaybackError.engineFailure("播放器无法插入当前歌曲")
             }
             player.insert(item, after: nil)
@@ -297,12 +304,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         if pauseRequestedDuringPreparing {
             // preparing 期间已请求暂停：起播后立即生效（F13）。
             player.pause()
-            playbackState = .paused
+            setPlaybackState(.paused)
             pauseRequestedDuringPreparing = false
             CrashLog.shared.log("preparing 期间已请求暂停，播放已立即暂停")
             return
         }
-        playbackState = .playing
+        setPlaybackState(.playing)
         AuralisLog.playback.info("开始播放 \(track.title) · \(streamURL.isFileURL ? "本地缓存" : "服务器流式")音频")
         CrashLog.shared.log("播放状态已设为 .playing")
     }
@@ -370,7 +377,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
            activeRealtimeFallbackPreparationID == preparation.id {
             preparation.realtimeFallbackSink?.pause()
         }
-        playbackState = .paused
+        setPlaybackState(.paused)
     }
 
     public func resume() throws {
@@ -387,12 +394,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         if playbackRate != 1.0 {
             player.rate = playbackRate
         }
-        playbackState = .playing
+        setPlaybackState(.playing)
     }
 
     public func stop() {
         stopAll()
-        playbackState = .idle
+        setPlaybackState(.idle)
         currentTrack = nil
     }
 
@@ -405,6 +412,23 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
            activeRealtimeFallbackPreparationID == preparation.id {
             preparation.realtimeFallbackSink?.seek(to: position)
         }
+    }
+
+    private func setPlaybackState(_ state: PlaybackState) {
+        playbackState = state
+        let timingState: PlaybackTimingState? = switch state {
+        case .buffering: .buffering
+        case .playing: .playing
+        case .paused: .paused
+        case .stalled: .stalled
+        case .idle, .preparing, .failed: nil
+        }
+        guard let timingState else { return }
+        playbackTimingHandler?(PlaybackTimingUpdate(
+            state: timingState,
+            position: currentPosition(),
+            rate: playbackRate
+        ))
     }
 
     /// AVPlayer 的真实播放位置（秒）。
@@ -678,7 +702,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         if playbackRate != 1.0 {
             avPlayer?.rate = playbackRate
         }
-        playbackState = avPlayer?.timeControlStatus == .playing ? .playing : .buffering
+        setPlaybackState(avPlayer?.timeControlStatus == .playing ? .playing : .buffering)
         preparedTrackStartedHandler?(track)
     }
 
@@ -747,7 +771,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                 // 失败态免疫（P1-6）：失败后晚到的 stall 通知不得把状态改回 stalled。
                 if case .failed = self.playbackState { return }
                 if self.playbackState != .paused {
-                    self.playbackState = .stalled
+                    self.setPlaybackState(.stalled)
                     self.startStallTimeout()
                 }
             }
@@ -765,11 +789,11 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                 switch player.timeControlStatus {
                 case .waitingToPlayAtSpecifiedRate:
                     if self.playbackState != .paused {
-                        self.playbackState = .buffering
+                        self.setPlaybackState(.buffering)
                     }
                 case .playing:
                     if self.playbackState != .paused {
-                        self.playbackState = .playing
+                        self.setPlaybackState(.playing)
                     }
                     self.cancelStallTimeout()
                 default:

@@ -63,6 +63,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         var analysisPosition: TimeInterval = 0
         var lastWindowEnd: TimeInterval = 0
         var processor = MusicHapticsDSPProcessor()
+        var mixer = MusicHapticsPerceptualMixer()
         let duration: TimeInterval
 
         init(identity: MusicHapticsIdentity, duration: TimeInterval, partial: MusicHapticsPartialCheckpoint?) {
@@ -105,6 +106,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
             if lastFrameTime.isFinite,
                abs(time - lastFrameTime) > max(0.5, frameDuration * 2) {
                 processor = MusicHapticsDSPProcessor()
+                mixer.reset()
             }
             // A replayed range is still added to the union, but must not
             // duplicate events already present in a checkpoint. This lets a
@@ -117,12 +119,14 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 // checkpoint. Do not let their state bridge into the first
                 // newly analyzed hole.
                 processor = MusicHapticsDSPProcessor()
+                mixer.reset()
             } else {
-                let produced = processor.process(
+                let candidates = processor.processCandidates(
                     monoSamples: mono,
                     startTime: time,
                     sampleRate: format.sampleRate
                 )
+                let produced = mixer.mix(frames: candidates).events
                 events.append(contentsOf: produced)
                 newlyAnalyzedEvents.append(contentsOf: produced)
             }
@@ -135,13 +139,23 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
             guard !timeWasAlreadyAnalyzed,
                   analysisPosition >= lastWindowEnd + 2 else { return nil }
             let windowEnd = min(duration, analysisPosition)
+            let pendingBeforeEnd = newlyAnalyzedEvents.filter { $0.time < windowEnd }
+            let windowStart = min(
+                lastWindowEnd,
+                pendingBeforeEnd.map(\.time).min() ?? lastWindowEnd
+            )
+            let windowEvents = pendingBeforeEnd.filter { event in
+                if event.kind == .transient {
+                    return event.time >= windowStart
+                }
+                return event.time + (event.duration ?? 0) > windowStart
+            }
+            newlyAnalyzedEvents.removeAll { windowEvents.contains($0) }
             let window = MusicHapticsAnalysisWindow(
-                startTime: lastWindowEnd,
+                startTime: windowStart,
                 endTime: windowEnd,
                 analysisPosition: analysisPosition,
-                events: newlyAnalyzedEvents.filter {
-                    $0.time >= lastWindowEnd && $0.time < windowEnd
-                },
+                events: windowEvents,
                 coverage: coverage,
                 analysisSpeedX: 1,
                 tempoBPM: processor.diagnostics.tempoBPM,
@@ -150,7 +164,8 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 analysisStreamBitrate: nil,
                 eventCount: events.count,
                 transientCount: events.filter { $0.kind == .transient }.count,
-                continuousCount: events.filter { $0.kind == .continuous }.count
+                continuousCount: events.filter { $0.kind == .continuous }.count,
+                mixerDiagnostics: mixer.diagnostics
             )
             lastWindowEnd = windowEnd
             return window.events.isEmpty ? nil : window
@@ -175,13 +190,15 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         }
 
         func flush() {
-            let produced = processor.finish()
+            let produced = mixer.mix(frames: processor.finishCandidates()).events
+                + mixer.finish().events
             events.append(contentsOf: produced)
             newlyAnalyzedEvents.append(contentsOf: produced)
         }
 
         func seek(to position: TimeInterval) {
             processor = MusicHapticsDSPProcessor()
+            mixer.reset()
             newlyAnalyzedEvents.removeAll(keepingCapacity: true)
             lastFrameTime = -.infinity
             analysisPosition = min(duration, max(0, position))
@@ -222,7 +239,8 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 tempoBPM: diagnostics.tempoBPM,
                 beatConfidence: diagnostics.beatConfidence,
                 transientCount: checkpoint.events.filter { $0.kind == .transient }.count,
-                continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count
+                continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count,
+                mixerDiagnostics: mixer.diagnostics
             )
         }
 
