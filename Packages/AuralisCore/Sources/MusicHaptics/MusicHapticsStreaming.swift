@@ -65,6 +65,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         var processor = MusicHapticsDSPProcessor()
         var mixer = MusicHapticsPerceptualMixer()
         let duration: TimeInterval
+        private let progressiveWindowAdvance: TimeInterval = 0.25
 
         init(identity: MusicHapticsIdentity, duration: TimeInterval, partial: MusicHapticsPartialCheckpoint?) {
             self.identity = identity
@@ -136,8 +137,13 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 lowerBound: time,
                 upperBound: max(time, time + frameDuration)
             ))
+            // Realtime tap output cannot wait for a two-second analysis
+            // batch: by then a just-closed texture has already passed the
+            // player. Progressive mixer segments are therefore published at
+            // the same bounded cadence as their materialization.
             guard !timeWasAlreadyAnalyzed,
-                  analysisPosition >= lastWindowEnd + 2 else { return nil }
+                  analysisPosition >= lastWindowEnd + progressiveWindowAdvance
+            else { return nil }
             let windowEnd = min(duration, analysisPosition)
             let pendingBeforeEnd = newlyAnalyzedEvents.filter { $0.time < windowEnd }
             let windowStart = min(

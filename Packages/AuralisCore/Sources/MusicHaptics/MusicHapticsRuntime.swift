@@ -189,8 +189,33 @@ public enum MusicHapticsEngineState: String, Sendable, Equatable {
     case needsRestart
 }
 
-    /// Pure ordering rule for the one authoritative playback plan. The resolver
-    /// has no AVFoundation dependency, so all branches can be regression
+/// Maps absolute track time into the real-time domain used by Core Haptics.
+/// Keeping this arithmetic in one pure type prevents a playback-rate change
+/// from being handled only by scheduler drift prediction while pattern event
+/// times remain at 1.0x.
+public enum MusicHapticsPlaybackTimeMapping {
+    public static func relativeTime(
+        trackTime: TimeInterval,
+        playbackPosition: TimeInterval,
+        playbackRate: Double
+    ) -> TimeInterval {
+        max(0, trackTime - playbackPosition) / safeRate(playbackRate)
+    }
+
+    public static func scaledDuration(
+        _ trackDuration: TimeInterval,
+        playbackRate: Double
+    ) -> TimeInterval {
+        max(0, trackDuration) / safeRate(playbackRate)
+    }
+
+    private static func safeRate(_ rate: Double) -> Double {
+        min(max(rate.isFinite ? rate : 1, 0.5), 2)
+    }
+}
+
+/// Pure ordering rule for the one authoritative playback plan. The resolver
+/// has no AVFoundation dependency, so all branches can be regression
 /// tested without a device or a haptics engine.
 public enum MusicHapticsPlaybackPlanResolver {
     public static func resolve(
@@ -279,6 +304,7 @@ final class CustomMusicHapticsEngine {
     private(set) var state: MusicHapticsEngineState = .notCreated
     private(set) var applicationSuspended = false
     private(set) var lastStopReason: String?
+    private(set) var isInBackground = false
 
     #if os(iOS)
     private var engine: CHHapticEngine?
@@ -293,15 +319,30 @@ final class CustomMusicHapticsEngine {
         #endif
     }
 
-    func play(_ timeline: MusicHapticsTimeline, offset: TimeInterval) throws {
+    func play(
+        _ timeline: MusicHapticsTimeline,
+        offset: TimeInterval,
+        playbackRate: Double = 1
+    ) throws {
         #if os(iOS)
         guard supportsHaptics else { return }
+        let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
         let engine = try prepareEngine()
         stop()
-        let pattern = try makePattern(events: timeline.events, timeShift: 0, offset: 0, intensity: .medium)
+        let pattern = try makePattern(
+            events: timeline.events,
+            timeShift: 0,
+            offset: 0,
+            intensity: .medium,
+            playbackRate: safeRate
+        )
         let player = try engine.makeAdvancedPlayer(with: pattern)
         players = [player]
-        try player.seek(toOffset: max(0, offset))
+        try player.seek(toOffset: MusicHapticsPlaybackTimeMapping.relativeTime(
+            trackTime: max(0, offset),
+            playbackPosition: 0,
+            playbackRate: safeRate
+        ))
         try player.start(atTime: CHHapticTimeImmediate)
         #endif
     }
@@ -313,13 +354,15 @@ final class CustomMusicHapticsEngine {
     func play(
         _ window: MusicHapticsAnalysisWindow,
         from currentPosition: TimeInterval,
-        intensity: MusicHapticsIntensity = .medium
+        intensity: MusicHapticsIntensity = .medium,
+        playbackRate: Double = 1
     ) {
         #if os(iOS)
         guard supportsHaptics,
               !window.events.filter({ shouldKeep($0, intensity: intensity) }).isEmpty
         else { return }
         do {
+            let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
             let engine = try prepareEngine()
             let pattern = try makePattern(
                 events: window.events,
@@ -328,7 +371,8 @@ final class CustomMusicHapticsEngine {
                 // own start must not be added a second time.
                 timeShift: 0,
                 offset: max(0, currentPosition),
-                intensity: intensity
+                intensity: intensity,
+                playbackRate: safeRate
             )
             let player = try engine.makeAdvancedPlayer(with: pattern)
             if players.count >= 8 {
@@ -351,11 +395,16 @@ final class CustomMusicHapticsEngine {
         #endif
     }
 
-    func resume(at offset: TimeInterval) {
+    func resume(at offset: TimeInterval, playbackRate: Double = 1) {
         #if os(iOS)
         do {
             guard let player = players.last else { return }
-            try player.seek(toOffset: max(0, offset))
+            let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
+            try player.seek(toOffset: MusicHapticsPlaybackTimeMapping.relativeTime(
+                trackTime: max(0, offset),
+                playbackPosition: 0,
+                playbackRate: safeRate
+            ))
             try player.resume(atTime: CHHapticTimeImmediate)
         } catch {
             stop()
@@ -365,11 +414,16 @@ final class CustomMusicHapticsEngine {
         #endif
     }
 
-    func seek(to offset: TimeInterval, playing: Bool) {
+    func seek(to offset: TimeInterval, playing: Bool, playbackRate: Double = 1) {
         #if os(iOS)
         do {
             guard let player = players.last else { return }
-            try player.seek(toOffset: max(0, offset))
+            let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
+            try player.seek(toOffset: MusicHapticsPlaybackTimeMapping.relativeTime(
+                trackTime: max(0, offset),
+                playbackPosition: 0,
+                playbackRate: safeRate
+            ))
             if playing { try player.resume(atTime: CHHapticTimeImmediate) }
         } catch {
             stop()
@@ -386,14 +440,11 @@ final class CustomMusicHapticsEngine {
         #endif
     }
 
-    /// Mark the lifecycle transition explicitly. Audio background playback is
-    /// allowed to continue, but custom Core Haptics is not assumed to survive
-    /// suspension. The next foreground path owns the single restart attempt.
+    /// Mark the lifecycle transition without preemptively stopping a running
+    /// engine/player. iOS may suspend Core Haptics later; its stoppedHandler is
+    /// the authority that records an actual suspension and requests recovery.
     func applicationDidEnterBackground() {
-        applicationSuspended = true
-        lastStopReason = "applicationSuspended"
-        if state != .notCreated { state = .needsRestart }
-        stop()
+        isInBackground = true
     }
 
     /// iOS may suspend a custom haptic engine while audio continues. Recovery
@@ -401,6 +452,7 @@ final class CustomMusicHapticsEngine {
     /// AVPlayer position to rebuild future output; it never starts haptics in
     /// the background or relies on private lifecycle workarounds.
     func restartIfNeeded() {
+        isInBackground = false
         #if os(iOS)
         guard applicationSuspended || state == .needsRestart || state == .stopped else { return }
         guard engine != nil else {
@@ -462,23 +514,43 @@ final class CustomMusicHapticsEngine {
         events: [MusicHapticsEvent],
         timeShift: TimeInterval,
         offset: TimeInterval,
-        intensity: MusicHapticsIntensity
+        intensity: MusicHapticsIntensity,
+        playbackRate: Double
     ) throws -> CHHapticPattern {
+        let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
         let selectedEvents = events.filter { shouldKeep($0, intensity: intensity) }
         let hapticEvents = selectedEvents.compactMap { event -> CHHapticEvent? in
-            let eventOffset = event.time - offset
-            let relativeTime = timeShift + eventOffset
             let eventEnd = event.time + (event.duration ?? 0)
-            guard eventEnd > offset, relativeTime >= 0 else { return nil }
-            let duration = max(0.02, eventEnd - max(offset, event.time))
             switch event.kind {
             case .transient:
+                guard event.time >= offset else { return nil }
+                let relativeTime = timeShift + MusicHapticsPlaybackTimeMapping.relativeTime(
+                    trackTime: event.time,
+                    playbackPosition: offset,
+                    playbackRate: safeRate
+                )
+                guard relativeTime >= 0 else { return nil }
                 return CHHapticEvent(
                     eventType: .hapticTransient,
                     parameters: parameters(for: event, intensity: intensity),
                     relativeTime: relativeTime
                 )
             case .continuous:
+                guard eventEnd > offset else { return nil }
+                let segmentStart = max(offset, event.time)
+                let relativeTime = timeShift + MusicHapticsPlaybackTimeMapping.relativeTime(
+                    trackTime: segmentStart,
+                    playbackPosition: offset,
+                    playbackRate: safeRate
+                )
+                let duration = max(
+                    0.02,
+                    MusicHapticsPlaybackTimeMapping.scaledDuration(
+                        eventEnd - segmentStart,
+                        playbackRate: safeRate
+                    )
+                )
+                guard relativeTime >= 0 else { return nil }
                 return CHHapticEvent(
                     eventType: .hapticContinuous,
                     parameters: parameters(for: event, intensity: intensity),
@@ -489,17 +561,36 @@ final class CustomMusicHapticsEngine {
         }
         let curves = selectedEvents.flatMap { event -> [CHHapticParameterCurve] in
             guard event.kind == .continuous, event.curve.count >= 2 else { return [] }
-            let start = timeShift + event.time - offset
+            let eventEnd = event.time + (event.duration ?? 0)
+            guard eventEnd > offset else { return [] }
+            let segmentStart = max(offset, event.time)
+            let trackDuration = max(0.02, eventEnd - segmentStart)
+            let start = timeShift + MusicHapticsPlaybackTimeMapping.relativeTime(
+                trackTime: segmentStart,
+                playbackPosition: offset,
+                playbackRate: safeRate
+            )
             guard start >= 0 else { return [] }
-            let intensityPoints = event.curve.map {
+            let curve = scaledCurve(
+                for: event,
+                trimOffset: max(0, segmentStart - event.time),
+                duration: trackDuration
+            )
+            let intensityPoints = curve.map {
                 CHHapticParameterCurve.ControlPoint(
-                    relativeTime: $0.timeOffset,
+                    relativeTime: MusicHapticsPlaybackTimeMapping.scaledDuration(
+                        $0.timeOffset,
+                        playbackRate: safeRate
+                    ),
                     value: min(0.92, $0.intensity * intensity.masterIntensity * intensity.continuousTextureScale)
                 )
             }
-            let sharpnessPoints = event.curve.map {
+            let sharpnessPoints = curve.map {
                 CHHapticParameterCurve.ControlPoint(
-                    relativeTime: $0.timeOffset,
+                    relativeTime: MusicHapticsPlaybackTimeMapping.scaledDuration(
+                        $0.timeOffset,
+                        playbackRate: safeRate
+                    ),
                     value: $0.sharpness
                 )
             }
@@ -517,6 +608,75 @@ final class CustomMusicHapticsEngine {
             ]
         }
         return try CHHapticPattern(events: hapticEvents, parameterCurves: curves)
+    }
+
+    private func scaledCurve(
+        for event: MusicHapticsEvent,
+        trimOffset: TimeInterval,
+        duration: TimeInterval
+    ) -> [MusicHapticsCurvePoint] {
+        let source = event.curve.sorted { $0.timeOffset < $1.timeOffset }
+        guard !source.isEmpty else {
+            return [
+                MusicHapticsCurvePoint(timeOffset: 0, intensity: event.intensity, sharpness: event.sharpness),
+                MusicHapticsCurvePoint(timeOffset: duration, intensity: event.intensity, sharpness: event.sharpness),
+            ]
+        }
+        let upperOffset = trimOffset + duration
+        let start = interpolatedCurvePoint(source, at: trimOffset)
+        let end = interpolatedCurvePoint(source, at: upperOffset)
+        let interior = source.filter {
+            $0.timeOffset > trimOffset + 0.0005
+                && $0.timeOffset < upperOffset - 0.0005
+        }
+        var result = ([start] + interior + [end]).map {
+            MusicHapticsCurvePoint(
+                timeOffset: min(duration, max(0, $0.timeOffset - trimOffset)),
+                intensity: $0.intensity,
+                sharpness: $0.sharpness
+            )
+        }
+        result.sort { $0.timeOffset < $1.timeOffset }
+        var unique: [MusicHapticsCurvePoint] = []
+        for point in result {
+            if let last = unique.last,
+               abs(last.timeOffset - point.timeOffset) <= 0.0005 {
+                unique[unique.count - 1] = point
+            } else {
+                unique.append(point)
+            }
+        }
+        return unique
+    }
+
+    private func interpolatedCurvePoint(
+        _ points: [MusicHapticsCurvePoint],
+        at offset: TimeInterval
+    ) -> MusicHapticsCurvePoint {
+        if offset <= points[0].timeOffset {
+            return MusicHapticsCurvePoint(
+                timeOffset: offset,
+                intensity: points[0].intensity,
+                sharpness: points[0].sharpness
+            )
+        }
+        for pair in zip(points, points.dropFirst()) {
+            let (lower, upper) = pair
+            guard offset <= upper.timeOffset else { continue }
+            let span = max(0.0001, upper.timeOffset - lower.timeOffset)
+            let fraction = Float(min(1, max(0, (offset - lower.timeOffset) / span)))
+            return MusicHapticsCurvePoint(
+                timeOffset: offset,
+                intensity: lower.intensity + (upper.intensity - lower.intensity) * fraction,
+                sharpness: lower.sharpness + (upper.sharpness - lower.sharpness) * fraction
+            )
+        }
+        let last = points[points.count - 1]
+        return MusicHapticsCurvePoint(
+            timeOffset: offset,
+            intensity: last.intensity,
+            sharpness: last.sharpness
+        )
     }
 
     private func prepareEngine() throws -> CHHapticEngine {
@@ -549,6 +709,7 @@ final class CustomMusicHapticsEngine {
         self.engine = engine
         state = .running
         applicationSuspended = false
+        isInBackground = false
         return engine
     }
     #endif
@@ -937,7 +1098,13 @@ public final class MusicHapticsCoordinator {
             source = .system
         case let .custom(timeline):
             do {
-                if !isInBackground { try custom.play(timeline, offset: position) }
+                if !isInBackground {
+                    try custom.play(
+                        timeline,
+                        offset: position,
+                        playbackRate: playbackRate
+                    )
+                }
                 currentTimeline = timeline
                 source = .custom
             } catch {
@@ -1026,8 +1193,20 @@ public final class MusicHapticsCoordinator {
         playbackIsPlaying = true
         audioBuffering = false
         guard !isInBackground else { return }
-        if source == .custom {
-            custom.resume(at: position)
+        if source == .custom, let timeline = currentTimeline {
+            custom.stop()
+            do {
+                try custom.play(
+                    timeline,
+                    offset: position,
+                    playbackRate: playbackRate
+                )
+            } catch {
+                source = .none
+                currentPlanReason = "custom_resume_failed"
+            }
+        } else if source == .custom {
+            custom.resume(at: position, playbackRate: playbackRate)
         } else if case .analyzeLookahead = currentPlan {
             let windows = rollingScheduler.resume(position: position, rate: playbackRate)
             if rollingScheduler.consumeHapticFlushRequest() { custom.stop() }
@@ -1046,7 +1225,11 @@ public final class MusicHapticsCoordinator {
         playbackIsPlaying = playing
         guard !isInBackground else { return }
         if source == .custom {
-            custom.seek(to: position, playing: playing)
+            custom.seek(
+                to: position,
+                playing: playing,
+                playbackRate: playbackRate
+            )
         } else if case .analyzeLookahead = currentPlan {
             custom.stop()
             let windows = rollingScheduler.seek(to: position, playing: playing, rate: playbackRate)
@@ -1064,12 +1247,17 @@ public final class MusicHapticsCoordinator {
     ) {
         let previousPosition = currentPosition
         currentPosition = max(0, position)
-        playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
+        let safeRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
+        let rateChanged = abs(safeRate - playbackRate) > 0.02
+        playbackRate = safeRate
         playbackIsPlaying = isPlaying
         if isPlaying { audioBuffering = false }
         if currentPosition + 0.15 < previousPosition {
             custom.stop()
             activeAnalysisSink?.seek(to: currentPosition)
+        }
+        if rateChanged, !isInBackground, !audioBuffering {
+            rebaseForPlaybackRateChange(position: currentPosition, isPlaying: isPlaying)
         }
         guard case .analyzeLookahead = currentPlan, !isInBackground else { return }
         pumpScheduler(position: currentPosition, isPlaying: isPlaying)
@@ -1088,8 +1276,9 @@ public final class MusicHapticsCoordinator {
     }
 
     /// Background suspension is an expected iOS lifecycle outcome for custom
-    /// haptics. Preserve analysis/checkpoint state, stop future output, and do
-    /// not attempt to restart the engine while the app is suspended.
+    /// haptics. Preserve analysis/checkpoint state and stop handing out future
+    /// scheduler windows, but leave an already-running Core Haptics player to
+    /// the system instead of preemptively stopping it.
     public func applicationDidEnterBackground() {
         isInBackground = true
         custom.applicationDidEnterBackground()
@@ -1121,7 +1310,11 @@ public final class MusicHapticsCoordinator {
         case let .custom(timeline):
             custom.stop()
             do {
-                try custom.play(timeline, offset: currentPosition)
+                try custom.play(
+                    timeline,
+                    offset: currentPosition,
+                    playbackRate: playbackRate
+                )
                 currentTimeline = timeline
                 source = .custom
             } catch {
@@ -1505,7 +1698,12 @@ public final class MusicHapticsCoordinator {
               !audioBuffering,
               currentPlan.kind == .analyze || realtimeFallbackPreparationID == preparationID
         else { return }
-        custom.play(window, from: currentPosition, intensity: .medium)
+        custom.play(
+            window,
+            from: currentPosition,
+            intensity: .medium,
+            playbackRate: playbackRate
+        )
         let transientCount = window.events.filter { $0.kind == .transient }.count
         let continuousCount = window.events.filter { $0.kind == .continuous }.count
         analysisSnapshot = MusicHapticsAnalysisSnapshot(
@@ -1570,6 +1768,46 @@ public final class MusicHapticsCoordinator {
         )
     }
 
+    private func rebaseForPlaybackRateChange(
+        position: TimeInterval,
+        isPlaying: Bool
+    ) {
+        switch currentPlan {
+        case let .custom(timeline):
+            custom.stop()
+            guard isPlaying else { return }
+            do {
+                try custom.play(
+                    timeline,
+                    offset: position,
+                    playbackRate: playbackRate
+                )
+                currentTimeline = timeline
+                source = .custom
+            } catch {
+                currentTimeline = nil
+                source = .none
+                currentPlanReason = "custom_rate_rebase_failed"
+            }
+        case .analyzeLookahead:
+            custom.stop()
+            guard realtimeFallbackPreparationID == nil else { return }
+            let windows = rollingScheduler.seek(
+                to: position,
+                playing: isPlaying,
+                rate: playbackRate
+            )
+            if rollingScheduler.consumeHapticFlushRequest() { custom.stop() }
+            playScheduledWindows(windows, position: position)
+        case .analyze:
+            // Realtime fallback windows are timestamped in track time. Drop
+            // the old pattern; the next PCM window is built at the new rate.
+            custom.stop()
+        case .disabled, .system:
+            break
+        }
+    }
+
     private func pumpScheduler(position: TimeInterval, isPlaying: Bool) {
         guard !isInBackground, !audioBuffering else { return }
         if position + 0.15 < currentPosition { custom.stop() }
@@ -1590,7 +1828,12 @@ public final class MusicHapticsCoordinator {
     ) {
         guard !isInBackground, !audioBuffering else { return }
         for window in windows {
-            custom.play(window, from: position, intensity: .medium)
+            custom.play(
+                window,
+                from: position,
+                intensity: .medium,
+                playbackRate: playbackRate
+            )
         }
     }
 

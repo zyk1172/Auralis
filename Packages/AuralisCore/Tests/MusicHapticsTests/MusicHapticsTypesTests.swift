@@ -160,7 +160,7 @@ import Testing
     #expect(complete.timeline().algorithmVersion == MusicHapticsTimeline.algorithmVersion)
 }
 
-@Test func classAwareEventDedupKeepsDifferentRhythmicClasses() {
+@Test func eventDedupFusesDifferentTransientClassesInsideCollisionWindow() {
     let kick = MusicHapticsEvent(
         time: 1,
         intensity: 0.7,
@@ -183,9 +183,32 @@ import Testing
         classification: .highPercussion
     )
     let merged = MusicHapticsEventDeduplicator.merge([kick, duplicateKick, hat])
-    #expect(merged.count == 2)
-    #expect(merged.contains { $0.classification == .kick && $0.intensity == 0.7 })
-    #expect(merged.contains { $0.classification == .highPercussion })
+    #expect(merged.count == 1)
+    #expect(merged[0].classification == .kick)
+    #expect(merged[0].intensity > 0.7)
+}
+
+@Test func playbackRateMappingScalesTrackTimeAndDuration() {
+    #expect(abs(MusicHapticsPlaybackTimeMapping.relativeTime(
+        trackTime: 12,
+        playbackPosition: 10,
+        playbackRate: 2
+    ) - 1) < 0.0001)
+    #expect(abs(MusicHapticsPlaybackTimeMapping.relativeTime(
+        trackTime: 12,
+        playbackPosition: 10,
+        playbackRate: 0.5
+    ) - 4) < 0.0001)
+    #expect(abs(MusicHapticsPlaybackTimeMapping.scaledDuration(
+        4,
+        playbackRate: 2
+    ) - 2) < 0.0001)
+}
+
+@Test func voiceBudgetSeparatesTransientAndContinuousCaps() {
+    let budget = HapticVoiceBudget(maxContinuousVoices: 4)
+    #expect(budget.maxTransientVoices == 1)
+    #expect(budget.maxContinuousVoices == 1)
 }
 
 @Test func v2DSPSilenceDoesNotCreateHaptics() {
@@ -449,6 +472,48 @@ private actor AnalysisCapture {
     func record(_ result: MusicHapticsAnalysisResult) {
         self.result = result
     }
+}
+
+private actor WindowCapture {
+    var windows: [MusicHapticsAnalysisWindow] = []
+
+    func record(_ window: MusicHapticsAnalysisWindow) {
+        windows.append(window)
+    }
+}
+
+@Test func streamingAnalysisPublishesProgressiveWindowsBeforeTwoSecondBatch() async {
+    let identity = MusicHapticsIdentity(title: "Progressive", artist: "Artist", durationMilliseconds: 10_000)
+    let capture = WindowCapture()
+    let analyzer = StreamingMusicHapticsAnalyzer(
+        identity: identity,
+        duration: 10,
+        onResult: { _ in },
+        onWindow: { window in Task { await capture.record(window) } }
+    )
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 20,
+        channels: 1,
+        sampleType: .int16,
+        interleaved: true,
+        bytesPerFrame: 2,
+        bytesPerSample: 2
+    )!
+    let samples = Array(repeating: Int16(1_200), count: 20)
+    let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+
+    analyzer.begin(format: format)
+    for second in 0..<4 {
+        analyzer.consumePCM(bytes, time: Double(second), format: format, frameCount: 20)
+    }
+    for _ in 0..<100 where await capture.windows.isEmpty {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    let firstWindow = await capture.windows.first
+    #expect(firstWindow != nil)
+    #expect(firstWindow?.endTime ?? 2 < 2)
+    #expect(firstWindow?.events.contains { $0.kind == .continuous } == true)
+    analyzer.cancel()
 }
 
 @Test func streamingAnalysisResumesAndMergesPartialRanges() async {
