@@ -129,6 +129,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     private var activeTexturePeak: Float = 0
     private var activeTextureSharpness: Float = 0
     private var activeTexturePoints: [MusicHapticsCurvePoint] = []
+    private var activeTextureLastSnapshotTime: TimeInterval?
     private var rmsHistory: [Float] = []
     private var onsetHistory: [Float] = []
     private var beatTracker = MusicHapticsBeatTracker()
@@ -301,6 +302,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         activeTexturePeak = 0
         activeTextureSharpness = 0
         activeTexturePoints.removeAll(keepingCapacity: true)
+        activeTextureLastSnapshotTime = nil
         rmsHistory.removeAll(keepingCapacity: true)
         onsetHistory.removeAll(keepingCapacity: true)
         beatTracker.reset()
@@ -396,6 +398,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
                 intensity: baseIntensity,
                 sharpness: textureClass == .buildTexture ? 0.42 : 0.16
             )
+            if shouldEmitTextureSnapshot(at: time),
+               let texture = textureSnapshot() {
+                events.append(texture)
+                activeTextureLastSnapshotTime = time
+            }
         } else if let lastTextureTime = activeTextureLastTime,
                   time - lastTextureTime > 0.18,
                   let texture = finishTexture() {
@@ -486,7 +493,12 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         }
     }
 
-    private mutating func finishTexture() -> MusicHapticsEvent? {
+    private func shouldEmitTextureSnapshot(at time: TimeInterval) -> Bool {
+        guard let last = activeTextureLastSnapshotTime else { return true }
+        return time - last >= 0.25
+    }
+
+    private func textureSnapshot() -> MusicHapticsEvent? {
         guard let start = activeTextureStart,
               let last = activeTextureLastTime,
               let eventClass = activeTextureClass
@@ -507,7 +519,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         if curve.last?.timeOffset != duration {
             curve.append(MusicHapticsCurvePoint(timeOffset: duration, intensity: activeTexturePeak * 0.76, sharpness: activeTextureSharpness))
         }
-        let event = MusicHapticsEvent(
+        return MusicHapticsEvent(
             time: start,
             duration: duration,
             intensity: activeTexturePeak,
@@ -516,12 +528,17 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             classification: eventClass,
             curve: curve
         )
+    }
+
+    private mutating func finishTexture() -> MusicHapticsEvent? {
+        let event = textureSnapshot()
         activeTextureStart = nil
         activeTextureLastTime = nil
         activeTextureClass = nil
         activeTexturePeak = 0
         activeTextureSharpness = 0
         activeTexturePoints.removeAll(keepingCapacity: true)
+        activeTextureLastSnapshotTime = nil
         return event
     }
 
@@ -707,9 +724,9 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
 
 }
 
-/// Event thinning is deliberately class-aware.  A kick and a hi-hat at the
-/// same time are allowed to coexist, while duplicate detections of one class
-/// are collapsed only within that class's short refractory window.
+/// Event thinning keeps continuous texture curves class-aware, but transient
+/// collisions are always collapsed across classes. The final timeline must
+/// preserve the same one-transient voice budget as the streaming mixer.
 public enum MusicHapticsEventDeduplicator {
     public static func merge(_ input: [MusicHapticsEvent]) -> [MusicHapticsEvent] {
         var result: [MusicHapticsEvent] = []
@@ -751,6 +768,58 @@ public enum MusicHapticsEventDeduplicator {
                 result[index] = event
             }
         }
+        return collapseTransientCollisions(result)
+    }
+
+    private static func collapseTransientCollisions(
+        _ input: [MusicHapticsEvent]
+    ) -> [MusicHapticsEvent] {
+        let sorted = input.sorted { $0.time < $1.time }
+        var result: [MusicHapticsEvent] = []
+        var cluster: [MusicHapticsEvent] = []
+
+        func flushCluster() {
+            guard !cluster.isEmpty else { return }
+            if let fused = fusedTransientEventForDeduplication(cluster) {
+                result.append(fused)
+            }
+            cluster.removeAll(keepingCapacity: true)
+        }
+
+        for event in sorted {
+            guard event.kind == .transient else {
+                result.append(event)
+                continue
+            }
+            if let first = cluster.first,
+               event.time - first.time <= 0.070 {
+                cluster.append(event)
+            } else {
+                flushCluster()
+                cluster = [event]
+            }
+        }
+        flushCluster()
         return result.sorted { $0.time < $1.time }
+    }
+
+    private static func fusedTransientEventForDeduplication(
+        _ cluster: [MusicHapticsEvent]
+    ) -> MusicHapticsEvent? {
+        let realCandidates = cluster.filter { $0.classification != .climax }
+        guard let dominant = realCandidates.max(by: {
+            deduplicationScore($0) < deduplicationScore($1)
+        }) else { return nil }
+        let supports = realCandidates.filter { $0 != dominant }
+        let modifiers = cluster.filter { $0.classification == .climax }
+        return fusedTransientEvent(
+            dominant: dominant,
+            supports: supports,
+            climaxModifiers: modifiers
+        )
+    }
+
+    private static func deduplicationScore(_ event: MusicHapticsEvent) -> Float {
+        transientScore(event)
     }
 }

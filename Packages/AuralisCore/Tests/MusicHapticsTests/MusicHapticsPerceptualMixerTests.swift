@@ -36,38 +36,69 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
 
 @Test func sustainedSectionIsOneContinuousVoice() {
     var mixer = MusicHapticsPerceptualMixer()
+    var output: [MusicHapticsEvent] = []
     for index in 0..<8 {
-        _ = mixer.mix(events: [texture(Double(index) * 0.22)], time: Double(index) * 0.22, energyLevel: 0.5)
+        output.append(contentsOf: mixer.mix(
+            events: [texture(Double(index) * 0.22)],
+            time: Double(index) * 0.22,
+            energyLevel: 0.5
+        ).events)
     }
-    let result = mixer.finish()
-    #expect(result.events.count == 1)
-    #expect(result.events[0].kind == .continuous)
-    #expect((result.events[0].duration ?? 0) > 1.2)
-    #expect(result.events[0].curve.count >= 2)
+    #expect(output.contains { $0.kind == .continuous })
+    output.append(contentsOf: mixer.finish().events)
+    let continuous = output.filter { $0.kind == .continuous }
+    #expect(continuous.count >= 2)
+    #expect(continuous.allSatisfy { $0.curve.count >= 2 })
+    #expect(continuous.dropFirst().enumerated().allSatisfy { index, event in
+        let previous = continuous[index]
+        return event.time >= previous.time + (previous.duration ?? 0) - 0.001
+    })
+    #expect(continuous.reduce(0) { $0 + ($1.duration ?? 0) } > 1.2)
 }
 
 @Test func climaxModifiesKickWithoutAddingTransientVoice() {
     var mixer = MusicHapticsPerceptualMixer()
-    let result = mixer.mix(events: [
+    _ = mixer.mix(events: [
         transient(1, intensity: 0.65, classification: .kick),
         transient(1.01, intensity: 0.9, classification: .climax, climaxAmount: 0.8),
     ], time: 1, energyLevel: 0.8)
+    let result = mixer.finish()
     #expect(result.events.count == 1)
     #expect(result.events[0].classification == .kick)
     #expect(result.events[0].climaxAmount > 0)
     #expect(result.diagnostics.dominantTransientCount == 1)
 }
 
-@Test func kickKeepsPriorityAndAtMostOneSupportingHat() {
+@Test func collisionFusesKickAndSupportingPercussionIntoOneTransient() {
     var mixer = MusicHapticsPerceptualMixer()
-    let result = mixer.mix(events: [
+    _ = mixer.mix(events: [
         transient(1, intensity: 0.9, classification: .kick),
         transient(1.02, intensity: 0.7, classification: .highPercussion),
         transient(1.03, intensity: 0.6, classification: .highPercussion),
     ], time: 1, energyLevel: 0.7)
-    #expect(result.events.contains { $0.classification == .kick })
-    #expect(result.events.filter { $0.kind == .transient }.count <= 2)
-    #expect(result.diagnostics.suppressedTransientCount >= 1)
+    let result = mixer.finish()
+    #expect(result.events.filter { $0.kind == .transient }.count == 1)
+    #expect(result.events.first?.classification == .kick)
+    #expect((result.events.first?.intensity ?? 0) > 0.9)
+    #expect(result.diagnostics.suppressedTransientCount >= 2)
+}
+
+@Test func collisionAcrossAnalysisFramesStillEmitsOneTransient() {
+    var mixer = MusicHapticsPerceptualMixer()
+    _ = mixer.mix(
+        events: [transient(1, intensity: 0.78, classification: .kick)],
+        time: 1,
+        energyLevel: 0.7
+    )
+    _ = mixer.mix(
+        events: [transient(1.04, intensity: 0.64, classification: .highPercussion)],
+        time: 1.04,
+        energyLevel: 0.7
+    )
+    let flushed = mixer.mix(events: [], time: 1.20, energyLevel: 0.7)
+    #expect(flushed.events.filter { $0.kind == .transient }.count == 1)
+    #expect(flushed.events.first?.classification == .kick)
+    #expect(flushed.events.first?.sharpness ?? 0 > 0.2)
 }
 
 @Test func highPercussionUsesEnergyDependentDensityBudget() {
@@ -100,7 +131,8 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
         energyLevel: 0.08,
         isQuiet: true
     )
-    #expect(important.events.contains { $0.classification == .snareClap })
+    let finished = mixer.finish()
+    #expect((important.events + finished.events).contains { $0.classification == .snareClap })
 }
 
 @Test func stableBeatGridPromotes120BPMAndExposesPhase() {
@@ -130,6 +162,22 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
     }
     #expect(estimates.allSatisfy { !$0.isBeat })
     #expect(estimates.last?.confidence ?? 1 < 0.45)
+}
+
+@Test func beatGridReacquiresAfterWrongInitialPeriod() {
+    var tracker = MusicHapticsBeatTracker()
+    let times: [TimeInterval] = [
+        0, 0.43, 0.86,
+        1.5122, 2.1644, 2.8166, 3.4688, 4.1210,
+        4.7732, 5.4254, 6.0776
+    ]
+    let estimates = times.map {
+        tracker.update(time: $0, onset: 1, threshold: 0.5, energy: 0.7)
+    }
+    let recovered = estimates.last!
+    #expect(abs((recovered.tempoBPM ?? 0) - 92) < 4)
+    #expect(recovered.confidence > 0.45)
+    #expect(estimates.dropFirst(2).contains { $0.tempoBPM ?? 0 < 110 })
 }
 
 @Test func halfDoubleTempoObservationsStayAt70BPM() {

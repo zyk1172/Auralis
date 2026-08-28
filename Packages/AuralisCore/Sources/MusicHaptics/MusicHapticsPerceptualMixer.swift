@@ -52,6 +52,10 @@ public struct MusicHapticsBeatTracker: Sendable {
         let energy: Float
     }
 
+    private struct CandidateObservation: Sendable {
+        let onGrid: Bool
+    }
+
     private var onsets: [Onset] = []
     private var intervals: [TimeInterval] = []
     private var lastOnsetTime: TimeInterval = -.infinity
@@ -59,6 +63,9 @@ public struct MusicHapticsBeatTracker: Sendable {
     private var phaseAnchor: TimeInterval?
     private var confidence: Double = 0
     private var lastTime: TimeInterval = 0
+    private var candidateHistory: [CandidateObservation] = []
+    private var lowConfidenceSince: TimeInterval?
+    private var lastReacquireTime: TimeInterval = -.infinity
 
     public init() {}
 
@@ -70,6 +77,9 @@ public struct MusicHapticsBeatTracker: Sendable {
         phaseAnchor = nil
         confidence = 0
         lastTime = 0
+        candidateHistory.removeAll(keepingCapacity: true)
+        lowConfidenceSince = nil
+        lastReacquireTime = -.infinity
     }
 
     public mutating func update(
@@ -116,40 +126,37 @@ public struct MusicHapticsBeatTracker: Sendable {
             )
         }
 
-        let normalizedIntervals = intervals.map { normalizedInterval($0, relativeTo: period) }
-        let medianInterval = median(normalizedIntervals)
-        let deviation = normalizedIntervals.isEmpty
-            ? 1
-            : normalizedIntervals.reduce(0) { $0 + abs($1 - medianInterval) } / Double(normalizedIntervals.count)
-        // FFT-frame quantization and interleaved sub-beat onsets can move a
-        // legitimate grid by a few frames. Keep the tolerance bounded, while
-        // still leaving irregular onset sequences below the promotion gate.
-        let consistency = max(0, min(1, 1 - deviation / max(0.001, medianInterval * 0.16)))
-        // Six matching intervals are the minimum useful evidence for a
-        // continuous grid. The seventh sample removes the early false
-        // promotion seen with a handful of coincident random onsets.
-        let maturity = min(1, Double(intervals.count) / 7)
-        confidence = max(0, min(1, consistency * maturity))
-
+        confidence = gridConfidence(for: period)
         if phaseAnchor == nil, candidate, confidence >= 0.35 {
             phaseAnchor = time
         }
-        let phaseValues: (phase: Double?, error: Double, next: TimeInterval?) = {
-            guard let phaseAnchor else { return (nil, 1, nil) }
-            let relative = (time - phaseAnchor) / period
-            let nearestBeatIndex = relative.rounded()
-            let predicted = phaseAnchor + nearestBeatIndex * period
-            let error = min(1, abs(time - predicted) / period)
-            let normalized = relative - floor(relative)
-            let nextIndex = max(nearestBeatIndex + (error < 0.005 ? 1 : 0), ceil(relative))
-            return (
-                normalized >= 0 ? normalized : normalized + 1,
-                error,
-                phaseAnchor + nextIndex * period
-            )
-        }()
-
-        let onGrid = phaseValues.error <= 0.22
+        var phaseValues = makePhaseValues(
+            at: time,
+            period: period,
+            anchor: phaseAnchor
+        )
+        var onGrid = phaseValues.error <= 0.22
+        if candidate {
+            candidateHistory.append(CandidateObservation(onGrid: onGrid))
+            if candidateHistory.count > 12 { candidateHistory.removeFirst() }
+            if confidence < 0.30 {
+                lowConfidenceSince = lowConfidenceSince ?? time
+            } else {
+                lowConfidenceSince = nil
+            }
+            if shouldReacquire(at: time), reacquirePeriod() {
+                guard let reacquiredPeriod = self.period else {
+                    return MusicHapticsBeatEstimate()
+                }
+                confidence = gridConfidence(for: reacquiredPeriod)
+                phaseValues = makePhaseValues(
+                    at: time,
+                    period: reacquiredPeriod,
+                    anchor: phaseAnchor
+                )
+                onGrid = phaseValues.error <= 0.22
+            }
+        }
         let promoted = candidate && confidence >= 0.45 && onGrid
         let latestEnergy = onsets.last?.energy ?? safeEnergy
         let strength: MusicHapticsBeatStrength
@@ -164,12 +171,163 @@ public struct MusicHapticsBeatTracker: Sendable {
             isBeat: promoted,
             strength: strength,
             confidence: confidence,
-            tempoBPM: 60 / period,
+            tempoBPM: 60 / (self.period ?? period),
             phase: phaseValues.phase,
             phaseAnchor: phaseAnchor,
             nextBeatTime: phaseValues.next,
             phaseError: phaseValues.error
         )
+    }
+
+    private func gridConfidence(for candidatePeriod: TimeInterval) -> Double {
+        let normalizedIntervals = intervals.map {
+            normalizedInterval($0, relativeTo: candidatePeriod)
+        }
+        let medianInterval = median(normalizedIntervals)
+        let deviation = normalizedIntervals.isEmpty
+            ? 1
+            : normalizedIntervals.reduce(0) {
+                $0 + abs($1 - medianInterval)
+            } / Double(normalizedIntervals.count)
+        let consistency = max(
+            0,
+            min(1, 1 - deviation / max(0.001, medianInterval * 0.16))
+        )
+        let maturity = min(1, Double(intervals.count) / 7)
+        return max(0, min(1, consistency * maturity))
+    }
+
+    private func makePhaseValues(
+        at time: TimeInterval,
+        period: TimeInterval,
+        anchor: TimeInterval?
+    ) -> (phase: Double?, error: Double, next: TimeInterval?) {
+        guard let anchor else { return (nil, 1, nil) }
+        let relative = (time - anchor) / period
+        let nearestBeatIndex = relative.rounded()
+        let predicted = anchor + nearestBeatIndex * period
+        let error = min(1, abs(time - predicted) / period)
+        let normalized = relative - floor(relative)
+        let nextIndex = max(
+            nearestBeatIndex + (error < 0.005 ? 1 : 0),
+            ceil(relative)
+        )
+        return (
+            normalized >= 0 ? normalized : normalized + 1,
+            error,
+            anchor + nextIndex * period
+        )
+    }
+
+    private func shouldReacquire(at time: TimeInterval) -> Bool {
+        guard intervals.count >= 6,
+              candidateHistory.count >= 6,
+              time - lastReacquireTime >= 2
+        else { return false }
+        let offGridCount = candidateHistory.filter { !$0.onGrid }.count
+        if Double(offGridCount) / Double(candidateHistory.count) >= 0.60 {
+            return true
+        }
+        if let lowConfidenceSince,
+           time - lowConfidenceSince >= 2.5 {
+            return true
+        }
+        return false
+    }
+
+    private mutating func reacquirePeriod() -> Bool {
+        let recentIntervals = Array(intervals.suffix(10))
+        guard recentIntervals.count >= 6 else { return false }
+
+        var candidates: [TimeInterval] = []
+        for interval in recentIntervals {
+            for value in [interval / 2, interval, interval * 2]
+                where value >= 0.30 && value <= 1.091 {
+                guard !candidates.contains(where: {
+                    abs(log($0 / value)) < log(1.01)
+                }) else { continue }
+                candidates.append(value)
+            }
+        }
+        guard !candidates.isEmpty else { return false }
+
+        func score(_ candidate: TimeInterval) -> (
+            support: Int,
+            residual: Double,
+            directResidual: Double
+        ) {
+            let residuals = recentIntervals.map {
+                intervalResidual($0, relativeTo: candidate)
+            }
+            let support = residuals.filter { $0 <= log(1.16) }.count
+            let mean = residuals.reduce(0, +) / Double(residuals.count)
+            let medianRawInterval = median(recentIntervals)
+            return (
+                support,
+                mean,
+                abs(log(medianRawInterval / candidate))
+            )
+        }
+
+        guard let best = candidates.max(by: { lhs, rhs in
+            let left = score(lhs)
+            let right = score(rhs)
+            if left.support != right.support {
+                return left.support < right.support
+            }
+            if abs(left.residual - right.residual) > 0.0001 {
+                return left.residual > right.residual
+            }
+            return left.directResidual > right.directResidual
+        }) else { return false }
+        let bestScore = score(best)
+        guard bestScore.support >= Int(ceil(Double(recentIntervals.count) * 0.60)) else {
+            return false
+        }
+        if let current = period {
+            let currentScore = score(current)
+            let materiallyBetter = bestScore.support > currentScore.support
+                || bestScore.residual + 0.05 < currentScore.residual
+            guard abs(log(best / current)) > log(1.03), materiallyBetter else {
+                return false
+            }
+        }
+
+        period = best
+        intervals = recentIntervals.filter {
+            intervalResidual($0, relativeTo: best) <= log(1.16)
+        }
+        let recentOnsetTimes = onsets.suffix(12).map(\.time)
+        phaseAnchor = recentOnsetTimes.min {
+            phaseResidual(anchor: $0, times: recentOnsetTimes, period: best)
+                < phaseResidual(anchor: $1, times: recentOnsetTimes, period: best)
+        }
+        confidence = gridConfidence(for: best)
+        lastReacquireTime = lastTime
+        candidateHistory.removeAll(keepingCapacity: true)
+        lowConfidenceSince = nil
+        return true
+    }
+
+    private func intervalResidual(
+        _ interval: TimeInterval,
+        relativeTo candidatePeriod: TimeInterval
+    ) -> Double {
+        let options = [interval / 2, interval, interval * 2]
+            .filter { $0 >= 0.30 && $0 <= 1.091 }
+        return options.map { abs(log($0 / candidatePeriod)) }.min() ?? .infinity
+    }
+
+    private func phaseResidual(
+        anchor: TimeInterval,
+        times: [TimeInterval],
+        period: TimeInterval
+    ) -> Double {
+        guard !times.isEmpty else { return .infinity }
+        return times.reduce(0) { partial, time in
+            let relative = (time - anchor) / period
+            return partial + abs(relative - relative.rounded())
+        } / Double(times.count)
     }
 
     public var currentEstimate: MusicHapticsBeatEstimate {
@@ -258,20 +416,21 @@ public struct MusicHapticsCandidateFrame: Hashable, Sendable {
 }
 
 /// The perceptual budget is intentionally small. A collision can produce one
-/// dominant attack and one supporting texture, but never a stack of voices.
+/// fused transient and one independent continuous texture, but never a stack
+/// of transient voices.
 public struct HapticVoiceBudget: Hashable, Sendable {
     public let collisionWindow: TimeInterval
-    public let maxDominantTransientVoices: Int
-    public let maxSupportingTextureVoices: Int
+    /// Collision resolution is intentionally hard-capped at one transient;
+    /// this is a perceptual invariant, not a caller-tunable stack size.
+    public let maxTransientVoices: Int = 1
+    public let maxContinuousVoices: Int
 
     public init(
         collisionWindow: TimeInterval = 0.070,
-        maxDominantTransientVoices: Int = 1,
-        maxSupportingTextureVoices: Int = 1
+        maxContinuousVoices: Int = 1
     ) {
         self.collisionWindow = min(max(collisionWindow, 0.050), 0.080)
-        self.maxDominantTransientVoices = max(1, maxDominantTransientVoices)
-        self.maxSupportingTextureVoices = max(0, maxSupportingTextureVoices)
+        self.maxContinuousVoices = min(1, max(0, maxContinuousVoices))
     }
 }
 
@@ -329,6 +488,12 @@ public struct MusicHapticsMixerResult: Hashable, Sendable {
 /// haptic event stream. It owns only bounded history and deliberately does not
 /// amplify intensity when reducing voices.
 public struct MusicHapticsPerceptualMixer: Sendable {
+    private struct PendingTransientCluster: Sendable {
+        let firstTime: TimeInterval
+        var candidates: [MusicHapticsEvent]
+        var frame: MusicHapticsCandidateFrame
+    }
+
     private struct TextureAccumulator: Sendable {
         var start: TimeInterval
         var end: TimeInterval
@@ -336,6 +501,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         var peakIntensity: Float
         var sharpness: Float
         var points: [MusicHapticsCurvePoint]
+        var emittedEnd: TimeInterval
 
         init(_ event: MusicHapticsEvent) {
             let eventStart = event.time
@@ -348,6 +514,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             self.eventClass = eventClass
             peakIntensity = eventIntensity
             sharpness = eventSharpness
+            emittedEnd = eventStart
             let mappedPoints = event.curve.map {
                 MusicHapticsCurvePoint(
                     timeOffset: event.time - eventStart + $0.timeOffset,
@@ -377,37 +544,117 @@ public struct MusicHapticsPerceptualMixer: Sendable {
                         sharpness: $0.sharpness
                     )
             }
-            points.append(contentsOf: incoming)
+            for point in incoming {
+                if let index = points.firstIndex(where: {
+                    abs($0.timeOffset - point.timeOffset) <= 0.008
+                }) {
+                    points[index] = point
+                } else {
+                    points.append(point)
+                }
+            }
+            points.sort { $0.timeOffset < $1.timeOffset }
             if points.count > 128 {
                 points = Self.downsampleCurve(points, limit: 128)
             }
         }
 
-        func event(fatigueGain: Float) -> MusicHapticsEvent {
-            let duration = max(0.16, end - start)
-            var normalized = points
-                .map {
-                    MusicHapticsCurvePoint(
-                        timeOffset: min(duration, max(0, $0.timeOffset)),
-                        intensity: min(1, max(0, $0.intensity * fatigueGain)),
-                        sharpness: $0.sharpness
-                    )
+        mutating func materialize(
+            minimumDuration: TimeInterval,
+            force: Bool,
+            fatigueGain: Float
+        ) -> MusicHapticsEvent? {
+            let available = end - emittedEnd
+            guard force || available >= minimumDuration else { return nil }
+            let segmentEnd = max(emittedEnd, end)
+            guard segmentEnd - emittedEnd >= 0.02 else { return nil }
+            let result = segment(
+                from: emittedEnd,
+                to: segmentEnd,
+                fatigueGain: fatigueGain
+            )
+            emittedEnd = segmentEnd
+            return result
+        }
+
+        private func segment(
+            from lowerBound: TimeInterval,
+            to upperBound: TimeInterval,
+            fatigueGain: Float
+        ) -> MusicHapticsEvent {
+            let segmentStart = min(max(lowerBound, start), end)
+            let segmentEnd = min(max(upperBound, segmentStart), end)
+            let duration = max(0.02, segmentEnd - segmentStart)
+            let lowerOffset = max(0, segmentStart - start)
+            let upperOffset = max(lowerOffset, segmentEnd - start)
+            let startPoint = point(at: lowerOffset)
+            let endPoint = point(at: upperOffset)
+            let interior = points.filter {
+                $0.timeOffset > lowerOffset + 0.0005
+                    && $0.timeOffset < upperOffset - 0.0005
+            }
+            var normalized = ([startPoint] + interior + [endPoint]).map {
+                MusicHapticsCurvePoint(
+                    timeOffset: min(duration, max(0, $0.timeOffset - lowerOffset)),
+                    intensity: min(1, max(0, $0.intensity * fatigueGain)),
+                    sharpness: $0.sharpness
+                )
+            }
+            normalized.sort { $0.timeOffset < $1.timeOffset }
+            var unique: [MusicHapticsCurvePoint] = []
+            for point in normalized {
+                if let last = unique.last,
+                   abs(last.timeOffset - point.timeOffset) <= 0.0005 {
+                    unique[unique.count - 1] = point
+                } else {
+                    unique.append(point)
                 }
-                .sorted { $0.timeOffset < $1.timeOffset }
-            if normalized.first?.timeOffset != 0 {
-                normalized.insert(MusicHapticsCurvePoint(timeOffset: 0, intensity: peakIntensity * fatigueGain * 0.72, sharpness: sharpness), at: 0)
             }
-            if normalized.last?.timeOffset != duration {
-                normalized.append(MusicHapticsCurvePoint(timeOffset: duration, intensity: peakIntensity * fatigueGain * 0.76, sharpness: sharpness))
-            }
+            let segmentIntensity = unique.map(\.intensity).max() ?? peakIntensity
+            let segmentSharpness = unique.map(\.sharpness).max() ?? sharpness
             return MusicHapticsEvent(
-                time: start,
+                time: segmentStart,
                 duration: duration,
-                intensity: min(1, max(0, peakIntensity * fatigueGain)),
-                sharpness: sharpness,
+                intensity: min(1, max(0, segmentIntensity)),
+                sharpness: segmentSharpness,
                 kind: .continuous,
                 classification: eventClass,
-                curve: normalized
+                curve: unique
+            )
+        }
+
+        private func point(at offset: TimeInterval) -> MusicHapticsCurvePoint {
+            guard !points.isEmpty else {
+                return MusicHapticsCurvePoint(
+                    timeOffset: offset,
+                    intensity: peakIntensity,
+                    sharpness: sharpness
+                )
+            }
+            let sorted = points.sorted { $0.timeOffset < $1.timeOffset }
+            if offset <= sorted[0].timeOffset {
+                return MusicHapticsCurvePoint(
+                    timeOffset: offset,
+                    intensity: sorted[0].intensity,
+                    sharpness: sorted[0].sharpness
+                )
+            }
+            for pair in zip(sorted, sorted.dropFirst()) {
+                let (lower, upper) = pair
+                guard offset <= upper.timeOffset else { continue }
+                let span = max(0.0001, upper.timeOffset - lower.timeOffset)
+                let fraction = min(1, max(0, (offset - lower.timeOffset) / span))
+                return MusicHapticsCurvePoint(
+                    timeOffset: offset,
+                    intensity: lower.intensity + (upper.intensity - lower.intensity) * Float(fraction),
+                    sharpness: lower.sharpness + (upper.sharpness - lower.sharpness) * Float(fraction)
+                )
+            }
+            let last = sorted[sorted.count - 1]
+            return MusicHapticsCurvePoint(
+                timeOffset: offset,
+                intensity: last.intensity,
+                sharpness: last.sharpness
             )
         }
 
@@ -425,6 +672,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
 
     public let voiceBudget: HapticVoiceBudget
     private var activeTexture: TextureAccumulator?
+    private var pendingTransientCluster: PendingTransientCluster?
     private var recentOutput: [MusicHapticsEvent] = []
     private var acceptedTransientTimes: [TimeInterval] = []
     private var lastHighPercussionTime: TimeInterval = -.infinity
@@ -434,6 +682,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
     private var totalMergedCollisions = 0
     private var lastBeat = MusicHapticsBeatEstimate()
     private var lastDiagnostics = MusicHapticsMixerDiagnostics()
+    private let progressiveTextureCommitInterval: TimeInterval = 0.25
 
     public init(voiceBudget: HapticVoiceBudget = .init()) {
         self.voiceBudget = voiceBudget
@@ -443,6 +692,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
 
     public mutating func reset() {
         activeTexture = nil
+        pendingTransientCluster = nil
         recentOutput.removeAll(keepingCapacity: true)
         acceptedTransientTimes.removeAll(keepingCapacity: true)
         lastHighPercussionTime = -.infinity
@@ -461,13 +711,16 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             lastBeat = frame.beat
             pruneHistory(at: frame.time)
             let transientCandidates = frame.events.filter { $0.kind == .transient }
-            resolveTransients(transientCandidates, frame: frame, output: &output)
+            flushPendingTransientCluster(before: frame.time, output: &output)
+            enqueueTransients(transientCandidates, frame: frame, output: &output)
             for event in frame.events where event.kind == .continuous {
                 consumeTexture(event, frame: frame, output: &output)
             }
         }
-        // Transients are returned immediately. A texture is held until a gap
-        // or finish so a sustained bass section remains one continuous event.
+        // A transient is held for one collision window so adjacent DSP frames
+        // cannot escape the same one-voice cluster. Texture sections remain a
+        // single logical accumulator, but materialize non-overlapping suffixes
+        // progressively instead of waiting for section close.
         let resultEvents = output.sorted { $0.time < $1.time }
         appendHistory(resultEvents)
         let diagnostics = makeDiagnostics(at: frames.last?.time ?? 0)
@@ -498,13 +751,77 @@ public struct MusicHapticsPerceptualMixer: Sendable {
 
     public mutating func finish() -> MusicHapticsMixerResult {
         var output: [MusicHapticsEvent] = []
+        flushPendingTransientCluster(before: .infinity, output: &output)
         if let activeTexture {
-            output.append(activeTexture.event(fatigueGain: Float(fatigue(at: activeTexture.end))))
+            var activeTexture = activeTexture
+            if let segment = activeTexture.materialize(
+                minimumDuration: progressiveTextureCommitInterval,
+                force: true,
+                fatigueGain: Float(fatigue(at: activeTexture.end))
+            ) {
+                output.append(segment)
+            }
             self.activeTexture = nil
         }
         appendHistory(output)
         let diagnostics = makeDiagnostics(at: output.map(\.time).max() ?? 0)
         return MusicHapticsMixerResult(events: output.sorted { $0.time < $1.time }, diagnostics: diagnostics)
+    }
+
+    private mutating func enqueueTransients(
+        _ candidates: [MusicHapticsEvent],
+        frame: MusicHapticsCandidateFrame,
+        output: inout [MusicHapticsEvent]
+    ) {
+        for event in candidates.sorted(by: { $0.time < $1.time }) {
+            if var pendingTransientCluster,
+               event.time - pendingTransientCluster.firstTime <= voiceBudget.collisionWindow {
+                pendingTransientCluster.candidates.append(event)
+                pendingTransientCluster.frame = mergedFrame(
+                    pendingTransientCluster.frame,
+                    with: frame
+                )
+                self.pendingTransientCluster = pendingTransientCluster
+            } else {
+                flushPendingTransientCluster(before: event.time, output: &output)
+                pendingTransientCluster = PendingTransientCluster(
+                    firstTime: event.time,
+                    candidates: [event],
+                    frame: frame
+                )
+            }
+        }
+    }
+
+    private mutating func flushPendingTransientCluster(
+        before time: TimeInterval,
+        output: inout [MusicHapticsEvent]
+    ) {
+        guard let pendingTransientCluster,
+              time - pendingTransientCluster.firstTime > voiceBudget.collisionWindow
+                || !time.isFinite
+        else { return }
+        self.pendingTransientCluster = nil
+        resolveTransients(
+            pendingTransientCluster.candidates,
+            frame: pendingTransientCluster.frame,
+            output: &output
+        )
+    }
+
+    private func mergedFrame(
+        _ first: MusicHapticsCandidateFrame,
+        with second: MusicHapticsCandidateFrame
+    ) -> MusicHapticsCandidateFrame {
+        MusicHapticsCandidateFrame(
+            time: second.time,
+            events: [],
+            energyLevel: max(first.energyLevel, second.energyLevel),
+            slowEnergy: max(first.slowEnergy, second.slowEnergy),
+            onsetActivity: max(first.onsetActivity, second.onsetActivity),
+            beat: second.beat,
+            isQuiet: first.isQuiet && second.isQuiet
+        )
     }
 
     private mutating func resolveTransients(
@@ -555,7 +872,12 @@ public struct MusicHapticsPerceptualMixer: Sendable {
                 totalSuppressedHighPercussion += 1
                 continue
             }
-            var selected = applyClimax(modifiers, to: dominant)
+            let supports = realCandidates.filter { $0 != dominant }
+            var selected = fusedTransientEvent(
+                dominant: dominant,
+                supports: supports,
+                climaxModifiers: modifiers
+            )
             selected = attenuate(selected, factor: dominant.classification == .highPercussion ? Float(fatigue(at: selected.time)) : 1)
             output.append(selected)
             acceptedTransientTimes.append(selected.time)
@@ -563,31 +885,13 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             if dominant.classification == .highPercussion {
                 lastHighPercussionTime = dominant.time
             }
-
-            let supporting = realCandidates
-                .filter { $0 != dominant && ($0.classification == .highPercussion || $0.classification == .snareClap) }
-                .max(by: { score($0) < score($1) })
-            var supportingAccepted = false
-            if voiceBudget.maxSupportingTextureVoices > 0, let supporting {
-                if supporting.classification == .highPercussion {
-                    let minimumSpacing = highPercussionSpacing(energyLevel: frame.energyLevel)
-                    if supporting.time - lastHighPercussionTime >= minimumSpacing {
-                        output.append(attenuate(supporting, factor: Float(fatigue(at: supporting.time) * 0.58)))
-                        acceptedTransientTimes.append(supporting.time)
-                        supportingAccepted = true
-                        lastHighPercussionTime = supporting.time
-                    } else {
-                        totalSuppressedHighPercussion += 1
-                    }
-                } else {
-                    output.append(attenuate(supporting, factor: Float(fatigue(at: supporting.time) * 0.62)))
-                    acceptedTransientTimes.append(supporting.time)
-                    supportingAccepted = true
-                }
-            }
-            let accepted = 1 + (supportingAccepted ? 1 : 0)
-            totalSuppressedTransient += max(0, cluster.count - accepted)
-            totalMergedCollisions += max(0, cluster.count - accepted)
+            // Every non-dominant transient becomes a small accent inside the
+            // selected event. It is never emitted as a second haptic voice.
+            totalSuppressedTransient += max(0, cluster.count - 1)
+            totalSuppressedHighPercussion += supports.filter {
+                $0.classification == .highPercussion
+            }.count
+            totalMergedCollisions += max(0, cluster.count - 1)
         }
     }
 
@@ -596,13 +900,21 @@ public struct MusicHapticsPerceptualMixer: Sendable {
         frame: MusicHapticsCandidateFrame,
         output: inout [MusicHapticsEvent]
     ) {
+        guard voiceBudget.maxContinuousVoices > 0 else { return }
         if frame.isQuiet && event.classification != .sustainedBass {
             totalSuppressedTransient += 1
             return
         }
         if let activeTexture {
             if event.time >= activeTexture.start + 8 {
-                output.append(activeTexture.event(fatigueGain: Float(fatigue(at: activeTexture.end))))
+                var activeTexture = activeTexture
+                if let segment = activeTexture.materialize(
+                    minimumDuration: progressiveTextureCommitInterval,
+                    force: true,
+                    fatigueGain: Float(fatigue(at: activeTexture.end))
+                ) {
+                    output.append(segment)
+                }
                 self.activeTexture = nil
             }
         }
@@ -611,29 +923,36 @@ public struct MusicHapticsPerceptualMixer: Sendable {
             if event.time <= activeEnd + 0.16 {
                 var merged = activeTexture
                 merged.absorb(event)
+                if let segment = merged.materialize(
+                    minimumDuration: progressiveTextureCommitInterval,
+                    force: false,
+                    fatigueGain: Float(fatigue(at: event.time))
+                ) {
+                    output.append(segment)
+                }
                 self.activeTexture = merged
                 totalMergedCollisions += 1
                 return
             }
-            output.append(activeTexture.event(fatigueGain: Float(fatigue(at: activeEnd))))
+            var activeTexture = activeTexture
+            if let segment = activeTexture.materialize(
+                minimumDuration: progressiveTextureCommitInterval,
+                force: true,
+                fatigueGain: Float(fatigue(at: activeTexture.end))
+            ) {
+                output.append(segment)
+            }
             self.activeTexture = nil
         }
-        self.activeTexture = TextureAccumulator(event)
-    }
-
-    private func applyClimax(_ modifiers: [MusicHapticsEvent], to event: MusicHapticsEvent) -> MusicHapticsEvent {
-        guard let modifier = modifiers.max(by: { $0.intensity < $1.intensity }) else { return event }
-        let amount = max(0.06, modifier.climaxAmount > 0 ? modifier.climaxAmount : modifier.intensity * 0.18)
-        return MusicHapticsEvent(
-            time: event.time,
-            duration: event.duration,
-            intensity: min(1, event.intensity + amount * 0.18),
-            sharpness: min(1, event.sharpness + amount * 0.10),
-            kind: event.kind,
-            classification: event.classification,
-            climaxAmount: amount,
-            curve: event.curve
-        )
+        var newTexture = TextureAccumulator(event)
+        if let segment = newTexture.materialize(
+            minimumDuration: progressiveTextureCommitInterval,
+            force: false,
+            fatigueGain: Float(fatigue(at: event.time))
+        ) {
+            output.append(segment)
+        }
+        self.activeTexture = newTexture
     }
 
     private func attenuate(_ event: MusicHapticsEvent, factor: Float) -> MusicHapticsEvent {
@@ -653,15 +972,7 @@ public struct MusicHapticsPerceptualMixer: Sendable {
     }
 
     private func score(_ event: MusicHapticsEvent) -> Float {
-        let classWeight: Float = switch event.classification {
-        case .kick: 1.00
-        case .bassAttack: 0.88
-        case .snareClap: 0.82
-        case .highPercussion: 0.42
-        case .unknown: 0.25
-        case .sustainedBass, .buildTexture, .climax: 0.10
-        }
-        return event.intensity * 0.70 + classWeight * 0.30
+        transientScore(event)
     }
 
     private func highPercussionSpacing(energyLevel: Float) -> TimeInterval {
@@ -747,4 +1058,56 @@ private func texturePriority(_ value: MusicHapticsEventClass) -> Int {
     case .sustainedBass: 1
     default: 0
     }
+}
+
+func transientScore(_ event: MusicHapticsEvent) -> Float {
+    let classWeight: Float = switch event.classification {
+    case .kick: 1.00
+    case .bassAttack: 0.88
+    case .snareClap: 0.82
+    case .highPercussion: 0.42
+    case .unknown: 0.25
+    case .sustainedBass, .buildTexture, .climax: 0.10
+    }
+    return event.intensity * 0.70 + classWeight * 0.30
+}
+
+/// Fuses all transient candidates in one collision into the dominant event.
+/// Supporting attacks only contribute a bounded intensity accent and a small
+/// sharpness blend; they never become another Core Haptics event.
+func fusedTransientEvent(
+    dominant: MusicHapticsEvent,
+    supports: [MusicHapticsEvent],
+    climaxModifiers: [MusicHapticsEvent]
+) -> MusicHapticsEvent {
+    let strongestSupport = supports.max(by: { transientScore($0) < transientScore($1) })
+    let supportAccent = supports
+        .sorted(by: { transientScore($0) > transientScore($1) })
+        .prefix(2)
+        .enumerated()
+        .reduce(Float(0)) { partial, item in
+            let weight: Float = item.offset == 0 ? 0.08 : 0.03
+            return partial + item.element.intensity * weight
+        }
+    let blendedSharpness: Float
+    if let strongestSupport {
+        blendedSharpness = dominant.sharpness * 0.78 + strongestSupport.sharpness * 0.22
+    } else {
+        blendedSharpness = dominant.sharpness
+    }
+    let climaxAmount = climaxModifiers.map {
+        $0.climaxAmount > 0 ? $0.climaxAmount : $0.intensity * 0.18
+    }.max() ?? dominant.climaxAmount
+    let climaxIntensity = climaxAmount > 0 ? climaxAmount * 0.18 : 0
+    let climaxSharpness = climaxAmount > 0 ? climaxAmount * 0.10 : 0
+    return MusicHapticsEvent(
+        time: dominant.time,
+        duration: dominant.duration,
+        intensity: min(1, dominant.intensity + min(0.10, supportAccent) + climaxIntensity),
+        sharpness: min(1, blendedSharpness + climaxSharpness),
+        kind: .transient,
+        classification: dominant.classification,
+        climaxAmount: climaxAmount,
+        curve: dominant.curve
+    )
 }

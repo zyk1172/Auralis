@@ -2258,6 +2258,11 @@ public final class AuralisAppModel: ObservableObject {
         defaults.set(Double(clamped), forKey: Self.playbackRateDefaultsKey)
         Task {
             await engine.setRate(clamped)
+            self.musicHaptics.updatePlaybackPosition(
+                self.playbackPosition,
+                isPlaying: self.playbackState == .playing,
+                rate: Double(clamped)
+            )
             mediaIntegration.playbackStateChanged(
                 isPlaying: playbackState == .playing,
                 position: playbackPosition,
