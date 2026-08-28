@@ -122,25 +122,130 @@ public enum TrackHapticsPreference: String, Codable, CaseIterable, Sendable {
 
 public enum MusicHapticsEventKind: String, Codable, Sendable { case transient, continuous }
 
+/// The mix and intensity models intentionally live in the data layer.  The
+/// first v2 release only exposes `fullMix` to the runtime; `vocalsOnly` is
+/// reserved until a reliable vocal-salience source exists.
+public enum MusicHapticsMixMode: String, Codable, Hashable, Sendable {
+    case fullMix
+    case vocalsOnly
+}
+
+public enum MusicHapticsIntensity: String, Codable, CaseIterable, Hashable, Sendable {
+    case light
+    case medium
+    case strong
+
+    public var masterIntensity: Float {
+        switch self {
+        case .light: 0.72
+        case .medium: 1.0
+        case .strong: 1.12
+        }
+    }
+
+    /// Fraction of low-energy events retained by the scheduler.  This is a
+    /// deterministic class-aware filter, not random thinning.
+    public var weakEventFloor: Float {
+        switch self {
+        case .light: 0.42
+        case .medium: 0.18
+        case .strong: 0.08
+        }
+    }
+
+    public var continuousTextureScale: Float {
+        switch self {
+        case .light: 0.55
+        case .medium: 1.0
+        case .strong: 1.16
+        }
+    }
+}
+
+public enum MusicHapticsEventClass: String, Codable, Hashable, Sendable {
+    case kick
+    case bassAttack
+    case snareClap
+    case highPercussion
+    case sustainedBass
+    case buildTexture
+    case climax
+    case unknown
+
+    public var deduplicationWindow: TimeInterval {
+        switch self {
+        case .kick, .bassAttack: 0.050
+        case .snareClap: 0.040
+        case .highPercussion: 0.028
+        case .sustainedBass, .buildTexture, .climax, .unknown: 0.040
+        }
+    }
+}
+
+public struct MusicHapticsCurvePoint: Codable, Hashable, Sendable {
+    public var timeOffset: TimeInterval
+    public var intensity: Float
+    public var sharpness: Float
+
+    public init(timeOffset: TimeInterval, intensity: Float, sharpness: Float) {
+        self.timeOffset = max(0, timeOffset.isFinite ? timeOffset : 0)
+        self.intensity = min(max(intensity.isFinite ? intensity : 0, 0), 1)
+        self.sharpness = min(max(sharpness.isFinite ? sharpness : 0, 0), 1)
+    }
+}
+
 public struct MusicHapticsEvent: Codable, Hashable, Sendable {
     public var time: TimeInterval
     public var duration: TimeInterval?
     public var intensity: Float
     public var sharpness: Float
     public var kind: MusicHapticsEventKind
+    public var classification: MusicHapticsEventClass
+    public var curve: [MusicHapticsCurvePoint]
 
-    public init(time: TimeInterval, duration: TimeInterval? = nil, intensity: Float, sharpness: Float, kind: MusicHapticsEventKind) {
+    public init(
+        time: TimeInterval,
+        duration: TimeInterval? = nil,
+        intensity: Float,
+        sharpness: Float,
+        kind: MusicHapticsEventKind,
+        classification: MusicHapticsEventClass = .unknown,
+        curve: [MusicHapticsCurvePoint] = []
+    ) {
         self.time = max(0, time)
         self.duration = duration.map { max(0.02, min($0, 20)) }
-        self.intensity = min(max(intensity, 0), 1)
-        self.sharpness = min(max(sharpness, 0), 1)
+        self.intensity = min(max(intensity.isFinite ? intensity : 0, 0), 1)
+        self.sharpness = min(max(sharpness.isFinite ? sharpness : 0, 0), 1)
         self.kind = kind
+        self.classification = classification
+        self.curve = curve.sorted { $0.timeOffset < $1.timeOffset }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case time, duration, intensity, sharpness, kind, classification, curve
+    }
+
+    /// v1 files did not contain event classes or curves.  Missing fields are
+    /// deliberately treated as `.unknown`/empty so old files remain readable;
+    /// the plan resolver still rejects their v1 algorithm version.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            time: try container.decode(TimeInterval.self, forKey: .time),
+            duration: try container.decodeIfPresent(TimeInterval.self, forKey: .duration),
+            intensity: try container.decode(Float.self, forKey: .intensity),
+            sharpness: try container.decode(Float.self, forKey: .sharpness),
+            kind: try container.decode(MusicHapticsEventKind.self, forKey: .kind),
+            classification: try container.decodeIfPresent(MusicHapticsEventClass.self, forKey: .classification) ?? .unknown,
+            curve: try container.decodeIfPresent([MusicHapticsCurvePoint].self, forKey: .curve) ?? []
+        )
     }
 }
 
 public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     public static let formatVersion = 1
-    public static let algorithmVersion = "auralis-haptics-v1"
+    public static let legacyAlgorithmVersion = "auralis-haptics-v1"
+    public static let algorithmVersion = "auralis-haptics-v2"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity
@@ -149,8 +254,25 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     public var analyzedDuration: TimeInterval
     public var analysisCoverage: Double
     public var events: [MusicHapticsEvent]
+    public var mixMode: MusicHapticsMixMode
+    public var tempoBPM: Double?
+    public var beatConfidence: Double?
+    public var beatPhase: Double?
 
-    public init(identity: MusicHapticsIdentity, duration: TimeInterval, createdAt: Date = .now, analyzedDuration: TimeInterval, analysisCoverage: Double, events: [MusicHapticsEvent], formatVersion: Int = MusicHapticsTimeline.formatVersion, algorithmVersion: String = MusicHapticsTimeline.algorithmVersion) {
+    public init(
+        identity: MusicHapticsIdentity,
+        duration: TimeInterval,
+        createdAt: Date = .now,
+        analyzedDuration: TimeInterval,
+        analysisCoverage: Double,
+        events: [MusicHapticsEvent],
+        formatVersion: Int = MusicHapticsTimeline.formatVersion,
+        algorithmVersion: String = MusicHapticsTimeline.algorithmVersion,
+        mixMode: MusicHapticsMixMode = .fullMix,
+        tempoBPM: Double? = nil,
+        beatConfidence: Double? = nil,
+        beatPhase: Double? = nil
+    ) {
         self.formatVersion = formatVersion
         self.algorithmVersion = algorithmVersion
         self.identity = identity
@@ -159,6 +281,34 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
         self.analyzedDuration = max(0, analyzedDuration)
         self.analysisCoverage = min(max(analysisCoverage, 0), 1)
         self.events = events.sorted { $0.time < $1.time }
+        self.mixMode = mixMode
+        self.tempoBPM = tempoBPM?.isFinite == true ? tempoBPM : nil
+        self.beatConfidence = beatConfidence?.isFinite == true ? min(max(beatConfidence!, 0), 1) : nil
+        self.beatPhase = beatPhase?.isFinite == true ? beatPhase : nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion, algorithmVersion, identity, duration, createdAt
+        case analyzedDuration, analysisCoverage, events
+        case mixMode, tempoBPM, beatConfidence, beatPhase
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            identity: try container.decode(MusicHapticsIdentity.self, forKey: .identity),
+            duration: try container.decode(TimeInterval.self, forKey: .duration),
+            createdAt: try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now,
+            analyzedDuration: try container.decodeIfPresent(TimeInterval.self, forKey: .analyzedDuration) ?? 0,
+            analysisCoverage: try container.decodeIfPresent(Double.self, forKey: .analysisCoverage) ?? 0,
+            events: try container.decodeIfPresent([MusicHapticsEvent].self, forKey: .events) ?? [],
+            formatVersion: try container.decodeIfPresent(Int.self, forKey: .formatVersion) ?? Self.formatVersion,
+            algorithmVersion: try container.decodeIfPresent(String.self, forKey: .algorithmVersion) ?? Self.legacyAlgorithmVersion,
+            mixMode: try container.decodeIfPresent(MusicHapticsMixMode.self, forKey: .mixMode) ?? .fullMix,
+            tempoBPM: try container.decodeIfPresent(Double.self, forKey: .tempoBPM),
+            beatConfidence: try container.decodeIfPresent(Double.self, forKey: .beatConfidence),
+            beatPhase: try container.decodeIfPresent(Double.self, forKey: .beatPhase)
+        )
     }
 
     public var isComplete: Bool { analysisCoverage >= 0.95 }

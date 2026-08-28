@@ -15,6 +15,7 @@ public enum MusicHapticsPlanKind: String, Codable, Hashable, Sendable {
     case system
     case custom
     case analyze
+    case analyzeLookahead
 }
 
 public enum MusicHapticsAnalysisFinishReason: String, Codable, Hashable, Sendable {
@@ -51,6 +52,16 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
     public let events: [MusicHapticsEvent]
     public let coverage: Double
     public let updatedAt: Date
+    public let mixMode: MusicHapticsMixMode?
+    public let tempoBPM: Double?
+    public let beatConfidence: Double?
+    public let beatPhase: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion, identity, algorithmVersion, duration
+        case analyzedRanges, events, coverage, updatedAt
+        case mixMode, tempoBPM, beatConfidence, beatPhase
+    }
 
     public init(
         identity: MusicHapticsIdentity,
@@ -60,7 +71,11 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         events: [MusicHapticsEvent],
         coverage: Double? = nil,
         updatedAt: Date = .now,
-        formatVersion: Int = Self.formatVersion
+        formatVersion: Int = Self.formatVersion,
+        mixMode: MusicHapticsMixMode? = .fullMix,
+        tempoBPM: Double? = nil,
+        beatConfidence: Double? = nil,
+        beatPhase: Double? = nil
     ) {
         let safeDuration = max(0, duration.isFinite ? duration : 0)
         self.formatVersion = formatVersion
@@ -80,6 +95,29 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         // checkpoint beyond the bytes that were actually analyzed.
         self.coverage = min(calculatedCoverage, suppliedCoverage)
         self.updatedAt = updatedAt
+        self.mixMode = mixMode
+        self.tempoBPM = tempoBPM?.isFinite == true ? tempoBPM : nil
+        self.beatConfidence = beatConfidence?.isFinite == true ? min(max(beatConfidence!, 0), 1) : nil
+        self.beatPhase = beatPhase?.isFinite == true ? beatPhase : nil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            identity: try container.decode(MusicHapticsIdentity.self, forKey: .identity),
+            algorithmVersion: try container.decodeIfPresent(String.self, forKey: .algorithmVersion)
+                ?? MusicHapticsTimeline.legacyAlgorithmVersion,
+            duration: try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0,
+            analyzedRanges: try container.decodeIfPresent([MusicHapticsTimeRange].self, forKey: .analyzedRanges) ?? [],
+            events: try container.decodeIfPresent([MusicHapticsEvent].self, forKey: .events) ?? [],
+            coverage: try container.decodeIfPresent(Double.self, forKey: .coverage),
+            updatedAt: try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now,
+            formatVersion: try container.decodeIfPresent(Int.self, forKey: .formatVersion) ?? Self.formatVersion,
+            mixMode: try container.decodeIfPresent(MusicHapticsMixMode.self, forKey: .mixMode),
+            tempoBPM: try container.decodeIfPresent(Double.self, forKey: .tempoBPM),
+            beatConfidence: try container.decodeIfPresent(Double.self, forKey: .beatConfidence),
+            beatPhase: try container.decodeIfPresent(Double.self, forKey: .beatPhase)
+        )
     }
 
     public var analyzedDuration: TimeInterval {
@@ -88,6 +126,22 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
 
     public var isComplete: Bool { coverage >= 0.95 }
 
+    public var isCurrentAlgorithm: Bool {
+        formatVersion == Self.formatVersion
+            && algorithmVersion == MusicHapticsTimeline.algorithmVersion
+    }
+
+    /// Returns the first real uncovered position. Ranges after this position
+    /// remain meaningful holes and are never collapsed into a max position.
+    public var firstUnanalyzedPosition: TimeInterval {
+        var cursor: TimeInterval = 0
+        for range in analyzedRanges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if range.lowerBound > cursor { return cursor }
+            cursor = max(cursor, range.upperBound)
+        }
+        return min(duration, cursor)
+    }
+
     public func timeline() -> MusicHapticsTimeline {
         MusicHapticsTimeline(
             identity: identity,
@@ -95,7 +149,12 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
             createdAt: updatedAt,
             analyzedDuration: analyzedDuration,
             analysisCoverage: coverage,
-            events: events
+            events: events,
+            algorithmVersion: algorithmVersion,
+            mixMode: mixMode ?? .fullMix,
+            tempoBPM: tempoBPM,
+            beatConfidence: beatConfidence,
+            beatPhase: beatPhase
         )
     }
 
@@ -107,27 +166,30 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
               identity.matchConfidence(with: other.identity) >= 0.82
         else { return other }
 
-        var mergedEvents = events + other.events
-        mergedEvents.sort { $0.time < $1.time }
-        var thinned: [MusicHapticsEvent] = []
-        for event in mergedEvents {
-            guard let previous = thinned.last, event.time - previous.time < 0.16 else {
-                thinned.append(event)
-                continue
-            }
-            if event.intensity > previous.intensity {
-                thinned[thinned.count - 1] = event
-            }
-        }
+        let mergedIdentity = other.identity
+        let mergedAlgorithmVersion = other.algorithmVersion
+        let mergedDuration = max(duration, other.duration)
+        let mergedRanges = analyzedRanges + other.analyzedRanges
+        let mergedEvents = MusicHapticsEventDeduplicator.merge(events + other.events)
+        let mergedMixMode = other.mixMode ?? mixMode
+        let mergedTempo = other.tempoBPM ?? tempoBPM
+        let mergedBeatConfidence = other.beatConfidence ?? beatConfidence
+        let mergedBeatPhase = other.beatPhase ?? beatPhase
+        let mergedUpdatedAt = max(updatedAt, other.updatedAt)
+        let mergedFormatVersion = max(formatVersion, other.formatVersion)
 
         return MusicHapticsPartialCheckpoint(
-            identity: other.identity,
-            algorithmVersion: other.algorithmVersion,
-            duration: max(duration, other.duration),
-            analyzedRanges: analyzedRanges + other.analyzedRanges,
-            events: thinned,
-            updatedAt: max(updatedAt, other.updatedAt),
-            formatVersion: max(formatVersion, other.formatVersion)
+            identity: mergedIdentity,
+            algorithmVersion: mergedAlgorithmVersion,
+            duration: mergedDuration,
+            analyzedRanges: mergedRanges,
+            events: mergedEvents,
+            updatedAt: mergedUpdatedAt,
+            formatVersion: mergedFormatVersion,
+            mixMode: mergedMixMode,
+            tempoBPM: mergedTempo,
+            beatConfidence: mergedBeatConfidence,
+            beatPhase: mergedBeatPhase
         )
     }
 
@@ -165,17 +227,42 @@ public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
     public let favorite: Bool
     public let duration: TimeInterval
     public let partial: MusicHapticsPartialCheckpoint?
+    public let analysisSource: MusicHapticsAnalysisSource
+    public let warmupDeadline: Duration
 
     public init(
         identity: MusicHapticsIdentity,
         favorite: Bool,
         duration: TimeInterval,
-        partial: MusicHapticsPartialCheckpoint? = nil
+        partial: MusicHapticsPartialCheckpoint? = nil,
+        analysisSource: MusicHapticsAnalysisSource = .realtimeTap,
+        warmupDeadline: Duration = .milliseconds(350)
     ) {
         self.identity = identity
         self.favorite = favorite
         self.duration = max(0, duration.isFinite ? duration : 0)
         self.partial = partial
+        self.analysisSource = analysisSource
+        self.warmupDeadline = warmupDeadline
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case identity, favorite, duration, partial, warmupDeadline
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            identity: try container.decode(MusicHapticsIdentity.self, forKey: .identity),
+            favorite: try container.decodeIfPresent(Bool.self, forKey: .favorite) ?? false,
+            duration: try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0,
+            partial: try container.decodeIfPresent(MusicHapticsPartialCheckpoint.self, forKey: .partial),
+            // Analysis sources are process-lifetime inputs.  A decoded plan
+            // must fall back to a fresh upper-layer source instead of ever
+            // reconstructing a stale URL or credential-bearing stream.
+            analysisSource: .realtimeTap,
+            warmupDeadline: try container.decodeIfPresent(Duration.self, forKey: .warmupDeadline) ?? .milliseconds(350)
+        )
     }
 }
 
@@ -184,6 +271,7 @@ public enum MusicHapticsPlaybackPlan: Codable, Hashable, Sendable {
     case system
     case custom(MusicHapticsTimeline)
     case analyze(MusicHapticsAnalysisRequest)
+    case analyzeLookahead(MusicHapticsAnalysisRequest)
 
     public var kind: MusicHapticsPlanKind {
         switch self {
@@ -191,6 +279,7 @@ public enum MusicHapticsPlaybackPlan: Codable, Hashable, Sendable {
         case .system: .system
         case .custom: .custom
         case .analyze: .analyze
+        case .analyzeLookahead: .analyzeLookahead
         }
     }
 
@@ -199,6 +288,7 @@ public enum MusicHapticsPlaybackPlan: Codable, Hashable, Sendable {
         case .disabled, .system: nil
         case let .custom(timeline): timeline.identity
         case let .analyze(request): request.identity
+        case let .analyzeLookahead(request): request.identity
         }
     }
 }
@@ -225,6 +315,15 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
     public var eventCount: Int
     public var droppedFrames: Int
     public var finishReason: MusicHapticsAnalysisFinishReason?
+    public var analysisMode: MusicHapticsAnalysisMode
+    /// Requested server-side transcode ceiling only; never a URL or token.
+    public var analysisStreamBitrate: Int?
+    public var analysisPosition: TimeInterval
+    public var analysisSpeedX: Double
+    public var tempoBPM: Double?
+    public var beatConfidence: Double
+    public var transientCount: Int
+    public var continuousCount: Int
 
     public init(
         tapAttached: Bool = false,
@@ -233,7 +332,15 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
         coverage: Double = 0,
         eventCount: Int = 0,
         droppedFrames: Int = 0,
-        finishReason: MusicHapticsAnalysisFinishReason? = nil
+        finishReason: MusicHapticsAnalysisFinishReason? = nil,
+        analysisMode: MusicHapticsAnalysisMode = .realtimeTap,
+        analysisStreamBitrate: Int? = nil,
+        analysisPosition: TimeInterval = 0,
+        analysisSpeedX: Double = 0,
+        tempoBPM: Double? = nil,
+        beatConfidence: Double = 0,
+        transientCount: Int = 0,
+        continuousCount: Int = 0
     ) {
         self.tapAttached = tapAttached
         self.pcmFormat = pcmFormat
@@ -242,6 +349,14 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
         self.eventCount = max(0, eventCount)
         self.droppedFrames = max(0, droppedFrames)
         self.finishReason = finishReason
+        self.analysisMode = analysisMode
+        self.analysisStreamBitrate = analysisStreamBitrate.map { max(1, $0) }
+        self.analysisPosition = max(0, analysisPosition)
+        self.analysisSpeedX = max(0, analysisSpeedX)
+        self.tempoBPM = tempoBPM
+        self.beatConfidence = min(max(beatConfidence, 0), 1)
+        self.transientCount = max(0, transientCount)
+        self.continuousCount = max(0, continuousCount)
     }
 }
 
@@ -267,9 +382,8 @@ public struct MusicHapticsAnalysisResult: Hashable, Sendable {
 }
 
 public extension MusicHapticsTimeline {
-    /// Density is intentionally diagnostic only.  The v1 algorithm remains
-    /// unchanged in this PR; this makes sparse output visible for a later DSP
-    /// revision instead of silently presenting it as healthy.
+    /// Density is intentionally diagnostic only.  It makes sparse output
+    /// visible instead of silently presenting a low-event recording as healthy.
     var eventDensity: Double {
         guard duration > 0 else { return 0 }
         return Double(events.count) / duration

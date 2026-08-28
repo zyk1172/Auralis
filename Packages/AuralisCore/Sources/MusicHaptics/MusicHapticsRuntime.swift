@@ -34,6 +34,19 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
     public var droppedFrames: Int
     public var finishReason: MusicHapticsAnalysisFinishReason?
     public var timelineSuspiciouslySparse: Bool
+    public var analysisMode: MusicHapticsAnalysisMode
+    public var analysisStreamBitrate: Int?
+    public var playbackPosition: TimeInterval
+    public var analysisPosition: TimeInterval
+    public var analysisLeadSeconds: TimeInterval
+    public var analysisSpeedX: Double
+    public var lookaheadTarget: TimeInterval
+    public var scheduledUntil: TimeInterval
+    public var rollingWindowCount: Int
+    public var beatConfidence: Double
+    public var tempoBPM: Double?
+    public var transientCount: Int
+    public var continuousCount: Int
 
     public init(
         supportsCustomHaptics: Bool,
@@ -58,7 +71,20 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         eventDensity: Double? = nil,
         droppedFrames: Int = 0,
         finishReason: MusicHapticsAnalysisFinishReason? = nil,
-        timelineSuspiciouslySparse: Bool = false
+        timelineSuspiciouslySparse: Bool = false,
+        analysisMode: MusicHapticsAnalysisMode = .realtimeTap,
+        analysisStreamBitrate: Int? = nil,
+        playbackPosition: TimeInterval = 0,
+        analysisPosition: TimeInterval = 0,
+        analysisLeadSeconds: TimeInterval = 0,
+        analysisSpeedX: Double = 0,
+        lookaheadTarget: TimeInterval = 8,
+        scheduledUntil: TimeInterval = 0,
+        rollingWindowCount: Int = 0,
+        beatConfidence: Double = 0,
+        tempoBPM: Double? = nil,
+        transientCount: Int = 0,
+        continuousCount: Int = 0
     ) {
         self.supportsCustomHaptics = supportsCustomHaptics
         self.systemMusicHapticsActive = systemMusicHapticsActive
@@ -83,11 +109,24 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         self.droppedFrames = max(0, droppedFrames)
         self.finishReason = finishReason
         self.timelineSuspiciouslySparse = timelineSuspiciouslySparse
+        self.analysisMode = analysisMode
+        self.analysisStreamBitrate = analysisStreamBitrate.map { max(1, $0) }
+        self.playbackPosition = max(0, playbackPosition)
+        self.analysisPosition = max(0, analysisPosition)
+        self.analysisLeadSeconds = analysisLeadSeconds
+        self.analysisSpeedX = max(0, analysisSpeedX)
+        self.lookaheadTarget = max(0, lookaheadTarget)
+        self.scheduledUntil = max(0, scheduledUntil)
+        self.rollingWindowCount = max(0, rollingWindowCount)
+        self.beatConfidence = min(max(beatConfidence, 0), 1)
+        self.tempoBPM = tempoBPM
+        self.transientCount = max(0, transientCount)
+        self.continuousCount = max(0, continuousCount)
     }
 }
 
-/// Pure ordering rule for the one authoritative playback plan. The resolver
-/// has no AVFoundation dependency, so all four branches can be regression
+    /// Pure ordering rule for the one authoritative playback plan. The resolver
+    /// has no AVFoundation dependency, so all branches can be regression
 /// tested without a device or a haptics engine.
 public enum MusicHapticsPlaybackPlanResolver {
     public static func resolve(
@@ -100,6 +139,7 @@ public enum MusicHapticsPlaybackPlanResolver {
     ) -> (plan: MusicHapticsPlaybackPlan, reason: String) {
         guard featureEnabled else { return (.disabled, "feature_disabled") }
         if systemTimelineAvailable { return (.system, "system_available") }
+        guard customHapticsSupported else { return (.disabled, "custom_haptics_unavailable") }
         if let fullTimeline,
            fullTimeline.isComplete,
            fullTimeline.algorithmVersion == MusicHapticsTimeline.algorithmVersion,
@@ -108,16 +148,21 @@ public enum MusicHapticsPlaybackPlanResolver {
            fullTimeline.identity.matchConfidence(with: request.identity) >= 0.82 {
             return (.custom(fullTimeline), "timeline_available")
         }
-        guard customHapticsSupported else { return (.disabled, "custom_haptics_unavailable") }
         guard request.duration > 0 else { return (.disabled, "invalid_duration") }
-        return (.analyze(
-            MusicHapticsAnalysisRequest(
-                identity: request.identity,
-                favorite: request.favorite,
-                duration: request.duration,
-                partial: partial
-            )
-        ), partial == nil ? "no_timeline" : "resume_partial")
+        let resolvedRequest = MusicHapticsAnalysisRequest(
+            identity: request.identity,
+            favorite: request.favorite,
+            duration: request.duration,
+            partial: partial,
+            analysisSource: request.analysisSource,
+            warmupDeadline: request.warmupDeadline
+        )
+        switch request.analysisSource {
+        case .localFile, .remoteLookahead:
+            return (.analyzeLookahead(resolvedRequest), partial == nil ? "no_timeline" : "resume_partial")
+        case .realtimeTap:
+            return (.analyze(resolvedRequest), partial == nil ? "no_timeline" : "resume_partial")
+        }
     }
 }
 
@@ -169,7 +214,7 @@ public final class SystemMusicHapticsAdapter {
 final class CustomMusicHapticsEngine {
     #if os(iOS)
     private var engine: CHHapticEngine?
-    private var player: CHHapticAdvancedPatternPlayer?
+    private var players: [CHHapticAdvancedPatternPlayer] = []
     #endif
 
     var supportsHaptics: Bool {
@@ -184,42 +229,64 @@ final class CustomMusicHapticsEngine {
         #if os(iOS)
         guard supportsHaptics else { return }
         let engine = try prepareEngine()
-        let events = timeline.events.compactMap { event -> CHHapticEvent? in
-            switch event.kind {
-            case .transient:
-                return CHHapticEvent(
-                    eventType: .hapticTransient,
-                    parameters: parameters(for: event),
-                    relativeTime: event.time
-                )
-            case .continuous:
-                return CHHapticEvent(
-                    eventType: .hapticContinuous,
-                    parameters: parameters(for: event),
-                    relativeTime: event.time,
-                    duration: event.duration ?? 0.1
-                )
-            }
-        }
-        let pattern = try CHHapticPattern(events: events, parameters: [])
+        stop()
+        let pattern = try makePattern(events: timeline.events, timeShift: 0, offset: 0, intensity: .medium)
         let player = try engine.makeAdvancedPlayer(with: pattern)
-        self.player = player
+        players = [player]
         try player.seek(toOffset: max(0, offset))
         try player.start(atTime: CHHapticTimeImmediate)
         #endif
     }
 
+    /// Starts one non-overlapping future window.  The window is shifted by
+    /// global event timestamps are translated once against `currentPosition`,
+    /// so Core Haptics receives one future-relative pattern rather than a
+    /// Timer per event.
+    func play(
+        _ window: MusicHapticsAnalysisWindow,
+        from currentPosition: TimeInterval,
+        intensity: MusicHapticsIntensity = .medium
+    ) {
+        #if os(iOS)
+        guard supportsHaptics,
+              !window.events.filter({ shouldKeep($0, intensity: intensity) }).isEmpty
+        else { return }
+        do {
+            let engine = try prepareEngine()
+            let pattern = try makePattern(
+                events: window.events,
+                // Event timestamps are global track time. Translate them once
+                // against the authoritative AVPlayer position; the window's
+                // own start must not be added a second time.
+                timeShift: 0,
+                offset: max(0, currentPosition),
+                intensity: intensity
+            )
+            let player = try engine.makeAdvancedPlayer(with: pattern)
+            if players.count >= 8 {
+                let old = players.removeFirst()
+                try? old.stop(atTime: CHHapticTimeImmediate)
+            }
+            players.append(player)
+            try player.start(atTime: CHHapticTimeImmediate)
+        } catch {
+            stop()
+        }
+        #endif
+    }
+
     func pause() {
         #if os(iOS)
-        try? player?.pause(atTime: CHHapticTimeImmediate)
+        players.forEach { try? $0.pause(atTime: CHHapticTimeImmediate) }
         #endif
     }
 
     func resume(at offset: TimeInterval) {
         #if os(iOS)
         do {
-            try player?.seek(toOffset: max(0, offset))
-            try player?.resume(atTime: CHHapticTimeImmediate)
+            guard let player = players.last else { return }
+            try player.seek(toOffset: max(0, offset))
+            try player.resume(atTime: CHHapticTimeImmediate)
         } catch {
             stop()
         }
@@ -229,8 +296,9 @@ final class CustomMusicHapticsEngine {
     func seek(to offset: TimeInterval, playing: Bool) {
         #if os(iOS)
         do {
-            try player?.seek(toOffset: max(0, offset))
-            if playing { try player?.resume(atTime: CHHapticTimeImmediate) }
+            guard let player = players.last else { return }
+            try player.seek(toOffset: max(0, offset))
+            if playing { try player.resume(atTime: CHHapticTimeImmediate) }
         } catch {
             stop()
         }
@@ -239,24 +307,116 @@ final class CustomMusicHapticsEngine {
 
     func stop() {
         #if os(iOS)
-        try? player?.stop(atTime: CHHapticTimeImmediate)
-        player = nil
+        players.forEach { try? $0.stop(atTime: CHHapticTimeImmediate) }
+        players.removeAll()
         #endif
     }
 
     #if os(iOS)
-    private func parameters(for event: MusicHapticsEvent) -> [CHHapticEventParameter] {
-        [
-            CHHapticEventParameter(parameterID: .hapticIntensity, value: min(event.intensity, 0.88)),
+    private func parameters(
+        for event: MusicHapticsEvent,
+        intensity: MusicHapticsIntensity
+    ) -> [CHHapticEventParameter] {
+        let scaled: Float
+        switch intensity {
+        case .light:
+            scaled = event.intensity * intensity.masterIntensity
+        case .medium:
+            scaled = event.intensity
+        case .strong:
+            scaled = min(0.92, 1 - (1 - event.intensity) / intensity.masterIntensity)
+        }
+        let textureScale = event.kind == .continuous ? intensity.continuousTextureScale : 1
+        let effective = min(0.92, scaled * textureScale)
+        return [
+            CHHapticEventParameter(parameterID: .hapticIntensity, value: min(effective, 0.88)),
             CHHapticEventParameter(parameterID: .hapticSharpness, value: event.sharpness),
         ]
+    }
+
+    private func shouldKeep(
+        _ event: MusicHapticsEvent,
+        intensity: MusicHapticsIntensity
+    ) -> Bool {
+        let floor = intensity.weakEventFloor
+        switch event.classification {
+        case .kick, .bassAttack, .snareClap, .climax:
+            return event.intensity >= floor * 0.65
+        case .highPercussion:
+            return event.intensity >= (intensity == .light ? 0.48 : floor)
+        case .sustainedBass, .buildTexture:
+            return event.intensity >= (intensity == .light ? 0.30 : floor)
+        case .unknown:
+            return event.intensity >= floor
+        }
+    }
+
+    private func makePattern(
+        events: [MusicHapticsEvent],
+        timeShift: TimeInterval,
+        offset: TimeInterval,
+        intensity: MusicHapticsIntensity
+    ) throws -> CHHapticPattern {
+        let selectedEvents = events.filter { shouldKeep($0, intensity: intensity) }
+        let hapticEvents = selectedEvents.compactMap { event -> CHHapticEvent? in
+            let eventOffset = event.time - offset
+            let relativeTime = timeShift + eventOffset
+            let eventEnd = event.time + (event.duration ?? 0)
+            guard eventEnd > offset, relativeTime >= 0 else { return nil }
+            let duration = max(0.02, eventEnd - max(offset, event.time))
+            switch event.kind {
+            case .transient:
+                return CHHapticEvent(
+                    eventType: .hapticTransient,
+                    parameters: parameters(for: event, intensity: intensity),
+                    relativeTime: relativeTime
+                )
+            case .continuous:
+                return CHHapticEvent(
+                    eventType: .hapticContinuous,
+                    parameters: parameters(for: event, intensity: intensity),
+                    relativeTime: relativeTime,
+                    duration: duration
+                )
+            }
+        }
+        let curves = selectedEvents.flatMap { event -> [CHHapticParameterCurve] in
+            guard event.kind == .continuous, event.curve.count >= 2 else { return [] }
+            let start = timeShift + event.time - offset
+            guard start >= 0 else { return [] }
+            let intensityPoints = event.curve.map {
+                CHHapticParameterCurve.ControlPoint(
+                    relativeTime: $0.timeOffset,
+                    value: min(0.92, $0.intensity * intensity.masterIntensity * intensity.continuousTextureScale)
+                )
+            }
+            let sharpnessPoints = event.curve.map {
+                CHHapticParameterCurve.ControlPoint(
+                    relativeTime: $0.timeOffset,
+                    value: $0.sharpness
+                )
+            }
+            return [
+                CHHapticParameterCurve(
+                    parameterID: .hapticIntensityControl,
+                    controlPoints: intensityPoints,
+                    relativeTime: start
+                ),
+                CHHapticParameterCurve(
+                    parameterID: .hapticSharpnessControl,
+                    controlPoints: sharpnessPoints,
+                    relativeTime: start
+                ),
+            ]
+        }
+        return try CHHapticPattern(events: hapticEvents, parameterCurves: curves)
     }
 
     private func prepareEngine() throws -> CHHapticEngine {
         if let engine { return engine }
         let engine = try CHHapticEngine()
         engine.stoppedHandler = { [weak self] _ in
-            Task { @MainActor in self?.player = nil }
+            Task { @MainActor in self?.players.removeAll() }
         }
         engine.resetHandler = { [weak self] in
             Task { @MainActor in try? self?.engine?.start() }
@@ -281,6 +441,11 @@ public final class MusicHapticsPlaybackPreparation {
     public let fullTimelineExists: Bool
     public let partialExists: Bool
     public let analysisSink: (any MusicHapticsAnalysisSink)?
+    /// Created for lookahead plans but attached only after the sidecar fails.
+    /// Keeping it separate prevents a successful lookahead path from paying
+    /// for an AVAudioMix tap at all.
+    public let realtimeFallbackSink: (any MusicHapticsAnalysisSink)?
+    public let lookaheadAnalyzer: LookaheadMusicHapticsAnalyzer?
 
     public init(
         id: UUID = UUID(),
@@ -291,7 +456,9 @@ public final class MusicHapticsPlaybackPreparation {
         systemAvailability: MusicHapticsSystemAvailability,
         fullTimelineExists: Bool,
         partialExists: Bool,
-        analysisSink: (any MusicHapticsAnalysisSink)?
+        analysisSink: (any MusicHapticsAnalysisSink)?,
+        realtimeFallbackSink: (any MusicHapticsAnalysisSink)? = nil,
+        lookaheadAnalyzer: LookaheadMusicHapticsAnalyzer? = nil
     ) {
         self.id = id
         self.identity = identity
@@ -302,6 +469,8 @@ public final class MusicHapticsPlaybackPreparation {
         self.fullTimelineExists = fullTimelineExists
         self.partialExists = partialExists
         self.analysisSink = analysisSink
+        self.realtimeFallbackSink = realtimeFallbackSink
+        self.lookaheadAnalyzer = lookaheadAnalyzer
     }
 }
 
@@ -315,13 +484,22 @@ public final class MusicHapticsCoordinator {
     private let store: MusicHapticsStore
     private let system = SystemMusicHapticsAdapter()
     private let custom = CustomMusicHapticsEngine()
+    private let rollingScheduler: RollingMusicHapticsScheduler
     private let defaults: UserDefaults
+    private var analysisSourceProvider: (any MusicHapticsAnalysisSourceProvider)?
+    private var realtimeFallbackHandler: ((UUID, any MusicHapticsAnalysisSink) -> Void)?
+    private var realtimeFallbackPreparationID: UUID?
+    private var failedLookaheadPreparationIDs: Set<UUID> = []
+    private var preparedLookaheadPreparationIDs: Set<UUID> = []
+    private var preparedLookaheadWindows: [UUID: [MusicHapticsAnalysisWindow]] = [:]
+    private let maximumPreparedLookaheadWindows = 64
     private var currentIdentity: MusicHapticsIdentity?
     private var currentTimeline: MusicHapticsTimeline?
     private var currentPreparation: MusicHapticsPlaybackPreparation?
     private var activeAnalysisSink: (any MusicHapticsAnalysisSink)?
     private var currentFavorite = false
     private var currentPosition: TimeInterval = 0
+    private var playbackIsPlaying = false
     private var currentPlan: MusicHapticsPlaybackPlan = .disabled
     private var currentPlanReason = "idle"
     private var currentSystemAvailability = MusicHapticsSystemAvailability(
@@ -332,6 +510,7 @@ public final class MusicHapticsCoordinator {
     private var fullTimelineExists = false
     private var partialExists = false
     private var analysisSnapshot = MusicHapticsAnalysisSnapshot()
+    private var warmupTask: Task<Void, Never>?
     /// Keeps a just-finished checkpoint visible while its actor-owned store
     /// write is in flight. This closes the rapid A→B→A race without making
     /// playback wait for disk I/O.
@@ -339,10 +518,32 @@ public final class MusicHapticsCoordinator {
 
     public init(
         store: MusicHapticsStore = MusicHapticsStore(),
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        analysisSourceProvider: (any MusicHapticsAnalysisSourceProvider)? = nil
     ) {
         self.store = store
         self.defaults = defaults
+        self.analysisSourceProvider = analysisSourceProvider
+        let policy = MusicHapticsAnalysisPerformancePolicy.current
+        self.rollingScheduler = RollingMusicHapticsScheduler(
+            targetLead: policy.targetLead,
+            schedulingHorizon: policy.schedulingHorizon
+        )
+    }
+
+    /// Installed by AppShell after its connector is constructed.  Keeping the
+    /// provider at this boundary prevents MusicHaptics from importing or
+    /// retaining OpenSubsonic credentials.
+    public func setAnalysisSourceProvider(_ provider: (any MusicHapticsAnalysisSourceProvider)?) {
+        analysisSourceProvider = provider
+    }
+
+    /// AppShell wires this to AVFoundationPlaybackEngine. The callback stays
+    /// on MainActor and receives only an opaque sink, never a URL or token.
+    public func setRealtimeFallbackHandler(
+        _ handler: ((UUID, any MusicHapticsAnalysisSink) -> Void)?
+    ) {
+        realtimeFallbackHandler = handler
     }
 
     public var supportsHaptics: Bool { custom.supportsHaptics }
@@ -353,7 +554,8 @@ public final class MusicHapticsCoordinator {
     public func preparePlayback(
         identity: MusicHapticsIdentity,
         favorite: Bool,
-        duration: TimeInterval
+        duration: TimeInterval,
+        playbackURL: URL? = nil
     ) async -> MusicHapticsPlaybackPreparation {
         let startedAt = ContinuousClock.now
         let preference = (try? await store.preference(for: identity)) ?? .inherit
@@ -367,6 +569,7 @@ public final class MusicHapticsCoordinator {
         )
         var fullTimeline: MusicHapticsTimeline?
         var partial: MusicHapticsPartialCheckpoint?
+        var analysisSource: MusicHapticsAnalysisSource = .realtimeTap
 
         if featureEnabled {
             systemAvailability = await system.availability(isrc: identity.isrc)
@@ -396,11 +599,22 @@ public final class MusicHapticsCoordinator {
             }
         }
 
+        if featureEnabled,
+           fullTimeline == nil,
+           !systemAvailability.canUseTimeline,
+           custom.supportsHaptics {
+            analysisSource = await analysisSourceProvider?.source(
+                for: identity,
+                playbackURL: playbackURL
+            ) ?? .realtimeTap
+        }
+
         let request = MusicHapticsAnalysisRequest(
             identity: identity,
             favorite: favorite,
             duration: duration,
-            partial: partial
+            partial: partial,
+            analysisSource: analysisSource
         )
         let decision = MusicHapticsPlaybackPlanResolver.resolve(
             featureEnabled: featureEnabled,
@@ -412,6 +626,8 @@ public final class MusicHapticsCoordinator {
         )
         let preparationID = UUID()
         let analysisSink: (any MusicHapticsAnalysisSink)?
+        let realtimeFallbackSink: (any MusicHapticsAnalysisSink)?
+        let lookaheadAnalyzer: LookaheadMusicHapticsAnalyzer?
         switch decision.plan {
         case let .analyze(analysisRequest):
             analysisSink = StreamingMusicHapticsAnalyzer(
@@ -434,10 +650,81 @@ public final class MusicHapticsCoordinator {
                         else { return }
                         self.acceptAnalysisSnapshot(snapshot)
                     }
+                },
+                onWindow: { [weak self] window in
+                    Task { @MainActor [weak self] in
+                        self?.acceptRealtimeWindow(window, preparationID: preparationID)
+                    }
+                }
+            )
+            realtimeFallbackSink = nil
+            lookaheadAnalyzer = nil
+        case let .analyzeLookahead(analysisRequest):
+            analysisSink = nil
+            realtimeFallbackSink = StreamingMusicHapticsAnalyzer(
+                identity: analysisRequest.identity,
+                duration: analysisRequest.duration,
+                partial: analysisRequest.partial,
+                onResult: { [weak self] result in
+                    Task { @MainActor [weak self] in
+                        await self?.handleAnalysisResult(
+                            result,
+                            preparationID: preparationID,
+                            favorite: analysisRequest.favorite
+                        )
+                    }
+                },
+                onProgress: { [weak self] snapshot in
+                    Task { @MainActor [weak self] in
+                        guard let self,
+                              self.currentPreparation?.id == preparationID,
+                              self.realtimeFallbackPreparationID == preparationID
+                        else { return }
+                        self.acceptAnalysisSnapshot(snapshot)
+                    }
+                },
+                onWindow: { [weak self] window in
+                    Task { @MainActor [weak self] in
+                        self?.acceptRealtimeWindow(window, preparationID: preparationID)
+                    }
+                }
+            )
+            lookaheadAnalyzer = LookaheadMusicHapticsAnalyzer(
+                identity: analysisRequest.identity,
+                duration: analysisRequest.duration,
+                partial: analysisRequest.partial,
+                onWindow: { [weak self] window in
+                    Task { @MainActor [weak self] in
+                        self?.acceptLookaheadWindow(window, preparationID: preparationID)
+                    }
+                },
+                onResult: { [weak self] result in
+                    Task { @MainActor [weak self] in
+                        await self?.handleAnalysisResult(
+                            result,
+                            preparationID: preparationID,
+                            favorite: analysisRequest.favorite
+                        )
+                    }
+                },
+                onProgress: { [weak self] snapshot in
+                    Task { @MainActor [weak self] in
+                        guard let self,
+                              self.currentPreparation?.id == preparationID
+                        else { return }
+                        self.acceptAnalysisSnapshot(snapshot)
+                    }
+                },
+                onFailure: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.handleLookaheadFailure(preparationID: preparationID, identity: identity)
+                    }
                 }
             )
         case .disabled, .system, .custom:
             analysisSink = nil
+            realtimeFallbackSink = nil
+            lookaheadAnalyzer = nil
         }
 
         let preparation = MusicHapticsPlaybackPreparation(
@@ -449,8 +736,13 @@ public final class MusicHapticsCoordinator {
             systemAvailability: systemAvailability,
             fullTimelineExists: fullTimeline != nil,
             partialExists: partial != nil,
-            analysisSink: analysisSink
+            analysisSink: analysisSink,
+            realtimeFallbackSink: realtimeFallbackSink,
+            lookaheadAnalyzer: lookaheadAnalyzer
         )
+        if decision.plan.kind == .analyzeLookahead {
+            preparedLookaheadPreparationIDs.insert(preparationID)
+        }
         let planMs = durationMs(startedAt.duration(to: .now))
         musicHapticsLogger.debug(
             "HAPTICS_PLAN_MS duration_ms=\(planMs, privacy: .public) track=\(self.diagnosticTrack(identity), privacy: .public)"
@@ -467,28 +759,43 @@ public final class MusicHapticsCoordinator {
     }
 
     /// Starts the selected source after the audio player is already running.
-    /// For `.analyze`, the sink has already been handed to the engine before
-    /// `play()`, so this method never creates another analyzer.
+    /// Interactive AVFoundation playback installs the preparation at this same
+    /// boundary; prepared gapless items may already have their source running.
+    /// This method never creates a second analyzer or changes the resolved plan.
     public func activate(
         _ preparation: MusicHapticsPlaybackPreparation,
         position: TimeInterval
     ) {
         if currentPreparation?.id != preparation.id {
             activeAnalysisSink?.finishPartial(reason: .trackSwitch)
+            currentPreparation?.lookaheadAnalyzer?.finishPartial(reason: .trackSwitch)
+            if let oldID = currentPreparation?.id {
+                if realtimeFallbackPreparationID != oldID {
+                    currentPreparation?.realtimeFallbackSink?.cancel()
+                }
+                failedLookaheadPreparationIDs.remove(oldID)
+            }
         }
+        warmupTask?.cancel()
+        warmupTask = nil
         custom.stop()
+        rollingScheduler.stop()
         currentPreparation = preparation
+        preparedLookaheadPreparationIDs.remove(preparation.id)
         currentIdentity = preparation.identity
         currentFavorite = preparation.favorite
         currentPosition = max(0, position)
+        playbackIsPlaying = true
         currentPlan = preparation.plan
         currentSystemAvailability = preparation.systemAvailability
         fullTimelineExists = preparation.fullTimelineExists
         partialExists = preparation.partialExists
         currentPlanReason = preparation.reason
         activeAnalysisSink = preparation.analysisSink
+        realtimeFallbackPreparationID = nil
         currentTimeline = nil
         analysisSnapshot = initialSnapshot(for: preparation)
+        let bufferedWindows = preparedLookaheadWindows.removeValue(forKey: preparation.id) ?? []
 
         switch preparation.plan {
         case .disabled:
@@ -504,9 +811,44 @@ public final class MusicHapticsCoordinator {
                 source = .none
                 currentPlanReason = "custom_play_failed"
             }
+        case let .analyzeLookahead(request):
+            source = .analyzing
+            if failedLookaheadPreparationIDs.remove(preparation.id) != nil {
+                activateRealtimeFallback(preparation)
+            } else {
+                for window in bufferedWindows {
+                    _ = rollingScheduler.ingest(window)
+                }
+                preparation.lookaheadAnalyzer?.start(source: request.analysisSource)
+                startWarmupDeadline(preparation: preparation)
+                pumpScheduler(position: position, isPlaying: true)
+            }
         case .analyze:
             source = .analyzing
         }
+    }
+
+    /// Prepared next items may start decoding before they become current.  It
+    /// is idempotent, so the active transition can call it again safely.
+    public func startPreparedAnalysis(_ preparation: MusicHapticsPlaybackPreparation) {
+        guard case let .analyzeLookahead(request) = preparation.plan else { return }
+        preparation.lookaheadAnalyzer?.start(source: request.analysisSource)
+    }
+
+    /// Drops a prepared (not-current) analysis session when queue policy or a
+    /// newer preparation replaces it. The engine owns item cleanup; this
+    /// method only releases the sidecar's buffered windows/state.
+    public func discardPreparedAnalysis(_ preparation: MusicHapticsPlaybackPreparation) {
+        guard currentPreparation?.id != preparation.id else { return }
+        preparedLookaheadPreparationIDs.remove(preparation.id)
+        preparedLookaheadWindows.removeValue(forKey: preparation.id)
+        failedLookaheadPreparationIDs.remove(preparation.id)
+        // A prepared item may already have decoded useful PCM/lookahead. It
+        // is being replaced, not invalidated; finish its sidecar so the
+        // checkpoint is merged and persisted asynchronously.
+        preparation.analysisSink?.finishPartial(reason: .preparationReplaced)
+        preparation.realtimeFallbackSink?.cancel()
+        preparation.lookaheadAnalyzer?.finishPartial(reason: .preparationReplaced)
     }
 
     /// Compatibility entry point for non-AV callers. The real AppModel uses
@@ -536,20 +878,55 @@ public final class MusicHapticsCoordinator {
     }
 
     public func pause() {
-        guard source == .custom else { return }
-        custom.pause()
+        playbackIsPlaying = false
+        if source == .custom || source == .analyzing { custom.pause() }
+        activeAnalysisSink?.pause()
+        if case .analyzeLookahead = currentPlan {
+            rollingScheduler.pause()
+            custom.stop()
+        }
     }
 
     public func resume(position: TimeInterval) {
-        guard source == .custom else { return }
         currentPosition = max(0, position)
-        custom.resume(at: position)
+        playbackIsPlaying = true
+        if source == .custom {
+            custom.resume(at: position)
+        } else if case .analyzeLookahead = currentPlan {
+            pumpScheduler(position: position, isPlaying: true)
+        } else if case .analyze = currentPlan {
+            // Realtime tap events are timestamped against the player. Drop
+            // any pattern built before the pause and let the next PCM window
+            // repopulate future output.
+            custom.stop()
+        }
     }
 
     public func seek(position: TimeInterval, playing: Bool) {
         currentPosition = max(0, position)
-        guard source == .custom else { return }
-        custom.seek(to: position, playing: playing)
+        playbackIsPlaying = playing
+        if source == .custom {
+            custom.seek(to: position, playing: playing)
+        } else if case .analyzeLookahead = currentPlan {
+            custom.stop()
+            let windows = rollingScheduler.seek(to: position, playing: playing)
+            playScheduledWindows(windows, position: position)
+        } else if case .analyze = currentPlan {
+            custom.stop()
+            activeAnalysisSink?.seek(to: position)
+        }
+    }
+
+    public func updatePlaybackPosition(_ position: TimeInterval, isPlaying: Bool) {
+        let previousPosition = currentPosition
+        currentPosition = max(0, position)
+        playbackIsPlaying = isPlaying
+        if currentPosition + 0.15 < previousPosition {
+            custom.stop()
+            activeAnalysisSink?.seek(to: currentPosition)
+        }
+        guard case .analyzeLookahead = currentPlan else { return }
+        pumpScheduler(position: currentPosition, isPlaying: isPlaying)
     }
 
     public func buffering() { pause() }
@@ -562,7 +939,21 @@ public final class MusicHapticsCoordinator {
     /// complete result is promoted; otherwise the checkpoint is persisted.
     public func finishPartial(reason: MusicHapticsAnalysisFinishReason) {
         activeAnalysisSink?.finishPartial(reason: reason)
+        currentPreparation?.lookaheadAnalyzer?.finishPartial(reason: reason)
+        if realtimeFallbackPreparationID == nil {
+            currentPreparation?.realtimeFallbackSink?.cancel()
+        }
         activeAnalysisSink = nil
+        realtimeFallbackPreparationID = nil
+        playbackIsPlaying = false
+        failedLookaheadPreparationIDs.removeAll()
+        if let currentID = currentPreparation?.id {
+            preparedLookaheadPreparationIDs.remove(currentID)
+            preparedLookaheadWindows.removeValue(forKey: currentID)
+        }
+        warmupTask?.cancel()
+        warmupTask = nil
+        rollingScheduler.stop()
         custom.stop()
         currentTimeline = nil
         source = .none
@@ -638,22 +1029,30 @@ public final class MusicHapticsCoordinator {
         let eventCount: Int
         let eventDensity: Double?
         let sparse: Bool
+        let transientCount: Int
+        let continuousCount: Int
         if let currentTimeline {
             currentCoverage = currentTimeline.analysisCoverage
             eventCount = currentTimeline.events.count
             eventDensity = currentTimeline.eventDensity
             sparse = currentTimeline.timelineSuspiciouslySparse
-        } else if currentPlan.kind == .analyze {
+            transientCount = currentTimeline.events.filter { $0.kind == .transient }.count
+            continuousCount = currentTimeline.events.filter { $0.kind == .continuous }.count
+        } else if currentPlan.kind == .analyze || currentPlan.kind == .analyzeLookahead {
             currentCoverage = analysisSnapshot.coverage
             eventCount = analysisSnapshot.eventCount
             let duration = currentIdentity.map { Double($0.durationMilliseconds) / 1_000 } ?? 0
             eventDensity = duration > 0 ? Double(eventCount) / duration : nil
             sparse = duration > 120 && eventCount < max(8, Int(duration / 30))
+            transientCount = analysisSnapshot.transientCount
+            continuousCount = analysisSnapshot.continuousCount
         } else {
             currentCoverage = nil
             eventCount = 0
             eventDensity = nil
             sparse = false
+            transientCount = 0
+            continuousCount = 0
         }
         return MusicHapticsDiagnostics(
             supportsCustomHaptics: custom.supportsHaptics,
@@ -678,7 +1077,20 @@ public final class MusicHapticsCoordinator {
             eventDensity: eventDensity,
             droppedFrames: analysisSnapshot.droppedFrames,
             finishReason: analysisSnapshot.finishReason,
-            timelineSuspiciouslySparse: sparse
+            timelineSuspiciouslySparse: sparse,
+            analysisMode: analysisSnapshot.analysisMode,
+            analysisStreamBitrate: analysisSnapshot.analysisStreamBitrate,
+            playbackPosition: currentPosition,
+            analysisPosition: analysisSnapshot.analysisPosition,
+            analysisLeadSeconds: analysisSnapshot.analysisPosition - currentPosition,
+            analysisSpeedX: analysisSnapshot.analysisSpeedX,
+            lookaheadTarget: rollingScheduler.targetLead,
+            scheduledUntil: rollingScheduler.scheduledUntil,
+            rollingWindowCount: rollingScheduler.rollingWindowCount,
+            beatConfidence: analysisSnapshot.beatConfidence,
+            tempoBPM: analysisSnapshot.tempoBPM,
+            transientCount: transientCount,
+            continuousCount: continuousCount
         )
     }
 
@@ -695,19 +1107,30 @@ public final class MusicHapticsCoordinator {
         preparationID: UUID,
         favorite: Bool
     ) async {
+        // A failed lookahead emits one terminal remote result so already
+        // decoded ranges can be checkpointed. Once the realtime fallback is
+        // active, that stale remote result must not overwrite its diagnostics
+        // or race the fallback checkpoint.
+        if realtimeFallbackPreparationID == preparationID,
+           result.snapshot.analysisMode == .remoteLookahead {
+            return
+        }
         let identity = result.checkpoint.identity
+        let checkpointToPersist: MusicHapticsPartialCheckpoint
         if let existing = inMemoryPartials[identity.stableKey],
            existing.identity.matchConfidence(with: identity) >= 0.82 {
-            inMemoryPartials[identity.stableKey] = existing.merged(with: result.checkpoint)
+            checkpointToPersist = existing.merged(with: result.checkpoint)
         } else {
-            inMemoryPartials[identity.stableKey] = result.checkpoint
+            checkpointToPersist = result.checkpoint
         }
+        inMemoryPartials[identity.stableKey] = checkpointToPersist
+        let completeTimeline = checkpointToPersist.isComplete ? checkpointToPersist.timeline() : nil
         var storedFull = false
         var storedPartial = false
-        if let timeline = result.timeline {
+        if let timeline = completeTimeline {
             do {
                 try await store.store(timeline, favorite: favorite)
-                if inMemoryPartials[identity.stableKey] == result.checkpoint {
+                if inMemoryPartials[identity.stableKey] == checkpointToPersist {
                     inMemoryPartials.removeValue(forKey: identity.stableKey)
                 }
                 storedFull = true
@@ -721,10 +1144,10 @@ public final class MusicHapticsCoordinator {
                 // A complete promotion is still a checkpoint boundary. Keep
                 // the result recoverable if the final timeline write fails.
                 do {
-                    try await store.storePartial(result.checkpoint)
+                    try await store.storePartial(checkpointToPersist)
                     storedPartial = true
                     musicHapticsLogger.debug(
-                        "HAPTICS_PARTIAL_SAVED track=\(self.diagnosticTrack(identity), privacy: .public) coverage=\(result.checkpoint.coverage, privacy: .public) ranges=\(self.rangeDescription(result.checkpoint.analyzedRanges), privacy: .public)"
+                        "HAPTICS_PARTIAL_SAVED track=\(self.diagnosticTrack(identity), privacy: .public) coverage=\(checkpointToPersist.coverage, privacy: .public) ranges=\(self.rangeDescription(checkpointToPersist.analyzedRanges), privacy: .public)"
                     )
                 } catch {
                     musicHapticsLogger.error(
@@ -734,13 +1157,13 @@ public final class MusicHapticsCoordinator {
             }
         } else {
             do {
-                try await store.storePartial(result.checkpoint)
-                if inMemoryPartials[identity.stableKey] == result.checkpoint {
+                try await store.storePartial(checkpointToPersist)
+                if inMemoryPartials[identity.stableKey] == checkpointToPersist {
                     inMemoryPartials.removeValue(forKey: identity.stableKey)
                 }
                 storedPartial = true
                 musicHapticsLogger.debug(
-                    "HAPTICS_PARTIAL_SAVED track=\(self.diagnosticTrack(identity), privacy: .public) coverage=\(result.checkpoint.coverage, privacy: .public) ranges=\(self.rangeDescription(result.checkpoint.analyzedRanges), privacy: .public)"
+                    "HAPTICS_PARTIAL_SAVED track=\(self.diagnosticTrack(identity), privacy: .public) coverage=\(checkpointToPersist.coverage, privacy: .public) ranges=\(self.rangeDescription(checkpointToPersist.analyzedRanges), privacy: .public)"
                 )
             } catch {
                 musicHapticsLogger.error(
@@ -749,16 +1172,16 @@ public final class MusicHapticsCoordinator {
             }
         }
 
-        let eventDensity = result.checkpoint.duration > 0
-            ? Double(result.snapshot.eventCount) / result.checkpoint.duration
+        let eventDensity = checkpointToPersist.duration > 0
+            ? Double(checkpointToPersist.events.count) / checkpointToPersist.duration
             : 0
-        let suspiciouslySparse = result.timeline?.timelineSuspiciouslySparse
-            ?? (result.checkpoint.duration > 120
-                && result.snapshot.eventCount < max(8, Int(result.checkpoint.duration / 30)))
+        let suspiciouslySparse = completeTimeline?.timelineSuspiciouslySparse
+            ?? (checkpointToPersist.duration > 120
+                && checkpointToPersist.events.count < max(8, Int(checkpointToPersist.duration / 30)))
         musicHapticsLogger.debug(
-            "HAPTICS_ANALYSIS track=\(self.diagnosticTrack(identity), privacy: .public) coverage=\(result.snapshot.coverage, privacy: .public) events=\(result.snapshot.eventCount, privacy: .public) event_density=\(eventDensity, privacy: .public) dropped_frames=\(result.snapshot.droppedFrames, privacy: .public) finish_reason=\(result.finishReason.rawValue, privacy: .public) tap_attached=\(result.snapshot.tapAttached, privacy: .public) pcm_format=\(self.formatDescription(result.snapshot.pcmFormat), privacy: .public) analyzed_ranges=\(self.rangeDescription(result.snapshot.analyzedRanges), privacy: .public) timeline_suspiciously_sparse=\(suspiciouslySparse, privacy: .public)"
+            "HAPTICS_ANALYSIS track=\(self.diagnosticTrack(identity), privacy: .public) mode=\(result.snapshot.analysisMode.rawValue, privacy: .public) coverage=\(result.snapshot.coverage, privacy: .public) events=\(result.snapshot.eventCount, privacy: .public) transient_count=\(result.snapshot.transientCount, privacy: .public) continuous_count=\(result.snapshot.continuousCount, privacy: .public) event_density=\(eventDensity, privacy: .public) dropped_frames=\(result.snapshot.droppedFrames, privacy: .public) finish_reason=\(result.finishReason.rawValue, privacy: .public) tap_attached=\(result.snapshot.tapAttached, privacy: .public) pcm_format=\(self.formatDescription(result.snapshot.pcmFormat), privacy: .public) analysis_position=\(result.snapshot.analysisPosition, privacy: .public) speed=\(result.snapshot.analysisSpeedX, privacy: .public)x bitrate=\(result.snapshot.analysisStreamBitrate ?? -1, privacy: .public) tempo=\(result.snapshot.tempoBPM ?? -1, privacy: .public) beat_confidence=\(result.snapshot.beatConfidence, privacy: .public) analyzed_ranges=\(self.rangeDescription(result.snapshot.analyzedRanges), privacy: .public) timeline_suspiciously_sparse=\(suspiciouslySparse, privacy: .public)"
         )
-        if let timeline = result.timeline, timeline.timelineSuspiciouslySparse {
+        if let timeline = completeTimeline, timeline.timelineSuspiciouslySparse {
             musicHapticsLogger.debug(
                 "HAPTICS_ANALYSIS timeline_suspiciously_sparse=true track=\(self.diagnosticTrack(identity), privacy: .public) duration=\(timeline.duration, privacy: .public) events=\(timeline.events.count, privacy: .public) density=\(timeline.eventDensity, privacy: .public)"
             )
@@ -769,16 +1192,21 @@ public final class MusicHapticsCoordinator {
         if storedFull {
             fullTimelineExists = true
             partialExists = false
-            // This first playback has already started as an analyze plan. The
-            // newly promoted timeline is intentionally used on the next play,
-            // not hot-swapped into a running track.
-            currentPlanReason = "analysis_complete_next_play"
+            // Rolling windows have already been scheduled during this first
+            // play. The completed v2 timeline is therefore immediately useful
+            // without restarting the player; future plays resolve .custom.
+            currentTimeline = completeTimeline
+            currentPlanReason = "analysis_complete_rolling_active"
         } else if storedPartial {
             partialExists = true
         }
     }
 
     private func acceptAnalysisSnapshot(_ snapshot: MusicHapticsAnalysisSnapshot) {
+        if snapshot.analysisMode == .remoteLookahead,
+           realtimeFallbackPreparationID != nil {
+            return
+        }
         // Progress callbacks and the terminal result are delivered by separate
         // utility tasks. Do not let a late startup snapshot regress the final
         // coverage/event count shown to the user.
@@ -788,6 +1216,157 @@ public final class MusicHapticsCoordinator {
         analysisSnapshot = snapshot
     }
 
+    private func handleLookaheadFailure(
+        preparationID: UUID,
+        identity: MusicHapticsIdentity
+    ) {
+        failedLookaheadPreparationIDs.insert(preparationID)
+        musicHapticsLogger.debug(
+            "HAPTICS_LOOKAHEAD_FAILED track=\(self.diagnosticTrack(identity), privacy: .public)"
+        )
+        guard currentPreparation?.id == preparationID,
+              let preparation = currentPreparation
+        else { return }
+        currentPlanReason = "lookahead_failed_realtime_fallback"
+        activateRealtimeFallback(preparation)
+    }
+
+    private func activateRealtimeFallback(_ preparation: MusicHapticsPlaybackPreparation) {
+        guard currentPreparation?.id == preparation.id,
+              case .analyzeLookahead = preparation.plan,
+              let sink = preparation.realtimeFallbackSink
+        else {
+            currentPlanReason = "lookahead_failed_no_realtime_fallback"
+            return
+        }
+        guard realtimeFallbackPreparationID != preparation.id else { return }
+        realtimeFallbackPreparationID = preparation.id
+        activeAnalysisSink = sink
+        analysisSnapshot = MusicHapticsAnalysisSnapshot(
+            tapAttached: analysisSnapshot.tapAttached,
+            pcmFormat: analysisSnapshot.pcmFormat,
+            analyzedRanges: analysisSnapshot.analyzedRanges,
+            coverage: analysisSnapshot.coverage,
+            eventCount: analysisSnapshot.eventCount,
+            droppedFrames: analysisSnapshot.droppedFrames,
+            finishReason: nil,
+            analysisMode: .realtimeTap,
+            analysisStreamBitrate: analysisSnapshot.analysisStreamBitrate,
+            analysisPosition: analysisSnapshot.analysisPosition,
+            analysisSpeedX: 1,
+            tempoBPM: analysisSnapshot.tempoBPM,
+            beatConfidence: analysisSnapshot.beatConfidence,
+            transientCount: analysisSnapshot.transientCount,
+            continuousCount: analysisSnapshot.continuousCount
+        )
+        realtimeFallbackHandler?(preparation.id, sink)
+        musicHapticsLogger.debug(
+            "HAPTICS_FALLBACK track=\(self.diagnosticTrack(preparation.identity), privacy: .public) analysis_mode=realtime_fallback lookahead=false"
+        )
+    }
+
+    private func acceptRealtimeWindow(
+        _ window: MusicHapticsAnalysisWindow,
+        preparationID: UUID
+    ) {
+        guard currentPreparation?.id == preparationID,
+              playbackIsPlaying,
+              currentPlan.kind == .analyze || realtimeFallbackPreparationID == preparationID
+        else { return }
+        custom.play(window, from: currentPosition, intensity: .medium)
+        let transientCount = window.events.filter { $0.kind == .transient }.count
+        let continuousCount = window.events.filter { $0.kind == .continuous }.count
+        analysisSnapshot = MusicHapticsAnalysisSnapshot(
+            tapAttached: analysisSnapshot.tapAttached,
+            pcmFormat: analysisSnapshot.pcmFormat,
+            analyzedRanges: analysisSnapshot.analyzedRanges,
+            coverage: analysisSnapshot.coverage,
+            eventCount: max(analysisSnapshot.eventCount, window.eventCount),
+            droppedFrames: analysisSnapshot.droppedFrames,
+            finishReason: analysisSnapshot.finishReason,
+            analysisMode: .realtimeTap,
+            analysisStreamBitrate: analysisSnapshot.analysisStreamBitrate,
+            analysisPosition: max(analysisSnapshot.analysisPosition, window.analysisPosition),
+            analysisSpeedX: max(1, window.analysisSpeedX),
+            tempoBPM: window.tempoBPM ?? analysisSnapshot.tempoBPM,
+            beatConfidence: max(analysisSnapshot.beatConfidence, window.beatConfidence),
+            transientCount: max(analysisSnapshot.transientCount, max(window.transientCount, transientCount)),
+            continuousCount: max(analysisSnapshot.continuousCount, max(window.continuousCount, continuousCount))
+        )
+        musicHapticsLogger.debug(
+            "HAPTICS_REALTIME_FALLBACK playback=\(self.currentPosition, privacy: .public) analysis=\(window.analysisPosition, privacy: .public) lead=\(window.analysisPosition - self.currentPosition, privacy: .public) lookahead=false events=\(window.events.count, privacy: .public)"
+        )
+    }
+
+    private func acceptLookaheadWindow(
+        _ window: MusicHapticsAnalysisWindow,
+        preparationID: UUID
+    ) {
+        guard realtimeFallbackPreparationID != preparationID else { return }
+        guard currentPreparation?.id == preparationID else {
+            guard preparedLookaheadPreparationIDs.contains(preparationID) else { return }
+            var windows = preparedLookaheadWindows[preparationID, default: []]
+            windows.append(window)
+            if windows.count > maximumPreparedLookaheadWindows {
+                windows.removeFirst(windows.count - maximumPreparedLookaheadWindows)
+            }
+            preparedLookaheadWindows[preparationID] = windows
+            return
+        }
+        guard case .analyzeLookahead = currentPlan else { return }
+        let scheduled = rollingScheduler.ingest(window)
+        analysisSnapshot = MusicHapticsAnalysisSnapshot(
+            analyzedRanges: analysisSnapshot.analyzedRanges,
+            coverage: max(analysisSnapshot.coverage, window.coverage),
+            eventCount: max(analysisSnapshot.eventCount, window.eventCount),
+            droppedFrames: analysisSnapshot.droppedFrames,
+            finishReason: analysisSnapshot.finishReason,
+            analysisMode: window.sourceMode,
+            analysisStreamBitrate: window.analysisStreamBitrate,
+            analysisPosition: max(analysisSnapshot.analysisPosition, window.analysisPosition),
+            analysisSpeedX: max(analysisSnapshot.analysisSpeedX, window.analysisSpeedX),
+            tempoBPM: window.tempoBPM ?? analysisSnapshot.tempoBPM,
+            beatConfidence: max(analysisSnapshot.beatConfidence, window.beatConfidence),
+            transientCount: max(analysisSnapshot.transientCount, window.transientCount),
+            continuousCount: max(analysisSnapshot.continuousCount, window.continuousCount)
+        )
+        playScheduledWindows(scheduled, position: currentPosition)
+        musicHapticsLogger.debug(
+            "HAPTICS_LOOKAHEAD playback=\(self.currentPosition, privacy: .public) analysis=\(window.analysisPosition, privacy: .public) lead=\(window.analysisPosition - self.currentPosition, privacy: .public) speed=\(window.analysisSpeedX, privacy: .public)x bitrate=\(window.analysisStreamBitrate ?? -1, privacy: .public) scheduled_until=\(self.rollingScheduler.scheduledUntil, privacy: .public) rolling_windows=\(self.rollingScheduler.rollingWindowCount, privacy: .public)"
+        )
+    }
+
+    private func pumpScheduler(position: TimeInterval, isPlaying: Bool) {
+        if position + 0.15 < currentPosition { custom.stop() }
+        let windows = rollingScheduler.updateClock(position: position, isPlaying: isPlaying)
+        playScheduledWindows(windows, position: position)
+    }
+
+    private func playScheduledWindows(
+        _ windows: [MusicHapticsAnalysisWindow],
+        position: TimeInterval
+    ) {
+        for window in windows {
+            custom.play(window, from: position, intensity: .medium)
+        }
+    }
+
+    private func startWarmupDeadline(preparation: MusicHapticsPlaybackPreparation) {
+        guard case let .analyzeLookahead(request) = preparation.plan else { return }
+        let deadline = request.warmupDeadline
+        warmupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: deadline)
+            guard let self,
+                  !Task.isCancelled,
+                  self.currentPreparation?.id == preparation.id
+            else { return }
+            let ready = self.rollingScheduler.scheduledUntil > self.currentPosition
+            musicHapticsLogger.debug(
+                "HAPTICS_WARMUP deadline_ms=\(self.durationMs(deadline), privacy: .public) ready=\(ready, privacy: .public) playback=\(self.currentPosition, privacy: .public) analysis=\(self.analysisSnapshot.analysisPosition, privacy: .public)"
+            )
+        }
+    }
+
     private func inMemoryPartial(for identity: MusicHapticsIdentity) -> MusicHapticsPartialCheckpoint? {
         inMemoryPartials.values
             .filter { $0.identity.matchConfidence(with: identity) >= 0.82 }
@@ -795,13 +1374,32 @@ public final class MusicHapticsCoordinator {
     }
 
     private func initialSnapshot(for preparation: MusicHapticsPlaybackPreparation) -> MusicHapticsAnalysisSnapshot {
-        guard case let .analyze(request) = preparation.plan,
-              let partial = request.partial
-        else { return MusicHapticsAnalysisSnapshot() }
+        let request: MusicHapticsAnalysisRequest
+        switch preparation.plan {
+        case let .analyze(value), let .analyzeLookahead(value): request = value
+        case .disabled, .system, .custom: return MusicHapticsAnalysisSnapshot()
+        }
+        let bitrate: Int? = switch request.analysisSource {
+        case let .remoteLookahead(source): source.bitrate
+        case .localFile, .realtimeTap: nil
+        }
+        guard let partial = request.partial
+        else {
+            return MusicHapticsAnalysisSnapshot(
+                analysisMode: request.analysisSource.mode,
+                analysisStreamBitrate: bitrate
+            )
+        }
         return MusicHapticsAnalysisSnapshot(
             analyzedRanges: partial.analyzedRanges,
             coverage: partial.coverage,
-            eventCount: partial.events.count
+            eventCount: partial.events.count,
+            analysisMode: request.analysisSource.mode,
+            analysisStreamBitrate: bitrate,
+            tempoBPM: partial.tempoBPM,
+            beatConfidence: partial.beatConfidence ?? 0,
+            transientCount: partial.events.filter { $0.kind == .transient }.count,
+            continuousCount: partial.events.filter { $0.kind == .continuous }.count
         )
     }
 
@@ -817,27 +1415,35 @@ public final class MusicHapticsCoordinator {
         let eventCount: Int
         let eventDensity: Double?
         let sparse: Bool
+        let analysisStreamBitrate: Int?
         switch plan {
         case let .custom(timeline):
             coverage = timeline.analysisCoverage
             eventCount = timeline.events.count
             eventDensity = timeline.eventDensity
             sparse = timeline.timelineSuspiciouslySparse
-        case let .analyze(request):
+            analysisStreamBitrate = nil
+        case let .analyze(request), let .analyzeLookahead(request):
             coverage = request.partial?.coverage
             eventCount = request.partial?.events.count ?? 0
             eventDensity = request.partial.map { $0.duration > 0 ? Double($0.events.count) / $0.duration : 0 }
             sparse = request.partial.map {
                 $0.duration > 120 && $0.events.count < max(8, Int($0.duration / 30))
             } ?? false
+            if case let .remoteLookahead(source) = request.analysisSource {
+                analysisStreamBitrate = source.bitrate
+            } else {
+                analysisStreamBitrate = nil
+            }
         case .disabled, .system:
             coverage = nil
             eventCount = 0
             eventDensity = nil
             sparse = false
+            analysisStreamBitrate = nil
         }
         musicHapticsLogger.debug(
-            "HAPTICS_PLAN track=\(self.diagnosticTrack(identity), privacy: .public) plan=\(plan.kind.rawValue, privacy: .public) reason=\(reason, privacy: .public) hasISRC=\(systemAvailability.hasISRC, privacy: .public) systemActive=\(systemAvailability.active, privacy: .public) systemTimelineAvailable=\(systemAvailability.timelineAvailable, privacy: .public) fullTimelineExists=\(fullTimelineExists, privacy: .public) partialExists=\(partialExists, privacy: .public) coverage=\(coverage ?? -1, privacy: .public) events=\(eventCount, privacy: .public) event_density=\(eventDensity ?? -1, privacy: .public) timeline_suspiciously_sparse=\(sparse, privacy: .public)"
+            "HAPTICS_PLAN track=\(self.diagnosticTrack(identity), privacy: .public) plan=\(plan.kind.rawValue, privacy: .public) reason=\(reason, privacy: .public) hasISRC=\(systemAvailability.hasISRC, privacy: .public) systemActive=\(systemAvailability.active, privacy: .public) systemTimelineAvailable=\(systemAvailability.timelineAvailable, privacy: .public) fullTimelineExists=\(fullTimelineExists, privacy: .public) partialExists=\(partialExists, privacy: .public) coverage=\(coverage ?? -1, privacy: .public) events=\(eventCount, privacy: .public) event_density=\(eventDensity ?? -1, privacy: .public) analysis_stream_bitrate=\(analysisStreamBitrate ?? -1, privacy: .public) timeline_suspiciously_sparse=\(sparse, privacy: .public)"
         )
     }
 
