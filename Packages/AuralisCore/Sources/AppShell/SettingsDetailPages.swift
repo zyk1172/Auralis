@@ -211,6 +211,8 @@ private struct MusicHapticsDiagnosticsPage: View {
                 LabeledContent("systemTimelineAvailable", value: displayDiagnostics.systemTimelineAvailable ? "true" : "false")
                 LabeledContent("fullTimelineExists", value: displayDiagnostics.fullTimelineExists ? "true" : "false")
                 LabeledContent("partialExists", value: displayDiagnostics.partialExists ? "true" : "false")
+                LabeledContent("analysisMode", value: displayDiagnostics.analysisMode.rawValue)
+                LabeledContent("analysisStreamBitrate", value: displayDiagnostics.analysisStreamBitrate.map(String.init) ?? "none")
                 LabeledContent("tapAttached", value: displayDiagnostics.tapAttached ? "true" : "false")
                 LabeledContent(
                     "PCMFormat",
@@ -226,6 +228,17 @@ private struct MusicHapticsDiagnosticsPage: View {
                 LabeledContent("droppedFrames", value: "\(displayDiagnostics.droppedFrames)")
                 LabeledContent("finishReason", value: displayDiagnostics.finishReason?.rawValue ?? "none")
                 LabeledContent("timelineSuspiciouslySparse", value: displayDiagnostics.timelineSuspiciouslySparse ? "true" : "false")
+                LabeledContent("playbackPosition", value: String(format: "%.2f", displayDiagnostics.playbackPosition))
+                LabeledContent("analysisPosition", value: String(format: "%.2f", displayDiagnostics.analysisPosition))
+                LabeledContent("analysisLeadSeconds", value: String(format: "%.2f", displayDiagnostics.analysisLeadSeconds))
+                LabeledContent("analysisSpeedX", value: String(format: "%.2fx", displayDiagnostics.analysisSpeedX))
+                LabeledContent("lookaheadTarget", value: String(format: "%.2fs", displayDiagnostics.lookaheadTarget))
+                LabeledContent("scheduledUntil", value: String(format: "%.2f", displayDiagnostics.scheduledUntil))
+                LabeledContent("rollingWindowCount", value: "\(displayDiagnostics.rollingWindowCount)")
+                LabeledContent("tempoBPM", value: displayDiagnostics.tempoBPM.map { String(format: "%.1f", $0) } ?? "none")
+                LabeledContent("beatConfidence", value: String(format: "%.2f", displayDiagnostics.beatConfidence))
+                LabeledContent("transientCount", value: "\(displayDiagnostics.transientCount)")
+                LabeledContent("continuousCount", value: "\(displayDiagnostics.continuousCount)")
                 LabeledContent("analyzedRanges", value: analyzedRangesDescription)
             }
         }

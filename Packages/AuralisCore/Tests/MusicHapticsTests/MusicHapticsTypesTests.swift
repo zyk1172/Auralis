@@ -69,6 +69,232 @@ import Testing
     ).plan.kind == .analyze)
 }
 
+@Test func playbackPlanResolverUsesLookaheadForRemoteAndRejectsV1Timeline() {
+    let identity = MusicHapticsIdentity(
+        serverID: "server",
+        remoteID: "remote-track",
+        title: "Remote",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+    let source = MusicHapticsAnalysisSource.remoteLookahead(
+        .init(url: URL(string: "https://example.invalid/stream?token=not-a-diagnostic")!, bitrate: 96)
+    )
+    let request = MusicHapticsAnalysisRequest(
+        identity: identity,
+        favorite: false,
+        duration: 180,
+        analysisSource: source
+    )
+    let legacy = MusicHapticsTimeline(
+        identity: identity,
+        duration: 180,
+        analyzedDuration: 180,
+        analysisCoverage: 1,
+        events: [],
+        algorithmVersion: MusicHapticsTimeline.legacyAlgorithmVersion
+    )
+
+    let decision = MusicHapticsPlaybackPlanResolver.resolve(
+        featureEnabled: true,
+        customHapticsSupported: true,
+        systemTimelineAvailable: false,
+        fullTimeline: legacy,
+        partial: nil,
+        request: request
+    )
+    #expect(decision.plan.kind == .analyzeLookahead)
+    #expect(decision.reason == "no_timeline")
+
+    let systemDecision = MusicHapticsPlaybackPlanResolver.resolve(
+        featureEnabled: true,
+        customHapticsSupported: true,
+        systemTimelineAvailable: true,
+        fullTimeline: nil,
+        partial: nil,
+        request: request
+    )
+    #expect(systemDecision.plan.kind == .system)
+}
+
+@Test func v1PartialCannotBePromotedAsV2() {
+    let identity = MusicHapticsIdentity(title: "Legacy", artist: "Artist", durationMilliseconds: 10_000)
+    let legacy = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        algorithmVersion: MusicHapticsTimeline.legacyAlgorithmVersion,
+        duration: 10,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 10)],
+        events: []
+    )
+    #expect(!legacy.isCurrentAlgorithm)
+    #expect(!legacy.isComplete || legacy.timeline().algorithmVersion == MusicHapticsTimeline.legacyAlgorithmVersion)
+
+    let request = MusicHapticsAnalysisRequest(identity: identity, favorite: false, duration: 10)
+    let decision = MusicHapticsPlaybackPlanResolver.resolve(
+        featureEnabled: true,
+        customHapticsSupported: true,
+        systemTimelineAvailable: false,
+        fullTimeline: nil,
+        partial: legacy,
+        request: request
+    )
+    #expect(decision.plan.kind == .analyze)
+}
+
+@Test func partialPromotionRequiresNinetyFivePercentCoverage() {
+    let identity = MusicHapticsIdentity(title: "Threshold", artist: "Artist", durationMilliseconds: 100_000)
+    let incomplete = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 100,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 94)],
+        events: []
+    )
+    let complete = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 100,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 96)],
+        events: []
+    )
+    #expect(!incomplete.isComplete)
+    #expect(complete.isComplete)
+    #expect(complete.timeline().algorithmVersion == MusicHapticsTimeline.algorithmVersion)
+}
+
+@Test func classAwareEventDedupKeepsDifferentRhythmicClasses() {
+    let kick = MusicHapticsEvent(
+        time: 1,
+        intensity: 0.7,
+        sharpness: 0.15,
+        kind: .transient,
+        classification: .kick
+    )
+    let duplicateKick = MusicHapticsEvent(
+        time: 1.02,
+        intensity: 0.4,
+        sharpness: 0.2,
+        kind: .transient,
+        classification: .kick
+    )
+    let hat = MusicHapticsEvent(
+        time: 1.01,
+        intensity: 0.3,
+        sharpness: 0.85,
+        kind: .transient,
+        classification: .highPercussion
+    )
+    let merged = MusicHapticsEventDeduplicator.merge([kick, duplicateKick, hat])
+    #expect(merged.count == 2)
+    #expect(merged.contains { $0.classification == .kick && $0.intensity == 0.7 })
+    #expect(merged.contains { $0.classification == .highPercussion })
+}
+
+@Test func v2DSPSilenceDoesNotCreateHaptics() {
+    var processor = MusicHapticsDSPProcessor(
+        configuration: .init(targetSampleRate: 22_050, fftFrameStride: 1)
+    )
+    let events = processor.process(
+        monoSamples: Array(repeating: Float(0), count: 22_050 * 2),
+        startTime: 0,
+        sampleRate: 22_050
+    ) + processor.finish()
+    #expect(events.isEmpty)
+    #expect(processor.diagnostics.eventCount == 0)
+}
+
+@Test func v2DSPDetectsLowLevelDynamicEventsAndBeatMetadata() {
+    let sampleRate = 22_050.0
+    let samples = syntheticRhythmicSignal(sampleRate: sampleRate, seconds: 4)
+    var processor = MusicHapticsDSPProcessor(
+        configuration: .init(targetSampleRate: sampleRate, fftFrameStride: 1)
+    )
+    let events = processor.process(monoSamples: samples, startTime: 0, sampleRate: sampleRate)
+        + processor.finish()
+    let classes = Set(events.map(\.classification))
+    #expect(!events.isEmpty)
+    #expect(classes.contains(.kick) || classes.contains(.bassAttack) || classes.contains(.snareClap))
+    #expect(events.contains { $0.kind == .continuous && $0.curve.count >= 2 })
+    #expect(processor.diagnostics.eventCount >= events.count)
+    #expect(processor.diagnostics.tempoBPM != nil)
+    #expect(processor.diagnostics.beatConfidence > 0.4)
+}
+
+@Test func v2DSPAdaptiveThresholdDetectsQuietPulseBelowV1RMSFloor() {
+    let sampleRate = 22_050.0
+    let count = Int(sampleRate * 3)
+    var samples = Array(repeating: Float(0), count: count)
+    for index in samples.indices {
+        let time = Double(index) / sampleRate
+        let pulsePhase = time.truncatingRemainder(dividingBy: 0.75)
+        let amplitude: Float = pulsePhase < 0.055 ? 0.018 : 0.004
+        samples[index] = amplitude * Float(sin(2 * Double.pi * 70 * time))
+    }
+    var processor = MusicHapticsDSPProcessor(
+        configuration: .init(targetSampleRate: sampleRate, fftFrameStride: 1)
+    )
+    let events = processor.process(monoSamples: samples, startTime: 0, sampleRate: sampleRate)
+        + processor.finish()
+    #expect(!events.isEmpty)
+    #expect(events.allSatisfy { $0.intensity >= 0 && $0.intensity <= 1 })
+}
+
+private func syntheticRhythmicSignal(sampleRate: Double, seconds: Int) -> [Float] {
+    let count = Int(sampleRate * Double(seconds))
+    return (0..<count).map { index in
+        let time = Double(index) / sampleRate
+        let beatPhase = time.truncatingRemainder(dividingBy: 0.5)
+        let kickEnvelope = Float(exp(-beatPhase * 34))
+        let kickOscillation = Float(sin(2 * Double.pi * 62 * time))
+        let kick = 0.34 * kickEnvelope * kickOscillation
+        let snarePhase = (time + 0.25).truncatingRemainder(dividingBy: 0.5)
+        let snareEnvelope = Float(exp(-snarePhase * 45))
+        let snareOscillation = Float(sin(2 * Double.pi * 2_800 * time))
+        let snare = 0.16 * snareEnvelope * snareOscillation
+        let sustained = 0.10 * Float(sin(2 * Double.pi * 58 * time))
+        return kick + snare + sustained
+    }
+}
+
+@Test @MainActor func rollingSchedulerOnlySchedulesStrictlyAheadWindowsAndFlushesOnSeek() {
+    let event = MusicHapticsEvent(
+        time: 2,
+        intensity: 0.7,
+        sharpness: 0.2,
+        kind: .transient,
+        classification: .kick
+    )
+    let ahead = MusicHapticsAnalysisWindow(
+        startTime: 0,
+        endTime: 6,
+        analysisPosition: 6,
+        events: [event],
+        coverage: 0.03,
+        analysisSpeedX: 4,
+        tempoBPM: 120,
+        beatConfidence: 0.8
+    )
+    let notAhead = MusicHapticsAnalysisWindow(
+        startTime: 6,
+        endTime: 12,
+        analysisPosition: 0,
+        events: [event],
+        coverage: 0.03,
+        analysisSpeedX: 4,
+        tempoBPM: 120,
+        beatConfidence: 0.8
+    )
+    let scheduler = RollingMusicHapticsScheduler(targetLead: 8, schedulingHorizon: 18)
+    #expect(scheduler.ingest(notAhead).isEmpty)
+    #expect(scheduler.ingest(ahead).isEmpty)
+    let scheduled = scheduler.updateClock(position: 0, isPlaying: true)
+    #expect(scheduled.map(\.startTime) == [0])
+    #expect(scheduler.scheduledUntil == 6)
+    scheduler.pause()
+    #expect(!scheduler.resume(position: 1).isEmpty)
+    let afterSeek = scheduler.seek(to: 8, playing: true)
+    #expect(afterSeek.isEmpty)
+    #expect(scheduler.scheduledUntil == 8)
+}
+
 @Test func partialCheckpointRoundTripPreservesHoles() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -96,6 +322,55 @@ import Testing
     #expect(restored?.events == checkpoint.events)
     #expect(abs((restored?.coverage ?? 0) - (82.0 / 180.0)) < 0.0001)
     #expect(try await store.timeline(for: identity) == nil)
+}
+
+@Test func partialCheckpointNeverPersistsAnalysisURLOrToken() throws {
+    let identity = MusicHapticsIdentity(
+        serverID: "server",
+        remoteID: "track",
+        title: "Privacy",
+        artist: "Artist",
+        durationMilliseconds: 30_000
+    )
+    let checkpoint = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 30,
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 3)],
+        events: []
+    )
+    let encoder = PropertyListEncoder()
+    encoder.outputFormat = .xml
+    let payload = String(data: try encoder.encode(checkpoint), encoding: .utf8) ?? ""
+    #expect(!payload.contains("example.invalid"))
+    #expect(!payload.localizedCaseInsensitiveContains("token"))
+    #expect(!payload.localizedCaseInsensitiveContains("streamurl"))
+}
+
+@Test func encodedAnalysisPlanNeverPersistsSidecarURLOrToken() throws {
+    let identity = MusicHapticsIdentity(
+        serverID: "server",
+        remoteID: "track",
+        title: "Plan privacy",
+        artist: "Artist",
+        durationMilliseconds: 30_000
+    )
+    let source = MusicHapticsAnalysisSource.remoteLookahead(
+        .init(url: URL(string: "https://example.invalid/stream?token=never-persist")!)
+    )
+    let plan = MusicHapticsPlaybackPlan.analyzeLookahead(
+        MusicHapticsAnalysisRequest(
+            identity: identity,
+            favorite: false,
+            duration: 30,
+            analysisSource: source
+        )
+    )
+    let encoder = PropertyListEncoder()
+    encoder.outputFormat = .xml
+    let payload = String(data: try encoder.encode(plan), encoding: .utf8) ?? ""
+    #expect(!payload.contains("example.invalid"))
+    #expect(!payload.localizedCaseInsensitiveContains("never-persist"))
+    #expect(!payload.localizedCaseInsensitiveContains("token"))
 }
 
 @Test func promotingOneTrackDoesNotDeleteAnotherPartial() async throws {

@@ -26,6 +26,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var pendingMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
     private var activeMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
     private var preparedMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
+    private var activeRealtimeFallbackPreparationID: UUID?
     private var currentTapSetupTask: Task<Void, Never>?
     private var preparedTapSetupTask: Task<Void, Never>?
 
@@ -110,9 +111,45 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     public func setMusicHapticsPlaybackPreparation(_ preparation: MusicHapticsPlaybackPreparation?) {
         if let previous = pendingMusicHapticsPreparation,
            previous.id != preparation?.id {
-            previous.analysisSink?.cancel()
+            previous.analysisSink?.finishPartial(reason: .preparationReplaced)
+            previous.realtimeFallbackSink?.cancel()
+            previous.lookaheadAnalyzer?.finishPartial(reason: .preparationReplaced)
         }
         pendingMusicHapticsPreparation = preparation
+    }
+
+    /// Installs a plan after the normal AVPlayer item has started.  AppShell
+    /// uses this for interactive song selection so preference/system/sidecar
+    /// resolution cannot sit between a tap and `player.play()`.  Prepared
+    /// gapless items continue to use `setMusicHapticsPlaybackPreparation`,
+    /// which installs their plan before queue insertion.
+    public func installActiveMusicHapticsPlaybackPreparation(
+        _ preparation: MusicHapticsPlaybackPreparation
+    ) {
+        guard let player = avPlayer,
+              let item = player.currentItem
+        else {
+            // Keep the plan recoverable if a caller races the first item
+            // creation; the next play call will consume it normally.
+            pendingMusicHapticsPreparation = preparation
+            return
+        }
+        guard activeMusicHapticsPreparation?.id != preparation.id else { return }
+        pendingMusicHapticsPreparation = nil
+        finishActiveMusicHaptics(reason: .preparationReplaced)
+        activeMusicHapticsPreparation = preparation
+        activeRealtimeFallbackPreparationID = nil
+        if case .analyze = preparation.plan,
+           let sink = preparation.analysisSink {
+            scheduleTapSetup(
+                for: item,
+                sink: sink,
+                isPrepared: false,
+                generation: playGeneration
+            )
+        } else {
+            logSkippedTapSetup(for: preparation.plan)
+        }
     }
 
     public func configureReplayGain(_ settings: ReplayGainSettings) {
@@ -200,6 +237,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         let preparation = pendingMusicHapticsPreparation
         pendingMusicHapticsPreparation = nil
         activeMusicHapticsPreparation = preparation
+        activeRealtimeFallbackPreparationID = nil
         let itemMs = durationMs(itemStart.duration(to: .now))
         AuralisLog.playback.debug("ENGINE_CREATE_ITEM_MS duration_ms=\(itemMs, privacy: .public)")
         let player: AVQueuePlayer
@@ -328,6 +366,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         cancelStallTimeout()
         avPlayer?.pause()
         activeMusicHapticsPreparation?.analysisSink?.pause()
+        if let preparation = activeMusicHapticsPreparation,
+           activeRealtimeFallbackPreparationID == preparation.id {
+            preparation.realtimeFallbackSink?.pause()
+        }
         playbackState = .paused
     }
 
@@ -359,6 +401,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         let time = CMTime(seconds: max(0, position), preferredTimescale: 600)
         await avPlayer?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         activeMusicHapticsPreparation?.analysisSink?.seek(to: position)
+        if let preparation = activeMusicHapticsPreparation,
+           activeRealtimeFallbackPreparationID == preparation.id {
+            preparation.realtimeFallbackSink?.seek(to: position)
+        }
     }
 
     /// AVPlayer 的真实播放位置（秒）。
@@ -441,6 +487,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         finishPreparedMusicHaptics(reason: .preparationReplaced)
         if !preservePendingMusicHaptics {
             pendingMusicHapticsPreparation?.analysisSink?.cancel()
+            pendingMusicHapticsPreparation?.realtimeFallbackSink?.cancel()
             pendingMusicHapticsPreparation = nil
         }
         avPlayer = nil
@@ -479,7 +526,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         // Natural end is the only path that promotes a complete timeline.
         // The coordinator receives the same idempotent completion through the
         // sink callback; a later queue transition may call finishPartial too.
-        activeMusicHapticsPreparation?.analysisSink?.finish()
+        finishActiveMusicHaptics(reason: .naturalEnd)
         activeMusicHapticsPreparation = nil
         let hasPrepared = preparedItem != nil
             && avPlayer?.items().contains(where: { $0 === preparedItem }) == true
@@ -609,8 +656,9 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         // transferring the prepared sidecar to the active slot.
         currentTapSetupTask?.cancel()
         currentTapSetupTask = nil
-        activeMusicHapticsPreparation?.analysisSink?.finish()
+        finishActiveMusicHaptics(reason: .naturalEnd)
         activeMusicHapticsPreparation = preparedMusicHapticsPreparation
+        activeRealtimeFallbackPreparationID = nil
         preparedMusicHapticsPreparation = nil
         currentTapSetupTask = preparedTapSetupTask
         preparedTapSetupTask = nil
@@ -789,7 +837,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         for item: AVPlayerItem,
         sink: any MusicHapticsAnalysisSink,
         isPrepared: Bool,
-        generation: Int
+        generation: Int,
+        planLabel: String = "analyze"
     ) {
         let setupStart = ContinuousClock.now
         let task = Task { @MainActor [weak self, item, sink] in
@@ -816,7 +865,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             }
             let setupMs = self.durationMs(setupStart.duration(to: .now))
             AuralisLog.playback.debug(
-                "HAPTICS_TAP_SETUP_MS duration_ms=\(setupMs, privacy: .public) attached=\(attached, privacy: .public) prepared=\(isPrepared, privacy: .public) plan=analyze"
+                "HAPTICS_TAP_SETUP_MS duration_ms=\(setupMs, privacy: .public) attached=\(attached, privacy: .public) prepared=\(isPrepared, privacy: .public) plan=\(planLabel, privacy: .public)"
             )
         }
         if isPrepared {
@@ -852,14 +901,53 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
     private func finishActiveMusicHaptics(reason: MusicHapticsAnalysisFinishReason) {
         guard let preparation = activeMusicHapticsPreparation else { return }
-        preparation.analysisSink?.finishPartial(reason: reason)
+        if reason == .naturalEnd {
+            preparation.analysisSink?.finish()
+        } else {
+            preparation.analysisSink?.finishPartial(reason: reason)
+        }
+        if activeRealtimeFallbackPreparationID == preparation.id,
+           let fallback = preparation.realtimeFallbackSink {
+            if reason == .naturalEnd {
+                fallback.finish()
+            } else {
+                fallback.finishPartial(reason: reason)
+            }
+        }
+        preparation.lookaheadAnalyzer?.finishPartial(reason: reason)
         activeMusicHapticsPreparation = nil
+        activeRealtimeFallbackPreparationID = nil
     }
 
     private func finishPreparedMusicHaptics(reason: MusicHapticsAnalysisFinishReason) {
         guard let preparation = preparedMusicHapticsPreparation else { return }
         preparation.analysisSink?.finishPartial(reason: reason)
+        preparation.realtimeFallbackSink?.cancel()
+        preparation.lookaheadAnalyzer?.finishPartial(reason: reason)
         preparedMusicHapticsPreparation = nil
+    }
+
+    /// Called only after the remote/local lookahead source has failed. The
+    /// normal path never invokes this method, so successful lookahead and
+    /// cached/system plans do not pay for an audio tap.
+    public func activateMusicHapticsRealtimeFallback(
+        preparationID: UUID,
+        sink: any MusicHapticsAnalysisSink
+    ) {
+        guard let preparation = activeMusicHapticsPreparation,
+              preparation.id == preparationID,
+              let player = avPlayer,
+              let item = player.currentItem,
+              activeRealtimeFallbackPreparationID != preparationID
+        else { return }
+        activeRealtimeFallbackPreparationID = preparationID
+        scheduleTapSetup(
+            for: item,
+            sink: sink,
+            isPrepared: false,
+            generation: playGeneration,
+            planLabel: "realtime_fallback"
+        )
     }
 }
 
