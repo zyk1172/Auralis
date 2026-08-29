@@ -3404,9 +3404,15 @@ public final class AuralisAppModel: ObservableObject {
         DispatchQueue.main.async {
             Task { @MainActor in
                 var restoredHapticsPreparation: MusicHapticsPlaybackPreparation?
-                if self.playbackState == .playing {
+                if self.playbackState == .playing
+                    || self.playbackState == .buffering
+                    || self.playbackState == .stalled {
                     self.lastStopReason = .userPaused
                     await self.engine.pause()
+                } else if self.playbackState == .preparing {
+                    // The player has not reached an actionable pause/resume
+                    // state yet; keep the loading presentation stable.
+                    return
                 } else if case .failed = self.playbackState {
                     // 失败态：重新起播（刷新流地址并重试），不要 resume——
                     // 对已失败的 AVPlayer resume 会静默无声（F16）。
@@ -3476,7 +3482,9 @@ public final class AuralisAppModel: ObservableObject {
     /// 远程命令专用：仅在播放时暂停。reason 用于区分用户暂停 / 系统中断 / 设备断开。
     public func pausePlayback(reason: PlaybackStopReason = .userPaused) {
         lastStopReason = reason
-        if playbackState == .playing { togglePlayback() }
+        if playbackState == .playing || playbackState == .buffering || playbackState == .stalled {
+            togglePlayback()
+        }
     }
 
     /// 用户明确停止整个播放会话：停止引擎、清除系统正在播放信息、记录停止原因。

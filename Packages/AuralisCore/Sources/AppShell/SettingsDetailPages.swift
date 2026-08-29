@@ -117,29 +117,31 @@ struct PlaybackSettingsPage: View {
                     .foregroundStyle(.secondary)
             }
 #if os(iOS)
-            Section(String(localized: "音乐震动反馈", bundle: .module)) {
-                Toggle(String(localized: "自动开启音乐震动", bundle: .module), isOn: $musicHapticsEnabled)
-                    .disabled(!model.musicHaptics.supportsHaptics)
-                    .accessibilityIdentifier(Self.musicHapticsSettingsIdentifier)
+            if MusicHapticsPlatformPolicy.isFeatureAvailable {
+                Section(String(localized: "音乐震动反馈", bundle: .module)) {
+                    Toggle(String(localized: "自动开启音乐震动", bundle: .module), isOn: $musicHapticsEnabled)
+                        .disabled(!model.musicHaptics.supportsHaptics)
+                        .accessibilityIdentifier(Self.musicHapticsSettingsIdentifier)
 #if DEBUG
-                NavigationLink(String(localized: "Music Haptics 调试诊断", bundle: .module)) {
-                    MusicHapticsDiagnosticsPage(model: model, theme: theme, diagnostics: musicHapticsDiagnostics)
-                }
+                    NavigationLink(String(localized: "Music Haptics 调试诊断", bundle: .module)) {
+                        MusicHapticsDiagnosticsPage(model: model, theme: theme, diagnostics: musicHapticsDiagnostics)
+                    }
 #endif
-                LabeledContent(String(localized: "设备支持 Core Haptics", bundle: .module), value: model.musicHaptics.supportsHaptics ? String(localized: "支持", bundle: .module) : String(localized: "不支持", bundle: .module))
-                LabeledContent(
-                    String(localized: "系统 Music Haptics", bundle: .module),
-                    value: musicHapticsDiagnostics.map {
-                        Self.systemHapticsState($0, supportsCustomHaptics: model.musicHaptics.supportsHaptics)
-                    } ?? String(localized: "检查中", bundle: .module)
-                )
-                Text(String(localized: "支持的歌曲优先使用系统 Music Haptics；其它歌曲会在首次播放时后台生成触觉轨道，之后播放时使用。", bundle: .module))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                LabeledContent(String(localized: "普通震动缓存", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.transientBytes, countStyle: .file) + " / 200 MB")
-                LabeledContent(String(localized: "收藏震动数据", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.favoriteBytes, countStyle: .file))
-                Button(String(localized: "清理普通震动缓存", bundle: .module), role: .destructive) {
-                    Task { await model.musicHaptics.clearTransientCache(); musicHapticsUsage = await model.musicHaptics.usage() }
+                    LabeledContent(String(localized: "设备支持 Core Haptics", bundle: .module), value: model.musicHaptics.supportsHaptics ? String(localized: "支持", bundle: .module) : String(localized: "不支持", bundle: .module))
+                    LabeledContent(
+                        String(localized: "系统 Music Haptics", bundle: .module),
+                        value: musicHapticsDiagnostics.map {
+                            Self.systemHapticsState($0, supportsCustomHaptics: model.musicHaptics.supportsHaptics)
+                        } ?? String(localized: "检查中", bundle: .module)
+                    )
+                    Text(String(localized: "支持的歌曲优先使用系统 Music Haptics；其它歌曲会在首次播放时后台生成触觉轨道，之后播放时使用。", bundle: .module))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    LabeledContent(String(localized: "普通震动缓存", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.transientBytes, countStyle: .file) + " / 200 MB")
+                    LabeledContent(String(localized: "收藏震动数据", bundle: .module), value: ByteCountFormatter.string(fromByteCount: musicHapticsUsage.favoriteBytes, countStyle: .file))
+                    Button(String(localized: "清理普通震动缓存", bundle: .module), role: .destructive) {
+                        Task { await model.musicHaptics.clearTransientCache(); musicHapticsUsage = await model.musicHaptics.usage() }
+                    }
                 }
             }
 #endif

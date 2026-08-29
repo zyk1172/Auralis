@@ -4,6 +4,7 @@ import OSLog
 #if os(iOS)
 import CoreHaptics
 import MediaAccessibility
+import UIKit
 #endif
 
 private let musicHapticsLogger = Logger(subsystem: "com.auralis.player", category: "Playback")
@@ -214,6 +215,23 @@ public enum MusicHapticsPlaybackTimeMapping {
     }
 }
 
+/// Product capability policy for Auralis Music Haptics.
+///
+/// Core Haptics may report a capability on more than one iOS form factor, but
+/// the product feature is intentionally iPhone-only. Keeping this decision in
+/// the MusicHaptics module makes the runtime, analysis sources and UI share
+/// the same rule instead of each checking `os(iOS)` independently.
+@MainActor
+public enum MusicHapticsPlatformPolicy {
+    public static var isFeatureAvailable: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+}
+
 /// Pure ordering rule for the one authoritative playback plan. The resolver
 /// has no AVFoundation dependency, so all branches can be regression
 /// tested without a device or a haptics engine.
@@ -261,6 +279,13 @@ public final class SystemMusicHapticsAdapter {
 
     public func availability(isrc: String?) async -> MusicHapticsSystemAvailability {
         let hasISRC = !(isrc?.isEmpty ?? true)
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+            return MusicHapticsSystemAvailability(
+                hasISRC: hasISRC,
+                active: false,
+                timelineAvailable: false
+            )
+        }
         #if os(iOS)
         let manager = MAMusicHapticsManager.shared
         let active = manager.isActive
@@ -291,10 +316,11 @@ public final class SystemMusicHapticsAdapter {
     }
 
     public var isActive: Bool {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return false }
         #if os(iOS)
-        MAMusicHapticsManager.shared.isActive
+        return MAMusicHapticsManager.shared.isActive
         #else
-        false
+        return false
         #endif
     }
 }
@@ -312,10 +338,11 @@ final class CustomMusicHapticsEngine {
     #endif
 
     var supportsHaptics: Bool {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return false }
         #if os(iOS)
-        CHHapticEngine.capabilitiesForHardware().supportsHaptics
+        return CHHapticEngine.capabilitiesForHardware().supportsHaptics
         #else
-        false
+        return false
         #endif
     }
 
@@ -837,7 +864,9 @@ public final class MusicHapticsCoordinator {
         realtimeFallbackHandler = handler
     }
 
-    public var supportsHaptics: Bool { custom.supportsHaptics }
+    public var supportsHaptics: Bool {
+        MusicHapticsPlatformPolicy.isFeatureAvailable && custom.supportsHaptics
+    }
 
     /// Resolves system/custom/analyze exactly once and creates only the
     /// lightweight PCM sink for the analyze branch. It never opens a URL or
@@ -849,6 +878,32 @@ public final class MusicHapticsCoordinator {
         playbackURL: URL? = nil
     ) async -> MusicHapticsPlaybackPreparation {
         let startedAt = ContinuousClock.now
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+            let systemAvailability = MusicHapticsSystemAvailability(
+                hasISRC: identity.isrc != nil,
+                active: false,
+                timelineAvailable: false
+            )
+            let preparation = MusicHapticsPlaybackPreparation(
+                identity: identity,
+                favorite: favorite,
+                plan: .disabled,
+                reason: "platform_unsupported",
+                systemAvailability: systemAvailability,
+                fullTimelineExists: false,
+                partialExists: false,
+                analysisSink: nil
+            )
+            logPlan(
+                identity: identity,
+                plan: .disabled,
+                reason: "platform_unsupported",
+                systemAvailability: systemAvailability,
+                fullTimelineExists: false,
+                partialExists: false
+            )
+            return preparation
+        }
         let preference = (try? await store.preference(for: identity)) ?? .inherit
         let featureEnabled = preference.effective(
             globalEnabled: defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
@@ -1058,6 +1113,10 @@ public final class MusicHapticsCoordinator {
         position: TimeInterval,
         rate: Double = 1
     ) {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+            source = .none
+            return
+        }
         if currentPreparation?.id != preparation.id {
             activeAnalysisSink?.finishPartial(reason: .trackSwitch)
             currentPreparation?.lookaheadAnalyzer?.finishPartial(reason: .trackSwitch)
@@ -1404,6 +1463,7 @@ public final class MusicHapticsCoordinator {
     }
 
     public func favoriteChanged(_ favorite: Bool, identity: MusicHapticsIdentity) {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return }
         currentFavorite = favorite
         Task { try? await store.updateFavorite(favorite, for: identity) }
     }
@@ -1417,6 +1477,7 @@ public final class MusicHapticsCoordinator {
     public func usage() async -> MusicHapticsUsage { (try? await store.usage()) ?? MusicHapticsUsage() }
 
     public func reconcile(_ tracks: [MusicHapticsIdentity], authoritative: Bool) async {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return }
         try? await store.reconcile(with: tracks, authoritative: authoritative)
     }
 

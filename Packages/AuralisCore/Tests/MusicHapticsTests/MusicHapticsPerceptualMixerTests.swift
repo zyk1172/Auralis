@@ -51,7 +51,12 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
     #expect(continuous.allSatisfy { $0.curve.count >= 2 })
     #expect(continuous.dropFirst().enumerated().allSatisfy { index, event in
         let previous = continuous[index]
-        return event.time >= previous.time + (previous.duration ?? 0) - 0.001
+        guard event.time >= previous.time + (previous.duration ?? 0) - 0.001,
+              let previousEnd = previous.curve.last,
+              let nextStart = event.curve.first
+        else { return false }
+        return abs(previousEnd.intensity - nextStart.intensity) <= 0.001
+            && abs(previousEnd.sharpness - nextStart.sharpness) <= 0.001
     })
     #expect(continuous.reduce(0) { $0 + ($1.duration ?? 0) } > 1.2)
 }
@@ -81,6 +86,28 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
     #expect(result.events.first?.classification == .kick)
     #expect((result.events.first?.intensity ?? 0) > 0.9)
     #expect(result.diagnostics.suppressedTransientCount >= 2)
+}
+
+@Test func collisionFusesKickAndSnareWithoutSupportingTransientVoice() {
+    var mixer = MusicHapticsPerceptualMixer()
+    _ = mixer.mix(events: [
+        transient(1, intensity: 0.72, classification: .kick),
+        MusicHapticsEvent(
+            time: 1.04,
+            duration: 0.08,
+            intensity: 0.55,
+            sharpness: 0.65,
+            kind: .transient,
+            classification: .snareClap
+        ),
+    ], time: 1, energyLevel: 0.7)
+
+    let transientEvents = mixer.finish().events.filter { $0.kind == .transient }
+    #expect(transientEvents.count == 1)
+    #expect(transientEvents.first?.classification == .kick)
+    #expect((transientEvents.first?.intensity ?? 0) > 0.72)
+    #expect((transientEvents.first?.sharpness ?? 0) > 0.20)
+    #expect((transientEvents.first?.sharpness ?? 1) < 0.65)
 }
 
 @Test func collisionAcrossAnalysisFramesStillEmitsOneTransient() {
