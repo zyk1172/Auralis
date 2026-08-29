@@ -12,4 +12,16 @@ struct MusicHapticsUIStructureTests {
         #expect(PlaybackSettingsPage.musicHapticsSettingsIdentifier == "auralis.settings.musicHaptics")
         #expect(NowPlayingView.musicHapticsMenuIdentifier == "auralis.nowPlaying.musicHaptics")
     }
+
+    @Test("播放控制统一映射播放、加载与暂停")
+    @MainActor
+    func playbackControlPresentationMapsAuthoritativeStates() {
+        #expect(PlaybackControlPresentation(state: .playing) == .pause)
+        #expect(PlaybackControlPresentation(state: .preparing) == .loading)
+        #expect(PlaybackControlPresentation(state: .buffering) == .loading)
+        #expect(PlaybackControlPresentation(state: .stalled) == .loading)
+        #expect(PlaybackControlPresentation(state: .paused) == .play)
+        #expect(PlaybackControlPresentation(state: .idle) == .play)
+        #expect(PlaybackControlPresentation(state: .failed(.networkUnavailable)) == .play)
+    }
 }

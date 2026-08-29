@@ -11,6 +11,7 @@ import ThemeEngine
 /// 外层尺寸、玻璃材质与边距由调用方（BottomGlassBarShell）统一决定。
 struct MiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
+    @ObservedObject private var playbackStore: PlaybackStore
     let theme: BuiltInTheme
     var height: CGFloat = 56
     /// 展开态为 1；收拢为底部中间胶囊时连续收至 0。
@@ -19,18 +20,34 @@ struct MiniPlayerContent: View {
 
     private var coverSize: CGFloat { min(42, max(36, height - 14)) }
     private var displayTitle: String {
-        model.currentTrack.id.rawValue == "placeholder" ? String(localized: "音乐正在赶来喵", bundle: .module) : model.currentTrack.title
+        playbackStore.currentTrack.id.rawValue == "placeholder" ? String(localized: "音乐正在赶来喵", bundle: .module) : playbackStore.currentTrack.title
+    }
+    private var controlPresentation: PlaybackControlPresentation {
+        PlaybackControlPresentation(state: playbackStore.state)
+    }
+
+    init(
+        model: AuralisAppModel,
+        theme: BuiltInTheme,
+        height: CGFloat = 56,
+        skipControlsVisibility: CGFloat = 1
+    ) {
+        self.model = model
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self.theme = theme
+        self.height = height
+        self.skipControlsVisibility = skipControlsVisibility
     }
 
     var body: some View {
         // 迷你播放条只保留封面、曲目信息与播放控制；进度仅在“正在播放”完整页提供。
         HStack(spacing: 0) {
             ArtworkView(
-                title: model.currentTrack.albumTitle,
-                artworkKey: model.currentTrack.artworkKey,
+                title: playbackStore.currentTrack.albumTitle,
+                artworkKey: playbackStore.currentTrack.artworkKey,
                 colors: theme.colorTokens,
                 size: coverSize,
-                serverID: model.currentTrack.serverID,
+                serverID: playbackStore.currentTrack.serverID,
                 cornerRadius: 8
             )
             .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1)
@@ -40,7 +57,7 @@ struct MiniPlayerContent: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(theme.colorTokens.primaryText.color)
                     .lineLimit(1)
-                Text(model.currentTrack.artistName)
+                Text(playbackStore.currentTrack.artistName)
                     .font(.caption)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
                     .lineLimit(1)
@@ -60,12 +77,14 @@ struct MiniPlayerContent: View {
                 )
 
                 Button(action: model.togglePlayback) {
-                    Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: 17, weight: .semibold))
+                    PlaybackControlIndicator(
+                        presentation: controlPresentation,
+                        color: theme.colorTokens.primaryText.color,
+                        fontSize: 17
+                    )
                         .frame(minWidth: 44, minHeight: 44)
-                        .foregroundStyle(theme.colorTokens.primaryText.color)
                 }
-                .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
+                .accessibilityLabel(controlPresentation.accessibilityLabel)
 
                 skipControl(
                     systemImage: "forward.fill",
@@ -82,12 +101,12 @@ struct MiniPlayerContent: View {
     /// VoiceOver 播放状态描述：歌曲 + 艺术家 + 播放状态。
     private var accessibilityPlaybackLabel: String {
         let state: String
-        switch model.playbackState {
+        switch playbackStore.state {
         case .playing: state = String(localized: "播放中", bundle: .module)
         case .paused: state = String(localized: "已暂停", bundle: .module)
         default: state = String(localized: "未播放", bundle: .module)
         }
-        return String(localized: "\(model.currentTrack.title)，\(model.currentTrack.artistName)，\(state)", bundle: .module)
+        return String(localized: "\(playbackStore.currentTrack.title)，\(playbackStore.currentTrack.artistName)，\(state)", bundle: .module)
     }
 
     private var normalizedSkipControlsVisibility: CGFloat {
@@ -121,20 +140,30 @@ struct MiniPlayerContent: View {
 /// 让首页入口和 AI 助手入口保持独立的圆形触控区域。
 struct CompactMiniPlayerContent: View {
     @ObservedObject var model: AuralisAppModel
+    @ObservedObject private var playbackStore: PlaybackStore
     let theme: BuiltInTheme
 
     private var title: String {
-        model.currentTrack.id.rawValue == "placeholder" ? String(localized: "音乐正在赶来喵", bundle: .module) : model.currentTrack.title
+        playbackStore.currentTrack.id.rawValue == "placeholder" ? String(localized: "音乐正在赶来喵", bundle: .module) : playbackStore.currentTrack.title
+    }
+    private var controlPresentation: PlaybackControlPresentation {
+        PlaybackControlPresentation(state: playbackStore.state)
+    }
+
+    init(model: AuralisAppModel, theme: BuiltInTheme) {
+        self.model = model
+        self._playbackStore = ObservedObject(wrappedValue: model.playbackStore)
+        self.theme = theme
     }
 
     var body: some View {
         HStack(spacing: 10) {
             ArtworkView(
-                title: model.currentTrack.albumTitle,
-                artworkKey: model.currentTrack.artworkKey,
+                title: playbackStore.currentTrack.albumTitle,
+                artworkKey: playbackStore.currentTrack.artworkKey,
                 colors: theme.colorTokens,
                 size: 36,
-                serverID: model.currentTrack.serverID,
+                serverID: playbackStore.currentTrack.serverID,
                 cornerRadius: 8
             )
 
@@ -146,13 +175,15 @@ struct CompactMiniPlayerContent: View {
             Spacer(minLength: 4)
 
             Button(action: model.togglePlayback) {
-                Image(systemName: model.playbackState == .playing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 17, weight: .semibold))
+                PlaybackControlIndicator(
+                    presentation: controlPresentation,
+                    color: theme.colorTokens.primaryText.color,
+                    fontSize: 17
+                )
                     .frame(width: 42, height: 44)
-                    .foregroundStyle(theme.colorTokens.primaryText.color)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(model.playbackState == .playing ? String(localized: "暂停", bundle: .module) : String(localized: "播放", bundle: .module))
+            .accessibilityLabel(controlPresentation.accessibilityLabel)
 
         }
         .padding(.horizontal, 10)
@@ -308,20 +339,22 @@ struct NowPlayingView: View {
             Button(String(localized: "歌曲鉴赏", bundle: .module)) { appreciateCurrentSong() }
             Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
 #if os(iOS)
-            Menu {
-                Button(String(localized: "跟随全局设置", bundle: .module)) {
-                    model.setMusicHapticsPreference(.inherit)
+            if MusicHapticsPlatformPolicy.isFeatureAvailable {
+                Menu {
+                    Button(String(localized: "跟随全局设置", bundle: .module)) {
+                        model.setMusicHapticsPreference(.inherit)
+                    }
+                    Button(String(localized: "为此歌曲开启", bundle: .module)) {
+                        model.setMusicHapticsPreference(.enabled)
+                    }
+                    Button(String(localized: "为此歌曲关闭", bundle: .module), role: .destructive) {
+                        model.setMusicHapticsPreference(.disabled)
+                    }
+                } label: {
+                    Text(String(localized: "音乐震动", bundle: .module))
                 }
-                Button(String(localized: "为此歌曲开启", bundle: .module)) {
-                    model.setMusicHapticsPreference(.enabled)
-                }
-                Button(String(localized: "为此歌曲关闭", bundle: .module), role: .destructive) {
-                    model.setMusicHapticsPreference(.disabled)
-                }
-            } label: {
-                Text(String(localized: "音乐震动", bundle: .module))
+                .accessibilityIdentifier(Self.musicHapticsMenuIdentifier)
             }
-            .accessibilityIdentifier(Self.musicHapticsMenuIdentifier)
 #endif
         } label: {
             Image(systemName: "ellipsis")

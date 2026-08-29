@@ -69,7 +69,7 @@ import Testing
     ).plan.kind == .analyze)
 }
 
-@Test func playbackPlanResolverUsesLookaheadForRemoteAndRejectsV1Timeline() {
+@Test func playbackPlanResolverUsesLookaheadAndRejectsStaleTimelines() {
     let identity = MusicHapticsIdentity(
         serverID: "server",
         remoteID: "remote-track",
@@ -86,25 +86,29 @@ import Testing
         duration: 180,
         analysisSource: source
     )
-    let legacy = MusicHapticsTimeline(
-        identity: identity,
-        duration: 180,
-        analyzedDuration: 180,
-        analysisCoverage: 1,
-        events: [],
-        algorithmVersion: MusicHapticsTimeline.legacyAlgorithmVersion
-    )
-
-    let decision = MusicHapticsPlaybackPlanResolver.resolve(
-        featureEnabled: true,
-        customHapticsSupported: true,
-        systemTimelineAvailable: false,
-        fullTimeline: legacy,
-        partial: nil,
-        request: request
-    )
-    #expect(decision.plan.kind == .analyzeLookahead)
-    #expect(decision.reason == "no_timeline")
+    for staleAlgorithmVersion in [
+        MusicHapticsTimeline.legacyAlgorithmVersion,
+        "auralis-haptics-v2.1",
+    ] {
+        let stale = MusicHapticsTimeline(
+            identity: identity,
+            duration: 180,
+            analyzedDuration: 180,
+            analysisCoverage: 1,
+            events: [],
+            algorithmVersion: staleAlgorithmVersion
+        )
+        let decision = MusicHapticsPlaybackPlanResolver.resolve(
+            featureEnabled: true,
+            customHapticsSupported: true,
+            systemTimelineAvailable: false,
+            fullTimeline: stale,
+            partial: nil,
+            request: request
+        )
+        #expect(decision.plan.kind == .analyzeLookahead)
+        #expect(decision.reason == "no_timeline")
+    }
 
     let systemDecision = MusicHapticsPlaybackPlanResolver.resolve(
         featureEnabled: true,
@@ -210,6 +214,12 @@ import Testing
     #expect(budget.maxTransientVoices == 1)
     #expect(budget.maxContinuousVoices == 1)
 }
+
+#if os(macOS)
+@Test @MainActor func musicHapticsPlatformPolicyDisablesMacOS() {
+    #expect(!MusicHapticsPlatformPolicy.isFeatureAvailable)
+}
+#endif
 
 @Test func v2DSPSilenceDoesNotCreateHaptics() {
     var processor = MusicHapticsDSPProcessor(

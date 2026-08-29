@@ -356,7 +356,16 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             let eventClass = classAndShape.eventClass
             let energyPart = min(1, safeRMS / max(rmsThreshold, 0.004))
             let onsetPart = min(1, onset / max(onsetThreshold, 0.0005))
-            let beatPart: Float = beat.isBeat ? 0.18 : 0
+            let beatPart: Float
+            if beat.isBeat {
+                beatPart = switch beat.strength {
+                case .strongBeat: 0.22
+                case .normalBeat: 0.10
+                case .subBeat: 0
+                }
+            } else {
+                beatPart = 0
+            }
             let intensity = min(0.92, 0.25 + energyPart * 0.25 + onsetPart * 0.37 + beatPart)
             let duration: TimeInterval = eventClass == .highPercussion ? 0.045 : 0.085
             events.append(MusicHapticsEvent(

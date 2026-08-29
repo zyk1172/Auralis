@@ -251,7 +251,10 @@ public struct MusicHapticsEvent: Codable, Hashable, Sendable {
 public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     public static let formatVersion = 1
     public static let legacyAlgorithmVersion = "auralis-haptics-v1"
-    public static let algorithmVersion = "auralis-haptics-v2.1"
+    /// Bump this whenever perceptual event selection or curve materialization
+    /// changes. Stored v2.1 timelines deliberately become cache misses so
+    /// playback cannot silently mix old and new tactile semantics.
+    public static let algorithmVersion = "auralis-haptics-v2.2"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity
