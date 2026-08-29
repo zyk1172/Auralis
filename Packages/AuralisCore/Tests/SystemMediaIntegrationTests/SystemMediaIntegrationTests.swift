@@ -13,9 +13,11 @@ private final class AudioSessionProbe {
     private(set) var requests: [AudioSessionRequest] = []
     var blockConfiguration = false
     var blockActivation = false
+    var blockDeactivation = false
     var failConfiguration = false
     private var configurationContinuation: CheckedContinuation<Void, Never>?
     private var activationContinuation: CheckedContinuation<Void, Never>?
+    private var deactivationContinuation: CheckedContinuation<Void, Never>?
 
     var configurationCallCount: Int {
         requests.filter { $0 == .configurePlayback }.count
@@ -31,6 +33,14 @@ private final class AudioSessionProbe {
 
     var activationStarted: Bool {
         activationCallCount > 0
+    }
+
+    var deactivationCallCount: Int {
+        requests.filter { $0 == .deactivate }.count
+    }
+
+    var deactivationStarted: Bool {
+        deactivationCallCount > 0
     }
 
     func perform(_ request: AudioSessionRequest) async throws {
@@ -53,7 +63,11 @@ private final class AudioSessionProbe {
                 }
             }
         case .deactivate:
-            break
+            if blockDeactivation {
+                await withCheckedContinuation { continuation in
+                    deactivationContinuation = continuation
+                }
+            }
         }
     }
 
@@ -65,6 +79,11 @@ private final class AudioSessionProbe {
     func releaseActivation() {
         activationContinuation?.resume()
         activationContinuation = nil
+    }
+
+    func releaseDeactivation() {
+        deactivationContinuation?.resume()
+        deactivationContinuation = nil
     }
 }
 
@@ -368,5 +387,78 @@ func concurrentAudioSessionActivationAwaitsSharedTask() async {
     await second.value
 
     #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive)
+}
+
+@Test("In-flight AudioSession activation is followed by the requested deactivation")
+@MainActor
+func inFlightAudioSessionActivationIsFollowedByDeactivation() async {
+    let probe = AudioSessionProbe()
+    probe.blockActivation = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.activationStarted {
+        await Task.yield()
+    }
+    #expect(probe.activationStarted)
+
+    let deactivation = Task { @MainActor in
+        await coordinator.deactivate()
+    }
+    await Task.yield()
+
+    #expect(probe.activationCallCount == 1)
+    #expect(probe.deactivationCallCount == 0)
+
+    probe.blockActivation = false
+    probe.releaseActivation()
+    await activation.value
+    await deactivation.value
+
+    #expect(probe.requests == [.configurePlayback, .activate, .deactivate])
+    #expect(coordinator.isActive == false)
+}
+
+@Test("In-flight AudioSession deactivation is followed by a new activation request")
+@MainActor
+func inFlightAudioSessionDeactivationIsFollowedByActivation() async {
+    let probe = AudioSessionProbe()
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    await coordinator.activate()
+    probe.blockDeactivation = true
+    let deactivation = Task { @MainActor in
+        await coordinator.deactivate()
+    }
+    for _ in 0..<100 where !probe.deactivationStarted {
+        await Task.yield()
+    }
+    #expect(probe.deactivationStarted)
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    await Task.yield()
+
+    #expect(probe.activationCallCount == 1)
+
+    probe.blockDeactivation = false
+    probe.releaseDeactivation()
+    await deactivation.value
+    await activation.value
+
+    #expect(probe.requests == [
+        .configurePlayback,
+        .activate,
+        .deactivate,
+        .activate
+    ])
     #expect(coordinator.isActive)
 }

@@ -16,14 +16,18 @@ internal typealias AudioSessionOperation = @MainActor @Sendable (AudioSessionReq
 /// 音频会话协调（仅 iOS/iPadOS；macOS 无 AVAudioSession 播放会话概念）。
 /// - 使用 .playback 分类，保证锁屏与后台继续播放。
 /// - 播放开始前激活会话，停止后按策略挂起。
+/// - activate/deactivate 通过同一个串行 transition 收敛到最新请求。
 @MainActor
 public final class AudioSessionCoordinator {
     public private(set) var isActive = false
     private var isConfigured = false
     private var configurationTask: Task<Bool, Never>?
     private var configurationTaskID = 0
-    private var activationTask: Task<Bool, Never>?
-    private var activationTaskID = 0
+    private var desiredActive = false
+    private var transitionRequestVersion = 0
+    private var transitionTask: Task<Void, Never>?
+    private var transitionTaskID = 0
+    private var transitionTaskRequestVersion = 0
     private var configurationAttemptCount = 0
     private var lastConfigurationError: String?
     private var configurationGeneration = 0
@@ -131,23 +135,94 @@ public final class AudioSessionCoordinator {
 
     /// 播放开始前激活音频会话。必须在主线程（本类型已是 @MainActor）。
     public func activate() async {
-        guard let sessionOperation else { return }
+        guard sessionOperation != nil else { return }
+        desiredActive = true
+        transitionRequestVersion &+= 1
+        await awaitTransition()
+    }
 
-        if let activationTask {
-            _ = await activationTask.value
+    /// 停止播放时挂起会话，把音频焦点还给系统。必须在主线程（本类型已是 @MainActor）。
+    public func deactivate() async {
+        guard sessionOperation != nil else { return }
+        desiredActive = false
+        transitionRequestVersion &+= 1
+        await awaitTransition()
+    }
+
+    /// Serialize activate/deactivate requests and let the latest desired state
+    /// win after the current AVAudioSession operation settles.
+    private func awaitTransition() async {
+        guard desiredActive != isActive || transitionTask != nil else {
+            logConfiguration(
+                duration: .zero,
+                skipped: true,
+                active: isActive,
+                operation: desiredActive ? "activate" : "deactivate"
+            )
             return
         }
 
-        activationTaskID &+= 1
-        let taskID = activationTaskID
-        let task = Task { @MainActor [weak self] () -> Bool in
-            guard let self else { return false }
-            return await self.performActivation(sessionOperation: sessionOperation)
+        while true {
+            if let transitionTask {
+                let taskID = transitionTaskID
+                let taskRequestVersion = transitionTaskRequestVersion
+                _ = await transitionTask.value
+                // A waiter may resume before the task creator clears the
+                // property. Clear only the task that this waiter observed.
+                if transitionTaskID == taskID {
+                    self.transitionTask = nil
+                }
+                if desiredActive == isActive {
+                    return
+                }
+                // A failed transition should not spin forever. Only a newer
+                // explicit request may ask us to try the current desired state
+                // again after the observed task has settled.
+                guard transitionRequestVersion != taskRequestVersion else {
+                    return
+                }
+                continue
+            }
+
+            guard desiredActive != isActive else { return }
+
+            transitionTaskID &+= 1
+            let taskID = transitionTaskID
+            let taskRequestVersion = transitionRequestVersion
+            transitionTaskRequestVersion = taskRequestVersion
+            let task = Task { @MainActor [weak self] () -> Void in
+                guard let self else { return }
+                await self.performTransition()
+            }
+            transitionTask = task
+            _ = await task.value
+            if transitionTaskID == taskID {
+                transitionTask = nil
+            }
+            if desiredActive == isActive {
+                return
+            }
+            // Do not immediately retry a failed operation for the same
+            // request; a later caller can explicitly request another attempt.
+            guard transitionRequestVersion != taskRequestVersion else {
+                return
+            }
         }
-        activationTask = task
-        _ = await task.value
-        if activationTaskID == taskID {
-            activationTask = nil
+    }
+
+    /// Execute one requested transition at a time. If the caller changes its
+    /// mind while an async AVAudioSession operation is in flight, finish that
+    /// operation first and then apply the newest desired state.
+    private func performTransition() async {
+        while true {
+            let requestedActive = desiredActive
+            if requestedActive {
+                await performActivationTransition()
+            } else {
+                await performDeactivationTransition()
+            }
+
+            guard requestedActive != desiredActive else { return }
         }
     }
 
@@ -156,7 +231,9 @@ public final class AudioSessionCoordinator {
     /// operation is suspended, so both phases validate the same generation.
     /// The bounded retry prevents a continuously unstable audio service from
     /// creating an unbounded activation loop.
-    private func performActivation(sessionOperation: AudioSessionOperation) async -> Bool {
+    private func performActivationTransition() async {
+        guard let sessionOperation else { return }
+
         for attempt in 0..<2 {
             let generation = configurationGeneration
             let configured = await configure()
@@ -174,8 +251,13 @@ public final class AudioSessionCoordinator {
                     active: false,
                     operation: "activate_unconfigured"
                 )
-                return false
+                return
             }
+
+            // A deactivate request can arrive while configuration is settling.
+            // Do not start a new activation when nobody wants an active session
+            // anymore; the transition loop will observe the latest request.
+            guard desiredActive else { return }
 
             guard !isActive else {
                 logConfiguration(
@@ -184,7 +266,7 @@ public final class AudioSessionCoordinator {
                     active: true,
                     operation: "activate"
                 )
-                return true
+                return
             }
 
             let startedAt = ContinuousClock.now
@@ -204,7 +286,7 @@ public final class AudioSessionCoordinator {
                 if attempt == 0, generation != configurationGeneration {
                     continue
                 }
-                return false
+                return
             }
 
             guard generation == configurationGeneration, isConfigured else {
@@ -219,7 +301,7 @@ public final class AudioSessionCoordinator {
                 if attempt == 0 {
                     continue
                 }
-                return false
+                return
             }
 
             isActive = true
@@ -229,16 +311,11 @@ public final class AudioSessionCoordinator {
                 active: true,
                 operation: "activate"
             )
-            return true
+            return
         }
-
-        return false
     }
 
-    /// 停止播放时挂起会话，把音频焦点还给系统。必须在主线程（本类型已是 @MainActor）。
-    public func deactivate() async {
-        guard let sessionOperation else { return }
-
+    private func performDeactivationTransition() async {
         guard isActive else {
             logConfiguration(
                 duration: .zero,
@@ -248,6 +325,8 @@ public final class AudioSessionCoordinator {
             )
             return
         }
+
+        guard let sessionOperation else { return }
         let startedAt = ContinuousClock.now
         do {
             try await sessionOperation(.deactivate)
@@ -308,11 +387,11 @@ public final class AudioSessionCoordinator {
             .map { $0.portType.rawValue }
             .joined(separator: ",")
         AuralisLog.playback.debug(
-            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) activation_in_flight=\(self.activationTask != nil, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public) actual_category=\(actualCategory, privacy: .public) actual_mode=\(actualMode, privacy: .public) secondary_audio_silenced=\(session.secondaryAudioShouldBeSilencedHint, privacy: .public) route_outputs=\(routeOutputs, privacy: .public)"
+            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) transition_in_flight=\(self.transitionTask != nil, privacy: .public) desired_active=\(self.desiredActive, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public) actual_category=\(actualCategory, privacy: .public) actual_mode=\(actualMode, privacy: .public) secondary_audio_silenced=\(session.secondaryAudioShouldBeSilencedHint, privacy: .public) route_outputs=\(routeOutputs, privacy: .public)"
         )
         #else
         AuralisLog.playback.debug(
-            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) activation_in_flight=\(self.activationTask != nil, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public)"
+            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) transition_in_flight=\(self.transitionTask != nil, privacy: .public) desired_active=\(self.desiredActive, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public)"
         )
         #endif
     }
