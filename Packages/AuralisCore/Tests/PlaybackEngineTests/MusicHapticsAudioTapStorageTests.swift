@@ -71,6 +71,7 @@ private final class NoopMusicHapticsSink: MusicHapticsAnalysisSink, @unchecked S
     func begin(format: MusicHapticsPCMFormat) {}
     func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int) {}
     func pause() {}
+    func resume() {}
     func seek(to position: TimeInterval) {}
     func finish() {}
     func finishPartial(reason: MusicHapticsAnalysisFinishReason) {}

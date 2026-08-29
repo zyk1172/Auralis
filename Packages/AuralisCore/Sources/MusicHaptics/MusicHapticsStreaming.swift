@@ -10,16 +10,23 @@ public protocol MusicHapticsAnalysisSink: AnyObject, Sendable {
     func begin(format: MusicHapticsPCMFormat)
     func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int)
     func pause()
+    func resume()
     func seek(to position: TimeInterval)
     func finish()
     func finishPartial(reason: MusicHapticsAnalysisFinishReason)
     func cancel()
 }
 
+/// Optional checkpoint access for analyzers that can preserve work without
+/// terminating the current analysis session.
+public protocol MusicHapticsPartialCheckpointProvider: AnyObject, Sendable {
+    func partialCheckpoint() async -> MusicHapticsPartialCheckpoint
+}
+
 /// A bounded PCM sidecar for a single playback. It intentionally owns neither
 /// the player nor the network connection; it receives decoded frames already
 /// fetched by AVPlayer and analyzes them on a utility task.
-public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unchecked Sendable {
+public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, MusicHapticsPartialCheckpointProvider, @unchecked Sendable {
     private let lock = NSLock()
     private struct PendingFrame {
         let bytes: Data
@@ -38,6 +45,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
     /// the seek, even if the utility drain is still finishing one old frame.
     private var pendingSeek: TimeInterval?
     private var draining = false
+    private var paused = false
     private var cancelled = false
     private var finished = false
     private var tapWasAttached = false
@@ -66,6 +74,9 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         var mixer = MusicHapticsPerceptualMixer()
         let duration: TimeInterval
         private let progressiveWindowAdvance: TimeInterval = 0.25
+        var eventCount = 0
+        var transientCount = 0
+        var continuousCount = 0
 
         init(identity: MusicHapticsIdentity, duration: TimeInterval, partial: MusicHapticsPartialCheckpoint?) {
             self.identity = identity
@@ -82,6 +93,9 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
             }
             events = compatiblePartial?.events ?? []
             ranges = compatiblePartial?.analyzedRanges ?? []
+            eventCount = events.count
+            transientCount = events.filter { $0.kind == .transient }.count
+            continuousCount = events.filter { $0.kind == .continuous }.count
             analysisPosition = compatiblePartial?.firstUnanalyzedPosition ?? 0
             lastWindowEnd = analysisPosition
         }
@@ -130,6 +144,9 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 let produced = mixer.mix(frames: candidates).events
                 events.append(contentsOf: produced)
                 newlyAnalyzedEvents.append(contentsOf: produced)
+                eventCount += produced.count
+                transientCount += produced.filter { $0.kind == .transient }.count
+                continuousCount += produced.filter { $0.kind == .continuous }.count
             }
             lastFrameTime = time
             analysisPosition = max(analysisPosition, time + frameDuration)
@@ -168,9 +185,9 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 beatConfidence: processor.diagnostics.beatConfidence,
                 sourceMode: .realtimeTap,
                 analysisStreamBitrate: nil,
-                eventCount: events.count,
-                transientCount: events.filter { $0.kind == .transient }.count,
-                continuousCount: events.filter { $0.kind == .continuous }.count,
+                eventCount: eventCount,
+                transientCount: transientCount,
+                continuousCount: continuousCount,
                 mixerDiagnostics: mixer.diagnostics
             )
             lastWindowEnd = windowEnd
@@ -180,19 +197,26 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         private func insertRange(_ range: MusicHapticsTimeRange) {
             guard range.duration > 0 else { return }
             var merged = range
-            var result: [MusicHapticsTimeRange] = []
-            for existing in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
-                if existing.upperBound < merged.lowerBound || merged.upperBound < existing.lowerBound {
-                    result.append(existing)
-                } else {
-                    merged = MusicHapticsTimeRange(
-                        lowerBound: min(existing.lowerBound, merged.lowerBound),
-                        upperBound: max(existing.upperBound, merged.upperBound)
-                    )
-                }
+            let tolerance = MusicHapticsTimeRange.adjacencyTolerance
+            var firstOverlappingIndex = 0
+            while firstOverlappingIndex < ranges.count,
+                  ranges[firstOverlappingIndex].upperBound + tolerance < merged.lowerBound {
+                firstOverlappingIndex += 1
             }
-            result.append(merged)
-            ranges = result.sorted(by: { $0.lowerBound < $1.lowerBound })
+            var endIndex = firstOverlappingIndex
+            while endIndex < ranges.count,
+                  ranges[endIndex].lowerBound <= merged.upperBound + tolerance {
+                let existing = ranges[endIndex]
+                merged = MusicHapticsTimeRange(
+                    lowerBound: min(existing.lowerBound, merged.lowerBound),
+                    upperBound: max(existing.upperBound, merged.upperBound)
+                )
+                endIndex += 1
+            }
+            ranges.replaceSubrange(
+                firstOverlappingIndex..<endIndex,
+                with: CollectionOfOne(merged)
+            )
         }
 
         func flush() {
@@ -200,6 +224,9 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 + mixer.finish().events
             events.append(contentsOf: produced)
             newlyAnalyzedEvents.append(contentsOf: produced)
+            eventCount += produced.count
+            transientCount += produced.filter { $0.kind == .transient }.count
+            continuousCount += produced.filter { $0.kind == .continuous }.count
         }
 
         func seek(to position: TimeInterval) {
@@ -229,14 +256,13 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
             droppedFrames: Int,
             finishReason: MusicHapticsAnalysisFinishReason? = nil
         ) -> MusicHapticsAnalysisSnapshot {
-            let checkpoint = checkpoint(identity: identity, duration: duration)
             let diagnostics = processor.diagnostics
             return MusicHapticsAnalysisSnapshot(
                 tapAttached: tapAttached,
                 pcmFormat: pcmFormat,
-                analyzedRanges: checkpoint.analyzedRanges,
-                coverage: checkpoint.coverage,
-                eventCount: checkpoint.events.count,
+                analyzedRanges: ranges,
+                coverage: coverage,
+                eventCount: eventCount,
                 droppedFrames: droppedFrames,
                 finishReason: finishReason,
                 analysisMode: .realtimeTap,
@@ -244,8 +270,8 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 analysisSpeedX: 1,
                 tempoBPM: diagnostics.tempoBPM,
                 beatConfidence: diagnostics.beatConfidence,
-                transientCount: checkpoint.events.filter { $0.kind == .transient }.count,
-                continuousCount: checkpoint.events.filter { $0.kind == .continuous }.count,
+                transientCount: transientCount,
+                continuousCount: continuousCount,
                 mixerDiagnostics: mixer.diagnostics
             )
         }
@@ -311,7 +337,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
     public func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int) {
         guard !bytes.isEmpty, time.isFinite, time >= 0, format.isValid, frameCount > 0 else { return }
         let shouldStartDrain = lock.withLock { () -> Bool in
-            guard !cancelled, !finished else { return false }
+            guard !cancelled, !finished, !paused else { return false }
             if pending.count >= maximumPendingFrames, let dropped = pending.first {
                 pending.removeFirst()
                 droppedFrames += max(0, dropped.frameCount)
@@ -326,7 +352,27 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
         }
     }
 
-    public func pause() {}
+    public func pause() {
+        lock.withLock {
+            guard !cancelled, !finished else { return }
+            paused = true
+            pending.removeAll(keepingCapacity: true)
+            pendingSeek = nil
+        }
+    }
+
+    public func resume() {
+        let shouldStartDrain = lock.withLock { () -> Bool in
+            guard !cancelled, !finished else { return false }
+            paused = false
+            guard !draining, pendingSeek != nil || !pending.isEmpty else { return false }
+            draining = true
+            return true
+        }
+        if shouldStartDrain {
+            Task.detached(priority: .utility) { [weak self] in await self?.drain() }
+        }
+    }
 
     public func seek(to position: TimeInterval) {
         let safePosition = max(0, position.isFinite ? position : 0)
@@ -336,7 +382,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
             // segment. Drop it before the next tap callback can enqueue more.
             pending.removeAll()
             pendingSeek = safePosition
-            guard !draining else { return false }
+            guard !paused, !draining else { return false }
             draining = true
             return true
         }
@@ -356,9 +402,14 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
     public func cancel() {
         lock.withLock {
             cancelled = true
+            paused = false
             pending.removeAll()
             draining = false
         }
+    }
+
+    public func partialCheckpoint() async -> MusicHapticsPartialCheckpoint {
+        await accumulator.checkpoint(identity: identity, duration: duration)
     }
 
     private func finish(reason: MusicHapticsAnalysisFinishReason) {
@@ -382,6 +433,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, @unc
                 guard !cancelled else {
                     pending.removeAll()
                     pendingSeek = nil
+                    draining = false
+                    return nil
+                }
+                guard !paused else {
                     draining = false
                     return nil
                 }

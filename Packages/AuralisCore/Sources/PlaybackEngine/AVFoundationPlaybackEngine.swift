@@ -77,6 +77,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
     public func state() -> PlaybackState { playbackState }
 
+    /// Internal test seam for the audio-fidelity invariant. Music Haptics is
+    /// a sidecar and must never replace the URL consumed by AVPlayer.
+    var currentPlaybackURLForTesting: URL? {
+        (avPlayer?.currentItem?.asset as? AVURLAsset)?.url
+    }
+
     public func setVolume(_ volume: Float) {
         self.volume = min(max(volume, 0), 1)
         applyOutputVolume()
