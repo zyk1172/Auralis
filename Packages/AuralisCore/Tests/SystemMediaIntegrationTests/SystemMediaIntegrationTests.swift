@@ -4,6 +4,55 @@ import MediaPlayer
 @testable import SystemMediaIntegration
 import Testing
 
+private enum AudioSessionProbeError: Error {
+    case configurationFailed
+}
+
+@MainActor
+private final class AudioSessionProbe {
+    private(set) var requests: [AudioSessionRequest] = []
+    var blockConfiguration = false
+    var failConfiguration = false
+    private var configurationContinuation: CheckedContinuation<Void, Never>?
+
+    var configurationCallCount: Int {
+        requests.filter { $0 == .configurePlayback }.count
+    }
+
+    var activationCallCount: Int {
+        requests.filter { $0 == .activate }.count
+    }
+
+    var configurationStarted: Bool {
+        configurationCallCount > 0
+    }
+
+    func perform(_ request: AudioSessionRequest) async throws {
+        requests.append(request)
+        guard request == .configurePlayback else { return }
+
+        if blockConfiguration {
+            await withCheckedContinuation { continuation in
+                configurationContinuation = continuation
+            }
+        }
+
+        if failConfiguration {
+            throw AudioSessionProbeError.configurationFailed
+        }
+    }
+
+    func releaseConfiguration() {
+        configurationContinuation?.resume()
+        configurationContinuation = nil
+    }
+}
+
+@MainActor
+private final class CompletionProbe {
+    var finished = false
+}
+
 @Test("Now Playing info dictionary carries metadata without artwork")
 @MainActor
 func nowPlayingInfoDictionary() {
@@ -131,4 +180,83 @@ func widgetReloadRequiresSignificantReason() {
     #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .trackChanged) == true)
     #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .playbackStateChanged) == true)
     #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .seek) == true)
+}
+
+// MARK: - Audio session state machine
+
+@Test("Concurrent AudioSession configuration calls await one shared task")
+@MainActor
+func concurrentAudioSessionConfigurationAwaitsSharedTask() async {
+    let probe = AudioSessionProbe()
+    probe.blockConfiguration = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let first = Task { @MainActor in
+        await coordinator.configure()
+    }
+    for _ in 0..<100 where !probe.configurationStarted {
+        await Task.yield()
+    }
+    #expect(probe.configurationStarted)
+
+    let completion = CompletionProbe()
+    let second = Task { @MainActor in
+        let result = await coordinator.configure()
+        completion.finished = true
+        return result
+    }
+    await Task.yield()
+
+    #expect(probe.configurationCallCount == 1)
+    #expect(completion.finished == false)
+
+    probe.releaseConfiguration()
+    #expect(await first.value)
+    #expect(await second.value)
+    #expect(probe.configurationCallCount == 1)
+}
+
+@Test("Failed AudioSession configuration can be retried")
+@MainActor
+func failedAudioSessionConfigurationCanBeRetried() async {
+    let probe = AudioSessionProbe()
+    probe.failConfiguration = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    await coordinator.activate()
+    #expect(probe.configurationCallCount == 1)
+    #expect(probe.activationCallCount == 0)
+    #expect(coordinator.isActive == false)
+
+    probe.failConfiguration = false
+    await coordinator.activate()
+    #expect(probe.configurationCallCount == 2)
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive)
+}
+
+@Test("Activation refuses to fast-path after configuration invalidation")
+@MainActor
+func activationRevalidatesConfigurationAfterInvalidation() async {
+    let probe = AudioSessionProbe()
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    await coordinator.activate()
+    #expect(coordinator.isActive)
+    #expect(probe.configurationCallCount == 1)
+    #expect(probe.activationCallCount == 1)
+
+    coordinator.invalidateForSystemAudioEvent()
+    probe.failConfiguration = true
+    await coordinator.activate()
+
+    #expect(probe.configurationCallCount == 2)
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive == false)
 }
