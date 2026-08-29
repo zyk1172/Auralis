@@ -4,6 +4,94 @@ import MediaPlayer
 @testable import SystemMediaIntegration
 import Testing
 
+private enum AudioSessionProbeError: Error {
+    case configurationFailed
+}
+
+@MainActor
+private final class AudioSessionProbe {
+    private(set) var requests: [AudioSessionRequest] = []
+    var blockConfiguration = false
+    var blockActivation = false
+    var blockDeactivation = false
+    var failConfiguration = false
+    private var configurationContinuation: CheckedContinuation<Void, Never>?
+    private var activationContinuation: CheckedContinuation<Void, Never>?
+    private var deactivationContinuation: CheckedContinuation<Void, Never>?
+
+    var configurationCallCount: Int {
+        requests.filter { $0 == .configurePlayback }.count
+    }
+
+    var activationCallCount: Int {
+        requests.filter { $0 == .activate }.count
+    }
+
+    var configurationStarted: Bool {
+        configurationCallCount > 0
+    }
+
+    var activationStarted: Bool {
+        activationCallCount > 0
+    }
+
+    var deactivationCallCount: Int {
+        requests.filter { $0 == .deactivate }.count
+    }
+
+    var deactivationStarted: Bool {
+        deactivationCallCount > 0
+    }
+
+    func perform(_ request: AudioSessionRequest) async throws {
+        requests.append(request)
+        switch request {
+        case .configurePlayback:
+            if blockConfiguration {
+                await withCheckedContinuation { continuation in
+                    configurationContinuation = continuation
+                }
+            }
+
+            if failConfiguration {
+                throw AudioSessionProbeError.configurationFailed
+            }
+        case .activate:
+            if blockActivation {
+                await withCheckedContinuation { continuation in
+                    activationContinuation = continuation
+                }
+            }
+        case .deactivate:
+            if blockDeactivation {
+                await withCheckedContinuation { continuation in
+                    deactivationContinuation = continuation
+                }
+            }
+        }
+    }
+
+    func releaseConfiguration() {
+        configurationContinuation?.resume()
+        configurationContinuation = nil
+    }
+
+    func releaseActivation() {
+        activationContinuation?.resume()
+        activationContinuation = nil
+    }
+
+    func releaseDeactivation() {
+        deactivationContinuation?.resume()
+        deactivationContinuation = nil
+    }
+}
+
+@MainActor
+private final class CompletionProbe {
+    var finished = false
+}
+
 @Test("Now Playing info dictionary carries metadata without artwork")
 @MainActor
 func nowPlayingInfoDictionary() {
@@ -131,4 +219,246 @@ func widgetReloadRequiresSignificantReason() {
     #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .trackChanged) == true)
     #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .playbackStateChanged) == true)
     #expect(LiveActivityManager.shouldReloadWidget(didWrite: true, reason: .seek) == true)
+}
+
+// MARK: - Audio session state machine
+
+@Test("Concurrent AudioSession configuration calls await one shared task")
+@MainActor
+func concurrentAudioSessionConfigurationAwaitsSharedTask() async {
+    let probe = AudioSessionProbe()
+    probe.blockConfiguration = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let first = Task { @MainActor in
+        await coordinator.configure()
+    }
+    for _ in 0..<100 where !probe.configurationStarted {
+        await Task.yield()
+    }
+    #expect(probe.configurationStarted)
+
+    let completion = CompletionProbe()
+    let second = Task { @MainActor in
+        let result = await coordinator.configure()
+        completion.finished = true
+        return result
+    }
+    await Task.yield()
+
+    #expect(probe.configurationCallCount == 1)
+    #expect(completion.finished == false)
+
+    probe.releaseConfiguration()
+    #expect(await first.value)
+    #expect(await second.value)
+    #expect(probe.configurationCallCount == 1)
+}
+
+@Test("Failed AudioSession configuration can be retried")
+@MainActor
+func failedAudioSessionConfigurationCanBeRetried() async {
+    let probe = AudioSessionProbe()
+    probe.failConfiguration = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    await coordinator.activate()
+    #expect(probe.configurationCallCount == 1)
+    #expect(probe.activationCallCount == 0)
+    #expect(coordinator.isActive == false)
+
+    probe.failConfiguration = false
+    await coordinator.activate()
+    #expect(probe.configurationCallCount == 2)
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive)
+}
+
+@Test("Activation refuses to fast-path after configuration invalidation")
+@MainActor
+func activationRevalidatesConfigurationAfterInvalidation() async {
+    let probe = AudioSessionProbe()
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    await coordinator.activate()
+    #expect(coordinator.isActive)
+    #expect(probe.configurationCallCount == 1)
+    #expect(probe.activationCallCount == 1)
+
+    coordinator.invalidateForSystemAudioEvent()
+    probe.failConfiguration = true
+    await coordinator.activate()
+
+    #expect(probe.configurationCallCount == 2)
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive == false)
+}
+
+@Test("In-flight AudioSession configuration retries after invalidation")
+@MainActor
+func inFlightAudioSessionConfigurationRetriesAfterInvalidation() async {
+    let probe = AudioSessionProbe()
+    probe.blockConfiguration = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.configurationStarted {
+        await Task.yield()
+    }
+    #expect(probe.configurationStarted)
+
+    coordinator.invalidateForSystemAudioEvent()
+    probe.blockConfiguration = false
+    probe.releaseConfiguration()
+
+    await activation.value
+    #expect(probe.configurationCallCount == 2)
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive)
+}
+
+@Test("Invalidated in-flight AudioSession activation cannot resurrect stale state")
+@MainActor
+func invalidatedInFlightAudioSessionActivationRetriesWithoutStaleState() async {
+    let probe = AudioSessionProbe()
+    probe.blockActivation = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.activationStarted {
+        await Task.yield()
+    }
+    #expect(probe.activationStarted)
+    #expect(coordinator.isActive == false)
+
+    coordinator.invalidateForSystemAudioEvent()
+    probe.blockActivation = false
+    probe.releaseActivation()
+
+    await activation.value
+    #expect(probe.activationCallCount == 2)
+    #expect(coordinator.isActive)
+}
+
+@Test("Concurrent AudioSession activation calls await one shared task")
+@MainActor
+func concurrentAudioSessionActivationAwaitsSharedTask() async {
+    let probe = AudioSessionProbe()
+    probe.blockActivation = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let first = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.activationStarted {
+        await Task.yield()
+    }
+    #expect(probe.activationStarted)
+
+    let completion = CompletionProbe()
+    let second = Task { @MainActor in
+        await coordinator.activate()
+        completion.finished = true
+    }
+    await Task.yield()
+
+    #expect(probe.activationCallCount == 1)
+    #expect(completion.finished == false)
+
+    probe.blockActivation = false
+    probe.releaseActivation()
+    await first.value
+    await second.value
+
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive)
+}
+
+@Test("In-flight AudioSession activation is followed by the requested deactivation")
+@MainActor
+func inFlightAudioSessionActivationIsFollowedByDeactivation() async {
+    let probe = AudioSessionProbe()
+    probe.blockActivation = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.activationStarted {
+        await Task.yield()
+    }
+    #expect(probe.activationStarted)
+
+    let deactivation = Task { @MainActor in
+        await coordinator.deactivate()
+    }
+    await Task.yield()
+
+    #expect(probe.activationCallCount == 1)
+    #expect(probe.deactivationCallCount == 0)
+
+    probe.blockActivation = false
+    probe.releaseActivation()
+    await activation.value
+    await deactivation.value
+
+    #expect(probe.requests == [.configurePlayback, .activate, .deactivate])
+    #expect(coordinator.isActive == false)
+}
+
+@Test("In-flight AudioSession deactivation is followed by a new activation request")
+@MainActor
+func inFlightAudioSessionDeactivationIsFollowedByActivation() async {
+    let probe = AudioSessionProbe()
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    await coordinator.activate()
+    probe.blockDeactivation = true
+    let deactivation = Task { @MainActor in
+        await coordinator.deactivate()
+    }
+    for _ in 0..<100 where !probe.deactivationStarted {
+        await Task.yield()
+    }
+    #expect(probe.deactivationStarted)
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    await Task.yield()
+
+    #expect(probe.activationCallCount == 1)
+
+    probe.blockDeactivation = false
+    probe.releaseDeactivation()
+    await deactivation.value
+    await activation.value
+
+    #expect(probe.requests == [
+        .configurePlayback,
+        .activate,
+        .deactivate,
+        .activate
+    ])
+    #expect(coordinator.isActive)
 }

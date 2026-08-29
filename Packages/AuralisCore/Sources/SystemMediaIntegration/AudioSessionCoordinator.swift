@@ -5,85 +5,305 @@ import Observability
 import AVFoundation
 #endif
 
+internal enum AudioSessionRequest: Sendable, Equatable {
+    case configurePlayback
+    case activate
+    case deactivate
+}
+
+internal typealias AudioSessionOperation = @MainActor @Sendable (AudioSessionRequest) async throws -> Void
+
 /// 音频会话协调（仅 iOS/iPadOS；macOS 无 AVAudioSession 播放会话概念）。
 /// - 使用 .playback 分类，保证锁屏与后台继续播放。
 /// - 播放开始前激活会话，停止后按策略挂起。
+/// - activate/deactivate 通过同一个串行 transition 收敛到最新请求。
 @MainActor
 public final class AudioSessionCoordinator {
     public private(set) var isActive = false
-    #if os(iOS)
     private var isConfigured = false
-    private var configurationAttempted = false
-    private var configurationTask: Task<Void, Never>?
-    #endif
+    private var configurationTask: Task<Bool, Never>?
+    private var configurationTaskID = 0
+    private var desiredActive = false
+    private var transitionRequestVersion = 0
+    private var transitionTask: Task<Void, Never>?
+    private var transitionTaskID = 0
+    private var transitionTaskRequestVersion = 0
+    private var configurationAttemptCount = 0
+    private var lastConfigurationError: String?
+    private var configurationGeneration = 0
+    private let sessionOperation: AudioSessionOperation?
 
-    public init() {}
-
-    /// 配置 .playback 分类。App 启动或首次播放前调用一次即可。
-    /// 注意：AVAudioSession 必须在主线程调用，本类型已是 @MainActor，直接执行。
-    public func configure() async {
+    public init() {
         #if os(iOS)
-        if isConfigured || configurationAttempted {
+        sessionOperation = { request in
+            switch request {
+            case .configurePlayback:
+                try await performAudioSession(category: .playback)
+            case .activate:
+                try await performAudioSession(active: true)
+            case .deactivate:
+                try await performAudioSession(active: false, options: .notifyOthersOnDeactivation)
+            }
+        }
+        #else
+        sessionOperation = nil
+        #endif
+    }
+
+    internal init(sessionOperation: @escaping AudioSessionOperation) {
+        self.sessionOperation = sessionOperation
+    }
+
+    /// 配置 .playback 分类。成功后复用；失败时下一次调用会重新尝试。
+    /// 注意：AVAudioSession 必须在主线程调用，本类型已是 @MainActor，直接执行。
+    @discardableResult
+    public func configure() async -> Bool {
+        guard sessionOperation != nil else { return true }
+
+        if isConfigured {
             logConfiguration(
                 duration: .zero,
                 skipped: true,
                 active: isActive,
                 operation: "configure"
             )
-            return
-        }
-        if let configurationTask {
-            await configurationTask.value
-            return
+            return true
         }
 
-        configurationAttempted = true
-        let task = Task { @MainActor [weak self] in
-            guard let self else { return }
+        if let configurationTask {
+            let success = await configurationTask.value
+            logConfiguration(
+                duration: .zero,
+                skipped: true,
+                active: isActive,
+                operation: "configure_wait"
+            )
+            return success
+        }
+
+        configurationAttemptCount += 1
+        let generation = configurationGeneration
+        configurationTaskID &+= 1
+        let taskID = configurationTaskID
+        let task = Task { @MainActor [weak self] () -> Bool in
+            guard let self, let sessionOperation = self.sessionOperation else { return false }
             let startedAt = ContinuousClock.now
             do {
-                try await self.performSession(category: .playback)
+                try await sessionOperation(.configurePlayback)
+                guard self.configurationGeneration == generation else {
+                    self.isConfigured = false
+                    self.isActive = false
+                    self.lastConfigurationError = "系统音频事件使本次配置失效"
+                    self.logConfiguration(
+                        duration: self.durationMs(startedAt.duration(to: .now)),
+                        skipped: false,
+                        active: false,
+                        operation: "configure_invalidated"
+                    )
+                    return false
+                }
                 self.isConfigured = true
+                self.lastConfigurationError = nil
+                self.logConfiguration(
+                    duration: self.durationMs(startedAt.duration(to: .now)),
+                    skipped: false,
+                    active: self.isActive,
+                    operation: "configure"
+                )
+                return true
             } catch {
-                // 配置失败不致命：记录并继续，播放仍可能在前台工作。
-                // 不再对非法 category/options 组合做静默 fallback；调用方可以
-                // 从这条日志确认真实的系统错误，而不是把 -50 隐藏掉。
+                self.isConfigured = false
+                self.isActive = false
+                self.lastConfigurationError = error.localizedDescription
                 AuralisLog.playback.error("音频会话配置分类失败：\(error.localizedDescription)")
+                self.logConfiguration(
+                    duration: self.durationMs(startedAt.duration(to: .now)),
+                    skipped: false,
+                    active: false,
+                    operation: "configure"
+                )
+                return false
             }
-            self.logConfiguration(
-                duration: self.durationMs(startedAt.duration(to: .now)),
-                skipped: false,
-                active: self.isActive,
-                operation: "configure"
-            )
         }
         configurationTask = task
-        await task.value
-        configurationTask = nil
-        #endif
+        let success = await task.value
+        if configurationTaskID == taskID {
+            configurationTask = nil
+        }
+        return success
     }
 
     /// 播放开始前激活音频会话。必须在主线程（本类型已是 @MainActor）。
     public func activate() async {
-        #if os(iOS)
-        // Do not even enter the configuration method for an already settled
-        // session. The in-flight case still waits so activation cannot race
-        // the initial setCategory call.
-        if configurationTask != nil || (!isConfigured && !configurationAttempted) {
-            await configure()
-        }
-        guard !isActive else {
+        guard sessionOperation != nil else { return }
+        desiredActive = true
+        transitionRequestVersion &+= 1
+        await awaitTransition()
+    }
+
+    /// 停止播放时挂起会话，把音频焦点还给系统。必须在主线程（本类型已是 @MainActor）。
+    public func deactivate() async {
+        guard sessionOperation != nil else { return }
+        desiredActive = false
+        transitionRequestVersion &+= 1
+        await awaitTransition()
+    }
+
+    /// Serialize activate/deactivate requests and let the latest desired state
+    /// win after the current AVAudioSession operation settles.
+    private func awaitTransition() async {
+        guard desiredActive != isActive || transitionTask != nil else {
             logConfiguration(
                 duration: .zero,
                 skipped: true,
-                active: true,
-                operation: "activate"
+                active: isActive,
+                operation: desiredActive ? "activate" : "deactivate"
             )
             return
         }
-        let startedAt = ContinuousClock.now
-        do {
-            try await performSession(active: true)
+
+        while true {
+            if let transitionTask {
+                let taskID = transitionTaskID
+                let taskRequestVersion = transitionTaskRequestVersion
+                _ = await transitionTask.value
+                // A waiter may resume before the task creator clears the
+                // property. Clear only the task that this waiter observed.
+                if transitionTaskID == taskID {
+                    self.transitionTask = nil
+                }
+                if desiredActive == isActive {
+                    return
+                }
+                // A failed transition should not spin forever. Only a newer
+                // explicit request may ask us to try the current desired state
+                // again after the observed task has settled.
+                guard transitionRequestVersion != taskRequestVersion else {
+                    return
+                }
+                continue
+            }
+
+            guard desiredActive != isActive else { return }
+
+            transitionTaskID &+= 1
+            let taskID = transitionTaskID
+            let taskRequestVersion = transitionRequestVersion
+            transitionTaskRequestVersion = taskRequestVersion
+            let task = Task { @MainActor [weak self] () -> Void in
+                guard let self else { return }
+                await self.performTransition()
+            }
+            transitionTask = task
+            _ = await task.value
+            if transitionTaskID == taskID {
+                transitionTask = nil
+            }
+            if desiredActive == isActive {
+                return
+            }
+            // Do not immediately retry a failed operation for the same
+            // request; a later caller can explicitly request another attempt.
+            guard transitionRequestVersion != taskRequestVersion else {
+                return
+            }
+        }
+    }
+
+    /// Execute one requested transition at a time. If the caller changes its
+    /// mind while an async AVAudioSession operation is in flight, finish that
+    /// operation first and then apply the newest desired state.
+    private func performTransition() async {
+        while true {
+            let requestedActive = desiredActive
+            if requestedActive {
+                await performActivationTransition()
+            } else {
+                await performDeactivationTransition()
+            }
+
+            guard requestedActive != desiredActive else { return }
+        }
+    }
+
+    /// Attempts one activation transition at a time. A system audio event can
+    /// invalidate either the configuration or the activation while its async
+    /// operation is suspended, so both phases validate the same generation.
+    /// The bounded retry prevents a continuously unstable audio service from
+    /// creating an unbounded activation loop.
+    private func performActivationTransition() async {
+        guard let sessionOperation else { return }
+
+        for attempt in 0..<2 {
+            let generation = configurationGeneration
+            let configured = await configure()
+            guard configured,
+                  isConfigured,
+                  generation == configurationGeneration
+            else {
+                if attempt == 0, generation != configurationGeneration {
+                    continue
+                }
+                isActive = false
+                logConfiguration(
+                    duration: .zero,
+                    skipped: false,
+                    active: false,
+                    operation: "activate_unconfigured"
+                )
+                return
+            }
+
+            // A deactivate request can arrive while configuration is settling.
+            // Do not start a new activation when nobody wants an active session
+            // anymore; the transition loop will observe the latest request.
+            guard desiredActive else { return }
+
+            guard !isActive else {
+                logConfiguration(
+                    duration: .zero,
+                    skipped: true,
+                    active: true,
+                    operation: "activate"
+                )
+                return
+            }
+
+            let startedAt = ContinuousClock.now
+            do {
+                try await sessionOperation(.activate)
+            } catch {
+                isConfigured = false
+                isActive = false
+                lastConfigurationError = error.localizedDescription
+                AuralisLog.playback.error("音频会话激活失败：\(error.localizedDescription)")
+                logConfiguration(
+                    duration: durationMs(startedAt.duration(to: .now)),
+                    skipped: false,
+                    active: false,
+                    operation: "activate"
+                )
+                if attempt == 0, generation != configurationGeneration {
+                    continue
+                }
+                return
+            }
+
+            guard generation == configurationGeneration, isConfigured else {
+                isActive = false
+                lastConfigurationError = "系统音频事件使本次激活失效"
+                logConfiguration(
+                    duration: durationMs(startedAt.duration(to: .now)),
+                    skipped: false,
+                    active: false,
+                    operation: "activate_invalidated"
+                )
+                if attempt == 0 {
+                    continue
+                }
+                return
+            }
+
             isActive = true
             logConfiguration(
                 duration: durationMs(startedAt.duration(to: .now)),
@@ -91,21 +311,11 @@ public final class AudioSessionCoordinator {
                 active: true,
                 operation: "activate"
             )
-        } catch {
-            AuralisLog.playback.error("音频会话激活失败：\(error.localizedDescription)")
-            logConfiguration(
-                duration: durationMs(startedAt.duration(to: .now)),
-                skipped: false,
-                active: false,
-                operation: "activate"
-            )
+            return
         }
-        #endif
     }
 
-    /// 停止播放时挂起会话，把音频焦点还给系统。必须在主线程（本类型已是 @MainActor）。
-    public func deactivate() async {
-        #if os(iOS)
+    private func performDeactivationTransition() async {
         guard isActive else {
             logConfiguration(
                 duration: .zero,
@@ -115,9 +325,11 @@ public final class AudioSessionCoordinator {
             )
             return
         }
+
+        guard let sessionOperation else { return }
         let startedAt = ContinuousClock.now
         do {
-            try await performSession(active: false, options: .notifyOthersOnDeactivation)
+            try await sessionOperation(.deactivate)
             logConfiguration(
                 duration: durationMs(startedAt.duration(to: .now)),
                 skipped: false,
@@ -134,7 +346,6 @@ public final class AudioSessionCoordinator {
             )
             return
         }
-        #endif
         isActive = false
     }
 
@@ -142,31 +353,19 @@ public final class AudioSessionCoordinator {
     /// AVAudioSession outside this object's control. The next activation may
     /// configure it once again; ordinary track switches never call this.
     public func invalidateForSystemAudioEvent() {
-        #if os(iOS)
         // Do not cancel a checked continuation inside an in-flight async
-        // activation/configuration. Let that operation settle, then allow a
-        // later caller to configure again.
+        // activation/configuration. Let the owning transition settle so its
+        // generation check can discard the result and retry if appropriate.
+        configurationGeneration &+= 1
         isConfigured = false
-        configurationAttempted = false
-        #endif
         isActive = false
     }
 
-    #if os(iOS)
     /// AVAudioSession 必须在主线程调用（内部 dispatch_assert_queue 断言，
     /// 后台线程会触发 _dispatch_assert_queue_fail + err=-19431）。
     /// AudioSessionCoordinator 已是 @MainActor，configure/activate/deactivate 调用本就在主线程，
     /// 但系统明确警告：从主线程调用*同步* setActive 会阻塞 UI（AVAudioSession_iOS.mm:978）。
     /// 因此一律走异步 activate/deactivate API（见模块内 performAudioSession）。
-    private func performSession(
-        category: AVAudioSession.Category? = nil,
-        mode: AVAudioSession.Mode = .default,
-        active: Bool? = nil,
-        options: AVAudioSession.SetActiveOptions = []
-    ) async throws {
-        try await performAudioSession(category: category, mode: mode, active: active, options: options)
-    }
-
     private func durationMs(_ duration: Duration) -> Double {
         let components = duration.components
         return Double(components.seconds) * 1_000
@@ -179,11 +378,23 @@ public final class AudioSessionCoordinator {
         active: Bool,
         operation: String
     ) {
+        let lastError = lastConfigurationError ?? "none"
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        let actualCategory = session.category.rawValue
+        let actualMode = session.mode.rawValue
+        let routeOutputs = session.currentRoute.outputs
+            .map { $0.portType.rawValue }
+            .joined(separator: ",")
         AuralisLog.playback.debug(
-            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) attempted=\(self.configurationAttempted, privacy: .public)"
+            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) transition_in_flight=\(self.transitionTask != nil, privacy: .public) desired_active=\(self.desiredActive, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public) actual_category=\(actualCategory, privacy: .public) actual_mode=\(actualMode, privacy: .public) secondary_audio_silenced=\(session.secondaryAudioShouldBeSilencedHint, privacy: .public) route_outputs=\(routeOutputs, privacy: .public)"
         )
+        #else
+        AuralisLog.playback.debug(
+            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) transition_in_flight=\(self.transitionTask != nil, privacy: .public) desired_active=\(self.desiredActive, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public)"
+        )
+        #endif
     }
-    #endif
 }
 
 #if os(iOS)
@@ -203,6 +414,9 @@ internal func performAudioSession(
     // .record / .playAndRecord；搭配 .playback 会返回 OSStatus -50 (paramErr)。
     if let category {
         try session.setCategory(category, mode: mode, options: categoryOptions(for: category))
+        guard session.category.rawValue == category.rawValue else {
+            throw AudioSessionError(kind: .configuration)
+        }
     }
     if let active {
         if active {
@@ -283,10 +497,11 @@ private func categoryOptions(for category: AVAudioSession.Category) -> AVAudioSe
 }
 
 private struct AudioSessionError: Error, CustomStringConvertible {
-    enum Kind { case activation, deactivation }
+    enum Kind { case configuration, activation, deactivation }
     let kind: Kind
     var description: String {
         switch kind {
+        case .configuration: return "AVAudioSession 分类配置未生效"
         case .activation: return "AVAudioSession 激活失败"
         case .deactivation: return "AVAudioSession 挂起失败"
         }
