@@ -21,6 +21,9 @@ public final class AudioSessionCoordinator {
     public private(set) var isActive = false
     private var isConfigured = false
     private var configurationTask: Task<Bool, Never>?
+    private var configurationTaskID = 0
+    private var activationTask: Task<Bool, Never>?
+    private var activationTaskID = 0
     private var configurationAttemptCount = 0
     private var lastConfigurationError: String?
     private var configurationGeneration = 0
@@ -76,6 +79,8 @@ public final class AudioSessionCoordinator {
 
         configurationAttemptCount += 1
         let generation = configurationGeneration
+        configurationTaskID &+= 1
+        let taskID = configurationTaskID
         let task = Task { @MainActor [weak self] () -> Bool in
             guard let self, let sessionOperation = self.sessionOperation else { return false }
             let startedAt = ContinuousClock.now
@@ -118,7 +123,9 @@ public final class AudioSessionCoordinator {
         }
         configurationTask = task
         let success = await task.value
-        configurationTask = nil
+        if configurationTaskID == taskID {
+            configurationTask = nil
+        }
         return success
     }
 
@@ -126,34 +133,95 @@ public final class AudioSessionCoordinator {
     public func activate() async {
         guard let sessionOperation else { return }
 
-        let configured = await configure()
-        guard configured, isConfigured else {
-            // Never treat an active flag as sufficient when the .playback
-            // category was not confirmed. This also repairs a stale
-            // active=true/configured=false state on the next activation.
-            isActive = false
-            logConfiguration(
-                duration: .zero,
-                skipped: false,
-                active: false,
-                operation: "activate_unconfigured"
-            )
+        if let activationTask {
+            _ = await activationTask.value
             return
         }
 
-        guard !isActive else {
-            logConfiguration(
-                duration: .zero,
-                skipped: true,
-                active: true,
-                operation: "activate"
-            )
-            return
+        activationTaskID &+= 1
+        let taskID = activationTaskID
+        let task = Task { @MainActor [weak self] () -> Bool in
+            guard let self else { return false }
+            return await self.performActivation(sessionOperation: sessionOperation)
         }
+        activationTask = task
+        _ = await task.value
+        if activationTaskID == taskID {
+            activationTask = nil
+        }
+    }
 
-        let startedAt = ContinuousClock.now
-        do {
-            try await sessionOperation(.activate)
+    /// Attempts one activation transition at a time. A system audio event can
+    /// invalidate either the configuration or the activation while its async
+    /// operation is suspended, so both phases validate the same generation.
+    /// The bounded retry prevents a continuously unstable audio service from
+    /// creating an unbounded activation loop.
+    private func performActivation(sessionOperation: AudioSessionOperation) async -> Bool {
+        for attempt in 0..<2 {
+            let generation = configurationGeneration
+            let configured = await configure()
+            guard configured,
+                  isConfigured,
+                  generation == configurationGeneration
+            else {
+                if attempt == 0, generation != configurationGeneration {
+                    continue
+                }
+                isActive = false
+                logConfiguration(
+                    duration: .zero,
+                    skipped: false,
+                    active: false,
+                    operation: "activate_unconfigured"
+                )
+                return false
+            }
+
+            guard !isActive else {
+                logConfiguration(
+                    duration: .zero,
+                    skipped: true,
+                    active: true,
+                    operation: "activate"
+                )
+                return true
+            }
+
+            let startedAt = ContinuousClock.now
+            do {
+                try await sessionOperation(.activate)
+            } catch {
+                isConfigured = false
+                isActive = false
+                lastConfigurationError = error.localizedDescription
+                AuralisLog.playback.error("音频会话激活失败：\(error.localizedDescription)")
+                logConfiguration(
+                    duration: durationMs(startedAt.duration(to: .now)),
+                    skipped: false,
+                    active: false,
+                    operation: "activate"
+                )
+                if attempt == 0, generation != configurationGeneration {
+                    continue
+                }
+                return false
+            }
+
+            guard generation == configurationGeneration, isConfigured else {
+                isActive = false
+                lastConfigurationError = "系统音频事件使本次激活失效"
+                logConfiguration(
+                    duration: durationMs(startedAt.duration(to: .now)),
+                    skipped: false,
+                    active: false,
+                    operation: "activate_invalidated"
+                )
+                if attempt == 0 {
+                    continue
+                }
+                return false
+            }
+
             isActive = true
             logConfiguration(
                 duration: durationMs(startedAt.duration(to: .now)),
@@ -161,18 +229,10 @@ public final class AudioSessionCoordinator {
                 active: true,
                 operation: "activate"
             )
-        } catch {
-            isConfigured = false
-            isActive = false
-            lastConfigurationError = error.localizedDescription
-            AuralisLog.playback.error("音频会话激活失败：\(error.localizedDescription)")
-            logConfiguration(
-                duration: durationMs(startedAt.duration(to: .now)),
-                skipped: false,
-                active: false,
-                operation: "activate"
-            )
+            return true
         }
+
+        return false
     }
 
     /// 停止播放时挂起会话，把音频焦点还给系统。必须在主线程（本类型已是 @MainActor）。
@@ -215,8 +275,8 @@ public final class AudioSessionCoordinator {
     /// configure it once again; ordinary track switches never call this.
     public func invalidateForSystemAudioEvent() {
         // Do not cancel a checked continuation inside an in-flight async
-        // activation/configuration. Let that operation settle, then allow a
-        // later caller to configure again.
+        // activation/configuration. Let the owning transition settle so its
+        // generation check can discard the result and retry if appropriate.
         configurationGeneration &+= 1
         isConfigured = false
         isActive = false
@@ -248,11 +308,11 @@ public final class AudioSessionCoordinator {
             .map { $0.portType.rawValue }
             .joined(separator: ",")
         AuralisLog.playback.debug(
-            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public) actual_category=\(actualCategory, privacy: .public) actual_mode=\(actualMode, privacy: .public) secondary_audio_silenced=\(session.secondaryAudioShouldBeSilencedHint, privacy: .public) route_outputs=\(routeOutputs, privacy: .public)"
+            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) activation_in_flight=\(self.activationTask != nil, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public) actual_category=\(actualCategory, privacy: .public) actual_mode=\(actualMode, privacy: .public) secondary_audio_silenced=\(session.secondaryAudioShouldBeSilencedHint, privacy: .public) route_outputs=\(routeOutputs, privacy: .public)"
         )
         #else
         AuralisLog.playback.debug(
-            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public)"
+            "ENGINE_CONFIG_SESSION_MS duration_ms=\(duration, privacy: .public) operation=\(operation, privacy: .public) skipped=\(skipped, privacy: .public) active=\(active, privacy: .public) configured=\(self.isConfigured, privacy: .public) configuration_in_flight=\(self.configurationTask != nil, privacy: .public) activation_in_flight=\(self.activationTask != nil, privacy: .public) configuration_attempt_count=\(self.configurationAttemptCount, privacy: .public) last_configuration_error=\(lastError, privacy: .public)"
         )
         #endif
     }

@@ -12,8 +12,10 @@ private enum AudioSessionProbeError: Error {
 private final class AudioSessionProbe {
     private(set) var requests: [AudioSessionRequest] = []
     var blockConfiguration = false
+    var blockActivation = false
     var failConfiguration = false
     private var configurationContinuation: CheckedContinuation<Void, Never>?
+    private var activationContinuation: CheckedContinuation<Void, Never>?
 
     var configurationCallCount: Int {
         requests.filter { $0 == .configurePlayback }.count
@@ -27,24 +29,42 @@ private final class AudioSessionProbe {
         configurationCallCount > 0
     }
 
+    var activationStarted: Bool {
+        activationCallCount > 0
+    }
+
     func perform(_ request: AudioSessionRequest) async throws {
         requests.append(request)
-        guard request == .configurePlayback else { return }
-
-        if blockConfiguration {
-            await withCheckedContinuation { continuation in
-                configurationContinuation = continuation
+        switch request {
+        case .configurePlayback:
+            if blockConfiguration {
+                await withCheckedContinuation { continuation in
+                    configurationContinuation = continuation
+                }
             }
-        }
 
-        if failConfiguration {
-            throw AudioSessionProbeError.configurationFailed
+            if failConfiguration {
+                throw AudioSessionProbeError.configurationFailed
+            }
+        case .activate:
+            if blockActivation {
+                await withCheckedContinuation { continuation in
+                    activationContinuation = continuation
+                }
+            }
+        case .deactivate:
+            break
         }
     }
 
     func releaseConfiguration() {
         configurationContinuation?.resume()
         configurationContinuation = nil
+    }
+
+    func releaseActivation() {
+        activationContinuation?.resume()
+        activationContinuation = nil
     }
 }
 
@@ -259,4 +279,94 @@ func activationRevalidatesConfigurationAfterInvalidation() async {
     #expect(probe.configurationCallCount == 2)
     #expect(probe.activationCallCount == 1)
     #expect(coordinator.isActive == false)
+}
+
+@Test("In-flight AudioSession configuration retries after invalidation")
+@MainActor
+func inFlightAudioSessionConfigurationRetriesAfterInvalidation() async {
+    let probe = AudioSessionProbe()
+    probe.blockConfiguration = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.configurationStarted {
+        await Task.yield()
+    }
+    #expect(probe.configurationStarted)
+
+    coordinator.invalidateForSystemAudioEvent()
+    probe.blockConfiguration = false
+    probe.releaseConfiguration()
+
+    await activation.value
+    #expect(probe.configurationCallCount == 2)
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive)
+}
+
+@Test("Invalidated in-flight AudioSession activation cannot resurrect stale state")
+@MainActor
+func invalidatedInFlightAudioSessionActivationRetriesWithoutStaleState() async {
+    let probe = AudioSessionProbe()
+    probe.blockActivation = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let activation = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.activationStarted {
+        await Task.yield()
+    }
+    #expect(probe.activationStarted)
+    #expect(coordinator.isActive == false)
+
+    coordinator.invalidateForSystemAudioEvent()
+    probe.blockActivation = false
+    probe.releaseActivation()
+
+    await activation.value
+    #expect(probe.activationCallCount == 2)
+    #expect(coordinator.isActive)
+}
+
+@Test("Concurrent AudioSession activation calls await one shared task")
+@MainActor
+func concurrentAudioSessionActivationAwaitsSharedTask() async {
+    let probe = AudioSessionProbe()
+    probe.blockActivation = true
+    let coordinator = AudioSessionCoordinator { request in
+        try await probe.perform(request)
+    }
+
+    let first = Task { @MainActor in
+        await coordinator.activate()
+    }
+    for _ in 0..<100 where !probe.activationStarted {
+        await Task.yield()
+    }
+    #expect(probe.activationStarted)
+
+    let completion = CompletionProbe()
+    let second = Task { @MainActor in
+        await coordinator.activate()
+        completion.finished = true
+    }
+    await Task.yield()
+
+    #expect(probe.activationCallCount == 1)
+    #expect(completion.finished == false)
+
+    probe.blockActivation = false
+    probe.releaseActivation()
+    await first.value
+    await second.value
+
+    #expect(probe.activationCallCount == 1)
+    #expect(coordinator.isActive)
 }
