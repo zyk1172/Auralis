@@ -1048,36 +1048,40 @@ private struct TrackInformationSheet: View {
                     infoRow(String(localized: "码率", bundle: .module), track.sourceInfo.bitRate.map { "\($0) kbps" } ?? String(localized: "未知", bundle: .module))
                     infoRow(String(localized: "声道", bundle: .module), track.sourceInfo.channelCount.map { "\($0)" } ?? String(localized: "未知", bundle: .module))
                 }
-                Section(String(localized: "音乐震动", bundle: .module)) {
-                    if let hapticsInfo {
-                        infoRow(
-                            String(localized: "来源", bundle: .module),
-                            hapticsOriginTitle(hapticsInfo.origin)
-                        )
-                        if let isrc = hapticsInfo.isrc, !isrc.isEmpty {
-                            infoRow(String(localized: "ISRC", bundle: .module), isrc)
-                        }
-                        if let algorithm = hapticsInfo.algorithmVersion {
-                            infoRow(String(localized: "算法", bundle: .module), algorithm)
-                        }
-                        if let coverage = hapticsInfo.coverage {
+#if os(iOS)
+                if MusicHapticsPlatformPolicy.isFeatureAvailable {
+                    Section(String(localized: "音乐震动", bundle: .module)) {
+                        if let hapticsInfo {
                             infoRow(
-                                String(localized: "覆盖率", bundle: .module),
-                                "\(Int((coverage * 100).rounded()))%"
+                                String(localized: "来源", bundle: .module),
+                                hapticsOriginTitle(hapticsInfo.origin)
                             )
-                        }
-                        infoRow(
-                            String(localized: "状态", bundle: .module),
-                            hapticsStateTitle(hapticsInfo)
-                        )
-                    } else {
-                        HStack(spacing: AuralisSpacing.small) {
-                            ProgressView()
-                            Text(String(localized: "正在读取音乐震动状态…", bundle: .module))
-                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            if let isrc = hapticsInfo.isrc, !isrc.isEmpty {
+                                infoRow(String(localized: "ISRC", bundle: .module), isrc)
+                            }
+                            if let algorithm = hapticsInfo.algorithmVersion {
+                                infoRow(String(localized: "算法", bundle: .module), algorithm)
+                            }
+                            if let coverage = hapticsInfo.coverage {
+                                infoRow(
+                                    String(localized: "覆盖率", bundle: .module),
+                                    "\(Int((coverage * 100).rounded()))%"
+                                )
+                            }
+                            infoRow(
+                                String(localized: "状态", bundle: .module),
+                                hapticsStateTitle(hapticsInfo)
+                            )
+                        } else {
+                            HStack(spacing: AuralisSpacing.small) {
+                                ProgressView()
+                                Text(String(localized: "正在读取音乐震动状态…", bundle: .module))
+                                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                            }
                         }
                     }
                 }
+#endif
                 Section(String(localized: "状态", bundle: .module)) {
                     infoRow(String(localized: "收藏", bundle: .module), track.isFavorite ? String(localized: "已收藏", bundle: .module) : String(localized: "未收藏", bundle: .module))
                     infoRow(String(localized: "评分", bundle: .module), track.rating.map { "\($0)/5" } ?? String(localized: "未评分", bundle: .module))
@@ -1145,12 +1149,20 @@ private struct TrackInformationSheet: View {
                 isLoadingExternalData = false
             }
             .task(id: musicHapticsRequestID) {
+#if os(iOS)
+                guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+                    hapticsInfo = nil
+                    return
+                }
                 hapticsInfo = nil
                 let requestedIdentity = musicHapticsRequestID
                 let info = await model.musicHapticsAssetInfo(for: track)
                 guard !Task.isCancelled,
                       requestedIdentity == musicHapticsRequestID else { return }
                 hapticsInfo = info
+#else
+                hapticsInfo = nil
+#endif
             }
         }
 #if os(macOS)

@@ -1978,6 +1978,15 @@ public final class MusicHapticsCoordinator {
                 coverage: timeline.analysisCoverage
             )
         }
+        if let partial = inMemoryPartial(for: identity) {
+            return MusicHapticsAssetInfo(
+                origin: .algorithmGenerated,
+                state: .generating,
+                isrc: identity.isrc,
+                algorithmVersion: MusicHapticsTimeline.algorithmVersion,
+                coverage: partial.coverage
+            )
+        }
         if let partial = try? await store.partial(for: identity) {
             return MusicHapticsAssetInfo(
                 origin: .algorithmGenerated,
@@ -1987,14 +1996,10 @@ public final class MusicHapticsCoordinator {
                 coverage: partial.coverage
             )
         }
-        if custom.supportsHaptics {
-            return MusicHapticsAssetInfo(
-                origin: .algorithmGenerated,
-                state: .generating,
-                isrc: identity.isrc,
-                algorithmVersion: MusicHapticsTimeline.algorithmVersion
-            )
-        }
+        // Capability alone is not evidence that this non-current track has an
+        // analyzer running. Without a persisted timeline or partial checkpoint
+        // the truthful state is unavailable, rather than a fabricated
+        // "generating" state.
         return MusicHapticsAssetInfo(
             origin: .none,
             state: .unavailable,

@@ -27,6 +27,36 @@ import Testing
     #expect(TrackHapticsPreference.preference(for: true, globalEnabled: false) == .enabled)
 }
 
+@Test func explicitPreferenceSurvivesIdentityEnrichment() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let uncachedIdentity = MusicHapticsIdentity(
+        globalID: "server:track",
+        serverID: "server",
+        remoteID: "track",
+        title: "Song",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+    let enrichedIdentity = MusicHapticsIdentity(
+        globalID: "server:track",
+        serverID: "server",
+        remoteID: "track",
+        isrc: "USABC1234567",
+        title: "Song",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+    let store = MusicHapticsStore(root: root)
+
+    try await store.setPreference(.disabled, for: uncachedIdentity)
+    #expect(try await store.preference(for: enrichedIdentity) == .disabled)
+
+    try await store.setPreference(.inherit, for: enrichedIdentity)
+    #expect(try await store.preference(for: enrichedIdentity) == .inherit)
+}
+
 @Test func assetInfoKeepsSystemMatchSeparateFromAlgorithmOutput() {
     let system = MusicHapticsAssetInfo(
         origin: .systemISRC,

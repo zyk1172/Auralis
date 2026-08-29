@@ -198,15 +198,33 @@ public actor MusicHapticsStore {
 
     public func preference(for identity: MusicHapticsIdentity) throws -> TrackHapticsPreference {
         try prepare()
-        return manifest.preferences[identity.stableKey] ?? .inherit
+        if let preference = manifest.preferences[identity.stableKey] {
+            return preference
+        }
+        // An explicit toggle must survive the identity enrichment that can
+        // change `stableKey` from `gid:` to `isrc:`. The GlobalID alias is
+        // deliberately only a fallback; a direct ISRC/MBID preference wins.
+        if let globalIDKey = globalIDPreferenceKey(for: identity),
+           let preference = manifest.preferences[globalIDKey] {
+            return preference
+        }
+        return .inherit
     }
 
     public func setPreference(_ value: TrackHapticsPreference, for identity: MusicHapticsIdentity) throws {
         try prepare()
+        let stableKey = identity.stableKey
+        let globalIDKey = globalIDPreferenceKey(for: identity)
         if value == .inherit {
-            manifest.preferences.removeValue(forKey: identity.stableKey)
+            manifest.preferences.removeValue(forKey: stableKey)
+            if let globalIDKey, globalIDKey != stableKey {
+                manifest.preferences.removeValue(forKey: globalIDKey)
+            }
         } else {
-            manifest.preferences[identity.stableKey] = value
+            manifest.preferences[stableKey] = value
+            if let globalIDKey, globalIDKey != stableKey {
+                manifest.preferences[globalIDKey] = value
+            }
         }
         try save()
     }
@@ -304,6 +322,11 @@ public actor MusicHapticsStore {
     private func directory(for tier: Tier) -> URL { tier == .transient ? transientDirectory : favoriteDirectory }
     private func url(for entry: Entry) -> URL { directory(for: entry.tier).appendingPathComponent(entry.filename) }
     private func partialURL(for entry: PartialEntry) -> URL { partialDirectory.appendingPathComponent(entry.filename) }
+
+    private func globalIDPreferenceKey(for identity: MusicHapticsIdentity) -> String? {
+        guard let globalID = identity.globalID, !globalID.isEmpty else { return nil }
+        return "gid:\(globalID)"
+    }
 
     private func filename(for key: String, suffix: String) -> String {
         Data(key.utf8)

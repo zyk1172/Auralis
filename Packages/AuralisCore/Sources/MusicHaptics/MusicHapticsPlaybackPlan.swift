@@ -229,6 +229,11 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
 }
 
 public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
+    /// Shared short preparation budget.  It is used by both lookahead
+    /// warm-up diagnostics and the AppShell identity-priority sidecar; public
+    /// metadata must never become an unbounded playback dependency.
+    public static let defaultWarmupDeadline: Duration = .milliseconds(350)
+
     public let identity: MusicHapticsIdentity
     public let favorite: Bool
     public let duration: TimeInterval
@@ -242,7 +247,7 @@ public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
         duration: TimeInterval,
         partial: MusicHapticsPartialCheckpoint? = nil,
         analysisSource: MusicHapticsAnalysisSource = .realtimeTap,
-        warmupDeadline: Duration = .milliseconds(350)
+        warmupDeadline: Duration = Self.defaultWarmupDeadline
     ) {
         self.identity = identity
         self.favorite = favorite
@@ -267,7 +272,7 @@ public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
             // must fall back to a fresh upper-layer source instead of ever
             // reconstructing a stale URL or credential-bearing stream.
             analysisSource: .realtimeTap,
-            warmupDeadline: try container.decodeIfPresent(Duration.self, forKey: .warmupDeadline) ?? .milliseconds(350)
+            warmupDeadline: try container.decodeIfPresent(Duration.self, forKey: .warmupDeadline) ?? Self.defaultWarmupDeadline
         )
     }
 }
