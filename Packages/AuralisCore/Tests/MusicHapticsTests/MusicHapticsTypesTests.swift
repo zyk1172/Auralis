@@ -357,6 +357,31 @@ private func syntheticRhythmicSignal(sampleRate: Double, seconds: Int) -> [Float
     #expect(try await store.timeline(for: identity) == nil)
 }
 
+@Test func partialCheckpointMergesAdjacentPCMRangeTolerance() {
+    let identity = MusicHapticsIdentity(title: "Adjacent", artist: "Artist", durationMilliseconds: 1_000)
+    let merged = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 1,
+        analyzedRanges: [
+            MusicHapticsTimeRange(lowerBound: 0, upperBound: 0.5),
+            MusicHapticsTimeRange(lowerBound: 0.515, upperBound: 1),
+        ],
+        events: []
+    )
+    #expect(merged.analyzedRanges == [MusicHapticsTimeRange(lowerBound: 0, upperBound: 1)])
+
+    let separate = MusicHapticsPartialCheckpoint(
+        identity: identity,
+        duration: 1,
+        analyzedRanges: [
+            MusicHapticsTimeRange(lowerBound: 0, upperBound: 0.5),
+            MusicHapticsTimeRange(lowerBound: 0.521, upperBound: 1),
+        ],
+        events: []
+    )
+    #expect(separate.analyzedRanges.count == 2)
+}
+
 @Test func partialCheckpointNeverPersistsAnalysisURLOrToken() throws {
     let identity = MusicHapticsIdentity(
         serverID: "server",
@@ -566,6 +591,40 @@ private actor WindowCapture {
     #expect(result?.checkpoint.analyzedRanges == [MusicHapticsTimeRange(lowerBound: 0, upperBound: 10)])
     #expect(result?.checkpoint.coverage == 1)
     #expect(result?.timeline?.isComplete == true)
+}
+
+@Test func streamingAnalysisPauseStopsPCMUntilResume() async {
+    let identity = MusicHapticsIdentity(title: "Pause", artist: "Artist", durationMilliseconds: 10_000)
+    let analyzer = StreamingMusicHapticsAnalyzer(
+        identity: identity,
+        duration: 10,
+        onResult: { _ in }
+    )
+    let format = MusicHapticsPCMFormat(
+        sampleRate: 10,
+        channels: 1,
+        sampleType: .int16,
+        interleaved: true,
+        bytesPerFrame: 2,
+        bytesPerSample: 2
+    )!
+    let samples = Array(repeating: Int16(1_200), count: 10)
+    let bytes = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+
+    analyzer.pause()
+    analyzer.consumePCM(bytes, time: 0, format: format, frameCount: 10)
+    try? await Task.sleep(for: .milliseconds(20))
+    #expect((await analyzer.partialCheckpoint()).coverage == 0)
+
+    analyzer.resume()
+    analyzer.consumePCM(bytes, time: 0, format: format, frameCount: 10)
+    var checkpoint = await analyzer.partialCheckpoint()
+    for _ in 0..<40 where checkpoint.coverage == 0 {
+        try? await Task.sleep(for: .milliseconds(5))
+        checkpoint = await analyzer.partialCheckpoint()
+    }
+    #expect(checkpoint.analyzedRanges == [MusicHapticsTimeRange(lowerBound: 0, upperBound: 1)])
+    analyzer.cancel()
 }
 
 @Test func streamingAnalysisPreservesNonContiguousRanges() async {

@@ -30,6 +30,11 @@ public enum MusicHapticsAnalysisFinishReason: String, Codable, Hashable, Sendabl
 /// maximum position, this preserves holes caused by seeking, buffering or a
 /// track switch.
 public struct MusicHapticsTimeRange: Codable, Hashable, Sendable {
+    /// PCM timestamps can differ by a few microseconds at buffer boundaries.
+    /// Treat a small gap as adjacency so coverage does not fragment merely
+    /// because two decoders rounded the same boundary differently.
+    public static let adjacencyTolerance: TimeInterval = 0.020
+
     public let lowerBound: TimeInterval
     public let upperBound: TimeInterval
 
@@ -206,7 +211,8 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
             var merged = MusicHapticsTimeRange(lowerBound: lower, upperBound: upper)
             var next: [MusicHapticsTimeRange] = []
             for existing in result.sorted(by: { $0.lowerBound < $1.lowerBound }) {
-                if existing.upperBound < merged.lowerBound || merged.upperBound < existing.lowerBound {
+                if existing.upperBound + MusicHapticsTimeRange.adjacencyTolerance < merged.lowerBound
+                    || merged.upperBound + MusicHapticsTimeRange.adjacencyTolerance < existing.lowerBound {
                     next.append(existing)
                 } else {
                     merged = MusicHapticsTimeRange(

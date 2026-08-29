@@ -954,6 +954,7 @@ public final class AuralisAppModel: ObservableObject {
         case .paused:
             playbackState = .paused
             musicHaptics.pause()
+            schedulePlaybackSessionPersistence(immediate: true)
         }
         syncProgressTimer()
     }
@@ -962,10 +963,14 @@ public final class AuralisAppModel: ObservableObject {
     /// the background and rebases custom haptics only after an authoritative
     /// AVPlayer position is available again.
     public func applicationDidEnterBackground() {
+        isInBackground = true
         musicHaptics.applicationDidEnterBackground()
+        lastPlaybackPersistAt = .now
+        schedulePlaybackSessionPersistence(immediate: true)
     }
 
     public func applicationDidBecomeActive() async {
+        isInBackground = false
         await keepAudioSessionActive()
         let state = await engine.state()
         let position = await engine.currentPosition() ?? playbackPosition
@@ -2522,7 +2527,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 连续变更只保存最后一次；大队列（如 10000 首）不再阻塞双击事件同步链。
     private var playbackSessionPersistenceTask: Task<Void, Never>?
 
-    private func schedulePlaybackSessionPersistence() {
+    private func schedulePlaybackSessionPersistence(immediate: Bool = false) {
         playbackSessionPersistenceTask?.cancel()
         guard let serverID = catalog.activeServerID else { return }
         let logicalQueue = logicalQueueTracks
@@ -2540,7 +2545,9 @@ public final class AuralisAppModel: ObservableObject {
         let defaults = self.defaults
         let key = Self.playbackSessionKey(serverID)
         playbackSessionPersistenceTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
+            if !immediate {
+                try? await Task.sleep(for: .milliseconds(350))
+            }
             guard !Task.isCancelled else { return }
             // JSON encode 在 detached 后台做（只捕获 Sendable 快照）；
             // UserDefaults 写入回到 MainActor。
@@ -4076,6 +4083,7 @@ public final class AuralisAppModel: ObservableObject {
     /// 进度刷新：优先采用引擎（AVPlayer）真实位置；取不到才按计时器估算，
     /// 估算模式下播完由这里兜底检测（真实模式下由引擎的播完通知驱动）。
     /// 同时以低频节流把播放位置写入本地，进程终止后能恢复进度。
+    private var isInBackground = false
     private var lastPlaybackPersistAt: Date = .distantPast
     /// 进度 tick 合并：`advanceProgress` 每 0.5 秒触发一次；若上一次的引擎位置查询
     /// 还没返回，跳过本次，避免 Task 叠加（P2-4）。
@@ -4103,8 +4111,10 @@ public final class AuralisAppModel: ObservableObject {
             // 注意：不在这里宣布“歌曲播完”。自然结束的唯一权威事件是
             // AVPlayerItemDidPlayToEndTime + PlayerItemBoundaryCoordinator。
             self.qualifyCurrentPlaybackIfNeeded()
-            // 每 2 秒落盘一次进度，避免高频写入。
-            if Date().timeIntervalSince(self.lastPlaybackPersistAt) >= 2 {
+            // 前台每 12 秒落盘一次进度；进入后台时只做一次立即 flush，
+            // 不让进度 timer 在后台持续制造唤醒和 UserDefaults 写入。
+            if !self.isInBackground,
+               Date().timeIntervalSince(self.lastPlaybackPersistAt) >= 12 {
                 self.lastPlaybackPersistAt = .now
                 self.schedulePlaybackSessionPersistence()
             }
