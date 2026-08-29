@@ -314,7 +314,7 @@ struct NowPlayingView: View {
         }
     }
 
-    /// 三点菜单直接使用系统 Menu，保证其子菜单在 iOS accessibility 树中真实可发现。
+    /// 三点菜单直接使用系统 Menu；Music Haptics 在这里是一个单层即时开关。
     private var moreMenu: some View {
         Menu {
             Button(String(localized: "添加到歌单", bundle: .module)) { isPlaylistSheetPresented = true }
@@ -340,17 +340,10 @@ struct NowPlayingView: View {
             Button(String(localized: "歌曲信息", bundle: .module)) { showsTrackInformation = true }
 #if os(iOS)
             if MusicHapticsPlatformPolicy.isFeatureAvailable {
-                Menu {
-                    Button(String(localized: "跟随全局设置", bundle: .module)) {
-                        model.setMusicHapticsPreference(.inherit)
-                    }
-                    Button(String(localized: "为此歌曲开启", bundle: .module)) {
-                        model.setMusicHapticsPreference(.enabled)
-                    }
-                    Button(String(localized: "为此歌曲关闭", bundle: .module), role: .destructive) {
-                        model.setMusicHapticsPreference(.disabled)
-                    }
-                } label: {
+                Toggle(isOn: Binding(
+                    get: { model.currentMusicHapticsEnabled },
+                    set: { model.setCurrentTrackMusicHapticsEnabled($0) }
+                )) {
                     Text(String(localized: "音乐震动", bundle: .module))
                 }
                 .accessibilityIdentifier(Self.musicHapticsMenuIdentifier)
@@ -997,6 +990,7 @@ private struct TrackInformationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var externalResult: AgentExternalMusicResult?
     @State private var isLoadingExternalData = true
+    @State private var hapticsInfo: MusicHapticsAssetInfo?
     // AppStorage 只负责让打开中的信息页在设置变化时立即重算；权限判定的唯一模型仍是
     // ExternalMusicPreferences，网络层还会执行同一份 gating。
     @AppStorage(ExternalMusicPreferences.Keys.enabled) private var externalMusicEnabled = true
@@ -1027,6 +1021,10 @@ private struct TrackInformationSheet: View {
         ].joined(separator: "|")
     }
 
+    private var musicHapticsRequestID: String {
+        "\(track.serverID.rawValue)|\(track.id.rawValue)|\(model.currentMusicHapticsEnabled)"
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -1049,6 +1047,36 @@ private struct TrackInformationSheet: View {
                     infoRow(String(localized: "位深", bundle: .module), track.sourceInfo.bitDepth.map { "\($0) bit" } ?? String(localized: "未知", bundle: .module))
                     infoRow(String(localized: "码率", bundle: .module), track.sourceInfo.bitRate.map { "\($0) kbps" } ?? String(localized: "未知", bundle: .module))
                     infoRow(String(localized: "声道", bundle: .module), track.sourceInfo.channelCount.map { "\($0)" } ?? String(localized: "未知", bundle: .module))
+                }
+                Section(String(localized: "音乐震动", bundle: .module)) {
+                    if let hapticsInfo {
+                        infoRow(
+                            String(localized: "来源", bundle: .module),
+                            hapticsOriginTitle(hapticsInfo.origin)
+                        )
+                        if let isrc = hapticsInfo.isrc, !isrc.isEmpty {
+                            infoRow(String(localized: "ISRC", bundle: .module), isrc)
+                        }
+                        if let algorithm = hapticsInfo.algorithmVersion {
+                            infoRow(String(localized: "算法", bundle: .module), algorithm)
+                        }
+                        if let coverage = hapticsInfo.coverage {
+                            infoRow(
+                                String(localized: "覆盖率", bundle: .module),
+                                "\(Int((coverage * 100).rounded()))%"
+                            )
+                        }
+                        infoRow(
+                            String(localized: "状态", bundle: .module),
+                            hapticsStateTitle(hapticsInfo)
+                        )
+                    } else {
+                        HStack(spacing: AuralisSpacing.small) {
+                            ProgressView()
+                            Text(String(localized: "正在读取音乐震动状态…", bundle: .module))
+                                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                        }
+                    }
                 }
                 Section(String(localized: "状态", bundle: .module)) {
                     infoRow(String(localized: "收藏", bundle: .module), track.isFavorite ? String(localized: "已收藏", bundle: .module) : String(localized: "未收藏", bundle: .module))
@@ -1116,6 +1144,14 @@ private struct TrackInformationSheet: View {
                 externalResult = await model.musicEnrichment.enrich(track: track, globalID: globalID)
                 isLoadingExternalData = false
             }
+            .task(id: musicHapticsRequestID) {
+                hapticsInfo = nil
+                let requestedIdentity = musicHapticsRequestID
+                let info = await model.musicHapticsAssetInfo(for: track)
+                guard !Task.isCancelled,
+                      requestedIdentity == musicHapticsRequestID else { return }
+                hapticsInfo = info
+            }
         }
 #if os(macOS)
         .frame(minWidth: 440, minHeight: 540)
@@ -1131,6 +1167,32 @@ private struct TrackInformationSheet: View {
                 .foregroundStyle(theme.colorTokens.primaryText.color)
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
+        }
+    }
+
+    private func hapticsOriginTitle(_ origin: MusicHapticsAssetOrigin) -> String {
+        switch origin {
+        case .systemISRC:
+            return String(localized: "ISRC 系统匹配", bundle: .module)
+        case .algorithmGenerated:
+            return String(localized: "Auralis 算法生成", bundle: .module)
+        case .none:
+            return String(localized: "暂无", bundle: .module)
+        }
+    }
+
+    private func hapticsStateTitle(_ info: MusicHapticsAssetInfo) -> String {
+        switch info.state {
+        case .available:
+            return info.isCurrentlyUsed
+                ? String(localized: "当前使用", bundle: .module)
+                : String(localized: "可用", bundle: .module)
+        case .generating:
+            return String(localized: "生成中", bundle: .module)
+        case .disabled:
+            return String(localized: "已关闭", bundle: .module)
+        case .unavailable:
+            return String(localized: "不可用", bundle: .module)
         }
     }
 

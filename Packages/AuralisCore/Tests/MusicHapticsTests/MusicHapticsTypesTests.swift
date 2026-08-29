@@ -20,6 +20,35 @@ import Testing
     #expect(TrackHapticsPreference.inherit.effective(globalEnabled: true))
 }
 
+@Test func playbackTogglePreservesThreeStatePreferenceSemantics() {
+    #expect(TrackHapticsPreference.preference(for: true, globalEnabled: true) == .inherit)
+    #expect(TrackHapticsPreference.preference(for: false, globalEnabled: true) == .disabled)
+    #expect(TrackHapticsPreference.preference(for: false, globalEnabled: false) == .inherit)
+    #expect(TrackHapticsPreference.preference(for: true, globalEnabled: false) == .enabled)
+}
+
+@Test func assetInfoKeepsSystemMatchSeparateFromAlgorithmOutput() {
+    let system = MusicHapticsAssetInfo(
+        origin: .systemISRC,
+        state: .available,
+        isrc: "USABC1234567",
+        isCurrentlyUsed: true
+    )
+    let algorithm = MusicHapticsAssetInfo(
+        origin: .algorithmGenerated,
+        state: .available,
+        isrc: "USABC1234567",
+        algorithmVersion: MusicHapticsTimeline.algorithmVersion,
+        coverage: 1
+    )
+
+    #expect(system.origin == .systemISRC)
+    #expect(system.isCurrentlyUsed)
+    #expect(algorithm.origin == .algorithmGenerated)
+    #expect(algorithm.algorithmVersion == MusicHapticsTimeline.algorithmVersion)
+    #expect(algorithm.origin != system.origin)
+}
+
 @Test func playbackPlanResolverHasOneAuthoritativeOrder() {
     let identity = MusicHapticsIdentity(
         title: "Plan",

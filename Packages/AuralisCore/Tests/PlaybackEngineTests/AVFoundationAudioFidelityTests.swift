@@ -47,10 +47,18 @@ struct AVFoundationAudioFidelityTests {
                 MusicHapticsRemoteLookaheadSource(url: analysisURL, bitrate: 96)
             )
         )
+        let cachedTimeline = MusicHapticsTimeline(
+            identity: identity,
+            duration: 60,
+            analyzedDuration: 60,
+            analysisCoverage: 1,
+            events: []
+        )
 
         let cases: [(label: String, plan: MusicHapticsPlaybackPlan, usesRealtimeFallback: Bool)] = [
             ("disabled", .disabled, false),
             ("system", .system, false),
+            ("cached custom", .custom(cachedTimeline), false),
             ("lookahead", .analyzeLookahead(lookaheadRequest), false),
             ("realtime fallback", .analyzeLookahead(lookaheadRequest), true),
         ]

@@ -165,6 +165,39 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         }
     }
 
+    /// Installs or replaces only the Haptics sidecar for the item already
+    /// inserted as `preparedItem`.  The AVPlayer item and its original URL are
+    /// deliberately left untouched so asynchronous ISRC/enrichment work can
+    /// finish after audio preloading has started.
+    @discardableResult
+    public func installPreparedMusicHapticsPlaybackPreparation(
+        _ preparation: MusicHapticsPlaybackPreparation
+    ) -> Bool {
+        guard let player = avPlayer,
+              let item = preparedItem,
+              player.items().contains(where: { $0 === item }),
+              preparedTrack != nil
+        else { return false }
+
+        guard preparedMusicHapticsPreparation?.id != preparation.id else { return true }
+        preparedTapSetupTask?.cancel()
+        preparedTapSetupTask = nil
+        finishPreparedMusicHaptics(reason: .preparationReplaced)
+        preparedMusicHapticsPreparation = preparation
+        if case .analyze = preparation.plan,
+           let sink = preparation.analysisSink {
+            scheduleTapSetup(
+                for: item,
+                sink: sink,
+                isPrepared: true,
+                generation: playGeneration
+            )
+        } else {
+            logSkippedTapSetup(for: preparation.plan)
+        }
+        return true
+    }
+
     public func configureReplayGain(_ settings: ReplayGainSettings) {
         replayGainSettings = settings
         updateReplayGain(for: currentTrack)
