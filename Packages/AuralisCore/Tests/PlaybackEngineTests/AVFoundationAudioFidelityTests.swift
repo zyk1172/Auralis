@@ -99,6 +99,75 @@ struct AVFoundationAudioFidelityTests {
             engine.stop()
         }
     }
+
+    @Test("Discarding prepared Haptics keeps the prepared audio item")
+    @MainActor
+    func discardingPreparedHapticsKeepsPreparedAudio() async throws {
+        let currentURL = try #require(
+            URL(string: "https://media.example.test/current.flac?quality=original")
+        )
+        let preparedURL = try #require(
+            URL(string: "https://media.example.test/next.flac?quality=original")
+        )
+        let current = Track(
+            id: TrackID(rawValue: "current"),
+            serverID: "server",
+            albumID: "album",
+            artistID: "artist",
+            title: "Current",
+            artistName: "Artist",
+            albumTitle: "Album",
+            duration: 60,
+            streamURL: currentURL
+        )
+        let prepared = Track(
+            id: TrackID(rawValue: "next"),
+            serverID: "server",
+            albumID: "album",
+            artistID: "artist",
+            title: "Next",
+            artistName: "Artist",
+            albumTitle: "Album",
+            duration: 60,
+            streamURL: preparedURL
+        )
+        let engine = AVFoundationPlaybackEngine()
+
+        try await engine.play(track: current)
+        let identity = MusicHapticsIdentity(
+            globalID: "server:next",
+            serverID: "server",
+            remoteID: "next",
+            title: prepared.title,
+            artist: prepared.artistName,
+            album: prepared.albumTitle,
+            durationMilliseconds: 60_000
+        )
+        let preparation = MusicHapticsPlaybackPreparation(
+            identity: identity,
+            favorite: false,
+            plan: .disabled,
+            reason: "test",
+            systemAvailability: MusicHapticsSystemAvailability(
+                hasISRC: false,
+                active: false,
+                timelineAvailable: false
+            ),
+            fullTimelineExists: false,
+            partialExists: false,
+            effectiveEnabled: true,
+            analysisSink: nil
+        )
+        engine.prepareNext(track: prepared, musicHapticsPreparation: preparation)
+        #expect(engine.preparedPlaybackURLForTesting == preparedURL)
+        #expect(engine.hasPreparedMusicHapticsForTesting)
+
+        engine.discardPreparedMusicHapticsPlaybackPreparation()
+
+        #expect(engine.preparedPlaybackURLForTesting == preparedURL)
+        #expect(!engine.hasPreparedMusicHapticsForTesting)
+        engine.stop()
+    }
 }
 
 private final class FidelityNoopSink: MusicHapticsAnalysisSink, @unchecked Sendable {

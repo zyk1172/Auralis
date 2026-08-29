@@ -843,6 +843,10 @@ public final class MusicHapticsPlaybackPreparation {
     public let systemAvailability: MusicHapticsSystemAvailability
     public let fullTimelineExists: Bool
     public let partialExists: Bool
+    /// The effective per-track setting observed when this sidecar was
+    /// prepared.  This is separate from the resolved plan: a track may be
+    /// enabled while no system/custom asset is currently available.
+    public let effectiveEnabled: Bool
     public let analysisSink: (any MusicHapticsAnalysisSink)?
     /// Created for lookahead plans but attached only after the sidecar fails.
     /// Keeping it separate prevents a successful lookahead path from paying
@@ -859,6 +863,7 @@ public final class MusicHapticsPlaybackPreparation {
         systemAvailability: MusicHapticsSystemAvailability,
         fullTimelineExists: Bool,
         partialExists: Bool,
+        effectiveEnabled: Bool = false,
         analysisSink: (any MusicHapticsAnalysisSink)?,
         realtimeFallbackSink: (any MusicHapticsAnalysisSink)? = nil,
         lookaheadAnalyzer: LookaheadMusicHapticsAnalyzer? = nil
@@ -871,6 +876,7 @@ public final class MusicHapticsPlaybackPreparation {
         self.systemAvailability = systemAvailability
         self.fullTimelineExists = fullTimelineExists
         self.partialExists = partialExists
+        self.effectiveEnabled = effectiveEnabled
         self.analysisSink = analysisSink
         self.realtimeFallbackSink = realtimeFallbackSink
         self.lookaheadAnalyzer = lookaheadAnalyzer
@@ -991,6 +997,7 @@ public final class MusicHapticsCoordinator {
                 systemAvailability: systemAvailability,
                 fullTimelineExists: false,
                 partialExists: false,
+                effectiveEnabled: false,
                 analysisSink: nil
             )
             logPlan(
@@ -1185,6 +1192,7 @@ public final class MusicHapticsCoordinator {
             systemAvailability: systemAvailability,
             fullTimelineExists: fullTimeline != nil,
             partialExists: partial != nil,
+            effectiveEnabled: featureEnabled,
             analysisSink: analysisSink,
             realtimeFallbackSink: realtimeFallbackSink,
             lookaheadAnalyzer: lookaheadAnalyzer
@@ -1217,7 +1225,10 @@ public final class MusicHapticsCoordinator {
         rate: Double = 1,
         isPlaying: Bool = true
     ) {
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable,
+              globalEnabled,
+              preparation.effectiveEnabled else {
             runtimeOutputEnabled = false
             source = .none
             return
@@ -1723,6 +1734,17 @@ public final class MusicHapticsCoordinator {
         for identity: MusicHapticsIdentity
     ) async {
         try? await store.setPreference(preference, for: identity)
+    }
+
+    /// Reads the effective setting for a recording without changing the
+    /// current runtime plan.  AppShell uses this for the playback-page toggle
+    /// so its value reflects the user's setting while a sidecar is still
+    /// preparing, rather than waiting for a plan to exist.
+    public func effectiveEnabled(for identity: MusicHapticsIdentity) async -> Bool {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return false }
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        let preference = (try? await store.preference(for: identity)) ?? .inherit
+        return preference.effective(globalEnabled: globalEnabled)
     }
 
     /// Immediately disables Haptics output for the current track while

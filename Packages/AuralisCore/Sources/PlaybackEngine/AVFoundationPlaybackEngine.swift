@@ -83,6 +83,16 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         (avPlayer?.currentItem?.asset as? AVURLAsset)?.url
     }
 
+    /// Internal test seam for verifying that sidecar invalidation does not
+    /// remove the original prepared audio item.
+    var preparedPlaybackURLForTesting: URL? {
+        (preparedItem?.asset as? AVURLAsset)?.url
+    }
+
+    var hasPreparedMusicHapticsForTesting: Bool {
+        preparedMusicHapticsPreparation != nil
+    }
+
     public func setVolume(_ volume: Float) {
         self.volume = min(max(volume, 0), 1)
         applyOutputVolume()
@@ -196,6 +206,16 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             logSkippedTapSetup(for: preparation.plan)
         }
         return true
+    }
+
+    /// Discards only the Haptics sidecar attached to the prepared AVPlayerItem.
+    /// The prepared item, its original URL and the queue boundary remain intact
+    /// so a global/per-track Haptics change can never remove or delay audio
+    /// preloading.
+    public func discardPreparedMusicHapticsPlaybackPreparation() {
+        preparedTapSetupTask?.cancel()
+        preparedTapSetupTask = nil
+        finishPreparedMusicHaptics(reason: .preparationReplaced)
     }
 
     public func configureReplayGain(_ settings: ReplayGainSettings) {
