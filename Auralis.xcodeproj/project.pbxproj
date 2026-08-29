@@ -83,7 +83,7 @@
 		41EEE6EE7ABFA5832F1EED76 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		46DE39CB6A88819B40895136 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		483C81986AF30F3B1A051853 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		53A83CD2104106116D511C8B /* Auralis.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Auralis.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		53A83CD2104106116D511C8B /* Auralis.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Auralis.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		55CFC5504447762F7DD8CCAF /* AuralisIntents.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AuralisIntents.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		69BB943D8AEC1DD5A92EC5E3 /* AuralisMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuralisMacApp.swift; sourceTree = "<group>"; };
 		6B42545B0A802D1012A96756 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
@@ -433,10 +433,10 @@
 			projectRoot = "";
 			targets = (
 				D2DFF0647A18535580FA7C69 /* Auralis */,
-				CA38E379DB0C07894F8A74B7 /* AuralisUITests */,
-				0AB239630792168B1AA6B2CA /* AuralisMac */,
 				A94C23FA70165354CFD55948 /* AuralisIntents */,
 				5097797681FF21CB927678CF /* AuralisLiveActivity */,
+				0AB239630792168B1AA6B2CA /* AuralisMac */,
+				CA38E379DB0C07894F8A74B7 /* AuralisUITests */,
 			);
 		};
 /* End PBXProject section */
