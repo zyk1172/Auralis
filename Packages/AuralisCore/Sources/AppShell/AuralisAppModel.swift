@@ -4832,6 +4832,10 @@ public final class AuralisAppModel: ObservableObject {
             } else {
                 self.playbackPosition += 0.5
             }
+            // The scene or player state may have changed while the AVPlayer
+            // query was suspended. Do not publish a tick that crossed either
+            // lifecycle boundary.
+            guard !self.isInBackground, self.playbackState == .playing else { return }
             self.musicHaptics.updatePlaybackPosition(
                 self.playbackPosition,
                 isPlaying: self.playbackState == .playing,
