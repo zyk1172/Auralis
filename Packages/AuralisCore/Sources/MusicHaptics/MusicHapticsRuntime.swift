@@ -1435,6 +1435,12 @@ public final class MusicHapticsCoordinator {
             return
         }
         activeAnalysisSink?.resume()
+        if case let .analyzeLookahead(request) = currentPlan {
+            // A preparation activated while paused deliberately has not
+            // opened its decoder.  Resume must therefore ensure the current
+            // analyzer is started before merely releasing its pause gate.
+            currentPreparation?.lookaheadAnalyzer?.start(source: request.analysisSource)
+        }
         currentPreparation?.lookaheadAnalyzer?.resume()
         preparedLookaheadAnalyzers.values.forEach { $0.resume() }
         if source == .custom, let timeline = currentTimeline {
