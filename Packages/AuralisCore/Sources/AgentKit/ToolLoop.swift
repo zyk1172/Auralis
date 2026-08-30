@@ -7,8 +7,8 @@ import LocalCatalog
 ///
 /// 流程：用户文本 →（可选 LLM 规划）→ 本地工具执行 → 结果回传 → UI 渲染。
 /// 设计准则：已注册的普通音乐工具默认全部允许；Intent 只是路由提示，不是能力边界；
-/// 用户明确要求且目标唯一时直接执行；只有工具元数据明确标出的不可逆高风险操作
-/// （删除歌单、清空记忆、删除技能）需要一次用户批准。
+/// 用户明确要求且目标唯一时直接执行；只有 `ToolDescriptor` 明确要求确认的操作
+/// （通常是不可逆高风险操作，如删除歌单、清空记忆、删除技能）需要一次用户批准。
 /// 硬性约束：每一轮模型请求和每一次工具执行都有独立超时；支持取消与防循环。
 /// 单工具超时/失败回灌结构化结果让模型换策略继续，不终止整项任务；
 /// 不设正常任务累计工具调用上限；noProgress / repeatedToolPattern 只做诊断统计。
@@ -210,7 +210,7 @@ public struct ToolLoop {
     ///   - provider: AI Provider；为 nil 时 AI Assistant 明确返回不可用（只保留
     ///     Direct Read Fast Path 的确定性只读查询，不做关键词规则降级）。
     ///   - toolTimeout: 单个工具执行的最长等待时间；超时以结构化失败回灌模型，不终止任务。
-    ///   - confirm: 仅在不可逆高风险工具实际执行前调用；其它工具不会经过该回调。
+    ///   - confirm: 仅在 `ToolDescriptor.requiresExplicitUserApproval` 的工具实际执行前调用；其它工具不会经过该回调。
     ///   - emit: 逐步向 UI 发送结构化消息。
     ///   - log: 所有修改型（reversible / destructive）工具调用的落盘回调。
     public static func run(
@@ -1283,8 +1283,8 @@ public struct ToolLoop {
             )
             // Skill activation is semantic routing, not a second operation
             // whitelist. Its concrete local mutations still pass through the
-            // normal argument validation, lease and destructive confirmation
-            // paths when executed.
+            // normal argument validation, lease and descriptor-owned
+            // confirmation policy paths when executed.
         }
         let activeSkillID = activeSkill?.skillID
         activeSkill?.configure(maxOutputTokens: provider.capabilities.maxOutputTokens)
@@ -3012,7 +3012,11 @@ public struct ToolLoop {
         // explicitly marked by the single confirmation policy. Reversible
         // mutations do not enter this helper and must never invent a second
         // confirmation protocol in natural language.
-        let confirmationGuidance = "此操作不可逆，且不会自动生成恢复副本。"
+        let confirmationGuidance: String = if descriptor.permission == .destructive {
+            "此操作属于破坏性变更，执行前需要用户确认。"
+        } else {
+            "此操作由工具确认策略要求执行前获得用户确认。"
+        }
         var title = descriptor.summary
         var detail: String
         var resolvedPlaylist = false
