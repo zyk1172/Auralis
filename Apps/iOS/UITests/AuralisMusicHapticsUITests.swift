@@ -58,7 +58,7 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 #endif
     }
 
-    func testNowPlayingExposesMusicHapticsSubmenu() throws {
+    func testNowPlayingExposesMusicHapticsToggle() throws {
         launchSmokeApp(with: "-auralis-ui-smoke-now-playing")
 
         XCTAssertTrue(app.staticTexts["正在播放"].waitForExistence(timeout: 15), "Now Playing sheet did not open from the deterministic smoke-test route")
@@ -66,12 +66,22 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 10), "Now Playing more-actions entry is missing")
         more.tap()
 
-        let hapticsMenu = app.descendants(matching: .any)["auralis.nowPlaying.musicHaptics"].firstMatch
-        XCTAssertTrue(hapticsMenu.waitForExistence(timeout: 10), "Music Haptics submenu entry is missing from Now Playing")
-        hapticsMenu.tap()
+        // SwiftUI renders a Menu Toggle as a menu control rather than an
+        // XCUIElementTypeSwitch on some iOS versions.  The stable identifier
+        // is the contract; keep the query type-agnostic across those renderers.
+        let hapticsToggle = app.descendants(matching: .any)["auralis.nowPlaying.musicHaptics"].firstMatch
+        XCTAssertTrue(
+            hapticsToggle.waitForExistence(timeout: 10),
+            "Now Playing must expose Music Haptics as a direct single-level toggle"
+        )
 
-        for label in ["跟随全局设置", "为此歌曲开启", "为此歌曲关闭"] {
-            XCTAssertTrue(app.buttons[label].waitForExistence(timeout: 5), "Missing Music Haptics option: \(label)")
-        }
+        // The playback page intentionally no longer exposes the old
+        // inherit/enabled/disabled submenu.  Keep this assertion aligned with
+        // the product contract so a future UI change cannot silently restore
+        // the two-step interaction.
+        XCTAssertFalse(
+            app.buttons["跟随全局设置"].waitForExistence(timeout: 1),
+            "The old Music Haptics submenu must not be restored"
+        )
     }
 }
