@@ -1656,14 +1656,18 @@ public final class MusicHapticsCoordinator {
             custom.restartIfNeeded()
         }
         // Any lookahead decoder withheld while backgrounded starts only after
-        // the authoritative AVPlayer position has been rebased.
-        if case let .analyzeLookahead(request) = currentPlan {
-            currentPreparation?.lookaheadAnalyzer?.start(source: request.analysisSource)
-        }
-        let deferredPreparedSources = deferredPreparedLookaheadSources
-        deferredPreparedLookaheadSources.removeAll()
-        for (preparationID, source) in deferredPreparedSources {
-            preparedLookaheadAnalyzers[preparationID]?.start(source: source)
+        // the authoritative AVPlayer position has been rebased, and only when
+        // audio is actually playing. A paused foreground scene must not open
+        // an optional decoder just because it became active.
+        if isPlaying, runtimeOutputEnabled {
+            if case let .analyzeLookahead(request) = currentPlan {
+                currentPreparation?.lookaheadAnalyzer?.start(source: request.analysisSource)
+            }
+            let deferredPreparedSources = deferredPreparedLookaheadSources
+            deferredPreparedLookaheadSources.removeAll()
+            for (preparationID, source) in deferredPreparedSources {
+                preparedLookaheadAnalyzers[preparationID]?.start(source: source)
+            }
         }
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
