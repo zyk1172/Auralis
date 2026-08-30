@@ -3952,14 +3952,16 @@ public final class AuralisAppModel: ObservableObject {
         hapticsEffectiveStateTask?.cancel()
         hapticsEffectiveStateTask = nil
 
+        let wasCurrentEffectiveEnabled = musicHaptics.currentEffectiveEnabled()
         musicHaptics.setGlobalEnabled(enabled)
+        let isCurrentEffectiveEnabled = musicHaptics.currentEffectiveEnabled()
 
         if !enabled {
             // The global value is only the default for `.inherit`.  An
             // explicit `.enabled` current track keeps its sidecar running;
             // only the effective-off case stops output.  In both cases the
             // prepared audio item remains untouched.
-            let currentEffectiveEnabled = musicHaptics.currentEffectiveEnabled()
+            let currentEffectiveEnabled = isCurrentEffectiveEnabled
             if let prepared = preparedMusicHapticsPreparation,
                !musicHaptics.effectiveEnabled(for: prepared) {
                 musicHaptics.discardPreparedAnalysis(prepared)
@@ -3987,13 +3989,17 @@ public final class AuralisAppModel: ObservableObject {
                     configurationRevision: configurationRevision
                 )
             }
-            // The current sidecar may still be resolving when the global
-            // default changes. Re-run the sidecar-only preparation so an
-            // explicit `.enabled` track override is honored even with the
-            // global default off; `.inherit` naturally resolves to disabled.
-            reprepareCurrentMusicHapticsIfNeeded(
-                configurationRevision: configurationRevision
-            )
+            // If a current sidecar was already effective, a global change
+            // cannot change its runtime meaning for this track: `.enabled`
+            // remains enabled, while `.inherit` was stopped above. Preserve
+            // the existing sidecar in both cases. When no effective sidecar
+            // exists, resolve once so an explicit `.enabled` override that
+            // was still preparing is not lost.
+            if !wasCurrentEffectiveEnabled {
+                reprepareCurrentMusicHapticsIfNeeded(
+                    configurationRevision: configurationRevision
+                )
+            }
             return
         }
 
@@ -4008,7 +4014,9 @@ public final class AuralisAppModel: ObservableObject {
 
         // Re-enable only the Haptics sidecars. Neither path recreates the
         // current AVPlayer item or calls prepareNext(track: nil).
-        reprepareCurrentMusicHapticsIfNeeded(configurationRevision: configurationRevision)
+        if !wasCurrentEffectiveEnabled {
+            reprepareCurrentMusicHapticsIfNeeded(configurationRevision: configurationRevision)
+        }
         refreshPreparedNextHapticsIfNeeded(configurationRevision: configurationRevision)
     }
 
