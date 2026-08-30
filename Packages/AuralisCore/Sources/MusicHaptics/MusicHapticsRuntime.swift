@@ -843,6 +843,14 @@ public final class MusicHapticsPlaybackPreparation {
     public let systemAvailability: MusicHapticsSystemAvailability
     public let fullTimelineExists: Bool
     public let partialExists: Bool
+    /// The persisted three-state override used to resolve this sidecar.  The
+    /// captured effective value is only a preparation-time observation; the
+    /// runtime must recompute it when the global default changes.
+    public let preference: TrackHapticsPreference
+    /// The effective per-track setting observed when this sidecar was
+    /// prepared.  This is separate from the resolved plan: a track may be
+    /// enabled while no system/custom asset is currently available.
+    public let effectiveEnabled: Bool
     public let analysisSink: (any MusicHapticsAnalysisSink)?
     /// Created for lookahead plans but attached only after the sidecar fails.
     /// Keeping it separate prevents a successful lookahead path from paying
@@ -859,6 +867,8 @@ public final class MusicHapticsPlaybackPreparation {
         systemAvailability: MusicHapticsSystemAvailability,
         fullTimelineExists: Bool,
         partialExists: Bool,
+        preference: TrackHapticsPreference = .inherit,
+        effectiveEnabled: Bool = false,
         analysisSink: (any MusicHapticsAnalysisSink)?,
         realtimeFallbackSink: (any MusicHapticsAnalysisSink)? = nil,
         lookaheadAnalyzer: LookaheadMusicHapticsAnalyzer? = nil
@@ -871,6 +881,8 @@ public final class MusicHapticsPlaybackPreparation {
         self.systemAvailability = systemAvailability
         self.fullTimelineExists = fullTimelineExists
         self.partialExists = partialExists
+        self.preference = preference
+        self.effectiveEnabled = effectiveEnabled
         self.analysisSink = analysisSink
         self.realtimeFallbackSink = realtimeFallbackSink
         self.lookaheadAnalyzer = lookaheadAnalyzer
@@ -905,6 +917,10 @@ public final class MusicHapticsCoordinator {
     private var currentPosition: TimeInterval = 0
     private var playbackRate: Double = 1
     private var playbackIsPlaying = false
+    /// Runtime-only gate used by the per-track playback toggle.  It never
+    /// touches AVPlayer; it only prevents the Haptics sidecar from producing
+    /// new output while retaining the current preparation/checkpoint.
+    private var runtimeOutputEnabled = false
     private var isInBackground = false
     private var hapticsSuspended = false
     private var audioBuffering = false
@@ -987,6 +1003,8 @@ public final class MusicHapticsCoordinator {
                 systemAvailability: systemAvailability,
                 fullTimelineExists: false,
                 partialExists: false,
+                preference: .inherit,
+                effectiveEnabled: false,
                 analysisSink: nil
             )
             logPlan(
@@ -1181,6 +1199,8 @@ public final class MusicHapticsCoordinator {
             systemAvailability: systemAvailability,
             fullTimelineExists: fullTimeline != nil,
             partialExists: partial != nil,
+            preference: preference,
+            effectiveEnabled: featureEnabled,
             analysisSink: analysisSink,
             realtimeFallbackSink: realtimeFallbackSink,
             lookaheadAnalyzer: lookaheadAnalyzer
@@ -1210,9 +1230,16 @@ public final class MusicHapticsCoordinator {
     public func activate(
         _ preparation: MusicHapticsPlaybackPreparation,
         position: TimeInterval,
-        rate: Double = 1
+        rate: Double = 1,
+        isPlaying: Bool = true
     ) {
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        let effectiveEnabled = preparation.preference.effective(
+            globalEnabled: globalEnabled
+        )
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable,
+              effectiveEnabled else {
+            runtimeOutputEnabled = false
             source = .none
             return
         }
@@ -1237,7 +1264,8 @@ public final class MusicHapticsCoordinator {
         currentFavorite = preparation.favorite
         currentPosition = max(0, position)
         playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
-        playbackIsPlaying = true
+        runtimeOutputEnabled = preparation.plan.kind != .disabled
+        playbackIsPlaying = isPlaying
         audioBuffering = false
         currentPlan = preparation.plan
         currentSystemAvailability = preparation.systemAvailability
@@ -1251,10 +1279,10 @@ public final class MusicHapticsCoordinator {
         let bufferedWindows = preparedLookaheadWindows.removeValue(forKey: preparation.id) ?? []
         preparation.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: playbackIsPlaying && !hapticsSuspended,
+            isPlaying: playbackIsPlaying && runtimeOutputEnabled && !hapticsSuspended,
             rate: playbackRate
         )
-        if hapticsSuspended || audioBuffering {
+        if hapticsSuspended || audioBuffering || !runtimeOutputEnabled || !playbackIsPlaying {
             preparation.lookaheadAnalyzer?.pause()
         } else {
             preparation.lookaheadAnalyzer?.resume()
@@ -1267,7 +1295,7 @@ public final class MusicHapticsCoordinator {
             source = .system
         case let .custom(timeline):
             do {
-                if custom.canProduceOutput, !hapticsSuspended {
+                if isPlaying, runtimeOutputEnabled, custom.canProduceOutput, !hapticsSuspended {
                     try custom.play(
                         timeline,
                         offset: position,
@@ -1283,7 +1311,9 @@ public final class MusicHapticsCoordinator {
         case let .analyzeLookahead(request):
             source = .analyzing
             preparedLookaheadAnalyzers.removeValue(forKey: preparation.id)
-            if failedLookaheadPreparationIDs.remove(preparation.id) != nil {
+            if !runtimeOutputEnabled || !isPlaying {
+                preparation.lookaheadAnalyzer?.pause()
+            } else if failedLookaheadPreparationIDs.remove(preparation.id) != nil {
                 activateRealtimeFallback(preparation)
             } else {
                 for window in bufferedWindows {
@@ -1291,7 +1321,7 @@ public final class MusicHapticsCoordinator {
                 }
                 preparation.lookaheadAnalyzer?.start(source: request.analysisSource)
                 startWarmupDeadline(preparation: preparation)
-                pumpScheduler(position: position, isPlaying: true)
+                pumpScheduler(position: position, isPlaying: isPlaying)
             }
         case .analyze:
             source = .analyzing
@@ -1371,12 +1401,15 @@ public final class MusicHapticsCoordinator {
         audioBuffering = false
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: !hapticsSuspended,
+            isPlaying: runtimeOutputEnabled && !hapticsSuspended,
             rate: playbackRate
         )
-        if hapticsSuspended {
+        if hapticsSuspended || !runtimeOutputEnabled {
             activeAnalysisSink?.pause()
             currentPreparation?.lookaheadAnalyzer?.pause()
+            preparedLookaheadAnalyzers.values.forEach { $0.pause() }
+            rollingScheduler.pause()
+            custom.stop()
             return
         }
         activeAnalysisSink?.resume()
@@ -1414,15 +1447,15 @@ public final class MusicHapticsCoordinator {
         playbackIsPlaying = playing
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: playing && !hapticsSuspended,
+            isPlaying: playing && runtimeOutputEnabled && !hapticsSuspended,
             rate: playbackRate
         )
-        if playing && !hapticsSuspended {
+        if playing && runtimeOutputEnabled && !hapticsSuspended {
             currentPreparation?.lookaheadAnalyzer?.resume()
         } else {
             currentPreparation?.lookaheadAnalyzer?.pause()
         }
-        guard !hapticsSuspended else { return }
+        guard !hapticsSuspended, runtimeOutputEnabled else { return }
         activeAnalysisSink?.seek(to: currentPosition)
         if source == .custom {
             custom.seek(
@@ -1451,7 +1484,7 @@ public final class MusicHapticsCoordinator {
         playbackRate = safeRate
         playbackIsPlaying = isPlaying
         if isPlaying { audioBuffering = false }
-        let analysisCanRun = isPlaying && !audioBuffering && !hapticsSuspended
+        let analysisCanRun = isPlaying && !audioBuffering && runtimeOutputEnabled && !hapticsSuspended
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
             isPlaying: analysisCanRun,
@@ -1468,10 +1501,12 @@ public final class MusicHapticsCoordinator {
             custom.stop()
             activeAnalysisSink?.seek(to: currentPosition)
         }
-        if rateChanged, !hapticsSuspended, !audioBuffering {
+        if rateChanged, runtimeOutputEnabled, !hapticsSuspended, !audioBuffering {
             rebaseForPlaybackRateChange(position: currentPosition, isPlaying: isPlaying)
         }
-        guard case .analyzeLookahead = currentPlan, !hapticsSuspended else { return }
+        guard case .analyzeLookahead = currentPlan,
+              runtimeOutputEnabled,
+              !hapticsSuspended else { return }
         pumpScheduler(position: currentPosition, isPlaying: isPlaying)
     }
 
@@ -1498,6 +1533,10 @@ public final class MusicHapticsCoordinator {
         currentPreparation?.lookaheadAnalyzer?.pause()
         preparedLookaheadAnalyzers.values.forEach { $0.pause() }
 
+        scheduleCurrentCheckpoint()
+    }
+
+    private func scheduleCurrentCheckpoint() {
         suspensionCheckpointTask?.cancel()
         guard let preparation = currentPreparation else { return }
         let provider: (any MusicHapticsPartialCheckpointProvider)? =
@@ -1585,13 +1624,15 @@ public final class MusicHapticsCoordinator {
         playbackIsPlaying = isPlaying
         audioBuffering = false
         foregroundRecoveryCount += 1
-        custom.restartIfNeeded()
+        if runtimeOutputEnabled {
+            custom.restartIfNeeded()
+        }
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: isPlaying && !audioBuffering,
+            isPlaying: isPlaying && runtimeOutputEnabled && !audioBuffering,
             rate: playbackRate
         )
-        if isPlaying && !audioBuffering {
+        if isPlaying && runtimeOutputEnabled && !audioBuffering {
             activeAnalysisSink?.resume()
             currentPreparation?.lookaheadAnalyzer?.resume()
             preparedLookaheadAnalyzers.values.forEach { $0.resume() }
@@ -1600,9 +1641,10 @@ public final class MusicHapticsCoordinator {
             currentPreparation?.lookaheadAnalyzer?.pause()
             preparedLookaheadAnalyzers.values.forEach { $0.pause() }
         }
-        guard isPlaying else {
+        guard isPlaying, runtimeOutputEnabled else {
             custom.stop()
             rollingScheduler.updateClock(position: currentPosition, isPlaying: false)
+            if !runtimeOutputEnabled { source = .none }
             return
         }
         switch currentPlan {
@@ -1659,6 +1701,7 @@ public final class MusicHapticsCoordinator {
         warmupTask = nil
         rollingScheduler.stop()
         custom.stop()
+        runtimeOutputEnabled = false
         currentTimeline = nil
         source = .none
     }
@@ -1682,14 +1725,86 @@ public final class MusicHapticsCoordinator {
 
     public func setPreference(_ preference: TrackHapticsPreference) {
         guard let identity = currentIdentity else { return }
+        setPreference(preference, for: identity)
+    }
+
+    public func setPreference(
+        _ preference: TrackHapticsPreference,
+        for identity: MusicHapticsIdentity
+    ) {
         Task { [weak self] in
             try? await self?.store.setPreference(preference, for: identity)
         }
     }
 
+    /// Awaitable form used when a runtime re-prepare must observe the newly
+    /// persisted per-track override before resolving its plan.
+    public func persistPreference(
+        _ preference: TrackHapticsPreference,
+        for identity: MusicHapticsIdentity
+    ) async {
+        try? await store.setPreference(preference, for: identity)
+    }
+
+    /// Reads the effective setting for a recording without changing the
+    /// current runtime plan.  AppShell uses this for the playback-page toggle
+    /// so its value reflects the user's setting while a sidecar is still
+    /// preparing, rather than waiting for a plan to exist.
+    public func effectiveEnabled(for identity: MusicHapticsIdentity) async -> Bool {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return false }
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        let preference = (try? await store.preference(for: identity)) ?? .inherit
+        return preference.effective(globalEnabled: globalEnabled)
+    }
+
+    /// Re-evaluates a prepared sidecar against the current global default.
+    /// This intentionally does not check platform support: callers use it to
+    /// preserve the three-state setting even when deciding whether a sidecar
+    /// should be retained or discarded.
+    public func effectiveEnabled(for preparation: MusicHapticsPlaybackPreparation) -> Bool {
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        return preparation.preference.effective(globalEnabled: globalEnabled)
+    }
+
+    /// Returns the current track's effective preference without consulting
+    /// the hardware.  A caller can use the platform policy separately while
+    /// keeping `.enabled` as a real override of the global default.
+    public func currentEffectiveEnabled() -> Bool {
+        guard let currentPreparation else { return false }
+        return effectiveEnabled(for: currentPreparation)
+    }
+
+    /// Immediately disables Haptics output for the current track while
+    /// leaving the AVPlayer item, position and audio route untouched.  The
+    /// active analyzer is paused and its partial checkpoint is retained so a
+    /// later re-enable can resume from the current position.
+    public func disableCurrentOutput() {
+        runtimeOutputEnabled = false
+        playbackIsPlaying = false
+        rollingScheduler.pause()
+        activeAnalysisSink?.pause()
+        currentPreparation?.lookaheadAnalyzer?.pause()
+        preparedLookaheadAnalyzers.values.forEach { $0.pause() }
+        custom.stop()
+        source = .none
+        scheduleCurrentCheckpoint()
+    }
+
     public func setGlobalEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.enabledDefaultsKey)
         guard !enabled else { return }
+
+        // The global value is the default for `.inherit`, not a hard power
+        // switch.  An explicit `.enabled` preparation must remain valid even
+        // after the global default is turned off.
+        let preference = currentPreparation?.preference ?? .inherit
+        guard !preference.effective(globalEnabled: enabled) else { return }
+
+        // The preparation is being invalidated because its effective setting
+        // is now off. Stop the actual sidecar output before clearing the
+        // preparation; otherwise a running custom scheduler could outlive
+        // the state reset and continue emitting haptics.
+        disableCurrentOutput()
         finishPartial(reason: .stopped)
         currentPreparation = nil
         currentPlan = .disabled
@@ -1817,6 +1932,154 @@ public final class MusicHapticsCoordinator {
             lastHapticStopReason: custom.lastStopReason,
             foregroundRecoveryCount: foregroundRecoveryCount
         )
+    }
+
+    /// Returns the provenance of the plan actually selected for the current
+    /// track.  Product/UI code should use this typed result instead of
+    /// interpreting `planReason` strings or treating an ISRC as proof of a
+    /// system Music Haptics match.
+    public func currentAssetInfo() async -> MusicHapticsAssetInfo {
+        guard let identity = currentIdentity else {
+            return MusicHapticsAssetInfo(
+                origin: .none,
+                state: .unavailable
+            )
+        }
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        let preference = (try? await store.preference(for: identity)) ?? .inherit
+        guard preference.effective(globalEnabled: globalEnabled), runtimeOutputEnabled else {
+            return MusicHapticsAssetInfo(
+                origin: .none,
+                state: .disabled
+            )
+        }
+
+        switch currentPlan {
+        case .system:
+            guard currentSystemAvailability.canUseTimeline else {
+                return MusicHapticsAssetInfo(
+                    origin: .none,
+                    state: .unavailable,
+                    isrc: identity.isrc
+                )
+            }
+            return MusicHapticsAssetInfo(
+                origin: .systemISRC,
+                state: .available,
+                isrc: identity.isrc,
+                isCurrentlyUsed: source == .system
+            )
+        case let .custom(timeline):
+            return MusicHapticsAssetInfo(
+                origin: .algorithmGenerated,
+                state: .available,
+                isrc: identity.isrc,
+                algorithmVersion: timeline.algorithmVersion,
+                coverage: timeline.analysisCoverage,
+                isCurrentlyUsed: source == .custom
+            )
+        case .analyze, .analyzeLookahead:
+            return MusicHapticsAssetInfo(
+                origin: .algorithmGenerated,
+                state: .generating,
+                isrc: identity.isrc,
+                algorithmVersion: MusicHapticsTimeline.algorithmVersion,
+                coverage: analysisSnapshot.coverage,
+                isCurrentlyUsed: source == .analyzing && !hapticsSuspended
+            )
+        case .disabled:
+            return MusicHapticsAssetInfo(
+                origin: .none,
+                state: .unavailable,
+                isrc: identity.isrc
+            )
+        }
+    }
+
+    /// Returns runtime provenance only when it belongs to the requested
+    /// server-scoped recording. An information sheet may outlive a track
+    /// switch, so callers must not treat the coordinator's latest snapshot as
+    /// belonging to an arbitrary `Track`.
+    public func currentAssetInfo(
+        for identity: MusicHapticsIdentity
+    ) async -> MusicHapticsAssetInfo? {
+        guard isCurrentIdentity(identity) else { return nil }
+        let info = await currentAssetInfo()
+        guard isCurrentIdentity(identity) else { return nil }
+        return info
+    }
+
+    /// Resolves persisted provenance for a non-current track.  It never
+    /// exposes the runtime state of another track, so an open information
+    /// sheet cannot accidentally display the currently playing song's plan.
+    public func assetInfo(for identity: MusicHapticsIdentity) async -> MusicHapticsAssetInfo {
+        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+            return MusicHapticsAssetInfo(origin: .none, state: .unavailable)
+        }
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        let preference = (try? await store.preference(for: identity)) ?? .inherit
+        guard preference.effective(globalEnabled: globalEnabled) else {
+            return MusicHapticsAssetInfo(origin: .none, state: .disabled)
+        }
+
+        let availability = await system.availability(isrc: identity.isrc)
+        if availability.canUseTimeline {
+            return MusicHapticsAssetInfo(
+                origin: .systemISRC,
+                state: .available,
+                isrc: identity.isrc
+            )
+        }
+        if let timeline = try? await store.timeline(for: identity) {
+            return MusicHapticsAssetInfo(
+                origin: .algorithmGenerated,
+                state: .available,
+                isrc: identity.isrc,
+                algorithmVersion: timeline.algorithmVersion,
+                coverage: timeline.analysisCoverage
+            )
+        }
+        if let partial = inMemoryPartial(for: identity) {
+            return MusicHapticsAssetInfo(
+                origin: .algorithmGenerated,
+                state: .generating,
+                isrc: identity.isrc,
+                algorithmVersion: MusicHapticsTimeline.algorithmVersion,
+                coverage: partial.coverage
+            )
+        }
+        if let partial = try? await store.partial(for: identity) {
+            return MusicHapticsAssetInfo(
+                origin: .algorithmGenerated,
+                state: .generating,
+                isrc: identity.isrc,
+                algorithmVersion: MusicHapticsTimeline.algorithmVersion,
+                coverage: partial.coverage
+            )
+        }
+        // Capability alone is not evidence that this non-current track has an
+        // analyzer running. Without a persisted timeline or partial checkpoint
+        // the truthful state is unavailable, rather than a fabricated
+        // "generating" state.
+        return MusicHapticsAssetInfo(
+            origin: .none,
+            state: .unavailable,
+            isrc: identity.isrc
+        )
+    }
+
+    private func isCurrentIdentity(_ identity: MusicHapticsIdentity) -> Bool {
+        guard let currentIdentity else { return false }
+        if let currentGlobalID = currentIdentity.globalID,
+           let requestedGlobalID = identity.globalID {
+            return currentGlobalID == requestedGlobalID
+        }
+        guard let currentServerID = currentIdentity.serverID,
+              let currentRemoteID = currentIdentity.remoteID,
+              let requestedServerID = identity.serverID,
+              let requestedRemoteID = identity.remoteID
+        else { return false }
+        return currentServerID == requestedServerID && currentRemoteID == requestedRemoteID
     }
 
     private var analysisState: String {
@@ -1959,6 +2222,7 @@ public final class MusicHapticsCoordinator {
 
     private func activateRealtimeFallback(_ preparation: MusicHapticsPlaybackPreparation) {
         guard currentPreparation?.id == preparation.id,
+              runtimeOutputEnabled,
               case .analyzeLookahead = preparation.plan,
               let sink = preparation.realtimeFallbackSink
         else {
@@ -1998,6 +2262,7 @@ public final class MusicHapticsCoordinator {
     ) {
         guard currentPreparation?.id == preparationID,
               playbackIsPlaying,
+              runtimeOutputEnabled,
               !hapticsSuspended,
               !audioBuffering,
               currentPlan.kind == .analyze || realtimeFallbackPreparationID == preparationID
@@ -2048,7 +2313,9 @@ public final class MusicHapticsCoordinator {
             preparedLookaheadWindows[preparationID] = windows
             return
         }
-        guard case .analyzeLookahead = currentPlan, !hapticsSuspended else { return }
+        guard case .analyzeLookahead = currentPlan,
+              runtimeOutputEnabled,
+              !hapticsSuspended else { return }
         let scheduled = rollingScheduler.ingest(window)
         analysisSnapshot = MusicHapticsAnalysisSnapshot(
             analyzedRanges: analysisSnapshot.analyzedRanges,
@@ -2113,7 +2380,7 @@ public final class MusicHapticsCoordinator {
     }
 
     private func pumpScheduler(position: TimeInterval, isPlaying: Bool) {
-        guard !hapticsSuspended, !audioBuffering else { return }
+        guard runtimeOutputEnabled, !hapticsSuspended, !audioBuffering else { return }
         if position + 0.15 < currentPosition { custom.stop() }
         let windows = rollingScheduler.updateClock(
             position: position,
@@ -2130,7 +2397,10 @@ public final class MusicHapticsCoordinator {
         _ windows: [MusicHapticsAnalysisWindow],
         position: TimeInterval
     ) {
-        guard !hapticsSuspended, !audioBuffering, custom.canProduceOutput else { return }
+        guard runtimeOutputEnabled,
+              !hapticsSuspended,
+              !audioBuffering,
+              custom.canProduceOutput else { return }
         for window in windows {
             custom.play(
                 window,

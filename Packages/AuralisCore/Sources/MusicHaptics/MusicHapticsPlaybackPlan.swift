@@ -229,6 +229,11 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
 }
 
 public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
+    /// Shared short preparation budget.  It is used by both lookahead
+    /// warm-up diagnostics and the AppShell identity-priority sidecar; public
+    /// metadata must never become an unbounded playback dependency.
+    public static let defaultWarmupDeadline: Duration = .milliseconds(350)
+
     public let identity: MusicHapticsIdentity
     public let favorite: Bool
     public let duration: TimeInterval
@@ -242,7 +247,7 @@ public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
         duration: TimeInterval,
         partial: MusicHapticsPartialCheckpoint? = nil,
         analysisSource: MusicHapticsAnalysisSource = .realtimeTap,
-        warmupDeadline: Duration = .milliseconds(350)
+        warmupDeadline: Duration = Self.defaultWarmupDeadline
     ) {
         self.identity = identity
         self.favorite = favorite
@@ -267,7 +272,7 @@ public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
             // must fall back to a fresh upper-layer source instead of ever
             // reconstructing a stale URL or credential-bearing stream.
             analysisSource: .realtimeTap,
-            warmupDeadline: try container.decodeIfPresent(Duration.self, forKey: .warmupDeadline) ?? .milliseconds(350)
+            warmupDeadline: try container.decodeIfPresent(Duration.self, forKey: .warmupDeadline) ?? Self.defaultWarmupDeadline
         )
     }
 }
@@ -311,6 +316,48 @@ public struct MusicHapticsSystemAvailability: Codable, Hashable, Sendable {
     }
 
     public var canUseTimeline: Bool { hasISRC && active && timelineAvailable }
+}
+
+/// User-facing provenance for the asset actually selected for a track. This
+/// is intentionally separate from `MusicHapticsPlanKind` and diagnostic
+/// reason strings so UI code never has to infer product meaning from runtime
+/// implementation details.
+public enum MusicHapticsAssetOrigin: String, Codable, Hashable, Sendable {
+    case systemISRC
+    case algorithmGenerated
+    case none
+}
+
+public enum MusicHapticsAssetState: String, Codable, Hashable, Sendable {
+    case available
+    case generating
+    case disabled
+    case unavailable
+}
+
+public struct MusicHapticsAssetInfo: Codable, Hashable, Sendable {
+    public let origin: MusicHapticsAssetOrigin
+    public let state: MusicHapticsAssetState
+    public let isrc: String?
+    public let algorithmVersion: String?
+    public let coverage: Double?
+    public let isCurrentlyUsed: Bool
+
+    public init(
+        origin: MusicHapticsAssetOrigin,
+        state: MusicHapticsAssetState,
+        isrc: String? = nil,
+        algorithmVersion: String? = nil,
+        coverage: Double? = nil,
+        isCurrentlyUsed: Bool = false
+    ) {
+        self.origin = origin
+        self.state = state
+        self.isrc = isrc
+        self.algorithmVersion = algorithmVersion
+        self.coverage = coverage.map { min(max($0.isFinite ? $0 : 0, 0), 1) }
+        self.isCurrentlyUsed = isCurrentlyUsed
+    }
 }
 
 public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {

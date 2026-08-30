@@ -42,6 +42,20 @@ struct GaplessPreparationTests {
         #expect(await engine.lastPreparedID() == tracks[1].id)
     }
 
+    @Test("Global Haptics changes preserve the prepared audio item")
+    @MainActor
+    func globalHapticsToggleDoesNotClearPreparedAudio() async {
+        let engine = GaplessProbeEngine()
+        let tracks = [track("one"), track("two")]
+        let model = makeModel(engine: engine, tracks: tracks)
+        model.playQueue(tracks)
+        await waitUntil { await engine.lastPreparedID() == tracks[1].id }
+
+        model.setMusicHapticsEnabled(false)
+
+        #expect(await engine.lastPreparedID() == tracks[1].id)
+    }
+
     @Test("Shuffle and repeat-one invalidate deterministic preparation")
     @MainActor
     func modeInvalidation() async {

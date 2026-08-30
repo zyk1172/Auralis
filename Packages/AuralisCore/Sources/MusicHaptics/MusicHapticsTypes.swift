@@ -118,6 +118,15 @@ public enum TrackHapticsPreference: String, Codable, CaseIterable, Sendable {
     public func effective(globalEnabled: Bool) -> Bool {
         switch self { case .inherit: globalEnabled; case .enabled: true; case .disabled: false }
     }
+
+    /// Converts the playback-page Boolean into the persisted three-state
+    /// preference without losing inheritance when the requested value already
+    /// matches the global setting.
+    public static func preference(for desiredEnabled: Bool, globalEnabled: Bool) -> Self {
+        desiredEnabled == globalEnabled
+            ? .inherit
+            : (desiredEnabled ? .enabled : .disabled)
+    }
 }
 
 public enum MusicHapticsEventKind: String, Codable, Sendable { case transient, continuous }

@@ -20,6 +20,106 @@ import Testing
     #expect(TrackHapticsPreference.inherit.effective(globalEnabled: true))
 }
 
+@Test @MainActor func preparedHapticsReevaluatesGlobalDefaultForEveryPreferenceState() {
+    let defaults = UserDefaults(suiteName: "music-haptics-preparation-(UUID().uuidString)")!
+    let coordinator = MusicHapticsCoordinator(defaults: defaults)
+    let identity = MusicHapticsIdentity(
+        serverID: "server",
+        remoteID: "track",
+        title: "Song",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+
+    func preparation(for preference: TrackHapticsPreference) -> MusicHapticsPlaybackPreparation {
+        MusicHapticsPlaybackPreparation(
+            identity: identity,
+            favorite: false,
+            plan: .disabled,
+            reason: "test",
+            systemAvailability: MusicHapticsSystemAvailability(
+                hasISRC: false,
+                active: false,
+                timelineAvailable: false
+            ),
+            fullTimelineExists: false,
+            partialExists: false,
+            preference: preference,
+            effectiveEnabled: preference.effective(globalEnabled: true),
+            analysisSink: nil
+        )
+    }
+
+    defaults.set(false, forKey: MusicHapticsCoordinator.enabledDefaultsKey)
+    #expect(coordinator.effectiveEnabled(for: preparation(for: .enabled)))
+    #expect(!coordinator.effectiveEnabled(for: preparation(for: .inherit)))
+    #expect(!coordinator.effectiveEnabled(for: preparation(for: .disabled)))
+
+    defaults.set(true, forKey: MusicHapticsCoordinator.enabledDefaultsKey)
+    #expect(coordinator.effectiveEnabled(for: preparation(for: .enabled)))
+    #expect(coordinator.effectiveEnabled(for: preparation(for: .inherit)))
+    #expect(!coordinator.effectiveEnabled(for: preparation(for: .disabled)))
+}
+
+@Test func playbackTogglePreservesThreeStatePreferenceSemantics() {
+    #expect(TrackHapticsPreference.preference(for: true, globalEnabled: true) == .inherit)
+    #expect(TrackHapticsPreference.preference(for: false, globalEnabled: true) == .disabled)
+    #expect(TrackHapticsPreference.preference(for: false, globalEnabled: false) == .inherit)
+    #expect(TrackHapticsPreference.preference(for: true, globalEnabled: false) == .enabled)
+}
+
+@Test func explicitPreferenceSurvivesIdentityEnrichment() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let uncachedIdentity = MusicHapticsIdentity(
+        globalID: "server:track",
+        serverID: "server",
+        remoteID: "track",
+        title: "Song",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+    let enrichedIdentity = MusicHapticsIdentity(
+        globalID: "server:track",
+        serverID: "server",
+        remoteID: "track",
+        isrc: "USABC1234567",
+        title: "Song",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+    let store = MusicHapticsStore(root: root)
+
+    try await store.setPreference(.disabled, for: uncachedIdentity)
+    #expect(try await store.preference(for: enrichedIdentity) == .disabled)
+
+    try await store.setPreference(.inherit, for: enrichedIdentity)
+    #expect(try await store.preference(for: enrichedIdentity) == .inherit)
+}
+
+@Test func assetInfoKeepsSystemMatchSeparateFromAlgorithmOutput() {
+    let system = MusicHapticsAssetInfo(
+        origin: .systemISRC,
+        state: .available,
+        isrc: "USABC1234567",
+        isCurrentlyUsed: true
+    )
+    let algorithm = MusicHapticsAssetInfo(
+        origin: .algorithmGenerated,
+        state: .available,
+        isrc: "USABC1234567",
+        algorithmVersion: MusicHapticsTimeline.algorithmVersion,
+        coverage: 1
+    )
+
+    #expect(system.origin == .systemISRC)
+    #expect(system.isCurrentlyUsed)
+    #expect(algorithm.origin == .algorithmGenerated)
+    #expect(algorithm.algorithmVersion == MusicHapticsTimeline.algorithmVersion)
+    #expect(algorithm.origin != system.origin)
+}
+
 @Test func playbackPlanResolverHasOneAuthoritativeOrder() {
     let identity = MusicHapticsIdentity(
         title: "Plan",

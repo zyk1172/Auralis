@@ -83,6 +83,16 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         (avPlayer?.currentItem?.asset as? AVURLAsset)?.url
     }
 
+    /// Internal test seam for verifying that sidecar invalidation does not
+    /// remove the original prepared audio item.
+    var preparedPlaybackURLForTesting: URL? {
+        (preparedItem?.asset as? AVURLAsset)?.url
+    }
+
+    var hasPreparedMusicHapticsForTesting: Bool {
+        preparedMusicHapticsPreparation != nil
+    }
+
     public func setVolume(_ volume: Float) {
         self.volume = min(max(volume, 0), 1)
         applyOutputVolume()
@@ -163,6 +173,49 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         } else {
             logSkippedTapSetup(for: preparation.plan)
         }
+    }
+
+    /// Installs or replaces only the Haptics sidecar for the item already
+    /// inserted as `preparedItem`.  The AVPlayer item and its original URL are
+    /// deliberately left untouched so asynchronous ISRC/enrichment work can
+    /// finish after audio preloading has started.
+    @discardableResult
+    public func installPreparedMusicHapticsPlaybackPreparation(
+        _ preparation: MusicHapticsPlaybackPreparation
+    ) -> Bool {
+        guard let player = avPlayer,
+              let item = preparedItem,
+              player.items().contains(where: { $0 === item }),
+              preparedTrack != nil
+        else { return false }
+
+        guard preparedMusicHapticsPreparation?.id != preparation.id else { return true }
+        preparedTapSetupTask?.cancel()
+        preparedTapSetupTask = nil
+        finishPreparedMusicHaptics(reason: .preparationReplaced)
+        preparedMusicHapticsPreparation = preparation
+        if case .analyze = preparation.plan,
+           let sink = preparation.analysisSink {
+            scheduleTapSetup(
+                for: item,
+                sink: sink,
+                isPrepared: true,
+                generation: playGeneration
+            )
+        } else {
+            logSkippedTapSetup(for: preparation.plan)
+        }
+        return true
+    }
+
+    /// Discards only the Haptics sidecar attached to the prepared AVPlayerItem.
+    /// The prepared item, its original URL and the queue boundary remain intact
+    /// so a global/per-track Haptics change can never remove or delay audio
+    /// preloading.
+    public func discardPreparedMusicHapticsPlaybackPreparation() {
+        preparedTapSetupTask?.cancel()
+        preparedTapSetupTask = nil
+        finishPreparedMusicHaptics(reason: .preparationReplaced)
     }
 
     public func configureReplayGain(_ settings: ReplayGainSettings) {

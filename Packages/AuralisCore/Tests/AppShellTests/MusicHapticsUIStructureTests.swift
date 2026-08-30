@@ -3,10 +3,10 @@ import Testing
 
 /// Keeps the two product entry points in the real AppShell target.  This is a
 /// deliberately small structural guard: it catches accidental removal of the
-/// iOS setting or the Now Playing submenu before a device build is installed.
+/// iOS setting or the Now Playing single-level toggle before a device build is installed.
 @Suite("Music Haptics iOS UI structure")
 struct MusicHapticsUIStructureTests {
-    @Test("播放设置页 and Now Playing submenu retain stable iOS identifiers")
+    @Test("播放设置页 and Now Playing toggle retain stable iOS identifiers")
     @MainActor
     func hapticsEntryPointsRemainAvailable() {
         #expect(PlaybackSettingsPage.musicHapticsSettingsIdentifier == "auralis.settings.musicHaptics")
