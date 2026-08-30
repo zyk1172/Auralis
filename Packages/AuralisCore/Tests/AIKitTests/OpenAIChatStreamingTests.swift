@@ -208,6 +208,8 @@ struct OpenAIChatStreamingTests {
         let sse = """
         data: {"delta":"兼容正文"}
 
+        data: {"choices":[{"delta":"嵌套兼容正文"}]}
+
         data: [DONE]
         """
         ChatMockURLProtocol.reset(stubs: [
@@ -223,6 +225,7 @@ struct OpenAIChatStreamingTests {
         }
 
         #expect(events.contains(.answerDelta("兼容正文")))
+        #expect(events.contains(.answerDelta("嵌套兼容正文")))
         #expect(!events.contains(.unknownDelta))
         #expect(events.last == .completed)
     }

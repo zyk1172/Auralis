@@ -1679,6 +1679,11 @@ public struct OpenAICompatibleProvider: AIProvider {
         if let delta = first["delta"] as? [String: Any] {
             return plainText(from: delta["content"]) ?? ""
         }
+        // Some Chat-compatible gateways simplify choices[0].delta to a plain
+        // string instead of an object. Treat that shape as answer text too.
+        if let deltaText = plainText(from: first["delta"]) {
+            return deltaText
+        }
         if let legacy = first["text"] as? String {
             return legacy // 旧版 /v1/completions 风格
         }
@@ -2300,12 +2305,15 @@ public struct OpenAICompatibleProvider: AIProvider {
                 events.append(.answerDelta(answer))
             }
         }
-        if events.isEmpty,
-           !toolCallArgumentsInFlight,
-           Self.streamToolCallFragments(from: data).isEmpty,
-           let bareDelta = plainText(from: object["delta"]),
-           !bareDelta.isEmpty {
-            events.append(.answerDelta(bareDelta))
+        if events.isEmpty, !toolCallArgumentsInFlight,
+           Self.streamToolCallFragments(from: data).isEmpty {
+            let bareDelta = plainText(from: object["delta"])
+                ?? (object["choices"] as? [[String: Any]]).flatMap { choices in
+                    choices.first.flatMap { plainText(from: $0["delta"]) }
+                }
+            if let bareDelta, !bareDelta.isEmpty {
+                events.append(.answerDelta(bareDelta))
+            }
         }
         return events
     }
