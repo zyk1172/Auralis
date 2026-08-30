@@ -1757,6 +1757,14 @@ public final class MusicHapticsCoordinator {
 
     public func stop() {
         finishPartial(reason: .stopped)
+        // A full playback stop invalidates prepared-next sidecars as well as
+        // the current one. Otherwise a decoder that was opened for the next
+        // item can keep reading after the player has stopped, with callbacks
+        // retained by the coordinator even though no item can become current.
+        preparedLookaheadAnalyzers.values.forEach { $0.finishPartial(reason: .stopped) }
+        preparedLookaheadAnalyzers.removeAll()
+        preparedLookaheadPreparationIDs.removeAll()
+        preparedLookaheadWindows.removeAll()
         deferredPreparedLookaheadSources.removeAll()
         currentPreparation = nil
         currentTimeline = nil
