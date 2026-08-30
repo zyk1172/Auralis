@@ -843,6 +843,10 @@ public final class MusicHapticsPlaybackPreparation {
     public let systemAvailability: MusicHapticsSystemAvailability
     public let fullTimelineExists: Bool
     public let partialExists: Bool
+    /// The persisted three-state override used to resolve this sidecar.  The
+    /// captured effective value is only a preparation-time observation; the
+    /// runtime must recompute it when the global default changes.
+    public let preference: TrackHapticsPreference
     /// The effective per-track setting observed when this sidecar was
     /// prepared.  This is separate from the resolved plan: a track may be
     /// enabled while no system/custom asset is currently available.
@@ -863,6 +867,7 @@ public final class MusicHapticsPlaybackPreparation {
         systemAvailability: MusicHapticsSystemAvailability,
         fullTimelineExists: Bool,
         partialExists: Bool,
+        preference: TrackHapticsPreference = .inherit,
         effectiveEnabled: Bool = false,
         analysisSink: (any MusicHapticsAnalysisSink)?,
         realtimeFallbackSink: (any MusicHapticsAnalysisSink)? = nil,
@@ -876,6 +881,7 @@ public final class MusicHapticsPlaybackPreparation {
         self.systemAvailability = systemAvailability
         self.fullTimelineExists = fullTimelineExists
         self.partialExists = partialExists
+        self.preference = preference
         self.effectiveEnabled = effectiveEnabled
         self.analysisSink = analysisSink
         self.realtimeFallbackSink = realtimeFallbackSink
@@ -997,6 +1003,7 @@ public final class MusicHapticsCoordinator {
                 systemAvailability: systemAvailability,
                 fullTimelineExists: false,
                 partialExists: false,
+                preference: .inherit,
                 effectiveEnabled: false,
                 analysisSink: nil
             )
@@ -1192,6 +1199,7 @@ public final class MusicHapticsCoordinator {
             systemAvailability: systemAvailability,
             fullTimelineExists: fullTimeline != nil,
             partialExists: partial != nil,
+            preference: preference,
             effectiveEnabled: featureEnabled,
             analysisSink: analysisSink,
             realtimeFallbackSink: realtimeFallbackSink,
@@ -1226,9 +1234,11 @@ public final class MusicHapticsCoordinator {
         isPlaying: Bool = true
     ) {
         let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        let effectiveEnabled = preparation.preference.effective(
+            globalEnabled: globalEnabled
+        )
         guard MusicHapticsPlatformPolicy.isFeatureAvailable,
-              globalEnabled,
-              preparation.effectiveEnabled else {
+              effectiveEnabled else {
             runtimeOutputEnabled = false
             source = .none
             return
@@ -1747,6 +1757,23 @@ public final class MusicHapticsCoordinator {
         return preference.effective(globalEnabled: globalEnabled)
     }
 
+    /// Re-evaluates a prepared sidecar against the current global default.
+    /// This intentionally does not check platform support: callers use it to
+    /// preserve the three-state setting even when deciding whether a sidecar
+    /// should be retained or discarded.
+    public func effectiveEnabled(for preparation: MusicHapticsPlaybackPreparation) -> Bool {
+        let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
+        return preparation.preference.effective(globalEnabled: globalEnabled)
+    }
+
+    /// Returns the current track's effective preference without consulting
+    /// the hardware.  A caller can use the platform policy separately while
+    /// keeping `.enabled` as a real override of the global default.
+    public func currentEffectiveEnabled() -> Bool {
+        guard let currentPreparation else { return false }
+        return effectiveEnabled(for: currentPreparation)
+    }
+
     /// Immediately disables Haptics output for the current track while
     /// leaving the AVPlayer item, position and audio route untouched.  The
     /// active analyzer is paused and its partial checkpoint is retained so a
@@ -1766,6 +1793,18 @@ public final class MusicHapticsCoordinator {
     public func setGlobalEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.enabledDefaultsKey)
         guard !enabled else { return }
+
+        // The global value is the default for `.inherit`, not a hard power
+        // switch.  An explicit `.enabled` preparation must remain valid even
+        // after the global default is turned off.
+        let preference = currentPreparation?.preference ?? .inherit
+        guard !preference.effective(globalEnabled: enabled) else { return }
+
+        // The preparation is being invalidated because its effective setting
+        // is now off. Stop the actual sidecar output before clearing the
+        // preparation; otherwise a running custom scheduler could outlive
+        // the state reset and continue emitting haptics.
+        disableCurrentOutput()
         finishPartial(reason: .stopped)
         currentPreparation = nil
         currentPlan = .disabled

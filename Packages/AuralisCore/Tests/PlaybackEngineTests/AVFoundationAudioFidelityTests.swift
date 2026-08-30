@@ -155,6 +155,7 @@ struct AVFoundationAudioFidelityTests {
             ),
             fullTimelineExists: false,
             partialExists: false,
+            preference: .enabled,
             effectiveEnabled: true,
             analysisSink: nil
         )

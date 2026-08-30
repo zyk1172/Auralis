@@ -20,6 +20,47 @@ import Testing
     #expect(TrackHapticsPreference.inherit.effective(globalEnabled: true))
 }
 
+@Test @MainActor func preparedHapticsReevaluatesGlobalDefaultForEveryPreferenceState() {
+    let defaults = UserDefaults(suiteName: "music-haptics-preparation-(UUID().uuidString)")!
+    let coordinator = MusicHapticsCoordinator(defaults: defaults)
+    let identity = MusicHapticsIdentity(
+        serverID: "server",
+        remoteID: "track",
+        title: "Song",
+        artist: "Artist",
+        durationMilliseconds: 180_000
+    )
+
+    func preparation(for preference: TrackHapticsPreference) -> MusicHapticsPlaybackPreparation {
+        MusicHapticsPlaybackPreparation(
+            identity: identity,
+            favorite: false,
+            plan: .disabled,
+            reason: "test",
+            systemAvailability: MusicHapticsSystemAvailability(
+                hasISRC: false,
+                active: false,
+                timelineAvailable: false
+            ),
+            fullTimelineExists: false,
+            partialExists: false,
+            preference: preference,
+            effectiveEnabled: preference.effective(globalEnabled: true),
+            analysisSink: nil
+        )
+    }
+
+    defaults.set(false, forKey: MusicHapticsCoordinator.enabledDefaultsKey)
+    #expect(coordinator.effectiveEnabled(for: preparation(for: .enabled)))
+    #expect(!coordinator.effectiveEnabled(for: preparation(for: .inherit)))
+    #expect(!coordinator.effectiveEnabled(for: preparation(for: .disabled)))
+
+    defaults.set(true, forKey: MusicHapticsCoordinator.enabledDefaultsKey)
+    #expect(coordinator.effectiveEnabled(for: preparation(for: .enabled)))
+    #expect(coordinator.effectiveEnabled(for: preparation(for: .inherit)))
+    #expect(!coordinator.effectiveEnabled(for: preparation(for: .disabled)))
+}
+
 @Test func playbackTogglePreservesThreeStatePreferenceSemantics() {
     #expect(TrackHapticsPreference.preference(for: true, globalEnabled: true) == .inherit)
     #expect(TrackHapticsPreference.preference(for: false, globalEnabled: true) == .disabled)

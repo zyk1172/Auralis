@@ -502,6 +502,11 @@ public final class AuralisAppModel: ObservableObject {
     /// case the boundary handler lets this task finish so it can rebase the
     /// sidecar onto the now-current item.
     private var preparingNextHapticsCandidateIdentity: GlobalID?
+    /// Haptics configuration revision owned by the in-flight sidecar. A
+    /// queue boundary may preserve this task only while the revision still
+    /// matches; a Haptics-only preference change must not make the boundary
+    /// wait for a stale sidecar before preloading the following audio item.
+    private var preparingNextHapticsConfigurationRevision: Int?
     private var preparingNextHapticsTaskID: UUID?
     private struct CurrentHapticsContext {
         let trackIdentity: GlobalID
@@ -2099,6 +2104,7 @@ public final class AuralisAppModel: ObservableObject {
         prepareNextTask?.cancel()
         prepareNextTask = nil
         preparingNextHapticsCandidateIdentity = nil
+        preparingNextHapticsConfigurationRevision = nil
         preparingNextHapticsTaskID = nil
         hapticsPreferenceRevision &+= 1
         currentHapticsContext = nil
@@ -2985,7 +2991,7 @@ public final class AuralisAppModel: ObservableObject {
             duration: duration,
             favorite: favorite
         )
-        currentMusicHapticsEnabled = preparation.effectiveEnabled
+        currentMusicHapticsEnabled = musicHaptics.effectiveEnabled(for: preparation)
         return preparation
     }
 
@@ -3946,26 +3952,50 @@ public final class AuralisAppModel: ObservableObject {
         hapticsEffectiveStateTask?.cancel()
         hapticsEffectiveStateTask = nil
 
+        musicHaptics.setGlobalEnabled(enabled)
+
         if !enabled {
-            // Global Haptics changes are sidecar-only. Stop the active output
-            // and discard prepared Haptics, but leave the already inserted
-            // AVPlayerItem untouched so audio preloading/gapless playback
-            // cannot be affected by this setting.
-            musicHaptics.disableCurrentOutput()
-            if let prepared = preparedMusicHapticsPreparation {
+            // The global value is only the default for `.inherit`.  An
+            // explicit `.enabled` current track keeps its sidecar running;
+            // only the effective-off case stops output.  In both cases the
+            // prepared audio item remains untouched.
+            let currentEffectiveEnabled = musicHaptics.currentEffectiveEnabled()
+            if let prepared = preparedMusicHapticsPreparation,
+               !musicHaptics.effectiveEnabled(for: prepared) {
                 musicHaptics.discardPreparedAnalysis(prepared)
+                preparedMusicHapticsPreparation = nil
+                if let avEngine = engine as? AVFoundationPlaybackEngine {
+                    avEngine.discardPreparedMusicHapticsPlaybackPreparation()
+                }
             }
-            preparedMusicHapticsPreparation = nil
             preparedNextHapticsRefreshTask?.cancel()
             preparedNextHapticsRefreshTask = nil
-            if let avEngine = engine as? AVFoundationPlaybackEngine {
-                avEngine.discardPreparedMusicHapticsPlaybackPreparation()
+            currentMusicHapticsEnabled = currentEffectiveEnabled
+            if !currentEffectiveEnabled {
+                mediaIntegration.setInternationalStandardRecordingCode(nil)
             }
-            currentMusicHapticsEnabled = false
+            scheduleCurrentMusicHapticsEffectiveState(
+                for: currentTrack,
+                revision: hapticsPreferenceRevision
+            )
+            // If the next sidecar was still in flight, the configuration
+            // revision above invalidated it. Recreate only that sidecar so a
+            // next track with an explicit `.enabled` override still works
+            // while the global default is off; the prepared audio item stays.
+            if preparedMusicHapticsPreparation == nil {
+                refreshPreparedNextHapticsIfNeeded(
+                    configurationRevision: configurationRevision
+                )
+            }
+            // The current sidecar may still be resolving when the global
+            // default changes. Re-run the sidecar-only preparation so an
+            // explicit `.enabled` track override is honored even with the
+            // global default off; `.inherit` naturally resolves to disabled.
+            reprepareCurrentMusicHapticsIfNeeded(
+                configurationRevision: configurationRevision
+            )
+            return
         }
-
-        musicHaptics.setGlobalEnabled(enabled)
-        guard enabled else { return }
 
         // The playback-page Toggle represents the effective setting, not
         // whether the replacement sidecar has finished preparing. Refresh it
@@ -3993,11 +4023,26 @@ public final class AuralisAppModel: ObservableObject {
         hapticsToggleTask?.cancel()
         hapticsEffectiveStateTask?.cancel()
         hapticsEffectiveStateTask = nil
+        hapticsConfigurationRevision &+= 1
+        let configurationRevision = hapticsConfigurationRevision
         hapticsPreferenceRevision &+= 1
         let revision = hapticsPreferenceRevision
         let requestedIdentity = queueIdentity(currentTrack)
         let requestedTrack = currentTrack
         currentMusicHapticsEnabled = enabled
+
+        // A per-track preference invalidates only the prepared Haptics
+        // sidecar.  The AVPlayerItem already buffered for the next queue
+        // occurrence is deliberately retained for gapless audio.
+        preparedNextHapticsRefreshTask?.cancel()
+        preparedNextHapticsRefreshTask = nil
+        if let prepared = preparedMusicHapticsPreparation {
+            musicHaptics.discardPreparedAnalysis(prepared)
+            preparedMusicHapticsPreparation = nil
+        }
+        if let avEngine = engine as? AVFoundationPlaybackEngine {
+            avEngine.discardPreparedMusicHapticsPlaybackPreparation()
+        }
 
         if !enabled {
             // Stop output before any identity lookup so a slow enrichment
@@ -4011,6 +4056,7 @@ public final class AuralisAppModel: ObservableObject {
             guard let self else { return }
             let diagnostics = await self.musicHaptics.diagnostics()
             guard !Task.isCancelled,
+                  self.hapticsConfigurationRevision == configurationRevision,
                   self.hapticsPreferenceRevision == revision,
                   self.queueIdentity(self.currentTrack) == requestedIdentity else { return }
 
@@ -4029,12 +4075,21 @@ public final class AuralisAppModel: ObservableObject {
                 identity = await self.cachedMusicHapticsIdentity(for: requestedTrack)
             }
             guard !Task.isCancelled,
+                  self.hapticsConfigurationRevision == configurationRevision,
                   self.hapticsPreferenceRevision == revision,
                   self.queueIdentity(self.currentTrack) == requestedIdentity else { return }
             await self.musicHaptics.persistPreference(preference, for: identity)
             guard !Task.isCancelled,
+                  self.hapticsConfigurationRevision == configurationRevision,
                   self.hapticsPreferenceRevision == revision,
                   self.queueIdentity(self.currentTrack) == requestedIdentity else { return }
+
+            // Rebuild only the Haptics sidecar for the already prepared next
+            // audio item after the new preference is durable.  This also
+            // handles [A, A, B]: the second A cannot reuse A1's old plan.
+            self.refreshPreparedNextHapticsIfNeeded(
+                configurationRevision: configurationRevision
+            )
 
             guard enabled else { return }
             let context = self.currentHapticsContext?.trackIdentity == requestedIdentity
@@ -4050,6 +4105,7 @@ public final class AuralisAppModel: ObservableObject {
                 playbackURL: playableTrack.streamURL
             )
             guard !Task.isCancelled,
+                  self.hapticsConfigurationRevision == configurationRevision,
                   self.hapticsPreferenceRevision == revision,
                   self.queueIdentity(self.currentTrack) == requestedIdentity else {
                 self.musicHaptics.discardPreparedAnalysis(preparation)
@@ -4058,6 +4114,7 @@ public final class AuralisAppModel: ObservableObject {
 
             let position = await self.engine.currentPosition() ?? self.playbackPosition
             guard !Task.isCancelled,
+                  self.hapticsConfigurationRevision == configurationRevision,
                   self.hapticsPreferenceRevision == revision,
                   self.queueIdentity(self.currentTrack) == requestedIdentity else {
                 self.musicHaptics.discardPreparedAnalysis(preparation)
@@ -4081,7 +4138,9 @@ public final class AuralisAppModel: ObservableObject {
                 duration: duration,
                 favorite: favorite
             )
-            self.currentMusicHapticsEnabled = preparation.effectiveEnabled
+            self.currentMusicHapticsEnabled = self.musicHaptics.effectiveEnabled(
+                for: preparation
+            )
             self.mediaIntegration.setInternationalStandardRecordingCode(identity.isrc)
         }
     }
@@ -4104,7 +4163,10 @@ public final class AuralisAppModel: ObservableObject {
 
         hapticsToggleTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let identity = await self.cachedMusicHapticsIdentity(for: playableTrack)
+            // Re-enabling the global default uses the same bounded ISRC-first
+            // path as normal playback.  This is still sidecar work and never
+            // delays or recreates the current AVPlayer item.
+            let identity = await self.prioritizedMusicHapticsIdentity(for: playableTrack)
             let effectiveEnabled = await self.musicHaptics.effectiveEnabled(for: identity)
             guard !Task.isCancelled,
                   self.hapticsConfigurationRevision == configurationRevision,
@@ -4146,7 +4208,9 @@ public final class AuralisAppModel: ObservableObject {
                 duration: duration,
                 favorite: favorite
             )
-            self.currentMusicHapticsEnabled = preparation.effectiveEnabled
+            self.currentMusicHapticsEnabled = self.musicHaptics.effectiveEnabled(
+                for: preparation
+            )
             self.mediaIntegration.setInternationalStandardRecordingCode(identity.isrc)
             self.musicHaptics.activate(
                 preparation,
@@ -4214,7 +4278,9 @@ public final class AuralisAppModel: ObservableObject {
                     duration: max(playable.duration, candidate.duration),
                     favorite: playable.isFavorite
                 )
-                self.currentMusicHapticsEnabled = preparation.effectiveEnabled
+                self.currentMusicHapticsEnabled = self.musicHaptics.effectiveEnabled(
+                    for: preparation
+                )
                 self.mediaIntegration.setInternationalStandardRecordingCode(identity.isrc)
                 self.musicHaptics.activate(
                     preparation,
@@ -4805,6 +4871,7 @@ public final class AuralisAppModel: ObservableObject {
         let preparedHaptics = preparedMusicHapticsPreparation
         let preserveInFlightHaptics = preparedHaptics == nil
             && preparingNextHapticsCandidateIdentity == queueIdentity(prepared)
+            && preparingNextHapticsConfigurationRevision == hapticsConfigurationRevision
         preparedMusicHapticsPreparation = nil
         // gapless A→B：B 的前几个 UI tick 不得沿用 A 的真实时长。
         actualDuration = nil
@@ -4839,6 +4906,17 @@ public final class AuralisAppModel: ObservableObject {
         setCurrentTrackWithoutQueueUpdate(canonical)
         playbackPosition = 0
         playbackState = .playing
+        // A seamless boundary is also a Haptics-track transition.  Advance
+        // the sidecar revision without touching the audio generation, then
+        // derive the Toggle from B's persisted effective preference rather
+        // than from whether B's Haptics plan has finished preparing.
+        hapticsPreferenceRevision &+= 1
+        hapticsEffectiveStateTask?.cancel()
+        hapticsEffectiveStateTask = nil
+        scheduleCurrentMusicHapticsEffectiveState(
+            for: canonical,
+            revision: hapticsPreferenceRevision
+        )
         if let preparedHaptics {
             currentHapticsContext = CurrentHapticsContext(
                 trackIdentity: queueIdentity(canonical),
@@ -4847,7 +4925,9 @@ public final class AuralisAppModel: ObservableObject {
                 duration: max(prepared.duration, canonical.duration),
                 favorite: prepared.isFavorite
             )
-            currentMusicHapticsEnabled = preparedHaptics.effectiveEnabled
+            currentMusicHapticsEnabled = musicHaptics.effectiveEnabled(
+                for: preparedHaptics
+            )
             mediaIntegration.setInternationalStandardRecordingCode(preparedHaptics.identity.isrc)
             musicHaptics.activate(preparedHaptics, position: 0, rate: Double(playbackRate))
         } else {
@@ -4856,7 +4936,6 @@ public final class AuralisAppModel: ObservableObject {
             // letting haptics for A continue into B.
             musicHaptics.finishPartial(reason: .trackSwitch)
             currentHapticsContext = nil
-            currentMusicHapticsEnabled = false
         }
         loadLyricsIfNeeded(for: canonical)
         refillLargeWindowIfNeeded()
@@ -4895,6 +4974,7 @@ public final class AuralisAppModel: ObservableObject {
         let currentIdentity = queueIdentity(currentTrack)
         let preserveInFlightHaptics = preservedIdentity == currentIdentity
             && preparingNextHapticsCandidateIdentity == currentIdentity
+            && preparingNextHapticsConfigurationRevision == hapticsConfigurationRevision
             && prepareNextTask != nil
         if preserveInFlightHaptics {
             return
@@ -4904,6 +4984,7 @@ public final class AuralisAppModel: ObservableObject {
         prepareNextTask?.cancel()
         prepareNextTask = nil
         preparingNextHapticsCandidateIdentity = nil
+        preparingNextHapticsConfigurationRevision = nil
         preparingNextHapticsTaskID = nil
         if let prepared = preparedMusicHapticsPreparation {
             musicHaptics.discardPreparedAnalysis(prepared)
@@ -4974,6 +5055,7 @@ public final class AuralisAppModel: ObservableObject {
             }
 
             let hapticsConfigurationRevision = self.hapticsConfigurationRevision
+            self.preparingNextHapticsConfigurationRevision = hapticsConfigurationRevision
             let hapticsIdentity = await self.prioritizedMusicHapticsIdentity(for: candidate)
             let preparation = await self.musicHaptics.preparePlayback(
                 identity: hapticsIdentity,
@@ -5042,6 +5124,7 @@ public final class AuralisAppModel: ObservableObject {
         guard preparingNextHapticsTaskID == taskID else { return }
         preparingNextHapticsTaskID = nil
         preparingNextHapticsCandidateIdentity = nil
+        preparingNextHapticsConfigurationRevision = nil
         prepareNextTask = nil
     }
 
@@ -5081,7 +5164,7 @@ public final class AuralisAppModel: ObservableObject {
             duration: duration,
             favorite: favorite
         )
-        currentMusicHapticsEnabled = preparation.effectiveEnabled
+        currentMusicHapticsEnabled = musicHaptics.effectiveEnabled(for: preparation)
         mediaIntegration.setInternationalStandardRecordingCode(preparation.identity.isrc)
         musicHaptics.activate(
             preparation,
@@ -5433,6 +5516,7 @@ public final class AuralisAppModel: ObservableObject {
             prepareNextTask?.cancel()
             prepareNextTask = nil
             preparingNextHapticsCandidateIdentity = nil
+            preparingNextHapticsConfigurationRevision = nil
             preparingNextHapticsTaskID = nil
             playbackError = nil
             lastStopReason = .serverDisconnected
