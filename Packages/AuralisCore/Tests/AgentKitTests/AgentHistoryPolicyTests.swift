@@ -136,7 +136,7 @@ func modelHistoryHidesOpaqueAssistantTextAfterDisclosureRevocation() {
     let text = messages.map(\.content).joined()
     #expect(!text.contains("私密歌曲"))
     #expect(!text.contains("播放 37 次"))
-    #expect(text.contains("操作结果已按隐私设置隐藏"))
+    #expect(text.isEmpty)
 }
 
 @Test("连续两次继续仍回溯到最初的完整任务")

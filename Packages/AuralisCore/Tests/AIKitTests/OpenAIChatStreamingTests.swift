@@ -201,4 +201,29 @@ struct OpenAIChatStreamingTests {
         #expect(events.contains(.usage(input: 5, output: 2)))
         #expect(events.last == .completed)
     }
+
+    /// 部分 OpenAI-compatible 网关会把 Chat SSE 简化为裸 `delta` 字符串；
+    /// 兼容分支必须保留正文，而不是把它吞成 unknownDelta。
+    @Test func streamsTypelessBareDeltaAsAnswer() async throws {
+        let sse = """
+        data: {"delta":"兼容正文"}
+
+        data: [DONE]
+        """
+        ChatMockURLProtocol.reset(stubs: [
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+        ])
+        let provider = makeProvider()
+
+        var events: [AIStreamEvent] = []
+        for try await event in provider.stream(
+            AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])
+        ) {
+            events.append(event)
+        }
+
+        #expect(events.contains(.answerDelta("兼容正文")))
+        #expect(!events.contains(.unknownDelta))
+        #expect(events.last == .completed)
+    }
 }

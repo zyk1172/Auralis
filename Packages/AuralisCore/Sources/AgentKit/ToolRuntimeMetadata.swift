@@ -3,9 +3,9 @@ import Domain
 import Foundation
 import LocalCatalog
 
-/// The smallest authorization family a model request can explicitly open.
-/// This is distinct from a provider-visible namespace and from the resource
-/// lock used to serialize concurrent mutations.
+/// The smallest mutation family recorded for routing, diagnostics and
+/// telemetry. This is distinct from a provider-visible namespace and from the
+/// resource lock used to serialize concurrent mutations; it is not a grant.
 public enum MutationScope: String, Codable, Sendable, Hashable, CaseIterable {
     case playback
     case queue
@@ -26,10 +26,8 @@ public enum ToolRisk: String, Codable, Sendable, Hashable, CaseIterable {
 }
 
 /// The only policy that can put a tool into the interactive approval path.
-/// Authorization answers "may this operation run?"; this policy answers the
+/// Local reversible operations run by default; this policy answers the
 /// separate question "must a user explicitly approve it before it runs?".
-/// Ordinary mutations therefore remain `.none` even when they require an
-/// exact authorization operation.
 public enum ToolConfirmationPolicy: Codable, Sendable, Equatable, Hashable {
     case none
     case explicitUserApproval(reason: String)
@@ -113,8 +111,8 @@ public struct ToolExecutorContext: Sendable {
     public let serverID: ServerID?
     public let systemService: (any AgentSystemService)?
     public let externalMusicService: (any AgentExternalMusicService)?
-    /// The complete run-scoped disclosure policy. Mutation authorization is
-    /// deliberately kept separate and remains owned by ToolRuntime.
+    /// The complete run-scoped disclosure policy. It controls data sent to
+    /// external providers, not whether a local mutation may execute.
     public let privacyPermissions: AIPrivacyPermissions
     public let allowsMetadata: Bool
     public let allowsHistory: Bool
@@ -185,9 +183,9 @@ public struct ToolExecutorContext: Sendable {
         self.capabilityEnvironment = capabilityEnvironment
     }
 
-    /// Execute a child canonical call from a declarative tool.  The child
-    /// stays inside the same authorization, run lease and resource registry;
-    /// it cannot silently obtain a broader privilege than its parent.
+    /// Execute a child canonical call from a declarative tool. The child stays
+    /// inside the same run lease, resource registry and descriptor validation;
+    /// it does not obtain a hidden privilege grant.
     public func executeChild(_ call: ToolCall) async -> ToolResult {
         await ToolRuntime.execute(
             call,
@@ -213,6 +211,8 @@ public struct ToolExecutorContext: Sendable {
         )
     }
 
+    /// Preserve operation metadata when a declarative tool expands into
+    /// canonical children. This is for routing and diagnostics only.
     public func withAdditionalAuthorizationOperations(_ operations: Set<ToolAuthorizationOperation>) -> ToolExecutorContext {
         ToolExecutorContext(
             bridge: bridge,
@@ -381,6 +381,14 @@ extension ToolDescriptor {
             return declaredRisk
         }
         return permission == .readOnly ? .none : .reversibleMutation
+    }
+
+    /// Destructive tools always use the visible confirmation path. A custom
+    /// workflow may also opt into confirmation through its inherited policy;
+    /// neither case depends on the request classifier recognizing an exact
+    /// operation name.
+    public var requiresExplicitUserApproval: Bool {
+        permission == .destructive || confirmationPolicy.requiresExplicitUserApproval
     }
 
     public var mutationScopes: Set<MutationScope> {

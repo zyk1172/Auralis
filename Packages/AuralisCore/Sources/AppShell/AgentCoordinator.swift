@@ -1242,13 +1242,6 @@ public final class AgentCoordinator: ObservableObject {
         return operationConfirmations[runID]
     }
 
-    /// 接收 Runner 发出的消息。
-    ///
-    /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
-    /// - `.streaming` 增量 → 累加进当前 in-flight 气泡；没有气泡时先新建一条；
-    /// - 非流式消息（最终 `.text` / 工具进度 / 卡片 / 错误等）→ 若存在 in-flight
-    ///   气泡，则**原地替换**该气泡（同一位置，不另起一条），并持久化最终消息。
-    ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     /// 接收 Runner 发出的消息。消息先绑定 sessionID + runID：
     /// 1. 只有仍登记在目标 session 的 run callback 才被接受（迟到/过期 callback 一律丢弃）；
     /// 2. 持久化永远写入目标 session 的 SessionStore；
@@ -1256,7 +1249,9 @@ public final class AgentCoordinator: ObservableObject {
     ///
     /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
     /// - `.streaming` 增量 → 累加进该 run 的 in-flight 气泡（key = runID）；
-    /// - 非流式消息（最终 `.text` / 工具进度 / 卡片 / 错误等）→ 原地定型 in-flight 气泡并持久化。
+    /// - 运行状态（tool progress / action preview）只更新 transient presentation，
+    ///   不写入聊天记录；
+    /// - 非流式消息（最终 `.text` / 卡片 / 错误等）→ 原地定型 in-flight 气泡并持久化。
     ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     func receive(_ message: AgentChatMessage, sessionID: UUID, runID: UUID) async {
         // 过期 callback（旧 run 的迟到 token / 旧 run 的 final answer）→ 丢弃，不污染新运行。
@@ -1281,6 +1276,13 @@ public final class AgentCoordinator: ObservableObject {
         }
 
         updateRunPresentation(for: sanitizedMessage, sessionID: sessionID, runID: runID)
+
+        // Tool progress and previews describe work in flight. They belong in
+        // the run presentation state, not in the transcript or SessionStore.
+        // The active UI still shows the single weak running indicator.
+        if Self.isTransientActivity(sanitizedMessage) {
+            return
+        }
 
         // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
         if let delta = Self.streamingDeltaText(from: message) {
@@ -1322,19 +1324,6 @@ public final class AgentCoordinator: ObservableObject {
             messages[index] = sanitizedMessage
             await sessionStore.append(sanitizedMessage, to: sessionID)
             return
-        }
-        // Tool activity is transient run state, not a chat transcript.  Keep
-        // exactly one trailing activity row and replace it in both the live
-        // UI and persistence; a long index run no longer fills the screen
-        // with one bubble per status/next/write operation.
-        if Self.isToolProgress(message), isActiveSession,
-           let index = messages.indices.last,
-           messages[index].role == .assistant,
-           Self.isToolProgress(messages[index]) {
-            messages[index] = sanitizedMessage
-            if await sessionStore.replaceTrailingToolProgress(sanitizedMessage, in: sessionID) {
-                return
-            }
         }
         if isActiveSession {
             messages.append(sanitizedMessage)
@@ -1417,10 +1406,14 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
-    private static func isToolProgress(_ message: AgentChatMessage) -> Bool {
+    private static func isTransientActivity(_ message: AgentChatMessage) -> Bool {
         !message.messages.isEmpty && message.messages.allSatisfy { item in
-            if case .toolProgress = item { return true }
-            return false
+            switch item {
+            case .toolProgress, .actionPreview:
+                return true
+            default:
+                return false
+            }
         }
     }
 

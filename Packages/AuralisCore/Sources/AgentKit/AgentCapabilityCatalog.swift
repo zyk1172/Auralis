@@ -282,7 +282,7 @@ public enum AgentCapabilityCatalog {
             runtimeDependencies: [.catalog, .activeServer],
             executionOwner: .bridge,
             modelRole: "在复杂任务中决定队列目标（如替换为筛选结果）。",
-            runtimeRole: "ToolRuntime exact authorization + bridge 执行 + 幂等保护。",
+            runtimeRole: "ToolRuntime 参数、租约与幂等校验 + bridge 执行。",
             userFacingDescription: "修改播放队列。",
             relatedTools: ["queue_replace", "queue_append_many", "queue_clear", "queue_move", "queue_play_next_many", "queue_get"]
         ),
@@ -294,7 +294,7 @@ public enum AgentCapabilityCatalog {
             runtimeDependencies: [.catalog, .activeServer],
             executionOwner: .bridge,
             modelRole: "在复杂任务中决定歌单目标。",
-            runtimeRole: "ToolRuntime authorization + confirmation（删除）+ bridge 执行。",
+            runtimeRole: "ToolRuntime 参数校验 + 删除操作的可见确认 + bridge 执行。",
             userFacingDescription: "创建与维护歌单。",
             relatedTools: ["playlist_create", "playlist_add_songs", "playlist_rename", "playlist_remove_songs", "playlist_delete", "playlist_list"]
         ),
@@ -306,7 +306,7 @@ public enum AgentCapabilityCatalog {
             runtimeDependencies: [.activeServer],
             executionOwner: .bridge,
             modelRole: "理解播放意图（如「找 20 首跑步歌并播放」）。",
-            runtimeRole: "ToolRuntime authorization + bridge 执行。",
+            runtimeRole: "ToolRuntime 参数与租约校验 + bridge 执行。",
             userFacingDescription: "控制播放。",
             relatedTools: ["playback_play_song", "playback_pause", "playback_next", "playback_seek", "playback_set_shuffle", "playback_set_repeat", "playback_get_state"]
         ),
@@ -334,7 +334,7 @@ public enum AgentCapabilityCatalog {
             runtimeDependencies: [.activeServer],
             executionOwner: .bridge,
             modelRole: "理解服务器管理需求。",
-            runtimeRole: "ToolRuntime authorization + bridge 执行。",
+            runtimeRole: "ToolRuntime 参数、租约与风险确认 + bridge 执行。",
             userFacingDescription: "管理与同步音乐服务器。",
             relatedTools: ["server_switch", "server_remove", "addServer", "updateServer", "server_sync_start", "refreshLibrary", "server_search"]
         ),

@@ -133,6 +133,72 @@ struct SessionIsolationTests {
         #expect(coordinator.runPresentationState?.phase == .retrying(message: "正在重试当前批次…"))
     }
 
+    @Test("reasoning 与 tool progress 只存在于当前 run，收尾后不进入历史")
+    func processActivityIsTransientAndAnswerPersists() async throws {
+        let (model, coordinator) = makeCoordinator()
+        _ = model
+        let sessionID = await coordinator.newSession()
+        let runID = UUID()
+        coordinator.currentRunID = runID
+        coordinator.beginRunPresentation(runID: runID, sessionID: sessionID)
+
+        await coordinator.receive(
+            AgentChatMessage(role: .assistant, messages: [.reasoning("先核对歌曲信息")]),
+            sessionID: sessionID,
+            runID: runID
+        )
+        await coordinator.receive(
+            AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "正在查询 ListenBrainz…")]),
+            sessionID: sessionID,
+            runID: runID
+        )
+        #expect(coordinator.messages.isEmpty)
+        #expect(coordinator.runPresentationState?.reasoningText == "先核对歌曲信息")
+
+        await coordinator.receive(
+            AgentChatMessage(role: .assistant, messages: [.streaming("《路过人间》鉴赏")]),
+            sessionID: sessionID,
+            runID: runID
+        )
+        await coordinator.receive(
+            AgentChatMessage(role: .assistant, messages: [.text("《路过人间》鉴赏")]),
+            sessionID: sessionID,
+            runID: runID
+        )
+        #expect(coordinator.messages.contains { message in
+            message.messages.contains { item in
+                if case let .text(value) = item { return value == "《路过人间》鉴赏" }
+                return false
+            }
+        })
+        #expect(coordinator.messages.allSatisfy { message in
+            message.messages.allSatisfy { item in
+                switch item {
+                case .reasoning, .toolProgress, .actionPreview: return false
+                default: return true
+                }
+            }
+        })
+
+        coordinator.finishOwnedRun(runID)
+        #expect(coordinator.runPresentationState == nil)
+        await coordinator.activate(sessionID)
+        #expect(coordinator.messages.contains { message in
+            message.messages.contains { item in
+                if case let .text(value) = item { return value == "《路过人间》鉴赏" }
+                return false
+            }
+        })
+        #expect(coordinator.messages.allSatisfy { message in
+            message.messages.allSatisfy { item in
+                switch item {
+                case .reasoning, .toolProgress, .actionPreview: return false
+                default: return true
+                }
+            }
+        })
+    }
+
     @Test("旧 Run 收尾不能释放新 Run 的所有权")
     func oldRunCannotFinishNewRun() async throws {
         let (model, coordinator) = makeCoordinator()

@@ -4,8 +4,8 @@ import Foundation
 /// Generic extension point retained for trusted workflows. The Recommendation
 /// Index uses its dedicated Runtime directly; fixed multi-step mutation skills
 /// (QueueReplacePlayback / PlaylistBuild) use this adapter so their internal
-/// canonical tool calls still flow through ToolRuntime's authorization,
-/// validation, lease and confirmation path inside `runWithLLM`.
+/// canonical tool calls still flow through ToolRuntime's validation, lease and
+/// visible destructive-confirmation path inside `runWithLLM`.
 public enum AgentSkillStep: Sendable, Equatable {
     /// Skill 强制执行的 canonical tool call（跳过模型 turn，直接走 ToolRuntime）。
     case executeTool(name: String, arguments: [String: AIJSONValue])
@@ -51,11 +51,12 @@ public protocol AgentStatefulSkillRuntime: AnyObject, Sendable {
     var isCompleted: Bool { get }
     var instructions: String { get }
     var facts: [String: String] { get }
-    /// 激活该 Skill 所必需的最小授权操作（与 Skill 定义一致，供授权子集验证）。
+    /// 激活该 Skill 需要的 canonical operation 元数据，用于路由、诊断和遥测；
+    /// 不作为普通本地操作的执行白名单。
     var requiredOperations: Set<ToolAuthorizationOperation> { get }
 
     func configure(maxOutputTokens: Int)
-    /// 消费当前 run 的授权（只读验证用；Skill 不得自行扩权）。
+    /// 消费当前 run 的语义元数据（Skill 不得自行改变用户意图）。
     func configure(authorization: SideEffectAuthorizationContext)
     func nextStep() -> AgentSkillStep
     func consumeModelOutput(_ text: String, contract: AgentSkillOutputContract) -> AgentSkillModelOutput
@@ -76,7 +77,7 @@ public extension AgentStatefulSkillRuntime {
 }
 
 /// Skill Runtime 初始化所需的确定性输入。一次 turn 的 AgentRequestPlan /
-/// Authorization 在此显式传给 Skill，禁止 Skill 重新解释用户文本或自行扩权。
+/// semantics 在此显式传给 Skill，禁止 Skill 重新解释用户文本或改变用户意图。
 public struct BuiltInSkillActivationContext: Sendable {
     public let currentUserText: String
     public let semantics: AgentRequestSemantics
@@ -107,14 +108,13 @@ public protocol AgentStatefulSkill: Sendable {
     var name: String { get }
     var instructions: String { get }
     var privateToolNames: Set<String> { get }
-    /// Skill 激活所必须的最小授权操作集合。runWithLLM 激活后必须验证
-    /// requiredOperations ⊆ 当前 allowedOperations，否则不激活。
+    /// Skill 激活所需的 operation 元数据，用于路由、诊断和遥测，不是执行白名单。
     var requiredOperations: Set<ToolAuthorizationOperation> { get }
 
     func canActivate(semantics: AgentRequestSemantics, userText: String, initialTaskState: AgentTaskState?) -> Bool
     func makeRuntime(checkpointJSON: String?) -> any AgentStatefulSkillRuntime
     /// 带本轮 deterministic input 的 Runtime 构造。生产路径通过此入口把
-    /// userText / semantics / targetCount / authorization 传给 Skill；
+    /// userText / semantics / targetCount / operation metadata 传给 Skill；
     /// 旧签名保留给兼容调用方。
     func makeRuntime(checkpointJSON: String?, activation: BuiltInSkillActivationContext?) -> any AgentStatefulSkillRuntime
 }
@@ -127,8 +127,8 @@ public extension AgentStatefulSkill {
 }
 
 /// Built-in fixed skills：稳定、多步骤、mutation 顺序确定的组合任务。
-/// 激活由 `canActivate`（语义触发）+ runWithLLM 的授权子集验证（授权确认）
-/// 双重决定；Skill-owned mutation 对模型隐藏，由 Skill 内部固定调用 ToolRuntime。
+/// 激活由 `canActivate` 语义触发；Skill-owned mutation 对模型隐藏，由
+/// Skill 内部固定调用 ToolRuntime，并继续经过参数校验、租约和破坏性确认。
 public enum BuiltInStatefulSkillRegistry {
     public static let all: [any AgentStatefulSkill] = [
         BuiltInQueueReplacePlaybackSkill(),
@@ -149,7 +149,7 @@ public enum BuiltInStatefulSkillRegistry {
         )
     }
 
-    /// 生产路径：携带当前授权与用户请求中的目标数量，Skill Runtime 初始化即可
+    /// 生产路径：携带当前 operation metadata 与用户请求中的目标数量，Skill Runtime 初始化即可
     /// 拿到 playlistName / targetCount 等 deterministic parameters。
     public static func activate(
         semantics: AgentRequestSemantics,

@@ -451,10 +451,10 @@ struct OpenAIResponsesProviderTests {
         #expect(outputTextDone == .ignore)
     }
 
-    /// 无 type 字段但带 delta 的网关偏差不能猜测为用户可见正文。
-    @Test func classifiesTypelessDeltaEventAsUnknown() {
+    /// OpenAI-compatible 网关有时省略 type；裸 delta 应作为正文保留，不能静默丢弃。
+    @Test func classifiesTypelessDeltaEventAsAnswerFallback() {
         let result = OpenAICompatibleProvider.parseResponsesStreamEvent(#"{"delta":"容错"}"#)
-        #expect(result == .unknownDelta)
+        #expect(result == .answer("容错"))
     }
 }
 

@@ -984,6 +984,34 @@ private final class ReasoningThenAnswerRepairAIProvider: AIProvider, @unchecked 
     }
 }
 
+private final class LongReasoningAnswerAIProvider: AIProvider, @unchecked Sendable {
+    let answer: String
+    let reasoning: String
+
+    init(answer: String, reasoning: String) {
+        self.answer = answer
+        self.reasoning = reasoning
+    }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "long-answer", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        AICompletionResponse(model: request.model, content: answer, reasoning: reasoning)
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(model: request.model))
+            continuation.yield(.reasoningDelta(reasoning))
+            continuation.yield(.answerDelta(answer))
+            continuation.yield(.completed)
+            continuation.finish()
+        }
+    }
+}
+
 @Test("Streaming: deltas are emitted and finalized into the final text")
 func streamingEmitsDeltasAndFinalizes() async {
     let store = try! makeStore()
@@ -1043,6 +1071,60 @@ func reasoningOnlyStreamRepairsFinalAnswerWithoutMixingChannels() async {
     } else {
         Issue.record("缺少最终回答修复请求")
     }
+}
+
+@Test("Streaming: long music appreciation answer survives beside reasoning")
+func longAnswerRemainsCompleteWhenReasoningIsPresent() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let answer = """
+    ## 《路过人间》鉴赏
+    ### 【已核验事实】
+    本地曲目资料已核验。
+    ### 【模型分析】
+    """ + String(repeating: "这首歌的旋律与人声形成细腻的层次。", count: 360) + """
+    ### 【我的私人数据】
+    暂无可用的私人播放数据。
+    ### 【大众评价】
+    暂无可核验的大众评价数据。
+    """
+    let provider = LongReasoningAnswerAIProvider(
+        answer: answer,
+        reasoning: "先核对歌曲信息，再整理可展示的鉴赏内容。"
+    )
+    var initialState = AgentTaskState(intent: .musicAppreciation, goal: "鉴赏当前歌曲")
+    initialState.facts["appreciation.metadata"] = "available"
+    initialState.facts["appreciation.lyrics"] = "unavailable"
+    initialState.facts["appreciation.community"] = "unavailable"
+
+    await AgentRunner.run(
+        userText: "鉴赏当前歌曲",
+        provider: provider,
+        model: "long-answer",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: "路过人间", queueCount: 0),
+        intent: .musicAppreciation,
+        initialTaskState: initialState,
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    let emitted = await collector.all()
+        .flatMap(\.messages)
+    #expect(emitted.contains { item in
+        if case let .reasoning(value) = item {
+            return value == "先核对歌曲信息，再整理可展示的鉴赏内容。"
+        }
+        return false
+    })
+    #expect(emitted.contains { item in
+        if case let .streaming(value) = item { return value == answer }
+        return false
+    })
+    #expect(await collector.containsText(answer))
+    #expect(answer.count > 5_000)
 }
 
 @Test("Streaming: no visible model output also triggers final-answer repair")
@@ -1267,15 +1349,15 @@ func toolSelectorCoversEightRequests() {
     }
 }
 
-// MARK: - 删除服务器是可逆的本地配置清理
+// MARK: - 删除服务器是高影响的本地配置清理
 
-@Test("Delete server executes without an invented confirmation")
-func deleteServerExecutesWithoutInventedConfirmation() async throws {
+@Test("Delete server requires visible confirmation")
+func deleteServerRequiresVisibleConfirmation() async throws {
     let store = try makeStore()
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
     let provider = ScriptedAIProvider(actionBatches: ["ACTION: {\"tool\":\"removeServer\",\"args\":{\"serverID\":\"srv-x\"}}"])
-    let probe = ConfirmationProbe(policy: false)
+    let probe = ConfirmationProbe(policy: true)
     await AgentRunner.run(
         userText: "删除服务器",
         provider: provider,
@@ -1287,10 +1369,10 @@ func deleteServerExecutesWithoutInventedConfirmation() async throws {
         emit: { await collector.record($0) },
         log: { _ in }
     )
-    // 服务器删除只清理本地配置，属于可逆 mutation；不应引入第二套
-    // 自然语言确认协议。真正不可逆的工具仍由 Runtime confirmation gate 保护。
+    // 删除服务器会移除一整套连接配置，属于高影响本地变更；确认由
+    // ToolLoop 的可见 confirmation policy 触发，避免内部授权文案泄漏给用户。
     #expect(await bridge.removedServers.contains(ServerID(rawValue: "srv-x")))
-    #expect(await probe.calls == 0)
+    #expect(await probe.calls == 1)
 }
 
 

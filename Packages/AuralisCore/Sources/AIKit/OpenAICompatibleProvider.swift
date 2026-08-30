@@ -678,7 +678,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 continuation.finish()
                                 return
                             }
-                            for event in Self.streamEvents(from: message.data) {
+                            for event in Self.streamEvents(
+                                from: message.data,
+                                toolCallArgumentsInFlight: !toolCallFragments.isEmpty
+                            ) {
                                 continuation.yield(event)
                             }
                             if let usage = Self.streamUsage(from: message.data) {
@@ -716,7 +719,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.finish()
                             return
                         }
-                        for event in Self.streamEvents(from: message.data) {
+                        for event in Self.streamEvents(
+                            from: message.data,
+                            toolCallArgumentsInFlight: !toolCallFragments.isEmpty
+                        ) {
                             continuation.yield(event)
                         }
                         if let usage = Self.streamUsage(from: message.data) {
@@ -820,7 +826,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 continuation.yield(.toolCall(toolCall))
                                 continue
                             }
-                            let parsed = Self.parseResponsesStreamEvent(message.data)
+                            let parsed = Self.parseResponsesStreamEvent(
+                                message.data,
+                                allowTypelessAnswer: responseToolCallFragments.isEmpty
+                            )
                             switch parsed {
                             case let .reasoning(text):
                                 continuation.yield(.reasoningDelta(text))
@@ -867,7 +876,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.yield(.toolCall(toolCall))
                             continue
                         }
-                        let parsed = Self.parseResponsesStreamEvent(message.data)
+                        let parsed = Self.parseResponsesStreamEvent(
+                            message.data,
+                            allowTypelessAnswer: responseToolCallFragments.isEmpty
+                        )
                         switch parsed {
                         case let .reasoning(text):
                             continuation.yield(.reasoningDelta(text))
@@ -1653,7 +1665,11 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// `content` 缺失或为 null 时返回空字符串而非报错（例如仅返回 tool_calls 的响应）。
     static func extractContent(from object: [String: Any]) -> String? {
         guard let choices = object["choices"] as? [[String: Any]], let first = choices.first else {
-            return nil
+            // A few OpenAI-compatible gateways return a minimal
+            // {"delta":"text"} object even for a non-stream request.
+            // Preserve it as answer text instead of reporting a successful
+            // empty response.
+            return plainText(from: object["delta"])
         }
         if let message = first["message"] as? [String: Any] {
             // `content` is the final answer. Thinking is extracted through a
@@ -1784,8 +1800,8 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// Responses SSE 单事件解析结果。与现有 stream 事件模型对齐：
     /// `.reasoning` / `.answer` map to their explicit stream channels;
-    /// `.unknownDelta` remains non-displayable. Tool calls and completion stay
-    /// provider-neutral.
+    /// `.unknownDelta` remains reserved for truly unsupported events. Tool
+    /// calls and completion stay provider-neutral.
     /// `.failed` → 上抛错误、`.ignore` → 跳过。
     enum ResponsesStreamParseResult: Equatable, Sendable {
         case reasoning(String)
@@ -2044,9 +2060,12 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// 解析一条 Responses SSE 事件（`data: {"type":...}`）。
-    /// 覆盖已知正文、思考、工具与终结事件。没有 type 的 `delta` 无法安全
-    /// 判断语义，必须保持为 unknown，而不能默认混进用户正文。
-    static func parseResponsesStreamEvent(_ data: String) -> ResponsesStreamParseResult {
+    /// 覆盖已知正文、思考、工具与终结事件。兼容网关发出的无 type 裸
+    /// `delta` 在没有工具参数事件上下文时按正文处理，避免静默丢字。
+    static func parseResponsesStreamEvent(
+        _ data: String,
+        allowTypelessAnswer: Bool = true
+    ) -> ResponsesStreamParseResult {
         guard let payload = data.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
         else { return .ignore }
@@ -2098,9 +2117,15 @@ public struct OpenAICompatibleProvider: AIProvider {
             //   同样不是用户正文（正文已由 output_text.delta 增量覆盖）。
             return .ignore
         default:
-            // A type-less gateway delta might be output, reasoning, or tool
-            // arguments. Preserve that ambiguity rather than displaying it.
-            if let delta = object["delta"] as? String, !delta.isEmpty { return .unknownDelta }
+            // A type-less gateway delta is the common OpenAI-compatible
+            // output shape. Typed function-call argument events are handled
+            // by the response.* branch above, so this fallback can preserve
+            // the text instead of silently dropping it.
+            if allowTypelessAnswer,
+               let delta = object["delta"] as? String,
+               !delta.isEmpty {
+                return .answer(delta)
+            }
             return .ignore
         }
     }
@@ -2251,25 +2276,36 @@ public struct OpenAICompatibleProvider: AIProvider {
         }
     }
 
-    /// Projects only explicitly named Chat Completions channels. Some
+    /// Projects explicitly named Chat Completions channels. Some
     /// OpenAI-compatible gateways place reasoning in `reasoning_content`,
     /// others use `reasoning` or `thinking`; all remain distinct from content.
-    private nonisolated static func streamEvents(from data: String) -> [AIStreamEvent] {
+    /// For a minimal typeless {"delta":"..."} gateway event, preserve the
+    /// text as an answer unless it is visibly a tool-call fragment.
+    private nonisolated static func streamEvents(
+        from data: String,
+        toolCallArgumentsInFlight: Bool = false
+    ) -> [AIStreamEvent] {
         guard let payload = data.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              let choices = object["choices"] as? [[String: Any]],
-              let delta = choices.first?["delta"] as? [String: Any]
-        else {
-            return []
-        }
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        else { return [] }
         var events: [AIStreamEvent] = []
-        for key in ["reasoning_content", "reasoning", "thinking"] {
-            if let reasoning = plainText(from: delta[key]), !reasoning.isEmpty {
-                events.append(.reasoningDelta(reasoning))
+        if let choices = object["choices"] as? [[String: Any]],
+           let delta = choices.first?["delta"] as? [String: Any] {
+            for key in ["reasoning_content", "reasoning", "thinking"] {
+                if let reasoning = plainText(from: delta[key]), !reasoning.isEmpty {
+                    events.append(.reasoningDelta(reasoning))
+                }
+            }
+            if let answer = plainText(from: delta["content"]), !answer.isEmpty {
+                events.append(.answerDelta(answer))
             }
         }
-        if let answer = plainText(from: delta["content"]), !answer.isEmpty {
-            events.append(.answerDelta(answer))
+        if events.isEmpty,
+           !toolCallArgumentsInFlight,
+           Self.streamToolCallFragments(from: data).isEmpty,
+           let bareDelta = plainText(from: object["delta"]),
+           !bareDelta.isEmpty {
+            events.append(.answerDelta(bareDelta))
         }
         return events
     }

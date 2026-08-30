@@ -100,7 +100,7 @@ public enum SystemPromptBuilder {
 
         ## 当前轮可直接调用工具
         上面的目录说明 Auralis 存在的能力；它不是本轮完整 JSON Schema。下面才是 Runtime 已装载、可直接调用的工具。
-        若需要目录中尚未装载的只读能力，先调用 tool_search；Runtime 会在下一轮加入匹配工具的完整 schema。修改型工具即使目录可见，也只有当前请求获精确授权时才会装载和执行。
+        若需要目录中尚未装载的能力，先调用 tool_search；Runtime 会在下一轮加入匹配工具的完整 schema。普通可逆工具可以直接执行；破坏性工具会在执行前请求用户确认。
         \(capabilities)
 
         \(compositions)
@@ -117,7 +117,7 @@ public enum SystemPromptBuilder {
         LocalCatalog、AgentBridge、Server API、Trusted Runtime 或可核验的外部证据。
 
         ## 执行边界
-        模型负责理解、推理、规划、分类、解释；Runtime 负责验证、授权、执行、持久化与最终
+        模型负责理解、推理、规划、分类、解释；Runtime 负责验证、风险确认、执行、持久化与最终
         成功判定。模型说"已完成"不能替代 Runtime 的成功证据。
 
         ## Provider 可用性

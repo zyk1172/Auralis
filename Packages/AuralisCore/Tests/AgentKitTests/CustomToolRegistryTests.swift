@@ -72,8 +72,8 @@ struct CustomToolRegistryTests {
         #expect(descriptor.derivedAuthorizationOperations == [.playlistDelete])
     }
 
-    @Test("Custom Tool authorization is operation-level, not scope-level")
-    func customToolDoesNotExpandPlaylistAddIntoRename() async throws {
+    @Test("Custom Tool keeps operation metadata without blocking local execution")
+    func customToolRetainsOperationMetadataWithoutExecutionWhitelist() async throws {
         let registry = makeRegistry()
         let manifest = CustomToolManifest(
             name: "添加并改名歌单",
@@ -88,7 +88,8 @@ struct CustomToolRegistryTests {
         #expect(descriptor.derivedAuthorizationOperations == [.playlistAdd, .playlistRename])
 
         let addOnly = SideEffectAuthorizationContext(originalUserRequest: "把歌曲加入歌单")
-        #expect(!addOnly.allows(descriptor))
+        #expect(addOnly.allows(descriptor))
+        #expect(addOnly.allowedOperations == [.playlistAdd])
 
         let both = SideEffectAuthorizationContext(originalUserRequest: "把歌曲加入歌单并重命名歌单")
         #expect(both.allows(descriptor))

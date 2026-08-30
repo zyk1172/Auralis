@@ -1058,8 +1058,10 @@ public enum AIStreamEvent: Equatable, Sendable {
     case reasoningDelta(String)
     /// Provider has explicitly classified this token as final user-facing text.
     case answerDelta(String)
-    /// A gateway sent a delta without an authoritative semantic channel. Do
-    /// not default it to final text: ambiguous content must not cross channels.
+    /// A gateway sent a delta that the provider could not classify. Providers
+    /// should use the compatibility answer fallback whenever the wire shape
+    /// is a normal Chat/Responses text delta; this case is reserved for truly
+    /// unsupported events and remains non-displayable.
     case unknownDelta
     /// 流式过程中完成的原生工具调用（来自 Responses API 的
     /// `response.output_item.done` / Chat 的 `delta.tool_calls`）。

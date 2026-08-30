@@ -130,13 +130,7 @@ public enum AgentHistoryPolicy {
                     content += permissions.allowsMetadata
                         ? "（歌单提案「\(name)」，\(tracks.count) 首）\n"
                         : "（歌单提案已按隐私设置隐藏）\n"
-                case let .actionPreview(title, detail):
-                    guard permissions.allowsMetadata else {
-                        content += "（操作结果已按隐私设置隐藏）\n"
-                        continue
-                    }
-                    content += "（操作预览：\(title)；\(detail)）\n"
-                case .toolProgress, .error, .confirmation, .streaming, .reasoning:
+                case .actionPreview, .toolProgress, .error, .confirmation, .streaming, .reasoning:
                     // 这些是 UI/runtime 轨迹，不是对话事实。重新送入模型会把旧错误、
                     // 已结束的确认和半成品当作当前指令，尤其容易污染“继续”任务。
                     continue

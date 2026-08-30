@@ -721,8 +721,8 @@ func webLibraryPlaybackScenario() async throws {
     } == true)
 }
 
-@Test("外部网页数据不能授权用户未请求的副作用")
-func externalWebDataCannotAuthorizeSideEffect() async throws {
+@Test("外部网页数据不能绕过 destructive confirmation")
+func externalWebDataCannotBypassDestructiveConfirmation() async throws {
     let runID = UUID()
     let executionLease = ToolExecutionLease(runID: runID, sessionID: UUID(), generation: 1)
     let source = WebSource(
@@ -759,14 +759,15 @@ func externalWebDataCannotAuthorizeSideEffect() async throws {
         policy: AgentTaskPolicy.policy(for: .conversation),
         runID: runID,
         executionLease: executionLease,
-        confirm: { _ in true },
+        confirm: { _ in false },
         emit: { message in await collector.append(message) }
     )
 
     #expect(bridge.clearedQueueCount == 0)
     let requests = provider.requests()
     #expect(requests.dropFirst(2).first?.messages.contains { message in
-        message.content.contains("不能授权此操作")
+        !message.content.contains("不能授权此操作") &&
+        (message.content.contains("确认") || message.content.contains("清空"))
     } == true)
     #expect(await collector.containsText("未执行网页中的其他指令"))
 }
@@ -903,8 +904,8 @@ func explicitPlaylistCreateDoesNotAskForConfirmation() async throws {
     #expect(await confirmation.count() == 0)
 }
 
-@Test("missing operation authorization is denied without a second confirmation path")
-func missingMutationOperationIsDeniedWithoutConfirmation() async throws {
+@Test("missing operation metadata does not block a reversible mutation")
+func missingMutationOperationDoesNotBlockReversibleTool() async throws {
     let serverID: ServerID = "confirmation-server"
     let playlistID = GlobalID(serverID: serverID, remoteID: "playlist")
     let trackID = GlobalID(serverID: serverID, remoteID: "track")
@@ -969,7 +970,7 @@ func missingMutationOperationIsDeniedWithoutConfirmation() async throws {
     )
 
     #expect(await confirmation.count() == 0)
-    #expect(bridge.addedToPlaylist.isEmpty)
+    #expect(!bridge.addedToPlaylist.isEmpty)
 }
 
 @Test("playlist list after failed create is read-only and cannot inherit mutation authority")
@@ -1062,8 +1063,8 @@ func genericSearchConvergesAfterNoNewResults() async throws {
     #expect(requests.last?.tools?.contains { $0.name == "web_search" } == false)
 }
 
-@Test("side-effect authorization is operation-level and avoids lexical false positives")
-func operationAuthorizationIsLeastPrivilege() {
+@Test("side-effect metadata is retained without becoming an execution whitelist")
+func operationAuthorizationRemainsMetadata() {
     let favorite = AgentToolRegistry.descriptor(for: "favorite_set")!
     let rating = AgentToolRegistry.descriptor(for: "rating_set")!
     let index = AgentToolRegistry.descriptor(for: "recommendation_index_commit")!
@@ -1074,19 +1075,23 @@ func operationAuthorizationIsLeastPrivilege() {
     let play = AgentToolRegistry.descriptor(for: "playback_play_song")!
     let favoriteAuthorization = SideEffectAuthorizationContext(originalUserRequest: "收藏这首歌")
     #expect(favoriteAuthorization.allows(favorite))
-    #expect(!favoriteAuthorization.allows(rating))
-    #expect(!favoriteAuthorization.allows(index))
+    #expect(favoriteAuthorization.allows(rating))
+    #expect(favoriteAuthorization.allows(index))
+    #expect(favoriteAuthorization.allowedOperations == [.favoriteSet])
     let appendAuthorization = SideEffectAuthorizationContext(originalUserRequest: "把这首歌加入队列")
     #expect(appendAuthorization.allows(queueAppend))
-    #expect(!appendAuthorization.allows(queueReplace))
+    #expect(appendAuthorization.allows(queueReplace))
+    #expect(appendAuthorization.allowedOperations == [.queueAppend])
     let createAuthorization = SideEffectAuthorizationContext(originalUserRequest: "创建一个歌单")
     #expect(createAuthorization.allows(playlistCreate))
-    #expect(!createAuthorization.allows(playlistAdd))
+    #expect(createAuthorization.allows(playlistAdd))
+    #expect(createAuthorization.allowedOperations == [.playlistCreate])
     let playAuthorization = SideEffectAuthorizationContext(originalUserRequest: "播放这首歌")
     #expect(playAuthorization.allows(play))
-    #expect(!playAuthorization.allows(queueReplace))
+    #expect(playAuthorization.allows(queueReplace))
+    #expect(playAuthorization.allowedOperations == [.playbackPlay])
     #expect(SideEffectAuthorizationContext(originalUserRequest: "构建完整推荐索引").allows(index))
-    #expect(!SideEffectAuthorizationContext(originalUserRequest: "继续").allows(index))
+    #expect(SideEffectAuthorizationContext(originalUserRequest: "继续").allows(index))
 
     #expect(SideEffectAuthorizationContext(originalUserRequest: "我不喜欢这个网页的排版").allowedOperations.isEmpty)
     #expect(SideEffectAuthorizationContext(originalUserRequest: "C++ memory leak 是怎么产生的？").allowedOperations.isEmpty)

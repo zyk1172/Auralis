@@ -676,8 +676,9 @@ func v2FavoriteAndRatingPrivacyGate() async throws {
     #expect(trustedMutation.success)
     #expect(await trustedBridge.likedTracks.contains(GlobalID(serverID: serverID, remoteID: "private-track")))
 
-    // The canonical Runtime boundary still requires exact mutation
-    // authorization; the disclosure switch is not that authorization.
+    // The canonical Runtime boundary must not require a second exact-operation
+    // grant for an ordinary reversible local mutation. Disclosure controls
+    // what is sent to a provider, not whether the local executor can run.
     let mutationCall = ToolCall(
         name: "favorite_set",
         arguments: ["targetType": "song", "targetID": "s:private-track", "value": "true"]
@@ -691,7 +692,7 @@ func v2FavoriteAndRatingPrivacyGate() async throws {
         privacyPermissions: AIPrivacyPermissions(),
         executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 1)
     )
-    #expect(!missingAuthorization.success)
+    #expect(missingAuthorization.success)
 
     let authorizedBridge = MockAgentBridge(activeServerID: serverID)
     let authorization = SideEffectAuthorizationContext(originalUserRequest: "收藏这首歌")
@@ -906,7 +907,7 @@ func v2Diagnostics() async throws {
 
 @Suite("队列 v2 工具")
 struct QueueV2Tests {
-    @Test("queue_replace / queue_clear 均直接执行（无确认要求）")
+    @Test("queue_replace 直接执行，queue_clear 由高风险策略标记确认")
     func confirmationAndExecution() async throws {
         let store = try makeV2Store()
         let tracks = [
@@ -916,10 +917,12 @@ struct QueueV2Tests {
         try await seedV2(store, tracks)
         let bridge = MockAgentBridge(activeServerID: "s")
 
-        // permissive direct execution：队列工具不再要求确认，且被视为可逆操作。
+        // 普通队列变更可直接执行；清空整个队列属于高影响操作，由
+        // ToolLoop 在进入执行前展示确认。底层 registry 执行器本身只负责
+        // 执行已经通过上层确认的调用。
         #expect(AgentToolRegistry.descriptor(for: "queue_replace")?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
-        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
-        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.permission == .reversible)
+        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.confirmationPolicy.requiresExplicitUserApproval == true)
+        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.permission == .destructive)
 
         let clear = await AgentToolkit.executeV2(
             ToolCall(name: "queue_clear", arguments: [:]),

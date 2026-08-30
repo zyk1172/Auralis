@@ -395,8 +395,7 @@ struct AgentToolOrchestrationRegressionTests {
     func mutationExposureMatchesAuthorizationPlan() {
         let plan = AgentRequestPlan.build(
             userText: "列出十首周杰伦的歌曲，替换到队列播放",
-            history: [],
-            failClosedAuthorization: false
+            history: []
         )
         #expect(plan.allowedOperations == [.queueReplace, .playbackPlay])
         let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
@@ -409,8 +408,8 @@ struct AgentToolOrchestrationRegressionTests {
         #expect(!names.contains("server_remove"))
     }
 
-    @Test("C4 暂停播放只暴露 playback 族内获准操作，不暴露 next/previous/seek/shuffle/repeat")
-    func pauseExposesOnlyPauseMutation() {
+    @Test("C4 暂停播放只保留相关 playback schema，执行层不靠 exact operation gate")
+    func pauseExposesRelevantPlaybackMutation() {
         let plan = AgentRequestPlan.build(userText: "暂停播放", history: [])
         #expect(plan.allowedOperations == [.playbackPause])
         let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
@@ -421,6 +420,8 @@ struct AgentToolOrchestrationRegressionTests {
         #expect(!mutations.contains("playback_set_shuffle"), "不应暴露随机，实际：\(mutations)")
         #expect(!mutations.contains("playback_set_repeat"), "不应暴露循环，实际：\(mutations)")
         #expect(mutations.contains("playback_pause"), "应暴露 playback_pause")
+        #expect(!mutations.contains("playlist_delete"))
+        #expect(!mutations.contains("server_remove"))
     }
 
     @Test("C5 端到端：搜索→提交候选→Skill 替换队列→播放，无确认、无 queue_clear")
@@ -606,16 +607,17 @@ struct AgentToolOrchestrationRegressionTests {
         }
     }
 
-    @Test("I2 tool_search 未授权 mutation 标记 authorized=false")
-    func toolSearchMarksUnauthorizedMutations() {
+    @Test("I2 tool_search 保留风险元数据但不标记普通 mutation 未授权")
+    func toolSearchDoesNotMarkReversibleMutationsUnauthorized() {
         let catalog = ToolCatalog(descriptors: AgentToolRegistry.all)
         let entries = catalog.search(
             query: "替换队列",
             authorizedOperations: [.playbackPlay]
         )
-        #expect(entries.contains { $0.name == "queue_replace" && $0.authorized == false })
+        #expect(entries.contains { $0.name == "queue_replace" && $0.authorized == nil })
         let readEntry = entries.first { $0.name == "queue_get" }
-        #expect(readEntry?.authorized == true)
+        #expect(readEntry?.authorized == nil)
+        #expect(entries.allSatisfy { !$0.summary.contains("未授权") })
     }
 
     // MARK: - 场景 J：tool_search 收敛

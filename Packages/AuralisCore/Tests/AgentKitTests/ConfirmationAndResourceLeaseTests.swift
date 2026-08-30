@@ -65,19 +65,20 @@ func playlistListIsCanonicalAndReadOnly() {
     #expect(AgentToolRegistry.all.first(where: { $0.name == "listPlaylists" })?.visibility == .legacyOnly)
 }
 
-@Test("Only irreversible deletion descriptors require confirmation")
-func confirmationIsLimitedToIrreversibleDeletion() {
+@Test("Only high-impact mutations require visible confirmation")
+func confirmationIsLimitedToHighImpactMutations() {
     for name in [
         "music_download_history_remove",
-        "music_download_history_clean",
-        "server_remove",
-        "queue_clear",
         "playlist_add_songs",
         "playlist_remove_songs",
+        "memory_delete",
     ] {
         #expect(AgentToolRegistry.descriptor(for: name)?.confirmationPolicy == Optional(ToolConfirmationPolicy.none), "\(name) should not require confirmation")
     }
-    for name in ["playlist_delete", "memory_delete", "memory_clear", "skill_delete"] {
+    for name in [
+        "music_download_history_clean", "server_remove", "queue_clear",
+        "playlist_delete", "memory_clear", "skill_delete", "tool_builder_delete",
+    ] {
         let descriptor = AgentToolRegistry.descriptor(for: name)
         #expect(descriptor?.permission == .destructive, "\(name) should be destructive")
         #expect(descriptor?.confirmationPolicy.requiresExplicitUserApproval == true, "\(name) should require confirmation")

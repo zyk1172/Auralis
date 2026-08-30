@@ -17,9 +17,9 @@ public enum AgentMessage: Sendable {
     case webSources([WebSource])
     /// 歌单提案（一组曲目 + 命名建议）。
     case playlistProposal(name: String, tracks: [TrackCard])
-    /// 即将执行的操作预览（修改型操作在执行前展示）。
+    /// 即将执行的操作预览（仅当前 run 瞬态展示，不进入聊天历史）。
     case actionPreview(title: String, detail: String)
-    /// 工具执行进度（透明展示规划过程）。
+    /// 工具执行进度（仅当前 run 瞬态展示，不进入聊天历史）。
     case toolProgress(step: String)
     /// 流式输出中的 assistant 文本增量：同一流式气泡按先后顺序累加，
     /// 由 AgentCoordinator 合并到「最后一条 in-flight 流式消息」，直到被

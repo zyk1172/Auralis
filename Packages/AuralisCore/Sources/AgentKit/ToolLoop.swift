@@ -253,7 +253,7 @@ public struct ToolLoop {
         ))
 
         // 一次 turn 只生成一份共享请求计划：semantics / intent / policy /
-        // authorization 全部来自同一个分析结果，禁止各层重新解释用户文本。
+        // operation metadata 全部来自同一个分析结果，禁止各层重新解释用户文本。
         // ConversationEngine 等上层可传入已构建的 plan，避免重复分析。
         let plan = requestPlan ?? AgentRequestPlan.build(
             userText: userText,
@@ -262,22 +262,25 @@ public struct ToolLoop {
             explicitPolicy: policy,
             authorizationContext: authorizationContext,
             executionLineage: executionLineage,
-            initialTaskState: initialTaskState,
-            failClosedAuthorization: executionLineage == nil && authorizationContext == nil
+            initialTaskState: initialTaskState
         )
         let requestSemantics = plan.semantics
         let resolvedIntent = plan.intent
         let resolvedPolicy = plan.policy
-        // ConversationEngine/AgentCoordinator select this at the task
-        // boundary. A direct low-level caller that omits it is fail-closed;
-        // the ToolLoop must never turn its current text into consent.
+        // ConversationEngine/AgentCoordinator may supply a run-owned lease so
+        // cancellation and stale callbacks can revoke a mutation. A direct
+        // compatibility caller gets a fresh local lease; this is lifecycle
+        // ownership, not a semantic permission grant.
         let resolvedAuthorization = plan.authorization
-        // Only AgentCoordinator can grant a live mutation capability. Direct
-        // compatibility callers remain able to use read-only tools but fail
-        // closed for every side effect.
         let resolvedExecutionLease: ToolExecutionLease
         if let executionLease, executionLease.runID == runID {
             resolvedExecutionLease = executionLease
+        } else if executionLease == nil {
+            resolvedExecutionLease = ToolExecutionLease(
+                runID: runID,
+                sessionID: executionLineage?.taskID ?? runID,
+                generation: 0
+            )
         } else {
             resolvedExecutionLease = .revoked(runID: runID)
         }
@@ -858,7 +861,7 @@ public struct ToolLoop {
                     else { return false }
                     return descriptor.permission == .readOnly
                         && descriptor.parallelSafe
-                        && !descriptor.confirmationPolicy.requiresExplicitUserApproval
+                        && !descriptor.requiresExplicitUserApproval
                 }
             if parallelEligible {
                 let executorContext = ToolExecutorContext(
@@ -976,22 +979,8 @@ public struct ToolLoop {
                 let executableCall = call.usesTextProtocol
                     ? structuredToolCall(name: call.name, legacyArguments: call.stringArguments)
                     : ToolCall(name: call.name, arguments: call.arguments)
-                switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
-                case .allowed:
-                    convergence.recordAuthorizationAllowance()
-                    break
-                case let .denied(reason):
-                    convergence.recordAuthorizationDenial()
-                    let text = "（工具执行结果）\(call.name)：失败 - \(reason)"
-                    resultMessages.append(toolResultMessage(callID: call.id, content: text, native: nativeMode))
-                    if let stopReason = convergence.stopReason(under: convergencePolicy) {
-                        await emit(AgentChatMessage(role: .assistant, messages: [.error(stopReason.userMessage)]))
-                        return
-                    }
-                    continue
-                }
 
-                if descriptor.confirmationPolicy.requiresExplicitUserApproval {
+                if descriptor.requiresExplicitUserApproval {
                     let pending = await Self.pendingConfirmation(
                         catalog: catalog,
                         descriptor: descriptor,
@@ -1255,7 +1244,7 @@ public struct ToolLoop {
     ) async {
         // 动态工具加载：只向模型暴露与本次意图相关的工具，降低 schema 对上下文的占用。
         // 每轮使用同一份共享 AgentRequestPlan（不允许 ToolSelector 重新分析用户文本），
-        // 任务中途的新工具需求通过 tool_search（授权过滤）与已执行工具补入。
+        // 任务中途的新工具需求通过 tool_search（相关性过滤）与已执行工具补入。
         var availableToolDescriptors = initialAvailableToolDescriptors
         // The initial selector already consumed this exact snapshot. A reload
         // is only meaningful after a later registry revision changes.
@@ -1292,13 +1281,10 @@ public struct ToolLoop {
                 allowedOperations: effectiveAuthorization.allowedOperations,
                 inferredTargetCount: inferredTargetCount
             )
-            // Skill 授权子集验证：Skill 只能消费用户原始请求已经明确授权的 operation。
-            // requiredOperations ⊄ allowedOperations → 不激活（Skill 自己不能扩权），
-            // 走普通 loop；Runtime 仍会对任何 mutation 做 exact authorization。
-            if let skill = activeSkill,
-               !skill.requiredOperations.isSubset(of: effectiveAuthorization.allowedOperations) {
-                activeSkill = nil
-            }
+            // Skill activation is semantic routing, not a second operation
+            // whitelist. Its concrete local mutations still pass through the
+            // normal argument validation, lease and destructive confirmation
+            // paths when executed.
         }
         let activeSkillID = activeSkill?.skillID
         activeSkill?.configure(maxOutputTokens: provider.capabilities.maxOutputTokens)
@@ -1310,7 +1296,7 @@ public struct ToolLoop {
             activeSkillID: activeSkillID
         )
         // Skill 激活后：模型面只保留只读工具（read/search/recommend/select +
-        // result_present_tracks + tool_search）。所有 mutation——包括授权操作对应的
+        // result_present_tracks + tool_search）。所有 mutation——包括该流程涉及的
         // 其它同族工具（playback_play_artist/album/playlist/random 等）——都从模型
         // schema 隐藏，由 Skill 内部 forced call 固定调用 ToolRuntime。
         if let activeSkill {
@@ -2215,32 +2201,8 @@ public struct ToolLoop {
                     ? structuredToolCall(name: call.name, legacyArguments: stringArguments)
                     : ToolCall(name: call.name, arguments: call.arguments)
                 let signature = Self.confirmationSignature(name: call.name, args: stringArguments)
-                switch effectiveAuthorization.decision(for: descriptor, call: executableCall) {
-                case .allowed:
-                    convergence.recordAuthorizationAllowance()
-                    diagnostics.recordAuthorization("allowed:\(call.name)")
-                    break
-                case let .denied(reason):
-                    let failureText = "（工具执行结果）\(call.name): 执行失败 - \(reason)"
-                    taskState.errors.append(failureText)
-                    convergence.recordAuthorizationDenial()
-                    diagnostics.recordAuthorization("denied:\(call.name)")
-                    diagnostics.recordFailure(code: "mutation_authorization_denied")
-                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "副作用授权拒绝", reused: false))
-                    toolMessages.append(Self.toolResultMessage(callID: call.id, content: failureText, native: nativeMode))
-                    if let stopReason = convergence.stopReason(under: policy.convergence, tolerateSearchExhaustion: plan.semantics.isMusicAppreciation) {
-                        let message = stopReason.userMessage
-                        taskState.status = .insufficient
-                        taskState.errorState = message
-                        taskState.updatedAt = .now
-                        await state(taskState)
-                        await emit(AgentChatMessage(role: .assistant, messages: [.error(message)]))
-                        return
-                    }
-                    continue
-                }
 
-                if descriptor.confirmationPolicy.requiresExplicitUserApproval {
+                if descriptor.requiresExplicitUserApproval {
                     let pending = await Self.pendingConfirmation(
                         catalog: catalog,
                         descriptor: descriptor,
@@ -2381,8 +2343,7 @@ public struct ToolLoop {
                    descriptor.permission != .readOnly,
                    Self.shouldFinalizeAfterMutation(
                        policy: policy,
-                       state: taskState,
-                       authorization: effectiveAuthorization
+                       state: taskState
                    ) {
                     pendingMutationFinalization = true
                 }
@@ -2402,8 +2363,8 @@ public struct ToolLoop {
                     )
                     let addedDiscoveredTool = !discoveredEntries.isEmpty
                     diagnostics.recordToolSearch(query: query, returned: discoveredEntries.map(\.name))
-                    // 结果携带 authorized 标记：未授权的 mutation 明确标注，
-                    // 不诱导模型把它当作当前可执行能力。
+        // 搜索结果只携带能力和风险元数据；普通本地 mutation 不因
+        // 语义分析遗漏而被标成不可执行。
                     if nativeMode, addedDiscoveredTool {
                         toolDefinitions = ToolSelector.toolDefinitions(
                             from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
@@ -2563,7 +2524,7 @@ public struct ToolLoop {
             }
 
             if pendingMutationFinalization, duplicateMutationFinalization {
-                // A successful, authorized mutation already satisfies the
+                // A successful mutation already satisfies the
                 // current request and the provider has planned the exact same
                 // call again. The working-set idempotence guard still protects
                 // the duplicate call; do not expose that recovery detail as a
@@ -2804,8 +2765,7 @@ public struct ToolLoop {
 
     private static func shouldFinalizeAfterMutation(
         policy: AgentTaskPolicy,
-        state: AgentTaskState,
-        authorization: SideEffectAuthorizationContext
+        state: AgentTaskState
     ) -> Bool {
         guard AgentCompletionEvaluator.factsSatisfied(state: state, policy: policy) else { return false }
         guard policy.completion == .queueMutation
@@ -2813,19 +2773,11 @@ public struct ToolLoop {
             || policy.completion == .playbackMutation
         else { return false }
 
-        // Authorization is the complete semantic contract for the current
-        // request. Do not narrow it back to the classifier's first domain:
-        // “replace the queue and play it” authorizes both queueReplace and
-        // playbackPlay, so the queue mutation must not finalize the run early.
-        let requested = authorization.allowedOperations
-
-        let successful = Set(state.successfulToolNames.compactMap {
-            AgentToolRegistry.descriptor(for: $0)?.authorizationOperation
-        })
-        // A descriptor's operation is the final source of truth. The explicit
-        // request set may be empty in compatibility tests; in that case the
-        // already-established completion fact is sufficient.
-        return requested.isEmpty || requested.isSubset(of: successful)
+        // Completion is a fact check, not an authorization check. The model's
+        // wording may miss a synonym even though the requested local action
+        // has completed successfully; requiring an exact operation here would
+        // recreate the same deadlock after Runtime execution.
+        return true
     }
 
     private static func markWorkflowCompleted(state: inout AgentTaskState) {
@@ -2863,12 +2815,12 @@ public struct ToolLoop {
     /// tool_search 结果 → 当前 schema 的扩展（Generic Chat 与 Task Loop 共用，
     /// 避免两套能力扩展行为分叉）。
     ///
-    /// 授权边界：mutation 只能以「获准的 canonical operation」进入 schema；
-    /// 未授权 mutation 不会作为“当前可执行能力”暴露，避免诱导模型反复尝试后
-    /// 被 Runtime 拒绝。只读工具不受限（ToolRuntime 仍是最终执行边界）。
+    /// Schema discovery is relevance-only. Mutation tools remain available;
+    /// ordinary reversible calls execute directly and destructive calls use
+    /// their visible confirmation policy.
     /// Skill 激活时，Skill-owned mutation（excludedNames）也不进入 schema——
     /// 主路径由 Skill 内部固定调用。
-    /// 返回完整搜索结果（含 authorized 标记），调用方可以附加提示文本。
+    /// 返回完整搜索结果（含能力/风险元数据），调用方可以附加提示文本。
     @discardableResult
     private static func expandToolsFromSearch(
         query: String,
@@ -2893,14 +2845,9 @@ public struct ToolLoop {
             guard !existing.contains(entry.name), let tool = byName[entry.name] else { continue }
             if excludedNames.contains(tool.name) { continue }
             if tool.permission != .readOnly {
-                // Fixed Skill 激活时：即使 mutation 已授权（如 queueReplace 对应的
+                // Fixed Skill 激活时：即使 mutation 属于该流程（如 queueReplace 对应的
                 // queue_replace），也不作为模型可见 schema 补入——Skill 内部会固定调用。
                 if excludeAllMutations { continue }
-                // 统一授权判定（含 Custom Tool 的 derivedAuthorizationOperations）。
-                guard tool.isAuthorizedForModelExposure(allowedOperations: allowedOperations) else {
-                    // 能力存在但当前请求未授权：不进 schema，不诱导模型尝试。
-                    continue
-                }
             }
             current.append(tool)
             existing.insert(tool.name)
@@ -2911,7 +2858,7 @@ public struct ToolLoop {
     /// One bounded recovery when a non-chat model turn explicitly signals it
     /// lacks factual evidence.  The selector remains only a schema optimizer:
     /// this adds at most eight *read-only* canonical descriptors and never
-    /// creates authorization or repeats the same expansion set.
+    /// creates a hidden permission or repeats the same expansion set.
     private static func automaticallyExpandReadOnlyTools(
         userText: String,
         plan: AgentRequestPlan,

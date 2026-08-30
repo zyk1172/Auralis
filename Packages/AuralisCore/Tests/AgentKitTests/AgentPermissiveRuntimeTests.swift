@@ -795,10 +795,10 @@ struct AgentPermissiveRuntimeTests {
         #expect(await collector.containsText("完成"))
     }
 
-    // MARK: - TEST 17 / 18：清空队列 / 删除下载直接执行
+    // MARK: - TEST 17 / 18：高影响清空 / 下载历史风险分类
 
-    @Test("TEST17 清空队列直接执行，无确认")
-    func clearQueueDirectExecution() async throws {
+    @Test("TEST17 清空队列需要可见确认，确认后执行")
+    func clearQueueRequiresVisibleConfirmation() async throws {
         let store = try makePermStore()
         let bridge = PermissiveBridge()
         let probe = PermissiveProbe()
@@ -816,17 +816,18 @@ struct AgentPermissiveRuntimeTests {
             emit: { _ in }
         )
         #expect(bridge.clearedQueueCount == 1)
-        #expect(await probe.calls == 0)
+        #expect(await probe.calls == 1)
     }
 
-    @Test("TEST18 拆分后的下载历史清理不发明确认协议")
-    func removeDownloadDirectExecution() async throws {
+    @Test("TEST18 单条下载历史可逆，批量清理需要确认")
+    func downloadHistoryRiskClassification() async throws {
         let removeTool = AgentToolRegistry.descriptor(for: "music_download_history_remove")
         let cleanTool = AgentToolRegistry.descriptor(for: "music_download_history_clean")
         #expect(removeTool != nil)
         #expect(cleanTool != nil)
         #expect(removeTool?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
-        #expect(cleanTool?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
+        #expect(cleanTool?.permission == .destructive)
+        #expect(cleanTool?.confirmationPolicy.requiresExplicitUserApproval == true)
     }
 
     // MARK: - TEST 19-22：conversation Intent 可调用写/播放/队列/推荐工具

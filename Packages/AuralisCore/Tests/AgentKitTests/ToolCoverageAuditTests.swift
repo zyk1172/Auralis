@@ -37,14 +37,22 @@ func canonicalAliasesResolveToTheirDeclaredTarget() {
     #expect(AgentToolRegistry.descriptor(for: "listPlaylists")?.name == "playlist_list")
 }
 
-@Test("Every irreversible deletion is UI-approved and no reversible mutation is")
+@Test("Destructive tools are UI-approved while ordinary local mutations stay frictionless")
 func toolRiskApprovalPolicyIsExplicit() {
     let irreversible = AgentToolRegistry.all.filter { $0.risk == .irreversibleDelete }
     #expect(!irreversible.isEmpty)
     #expect(irreversible.allSatisfy { $0.confirmationPolicy.requiresExplicitUserApproval })
 
-    let reversible = AgentToolRegistry.all.filter { $0.risk == .reversibleMutation }
-    #expect(reversible.allSatisfy { !$0.confirmationPolicy.requiresExplicitUserApproval })
+    let destructive = AgentToolRegistry.all.filter { $0.permission == .destructive }
+    #expect(destructive.allSatisfy { $0.requiresExplicitUserApproval })
+
+    // A composite custom tool may inherit a child confirmation policy even
+    // when its derived risk remains reversible. Built-in ordinary mutations
+    // do not carry an extra approval layer.
+    let builtInReversible = AgentToolRegistry.all.filter {
+        $0.customToolID == nil && $0.risk == .reversibleMutation
+    }
+    #expect(builtInReversible.allSatisfy { !$0.confirmationPolicy.requiresExplicitUserApproval })
 }
 
 @Test("Model-visible mutations declare a scope and operation")

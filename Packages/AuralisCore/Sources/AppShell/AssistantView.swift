@@ -170,8 +170,8 @@ struct AssistantView: View {
         } message: { consent in
             Text("\(consent.purpose)\n\(consent.fields.map { "· \($0)" }.joined(separator: "\n"))")
         }
-        // 运行时确认：不可逆工具或原始请求语义不足以覆盖某个具体修改时，
-        // 都通过同一个 PendingConfirmation 通道挂起；模型文本不会自行授予权限。
+        // 运行时确认：只有 descriptor 明确标记为 destructive/需显式批准的工具
+        // 才通过 PendingConfirmation 挂起；模型文本不会自行替代可见确认。
         .alert(
             Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认操作", bundle: .module)),
             isPresented: Binding(
@@ -716,7 +716,7 @@ struct AssistantView: View {
             // is active.  AgentTask remains useful for persisted deterministic
             // workflow diagnostics, but must not race a generic streaming run.
             Text(agent.runPresentationState?.phase.displayText
-                 ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
+                 ?? String(localized: "正在处理…", bundle: .module)).font(.caption2)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             Button(String(localized: "停止", bundle: .module)) { agent.cancel() }
                 .buttonStyle(HapticBorderedButtonStyle())
@@ -727,17 +727,21 @@ struct AssistantView: View {
     /// 思考内容只从 `AssistantRunPresentationState` 读取，运行结束即被清除，
     /// 不会作为 `AgentChatMessage` 写入本地会话或被后续模型调用回放。
     private func transientReasoningRow(_ reasoning: String) -> some View {
-        VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+        VStack(alignment: .leading, spacing: 3) {
             Label("思考中…", systemImage: "brain.head.profile")
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             ChatMarkdownContent(source: reasoning)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .opacity(0.82)
                 .textSelection(.enabled)
+                .frame(maxHeight: 120, alignment: .topLeading)
+                .clipped()
         }
-        .padding(AuralisSpacing.medium)
-        .background(theme.colorTokens.surface.color.opacity(0.8))
+        .padding(.horizontal, AuralisSpacing.small)
+        .padding(.vertical, 4)
+        .background(theme.colorTokens.surface.color.opacity(0.24))
         .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
         .frame(maxWidth: 560, alignment: .leading)
     }
@@ -877,19 +881,21 @@ struct AssistantView: View {
 
         case let .actionPreview(title, detail):
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.bold())
-                    .foregroundStyle(theme.colorTokens.primaryText.color)
-                Text(detail).font(.caption)
+                Text(title).font(.caption2.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                Text(detail).font(.caption2)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            .padding(AuralisSpacing.medium)
-            .background(theme.colorTokens.surface.color)
+            .padding(.horizontal, AuralisSpacing.small)
+            .padding(.vertical, 4)
+            .background(theme.colorTokens.surface.color.opacity(0.22))
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
 
         case let .toolProgress(step):
             Label(step, systemImage: "gearshape.arrow.trianglehead.2.clockwise.rotate.90")
                 .font(.caption2)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .opacity(0.78)
 
         case let .error(text):
             Label(text, systemImage: "exclamationmark.triangle.fill")

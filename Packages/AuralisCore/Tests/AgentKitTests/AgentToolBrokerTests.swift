@@ -51,16 +51,16 @@ func keyToolSummariesExplainPurposeAndContext() throws {
     }
 }
 
-@Test("未授权 mutation 留在目录但不进入 executable schema")
-func unauthorizedMutationIsAwareButNotExecutable() {
-    let delete = AgentToolRegistry.descriptor(for: "playlist_delete")!
-    let entry = ToolCatalog(descriptors: [delete]).awarenessEntries(
+@Test("普通 reversible mutation 保留在目录且不受 exact operation 阻塞")
+func reversibleMutationIsAwareAndExecutable() {
+    let mutation = AgentToolRegistry.descriptor(for: "playlist_add_songs")!
+    let entry = ToolCatalog(descriptors: [mutation]).awarenessEntries(
         environment: .init(),
         authorizedOperations: []
     ).first!
-    #expect(entry.authorized == false)
-    #expect(entry.renderedLine.contains("能力存在，但当前请求未授权执行"))
-    #expect(delete.isAuthorizedForModelExposure(allowedOperations: []) == false)
+    #expect(entry.authorized == nil)
+    #expect(!entry.renderedLine.contains("未授权"))
+    #expect(mutation.isAuthorizedForModelExposure(allowedOperations: []))
 }
 
 // MARK: - Tool Broker / CandidateSet / Completion 回归测试

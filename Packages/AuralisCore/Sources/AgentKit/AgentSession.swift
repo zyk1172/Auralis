@@ -112,6 +112,11 @@ public actor SessionStore {
     }
 
     public func append(_ message: AgentChatMessage, to id: UUID) {
+        // Reasoning, tool progress and action previews describe a live run;
+        // they are never durable conversation facts. Keep this invariant at
+        // the storage boundary as well as in AgentCoordinator so a future
+        // caller cannot accidentally pollute SessionStore.
+        guard !Self.isTransientActivity(message) else { return }
         guard var session = cache[id] else { return }
         session.messages.append(message)
         session.updatedAt = .now
@@ -120,27 +125,6 @@ public actor SessionStore {
         }
         cache[id] = session
         persistSafely(operation: "append")
-    }
-
-    /// A running tool loop has one live activity row.  Replacing its previous
-    /// progress message avoids persisting an unbounded wall of transient
-    /// “executing tool” chat bubbles.
-    @discardableResult
-    public func replaceTrailingToolProgress(_ message: AgentChatMessage, in id: UUID) -> Bool {
-        guard var session = cache[id],
-              let index = session.messages.indices.last,
-              session.messages[index].role == .assistant,
-              session.messages[index].messages.allSatisfy({ item in
-                  if case .toolProgress = item { return true }
-                  return false
-              }) else {
-            return false
-        }
-        session.messages[index] = message
-        session.updatedAt = .now
-        cache[id] = session
-        persistSafely(operation: "replaceToolProgress")
-        return true
     }
 
     public func rename(_ id: UUID, to title: String) {
@@ -185,6 +169,17 @@ public actor SessionStore {
     public func delete(_ id: UUID) {
         cache.removeValue(forKey: id)
         persistSafely(operation: "delete")
+    }
+
+    private static func isTransientActivity(_ message: AgentChatMessage) -> Bool {
+        !message.messages.isEmpty && message.messages.allSatisfy { item in
+            switch item {
+            case .reasoning, .toolProgress, .actionPreview:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     public func search(_ query: String) -> [AgentSession] {
