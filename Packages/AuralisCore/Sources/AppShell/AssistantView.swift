@@ -10,6 +10,22 @@ import UIKit
 import AppKit
 #endif
 
+private struct AssistantConversationViewportBottomPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct AssistantConversationContentBottomPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// AI 助手主界面：左侧会话列表，右侧结构化消息流。
 ///
 /// 交互要点：
@@ -21,6 +37,9 @@ struct AssistantView: View {
     /// 末尾锚点必须是独立视图：最后一条消息在流式输出时高度会变化，而其 id 不变。
     /// 用稳定的底部锚点滚动，才能始终贴住最新工具进度和回复结尾。
     private static let conversationEndID = "assistant-conversation-end"
+    private static let conversationScrollCoordinateSpace = "assistant-conversation-scroll"
+    /// 距底部不超过此距离时，新的流式内容才会自动跟随；用户上翻阅读时不抢回滚动位置。
+    private static let autoFollowThreshold: CGFloat = 80
 
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -37,6 +56,9 @@ struct AssistantView: View {
     @State private var isBatchManaging = false
     @State private var selectedSessionIDs: Set<UUID> = []
     @State private var confirmBatchDelete = false
+    @State private var isFollowingConversationOutput = true
+    @State private var conversationViewportBottom: CGFloat = .zero
+    @State private var conversationContentBottom: CGFloat = .zero
     /// 输入框焦点：仅供本页用 @FocusState 管理，以便点击空白 / 拖动 / 发送时收起键盘。
     @FocusState private var assistantInputFocused: Bool
 
@@ -433,22 +455,47 @@ struct AssistantView: View {
                         ForEach(agent.messages) { message in
                             messageRow(message).id(message.id)
                         }
+                        if let reasoning = agent.runPresentationState?.reasoningText,
+                           !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            transientReasoningRow(reasoning)
+                        }
                         if agent.isRunning { runningIndicator }
                         Color.clear
                             .frame(height: 1)
                             .id(Self.conversationEndID)
                     }
                     .padding(AuralisSpacing.large)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: AssistantConversationContentBottomPreferenceKey.self,
+                                value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
+                            )
+                        }
+                    }
                     // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
                     .onTapGesture { assistantInputFocused = false }
                 }
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: AssistantConversationViewportBottomPreferenceKey.self,
+                            value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
+                        )
+                    }
+                }
+                .coordinateSpace(name: Self.conversationScrollCoordinateSpace)
                 .reportsBottomDockScroll(source: .assistant)
                 // 向下拖动聊天列表时交互式收起键盘。
                 .scrollDismissesKeyboard(.immediately)
                 // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
-                .onAppear { scrollConversationToEnd(proxy, animated: false) }
+                .onAppear {
+                    isFollowingConversationOutput = true
+                    scrollConversationToEnd(proxy, animated: false, force: true)
+                }
                 .onChange(of: agent.activeSessionID) { _, _ in
-                    scrollConversationToEnd(proxy, animated: false)
+                    isFollowingConversationOutput = true
+                    scrollConversationToEnd(proxy, animated: false, force: true)
                 }
                 .onChange(of: agent.messages.count) { _, _ in
                     scrollConversationToEnd(proxy, animated: true)
@@ -457,6 +504,14 @@ struct AssistantView: View {
                 // 并延后一帧，等新高度完成布局后再贴到底部。
                 .onReceive(agent.objectWillChange) { _ in
                     scrollConversationToEnd(proxy, animated: false)
+                }
+                .onPreferenceChange(AssistantConversationViewportBottomPreferenceKey.self) { value in
+                    conversationViewportBottom = value
+                    updateConversationAutoFollowState()
+                }
+                .onPreferenceChange(AssistantConversationContentBottomPreferenceKey.self) { value in
+                    conversationContentBottom = value
+                    updateConversationAutoFollowState()
                 }
             }
         }
@@ -511,7 +566,17 @@ struct AssistantView: View {
         #endif
     }
 
-    private func scrollConversationToEnd(_ proxy: ScrollViewProxy, animated: Bool) {
+    private func scrollConversationToEnd(
+        _ proxy: ScrollViewProxy,
+        animated: Bool,
+        force: Bool = false
+    ) {
+        // Capture the state before the new streaming chunk changes content
+        // height. A large single chunk can temporarily move the bottom more
+        // than the threshold before this async scroll runs; that must not
+        // make a user who was already following output fall behind.
+        let shouldFollow = force || isFollowingConversationOutput
+        guard shouldFollow else { return }
         DispatchQueue.main.async {
             if animated {
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -521,6 +586,12 @@ struct AssistantView: View {
                 proxy.scrollTo(Self.conversationEndID, anchor: .bottom)
             }
         }
+    }
+
+    private func updateConversationAutoFollowState() {
+        guard conversationViewportBottom > 0 else { return }
+        isFollowingConversationOutput = conversationContentBottom - conversationViewportBottom
+            <= Self.autoFollowThreshold
     }
 
     private var header: some View {
@@ -653,6 +724,24 @@ struct AssistantView: View {
         }
     }
 
+    /// 思考内容只从 `AssistantRunPresentationState` 读取，运行结束即被清除，
+    /// 不会作为 `AgentChatMessage` 写入本地会话或被后续模型调用回放。
+    private func transientReasoningRow(_ reasoning: String) -> some View {
+        VStack(alignment: .leading, spacing: AuralisSpacing.small) {
+            Label("思考中…", systemImage: "brain.head.profile")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+            ChatMarkdownContent(source: reasoning)
+                .font(.caption)
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .textSelection(.enabled)
+        }
+        .padding(AuralisSpacing.medium)
+        .background(theme.colorTokens.surface.color.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+
     @ViewBuilder
     private func messageRow(_ message: AgentChatMessage) -> some View {
         let isUser = message.role == .user
@@ -713,6 +802,12 @@ struct AssistantView: View {
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
             .frame(maxWidth: 560, alignment: .leading)
             .textSelection(.enabled)
+
+        // Reasoning is never meant to survive as a chat-message payload.  If
+        // an older/corrupt local session contains one, keep it invisible
+        // rather than revealing or replaying it as a durable assistant answer.
+        case .reasoning:
+            EmptyView()
 
         case let .trackCards(cards):
             TrackCardList(cards: cards, agent: agent, theme: theme)

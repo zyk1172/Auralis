@@ -913,9 +913,9 @@ public struct AICompletionRequest: Codable, Hashable, Sendable {
 
 public struct AICompletionResponse: Codable, Hashable, Sendable {
     public let model: String
-    /// 用户可见的最终回答（绝不包含思考链）。
+    /// 用户可见的最终回答（绝不混入思考链）。
     public let content: String
-    /// 模型思考链（reasoning_content）——仅内部保存，绝不展示给用户。
+    /// 模型思考文本。流式运行期间可以作为瞬态展示，但绝不写入聊天记录。
     public let reasoning: String?
     public let inputTokens: Int?
     public let outputTokens: Int?
@@ -1053,7 +1053,14 @@ public struct AIConnectionResult: Codable, Hashable, Sendable {
 
 public enum AIStreamEvent: Equatable, Sendable {
     case started(model: String)
-    case delta(String)
+    /// Provider has explicitly classified this token as reasoning/thinking.
+    /// It is presentation-only and must never be persisted as conversation.
+    case reasoningDelta(String)
+    /// Provider has explicitly classified this token as final user-facing text.
+    case answerDelta(String)
+    /// A gateway sent a delta without an authoritative semantic channel. Do
+    /// not default it to final text: ambiguous content must not cross channels.
+    case unknownDelta
     /// 流式过程中完成的原生工具调用（来自 Responses API 的
     /// `response.output_item.done` / Chat 的 `delta.tool_calls`）。
     /// 复用 `AIToolCall`，不新增重复 DTO。
@@ -1062,6 +1069,7 @@ public enum AIStreamEvent: Equatable, Sendable {
     case webCitations([AIWebCitation])
     case completed
     case usage(input: Int, output: Int)
+
 }
 
 public protocol AIProvider: Sendable {
@@ -1098,7 +1106,7 @@ public struct MockAIProvider: AIProvider {
     public func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.started(model: request.model))
-            continuation.yield(.delta("理解需求 → 搜索音乐库 → 筛选候选 → 安排顺序"))
+            continuation.yield(.answerDelta("理解需求 → 搜索音乐库 → 筛选候选 → 安排顺序"))
             continuation.yield(.completed)
             continuation.finish()
         }

@@ -223,7 +223,7 @@ private final class PermissiveScriptedProvider: AIProvider, @unchecked Sendable 
             requests.append(request)
             let content = remaining.isEmpty ? closing : remaining.removeFirst()
             continuation.yield(.started(model: request.model))
-            continuation.yield(.delta(content))
+            continuation.yield(.answerDelta(content))
             continuation.yield(.completed)
             continuation.finish()
         }

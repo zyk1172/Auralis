@@ -46,4 +46,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) {
         AuralisAppModel.shared.handleBackgroundDownloadEvents(identifier: identifier, completion: completionHandler)
     }
+
+    func applicationDidReceiveMemoryWarning(_ application: UIApplication) {
+        AuralisAppModel.shared.applicationDidReceiveMemoryWarning()
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        AuralisAppModel.shared.applicationWillTerminate()
+    }
 }

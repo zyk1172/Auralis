@@ -358,18 +358,18 @@ struct OpenAIResponsesProviderTests {
         let result = OpenAICompatibleProvider.parseResponsesStreamEvent(
             #"{"type":"response.output_text.delta","item_id":"i1","output_index":0,"content_index":0,"delta":"你好"}"#
         )
-        #expect(result == .text("你好"))
+        #expect(result == .answer("你好"))
     }
 
-    @Test func ignoresReasoningDeltaEvents() {
+    @Test func parsesReasoningDeltaEventsIntoSeparateChannel() {
         // 思考内容绝不输出为正文：reasoning_text.delta 的字段也叫 delta，
-        // 必须被显式忽略（此前会掉进默认兜底被当成正文输出——思考链泄漏）。
+        // 必须走独立 reasoning 通道，而不能落入最终回答或默认兜底。
         #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
             #"{"type":"response.reasoning_text.delta","item_id":"i1","output_index":0,"content_index":0,"delta":"内部思考"}"#
-        ) == .ignore)
+        ) == .reasoning("内部思考"))
         #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
-            #"{"type":"response.reasoning_summary_text.delta","item_id":"i1","output_index":0,"content_index":0,"summary_text":"小结"}"#
-        ) == .ignore)
+            #"{"type":"response.reasoning_summary_text.delta","item_id":"i1","output_index":0,"content_index":0,"delta":"小结"}"#
+        ) == .reasoning("小结"))
         #expect(OpenAICompatibleProvider.parseResponsesStreamEvent(
             #"{"type":"response.reasoning_text.done","item_id":"i1","output_index":0,"content_index":0}"#
         ) == .ignore)
@@ -451,10 +451,10 @@ struct OpenAIResponsesProviderTests {
         #expect(outputTextDone == .ignore)
     }
 
-    /// 无 type 字段但带 delta 的网关偏差也兜住。
-    @Test func toleratesTypelessDeltaEvent() {
+    /// 无 type 字段但带 delta 的网关偏差不能猜测为用户可见正文。
+    @Test func classifiesTypelessDeltaEventAsUnknown() {
         let result = OpenAICompatibleProvider.parseResponsesStreamEvent(#"{"delta":"容错"}"#)
-        #expect(result == .text("容错"))
+        #expect(result == .unknownDelta)
     }
 }
 
@@ -643,7 +643,7 @@ struct OpenAIResponsesNetworkTests {
         )) {
             events.append(event)
         }
-        #expect(events.contains(.delta("普通聊天仍可用")))
+        #expect(events.contains(.answerDelta("普通聊天仍可用")))
         #expect(events.last == .completed)
         #expect(AIKitMockURLProtocol.requests.first?.httpBody != nil)
     }
@@ -912,6 +912,8 @@ struct OpenAIResponsesNetworkTests {
         let sse = """
         data: {"type":"response.created","response":{"id":"resp_1"}}
 
+        data: {"type":"response.reasoning_text.delta","delta":"先分析"}
+
         data: {"type":"response.output_text.delta","delta":"你"}
 
         data: {"type":"response.output_text.delta","delta":"好"}
@@ -935,8 +937,9 @@ struct OpenAIResponsesNetworkTests {
         }
 
         #expect(events.first == .started(model: "test-model"))
-        #expect(events.contains(.delta("你")))
-        #expect(events.contains(.delta("好")))
+        #expect(events.contains(.reasoningDelta("先分析")))
+        #expect(events.contains(.answerDelta("你")))
+        #expect(events.contains(.answerDelta("好")))
         #expect(events.contains(.toolCall(AIToolCall(id: "call_1", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}"))))
         #expect(events.last == .completed)
     }
@@ -965,7 +968,7 @@ struct OpenAIResponsesNetworkTests {
 
         #expect(events.contains(.toolCall(AIToolCall(id: "call_delta", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}"))))
         #expect(events.last == .completed)
-        #expect(events.contains { if case .delta = $0 { return true }; return false } == false)
+        #expect(events.contains { if case .answerDelta = $0 { return true }; return false } == false)
     }
 
     /// 网关不发 [DONE] / response.completed 也视为正常结束（沿用 Chat 路径行为）。
@@ -986,8 +989,8 @@ struct OpenAIResponsesNetworkTests {
         ) {
             events.append(event)
         }
-        #expect(events.contains(.delta("收")))
-        #expect(events.contains(.delta("到")))
+        #expect(events.contains(.answerDelta("收")))
+        #expect(events.contains(.answerDelta("到")))
         #expect(events.last == .completed)
     }
 

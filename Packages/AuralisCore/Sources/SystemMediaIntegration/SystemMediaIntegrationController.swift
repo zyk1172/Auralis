@@ -16,7 +16,9 @@ public final class SystemMediaIntegrationController {
     public let interruptions = AudioInterruptionCoordinator()
     public let routes = AudioRouteCoordinator()
 
-    private var started = false
+    /// Internal visibility supports lifecycle regression tests without making
+    /// startup state part of the public media-control API.
+    private(set) var started = false
     /// Verified metadata for the current item.  It is retained across normal
     /// track/progress snapshot refreshes, rather than being tied to a haptics
     /// coordinator callback.
@@ -145,6 +147,10 @@ public final class SystemMediaIntegrationController {
 
     /// 停止播放或退出服务器：清理 Now Playing 与音频会话。
     public func stop() {
+        // `start()` owns observer registration. A complete stop/start cycle
+        // must therefore reopen that gate; otherwise media-services resets,
+        // interruptions and route changes are never registered again.
+        started = false
         internationalStandardRecordingCode = nil
         nowPlaying.clear()
 #if os(iOS)
@@ -153,6 +159,8 @@ public final class SystemMediaIntegrationController {
             self.mediaServicesResetObserver = nil
         }
 #endif
+        interruptions.stop()
+        routes.stop()
         let coordinator = audioSession
         Task { await coordinator.deactivate() }
     }

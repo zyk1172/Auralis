@@ -146,7 +146,7 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
                 continuation.yield(.started(model: request.model))
                 let chunks = Self.splitForStreaming(content)
                 for chunk in chunks {
-                    continuation.yield(.delta(chunk))
+                    continuation.yield(.answerDelta(chunk))
                 }
                 continuation.yield(.completed)
                 continuation.finish()
@@ -781,7 +781,7 @@ private final class NativeToolAIProvider: AIProvider, @unchecked Sendable {
                 continuation.yield(.started(model: request.model))
                 guard !remaining.isEmpty else {
                     for chunk in Self.splitForStreaming(closing) {
-                        continuation.yield(.delta(chunk))
+                        continuation.yield(.answerDelta(chunk))
                     }
                     continuation.yield(.completed)
                     continuation.finish()
@@ -855,7 +855,7 @@ private final class StreamingTextAIProvider: AIProvider, @unchecked Sendable {
             let task = Task {
                 continuation.yield(.started(model: request.model))
                 for chunk in chunks {
-                    continuation.yield(.delta(chunk))
+                    continuation.yield(.answerDelta(chunk))
                 }
                 continuation.yield(.completed)
                 continuation.finish()
@@ -894,14 +894,14 @@ private final class StreamingToolCallAIProvider: AIProvider, @unchecked Sendable
                 let first = requests.count == 1
                 if first {
                     for chunk in ["好的，我", "来搜索这首歌。"] {
-                        continuation.yield(.delta(chunk))
+                        continuation.yield(.answerDelta(chunk))
                     }
                     for call in calls {
                         continuation.yield(.toolCall(call))
                     }
                 } else {
                     for chunk in ScriptedAIProvider.splitForStreaming(closing) {
-                        continuation.yield(.delta(chunk))
+                        continuation.yield(.answerDelta(chunk))
                     }
                 }
                 continuation.yield(.completed)
@@ -929,11 +929,58 @@ private final class StreamErrorAIProvider: AIProvider, @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(.started(model: request.model))
-                continuation.yield(.delta("部分"))
+                continuation.yield(.answerDelta("部分"))
                 continuation.finish(throwing: AIProviderError.malformedResponse(detail: detail, retryable: false))
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+}
+
+/// First streams only reasoning, then mirrors the real compatibility repair
+/// path: the first non-stream completion has no answer and the repair request
+/// returns a final user-facing answer.
+private final class ReasoningThenAnswerRepairAIProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var completionRequests: [AICompletionRequest] = []
+    private let emitsReasoning: Bool
+
+    init(emitsReasoning: Bool = true) {
+        self.emitsReasoning = emitsReasoning
+    }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "reasoning-repair", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        let attempt = lock.withLock { () -> Int in
+            completionRequests.append(request)
+            return completionRequests.count
+        }
+        if attempt == 1 {
+            return AICompletionResponse(
+                model: request.model,
+                content: "",
+                reasoning: emitsReasoning ? "内部分析" : nil
+            )
+        }
+        return AICompletionResponse(model: request.model, content: "这是面向用户的最终答案。")
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(model: request.model))
+            if emitsReasoning {
+                continuation.yield(.reasoningDelta("内部分析"))
+            }
+            continuation.yield(.completed)
+            continuation.finish()
+        }
+    }
+
+    func recordedCompletionRequests() -> [AICompletionRequest] {
+        lock.withLock { completionRequests }
     }
 }
 
@@ -961,6 +1008,63 @@ func streamingEmitsDeltasAndFinalizes() async {
     #expect(streamed.count == 3)
     // 收尾时产出最终文本。
     #expect(await collector.containsText("你好，已完成。"))
+}
+
+@Test("Streaming: reasoning stays separate and empty answer triggers a disabled-reasoning repair")
+func reasoningOnlyStreamRepairsFinalAnswerWithoutMixingChannels() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let provider = ReasoningThenAnswerRepairAIProvider()
+
+    await AgentRunner.run(
+        userText: "测试思考与正文分离",
+        provider: provider,
+        model: "reasoning-repair",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    let all = await collector.all()
+    let emitted = all.flatMap(\.messages)
+    #expect(emitted.contains { if case .reasoning("内部分析") = $0 { return true }; return false })
+    #expect(emitted.contains { if case let .streaming(text) = $0 { return text.contains("内部分析") }; return false } == false)
+    #expect(await collector.containsText("这是面向用户的最终答案。"))
+
+    let requests = provider.recordedCompletionRequests()
+    #expect(requests.count == 2)
+    if let repair = requests.last {
+        #expect(repair.tools == nil)
+        #expect(repair.toolChoice == AIToolChoice.none)
+        #expect(repair.reasoning?.mode == .disabled)
+    } else {
+        Issue.record("缺少最终回答修复请求")
+    }
+}
+
+@Test("Streaming: no visible model output also triggers final-answer repair")
+func emptyStreamRepairsFinalAnswer() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let provider = ReasoningThenAnswerRepairAIProvider(emitsReasoning: false)
+
+    await AgentRunner.run(
+        userText: "测试空回答修复",
+        provider: provider,
+        model: "reasoning-repair",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    #expect(await collector.containsText("这是面向用户的最终答案。"))
+    #expect(provider.recordedCompletionRequests().count == 2)
 }
 
 @Test("Streaming: tool calls collected from stream are executed and loop continues")

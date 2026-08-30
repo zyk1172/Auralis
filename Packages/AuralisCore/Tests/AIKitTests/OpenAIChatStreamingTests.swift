@@ -131,8 +131,8 @@ struct OpenAIChatStreamingTests {
         }
 
         #expect(events.first == .started(model: "test-model"))
-        #expect(events.contains(.delta("我")))
-        #expect(events.contains(.delta("来")))
+        #expect(events.contains(.answerDelta("我")))
+        #expect(events.contains(.answerDelta("来")))
         let expectedCall = AIToolCall(id: "call_1", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}")
         #expect(events.contains(.toolCall(expectedCall)))
         // toolCall 必须在 completed 之前产出。
@@ -164,7 +164,7 @@ struct OpenAIChatStreamingTests {
             events.append(event)
         }
 
-        #expect(events.contains(.delta("收")))
+        #expect(events.contains(.answerDelta("收")))
         #expect(events.contains(.toolCall(AIToolCall(id: "call_2", name: "playTrack", arguments: "{\"trackID\":\"srv:1\"}"))))
         #expect(events.last == .completed)
     }
@@ -172,6 +172,8 @@ struct OpenAIChatStreamingTests {
     /// 纯文本流：只有 delta + completed，不产出任何 toolCall。
     @Test func streamsPlainTextWithoutToolCalls() async throws {
         let sse = """
+        data: {"choices":[{"delta":{"reasoning_content":"先分析"}}]}
+
         data: {"choices":[{"delta":{"content":"你"}}]}
 
         data: {"choices":[{"delta":{"content":"好"}}]}
@@ -192,8 +194,9 @@ struct OpenAIChatStreamingTests {
             events.append(event)
         }
 
-        #expect(events.contains(.delta("你")))
-        #expect(events.contains(.delta("好")))
+        #expect(events.contains(.reasoningDelta("先分析")))
+        #expect(events.contains(.answerDelta("你")))
+        #expect(events.contains(.answerDelta("好")))
         #expect(events.contains { if case .toolCall = $0 { return true } else { return false } } == false)
         #expect(events.contains(.usage(input: 5, output: 2)))
         #expect(events.last == .completed)

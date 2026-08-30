@@ -146,12 +146,14 @@ public final class AgentCoordinator: ObservableObject {
     /// A substantive user request replaces the entry instead of inheriting a
     /// stale task completion or mutation authorization.
     var executionLineages: [UUID: ExecutionLineage] = [:]
-    /// 每个 Run 独立的流式状态（key = runID）。`.streaming` 增量累加进该 run 的气泡，
-    /// 直到收到非流式消息（最终文本 / 工具进度 / 卡片等）把它原地定型为止。
+    /// 每个 Run 独立的流式状态（key = runID）。回答 `.streaming` 增量累加进该 run
+    /// 的气泡；`reasoning` 只保留在运行时展示状态，绝不写入会话。
+    /// 回答直到收到非流式消息（最终文本 / 工具进度 / 卡片等）才原地定型。
     /// 用 runID 隔离后，Session A 的流式气泡永远不会与 Session B 共享。
     private struct AgentStreamingState {
-        var messageID: UUID?
-        var rawText = ""
+        var answerMessageID: UUID?
+        var answerText = ""
+        var reasoningText = ""
     }
     private var streamingStates: [UUID: AgentStreamingState] = [:]
     private var runPresentationStates: [UUID: AssistantRunPresentationState] = [:]
@@ -1262,17 +1264,33 @@ public final class AgentCoordinator: ObservableObject {
         let isActiveSession = activeSessionID == sessionID
 
         let sanitizedMessage = AgentUserFacingSanitizer.chatMessage(message)
+
+        // Reasoning is deliberately a live-only presentation channel.  It
+        // neither creates a transcript bubble nor enters SessionStore, so a
+        // later model turn can never receive hidden chain-of-thought back.
+        if let reasoning = Self.reasoningDeltaText(from: message) {
+            var state = streamingStates[runID] ?? AgentStreamingState(answerMessageID: nil)
+            state.reasoningText += reasoning
+            streamingStates[runID] = state
+            updateReasoningPresentation(
+                AgentUserFacingSanitizer.text(state.reasoningText),
+                sessionID: sessionID,
+                runID: runID
+            )
+            return
+        }
+
         updateRunPresentation(for: sanitizedMessage, sessionID: sessionID, runID: runID)
 
         // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
         if let delta = Self.streamingDeltaText(from: message) {
-            var state = streamingStates[runID] ?? AgentStreamingState(messageID: nil)
-            state.rawText += delta
+            var state = streamingStates[runID] ?? AgentStreamingState(answerMessageID: nil)
+            state.answerText += delta
             if isActiveSession {
-                if let streamingID = state.messageID,
+                if let streamingID = state.answerMessageID,
                    let index = messages.lastIndex(where: { $0.id == streamingID }) {
                     var existing = messages[index]
-                    let accumulated = AgentUserFacingSanitizer.text(state.rawText)
+                    let accumulated = AgentUserFacingSanitizer.text(state.answerText)
                     existing = AgentChatMessage(
                         id: existing.id,
                         role: .assistant,
@@ -1281,16 +1299,16 @@ public final class AgentCoordinator: ObservableObject {
                     )
                     messages[index] = existing
                 } else {
-                    state.messageID = message.id
+                    state.answerMessageID = message.id
                     messages.append(AgentChatMessage(
                         id: message.id,
                         role: .assistant,
-                        messages: [.streaming(AgentUserFacingSanitizer.text(state.rawText))],
+                        messages: [.streaming(AgentUserFacingSanitizer.text(state.answerText))],
                         createdAt: message.createdAt
                     ))
                 }
-            } else if state.messageID == nil {
-                state.messageID = message.id
+            } else if state.answerMessageID == nil {
+                state.answerMessageID = message.id
             }
             streamingStates[runID] = state
             return
@@ -1299,7 +1317,7 @@ public final class AgentCoordinator: ObservableObject {
         // 非流式消息：把该 run 的 in-flight 气泡原地定型并持久化。
         let state = streamingStates[runID]
         streamingStates[runID] = nil
-        if let streamingID = state?.messageID, isActiveSession,
+        if let streamingID = state?.answerMessageID, isActiveSession,
            let index = messages.lastIndex(where: { $0.id == streamingID }) {
             messages[index] = sanitizedMessage
             await sessionStore.append(sanitizedMessage, to: sessionID)
@@ -1348,6 +1366,8 @@ public final class AgentCoordinator: ObservableObject {
                 presentation.phase = .waitingForConfirmation
             case let .error(text):
                 presentation.phase = .failed(message: text)
+            case .reasoning:
+                presentation.phase = .thinking
             default:
                 break
             }
@@ -1367,6 +1387,34 @@ public final class AgentCoordinator: ObservableObject {
         }
         guard !pieces.isEmpty else { return nil }
         return pieces.joined()
+    }
+
+    /// Provider-explicit reasoning is not an answer delta.  It has a separate
+    /// transient path so it cannot be persisted or replayed as user-visible
+    /// final content.
+    private static func reasoningDeltaText(from message: AgentChatMessage) -> String? {
+        guard message.role == .assistant, !message.messages.isEmpty else { return nil }
+        var pieces: [String] = []
+        for item in message.messages {
+            if case let .reasoning(text) = item { pieces.append(text) }
+        }
+        guard !pieces.isEmpty else { return nil }
+        return pieces.joined()
+    }
+
+    private func updateReasoningPresentation(
+        _ reasoningText: String,
+        sessionID: UUID,
+        runID: UUID
+    ) {
+        guard var presentation = runPresentationStates[runID],
+              presentation.sessionID == sessionID else { return }
+        presentation.reasoningText = reasoningText
+        presentation.phase = .thinking
+        runPresentationStates[runID] = presentation
+        if activeSessionID == sessionID, currentRunID == runID {
+            runPresentationState = presentation
+        }
     }
 
     private static func isToolProgress(_ message: AgentChatMessage) -> Bool {

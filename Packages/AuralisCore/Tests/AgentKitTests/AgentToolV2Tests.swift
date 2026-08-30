@@ -77,7 +77,7 @@ private final class IndexScriptedProvider: AIProvider, @unchecked Sendable {
     func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.started(model: request.model))
-            continuation.yield(.delta(batches.isEmpty ? "已处理完成" : batches.removeFirst()))
+            continuation.yield(.answerDelta(batches.isEmpty ? "已处理完成" : batches.removeFirst()))
             continuation.yield(.completed)
             continuation.finish()
         }
@@ -115,7 +115,7 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
                 let call = calls.removeFirst()
                 continuation.yield(.toolCall(call))
             } else {
-                continuation.yield(.delta("索引已完成。"))
+                continuation.yield(.answerDelta("索引已完成。"))
             }
             continuation.yield(.completed)
             continuation.finish()
@@ -168,7 +168,7 @@ private final class NativeJSONIndexProvider: AIProvider, @unchecked Sendable {
         let response = nextResponse()
         return AsyncThrowingStream { continuation in
             continuation.yield(.started(model: request.model))
-            continuation.yield(.delta(response))
+            continuation.yield(.answerDelta(response))
             continuation.yield(.completed)
             continuation.finish()
         }
@@ -232,12 +232,12 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
                 continuation.finish(throwing: error)
             case let .text(text):
                 continuation.yield(.started(model: request.model))
-                continuation.yield(.delta(text))
+                continuation.yield(.answerDelta(text))
                 continuation.yield(.completed)
                 continuation.finish()
             case .final:
                 continuation.yield(.started(model: request.model))
-                continuation.yield(.delta("索引已完成。"))
+                continuation.yield(.answerDelta("索引已完成。"))
                 continuation.yield(.completed)
                 continuation.finish()
             }

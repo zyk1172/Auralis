@@ -25,6 +25,10 @@ public enum AgentMessage: Sendable {
     /// 由 AgentCoordinator 合并到「最后一条 in-flight 流式消息」，直到被
     /// 最终文本 / 工具执行等非流式消息定型为止。
     case streaming(String)
+    /// Provider-explicit reasoning/thinking delta. This is strictly an active
+    /// run presentation signal: AgentCoordinator never persists it into a
+    /// session transcript or sends it back to a subsequent model turn.
+    case reasoning(String)
     /// 错误。
     case error(String)
     /// 需要用户确认的操作。
@@ -34,7 +38,7 @@ public enum AgentMessage: Sendable {
 extension AgentMessage: Codable {
     private enum Kind: String, Codable {
         case text, trackCards, albumCards, playlistCards, artistCards, webSources,
-             playlistProposal, actionPreview, toolProgress, error, confirmation, streaming
+             playlistProposal, actionPreview, toolProgress, error, confirmation, streaming, reasoning
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -78,6 +82,9 @@ extension AgentMessage: Codable {
         case let .streaming(value):
             try container.encode(Kind.streaming, forKey: .type)
             try container.encode(value, forKey: .value)
+        case let .reasoning(value):
+            try container.encode(Kind.reasoning, forKey: .type)
+            try container.encode(value, forKey: .value)
         }
     }
 
@@ -105,6 +112,7 @@ extension AgentMessage: Codable {
         case .error: self = .error(try container.decode(String.self, forKey: .value))
         case .confirmation: self = .confirmation(try container.decode(PendingConfirmation.self, forKey: .value))
         case .streaming: self = .streaming(try container.decode(String.self, forKey: .value))
+        case .reasoning: self = .reasoning(try container.decode(String.self, forKey: .value))
         }
     }
 

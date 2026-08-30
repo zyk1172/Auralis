@@ -200,7 +200,7 @@ private final class V2Provider: AIProvider, @unchecked Sendable {
                     continuation.yield(.toolCall(call))
                 }
             } else if !response.content.isEmpty {
-                continuation.yield(.delta(response.content))
+                continuation.yield(.answerDelta(response.content))
             }
             continuation.yield(.completed)
             continuation.finish()

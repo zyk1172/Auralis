@@ -198,6 +198,20 @@ struct AnthropicMessagesProviderTests {
         #expect(thinking["budget_tokens"] as? Int == 1_024)
     }
 
+    @Test("Anthropic 非流式 thinking 与正文分流")
+    func nonStreamingThinkingDoesNotMixWithAnswer() async throws {
+        AnthropicMockURLProtocol.reset(data: Data(#"{"id":"msg_thinking","type":"message","role":"assistant","model":"claude-test","content":[{"type":"thinking","thinking":"先核对播放状态。"},{"type":"text","text":"已为你继续播放。"}],"stop_reason":"end_turn"}"#.utf8))
+
+        let response = try await makeProvider().complete(AICompletionRequest(
+            model: "claude-test",
+            messages: [AIMessage(role: .user, content: "继续播放")],
+            maxTokens: 64
+        ))
+
+        #expect(response.reasoning == "先核对播放状态。")
+        #expect(response.content == "已为你继续播放。")
+    }
+
     /// 并行 tool_use 的 id 与 content_block.index 顺序不一致时，必须按 index
     /// 恢复原始顺序（index 0 = firstTool，index 1 = secondTool），不能按
     /// tool_use.id 字典序（tool-a < tool-z）交换顺序。

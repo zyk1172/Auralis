@@ -40,10 +40,19 @@ public struct AssistantRunPresentationState: Equatable, Sendable {
     public let runID: UUID
     public let sessionID: UUID
     public var phase: Phase
+    /// Provider-returned reasoning is useful while a run is active, but is
+    /// intentionally not part of the persisted conversation transcript.
+    public var reasoningText: String
 
-    public init(runID: UUID, sessionID: UUID, phase: Phase) {
+    public init(
+        runID: UUID,
+        sessionID: UUID,
+        phase: Phase,
+        reasoningText: String = ""
+    ) {
         self.runID = runID
         self.sessionID = sessionID
         self.phase = phase
+        self.reasoningText = reasoningText
     }
 }

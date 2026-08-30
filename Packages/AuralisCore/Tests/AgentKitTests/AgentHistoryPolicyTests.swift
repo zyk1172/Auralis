@@ -34,10 +34,12 @@ func modelHistoryKeepsConversationMessages() {
         AgentChatMessage(role: .assistant, messages: [.toolProgress(step: "library_index_v2_status")]),
         AgentChatMessage(role: .assistant, messages: [.confirmation(testConfirmation)]),
         AgentChatMessage(role: .assistant, messages: [.streaming("半成品")]),
+        AgentChatMessage(role: .assistant, messages: [.reasoning("内部思考内容")]),
     ]
 
     let projected = AgentHistoryPolicy.modelMessages(from: history)
-    // 运行时进度、错误、确认和流式半成品只服务 UI，不应重新进入模型上下文。
+    // 运行时进度、错误、确认、流式半成品和 reasoning 只服务当前运行，
+    // 不应重新进入模型上下文。
     #expect(projected.count == 1)
     #expect(projected[0].role == .user)
     #expect(projected[0].content == "播放一些歌曲")

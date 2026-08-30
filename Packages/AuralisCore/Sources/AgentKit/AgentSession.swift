@@ -74,6 +74,7 @@ public struct AgentSession: Codable, Sendable, Identifiable {
         case let .error(value): return value.count / 2
         case .confirmation: return 8
         case let .streaming(value): return value.count / 2
+        case .reasoning: return 0
         }
     }
 }

@@ -115,7 +115,7 @@ struct AgentToolParameterAuditTests {
                 if let calls = response.toolCalls, !calls.isEmpty {
                     for call in calls { continuation.yield(.toolCall(call)) }
                 } else if !response.content.isEmpty {
-                    continuation.yield(.delta(response.content))
+                    continuation.yield(.answerDelta(response.content))
                 }
                 continuation.yield(.completed)
                 continuation.finish()

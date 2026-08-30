@@ -160,10 +160,11 @@ public struct ToolLoop {
         }
     }
 
-    /// 一次流式模型生成的结果：累积文本 + 收集到的原生工具调用 + token 用量。
+    /// 一次流式模型生成的结果：分离的思考/正文缓冲、原生工具调用和 token 用量。
     /// 与 `AICompletionResponse` 对应，但由 `provider.stream()` 的增量事件拼装而成。
     private struct StreamOutcome: Sendable {
-        var text = ""
+        var reasoningText = ""
+        var answerText = ""
         var toolCalls: [AIToolCall] = []
         var webCitations: [AIWebCitation] = []
         var inputTokens: Int?
@@ -731,9 +732,17 @@ public struct ToolLoop {
             )
             let outcome: StreamOutcome
             do {
-                outcome = try await streamWithFallback(provider: provider, request: request, timeout: roundTimeout) { delta in
-                    await emitStreamingDelta(delta, emit: emit)
-                }
+                outcome = try await streamWithFallback(
+                    provider: provider,
+                    request: request,
+                    timeout: roundTimeout,
+                    onAnswerDelta: { delta in
+                        await emitStreamingDelta(delta, emit: emit)
+                    },
+                    onReasoningDelta: { delta in
+                        await emitStreamingReasoningDelta(delta, emit: emit)
+                    }
+                )
             } catch is CancellationError {
                 await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                 return
@@ -752,7 +761,7 @@ public struct ToolLoop {
                 }
             }
 
-            let streamedText = outcome.text
+            let streamedText = outcome.answerText
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             // Native requests only accept provider-native tool calls. ACTION is
             // decoded exclusively when the request started in textual mode.
@@ -1627,11 +1636,19 @@ public struct ToolLoop {
                     // 确定性 mutation 任务：模型正文是 provisional，工具成功前不
                     // 实时上屏（避免“已经替换好了”等未经核实的成功声明误导用户）。
                     // 完成时最终 `.text(reply)` 才会提交；失败/继续时这些文字被丢弃。
-                    outcome = try await streamWithFallback(provider: provider, request: request, timeout: requestTimeout) { delta in
-                        if !buffersProvisionalText {
-                            await Self.emitStreamingDelta(delta, emit: emit)
+                    outcome = try await streamWithFallback(
+                        provider: provider,
+                        request: request,
+                        timeout: requestTimeout,
+                        onAnswerDelta: { delta in
+                            if !buffersProvisionalText {
+                                await Self.emitStreamingDelta(delta, emit: emit)
+                            }
+                        },
+                        onReasoningDelta: { delta in
+                            await Self.emitStreamingReasoningDelta(delta, emit: emit)
                         }
-                    }
+                    )
                 } catch is CancellationError {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text("已取消。")]))
                     return
@@ -1695,7 +1712,7 @@ public struct ToolLoop {
 
             // 解析本轮工具调用：原生请求只接受 provider-native tool_calls；
             // ACTION 仅属于请求开始时已经确定的文本协议。
-            let streamedText = outcome.text
+            let streamedText = outcome.answerText
             let nativeCalls = nativeMode ? outcome.toolCalls : []
             let textActions = !nativeMode && nativeCalls.isEmpty ? parseActions(from: streamedText) : []
 
@@ -3189,14 +3206,24 @@ public struct ToolLoop {
         provider: any AIProvider,
         request: AICompletionRequest,
         timeout: TimeInterval,
-        onDelta: @escaping @Sendable (String) async -> Void
+        onAnswerDelta: @escaping @Sendable (String) async -> Void,
+        onReasoningDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> StreamOutcome {
         let progress = StreamProgress()
         let consume: (any AIProvider, AICompletionRequest) async throws -> StreamOutcome = { provider, request in
-            try await streamOnce(provider: provider, request: request, timeout: timeout) { delta in
-                await progress.note(delta)
-                await onDelta(delta)
-            }
+            try await streamOnce(
+                provider: provider,
+                request: request,
+                timeout: timeout,
+                onAnswerDelta: { delta in
+                    await progress.note(delta)
+                    await onAnswerDelta(delta)
+                },
+                onReasoningDelta: { delta in
+                    await progress.note(delta)
+                    await onReasoningDelta(delta)
+                }
+            )
         }
         do {
             return try await consume(provider, request)
@@ -3213,21 +3240,23 @@ public struct ToolLoop {
     /// 流式请求正常结束但没有任何可见文本/工具调用时，补发一次非流式请求。
     ///
     /// NewAPI/本地中转常见两类兼容差异：SSE 通道提前结束，或模型把内容只放在
-    /// `reasoning_content`。后者不能直接展示给用户，但可以通过非流式兼容路径重新
-    /// 获取标准 `content` / `tool_calls`；若仍为空，交给上层的继续恢复逻辑处理。
+    /// reasoning 通道。后者先做一次无工具、关闭 reasoning 的最终回答修复；若仍
+    /// 为空则明确失败，绝不静默把思考链混进正文。
     private static func streamWithFallback(
         provider: any AIProvider,
         request: AICompletionRequest,
         timeout: TimeInterval,
-        onDelta: @escaping @Sendable (String) async -> Void
+        onAnswerDelta: @escaping @Sendable (String) async -> Void,
+        onReasoningDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> StreamOutcome {
         let streamed = try await streamWithRetry(
             provider: provider,
             request: request,
             timeout: timeout,
-            onDelta: onDelta
+            onAnswerDelta: onAnswerDelta,
+            onReasoningDelta: onReasoningDelta
         )
-        guard streamed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard streamed.answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               streamed.toolCalls.isEmpty
         else {
             return streamed
@@ -3235,15 +3264,61 @@ public struct ToolLoop {
 
         let response = try await completeWithRetry(provider: provider, request: request)
         var fallback = streamed
-        fallback.text = response.content
+        fallback.answerText = response.content
         fallback.toolCalls = response.toolCalls ?? []
         fallback.webCitations = response.webCitations ?? streamed.webCitations
         fallback.inputTokens = response.inputTokens ?? streamed.inputTokens
         fallback.outputTokens = response.outputTokens ?? streamed.outputTokens
+        if fallback.reasoningText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let reasoning = response.reasoning,
+           !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            fallback.reasoningText = reasoning
+            await onReasoningDelta(reasoning)
+        }
         if !response.content.isEmpty {
-            await onDelta(response.content)
+            await onAnswerDelta(response.content)
+        }
+
+        if fallback.answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           fallback.toolCalls.isEmpty {
+            let repair = try await completeWithRetry(
+                provider: provider,
+                request: finalAnswerRepairRequest(from: request)
+            )
+            let repairedAnswer = repair.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !repairedAnswer.isEmpty, repair.toolCalls?.isEmpty != false else {
+                throw AIProviderError.malformedResponse(
+                    detail: "模型未产生可显示正文，且最终回答修复未产生可显示正文",
+                    retryable: false
+                )
+            }
+            fallback.answerText = repair.content
+            fallback.inputTokens = repair.inputTokens ?? fallback.inputTokens
+            fallback.outputTokens = repair.outputTokens ?? fallback.outputTokens
+            await onAnswerDelta(repair.content)
         }
         return fallback
+    }
+
+    private static func finalAnswerRepairRequest(
+        from request: AICompletionRequest
+    ) -> AICompletionRequest {
+        var transcript = request.transcript
+        transcript.append(.userText("基于当前上下文，只输出给用户的最终答案。不要重新调用工具，不要输出思考过程。"))
+        return AICompletionRequest(
+            model: request.model,
+            transcript: transcript,
+            temperature: request.temperature,
+            maxTokens: request.maxTokens,
+            tools: nil,
+            toolChoice: AIToolChoice.none,
+            hostedTools: nil,
+            outputFormat: .text,
+            reasoning: AIReasoningConfiguration(
+                mode: .disabled,
+                effort: request.reasoning?.effort ?? .low
+            )
+        )
     }
 
     /// 单次流式消费（带单轮超时）：遍历 provider 流事件，拼装 `StreamOutcome`。
@@ -3255,7 +3330,8 @@ public struct ToolLoop {
         provider: any AIProvider,
         request: AICompletionRequest,
         timeout: TimeInterval,
-        onDelta: @escaping @Sendable (String) async -> Void
+        onAnswerDelta: @escaping @Sendable (String) async -> Void,
+        onReasoningDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> StreamOutcome {
         try await withTimeout(timeout) {
             var outcome = StreamOutcome()
@@ -3264,9 +3340,16 @@ public struct ToolLoop {
                 switch event {
                 case .started:
                     break
-                case let .delta(text):
-                    outcome.text += text
-                    await onDelta(text)
+                case let .reasoningDelta(text):
+                    outcome.reasoningText += text
+                    await onReasoningDelta(text)
+                case let .answerDelta(text):
+                    outcome.answerText += text
+                    await onAnswerDelta(text)
+                case .unknownDelta:
+                    // An ambiguous gateway field must never be shown as final
+                    // content or persisted into the conversation transcript.
+                    break
                 case let .toolCall(call):
                     outcome.toolCalls.append(call)
                 case let .webCitations(citations):
@@ -3291,6 +3374,16 @@ public struct ToolLoop {
     ) async {
         guard !delta.isEmpty else { return }
         await emit(AgentChatMessage(role: .assistant, messages: [.streaming(delta)]))
+    }
+
+    /// Reasoning has its own transient channel. AgentCoordinator keeps this
+    /// out of SessionStore and removes it when the active run completes.
+    private static func emitStreamingReasoningDelta(
+        _ delta: String,
+        emit: @escaping @Sendable (AgentChatMessage) async -> Void
+    ) async {
+        guard !delta.isEmpty else { return }
+        await emit(AgentChatMessage(role: .assistant, messages: [.reasoning(delta)]))
     }
 
 
@@ -3341,7 +3434,7 @@ public struct ToolLoop {
             return "错误：\(value)"
         case let .streaming(value):
             return value
-        case .toolProgress, .confirmation:
+        case .reasoning, .toolProgress, .confirmation:
             return ""
         }
     }

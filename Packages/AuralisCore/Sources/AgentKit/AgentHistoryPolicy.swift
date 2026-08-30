@@ -136,7 +136,7 @@ public enum AgentHistoryPolicy {
                         continue
                     }
                     content += "（操作预览：\(title)；\(detail)）\n"
-                case .toolProgress, .error, .confirmation, .streaming:
+                case .toolProgress, .error, .confirmation, .streaming, .reasoning:
                     // 这些是 UI/runtime 轨迹，不是对话事实。重新送入模型会把旧错误、
                     // 已结束的确认和半成品当作当前指令，尤其容易污染“继续”任务。
                     continue

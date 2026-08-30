@@ -952,6 +952,9 @@ public final class AuralisAppModel: ObservableObject {
 
         // 安装崩溃日志处理器（仅首次）
         CrashLog.shared.installHandlers()
+        if let previousSession = PlaybackTerminationDiagnostics.shared.beginLaunch().logMessage {
+            CrashLog.shared.log(previousSession)
+        }
         let activity = NSUserActivity(activityType: Self.handoffActivityType)
         activity.title = String(localized: "Auralis 播放", bundle: .module)
         activity.isEligibleForHandoff = true
@@ -1031,6 +1034,9 @@ public final class AuralisAppModel: ObservableObject {
         case .buffering, .stalled:
             playbackState = update.state == .buffering ? .buffering : .stalled
             musicHaptics.buffering()
+            if update.state == .stalled {
+                recordPlaybackTerminationDiagnostic(.playbackStall)
+            }
         case .playing:
             playbackState = .playing
             musicHaptics.audioResumed(position: playbackPosition, rate: Double(update.rate))
@@ -1047,9 +1053,14 @@ public final class AuralisAppModel: ObservableObject {
     /// AVPlayer position is available again.
     public func applicationDidEnterBackground() {
         isInBackground = true
+        // UI position publishing is not needed to keep AVPlayer alive. Stop
+        // the RunLoop timer before the scene is suspended so it cannot keep
+        // waking the MainActor while audio continues in the background.
+        stopProgressTimer()
         musicHaptics.applicationDidEnterBackground()
         lastPlaybackPersistAt = .now
         schedulePlaybackSessionPersistence(immediate: true)
+        recordPlaybackTerminationDiagnostic(.background)
     }
 
     public func applicationDidBecomeActive() async {
@@ -1057,6 +1068,7 @@ public final class AuralisAppModel: ObservableObject {
         await keepAudioSessionActive()
         let state = await engine.state()
         let position = await engine.currentPosition() ?? playbackPosition
+        playbackState = state
         playbackPosition = max(0, position)
         musicHaptics.applicationDidBecomeActive(
             position: playbackPosition,
@@ -1064,6 +1076,72 @@ public final class AuralisAppModel: ObservableObject {
             rate: Double(playbackRate)
         )
         syncProgressTimer()
+        recordPlaybackTerminationDiagnostic(.foreground)
+    }
+
+    /// UIKit forwards memory pressure here so the next-launch diagnostic can
+    /// distinguish an unexplained end from a run that first received a memory
+    /// warning. This is evidence only; iOS does not expose a Jetsam verdict to
+    /// the app sandbox.
+    public func applicationDidReceiveMemoryWarning() {
+        recordPlaybackTerminationDiagnostic(.memoryWarning)
+    }
+
+    /// `applicationWillTerminate` is not guaranteed for background kills, but
+    /// when iOS does call it this marker prevents a clean foreground shutdown
+    /// from being reported as unexplained on the next launch.
+    public func applicationWillTerminate() {
+        PlaybackTerminationDiagnostics.shared.markNormalTermination()
+    }
+
+    private enum PlaybackTerminationDiagnosticEvent {
+        case background
+        case foreground
+        case playbackStall
+        case audioInterruption
+        case memoryWarning
+    }
+
+    private func recordPlaybackTerminationDiagnostic(
+        _ event: PlaybackTerminationDiagnosticEvent
+    ) {
+        let trackIdentity = queueIdentity(currentTrack).description
+        let playbackState: String = switch self.playbackState {
+        case .idle: "idle"
+        case .preparing: "preparing"
+        case .buffering: "buffering"
+        case .playing: "playing"
+        case .paused: "paused"
+        case .stalled: "stalled"
+        case .failed: "failed"
+        }
+        let audioSessionActive = mediaIntegration.audioSession.isActive
+        let hapticsEnabled = currentMusicHapticsEnabled
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let haptics = await self.musicHaptics.diagnostics()
+            let context = PlaybackTerminationDiagnostics.Context(
+                trackIdentity: trackIdentity,
+                playbackState: playbackState,
+                audioSessionActive: audioSessionActive,
+                musicHapticsEnabled: hapticsEnabled,
+                musicHapticsAnalysisMode: haptics.analysisMode.rawValue,
+                musicHapticsAnalysisLeadSeconds: haptics.analysisLeadSeconds
+            )
+            switch event {
+            case .background:
+                PlaybackTerminationDiagnostics.shared.recordBackground(context: context)
+            case .foreground:
+                PlaybackTerminationDiagnostics.shared.recordForeground(context: context)
+            case .playbackStall:
+                PlaybackTerminationDiagnostics.shared.recordPlaybackStall(context: context)
+            case .audioInterruption:
+                PlaybackTerminationDiagnostics.shared.recordAudioInterruption(context: context)
+            case .memoryWarning:
+                PlaybackTerminationDiagnostics.shared.recordMemoryWarning(context: context)
+            }
+        }
     }
 
     // MARK: - 灵动岛（Live Activity）
@@ -1186,7 +1264,10 @@ public final class AuralisAppModel: ObservableObject {
                 onRepeatMode: { [weak self] mode in self?.setRepeatMode(mode) }
             ),
             // 区分「系统中断暂停」与「用户暂停 / 设备断开」，用于正确记录停止原因。
-            onInterruptionBegan: { [weak self] in self?.pausePlayback(reason: .audioSessionInterrupted) },
+            onInterruptionBegan: { [weak self] in
+                self?.recordPlaybackTerminationDiagnostic(.audioInterruption)
+                self?.pausePlayback(reason: .audioSessionInterrupted)
+            },
             onInterruptionShouldResume: { [weak self] in self?.resumePlayback() },
             onOutputDetached: { [weak self] in self?.pausePlayback(reason: .outputDisconnected) },
             onRouteChanged: { [weak self] in
@@ -4700,7 +4781,7 @@ public final class AuralisAppModel: ObservableObject {
     // MARK: - Progress timer
 
     private func syncProgressTimer() {
-        if playbackState == .playing {
+        if playbackState == .playing, !isInBackground {
             recordPlaybackStarted(for: currentTrack)
             startProgressTimer()
         } else {
@@ -4737,6 +4818,10 @@ public final class AuralisAppModel: ObservableObject {
         isAdvancingProgress = true
         Task { @MainActor in
             defer { self.isAdvancingProgress = false }
+            // A timer tick may already be awaiting AVPlayer when the scene
+            // enters background. Do not publish a stale UI position or start
+            // any sidecar work after that boundary.
+            guard !self.isInBackground else { return }
             // 时长只读缓存：引擎按 item 解析一次/变化时更新，tick 不做重负载读取。
             if let realDuration = await self.engine.currentDuration() {
                 self.actualDuration = realDuration
