@@ -9,6 +9,10 @@ public protocol MusicHapticsAnalysisSink: AnyObject, Sendable {
     /// Called after the PlaybackEngine successfully installs the audio mix.
     /// `begin(format:)` is invoked later when AVFoundation prepares the tap.
     func tapAttached()
+    /// True only after the PlaybackEngine has successfully installed the tap.
+    /// A remote lookahead failure may use this value to decide whether the
+    /// pre-play realtime fallback is actually available.
+    var tapIsAttached: Bool { get }
     func begin(format: MusicHapticsPCMFormat)
     func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int)
     /// Reserves a preallocated PCM slot for the audio render callback. The
@@ -31,6 +35,8 @@ public protocol MusicHapticsAnalysisSink: AnyObject, Sendable {
 }
 
 public extension MusicHapticsAnalysisSink {
+    var tapIsAttached: Bool { false }
+
     func beginPCMFrame(
         time: TimeInterval,
         format: MusicHapticsPCMFormat,
@@ -488,6 +494,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
     public func tapAttached() {
         stateLock.withLock { tapWasAttached = true }
         publishProgress()
+    }
+
+    public var tapIsAttached: Bool {
+        stateLock.withLock { tapWasAttached }
     }
 
     public func begin(format: MusicHapticsPCMFormat) {

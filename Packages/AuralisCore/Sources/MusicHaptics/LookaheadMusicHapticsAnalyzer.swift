@@ -143,6 +143,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
     public typealias ResultHandler = @Sendable (MusicHapticsAnalysisResult) -> Void
     public typealias FailureHandler = @Sendable () -> Void
     public typealias DiagnosticHandler = @Sendable (MusicHapticsAnalysisDiagnostic) -> Void
+    public typealias DecoderFailureHandler = @Sendable (MusicHapticsDecoderFailure) -> Void
     public typealias FallbackSourceProvider = @Sendable (MusicHapticsAnalysisSource) async -> [MusicHapticsAnalysisSource]
 
     private let lock = NSLock()
@@ -154,6 +155,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
     private let onResult: ResultHandler
     private let onFailure: FailureHandler
     private let onDiagnostic: DiagnosticHandler
+    private let onDecoderFailure: DecoderFailureHandler
     private let fallbackSourceProvider: FallbackSourceProvider
     private let state: State
     private var task: Task<Void, Never>?
@@ -172,6 +174,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         onProgress: @escaping SnapshotHandler = { _ in },
         onFailure: @escaping FailureHandler = {},
         onDiagnostic: @escaping DiagnosticHandler = { _ in },
+        onDecoderFailure: @escaping DecoderFailureHandler = { _ in },
         fallbackSourceProvider: @escaping FallbackSourceProvider = { _ in [] }
     ) {
         self.identity = identity
@@ -191,6 +194,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         self.onProgress = onProgress
         self.onFailure = onFailure
         self.onDiagnostic = onDiagnostic
+        self.onDecoderFailure = onDecoderFailure
         self.fallbackSourceProvider = fallbackSourceProvider
         self.state = State(identity: identity, duration: safeDuration, partial: self.partial)
     }
@@ -297,7 +301,8 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                         sourceMode: .remoteLookahead,
                         nextWindowStart: &nextWindowStart,
                         windowLength: windowLength,
-                        bitrate: remote.bitrate
+                        bitrate: remote.bitrate,
+                        fileExtension: remote.format
                     )
                 case let .remoteProgressive(url):
                     try await read(
@@ -305,7 +310,8 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                         sourceMode: .remoteProgressive,
                         nextWindowStart: &nextWindowStart,
                         windowLength: windowLength,
-                        bitrate: nil
+                        bitrate: nil,
+                        fileExtension: url.pathExtension
                     )
                 case .realtimeTap:
                     throw MusicHapticsAnalyzerError.cannotDecode
@@ -358,12 +364,12 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                     }
                     return true
                 }) else {
-                    // The current AVPlayer item is deliberately not touched.
-                    // A remote realtime tap would require mutating an item
-                    // that is already decoding, so it is an invalid recovery
-                    // path for this lookahead plan.
-                    onDiagnostic(.realtimeFallbackForbidden)
-                    onDiagnostic(.noHapticEventSource)
+                    // The analyzer owns only independent sidecar sources. A
+                    // realtime fallback, when available, is attached by the
+                    // PlaybackEngine before AVPlayer starts and is activated by
+                    // the coordinator after this callback. Do not claim that
+                    // fallback is forbidden here: this layer cannot know
+                    // whether a pre-play tap was installed.
                     onFailure()
                     let reason = lock.withLock { requestedFinishReason ?? .playbackFailure }
                     await emitResult(reason: reason, sourceMode: currentSource.mode)
@@ -387,21 +393,62 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         sourceMode: MusicHapticsAnalysisMode,
         nextWindowStart: inout TimeInterval,
         windowLength: TimeInterval,
-        bitrate: Int? = nil
+        bitrate: Int? = nil,
+        fileExtension: String? = nil
     ) async throws {
         let startedAt = ContinuousClock.now
         await state.setAnalysisStreamBitrate(bitrate)
-        let asset = AVURLAsset(url: url)
+        let materializedURL: URL
+        if sourceMode == .remoteLookahead || sourceMode == .remoteProgressive,
+           !url.isFileURL {
+            do {
+                materializedURL = try await materializeRemoteAudio(
+                    url: url,
+                    fileExtension: fileExtension
+                )
+            } catch {
+                reportDecoderFailure(.remoteDownloadFailed, sourceMode: sourceMode, error: error)
+                throw error
+            }
+        } else {
+            materializedURL = url
+        }
+        defer {
+            if materializedURL != url {
+                try? FileManager.default.removeItem(at: materializedURL)
+            }
+        }
+        // AVAssetReader is reliable once it receives a complete local file.
+        // In particular, AVURLAsset.loadTracks/AVAssetReader.startReading do
+        // not consistently decode authenticated progressive HTTP audio on a
+        // device. The download is an independent sidecar and never touches
+        // the AVPlayerItem that owns authoritative playback.
+        let asset = AVURLAsset(url: materializedURL)
         // Do not wait for remote duration metadata before decoding. The
         // catalog duration is already part of the request, and HTTP/MP3
         // sidecars may expose an indefinite duration until substantial data
         // has arrived. This keeps the first lookahead window on the decode
         // path instead of on a metadata round trip.
         let sourceDuration = duration
-        let tracks = try await asset.loadTracks(withMediaType: .audio)
-        guard let track = tracks.first else { throw MusicHapticsAnalyzerError.noAudioTrack }
+        let tracks: [AVAssetTrack]
+        do {
+            tracks = try await asset.loadTracks(withMediaType: .audio)
+        } catch {
+            reportDecoderFailure(.loadTracksFailed, sourceMode: sourceMode, error: error)
+            throw error
+        }
+        guard let track = tracks.first else {
+            reportDecoderFailure(.noAudioTrack, sourceMode: sourceMode)
+            throw MusicHapticsAnalyzerError.noAudioTrack
+        }
         let sampleRate = 22_050.0
-        let reader = try AVAssetReader(asset: asset)
+        let reader: AVAssetReader
+        do {
+            reader = try AVAssetReader(asset: asset)
+        } catch {
+            reportDecoderFailure(.readerInitFailed, sourceMode: sourceMode, error: error)
+            throw error
+        }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: sampleRate,
@@ -411,9 +458,16 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
             AVLinearPCMIsBigEndianKey: false,
         ])
         output.alwaysCopiesSampleData = false
-        guard reader.canAdd(output) else { throw MusicHapticsAnalyzerError.cannotDecode }
+        guard reader.canAdd(output) else {
+            reportDecoderFailure(.readerOutputConfigurationFailed, sourceMode: sourceMode)
+            throw MusicHapticsAnalyzerError.cannotDecode
+        }
         reader.add(output)
-        guard reader.startReading() else { throw reader.error ?? MusicHapticsAnalyzerError.cannotDecode }
+        guard reader.startReading() else {
+            let error = reader.error
+            reportDecoderFailure(.readerStartFailed, sourceMode: sourceMode, error: error)
+            throw error ?? MusicHapticsAnalyzerError.cannotDecode
+        }
 
         let format = MusicHapticsPCMFormat(
             sampleRate: sampleRate,
@@ -426,6 +480,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         var analysisPosition = nextWindowStart
         var nextProgressPosition = nextWindowStart
         var nextProgressWallTime: Double = 0
+        var decodedFrameCount = 0
         while true {
             guard await control.waitUntilReady(
                 analysisPosition: analysisPosition,
@@ -467,6 +522,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                     duration: sampleLength
                 )
             }
+            decodedFrameCount += frameCount
             analysisPosition = max(analysisPosition, sampleEnd)
             let wallTime = durationSeconds(startedAt.duration(to: .now))
             if analysisPosition >= nextProgressPosition,
@@ -494,7 +550,15 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                 if nextWindowStart >= duration { break }
             }
         }
-        if reader.status == .failed { throw reader.error ?? MusicHapticsAnalyzerError.cannotDecode }
+        if reader.status == .failed {
+            let error = reader.error
+            reportDecoderFailure(.sampleReadFailed, sourceMode: sourceMode, error: error)
+            throw error ?? MusicHapticsAnalyzerError.cannotDecode
+        }
+        guard decodedFrameCount > 0 else {
+            reportDecoderFailure(.sampleDataUnavailable, sourceMode: sourceMode)
+            throw MusicHapticsAnalyzerError.cannotDecode
+        }
         let progress = await state.progress(
             sourceMode: sourceMode,
             startedAt: startedAt,
@@ -533,6 +597,68 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         let components = duration.components
         return Double(components.seconds)
             + Double(components.attoseconds) / 1_000_000_000_000_000_000
+    }
+
+    private func reportDecoderFailure(
+        _ diagnostic: MusicHapticsAnalysisDiagnostic,
+        sourceMode: MusicHapticsAnalysisMode,
+        error: Error? = nil
+    ) {
+        guard sourceMode == .remoteLookahead || sourceMode == .remoteProgressive else { return }
+        let nsError = error as NSError?
+        let failure = MusicHapticsDecoderFailure(
+            diagnostic: diagnostic,
+            errorDomain: nsError?.domain ?? "AuralisMusicHaptics",
+            errorCode: nsError?.code ?? 0
+        )
+        onDecoderFailure(failure)
+    }
+
+    private func materializeRemoteAudio(
+        url: URL,
+        fileExtension: String?
+    ) async throws -> URL {
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 30
+        request.setValue("audio/mpeg,audio/*;q=0.9,*/*;q=0.1", forHTTPHeaderField: "Accept")
+
+        let (downloadURL, response) = try await URLSession.shared.download(for: request)
+        var moved = false
+        defer {
+            if !moved {
+                try? FileManager.default.removeItem(at: downloadURL)
+            }
+        }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw MusicHapticsRemoteAudioError.nonHTTPResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw MusicHapticsRemoteAudioError.httpStatus(httpResponse.statusCode)
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: downloadURL.path)
+        guard (attributes[.size] as? NSNumber)?.intValue ?? 0 > 0 else {
+            throw MusicHapticsRemoteAudioError.emptyResponse
+        }
+
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-haptics-sidecar-\(UUID().uuidString)")
+            .appendingPathExtension(Self.safeAudioFileExtension(fileExtension))
+        try FileManager.default.moveItem(at: downloadURL, to: destination)
+        moved = true
+        return destination
+    }
+
+    private static func safeAudioFileExtension(_ fileExtension: String?) -> String {
+        let value = (fileExtension ?? "mp3").lowercased()
+        let allowed = Set(["mp3", "m4a", "aac", "wav", "caf", "flac", "mp4"])
+        return allowed.contains(value) ? value : "mp3"
+    }
+
+    private enum MusicHapticsRemoteAudioError: Error {
+        case nonHTTPResponse
+        case httpStatus(Int)
+        case emptyResponse
     }
 
     private actor State {

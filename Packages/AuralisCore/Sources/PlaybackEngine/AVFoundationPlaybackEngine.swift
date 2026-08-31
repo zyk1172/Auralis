@@ -172,6 +172,22 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             sink.cancel()
             logSkippedTapSetup(for: preparation.plan)
             return false
+        } else if let sink = realtimeTapSink(for: preparation) {
+            if sink.tapIsAttached {
+                activeRealtimeFallbackPreparationID = preparation.id
+                AuralisLog.playback.debug(
+                    "HAPTICS_REALTIME_FALLBACK_READY preparation=\(preparation.id.uuidString, privacy: .public) phase=late_install"
+                )
+            } else {
+                // This preparation arrived after the current item started. Do
+                // not hot-insert an AVAudioMix; the coordinator will expose
+                // realtime_fallback_forbidden and fail the haptics path closed.
+                sink.cancel()
+                AuralisLog.playback.debug(
+                    "HAPTICS_REALTIME_FALLBACK_FORBIDDEN preparation=\(preparation.id.uuidString, privacy: .public) phase=late_install"
+                )
+            }
+            logSkippedTapSetup(for: preparation.plan)
         } else {
             logSkippedTapSetup(for: preparation.plan)
         }
@@ -197,13 +213,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedTapSetupTask = nil
         finishPreparedMusicHaptics(reason: .preparationReplaced)
         preparedMusicHapticsPreparation = preparation
-        if case .analyze = preparation.plan,
-           let sink = preparation.analysisSink {
+        if let sink = realtimeTapSink(for: preparation) {
             scheduleTapSetup(
                 for: item,
                 sink: sink,
                 isPrepared: true,
-                generation: playGeneration
+                generation: playGeneration,
+                planLabel: preparation.plan.kind.rawValue
             )
         } else {
             logSkippedTapSetup(for: preparation.plan)
@@ -299,24 +315,25 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         // 只记录脱敏后的地址（去掉查询串，查询串含认证参数）。
         CrashLog.shared.log("创建 AVPlayerItem，URL: \(Self.redactedURL(streamURL))")
         let itemStart = ContinuousClock.now
-        // AVPlayerItem(url:) is intentionally created synchronously. A tap is
-        // only eligible for a local file and is resolved before insertion/play;
-        // remote/HLS items never receive a realtime tap.
+        // AVPlayerItem(url:) is intentionally created synchronously. Any
+        // realtime fallback tap was resolved before this item is inserted and
+        // before player.play(); remote sidecar analysis remains independent.
         let item = AVPlayerItem(url: streamURL)
         let preparation = pendingMusicHapticsPreparation
         pendingMusicHapticsPreparation = nil
         activeMusicHapticsPreparation = preparation
         activeRealtimeFallbackPreparationID = nil
         if let preparation,
-           case .analyze = preparation.plan,
-           let sink = preparation.analysisSink {
-            if streamURL.isFileURL,
-               let mix = await Self.makeAudioMix(for: item, sink: sink) {
+           let sink = realtimeTapSink(for: preparation) {
+            if let mix = await Self.makeAudioMix(for: item, sink: sink) {
                 item.audioMix = mix
                 sink.tapAttached()
+                if case .analyzeLookahead = preparation.plan {
+                    activeRealtimeFallbackPreparationID = preparation.id
+                }
             } else {
                 sink.cancel()
-                logSkippedTapSetup(for: preparation.plan)
+                logTapSetupFailure(for: preparation.plan)
             }
         }
         let itemMs = durationMs(itemStart.duration(to: .now))
@@ -422,9 +439,14 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         player.insert(item, after: nil)
         observePreparedItemFailure(for: item)
         if let preparation = musicHapticsPreparation,
-           case .analyze = preparation.plan,
-           let sink = preparation.analysisSink {
-            scheduleTapSetup(for: item, sink: sink, isPrepared: true, generation: playGeneration)
+           let sink = realtimeTapSink(for: preparation) {
+            scheduleTapSetup(
+                for: item,
+                sink: sink,
+                isPrepared: true,
+                generation: playGeneration,
+                planLabel: preparation.plan.kind.rawValue
+            )
         } else {
             logSkippedTapSetup(for: musicHapticsPreparation?.plan)
         }
@@ -752,7 +774,9 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         currentTapSetupTask = nil
         finishActiveMusicHaptics(reason: .naturalEnd)
         activeMusicHapticsPreparation = preparedMusicHapticsPreparation
-        activeRealtimeFallbackPreparationID = nil
+        activeRealtimeFallbackPreparationID = preparedMusicHapticsPreparation.flatMap { preparation in
+            preparation.realtimeFallbackSink?.tapIsAttached == true ? preparation.id : nil
+        }
         preparedMusicHapticsPreparation = nil
         currentTapSetupTask = preparedTapSetupTask
         preparedTapSetupTask = nil
@@ -957,6 +981,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             } else {
                 sink.cancel()
                 attached = false
+                let plan = planLabel
+                AuralisLog.playback.debug(
+                    "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false failed=true plan=\(plan, privacy: .public)"
+                )
             }
             let setupMs = self.durationMs(setupStart.duration(to: .now))
             AuralisLog.playback.debug(
@@ -974,19 +1002,67 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         for item: AVPlayerItem,
         sink: any MusicHapticsAnalysisSink
     ) async -> AVAudioMix? {
-        guard let asset = item.asset as? AVURLAsset, asset.url.isFileURL else {
+        let tracks: [AVAssetTrack]
+        do {
+            tracks = try await item.asset.loadTracks(withMediaType: .audio)
+        } catch {
+            let nsError = error as NSError
+            AuralisLog.playback.debug(
+                "HAPTICS_TAP_DECODER stage=load_tracks_failed domain=\(Self.safeErrorDomain(nsError.domain), privacy: .public) code=\(nsError.code, privacy: .public)"
+            )
             return nil
         }
-        guard let track = try? await item.asset.loadTracks(withMediaType: .audio).first else {
+        guard let track = tracks.first else {
+            AuralisLog.playback.debug(
+                "HAPTICS_TAP_DECODER stage=no_audio_track domain=AuralisPlaybackEngine code=0"
+            )
             return nil
         }
-        return MusicHapticsAudioTap.makeMix(track: track, sink: sink)
+        guard let mix = MusicHapticsAudioTap.makeMix(track: track, sink: sink) else {
+            AuralisLog.playback.debug(
+                "HAPTICS_TAP_DECODER stage=tap_creation_failed domain=AuralisPlaybackEngine code=0"
+            )
+            return nil
+        }
+        return mix
+    }
+
+    private func realtimeTapSink(
+        for preparation: MusicHapticsPlaybackPreparation
+    ) -> (any MusicHapticsAnalysisSink)? {
+        switch preparation.plan {
+        case .analyze:
+            return preparation.analysisSink
+        case let .analyzeLookahead(request):
+            switch request.analysisSource {
+            case .remoteLookahead, .remoteProgressive:
+                return preparation.realtimeFallbackSink
+            case .localFile, .realtimeTap:
+                return nil
+            }
+        case .disabled, .system, .custom:
+            return nil
+        }
+    }
+
+    private static func safeErrorDomain(_ domain: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        let sanitized = domain.unicodeScalars.filter { allowed.contains($0) }
+        let value = String(String.UnicodeScalarView(sanitized))
+        return String(value.prefix(64)).isEmpty ? "unknown" : String(value.prefix(64))
     }
 
     private func logSkippedTapSetup(for plan: MusicHapticsPlaybackPlan?) {
         let planKind = plan?.kind.rawValue ?? MusicHapticsPlanKind.disabled.rawValue
         AuralisLog.playback.debug(
             "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false skipped=true plan=\(planKind, privacy: .public)"
+        )
+    }
+
+    private func logTapSetupFailure(for plan: MusicHapticsPlaybackPlan?) {
+        let planKind = plan?.kind.rawValue ?? MusicHapticsPlanKind.disabled.rawValue
+        AuralisLog.playback.debug(
+            "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false failed=true plan=\(planKind, privacy: .public)"
         )
     }
 
@@ -1025,9 +1101,10 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedMusicHapticsPreparation = nil
     }
 
-    /// Legacy compatibility entry point. Remote lookahead recovery is now
-    /// handled by independent sidecar analyzers; this method intentionally
-    /// never mutates the current AVPlayerItem or cancels the supplied sink.
+    /// Compatibility entry point for callers that already attached a fallback
+    /// before playback. It never mutates the current AVPlayerItem; a fallback
+    /// that was not pre-attached is explicitly rejected instead of hot-inserting
+    /// an AVAudioMix into a running decode graph.
     @discardableResult
     public func activateMusicHapticsRealtimeFallback(
         preparationID: UUID,
@@ -1035,18 +1112,27 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     ) -> Bool {
         guard let preparation = activeMusicHapticsPreparation,
               preparation.id == preparationID,
-              avPlayer?.currentItem != nil,
-              activeRealtimeFallbackPreparationID != preparationID
+              avPlayer?.currentItem != nil
         else {
             return false
         }
-        // The current item is already decoding. Never hot-insert an audio mix
-        // for a fallback; the coordinator records
-        // `realtime_fallback_forbidden` and keeps audio authoritative.
+        guard let fallback = preparation.realtimeFallbackSink,
+              fallback.tapIsAttached,
+              activeRealtimeFallbackPreparationID == preparationID else {
+            // The current item is already decoding. Never hot-insert an audio
+            // mix for a fallback; the coordinator records
+            // `realtime_fallback_forbidden` and keeps audio authoritative.
+            sink.cancel()
+            AuralisLog.playback.debug(
+                "HAPTICS_REALTIME_FALLBACK_FORBIDDEN preparation=\(preparation.id.uuidString, privacy: .public) phase=compatibility_call"
+            )
+            return false
+        }
+        fallback.resume()
         AuralisLog.playback.debug(
-            "HAPTICS_REALTIME_FALLBACK_FORBIDDEN preparation=\(preparation.id.uuidString, privacy: .public)"
+            "HAPTICS_REALTIME_FALLBACK_ACTIVE preparation=\(preparation.id.uuidString, privacy: .public) phase=compatibility_call"
         )
-        return false
+        return true
     }
 }
 

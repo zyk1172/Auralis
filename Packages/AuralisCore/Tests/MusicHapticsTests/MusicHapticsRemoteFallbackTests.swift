@@ -191,8 +191,6 @@ struct MusicHapticsRemoteFallbackTests {
             .remoteDecoderFailed,
             .remoteProgressiveFallback,
             .remoteDecoderFailed,
-            .realtimeFallbackForbidden,
-            .noHapticEventSource,
         ])
     }
 
@@ -214,11 +212,7 @@ struct MusicHapticsRemoteFallbackTests {
         #expect(run.failureCount == 1)
         #expect(run.result.finishReason == .playbackFailure)
         #expect(run.result.snapshot.analysisMode == .remoteLookahead)
-        #expect(run.diagnostics == [
-            .remoteDecoderFailed,
-            .realtimeFallbackForbidden,
-            .noHapticEventSource,
-        ])
+        #expect(run.diagnostics == [.remoteDecoderFailed])
     }
 
     private func testIdentity() -> MusicHapticsIdentity {

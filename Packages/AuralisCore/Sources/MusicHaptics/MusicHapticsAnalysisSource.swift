@@ -49,10 +49,50 @@ public enum MusicHapticsAnalysisMode: String, Codable, Hashable, Sendable {
 /// device logs can be searched without exposing a URL or server credential.
 public enum MusicHapticsAnalysisDiagnostic: String, Codable, Hashable, Sendable {
     case remoteSidecarURLUnavailable = "remote_sidecar_url_unavailable"
+    case remoteDownloadFailed = "remote_download_failed"
+    case loadTracksFailed = "load_tracks_failed"
+    case noAudioTrack = "no_audio_track"
+    case readerInitFailed = "reader_init_failed"
+    case readerOutputConfigurationFailed = "reader_output_configuration_failed"
+    case readerStartFailed = "reader_start_failed"
+    case sampleReadFailed = "sample_read_failed"
+    case sampleDataUnavailable = "sample_data_unavailable"
     case remoteDecoderFailed = "remote_decoder_failed"
     case remoteProgressiveFallback = "remote_progressive_fallback"
     case realtimeFallbackForbidden = "realtime_fallback_forbidden"
     case noHapticEventSource = "no_haptic_event_source"
+}
+
+/// A decoder failure that is safe to expose in diagnostics. The source URL,
+/// query items, credentials and localized error text are intentionally omitted;
+/// the NSError domain and code are enough to distinguish the AVFoundation
+/// failure stage on a real device.
+public struct MusicHapticsDecoderFailure: Hashable, Sendable {
+    public let diagnostic: MusicHapticsAnalysisDiagnostic
+    public let errorDomain: String
+    public let errorCode: Int
+
+    public init(
+        diagnostic: MusicHapticsAnalysisDiagnostic,
+        errorDomain: String = "AuralisMusicHaptics",
+        errorCode: Int = 0
+    ) {
+        self.diagnostic = diagnostic
+        self.errorDomain = Self.sanitizedDomain(errorDomain)
+        self.errorCode = errorCode
+    }
+
+    public var summary: String {
+        let reason = diagnostic.rawValue
+        return "\(reason) domain=\(errorDomain) code=\(errorCode)"
+    }
+
+    private static func sanitizedDomain(_ domain: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
+        let sanitized = domain.unicodeScalars.filter { allowed.contains($0) }
+        let value = String(String.UnicodeScalarView(sanitized))
+        return String(value.prefix(64)).isEmpty ? "unknown" : String(value.prefix(64))
+    }
 }
 
 /// The AppShell/connector layer implements this protocol.  It may use an

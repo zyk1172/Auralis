@@ -63,45 +63,6 @@ private final class MusicHapticsIdentityResolutionGate: @unchecked Sendable {
     }
 }
 
-/// Returns the preparation that finishes first without making a timed-out
-/// playback caller wait for the underlying enrichment task. The latter is
-/// intentionally allowed to finish so its cache warming can help a later
-/// playback request.
-private final class MusicHapticsPreparationResolutionGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var resolved = false
-    private var preparation: MusicHapticsPlaybackPreparation?
-    private var continuation: CheckedContinuation<MusicHapticsPlaybackPreparation?, Never>?
-
-    func wait() async -> MusicHapticsPlaybackPreparation? {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            if resolved {
-                let preparation = self.preparation
-                lock.unlock()
-                continuation.resume(returning: preparation)
-            } else {
-                self.continuation = continuation
-                lock.unlock()
-            }
-        }
-    }
-
-    func resolve(_ preparation: MusicHapticsPlaybackPreparation?) {
-        lock.lock()
-        guard !resolved else {
-            lock.unlock()
-            return
-        }
-        resolved = true
-        self.preparation = preparation
-        let continuation = self.continuation
-        self.continuation = nil
-        lock.unlock()
-        continuation?.resume(returning: preparation)
-    }
-}
-
 @MainActor
 public final class AuralisAppModel: ObservableObject {
     /// App 全局共享实例：快捷指令 / Siri 等系统入口需要访问与界面同一个播放服务。
@@ -2292,12 +2253,12 @@ public final class AuralisAppModel: ObservableObject {
             guard !Task.isCancelled,
                   self.queueIdentity(self.currentTrack) == self.queueIdentity(track) else { return }
             do {
-                // The AVFoundation path resolves the one Haptics plan in
-                // parallel, then installs it after the normal item has
-                // started.  This keeps all sidecar/system work out of the
-                // click -> player.play() critical section. The same ordering
-                // is kept for every playback engine so Haptics can never hold
-                // the audio start hostage.
+                // Resolve the one Haptics plan before AVPlayerItem insertion.
+                // Remote lookahead owns an independent sidecar, while its
+                // realtime fallback must be attached before player.play() so
+                // a decoder failure never requires a hot AVAudioMix insert.
+                // The sidecar decoder itself starts only after audio is live;
+                // only lightweight plan/identity resolution is on this gate.
                 hapticsPreparation = try await self.playWithMusicHaptics(
                     track: playable,
                     favorite: playable.isFavorite,
@@ -3007,34 +2968,11 @@ public final class AuralisAppModel: ObservableObject {
         return track.streamURL == nil ? nil : track
     }
 
-    private func preparationReadyBeforeAudioStart(
-        _ task: Task<MusicHapticsPlaybackPreparation?, Never>
-    ) async -> MusicHapticsPlaybackPreparation? {
-        let gate = MusicHapticsPreparationResolutionGate()
-        Task { @MainActor [gate] in
-            gate.resolve(await task.value)
-        }
-        let timeoutTask = Task { @MainActor [gate] in
-            do {
-                try await Task.sleep(for: Self.hapticsIdentityPreparationDeadline)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            gate.resolve(nil)
-        }
-        let preparation = await withTaskCancellationHandler(operation: {
-            await gate.wait()
-        }, onCancel: {
-            gate.resolve(nil)
-        })
-        timeoutTask.cancel()
-        return preparation
-    }
-
-    /// Resolves a local-file sidecar within a short bounded budget so its tap
-    /// can be attached before AVPlayer insertion. Remote/HLS playback starts
-    /// without a realtime tap; late analysis never mutates the current item.
+    /// Resolves the Haptics plan before AVPlayerItem insertion for every source.
+    /// Remote lookahead gets a pre-play PCM tap here, so a sidecar decoder
+    /// failure can fall back without mutating the item that is already playing.
+    /// The sidecar itself remains independent and never blocks on AVAssetReader
+    /// metadata or changes the authoritative audio URL.
     private func playWithMusicHaptics(
         track: Track,
         favorite: Bool,
@@ -3061,14 +2999,15 @@ public final class AuralisAppModel: ObservableObject {
             )
         }
 
-        var preparationBeforeAudioStart: MusicHapticsPlaybackPreparation?
-        if track.streamURL?.isFileURL == true {
-            preparationBeforeAudioStart = await preparationReadyBeforeAudioStart(preparationTask)
-            try Task.checkCancellation()
-            if let preparationBeforeAudioStart,
-               let avEngine = engine as? AVFoundationPlaybackEngine {
-                avEngine.setMusicHapticsPlaybackPreparation(preparationBeforeAudioStart)
-            }
+        let preparationBeforeAudioStart = await withTaskCancellationHandler(operation: {
+            await preparationTask.value
+        }, onCancel: {
+            preparationTask.cancel()
+        })
+        try Task.checkCancellation()
+        if let preparationBeforeAudioStart,
+           let avEngine = engine as? AVFoundationPlaybackEngine {
+            avEngine.setMusicHapticsPlaybackPreparation(preparationBeforeAudioStart)
         }
 
         do {
