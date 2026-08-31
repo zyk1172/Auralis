@@ -209,6 +209,7 @@ private struct MusicHapticsDiagnosticsPage: View {
                 LabeledContent("timelineExists", value: displayDiagnostics.timelineExists ? "true" : "false")
                 LabeledContent("hapticsPlan", value: displayDiagnostics.playbackPlan.rawValue)
                 LabeledContent("planReason", value: displayDiagnostics.planReason)
+                LabeledContent("analysisFailureReason", value: displayDiagnostics.analysisFailureReason ?? "none")
                 LabeledContent("hasISRC", value: displayDiagnostics.hasReliableISRC ? "true" : "false")
                 LabeledContent("systemTimelineAvailable", value: displayDiagnostics.systemTimelineAvailable ? "true" : "false")
                 LabeledContent("fullTimelineExists", value: displayDiagnostics.fullTimelineExists ? "true" : "false")

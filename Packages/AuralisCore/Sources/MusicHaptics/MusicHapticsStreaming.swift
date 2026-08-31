@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import Synchronization
 
 /// PCM hand-off point used by the playback engine. Implementations must be
@@ -84,6 +85,10 @@ private final class MusicHapticsPCMFrameRing: @unchecked Sendable {
     private let writeIndex = Atomic<UInt64>(0)
     private let readIndex = Atomic<UInt64>(0)
     private let producerInFlight = Atomic<UInt8>(0)
+    /// Pre-created wakeup used by the utility consumer. The render callback
+    /// only signals after publishing a slot; it never creates a task or
+    /// allocates storage.
+    private let dataAvailable = DispatchSemaphore(value: 0)
     /// Only the single audio producer touches this value.
     private var reservedIndex: UInt64?
 
@@ -130,12 +135,21 @@ private final class MusicHapticsPCMFrameRing: @unchecked Sendable {
         writeIndex.store(reservedIndex &+ 1, ordering: .releasing)
         self.reservedIndex = nil
         producerInFlight.store(0, ordering: .releasing)
+        dataAvailable.signal()
     }
 
     func abort() {
         guard reservedIndex != nil else { return }
         reservedIndex = nil
         producerInFlight.store(0, ordering: .releasing)
+    }
+
+    func wakeConsumer() {
+        dataAvailable.signal()
+    }
+
+    func waitForData(timeout: DispatchTimeInterval) {
+        _ = dataAvailable.wait(timeout: .now() + timeout)
     }
 
     func dequeue() -> Frame? {
@@ -545,6 +559,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             generation.wrappingAdd(1, ordering: .acquiringAndReleasing)
             pendingSeek = nil
         }
+        pcmRing.wakeConsumer()
     }
 
     public func resume() {
@@ -554,7 +569,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             lifecycle.store(Lifecycle.active, ordering: .releasing)
             return true
         }
-        if shouldResume { ensureDrainTask() }
+        if shouldResume {
+            ensureDrainTask()
+            pcmRing.wakeConsumer()
+        }
     }
 
     public func seek(to position: TimeInterval) {
@@ -566,7 +584,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             generation.wrappingAdd(1, ordering: .acquiringAndReleasing)
             return true
         }
-        if shouldStartDrain { ensureDrainTask() }
+        if shouldStartDrain {
+            ensureDrainTask()
+            pcmRing.wakeConsumer()
+        }
     }
 
     public func finish() {
@@ -584,6 +605,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             drainTask?.cancel()
             drainTask = nil
         }
+        pcmRing.wakeConsumer()
     }
 
     public func partialCheckpoint() async -> MusicHapticsPartialCheckpoint {
@@ -598,7 +620,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             lifecycle.store(Lifecycle.finishing, ordering: .releasing)
             return true
         }
-        if shouldStartDrain { ensureDrainTask() }
+        if shouldStartDrain {
+            ensureDrainTask()
+            pcmRing.wakeConsumer()
+        }
     }
 
     private func ensureDrainTask() {
@@ -651,7 +676,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
                 // a stale backlog. No frame is accepted by beginPCMFrame.
                 while pcmRing.dequeue() != nil {}
             }
-            try? await Task.sleep(for: .milliseconds(2))
+            // PCM windows are consumed as soon as a slot is published. The
+            // timeout is only a bounded safety net for producer/finish races;
+            // it reduces idle wakeups from ~500/s to at most ~50/s.
+            pcmRing.waitForData(timeout: .milliseconds(20))
         }
     }
 
@@ -666,7 +694,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
         // A callback that reserved a slot before finish() must either commit
         // or abort before the terminal result is materialized.
         while !pcmRing.isEmpty || !pcmRing.isProducerIdle {
-            try? await Task.sleep(for: .milliseconds(2))
+            pcmRing.waitForData(timeout: .milliseconds(20))
         }
         await accumulator.flush()
         let checkpoint = await accumulator.checkpoint(identity: identity, duration: duration)

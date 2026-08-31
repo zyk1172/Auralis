@@ -971,17 +971,6 @@ public final class AuralisAppModel: ObservableObject {
         self.musicHaptics.setAnalysisSourceProvider(
             AuralisMusicHapticsAnalysisSourceProvider(connector: resolvedConnector)
         )
-        if let avEngine = engine as? AVFoundationPlaybackEngine {
-            // Lookahead is the primary source. The engine receives this
-            // callback only after that source fails, so the successful path
-            // never installs a realtime tap.
-            self.musicHaptics.setRealtimeFallbackHandler { [weak avEngine] preparationID, sink in
-                avEngine?.activateMusicHapticsRealtimeFallback(
-                    preparationID: preparationID,
-                    sink: sink
-                ) ?? false
-            }
-        }
         self.artworkStore.onArtworkLoaded = { [weak self] key, data in
             guard let self, key == self.currentTrack.artworkKey else { return }
             self.mediaIntegration.artworkLoaded(

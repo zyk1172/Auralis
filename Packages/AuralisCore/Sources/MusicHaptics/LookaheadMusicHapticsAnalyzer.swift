@@ -142,6 +142,8 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
     public typealias SnapshotHandler = @Sendable (MusicHapticsAnalysisSnapshot) -> Void
     public typealias ResultHandler = @Sendable (MusicHapticsAnalysisResult) -> Void
     public typealias FailureHandler = @Sendable () -> Void
+    public typealias DiagnosticHandler = @Sendable (MusicHapticsAnalysisDiagnostic) -> Void
+    public typealias FallbackSourceProvider = @Sendable (MusicHapticsAnalysisSource) async -> [MusicHapticsAnalysisSource]
 
     private let lock = NSLock()
     private let identity: MusicHapticsIdentity
@@ -151,6 +153,8 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
     private let onProgress: SnapshotHandler
     private let onResult: ResultHandler
     private let onFailure: FailureHandler
+    private let onDiagnostic: DiagnosticHandler
+    private let fallbackSourceProvider: FallbackSourceProvider
     private let state: State
     private var task: Task<Void, Never>?
     private var didStart = false
@@ -166,7 +170,9 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         onWindow: @escaping WindowHandler,
         onResult: @escaping ResultHandler,
         onProgress: @escaping SnapshotHandler = { _ in },
-        onFailure: @escaping FailureHandler = {}
+        onFailure: @escaping FailureHandler = {},
+        onDiagnostic: @escaping DiagnosticHandler = { _ in },
+        fallbackSourceProvider: @escaping FallbackSourceProvider = { _ in [] }
     ) {
         self.identity = identity
         let safeDuration = max(0, duration.isFinite ? duration : 0)
@@ -184,6 +190,8 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         self.onResult = onResult
         self.onProgress = onProgress
         self.onFailure = onFailure
+        self.onDiagnostic = onDiagnostic
+        self.fallbackSourceProvider = fallbackSourceProvider
         self.state = State(identity: identity, duration: safeDuration, partial: self.partial)
     }
 
@@ -262,41 +270,104 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
 
     private func run(source: MusicHapticsAnalysisSource) async {
         var nextWindowStart = partial?.firstUnanalyzedPosition ?? 0
-        let sourceMode = source.mode
+        var currentSource = source
+        var attemptedSources: Set<MusicHapticsAnalysisSource> = [source]
+        var didAttemptRemoteSidecarRefresh = false
         // Windows are intentionally contiguous and non-overlapping.  The
         // scheduler can queue them ahead without double-playing overlap.
         let windowLength: TimeInterval = 6
-        do {
-            switch source {
-            case let .localFile(url):
-                try await read(url: url, sourceMode: .local, nextWindowStart: &nextWindowStart, windowLength: windowLength, bitrate: nil)
-            case let .remoteLookahead(remote):
-                try await read(url: remote.url, sourceMode: .remoteLookahead, nextWindowStart: &nextWindowStart, windowLength: windowLength, bitrate: remote.bitrate)
-            case .realtimeTap:
-                throw MusicHapticsAnalyzerError.cannotDecode
+        while true {
+            do {
+                switch currentSource {
+                case let .localFile(url):
+                    try await read(
+                        url: url,
+                        sourceMode: .local,
+                        nextWindowStart: &nextWindowStart,
+                        windowLength: windowLength,
+                        bitrate: nil
+                    )
+                case let .remoteLookahead(remote):
+                    try await read(
+                        url: remote.url,
+                        sourceMode: .remoteLookahead,
+                        nextWindowStart: &nextWindowStart,
+                        windowLength: windowLength,
+                        bitrate: remote.bitrate
+                    )
+                case let .remoteProgressive(url):
+                    try await read(
+                        url: url,
+                        sourceMode: .remoteProgressive,
+                        nextWindowStart: &nextWindowStart,
+                        windowLength: windowLength,
+                        bitrate: nil
+                    )
+                case .realtimeTap:
+                    throw MusicHapticsAnalyzerError.cannotDecode
+                }
+                let reason = lock.withLock { requestedFinishReason ?? .naturalEnd }
+                await emitResult(reason: reason, sourceMode: currentSource.mode)
+                return
+            } catch is CancellationError {
+                let reason = lock.withLock { requestedFinishReason ?? .trackSwitch }
+                await emitResult(reason: reason, sourceMode: currentSource.mode)
+                return
+            } catch {
+                let state = lock.withLock {
+                    (
+                        finishRequested: requestedFinishReason != nil,
+                        cancelled: didFinish
+                    )
+                }
+                // AVAssetReader may surface cancellation as a reader error
+                // rather than Swift CancellationError. A deliberate track
+                // switch or preparation replacement must not be mistaken for
+                // a sidecar failure and start another decoder.
+                guard !state.finishRequested, !state.cancelled else {
+                    let reason = lock.withLock { requestedFinishReason ?? .trackSwitch }
+                    await emitResult(reason: reason, sourceMode: currentSource.mode)
+                    return
+                }
+
+                guard currentSource.mode == .remoteLookahead
+                        || currentSource.mode == .remoteProgressive else {
+                    onFailure()
+                    let reason = lock.withLock { requestedFinishReason ?? .playbackFailure }
+                    await emitResult(reason: reason, sourceMode: currentSource.mode)
+                    return
+                }
+
+                onDiagnostic(.remoteDecoderFailed)
+                let candidates = await fallbackSourceProvider(currentSource)
+                guard let nextSource = candidates.first(where: {
+                    guard !attemptedSources.contains($0) else { return false }
+                    if case .remoteLookahead = $0 {
+                        return !didAttemptRemoteSidecarRefresh
+                    }
+                    return true
+                }) else {
+                    // The current AVPlayer item is deliberately not touched.
+                    // A remote realtime tap would require mutating an item
+                    // that is already decoding, so it is an invalid recovery
+                    // path for this lookahead plan.
+                    onDiagnostic(.realtimeFallbackForbidden)
+                    onDiagnostic(.noHapticEventSource)
+                    onFailure()
+                    let reason = lock.withLock { requestedFinishReason ?? .playbackFailure }
+                    await emitResult(reason: reason, sourceMode: currentSource.mode)
+                    return
+                }
+                attemptedSources.insert(nextSource)
+                if case .remoteLookahead = nextSource {
+                    didAttemptRemoteSidecarRefresh = true
+                }
+                if nextSource.mode == .remoteProgressive {
+                    onDiagnostic(.remoteProgressiveFallback)
+                }
+                currentSource = nextSource
+                lock.withLock { sourceMode = nextSource.mode }
             }
-            let reason = lock.withLock { requestedFinishReason ?? .naturalEnd }
-            await emitResult(reason: reason, sourceMode: sourceMode)
-        } catch is CancellationError {
-            let reason = lock.withLock { requestedFinishReason ?? .trackSwitch }
-            await emitResult(reason: reason, sourceMode: sourceMode)
-        } catch {
-            let state = lock.withLock {
-                (
-                    finishRequested: requestedFinishReason != nil,
-                    cancelled: didFinish
-                )
-            }
-            // AVAssetReader may surface cancellation as a reader error rather
-            // than Swift CancellationError. A deliberate track switch or
-            // preparation replacement must not be mistaken for a sidecar
-            // failure and activate the realtime tap on the next item.
-            if !state.finishRequested, !state.cancelled {
-                onFailure()
-            }
-            let reason = lock.withLock { requestedFinishReason ?? .playbackFailure }
-            // Preserve any bytes decoded before a network/transcode failure.
-            await emitResult(reason: reason, sourceMode: sourceMode)
         }
     }
 

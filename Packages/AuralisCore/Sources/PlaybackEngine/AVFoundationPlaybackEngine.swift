@@ -1025,9 +1025,9 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         preparedMusicHapticsPreparation = nil
     }
 
-    /// Called only after the remote/local lookahead source has failed. The
-    /// normal path never invokes this method, so successful lookahead and
-    /// cached/system plans do not pay for an audio tap.
+    /// Legacy compatibility entry point. Remote lookahead recovery is now
+    /// handled by independent sidecar analyzers; this method intentionally
+    /// never mutates the current AVPlayerItem or cancels the supplied sink.
     @discardableResult
     public func activateMusicHapticsRealtimeFallback(
         preparationID: UUID,
@@ -1038,13 +1038,14 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
               avPlayer?.currentItem != nil,
               activeRealtimeFallbackPreparationID != preparationID
         else {
-            sink.cancel()
             return false
         }
         // The current item is already decoding. Never hot-insert an audio mix
-        // for a fallback; a missed sidecar is preferable to an audio graph
-        // rebuild and audible playback interruption.
-        sink.cancel()
+        // for a fallback; the coordinator records
+        // `realtime_fallback_forbidden` and keeps audio authoritative.
+        AuralisLog.playback.debug(
+            "HAPTICS_REALTIME_FALLBACK_FORBIDDEN preparation=\(preparation.id.uuidString, privacy: .public)"
+        )
         return false
     }
 }

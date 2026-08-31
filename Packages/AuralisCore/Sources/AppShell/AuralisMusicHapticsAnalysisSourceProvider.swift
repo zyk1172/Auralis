@@ -16,15 +16,47 @@ struct AuralisMusicHapticsAnalysisSourceProvider: MusicHapticsAnalysisSourceProv
         if let playbackURL, playbackURL.isFileURL {
             return .localFile(playbackURL)
         }
-        guard let serverID = identity.serverID,
-              let remoteID = identity.remoteID,
-              let url = await connector.musicHapticsAnalysisURL(
-                  serverID: ServerID(rawValue: serverID),
-                  trackID: TrackID(rawValue: remoteID)
-              )
-        else {
-            return .realtimeTap
+        if let serverID = identity.serverID,
+           let remoteID = identity.remoteID,
+           let url = await connector.musicHapticsAnalysisURL(
+               serverID: ServerID(rawValue: serverID),
+               trackID: TrackID(rawValue: remoteID)
+           ) {
+            return .remoteLookahead(.init(url: url, bitrate: 96, format: "mp3"))
         }
-        return .remoteLookahead(.init(url: url, bitrate: 96, format: "mp3"))
+        // If the server cannot construct the 96 kbps sidecar, keep the
+        // analysis path alive with a separate progressive HTTP decoder. The
+        // PlaybackEngine continues to own the original AVPlayerItem; this URL
+        // is consumed only by LookaheadMusicHapticsAnalyzer.
+        if let playbackURL, !playbackURL.isFileURL {
+            return .remoteProgressive(playbackURL)
+        }
+        return .realtimeTap
+    }
+
+    func fallbackSources(
+        for identity: MusicHapticsIdentity,
+        playbackURL: URL?,
+        after failedSource: MusicHapticsAnalysisSource
+    ) async -> [MusicHapticsAnalysisSource] {
+        guard playbackURL?.isFileURL != true else { return [] }
+
+        var candidates: [MusicHapticsAnalysisSource] = []
+        if let serverID = identity.serverID,
+           let remoteID = identity.remoteID,
+           let refreshedURL = await connector.musicHapticsAnalysisURL(
+               serverID: ServerID(rawValue: serverID),
+               trackID: TrackID(rawValue: remoteID)
+           ) {
+            candidates.append(.remoteLookahead(.init(url: refreshedURL, bitrate: 96, format: "mp3")))
+        }
+        if let playbackURL, !playbackURL.isFileURL {
+            candidates.append(.remoteProgressive(playbackURL))
+        }
+
+        // A connector may return a deterministic URL when a server has no
+        // tokenized refresh. Do not retry the exact same source indefinitely.
+        var seen: Set<MusicHapticsAnalysisSource> = [failedSource]
+        return candidates.filter { seen.insert($0).inserted }
     }
 }
