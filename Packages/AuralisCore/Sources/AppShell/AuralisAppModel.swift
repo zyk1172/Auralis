@@ -2,6 +2,7 @@ import AIKit
 import AgentKit
 import Application
 import Combine
+import DesignSystem
 import LocalCatalog
 import Domain
 import Foundation
@@ -59,6 +60,45 @@ private final class MusicHapticsIdentityResolutionGate: @unchecked Sendable {
         self.continuation = nil
         lock.unlock()
         continuation?.resume(returning: outcome)
+    }
+}
+
+/// Returns the preparation that finishes first without making a timed-out
+/// playback caller wait for the underlying enrichment task. The latter is
+/// intentionally allowed to finish so its cache warming can help a later
+/// playback request.
+private final class MusicHapticsPreparationResolutionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resolved = false
+    private var preparation: MusicHapticsPlaybackPreparation?
+    private var continuation: CheckedContinuation<MusicHapticsPlaybackPreparation?, Never>?
+
+    func wait() async -> MusicHapticsPlaybackPreparation? {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if resolved {
+                let preparation = self.preparation
+                lock.unlock()
+                continuation.resume(returning: preparation)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func resolve(_ preparation: MusicHapticsPlaybackPreparation?) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        resolved = true
+        self.preparation = preparation
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: preparation)
     }
 }
 
@@ -762,6 +802,7 @@ public final class AuralisAppModel: ObservableObject {
     private let defaults: UserDefaults
     private let storeURL: URL?
     private var attemptedRestore = false
+    private var applicationLaunchTask: Task<Void, Never>?
     /// 上一次 apply() 时的服务器 ID，用于判断是「同一台服务器的增量刷新」
     /// 还是「切换到另一台服务器」。只有后者才需要清空封面 / 歌词缓存。
     private var appliedServerID: ServerID?
@@ -938,7 +979,7 @@ public final class AuralisAppModel: ObservableObject {
                 avEngine?.activateMusicHapticsRealtimeFallback(
                     preparationID: preparationID,
                     sink: sink
-                )
+                ) ?? false
             }
         }
         self.artworkStore.onArtworkLoaded = { [weak self] key, data in
@@ -2977,10 +3018,34 @@ public final class AuralisAppModel: ObservableObject {
         return track.streamURL == nil ? nil : track
     }
 
-    /// Starts normal playback immediately while the Haptics identity and plan
-    /// resolve in a separate sidecar task. The audio item is always created
-    /// from the caller-provided track URL; Haptics may be installed only after
-    /// that item is already playing.
+    private func preparationReadyBeforeAudioStart(
+        _ task: Task<MusicHapticsPlaybackPreparation?, Never>
+    ) async -> MusicHapticsPlaybackPreparation? {
+        let gate = MusicHapticsPreparationResolutionGate()
+        Task { @MainActor [gate] in
+            gate.resolve(await task.value)
+        }
+        let timeoutTask = Task { @MainActor [gate] in
+            do {
+                try await Task.sleep(for: Self.hapticsIdentityPreparationDeadline)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            gate.resolve(nil)
+        }
+        let preparation = await withTaskCancellationHandler(operation: {
+            await gate.wait()
+        }, onCancel: {
+            gate.resolve(nil)
+        })
+        timeoutTask.cancel()
+        return preparation
+    }
+
+    /// Resolves a local-file sidecar within a short bounded budget so its tap
+    /// can be attached before AVPlayer insertion. Remote/HLS playback starts
+    /// without a realtime tap; late analysis never mutates the current item.
     private func playWithMusicHaptics(
         track: Track,
         favorite: Bool,
@@ -3005,6 +3070,16 @@ public final class AuralisAppModel: ObservableObject {
                 duration: duration,
                 playbackURL: track.streamURL
             )
+        }
+
+        var preparationBeforeAudioStart: MusicHapticsPlaybackPreparation?
+        if track.streamURL?.isFileURL == true {
+            preparationBeforeAudioStart = await preparationReadyBeforeAudioStart(preparationTask)
+            try Task.checkCancellation()
+            if let preparationBeforeAudioStart,
+               let avEngine = engine as? AVFoundationPlaybackEngine {
+                avEngine.setMusicHapticsPlaybackPreparation(preparationBeforeAudioStart)
+            }
         }
 
         do {
@@ -3042,8 +3117,11 @@ public final class AuralisAppModel: ObservableObject {
             preparationTask.cancel()
             return nil
         }
-        let preparation = await withTaskCancellationHandler(operation: {
-            await preparationTask.value
+        let preparation = await withTaskCancellationHandler(operation: { () -> MusicHapticsPlaybackPreparation? in
+            if let preparationBeforeAudioStart {
+                return preparationBeforeAudioStart
+            }
+            return await preparationTask.value
         }, onCancel: {
             preparationTask.cancel()
         })
@@ -3063,7 +3141,13 @@ public final class AuralisAppModel: ObservableObject {
             return nil
         }
         if let avEngine = engine as? AVFoundationPlaybackEngine {
-            avEngine.installActiveMusicHapticsPlaybackPreparation(preparation)
+            guard avEngine.installActiveMusicHapticsPlaybackPreparation(preparation) else {
+                // The current item is already running and cannot safely accept
+                // a new AVAudioMix. Keep audio successful and discard only the
+                // late, disposable realtime-analysis sidecar.
+                musicHaptics.discardPreparedAnalysis(preparation)
+                return nil
+            }
         }
         currentHapticsContext = CurrentHapticsContext(
             trackIdentity: queueIdentity(track),
@@ -5475,6 +5559,25 @@ public final class AuralisAppModel: ObservableObject {
             serverConnectionState = .idle
             shouldPresentServerSetup = true
         }
+    }
+
+    /// Performs process-wide warm-up and restores local app state once. The
+    /// caller may keep rendering the launch overlay while this task continues;
+    /// no network result is required to dismiss that overlay.
+    public func prepareForApplicationLaunch() async {
+        if let applicationLaunchTask {
+            await applicationLaunchTask.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.musicHaptics.warmUpIfNeeded()
+            Haptics.prepare()
+            await self.restorePersistedLibrary()
+            await self.agentCoordinator.bootstrapIfNeeded()
+        }
+        applicationLaunchTask = task
+        await task.value
     }
 
     /// 本地目录已可见后再执行完整性检查与旧 dislike 迁移。Agent 在此之前完全不会

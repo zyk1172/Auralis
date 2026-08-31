@@ -423,6 +423,21 @@ final class CustomMusicHapticsEngine {
         actualSuspensionHandler = handler
     }
 
+    /// Starts Core Haptics during app launch so the first playback event does
+    /// not pay engine construction/startup latency. No pattern is created and
+    /// no output is emitted here.
+    func warmUp() {
+        #if os(iOS)
+        guard supportsHaptics, canProduceOutput else { return }
+        do {
+            _ = try prepareEngine()
+        } catch {
+            state = .stopped
+            lastStopReason = String(describing: error)
+        }
+        #endif
+    }
+
     func play(
         _ timeline: MusicHapticsTimeline,
         offset: TimeInterval,
@@ -588,12 +603,12 @@ final class CustomMusicHapticsEngine {
         case .medium:
             scaled = event.intensity
         case .strong:
-            scaled = min(0.92, 1 - (1 - event.intensity) / intensity.masterIntensity)
+            scaled = event.intensity * intensity.masterIntensity
         }
         let textureScale = event.kind == .continuous ? intensity.continuousTextureScale : 1
-        let effective = min(0.92, scaled * textureScale)
+        let effective = min(1, max(0, scaled * textureScale))
         return [
-            CHHapticEventParameter(parameterID: .hapticIntensity, value: min(effective, 0.88)),
+            CHHapticEventParameter(parameterID: .hapticIntensity, value: effective),
             CHHapticEventParameter(parameterID: .hapticSharpness, value: event.sharpness),
         ]
     }
@@ -687,7 +702,7 @@ final class CustomMusicHapticsEngine {
                         $0.timeOffset,
                         playbackRate: safeRate
                     ),
-                    value: min(0.92, $0.intensity * intensity.masterIntensity * intensity.continuousTextureScale)
+                    value: min(1, max(0, $0.intensity * intensity.masterIntensity * intensity.continuousTextureScale))
                 )
             }
             let sharpnessPoints = curve.map {
@@ -902,7 +917,7 @@ public final class MusicHapticsCoordinator {
     private let rollingScheduler: RollingMusicHapticsScheduler
     private let defaults: UserDefaults
     private var analysisSourceProvider: (any MusicHapticsAnalysisSourceProvider)?
-    private var realtimeFallbackHandler: ((UUID, any MusicHapticsAnalysisSink) -> Void)?
+    private var realtimeFallbackHandler: ((UUID, any MusicHapticsAnalysisSink) -> Bool)?
     private var realtimeFallbackPreparationID: UUID?
     private var failedLookaheadPreparationIDs: Set<UUID> = []
     private var preparedLookaheadPreparationIDs: Set<UUID> = []
@@ -975,9 +990,15 @@ public final class MusicHapticsCoordinator {
     /// AppShell wires this to AVFoundationPlaybackEngine. The callback stays
     /// on MainActor and receives only an opaque sink, never a URL or token.
     public func setRealtimeFallbackHandler(
-        _ handler: ((UUID, any MusicHapticsAnalysisSink) -> Void)?
+        _ handler: ((UUID, any MusicHapticsAnalysisSink) -> Bool)?
     ) {
         realtimeFallbackHandler = handler
+    }
+
+    /// Warm Core Haptics before the first user interaction. This is deliberately
+    /// independent from playback and remains a no-op on unsupported platforms.
+    public func warmUpIfNeeded() {
+        custom.warmUp()
     }
 
     public var supportsHaptics: Bool {
@@ -2345,7 +2366,14 @@ public final class MusicHapticsCoordinator {
             continuousCount: analysisSnapshot.continuousCount,
             mixerDiagnostics: analysisSnapshot.mixerDiagnostics
         )
-        realtimeFallbackHandler?(preparation.id, sink)
+        let installed = realtimeFallbackHandler?(preparation.id, sink) ?? false
+        guard installed else {
+            realtimeFallbackPreparationID = nil
+            activeAnalysisSink = nil
+            currentPlanReason = "lookahead_failed_no_realtime_fallback"
+            sink.cancel()
+            return
+        }
         musicHapticsLogger.debug(
             "HAPTICS_FALLBACK track=\(self.diagnosticTrack(preparation.identity), privacy: .public) analysis_mode=realtime_fallback lookahead=false"
         )

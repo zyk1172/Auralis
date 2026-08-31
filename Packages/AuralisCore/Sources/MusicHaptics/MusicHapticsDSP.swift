@@ -132,6 +132,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     private var activeTextureLastSnapshotTime: TimeInterval?
     private var rmsHistory: [Float] = []
     private var onsetHistory: [Float] = []
+    private var energyDBHistory: [Float] = []
     private var beatTracker = MusicHapticsBeatTracker()
     private var totalEventCount = 0
     private var totalTransientCount = 0
@@ -305,6 +306,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         activeTextureLastSnapshotTime = nil
         rmsHistory.removeAll(keepingCapacity: true)
         onsetHistory.removeAll(keepingCapacity: true)
+        energyDBHistory.removeAll(keepingCapacity: true)
         beatTracker.reset()
         if !keepSampleRate { sampleRate = nil }
     }
@@ -334,8 +336,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let onset = max(0, safeRMS - previousRMS)
             + logOnset * 0.02
             + flux * 0.35
-        appendRolling(&rmsHistory, value: safeRMS, limit: historyLimit(sampleRate: sampleRate))
-        appendRolling(&onsetHistory, value: onset, limit: historyLimit(sampleRate: sampleRate))
+        let rollingLimit = historyLimit(sampleRate: sampleRate)
+        appendRolling(&rmsHistory, value: safeRMS, limit: rollingLimit)
+        appendRolling(&onsetHistory, value: onset, limit: rollingLimit)
+        let energyDB = 20 * log10(max(safeRMS, 0.00001))
+        appendRolling(&energyDBHistory, value: energyDB, limit: rollingLimit)
 
         let onsetThreshold = adaptiveThreshold(onsetHistory, multiplier: 2.8, floor: 0.0005)
         let rmsThreshold = adaptiveThreshold(rmsHistory, multiplier: 2.2, floor: 0.004)
@@ -354,19 +359,32 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         var events: [MusicHapticsEvent] = []
         if isTransient || beat.isBeat {
             let eventClass = classAndShape.eventClass
-            let energyPart = min(1, safeRMS / max(rmsThreshold, 0.004))
-            let onsetPart = min(1, onset / max(onsetThreshold, 0.0005))
-            let beatPart: Float
+            // Thresholds decide whether an event is emitted; they must not
+            // also pin its loudness to the same value.  Map energy against
+            // the track's recent dB distribution and map the attack against
+            // the amount by which it clears the onset threshold.
+            let energyPosition = smoothstep(
+                edge0: percentile(energyDBHistory, percentile: 0.20),
+                edge1: percentile(energyDBHistory, percentile: 0.95),
+                value: energyDB
+            )
+            let onsetRatio = onset / max(onsetThreshold, 0.0005)
+            let attackStrength = 1 - exp(-0.85 * max(0, onsetRatio - 1))
+            let beatAccent: Float
             if beat.isBeat {
-                beatPart = switch beat.strength {
-                case .strongBeat: 0.22
-                case .normalBeat: 0.10
-                case .subBeat: 0
+                beatAccent = switch beat.strength {
+                case .strongBeat: 0.16
+                case .normalBeat: 0.07
+                case .subBeat: 0.02
                 }
             } else {
-                beatPart = 0
+                beatAccent = 0
             }
-            let intensity = min(0.92, 0.25 + energyPart * 0.25 + onsetPart * 0.37 + beatPart)
+            let perceptualBase = min(
+                1,
+                max(0, 0.10 + energyPosition * 0.42 + attackStrength * 0.34 + beatAccent)
+            )
+            let intensity = Float(pow(Double(perceptualBase), 0.85))
             let duration: TimeInterval = eventClass == .highPercussion ? 0.045 : 0.085
             events.append(MusicHapticsEvent(
                 time: time,
@@ -450,14 +468,24 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         totalEventCount += events.count
         totalTransientCount += events.filter { $0.kind == .transient }.count
         totalContinuousCount += events.filter { $0.kind == .continuous }.count
-        let energyLevel = min(1, safeRMS / max(0.02, rmsThreshold * 4))
+        let energyLevel = smoothstep(
+            edge0: percentile(energyDBHistory, percentile: 0.20),
+            edge1: percentile(energyDBHistory, percentile: 0.95),
+            value: energyDB
+        )
+        let slowEnergyDB = 20 * log10(max(slowEnvelope, 0.00001))
+        let slowEnergy = smoothstep(
+            edge0: percentile(energyDBHistory, percentile: 0.20),
+            edge1: percentile(energyDBHistory, percentile: 0.95),
+            value: slowEnergyDB
+        )
         let isQuiet = safeRMS < max(0.003, rmsThreshold * 0.95)
             && onset < onsetThreshold * 1.20
         return MusicHapticsCandidateFrame(
             time: time,
             events: events,
             energyLevel: energyLevel,
-            slowEnergy: min(1, slowEnvelope / max(0.02, rmsThreshold * 4)),
+            slowEnergy: slowEnergy,
             onsetActivity: min(1, onset / max(onsetThreshold, 0.0005)),
             beat: beat,
             isQuiet: isQuiet
@@ -698,6 +726,12 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let sorted = values.sorted()
         let index = min(sorted.count - 1, max(0, Int(Double(sorted.count - 1) * percentile)))
         return sorted[index]
+    }
+
+    private func smoothstep(edge0: Float, edge1: Float, value: Float) -> Float {
+        guard edge1 > edge0 + 0.0001 else { return 0.5 }
+        let t = min(1, max(0, (value - edge0) / (edge1 - edge0)))
+        return t * t * (3 - 2 * t)
     }
 
     private func historyLimit(sampleRate: Double) -> Int {

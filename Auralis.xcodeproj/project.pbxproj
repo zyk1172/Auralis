@@ -33,6 +33,7 @@
 		D150E91A09CB7BDF8BB4757A /* BuildProvenance.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30EC713D0C122CE058E2658 /* BuildProvenance.generated.swift */; };
 		DB032378F5BD33DFE8444B92 /* AuralisMusicHapticsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76B4E352F42FB8F4D9AB23F6 /* AuralisMusicHapticsUITests.swift */; };
 		DE2E4474991E5F09F514D763 /* AssistantAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C361144E585E27577F3148B /* AssistantAppIntent.swift */; };
+		E63C605044B7EDBF230C0FFE /* LaunchExperienceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DDE4627502072B5917D02B /* LaunchExperienceView.swift */; };
 		E76FDDD286F4D8186A721B0C /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 277C164815EFE9449940797F /* InfoPlist.xcstrings */; };
 /* End PBXBuildFile section */
 
@@ -99,6 +100,7 @@
 		9AA2EE3ADE81172BD503209A /* AuralisLiveActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AuralisLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA25390D86BDC4807DC0F7CF /* AuralisIntents.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AuralisIntents.entitlements; sourceTree = "<group>"; };
 		C30EC713D0C122CE058E2658 /* BuildProvenance.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildProvenance.generated.swift; sourceTree = "<group>"; };
+		D6DDE4627502072B5917D02B /* LaunchExperienceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchExperienceView.swift; sourceTree = "<group>"; };
 		DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingWidget.swift; sourceTree = "<group>"; };
 		EBF41918A59E1038580AD9CE /* IntentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentHandler.swift; sourceTree = "<group>"; };
 		F7FF4CE3EC2EF7AFE5C6F006 /* AppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntents.swift; sourceTree = "<group>"; };
@@ -239,6 +241,7 @@
 				7E92EE0F5FD4F611D1678C3B /* Auralis.entitlements */,
 				1C17241D49F118BD819B4F7A /* AuralisApp.swift */,
 				C30EC713D0C122CE058E2658 /* BuildProvenance.generated.swift */,
+				D6DDE4627502072B5917D02B /* LaunchExperienceView.swift */,
 				7661C85FE41D3637B3F6239E /* Intents */,
 				01D35E0B7E33395DCEF1FD35 /* LiveActivity */,
 				537240F55E4B105B80C97A1C /* Resources */,
@@ -506,6 +509,7 @@
 				DE2E4474991E5F09F514D763 /* AssistantAppIntent.swift in Sources */,
 				716A20002937E551C1F3E00A /* AuralisApp.swift in Sources */,
 				D150E91A09CB7BDF8BB4757A /* BuildProvenance.generated.swift in Sources */,
+				E63C605044B7EDBF230C0FFE /* LaunchExperienceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

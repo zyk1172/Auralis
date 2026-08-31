@@ -216,10 +216,18 @@ public struct AuralisRootView: View {
             // briefly present the normal server setup sheet before configuring
             // their deterministic shell.
             if configureUISmokeLaunchIfRequested() {
+                // The assistant smoke route deliberately keeps the real
+                // process-wide bootstrap running.  This preserves the
+                // cold-launch race that previously dismissed the first
+                // session-sheet presentation, while still avoiding network
+                // account restoration and its setup sheet.
+                if CommandLine.arguments.contains("-auralis-ui-smoke-assistant") {
+                    await model.agentCoordinator.bootstrapIfNeeded()
+                }
                 return
             }
 #endif
-            await model.restorePersistedLibrary()
+            await model.prepareForApplicationLaunch()
         }
         .onOpenURL { url in
             model.handleIncomingURL(url)
@@ -247,7 +255,8 @@ public struct AuralisRootView: View {
     private func configureUISmokeLaunchIfRequested() -> Bool {
         let arguments = Set(CommandLine.arguments)
         guard arguments.contains("-auralis-ui-smoke")
-            || arguments.contains("-auralis-ui-smoke-now-playing") else { return false }
+            || arguments.contains("-auralis-ui-smoke-now-playing")
+            || arguments.contains("-auralis-ui-smoke-assistant") else { return false }
 
         // A fresh test installation has no server account. Skip normal restore
         // entirely so neither the setup sheet nor a persisted-account probe can

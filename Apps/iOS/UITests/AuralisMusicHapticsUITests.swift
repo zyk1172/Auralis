@@ -84,4 +84,21 @@ final class AuralisMusicHapticsUITests: XCTestCase {
             "The old Music Haptics submenu must not be restored"
         )
     }
+
+    func testAssistantSessionSheetSurvivesColdBootstrap() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-assistant")
+
+        let assistant = app.buttons["AI 助手"].firstMatch
+        XCTAssertTrue(assistant.waitForExistence(timeout: 15), "Assistant entry point is missing")
+        assistant.tap()
+
+        let sessions = app.buttons["会话列表"].firstMatch
+        XCTAssertTrue(sessions.waitForExistence(timeout: 10), "Assistant did not expose the session button")
+        sessions.tap()
+
+        let title = app.staticTexts["会话"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "Session sheet did not present")
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(title.exists, "Session sheet must survive delayed launch bootstrap")
+    }
 }
