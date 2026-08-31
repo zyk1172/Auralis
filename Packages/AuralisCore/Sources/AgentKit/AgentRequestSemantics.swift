@@ -291,6 +291,14 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "跑步", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听",
             "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首", "recommend", "shuffle",
         ]) || (has(["选", "挑"]) && has(["首", "歌", "歌曲"]))
+        // 在音乐发现请求中，“列入清单，顺序播放”是明确的临时播放队列
+        // 组合，而不是仅仅给出推荐结果。这里把自然语言编译成
+        // queueReplace，供 selector 暴露 queue_replace；只有同时存在数量、
+        // 清单动作和顺序播放意图才命中，不会让普通“推荐几个歌单”获得写入面。
+        let orderedPlaybackQueueRequest = recommendationRequest
+            && hasSongQuantity
+            && has(["列入清单", "列入播放清单", "放入清单", "加入清单"])
+            && has(["顺序播放", "按顺序播放", "播放"])
         let genericSearch = has(["搜索", "查找", "查询", "找歌", "哪首", "哪个专辑", "谁唱的", "search"])
 
         let isMusicContext = explicitMusicNouns
@@ -398,6 +406,10 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if has(["随机剩余队列", "queue_shuffle_remaining", "shuffle remaining"]) { requested.insert(.queueShuffle) }
             if has(["接下来播放", "play next", "queue_play_next"]) { requested.insert(.queuePlayNext) }
             if has(["加入队列", "放进队列", "放到队列", "queue_append"]) { requested.insert(.queueAppend) }
+        }
+
+        if !suppressesMutationIntent, orderedPlaybackQueueRequest {
+            requested.insert(.queueReplace)
         }
 
         // 复合意图编译：跨域组合操作。

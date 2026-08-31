@@ -1535,6 +1535,13 @@ public final class MusicHapticsCoordinator {
         isPlaying: Bool,
         rate: Double = 1
     ) {
+        // This callback is driven by the UI/progress display and may arrive
+        // after the scene has already entered the background.  Background
+        // playback keeps AVPlayer as the clock source; accepting a late UI
+        // tick here would overwrite that clock and make the foreground
+        // rebase start from stale data.  The next active transition supplies
+        // the authoritative AVPlayer position explicitly.
+        guard !isInBackground else { return }
         let previousPosition = currentPosition
         currentPosition = max(0, position)
         let safeRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)

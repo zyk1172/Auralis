@@ -1835,10 +1835,16 @@ public struct ToolLoop {
                 if let finalMessage = presentation.finalMessage() {
                     await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
                 }
-                let finalText = reply.isEmpty
-                    ? (activeSkill != nil
-                        ? Self.skillCompletionMessage(activeSkill)
-                        : Self.deterministicCompletionSummary(policy: policy, presentation: presentation))
+                let deterministicSummary = activeSkill != nil
+                    ? Self.skillCompletionMessage(activeSkill)
+                    : Self.deterministicCompletionSummary(policy: policy, presentation: presentation)
+                // Compatibility providers often answer a completed mutation
+                // with a short generic phrase such as “已处理完成”。 Keep
+                // the user-facing result stable and domain-specific instead
+                // of letting that placeholder replace the deterministic
+                // completion summary. Rich model prose is still preserved.
+                let finalText = reply.isEmpty || Self.isGenericCompletionReply(reply, policy: policy)
+                    ? deterministicSummary
                     : reply
                 if !finalText.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text(finalText)]))
@@ -2785,6 +2791,25 @@ public struct ToolLoop {
         }
     }
 
+    private static func isGenericCompletionReply(
+        _ reply: String,
+        policy: AgentTaskPolicy
+    ) -> Bool {
+        guard policy.completion == .queueMutation
+            || policy.completion == .playlistMutation
+            || policy.completion == .playbackMutation
+        else { return false }
+        let normalized = reply
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: .punctuationCharacters)
+            .lowercased()
+        guard normalized.count <= 24 else { return false }
+        return [
+            "完成", "已完成", "已处理完成", "操作完成", "任务完成",
+            "done", "completed", "complete",
+        ].contains(normalized)
+    }
+
     private static func shouldFinalizeAfterMutation(
         policy: AgentTaskPolicy,
         state: AgentTaskState,
@@ -2868,14 +2893,25 @@ public struct ToolLoop {
             authorizedOperations: allowedOperations
         ).filter { entry in
             guard let semantics, entry.permission != .readOnly else { return true }
-            // tool_search is a schema-discovery surface, not a reason to make
-            // an unrelated local write executable.  Read/discovery requests
-            // stay read-only; an explicit mutation may expand only the
-            // concrete operation(s) inferred for this turn.  This closes the
-            // same accidental mutation path for generic reads as for pure
-            // recommendations while keeping ordinary requested writes
-            // frictionless at Runtime.
+            // `tool_search` is an explicit model request for a capability.
+            // For ordinary music/queue/playlist turns, let a matching
+            // mutation descriptor enter the next schema even when the first
+            // semantic pass only identified a neighboring domain (for
+            // example, “播放一首歌” followed by a search for “替换队列”).
+            // This is discovery, not an execution authorization decision;
+            // ToolRuntime still applies argument validation and the
+            // descriptor-owned confirmation policy.
+            //
+            // A read/discovery turn must not turn a model-generated search
+            // into an unrelated write. Ordinary mutation turns may discover
+            // a neighboring reversible operation explicitly (for example,
+            // “播放一首歌” followed by a search for “替换队列”).
             guard semantics.isExplicitMutation else { return false }
+            // Recommendation-only turns are the one important exception:
+            // recommendation expansion must not turn a read request into an
+            // unrelated write. An explicit compound request such as
+            // “推荐并加入队列” retains only its concrete operation(s).
+            guard semantics.domain == .recommendation else { return true }
             guard !semantics.requestedOperations.isEmpty else { return true }
             guard let rawOperation = entry.authorizationOperation,
                   let operation = ToolAuthorizationOperation(rawValue: rawOperation)

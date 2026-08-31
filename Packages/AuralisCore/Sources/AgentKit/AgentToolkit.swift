@@ -644,7 +644,17 @@ public struct AgentToolkit {
             _ = (try? boolParam(call, "playableOnly")) ?? false
             let sort = (try? require(call, "sort"))?.lowercased() ?? "popularityProxy"
             var tracks = try await catalog.allTracks(serverID: serverID)
-            if favoritesOnly { tracks = tracks.filter(\.isFavorite) }
+            // Favorite filtering is a local query predicate, not an external
+            // disclosure permission. `allTracks` materializes the track
+            // payload and therefore does not include the separate favorites
+            // table; always load the local IDs so an explicit favoritesOnly
+            // request works even when the Provider is not allowed to receive
+            // favorites/ratings.
+            let favoriteIDs = Set((try? await catalog.getFavorites(serverID: serverID))?.map(\.globalID) ?? [])
+            let gidOf: (Track) -> GlobalID = { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) }
+            if favoritesOnly {
+                tracks = tracks.filter { $0.isFavorite || favoriteIDs.contains(gidOf($0)) }
+            }
             if !genres.isEmpty {
                 tracks = tracks.filter { track in
                     track.genres.contains { genre in
@@ -690,14 +700,10 @@ public struct AgentToolkit {
             let popularity = allowsHistory
                 ? (try? await catalog.popularityScores(serverID: serverID)) ?? [:]
                 : [:]
-            let favoriteIDs = allowsFavoritesAndRatings
-                ? Set((try? await catalog.getFavorites(serverID: serverID))?.map(\.globalID) ?? [])
-                : []
             let recentIDs = allowsHistory
                 ? (try? await catalog.getRecentHistory(serverID: serverID, limit: 500))?.map(\.globalID) ?? []
                 : []
             let recentRank = Dictionary(uniqueKeysWithValues: recentIDs.enumerated().map { ($0.element, $0.offset) })
-            let gidOf: (Track) -> GlobalID = { GlobalID(serverID: $0.serverID, remoteID: $0.id.rawValue) }
 
             if excludeRecentlyPlayed {
                 let cutoff = Date().addingTimeInterval(-Double(max(recentDays, 1)) * 86400)
@@ -751,7 +757,20 @@ public struct AgentToolkit {
             guard !selected.isEmpty else {
                 return .fail(call, descriptor, "没有符合条件（\([languages.isEmpty ? "" : "语言=" + languages.joined(separator: "/"), genres.isEmpty ? "" : "流派=" + genres.joined(separator: "/"), artists.isEmpty ? "" : "艺术家=" + artists.joined(separator: "/")].filter { !$0.isEmpty }.joined(separator: "，"))）的歌曲")
             }
-            let cards = selected.map(TrackCard.from)
+            let cards = selected.map { track in
+                TrackCard(
+                    globalID: gidOf(track),
+                    title: track.title,
+                    artistName: track.artistName,
+                    albumTitle: track.albumTitle,
+                    duration: track.duration,
+                    // The local predicate may use the favorite table even
+                    // when external disclosure is disabled, but the
+                    // provider-facing card must not reveal that private bit.
+                    isFavorite: allowsFavoritesAndRatings
+                        && (track.isFavorite || favoriteIDs.contains(gidOf(track)))
+                )
+            }
             let detail = selected.prefix(40).map { track -> String in
                 let pop = popularity[gidOf(track)]
                 var parts = ["《\(track.title)》-\(track.artistName)（\(gidOf(track).description)）"]
