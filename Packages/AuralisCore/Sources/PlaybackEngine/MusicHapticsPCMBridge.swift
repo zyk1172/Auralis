@@ -24,6 +24,12 @@ enum MusicHapticsPCMBridge {
         } else if flags & kAudioFormatFlagIsSignedInteger != 0, bitsPerChannel == 16 {
             sampleType = .int16
             bytesPerSample = MemoryLayout<Int16>.size
+        } else if flags & kAudioFormatFlagIsSignedInteger != 0, bitsPerChannel == 24 {
+            sampleType = .int24
+            bytesPerSample = 3
+        } else if flags & kAudioFormatFlagIsSignedInteger != 0, bitsPerChannel == 32 {
+            sampleType = .int32
+            bytesPerSample = MemoryLayout<Int32>.size
         } else {
             return nil
         }

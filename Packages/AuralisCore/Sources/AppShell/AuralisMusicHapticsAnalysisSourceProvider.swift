@@ -16,20 +16,11 @@ struct AuralisMusicHapticsAnalysisSourceProvider: MusicHapticsAnalysisSourceProv
         if let playbackURL, playbackURL.isFileURL {
             return .localFile(playbackURL)
         }
-        if let serverID = identity.serverID,
-           let remoteID = identity.remoteID,
-           let url = await connector.musicHapticsAnalysisURL(
-               serverID: ServerID(rawValue: serverID),
-               trackID: TrackID(rawValue: remoteID)
-           ) {
-            return .remoteLookahead(.init(url: url, bitrate: 96, format: "mp3"))
-        }
-        // If the server cannot construct the 96 kbps sidecar, keep the
-        // analysis path alive with a separate progressive HTTP decoder. The
-        // PlaybackEngine continues to own the original AVPlayerItem; this URL
-        // is consumed only by LookaheadMusicHapticsAnalyzer.
         if let playbackURL, !playbackURL.isFileURL {
-            return .remoteProgressive(playbackURL)
+            // Analyze the same original encoding that AVPlayer receives. The
+            // MusicHaptics decoder consumes it incrementally and never asks the
+            // server for a bitrate/format-specific sidecar.
+            return .remoteOriginal(playbackURL)
         }
         return .realtimeTap
     }
@@ -48,19 +39,11 @@ struct AuralisMusicHapticsAnalysisSourceProvider: MusicHapticsAnalysisSourceProv
         } else {
             nil
         }
-        if let serverTrack,
-           let refreshedURL = await connector.musicHapticsAnalysisURL(
-               serverID: serverTrack.serverID,
-               trackID: serverTrack.trackID
-           ) {
-            candidates.append(.remoteLookahead(.init(url: refreshedURL, bitrate: 96, format: "mp3")))
-        }
-
-        // The AVPlayer URL can be a short-lived tokenized address. Refresh it
-        // for the independent progressive decoder when the sidecar failed;
-        // this does not replace, seek, or mutate the current AVPlayerItem.
-        let progressiveURL = if let serverTrack,
-                                let refreshedPlaybackURL = await connector.refreshStreamURL(
+        // The AVPlayer URL can be a short-lived tokenized address. Refresh the
+        // same original encoding for the independent decoder; this does not
+        // replace, seek, or mutate the current AVPlayerItem.
+        let refreshedOriginalURL = if let serverTrack,
+                                      let refreshedPlaybackURL = await connector.refreshStreamURL(
                                     serverID: serverTrack.serverID,
                                     trackID: serverTrack.trackID
                                 ) {
@@ -68,8 +51,8 @@ struct AuralisMusicHapticsAnalysisSourceProvider: MusicHapticsAnalysisSourceProv
         } else {
             playbackURL
         }
-        if let progressiveURL, !progressiveURL.isFileURL {
-            candidates.append(.remoteProgressive(progressiveURL))
+        if let refreshedOriginalURL, !refreshedOriginalURL.isFileURL {
+            candidates.append(.remoteOriginal(refreshedOriginalURL))
         }
 
         // A connector may return a deterministic URL when a server has no

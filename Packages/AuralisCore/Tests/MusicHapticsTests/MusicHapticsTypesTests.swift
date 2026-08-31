@@ -177,8 +177,8 @@ import Testing
         artist: "Artist",
         durationMilliseconds: 180_000
     )
-    let source = MusicHapticsAnalysisSource.remoteLookahead(
-        .init(url: URL(string: "https://example.invalid/stream?token=not-a-diagnostic")!, bitrate: 96)
+    let source = MusicHapticsAnalysisSource.remoteOriginal(
+        URL(string: "https://example.invalid/stream?token=not-a-diagnostic")!
     )
     let request = MusicHapticsAnalysisRequest(
         identity: identity,
@@ -245,7 +245,7 @@ import Testing
     #expect(decision.plan.kind == .analyze)
 }
 
-@Test func partialPromotionRequiresNinetyFivePercentCoverage() {
+@Test func partialPromotionRequiresCompleteCoverage() {
     let identity = MusicHapticsIdentity(title: "Threshold", artist: "Artist", durationMilliseconds: 100_000)
     let incomplete = MusicHapticsPartialCheckpoint(
         identity: identity,
@@ -256,7 +256,7 @@ import Testing
     let complete = MusicHapticsPartialCheckpoint(
         identity: identity,
         duration: 100,
-        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 96)],
+        analyzedRanges: [MusicHapticsTimeRange(lowerBound: 0, upperBound: 100)],
         events: []
     )
     #expect(!incomplete.isComplete)
@@ -387,7 +387,7 @@ private func syntheticRhythmicSignal(sampleRate: Double, seconds: Int) -> [Float
     }
 }
 
-@Test @MainActor func rollingSchedulerOnlySchedulesStrictlyAheadWindowsAndFlushesOnSeek() {
+@Test @MainActor func rollingSchedulerUsesPlaybackHorizonAndFlushesOnSeek() {
     let event = MusicHapticsEvent(
         time: 2,
         intensity: 0.7,
@@ -415,12 +415,12 @@ private func syntheticRhythmicSignal(sampleRate: Double, seconds: Int) -> [Float
         tempoBPM: 120,
         beatConfidence: 0.8
     )
-    let scheduler = RollingMusicHapticsScheduler(targetLead: 8, schedulingHorizon: 18)
+    let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
     #expect(scheduler.ingest(notAhead).isEmpty)
     #expect(scheduler.ingest(ahead).isEmpty)
     let scheduled = scheduler.updateClock(position: 0, isPlaying: true)
     #expect(scheduled.map(\.startTime) == [0])
-    #expect(scheduler.scheduledUntil == 6)
+    #expect(scheduler.scheduledUntil == 3)
     scheduler.pause()
     #expect(!scheduler.resume(position: 1).isEmpty)
     let afterSeek = scheduler.seek(to: 8, playing: true)
@@ -538,8 +538,8 @@ private func syntheticRhythmicSignal(sampleRate: Double, seconds: Int) -> [Float
         artist: "Artist",
         durationMilliseconds: 30_000
     )
-    let source = MusicHapticsAnalysisSource.remoteLookahead(
-        .init(url: URL(string: "https://example.invalid/stream?token=never-persist")!)
+    let source = MusicHapticsAnalysisSource.remoteOriginal(
+        URL(string: "https://example.invalid/stream?token=never-persist")!
     )
     let plan = MusicHapticsPlaybackPlan.analyzeLookahead(
         MusicHapticsAnalysisRequest(

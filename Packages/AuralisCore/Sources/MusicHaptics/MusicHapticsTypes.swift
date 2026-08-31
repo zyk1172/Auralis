@@ -4,6 +4,8 @@ import Foundation
 public enum MusicHapticsPCMSampleType: String, Codable, Hashable, Sendable {
     case float32
     case int16
+    case int24
+    case int32
 }
 
 /// Describes the decoded PCM layout handed from an audio tap to the haptics
@@ -48,6 +50,8 @@ public struct MusicHapticsPCMFormat: Hashable, Sendable {
         switch sampleType {
         case .float32: bytesPerSample == MemoryLayout<Float32>.size
         case .int16: bytesPerSample == MemoryLayout<Int16>.size
+        case .int24: bytesPerSample == 3
+        case .int32: bytesPerSample == MemoryLayout<Int32>.size
         }
     }
 }
@@ -130,6 +134,27 @@ public enum TrackHapticsPreference: String, Codable, CaseIterable, Sendable {
 }
 
 public enum MusicHapticsEventKind: String, Codable, Sendable { case transient, continuous }
+
+/// Runtime state of the independent original-stream decoder. This is
+/// diagnostic state only; it never controls or blocks AVPlayer.
+public enum MusicHapticsRemoteDecoderState: String, Codable, Hashable, Sendable {
+    case idle
+    case opening
+    case streaming
+    case stalled
+    case failed
+    case complete
+}
+
+/// Which analysis source supplied the event currently preferred by the
+/// scheduler. `.mixed` means the lookahead timeline and realtime tap have
+/// both contributed non-overlapping coverage during the current playback.
+public enum MusicHapticsEventSource: String, Codable, Hashable, Sendable {
+    case none
+    case remoteOriginal
+    case realtimeTap
+    case mixed
+}
 
 /// The mix and intensity models intentionally live in the data layer.  The
 /// first v2 release only exposes `fullMix` to the runtime; `vocalsOnly` is
@@ -264,7 +289,11 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
     /// changes. Stored timelines from an older algorithm deliberately become
     /// cache misses so playback cannot silently mix old and new tactile
     /// semantics.
-    public static let algorithmVersion = "auralis-haptics-v2.3"
+    /// v2.4 changes the remote analysis input from a server-transcoded
+    /// sidecar to the original encoded stream and changes the checkpoint/
+    /// source arbitration semantics. Older timelines must therefore be a
+    /// cache miss instead of being silently mixed with the new analysis.
+    public static let algorithmVersion = "auralis-haptics-v2.4"
     public var formatVersion: Int
     public var algorithmVersion: String
     public var identity: MusicHapticsIdentity
@@ -330,7 +359,12 @@ public struct MusicHapticsTimeline: Codable, Hashable, Sendable {
         )
     }
 
-    public var isComplete: Bool { analysisCoverage >= 0.95 }
+    /// A stored timeline is full only when its normalized coverage reaches the
+    /// end of the recording. Do not promote a 95% checkpoint and lose the
+    /// final uncovered region.
+    public var isComplete: Bool {
+        duration <= 0 || (analysisCoverage >= 0.999 && analyzedDuration >= duration - 0.02)
+    }
 }
 
 public struct MusicHapticsUsage: Sendable, Equatable {

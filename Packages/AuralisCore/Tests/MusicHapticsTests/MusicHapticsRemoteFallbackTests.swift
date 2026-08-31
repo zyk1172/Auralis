@@ -1,31 +1,84 @@
-import AVFoundation
 import Foundation
-import MusicHaptics
 import Testing
+@testable import MusicHaptics
 
-@Suite("Music Haptics remote source recovery", .serialized)
-struct MusicHapticsRemoteFallbackTests {
-    @Test("v2.3 cache miss keeps an independent remote lookahead source alive")
-    func v23CacheMissRemoteLookaheadSuccess() async throws {
-        let identity = testIdentity()
-        let audioURL = try makeWAV(duration: 1, name: "remote-lookahead-success")
-        defer { try? FileManager.default.removeItem(at: audioURL) }
-        let source = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(url: audioURL, bitrate: 96, format: "mp3")
+@Suite("Music Haptics original-stream analysis", .serialized)
+struct MusicHapticsOriginalStreamTests {
+    @Test("the original FLAC decoder emits PCM before the HTTP body reaches EOF")
+    func progressiveDecoderEmitsPCMBeforeResponseFinishes() async throws {
+        let server = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac",
+            responseChunkSize: 512,
+            responseChunkDelay: 0.05
+        )
+        try await server.start()
+        defer { server.stop() }
+
+        let capture = DecoderCapture()
+        let decoder = MusicHapticsProgressiveAudioDecoder(chunkByteCapacity: 512)
+        try await decoder.decode(
+            url: server.url,
+            onPCM: { chunk in
+                capture.append(chunk, responseFinished: server.bodyFinished)
+            }
+        )
+
+        #expect(capture.firstPCMBeforeResponseFinished == true)
+        #expect(capture.chunkCount > 0)
+        #expect(capture.lastPosition > 0)
+    }
+
+    @Test("v2.4 cache miss uses the original remote FLAC and produces analysis before EOF")
+    func originalFLACCacheMissUsesIncrementalAnalyzer() async throws {
+        let identity = testIdentity(duration: 0.75)
+        let server = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac",
+            responseChunkSize: 512,
+            responseChunkDelay: 0.05
+        )
+        try await server.start()
+        defer { server.stop() }
+
+        let capture = AnalysisCapture()
+        let run = await runAnalyzer(
+            identity: identity,
+            duration: 0.75,
+            source: .remoteOriginal(server.url),
+            capture: capture,
+            responseFinished: { server.bodyFinished }
+        )
+
+        #expect(run.result.finishReason == .naturalEnd)
+        #expect(run.result.snapshot.analysisMode == .remoteOriginal)
+        #expect(run.result.snapshot.remoteDecoderState == .complete)
+        #expect(run.result.snapshot.coverage >= 0.95)
+        #expect(run.result.checkpoint.isCurrentAlgorithm)
+        #expect(run.result.timeline?.algorithmVersion == MusicHapticsTimeline.algorithmVersion)
+        #expect(capture.firstWindowBeforeResponseFinished == true)
+        #expect(capture.windows.contains { !$0.events.isEmpty })
+        #expect(server.requestCount == 1)
+    }
+
+    @Test("a stale v2.3 timeline is a cache miss and the original FLAC path still completes")
+    func staleTimelineDoesNotReuseOldAlgorithmCache() async throws {
+        let identity = testIdentity(duration: 0.75)
+        let staleTimeline = MusicHapticsTimeline(
+            identity: identity,
+            duration: 0.75,
+            analyzedDuration: 0.75,
+            analysisCoverage: 1,
+            events: [],
+            algorithmVersion: "auralis-haptics-v2.3"
         )
         let request = MusicHapticsAnalysisRequest(
             identity: identity,
             favorite: false,
-            duration: 1,
-            analysisSource: source
-        )
-        let staleTimeline = MusicHapticsTimeline(
-            identity: identity,
-            duration: 1,
-            analyzedDuration: 1,
-            analysisCoverage: 1,
-            events: [],
-            algorithmVersion: "auralis-haptics-v2.2"
+            duration: 0.75,
+            analysisSource: .remoteOriginal(URL(string: "https://example.invalid/original.flac")!)
         )
         let decision = MusicHapticsPlaybackPlanResolver.resolve(
             featureEnabled: true,
@@ -37,390 +90,695 @@ struct MusicHapticsRemoteFallbackTests {
         )
         #expect(decision.plan.kind == .analyzeLookahead)
 
-        let provider = InjectedSourceProvider(primary: source, fallbacks: [])
-        let run = await runAnalyzer(
-            provider: provider,
-            identity: identity,
-            duration: 1
+        let server = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac",
+            responseChunkSize: 8 * 1024
         )
-        #expect(run.failureCount == 0)
-        #expect(run.result.finishReason == .naturalEnd)
-        #expect(run.result.snapshot.analysisMode == .remoteLookahead)
-        #expect(run.result.snapshot.analysisStreamBitrate == 96)
-        #expect(run.result.snapshot.coverage >= 0.95)
+        try await server.start()
+        defer { server.stop() }
+
+        let run = await runAnalyzer(
+            identity: identity,
+            duration: 0.75,
+            source: .remoteOriginal(server.url),
+            capture: AnalysisCapture()
+        )
+        #expect(run.result.timeline != nil)
+        #expect(run.result.snapshot.analysisMode == .remoteOriginal)
     }
 
-    @Test("v2.3 cache miss retries a refreshed sidecar before using progressive fallback")
-    func remoteLookaheadFailureRetriesIndependentSources() async throws {
-        let identity = testIdentity()
-        let audioURL = try makeWAV(duration: 1, name: "remote-lookahead-refresh")
-        defer { try? FileManager.default.removeItem(at: audioURL) }
+    @Test("refresh retries the same original stream without creating a sidecar")
+    func originalStreamRefreshIsBoundedAndKeepsEncoding() async throws {
+        let identity = testIdentity(duration: 0.75)
         let missingURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralis-missing-sidecar-\(UUID().uuidString).mp3")
-        let primary = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(url: missingURL, bitrate: 96, format: "mp3")
+            .appendingPathComponent("auralis-missing-original-\(UUID().uuidString).flac")
+        let server = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac"
         )
-        let refreshed = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(url: audioURL, bitrate: 96, format: "mp3")
-        )
-        let progressive = MusicHapticsAnalysisSource.remoteProgressive(audioURL)
-        let staleTimeline = MusicHapticsTimeline(
+        try await server.start()
+        defer { server.stop() }
+
+        let diagnostics = DiagnosticCapture()
+        let run = await runAnalyzer(
             identity: identity,
-            duration: 1,
-            analyzedDuration: 1,
-            analysisCoverage: 1,
-            events: [],
-            algorithmVersion: "auralis-haptics-v2.2"
+            duration: 0.75,
+            source: .remoteOriginal(missingURL),
+            fallbackSources: [.remoteOriginal(server.url)],
+            capture: AnalysisCapture(),
+            diagnostics: diagnostics
         )
-        let decision = MusicHapticsPlaybackPlanResolver.resolve(
-            featureEnabled: true,
-            customHapticsSupported: true,
-            systemTimelineAvailable: false,
-            fullTimeline: staleTimeline,
-            partial: nil,
-            request: MusicHapticsAnalysisRequest(
+
+        #expect(run.result.finishReason == .naturalEnd)
+        #expect(run.result.snapshot.analysisMode == .remoteOriginal)
+        #expect(diagnostics.values.contains(.remoteDecoderFailed))
+        #expect(diagnostics.values.contains(.remoteOriginalRefresh))
+        #expect(server.requestCount == 1)
+    }
+
+    @Test("the scheduler accepts a complete timeline far beyond the old twenty-second lead")
+    @MainActor
+    func schedulerDoesNotThrottleAnalysisLead() {
+        let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
+        _ = scheduler.updateClock(position: 0, isPlaying: true)
+        let window = MusicHapticsAnalysisWindow(
+            startTime: 0,
+            endTime: 40,
+            analysisPosition: 40,
+            events: [
+                MusicHapticsEvent(
+                    time: 1,
+                    intensity: 0.8,
+                    sharpness: 0.3,
+                    kind: .transient,
+                    classification: .kick
+                ),
+                MusicHapticsEvent(
+                    time: 31,
+                    intensity: 0.8,
+                    sharpness: 0.3,
+                    kind: .transient,
+                    classification: .kick
+                )
+            ],
+            coverage: 1,
+            analysisSpeedX: 8,
+            tempoBPM: 120,
+            beatConfidence: 0.8,
+            sourceMode: .remoteOriginal
+        )
+
+        let first = scheduler.ingest(window)
+        #expect(scheduler.hapticCommitHorizon == 3)
+        #expect(first.contains { $0.endTime <= 3.001 })
+        #expect(scheduler.scheduledUntil >= 3)
+        let later = scheduler.updateClock(position: 30, isPlaying: true)
+        #expect(later.contains { $0.events.contains { $0.time == 31 } })
+        #expect(scheduler.scheduledUntil >= 33)
+    }
+
+    @Test("realtime tap fills a slow lookahead gap and a later remote window upgrades it without duplicate events")
+    @MainActor
+    func realtimeTapArbitratesWithOriginalStream() {
+        let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
+        _ = scheduler.updateClock(position: 0, isPlaying: true)
+
+        let realtime = MusicHapticsAnalysisWindow(
+            startTime: 0,
+            endTime: 4,
+            analysisPosition: 4,
+            events: [
+                MusicHapticsEvent(time: 0.5, intensity: 0.7, sharpness: 0.2, kind: .transient, classification: .kick),
+                MusicHapticsEvent(time: 1.5, intensity: 0.7, sharpness: 0.2, kind: .transient, classification: .kick),
+                MusicHapticsEvent(time: 2.5, intensity: 0.7, sharpness: 0.2, kind: .transient, classification: .kick),
+                MusicHapticsEvent(time: 3.5, intensity: 0.7, sharpness: 0.2, kind: .transient, classification: .kick)
+            ],
+            coverage: 0.1,
+            analysisSpeedX: 0.72,
+            tempoBPM: 120,
+            beatConfidence: 0.7,
+            sourceMode: .realtimeTap
+        )
+        let first = scheduler.ingest(realtime)
+        #expect(first.contains { $0.events.contains { $0.time == 0.5 } })
+        #expect(scheduler.currentEventSource == .realtimeTap)
+
+        _ = scheduler.updateClock(position: 1, isPlaying: true)
+        _ = scheduler.updateClock(position: 2, isPlaying: true)
+
+        let remote = MusicHapticsAnalysisWindow(
+            startTime: 1.5,
+            endTime: 4.5,
+            analysisPosition: 4.5,
+            events: [
+                MusicHapticsEvent(time: 1.5, intensity: 0.8, sharpness: 0.3, kind: .transient, classification: .kick),
+                MusicHapticsEvent(time: 2.5, intensity: 0.8, sharpness: 0.3, kind: .transient, classification: .kick),
+                MusicHapticsEvent(time: 3.5, intensity: 0.8, sharpness: 0.3, kind: .transient, classification: .kick),
+                MusicHapticsEvent(time: 4.25, intensity: 0.8, sharpness: 0.3, kind: .transient, classification: .snareClap)
+            ],
+            coverage: 0.2,
+            analysisSpeedX: 5.7,
+            tempoBPM: 120,
+            beatConfidence: 0.9,
+            sourceMode: .remoteOriginal
+        )
+        let upgraded = scheduler.ingest(remote)
+        let emitted = first + upgraded
+        let eventTimes = emitted.flatMap(\.events).map(\.time)
+
+        #expect(emitted.contains { window in
+            window.sourceMode == .remoteOriginal
+                && window.events.contains { $0.time == 4.25 }
+        })
+        #expect(Set(eventTimes).count == eventTimes.count)
+        #expect(scheduler.currentEventSource == .remoteOriginal)
+        #expect(scheduler.scheduledUntil >= 4.5)
+    }
+
+    @Test("partial checkpoints preserve interior holes and resume anchors")
+    func checkpointResumesTheActualMissingRange() {
+        let identity = testIdentity(duration: 60)
+        let firstEvent = MusicHapticsEvent(
+            time: 4,
+            intensity: 0.7,
+            sharpness: 0.2,
+            kind: .transient,
+            classification: .kick
+        )
+        let secondEvent = MusicHapticsEvent(
+            time: 24,
+            intensity: 0.8,
+            sharpness: 0.2,
+            kind: .transient,
+            classification: .snareClap
+        )
+        let checkpoint = MusicHapticsPartialCheckpoint(
+            identity: identity,
+            duration: 60,
+            analyzedRanges: [
+                MusicHapticsTimeRange(lowerBound: 0, upperBound: 10),
+                MusicHapticsTimeRange(lowerBound: 20, upperBound: 30)
+            ],
+            events: [firstEvent, secondEvent],
+            decoderResumePoints: [
+                MusicHapticsDecoderResumePoint(position: 10, byteOffset: 10_000, packetIndex: 100),
+                MusicHapticsDecoderResumePoint(position: 30, byteOffset: 30_000, packetIndex: 300)
+            ]
+        )
+
+        #expect(checkpoint.uncoveredRanges == [
+            MusicHapticsTimeRange(lowerBound: 10, upperBound: 20),
+            MusicHapticsTimeRange(lowerBound: 30, upperBound: 60)
+        ])
+        #expect(checkpoint.firstUnanalyzedPosition == 10)
+        #expect(checkpoint.resumePoint(for: checkpoint.uncoveredRanges[0])?.position == 10)
+
+        let resumed = MusicHapticsPartialCheckpoint(
+            identity: identity,
+            duration: 60,
+            analyzedRanges: [MusicHapticsTimeRange(lowerBound: 30, upperBound: 60)],
+            events: [secondEvent]
+        )
+        let merged = checkpoint.merged(with: resumed)
+        #expect(merged.uncoveredRanges == [
+            MusicHapticsTimeRange(lowerBound: 10, upperBound: 20)
+        ])
+        #expect(merged.events.count == 2)
+        #expect(merged.analyzedRanges.contains {
+            abs($0.lowerBound - 20) < 0.001 && abs($0.upperBound - 60) < 0.001
+        })
+    }
+
+    @Test("an analyzer checkpoint resumes an original stream at a byte anchor and completes without duplicate events")
+    func analyzerResumesFromCheckpoint() async throws {
+        let duration: TimeInterval = 0.75
+        let identity = testIdentity(duration: duration)
+        let firstServer = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac",
+            responseChunkSize: 512,
+            responseChunkDelay: 0.02
+        )
+        try await firstServer.start()
+        defer { firstServer.stop() }
+
+        let holder = LookaheadHolder()
+        let stopOnce = StopOnce()
+        let firstResult = await withCheckedContinuation {
+            (continuation: CheckedContinuation<MusicHapticsAnalysisResult, Never>) in
+            let analyzer = LookaheadMusicHapticsAnalyzer(
                 identity: identity,
-                favorite: false,
+                duration: duration,
+                onWindow: { _ in
+                    guard stopOnce.take() else { return }
+                    holder.analyzer?.finishPartial(reason: .trackSwitch)
+                },
+                onResult: { result in continuation.resume(returning: result) }
+            )
+            holder.analyzer = analyzer
+            analyzer.start(source: .remoteOriginal(firstServer.url))
+        }
+        holder.analyzer = nil
+
+        #expect(firstResult.finishReason == .trackSwitch)
+        #expect(firstResult.checkpoint.coverage > 0.05)
+        #expect(firstResult.checkpoint.coverage < 0.999)
+        #expect(!firstResult.checkpoint.decoderResumePoints.isEmpty)
+
+        let resumeServer = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac",
+            responseChunkSize: 512
+        )
+        try await resumeServer.start()
+        defer { resumeServer.stop() }
+
+        let resumed = await runAnalyzer(
+            identity: identity,
+            duration: duration,
+            source: .remoteOriginal(resumeServer.url),
+            partial: firstResult.checkpoint,
+            capture: AnalysisCapture()
+        )
+
+        #expect(resumed.result.finishReason == .naturalEnd)
+        #expect(resumed.result.checkpoint.isComplete)
+        #expect(resumed.result.timeline != nil)
+        #expect(resumeServer.rangeRequests.count >= 2)
+        #expect(resumeServer.rangeRequests.contains { $0.hasSuffix("-") })
+
+        let deduplicatedEvents = MusicHapticsEventDeduplicator.merge(
+            resumed.result.checkpoint.events
+        )
+        #expect(deduplicatedEvents == resumed.result.checkpoint.events)
+        let firstCoveredEnd = firstResult.checkpoint.analyzedRanges.first?.upperBound ?? 0
+        let firstEvents = firstResult.checkpoint.events.filter { $0.time < firstCoveredEnd }
+        let resumedEventsInCoveredPrefix = resumed.result.checkpoint.events.filter { $0.time < firstCoveredEnd }
+        #expect(resumedEventsInCoveredPrefix == firstEvents)
+    }
+
+    @Test("an analyzer resumes an interior missing range without replaying covered ranges")
+    func analyzerResumesInteriorHole() async throws {
+        let duration: TimeInterval = 0.75
+        let identity = testIdentity(duration: duration)
+        let initialServer = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac",
+            responseChunkSize: 8 * 1024
+        )
+        try await initialServer.start()
+        defer { initialServer.stop() }
+
+        let complete = await runAnalyzer(
+            identity: identity,
+            duration: duration,
+            source: .remoteOriginal(initialServer.url),
+            capture: AnalysisCapture()
+        )
+        #expect(complete.result.checkpoint.isComplete)
+
+        let partial = MusicHapticsPartialCheckpoint(
+            identity: identity,
+            duration: duration,
+            analyzedRanges: [
+                MusicHapticsTimeRange(lowerBound: 0, upperBound: 0.25),
+                MusicHapticsTimeRange(lowerBound: 0.5, upperBound: duration)
+            ],
+            events: complete.result.checkpoint.events.filter {
+                $0.time < 0.25 || $0.time >= 0.5
+            },
+            decoderResumePoints: complete.result.checkpoint.decoderResumePoints
+        )
+        #expect(partial.uncoveredRanges == [
+            MusicHapticsTimeRange(lowerBound: 0.25, upperBound: 0.5)
+        ])
+
+        let resumeServer = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: RemoteFLACFixture.data,
+            contentType: "audio/flac",
+            responseChunkSize: 512
+        )
+        try await resumeServer.start()
+        defer { resumeServer.stop() }
+
+        let resumed = await runAnalyzer(
+            identity: identity,
+            duration: duration,
+            source: .remoteOriginal(resumeServer.url),
+            partial: partial,
+            capture: AnalysisCapture()
+        )
+
+        #expect(resumed.result.finishReason == .naturalEnd)
+        #expect(resumed.result.checkpoint.isComplete)
+        #expect(resumed.result.checkpoint.uncoveredRanges.isEmpty)
+        #expect(resumeServer.rangeRequests.count >= 2)
+        #expect(resumeServer.rangeRequests.contains { $0.hasSuffix("-") })
+        #expect(
+            MusicHapticsEventDeduplicator.merge(resumed.result.checkpoint.events)
+                == resumed.result.checkpoint.events
+        )
+    }
+
+    @Test("a forty-second simulated playback produces measured realtime throughput and continuous output")
+    @MainActor
+    func longRealtimeRunReportsActualMetrics() async throws {
+        let duration: TimeInterval = 40
+        let identity = testIdentity(duration: duration)
+        let capture = AnalysisCapture()
+        let holder = ResultHolder()
+        let result = await withCheckedContinuation {
+            (continuation: CheckedContinuation<MusicHapticsAnalysisResult, Never>) in
+            let analyzer = StreamingMusicHapticsAnalyzer(
+                identity: identity,
+                duration: duration,
+                onResult: { result in continuation.resume(returning: result) },
+                onProgress: { capture.append(snapshot: $0) },
+                onWindow: { capture.append(window: $0) }
+            )
+            holder.analyzer = analyzer
+            let format = int16MonoFormat(sampleRate: 22_050)
+            analyzer.tapAttached()
+            analyzer.configurePCMStorage(format: format, maxFrames: 2_205)
+            analyzer.begin(format: format)
+            let pcm = makeSyntheticPCM(duration: duration, sampleRate: 22_050)
+            let bytesPerFrame = 2
+            let framesPerChunk = 2_205
+            for chunkIndex in 0..<Int(duration * 10) {
+                let start = chunkIndex * framesPerChunk * bytesPerFrame
+                let end = min(pcm.count, start + framesPerChunk * bytesPerFrame)
+                guard start < end else { break }
+                analyzer.consumePCM(
+                    pcm.subdata(in: start..<end),
+                    time: Double(chunkIndex) * 0.1,
+                    format: format,
+                    frameCount: (end - start) / bytesPerFrame
+                )
+                // Feed faster than playback, but below the measured utility
+                // consumer throughput. This models a fast callback burst
+                // without intentionally overrunning the bounded ring.
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            analyzer.finishPartial(reason: .naturalEnd)
+        }
+        holder.analyzer = nil
+
+        #expect(result.snapshot.analysisPosition >= 39)
+        #expect(result.snapshot.analysisPosition > 30)
+        #expect(result.snapshot.realtimeAnalysisPosition >= 39)
+        #expect(result.snapshot.realtimeAnalysisSpeedX > 0)
+        #expect(result.snapshot.realtimeAnalysisSpeedX.isFinite)
+        #expect(result.snapshot.droppedFrames == 0)
+        #expect(capture.windows.contains { $0.events.contains { $0.time >= 10 && $0.time < 20 } })
+        #expect(capture.windows.contains { $0.events.contains { $0.time >= 20 && $0.time < 30 } })
+        #expect(capture.windows.contains { $0.events.contains { $0.time >= 30 && $0.time < 40 } })
+
+        let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
+        _ = scheduler.updateClock(position: 0, isPlaying: true)
+        for window in capture.windows {
+            _ = scheduler.ingest(window)
+        }
+        for position in stride(from: 1.0, through: 30.0, by: 1.0) {
+            _ = scheduler.updateClock(position: position, isPlaying: true)
+        }
+        let playbackPosition = 30.0
+        let lead = result.snapshot.analysisPosition - playbackPosition
+        print(
+            "HAPTICS_TEST_METRICS playbackPosition=\(playbackPosition) " +
+            "analysisPosition=\(result.snapshot.analysisPosition) " +
+            "analysisLeadSeconds=\(lead) " +
+            "analysisSpeedX=\(result.snapshot.realtimeAnalysisSpeedX) " +
+            "scheduledUntil=\(scheduler.scheduledUntil) " +
+            "droppedFrames=\(result.snapshot.droppedFrames)"
+        )
+        #expect(scheduler.scheduledUntil >= playbackPosition)
+    }
+
+    @Test("a 96 kHz stereo Float32 tap sizes storage from its real callback format")
+    func highSpecificationPCMDoesNotStarveRing() async throws {
+        let identity = testIdentity(duration: 1)
+        let holder = ResultHolder()
+        let format = try #require(MusicHapticsPCMFormat(
+            sampleRate: 96_000,
+            channels: 2,
+            sampleType: .float32,
+            interleaved: true,
+            bytesPerFrame: 8,
+            bytesPerSample: 4
+        ))
+        let result = await withCheckedContinuation {
+            (continuation: CheckedContinuation<MusicHapticsAnalysisResult, Never>) in
+            let analyzer = StreamingMusicHapticsAnalyzer(
+                identity: identity,
                 duration: 1,
-                analysisSource: primary
+                onResult: { result in continuation.resume(returning: result) }
             )
-        )
-        #expect(decision.plan.kind == .analyzeLookahead)
-        let provider = InjectedSourceProvider(primary: primary, fallbacks: [refreshed, progressive])
-
-        let run = await runAnalyzer(
-            provider: provider,
-            identity: identity,
-            duration: 1
-        )
-        #expect(run.failureCount == 0)
-        #expect(run.result.finishReason == .naturalEnd)
-        #expect(run.result.snapshot.analysisMode == .remoteLookahead)
-        #expect(run.diagnostics == [.remoteDecoderFailed])
-    }
-
-    @Test("remote lookahead falls back to an independent progressive source")
-    func remoteLookaheadFailureUsesProgressiveSource() async throws {
-        let identity = testIdentity()
-        let audioURL = try makeWAV(duration: 1, name: "remote-progressive-fallback")
-        defer { try? FileManager.default.removeItem(at: audioURL) }
-        let missingSidecar = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralis-missing-refresh-\(UUID().uuidString).mp3")
-        let primary = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(url: missingSidecar, bitrate: 96, format: "mp3")
-        )
-        let refreshedSidecar = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(url: FileManager.default.temporaryDirectory
-                .appendingPathComponent("auralis-missing-second-\(UUID().uuidString).mp3"), bitrate: 96)
-        )
-        let provider = InjectedSourceProvider(
-            primary: primary,
-            fallbacks: [refreshedSidecar, .remoteProgressive(audioURL)]
-        )
-
-        let run = await runAnalyzer(
-            provider: provider,
-            identity: identity,
-            duration: 1
-        )
-        #expect(run.failureCount == 0)
-        #expect(run.result.finishReason == .naturalEnd)
-        #expect(run.result.snapshot.analysisMode == .remoteProgressive)
-        #expect(run.result.snapshot.analysisStreamBitrate == nil)
-        #expect(run.diagnostics == [
-            .remoteDecoderFailed,
-            .remoteDecoderFailed,
-            .remoteProgressiveFallback,
-        ])
-    }
-
-    @Test("rotating sidecar refreshes still reach progressive fallback")
-    func remoteLookaheadRefreshIsBounded() async throws {
-        let identity = testIdentity()
-        let audioURL = try makeWAV(duration: 1, name: "bounded-refresh")
-        defer { try? FileManager.default.removeItem(at: audioURL) }
-        let primary = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(
-                url: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("auralis-missing-primary-\(UUID().uuidString).mp3"),
-                bitrate: 96
+            holder.analyzer = analyzer
+            analyzer.tapAttached()
+            analyzer.configurePCMStorage(format: format, maxFrames: 9_600)
+            analyzer.begin(format: format)
+            let framesPerChunk = 9_600
+            var data = Data(count: framesPerChunk * format.bytesPerFrame)
+            data.withUnsafeMutableBytes { rawBuffer in
+                let samples = rawBuffer.bindMemory(to: Float32.self)
+                for index in stride(from: 0, to: samples.count, by: 2) {
+                    let phase = Double(index / 2) / format.sampleRate
+                    let value = Float(sin(phase * 2 * .pi * 65))
+                    samples[index] = value
+                    samples[index + 1] = value
+                }
+            }
+            analyzer.consumePCM(
+                data,
+                time: 0,
+                format: format,
+                frameCount: framesPerChunk
             )
-        )
-        let provider = RotatingSidecarProvider(primary: primary, progressive: audioURL)
+            analyzer.finishPartial(reason: .naturalEnd)
+        }
+        holder.analyzer = nil
 
-        let run = await runAnalyzer(
-            provider: provider,
-            identity: identity,
-            duration: 1
-        )
-        let refreshCount = await provider.refreshCount
-        #expect(refreshCount == 2)
-        #expect(run.failureCount == 0)
-        #expect(run.result.finishReason == .naturalEnd)
-        #expect(run.result.snapshot.analysisMode == .remoteProgressive)
-        #expect(run.diagnostics == [
-            .remoteDecoderFailed,
-            .remoteDecoderFailed,
-            .remoteProgressiveFallback,
-        ])
+        #expect(result.snapshot.pcmFormat == format)
+        #expect(result.snapshot.droppedFrames == 0)
+        #expect(result.snapshot.droppedAudioDuration == 0)
     }
 
-    @Test("rotating progressive refreshes fail closed instead of looping")
-    func remoteProgressiveRefreshIsBounded() async throws {
-        let identity = testIdentity()
-        let primary = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(
-                url: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("auralis-missing-primary-(UUID().uuidString).mp3"),
-                bitrate: 96
+    @Test("a 96 kHz stereo packed 24-bit tap is accepted without ring starvation")
+    func highSpecificationPacked24PCMDoesNotStarveRing() async throws {
+        let identity = testIdentity(duration: 1)
+        let holder = ResultHolder()
+        let format = try #require(MusicHapticsPCMFormat(
+            sampleRate: 96_000,
+            channels: 2,
+            sampleType: .int24,
+            interleaved: true,
+            bytesPerFrame: 6,
+            bytesPerSample: 3
+        ))
+        let result = await withCheckedContinuation {
+            (continuation: CheckedContinuation<MusicHapticsAnalysisResult, Never>) in
+            let analyzer = StreamingMusicHapticsAnalyzer(
+                identity: identity,
+                duration: 1,
+                onResult: { result in continuation.resume(returning: result) }
             )
-        )
-        let provider = RotatingUnavailableSourceProvider(primary: primary)
+            holder.analyzer = analyzer
+            analyzer.tapAttached()
+            analyzer.configurePCMStorage(format: format, maxFrames: 9_600)
+            analyzer.begin(format: format)
+            let frames = 9_600
+            var data = Data(count: frames * format.bytesPerFrame)
+            data.withUnsafeMutableBytes { rawBuffer in
+                for frame in 0..<frames {
+                    let time = Double(frame) / format.sampleRate
+                    let value = Int32((sin(time * 2 * .pi * 65) * 0x7F_FFFF).rounded())
+                    let unsigned = UInt32(bitPattern: value)
+                    for channel in 0..<format.channels {
+                        let offset = frame * format.bytesPerFrame + channel * 3
+                        rawBuffer[offset] = UInt8(truncatingIfNeeded: unsigned)
+                        rawBuffer[offset + 1] = UInt8(truncatingIfNeeded: unsigned >> 8)
+                        rawBuffer[offset + 2] = UInt8(truncatingIfNeeded: unsigned >> 16)
+                    }
+                }
+            }
+            analyzer.consumePCM(
+                data,
+                time: 0,
+                format: format,
+                frameCount: frames
+            )
+            analyzer.finishPartial(reason: .naturalEnd)
+        }
+        holder.analyzer = nil
 
-        let run = await runAnalyzer(
-            provider: provider,
-            identity: identity,
-            duration: 1
-        )
-        let refreshCount = await provider.refreshCount
-        #expect(refreshCount == 3)
-        #expect(run.failureCount == 1)
-        #expect(run.result.finishReason == .playbackFailure)
-        #expect(run.diagnostics == [
-            .remoteDecoderFailed,
-            .remoteDecoderFailed,
-            .remoteProgressiveFallback,
-            .remoteDecoderFailed,
-        ])
+        #expect(result.snapshot.pcmFormat == format)
+        #expect(result.snapshot.droppedFrames == 0)
+        #expect(result.snapshot.droppedAudioDuration == 0)
     }
 
-    @Test("remote decoder failure never falls back to a current-item realtime tap")
-    func remoteLookaheadFailureReportsNoIndependentSource() async throws {
-        let identity = testIdentity()
-        let missingURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralis-missing-sidecar-\(UUID().uuidString).mp3")
-        let source = MusicHapticsAnalysisSource.remoteLookahead(
-            .init(url: missingURL, bitrate: 96, format: "mp3")
-        )
-        let provider = InjectedSourceProvider(primary: source, fallbacks: [])
-
-        let run = await runAnalyzer(
-            provider: provider,
-            identity: identity,
-            duration: 1
-        )
-        #expect(run.failureCount == 1)
-        #expect(run.result.finishReason == .playbackFailure)
-        #expect(run.result.snapshot.analysisMode == .remoteLookahead)
-        #expect(run.diagnostics == [.remoteDecoderFailed])
-    }
-
-    private func testIdentity() -> MusicHapticsIdentity {
+    private func testIdentity(duration: TimeInterval) -> MusicHapticsIdentity {
         MusicHapticsIdentity(
-            globalID: "server:remote-fallback",
+            globalID: "server:original-stream",
             serverID: "server",
-            remoteID: "remote-fallback",
-            title: "Remote fallback",
-            artist: "Auralis test",
-            durationMilliseconds: 1_000
+            remoteID: "original-stream-\(duration)",
+            title: "Original Stream",
+            artist: "Auralis Test",
+            durationMilliseconds: Int((duration * 1_000).rounded())
         )
     }
 
     private func runAnalyzer(
-        provider: some MusicHapticsAnalysisSourceProvider,
         identity: MusicHapticsIdentity,
-        duration: TimeInterval
+        duration: TimeInterval,
+        source: MusicHapticsAnalysisSource,
+        fallbackSources: [MusicHapticsAnalysisSource] = [],
+        partial: MusicHapticsPartialCheckpoint? = nil,
+        capture: AnalysisCapture,
+        diagnostics: DiagnosticCapture? = nil,
+        responseFinished: @escaping @Sendable () -> Bool = { false }
     ) async -> AnalysisRun {
-        let diagnostics = DiagnosticBox()
-        let failureCount = FailureBox()
-        let source = await provider.source(for: identity, playbackURL: nil) ?? .realtimeTap
-        let analyzerHolder = AnalyzerHolder()
+        let holder = ResultHolder()
         let result = await withCheckedContinuation {
             (continuation: CheckedContinuation<MusicHapticsAnalysisResult, Never>) in
             let analyzer = LookaheadMusicHapticsAnalyzer(
                 identity: identity,
                 duration: duration,
-                onWindow: { _ in },
+                partial: partial,
+                onWindow: { window in
+                    capture.append(window: window, responseFinished: responseFinished())
+                },
                 onResult: { result in continuation.resume(returning: result) },
-                onFailure: { failureCount.increment() },
-                onDiagnostic: { diagnostics.append($0) },
-                fallbackSourceProvider: { failedSource in
-                    await provider.fallbackSources(
-                        for: identity,
-                        playbackURL: nil,
-                        after: failedSource
-                    )
-                }
+                onProgress: { capture.append(snapshot: $0) },
+                onFailure: { capture.incrementFailure() },
+                onDiagnostic: { diagnostics?.append($0) },
+                onDecoderFailure: { diagnostics?.append($0.diagnostic) },
+                fallbackSourceProvider: { _ in fallbackSources }
             )
-            analyzerHolder.analyzer = analyzer
+            holder.analyzer = analyzer
             analyzer.start(source: source)
         }
-        analyzerHolder.analyzer = nil
-        return AnalysisRun(
-            result: result,
-            diagnostics: diagnostics.values,
-            failureCount: failureCount.value
-        )
-    }
-
-    private func makeWAV(duration: TimeInterval, name: String) throws -> URL {
-        let sampleRate = 44_100
-        let frames = Int(duration * Double(sampleRate))
-        let bytesPerSample = 2
-        let dataSize = frames * bytesPerSample
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralis-haptics-\(name)-\(UUID().uuidString).wav")
-
-        var data = Data()
-        data.append(contentsOf: Array("RIFF".utf8))
-        appendLittleEndian(UInt32(36 + dataSize), to: &data)
-        data.append(contentsOf: Array("WAVE".utf8))
-        data.append(contentsOf: Array("fmt ".utf8))
-        appendLittleEndian(UInt32(16), to: &data)
-        appendLittleEndian(UInt16(1), to: &data)
-        appendLittleEndian(UInt16(1), to: &data)
-        appendLittleEndian(UInt32(sampleRate), to: &data)
-        appendLittleEndian(UInt32(sampleRate * bytesPerSample), to: &data)
-        appendLittleEndian(UInt16(bytesPerSample), to: &data)
-        appendLittleEndian(UInt16(16), to: &data)
-        data.append(contentsOf: Array("data".utf8))
-        appendLittleEndian(UInt32(dataSize), to: &data)
-
-        var samples = Data(count: dataSize)
-        samples.withUnsafeMutableBytes { buffer in
-            for frame in 0..<frames {
-                let phase = Double(frame) / Double(sampleRate)
-                let value = Int16(sin(phase * .pi * 2 * 220) * 12_000).littleEndian
-                buffer.storeBytes(of: value, toByteOffset: frame * bytesPerSample, as: Int16.self)
-            }
-        }
-        data.append(samples)
-        try data.write(to: url)
-        return url
-    }
-
-    private func appendLittleEndian<T: FixedWidthInteger>(_ value: T, to data: inout Data) {
-        var littleEndian = value.littleEndian
-        withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
+        holder.analyzer = nil
+        return AnalysisRun(result: result, windows: capture.windows)
     }
 }
 
 private struct AnalysisRun: Sendable {
     let result: MusicHapticsAnalysisResult
-    let diagnostics: [MusicHapticsAnalysisDiagnostic]
-    let failureCount: Int
+    let windows: [MusicHapticsAnalysisWindow]
 }
 
-private struct InjectedSourceProvider: MusicHapticsAnalysisSourceProvider {
-    let primary: MusicHapticsAnalysisSource
-    let fallbacks: [MusicHapticsAnalysisSource]
-
-    func source(
-        for identity: MusicHapticsIdentity,
-        playbackURL: URL?
-    ) async -> MusicHapticsAnalysisSource? {
-        primary
-    }
-
-    func fallbackSources(
-        for identity: MusicHapticsIdentity,
-        playbackURL: URL?,
-        after failedSource: MusicHapticsAnalysisSource
-    ) async -> [MusicHapticsAnalysisSource] {
-        fallbacks
-    }
+private final class ResultHolder: @unchecked Sendable {
+    var analyzer: AnyObject?
 }
 
-private actor RotatingSidecarProvider: MusicHapticsAnalysisSourceProvider {
-    let primary: MusicHapticsAnalysisSource
-    let progressive: URL
-    private(set) var refreshCount = 0
-
-    init(primary: MusicHapticsAnalysisSource, progressive: URL) {
-        self.primary = primary
-        self.progressive = progressive
-    }
-
-    func source(
-        for identity: MusicHapticsIdentity,
-        playbackURL: URL?
-    ) async -> MusicHapticsAnalysisSource? {
-        primary
-    }
-
-    func fallbackSources(
-        for identity: MusicHapticsIdentity,
-        playbackURL: URL?,
-        after failedSource: MusicHapticsAnalysisSource
-    ) async -> [MusicHapticsAnalysisSource] {
-        refreshCount += 1
-        let refreshed = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralis-missing-refresh-\(UUID().uuidString).mp3")
-        return [
-            .remoteLookahead(.init(url: refreshed, bitrate: 96)),
-            .remoteProgressive(progressive),
-        ]
-    }
+private final class LookaheadHolder: @unchecked Sendable {
+    var analyzer: LookaheadMusicHapticsAnalyzer?
 }
 
-private actor RotatingUnavailableSourceProvider: MusicHapticsAnalysisSourceProvider {
-    let primary: MusicHapticsAnalysisSource
-    private(set) var refreshCount = 0
-
-    init(primary: MusicHapticsAnalysisSource) {
-        self.primary = primary
-    }
-
-    func source(
-        for identity: MusicHapticsIdentity,
-        playbackURL: URL?
-    ) async -> MusicHapticsAnalysisSource? {
-        primary
-    }
-
-    func fallbackSources(
-        for identity: MusicHapticsIdentity,
-        playbackURL: URL?,
-        after failedSource: MusicHapticsAnalysisSource
-    ) async -> [MusicHapticsAnalysisSource] {
-        refreshCount += 1
-        let refreshedSidecar = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralis-missing-sidecar-(UUID().uuidString).mp3")
-        let refreshedProgressive = FileManager.default.temporaryDirectory
-            .appendingPathComponent("auralis-missing-progressive-(UUID().uuidString).mp3")
-        return [
-            .remoteLookahead(.init(url: refreshedSidecar, bitrate: 96)),
-            .remoteProgressive(refreshedProgressive),
-        ]
-    }
-}
-
-private final class DiagnosticBox: @unchecked Sendable {
+private final class StopOnce: @unchecked Sendable {
     private let lock = NSLock()
-    private var storage: [MusicHapticsAnalysisDiagnostic] = []
+    private var stopped = false
+
+    func take() -> Bool {
+        lock.withLock {
+            guard !stopped else { return false }
+            stopped = true
+            return true
+        }
+    }
+}
+
+private final class DecoderCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedFirstPCMBeforeResponseFinished = false
+    private var storedSawPCM = false
+    private var storedChunkCount = 0
+    private var storedLastPosition: TimeInterval = 0
+
+    var firstPCMBeforeResponseFinished: Bool {
+        lock.withLock { storedFirstPCMBeforeResponseFinished }
+    }
+
+    var chunkCount: Int {
+        lock.withLock { storedChunkCount }
+    }
+
+    var lastPosition: TimeInterval {
+        lock.withLock { storedLastPosition }
+    }
+
+    func append(_ chunk: MusicHapticsDecodedPCMChunk, responseFinished: Bool) {
+        lock.withLock {
+            if !storedSawPCM {
+                storedFirstPCMBeforeResponseFinished = !responseFinished
+            }
+            storedSawPCM = true
+            storedChunkCount += 1
+            storedLastPosition = max(
+                storedLastPosition,
+                chunk.time + Double(chunk.frameCount) / chunk.format.sampleRate
+            )
+        }
+    }
+}
+
+private final class AnalysisCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedWindows: [MusicHapticsAnalysisWindow] = []
+    private var storedSnapshots: [MusicHapticsAnalysisSnapshot] = []
+    private var storedFailureCount = 0
+    private var firstWindowBeforeResponseFinishedValue: Bool?
+
+    var windows: [MusicHapticsAnalysisWindow] {
+        lock.withLock { storedWindows }
+    }
+
+    var firstWindowBeforeResponseFinished: Bool? {
+        lock.withLock { firstWindowBeforeResponseFinishedValue }
+    }
+
+    func append(window: MusicHapticsAnalysisWindow, responseFinished: Bool = false) {
+        lock.withLock {
+            storedWindows.append(window)
+            if firstWindowBeforeResponseFinishedValue == nil {
+                firstWindowBeforeResponseFinishedValue = !responseFinished
+            }
+        }
+    }
+
+    func append(snapshot: MusicHapticsAnalysisSnapshot) {
+        lock.withLock { storedSnapshots.append(snapshot) }
+    }
+
+    func incrementFailure() {
+        lock.withLock { storedFailureCount += 1 }
+    }
+}
+
+private final class DiagnosticCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [MusicHapticsAnalysisDiagnostic] = []
 
     var values: [MusicHapticsAnalysisDiagnostic] {
-        lock.withLock { storage }
+        lock.withLock { storedValues }
     }
 
     func append(_ value: MusicHapticsAnalysisDiagnostic) {
-        lock.withLock { storage.append(value) }
+        lock.withLock { storedValues.append(value) }
     }
 }
 
-private final class FailureBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage = 0
-
-    var value: Int {
-        lock.withLock { storage }
-    }
-
-    func increment() {
-        lock.withLock { storage += 1 }
-    }
+private func int16MonoFormat(sampleRate: Double) -> MusicHapticsPCMFormat {
+    MusicHapticsPCMFormat(
+        sampleRate: sampleRate,
+        channels: 1,
+        sampleType: .int16,
+        interleaved: true,
+        bytesPerFrame: 2,
+        bytesPerSample: 2
+    )!
 }
 
-private final class AnalyzerHolder: @unchecked Sendable {
-    var analyzer: LookaheadMusicHapticsAnalyzer?
+private func makeSyntheticPCM(duration: TimeInterval, sampleRate: Double) -> Data {
+    let frameCount = Int(duration * sampleRate)
+    var data = Data(capacity: frameCount * 2)
+    for frame in 0..<frameCount {
+        let time = Double(frame) / sampleRate
+        let beatPhase = time.truncatingRemainder(dividingBy: 0.5)
+        let kick = 0.85 * Float(exp(-beatPhase * 42)) * Float(sin(2 * .pi * 62 * time))
+        let snarePhase = (time + 0.25).truncatingRemainder(dividingBy: 0.5)
+        let snare = 0.42 * Float(exp(-snarePhase * 55)) * Float(sin(2 * .pi * 2_800 * time))
+        let bass = 0.18 * Float(sin(2 * .pi * 55 * time))
+        let value = max(-1, min(1, kick + snare + bass))
+        var sample = Int16((value * Float(Int16.max)).rounded()).littleEndian
+        withUnsafeBytes(of: &sample) { data.append(contentsOf: $0) }
+    }
+    return data
 }

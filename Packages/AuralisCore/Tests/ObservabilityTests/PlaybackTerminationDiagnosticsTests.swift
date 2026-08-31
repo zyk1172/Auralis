@@ -18,7 +18,7 @@ struct PlaybackTerminationDiagnosticsTests {
             playbackState: "playing",
             audioSessionActive: true,
             musicHapticsEnabled: true,
-            musicHapticsAnalysisMode: "remoteLookahead",
+            musicHapticsAnalysisMode: "remoteOriginal",
             musicHapticsAnalysisLeadSeconds: 12
         )
         first.recordBackground(context: context, now: Date(timeIntervalSince1970: 20))

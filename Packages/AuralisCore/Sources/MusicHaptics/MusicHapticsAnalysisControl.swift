@@ -1,11 +1,11 @@
 import Foundation
 
-/// Coordinates pause/resume and bounded lookahead without blocking a worker
-/// thread. A sidecar may decode ahead, but it must stop once it reaches a
-/// bounded distance from the authoritative playback clock.
+/// Coordinates pause/resume for an independent decoder without coupling its
+/// throughput to the authoritative playback clock. Analysis is deliberately
+/// allowed to run to EOF as fast as the network/decoder/CPU permit; the
+/// scheduler owns the short Core Haptics commit horizon separately.
 final class MusicHapticsAnalysisControl: @unchecked Sendable {
     private let lock = NSLock()
-    private let highWatermark: TimeInterval
     private var paused = false
     private var cancelled = false
     private var playbackPosition: TimeInterval = 0
@@ -13,9 +13,7 @@ final class MusicHapticsAnalysisControl: @unchecked Sendable {
     private var isPlaying = true
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
-    init(highWatermark: TimeInterval = 20) {
-        self.highWatermark = max(1, highWatermark)
-    }
+    init() {}
 
     func pause() {
         lock.withLock {
@@ -66,18 +64,18 @@ final class MusicHapticsAnalysisControl: @unchecked Sendable {
         continuations.forEach { $0.resume() }
     }
 
-    /// Wait until analysis is allowed to continue. The source duration makes
-    /// the final tail exempt from the high-watermark gate.
+    /// Wait until analysis is allowed to continue. The position arguments are
+    /// retained for source compatibility with the decoder loop, but are not a
+    /// high-watermark gate: a lookahead decoder may be arbitrarily ahead of
+    /// playback.
     func waitUntilReady(
-        analysisPosition: TimeInterval,
-        sourceDuration: TimeInterval
+        analysisPosition _: TimeInterval,
+        sourceDuration _: TimeInterval
     ) async -> Bool {
         await withCheckedContinuation { continuation in
             let resumeImmediately = lock.withLock {
                 if cancelled { return true }
-                let reachedEnd = analysisPosition >= sourceDuration - 0.001
-                let withinWatermark = analysisPosition <= playbackPosition + highWatermark
-                if !paused, isPlaying, (reachedEnd || withinWatermark) {
+                if !paused, isPlaying {
                     return true
                 }
                 waiters.append(continuation)
@@ -90,9 +88,9 @@ final class MusicHapticsAnalysisControl: @unchecked Sendable {
         return lock.withLock { !cancelled }
     }
 
-    var diagnostics: (playbackPosition: TimeInterval, playbackRate: Double, highWatermark: TimeInterval) {
+    var diagnostics: (playbackPosition: TimeInterval, playbackRate: Double) {
         lock.withLock {
-            (playbackPosition, playbackRate, highWatermark)
+            (playbackPosition, playbackRate)
         }
     }
 }

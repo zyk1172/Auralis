@@ -3,24 +3,15 @@ import Foundation
 
 public struct MusicHapticsAnalysisPerformancePolicy: Hashable, Sendable {
     public let fftFrameStride: Int
-    public let targetLead: TimeInterval
-    public let schedulingHorizon: TimeInterval
-    public let analysisLeadTarget: TimeInterval
     public let hapticCommitHorizon: TimeInterval
     public let isLowPowerMode: Bool
 
     public init(
         fftFrameStride: Int = 1,
-        targetLead: TimeInterval = 8,
-        schedulingHorizon: TimeInterval = 18,
-        analysisLeadTarget: TimeInterval? = nil,
         hapticCommitHorizon: TimeInterval = 3,
         isLowPowerMode: Bool = false
     ) {
         self.fftFrameStride = max(1, fftFrameStride)
-        self.targetLead = max(0.5, targetLead)
-        self.schedulingHorizon = max(self.targetLead, schedulingHorizon)
-        self.analysisLeadTarget = min(max(analysisLeadTarget ?? targetLead, 8), 20)
         self.hapticCommitHorizon = min(max(hapticCommitHorizon, 2.5), 4)
         self.isLowPowerMode = isLowPowerMode
     }
@@ -31,10 +22,10 @@ public struct MusicHapticsAnalysisPerformancePolicy: Hashable, Sendable {
         let thermal = process.thermalState
         let lowPower = process.isLowPowerModeEnabled
         if thermal == .critical {
-            return Self(fftFrameStride: 4, targetLead: 3, schedulingHorizon: 8, analysisLeadTarget: 8, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
+            return Self(fftFrameStride: 4, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
         }
         if thermal == .serious || lowPower {
-            return Self(fftFrameStride: 2, targetLead: 5, schedulingHorizon: 12, analysisLeadTarget: 8, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
+            return Self(fftFrameStride: 2, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
         }
         #endif
         return Self()
@@ -114,6 +105,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     private var hopSize = 256
     private var fft: vDSP.FFT<DSPSplitComplex>?
     private var pending: [Float] = []
+    /// Logical read cursor for the pending PCM. `removeFirst` on every hop
+    /// copies the remaining audio and can make the utility consumer fall
+    /// behind a real-time tap. Compact this bounded buffer periodically
+    /// instead of paying that cost for each FFT hop.
+    private var pendingReadOffset = 0
     private var pendingStart: TimeInterval?
     private var analysisFrameIndex = 0
     private var window: [Float] = []
@@ -174,19 +170,21 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
               sampleRate > 0
         else { return [] }
         configureIfNeeded(sampleRate: sampleRate)
+        let bufferedCount = pending.count - pendingReadOffset
         if let pendingStart,
            previousFrameTime.isFinite,
-           abs(startTime - (pendingStart + Double(pending.count) / sampleRate)) > 0.5 {
+           abs(startTime - (pendingStart + Double(bufferedCount) / sampleRate)) > 0.5 {
             resetRollingState()
             self.pendingStart = startTime
-        } else if pending.isEmpty {
+        } else if bufferedCount == 0 {
             self.pendingStart = startTime
         }
         pending.append(contentsOf: monoSamples.map { min(max($0.isFinite ? $0 : 0, -1), 1) })
 
         var frames: [MusicHapticsCandidateFrame] = []
-        while pending.count >= frameSize, let frameStart = pendingStart {
-            let frame = Array(pending.prefix(frameSize))
+        while pending.count - pendingReadOffset >= frameSize, let frameStart = pendingStart {
+            let frameEnd = pendingReadOffset + frameSize
+            let frame = Array(pending[pendingReadOffset..<frameEnd])
             if analysisFrameIndex % configuration.fftFrameStride == 0 {
                 frames.append(analyze(frame: frame, time: frameStart))
             } else {
@@ -204,8 +202,9 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
                 )
             }
             analysisFrameIndex += 1
-            pending.removeFirst(min(hopSize, pending.count))
+            pendingReadOffset += min(hopSize, frameSize)
             pendingStart = frameStart + Double(hopSize) / sampleRate
+            compactPendingIfNeeded()
         }
         return frames
     }
@@ -218,12 +217,12 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     }
 
     public mutating func finishCandidates() -> [MusicHapticsCandidateFrame] {
-        guard !pending.isEmpty, let frameStart = pendingStart else {
+        guard pending.count - pendingReadOffset > 0, let frameStart = pendingStart else {
             guard let texture = finishTexture() else { return [] }
             recordFinalizedEvent(texture)
             return [MusicHapticsCandidateFrame(time: texture.time, events: [texture])]
         }
-        var frame = pending
+        var frame = Array(pending[pendingReadOffset...])
         frame.append(contentsOf: repeatElement(0, count: max(0, frameSize - frame.count)))
         var result = analyze(frame: Array(frame.prefix(frameSize)), time: frameStart)
         if let texture = finishTexture() {
@@ -239,6 +238,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             )
         }
         pending.removeAll(keepingCapacity: false)
+        pendingReadOffset = 0
         pendingStart = nil
         return [result]
     }
@@ -291,6 +291,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
 
     private mutating func resetRollingState(keepSampleRate: Bool = true) {
         pending.removeAll(keepingCapacity: true)
+        pendingReadOffset = 0
         pendingStart = nil
         previousSpectrum.removeAll(keepingCapacity: true)
         previousFrameTime = -.infinity
@@ -309,6 +310,14 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         energyDBHistory.removeAll(keepingCapacity: true)
         beatTracker.reset()
         if !keepSampleRate { sampleRate = nil }
+    }
+
+    private mutating func compactPendingIfNeeded() {
+        guard pendingReadOffset > 0,
+              pendingReadOffset >= 8_192 || pendingReadOffset * 2 >= pending.count
+        else { return }
+        pending.removeFirst(pendingReadOffset)
+        pendingReadOffset = 0
     }
 
     private mutating func analyze(frame: [Float], time: TimeInterval) -> MusicHapticsCandidateFrame {
