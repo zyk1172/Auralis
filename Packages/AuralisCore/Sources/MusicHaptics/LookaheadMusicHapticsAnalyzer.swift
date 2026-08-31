@@ -273,10 +273,14 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         var currentSource = source
         var attemptedSources: Set<MusicHapticsAnalysisSource> = [source]
         var didAttemptRemoteSidecarRefresh = false
+        var didAttemptRemoteProgressive = false
         // Windows are intentionally contiguous and non-overlapping.  The
         // scheduler can queue them ahead without double-playing overlap.
         let windowLength: TimeInterval = 6
         while true {
+            if case .remoteProgressive = currentSource {
+                didAttemptRemoteProgressive = true
+            }
             do {
                 switch currentSource {
                 case let .localFile(url):
@@ -344,6 +348,13 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                     guard !attemptedSources.contains($0) else { return false }
                     if case .remoteLookahead = $0 {
                         return !didAttemptRemoteSidecarRefresh
+                    }
+                    if case .remoteProgressive = $0 {
+                        // A refreshed token must not turn a failed progressive
+                        // decoder into an unbounded retry loop. There is one
+                        // independent progressive attempt after the sidecar
+                        // chain; after that, haptics fail closed.
+                        return !didAttemptRemoteProgressive
                     }
                     return true
                 }) else {

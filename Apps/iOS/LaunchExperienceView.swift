@@ -49,9 +49,9 @@ struct LaunchExperienceView: View {
 private struct LaunchOverlay: View {
     var body: some View {
         ZStack {
-            Color(red: 0.0, green: 0.53333, blue: 1.0)
+            Color("LaunchBackground")
 
-            Image("LaunchAppIcon")
+            Image("LaunchGlyph")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 112, height: 112)

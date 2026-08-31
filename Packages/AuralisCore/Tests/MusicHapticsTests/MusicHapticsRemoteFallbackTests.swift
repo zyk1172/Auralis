@@ -50,7 +50,7 @@ struct MusicHapticsRemoteFallbackTests {
         #expect(run.result.snapshot.coverage >= 0.95)
     }
 
-    @Test("remote decoder failure retries a refreshed sidecar before using progressive fallback")
+    @Test("v2.3 cache miss retries a refreshed sidecar before using progressive fallback")
     func remoteLookaheadFailureRetriesIndependentSources() async throws {
         let identity = testIdentity()
         let audioURL = try makeWAV(duration: 1, name: "remote-lookahead-refresh")
@@ -64,6 +64,28 @@ struct MusicHapticsRemoteFallbackTests {
             .init(url: audioURL, bitrate: 96, format: "mp3")
         )
         let progressive = MusicHapticsAnalysisSource.remoteProgressive(audioURL)
+        let staleTimeline = MusicHapticsTimeline(
+            identity: identity,
+            duration: 1,
+            analyzedDuration: 1,
+            analysisCoverage: 1,
+            events: [],
+            algorithmVersion: "auralis-haptics-v2.2"
+        )
+        let decision = MusicHapticsPlaybackPlanResolver.resolve(
+            featureEnabled: true,
+            customHapticsSupported: true,
+            systemTimelineAvailable: false,
+            fullTimeline: staleTimeline,
+            partial: nil,
+            request: MusicHapticsAnalysisRequest(
+                identity: identity,
+                favorite: false,
+                duration: 1,
+                analysisSource: primary
+            )
+        )
+        #expect(decision.plan.kind == .analyzeLookahead)
         let provider = InjectedSourceProvider(primary: primary, fallbacks: [refreshed, progressive])
 
         let run = await runAnalyzer(
@@ -140,6 +162,37 @@ struct MusicHapticsRemoteFallbackTests {
             .remoteDecoderFailed,
             .remoteDecoderFailed,
             .remoteProgressiveFallback,
+        ])
+    }
+
+    @Test("rotating progressive refreshes fail closed instead of looping")
+    func remoteProgressiveRefreshIsBounded() async throws {
+        let identity = testIdentity()
+        let primary = MusicHapticsAnalysisSource.remoteLookahead(
+            .init(
+                url: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("auralis-missing-primary-(UUID().uuidString).mp3"),
+                bitrate: 96
+            )
+        )
+        let provider = RotatingUnavailableSourceProvider(primary: primary)
+
+        let run = await runAnalyzer(
+            provider: provider,
+            identity: identity,
+            duration: 1
+        )
+        let refreshCount = await provider.refreshCount
+        #expect(refreshCount == 3)
+        #expect(run.failureCount == 1)
+        #expect(run.result.finishReason == .playbackFailure)
+        #expect(run.diagnostics == [
+            .remoteDecoderFailed,
+            .remoteDecoderFailed,
+            .remoteProgressiveFallback,
+            .remoteDecoderFailed,
+            .realtimeFallbackForbidden,
+            .noHapticEventSource,
         ])
     }
 
@@ -312,6 +365,38 @@ private actor RotatingSidecarProvider: MusicHapticsAnalysisSourceProvider {
         return [
             .remoteLookahead(.init(url: refreshed, bitrate: 96)),
             .remoteProgressive(progressive),
+        ]
+    }
+}
+
+private actor RotatingUnavailableSourceProvider: MusicHapticsAnalysisSourceProvider {
+    let primary: MusicHapticsAnalysisSource
+    private(set) var refreshCount = 0
+
+    init(primary: MusicHapticsAnalysisSource) {
+        self.primary = primary
+    }
+
+    func source(
+        for identity: MusicHapticsIdentity,
+        playbackURL: URL?
+    ) async -> MusicHapticsAnalysisSource? {
+        primary
+    }
+
+    func fallbackSources(
+        for identity: MusicHapticsIdentity,
+        playbackURL: URL?,
+        after failedSource: MusicHapticsAnalysisSource
+    ) async -> [MusicHapticsAnalysisSource] {
+        refreshCount += 1
+        let refreshedSidecar = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-missing-sidecar-(UUID().uuidString).mp3")
+        let refreshedProgressive = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-missing-progressive-(UUID().uuidString).mp3")
+        return [
+            .remoteLookahead(.init(url: refreshedSidecar, bitrate: 96)),
+            .remoteProgressive(refreshedProgressive),
         ]
     }
 }

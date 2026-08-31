@@ -42,16 +42,34 @@ struct AuralisMusicHapticsAnalysisSourceProvider: MusicHapticsAnalysisSourceProv
         guard playbackURL?.isFileURL != true else { return [] }
 
         var candidates: [MusicHapticsAnalysisSource] = []
-        if let serverID = identity.serverID,
-           let remoteID = identity.remoteID,
+        let serverTrack: (serverID: ServerID, trackID: TrackID)? = if let serverID = identity.serverID,
+                                                                         let remoteID = identity.remoteID {
+            (ServerID(rawValue: serverID), TrackID(rawValue: remoteID))
+        } else {
+            nil
+        }
+        if let serverTrack,
            let refreshedURL = await connector.musicHapticsAnalysisURL(
-               serverID: ServerID(rawValue: serverID),
-               trackID: TrackID(rawValue: remoteID)
+               serverID: serverTrack.serverID,
+               trackID: serverTrack.trackID
            ) {
             candidates.append(.remoteLookahead(.init(url: refreshedURL, bitrate: 96, format: "mp3")))
         }
-        if let playbackURL, !playbackURL.isFileURL {
-            candidates.append(.remoteProgressive(playbackURL))
+
+        // The AVPlayer URL can be a short-lived tokenized address. Refresh it
+        // for the independent progressive decoder when the sidecar failed;
+        // this does not replace, seek, or mutate the current AVPlayerItem.
+        let progressiveURL = if let serverTrack,
+                                let refreshedPlaybackURL = await connector.refreshStreamURL(
+                                    serverID: serverTrack.serverID,
+                                    trackID: serverTrack.trackID
+                                ) {
+            refreshedPlaybackURL
+        } else {
+            playbackURL
+        }
+        if let progressiveURL, !progressiveURL.isFileURL {
+            candidates.append(.remoteProgressive(progressiveURL))
         }
 
         // A connector may return a deterministic URL when a server has no
