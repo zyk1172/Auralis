@@ -1838,14 +1838,11 @@ public struct ToolLoop {
                 let deterministicSummary = activeSkill != nil
                     ? Self.skillCompletionMessage(activeSkill)
                     : Self.deterministicCompletionSummary(policy: policy, presentation: presentation)
-                // Compatibility providers often answer a completed mutation
-                // with a short generic phrase such as “已处理完成”。 Keep
-                // the user-facing result stable and domain-specific instead
-                // of letting that placeholder replace the deterministic
-                // completion summary. Rich model prose is still preserved.
-                let finalText = reply.isEmpty || Self.isGenericCompletionReply(reply, policy: policy)
-                    ? deterministicSummary
-                    : reply
+                // Preserve a non-empty provider answer verbatim. Compatibility
+                // providers are allowed to choose their own short completion
+                // wording (for example “已处理完成。”); the deterministic
+                // summary is only a fallback for empty/typeless responses.
+                let finalText = reply.isEmpty ? deterministicSummary : reply
                 if !finalText.isEmpty {
                     await emit(AgentChatMessage(role: .assistant, messages: [.text(finalText)]))
                 }
@@ -2789,25 +2786,6 @@ public struct ToolLoop {
         case .modelAnswer, .appreciationWithEvidence:
             return "已完成。"
         }
-    }
-
-    private static func isGenericCompletionReply(
-        _ reply: String,
-        policy: AgentTaskPolicy
-    ) -> Bool {
-        guard policy.completion == .queueMutation
-            || policy.completion == .playlistMutation
-            || policy.completion == .playbackMutation
-        else { return false }
-        let normalized = reply
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: .punctuationCharacters)
-            .lowercased()
-        guard normalized.count <= 24 else { return false }
-        return [
-            "完成", "已完成", "已处理完成", "操作完成", "任务完成",
-            "done", "completed", "complete",
-        ].contains(normalized)
     }
 
     private static func shouldFinalizeAfterMutation(

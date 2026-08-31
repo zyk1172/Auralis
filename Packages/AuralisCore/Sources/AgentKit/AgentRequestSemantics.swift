@@ -414,8 +414,16 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
 
         // 复合意图编译：跨域组合操作。
         // “替换到队列播放 / 用这些歌覆盖当前队列然后开始播放” → queueReplace + playbackPlay。
+        // “播放队列”中的“播放”是实体名词，不是播放命令；只有在去掉
+        // 队列/列表/状态等复合名词后仍有播放动词时，才补 playbackPlay。
+        let playbackVerbOutsideNoun = [
+            "播放队列", "播放列表", "播放状态", "正在播放什么", "当前播放什么",
+            "最近播放", "最近听过", "播放历史",
+        ].reduce(value) { $0.replacingOccurrences(of: $1, with: "") }.contains("播放")
+        let queueReplacementAlsoPlays = playbackVerbOutsideNoun
+            || has(["开始播放", "顺序播放", "按顺序播放", "接着播放", "开播", "放出来"])
         if !suppressesMutationIntent, requested.contains(.queueReplace),
-           has(["播放", "开始播放", "开播", "接着放", "放出来"]),
+           queueReplacementAlsoPlays,
            !requested.contains(.playbackPause),
            !requested.contains(.playbackNavigation) {
             requested.insert(.playbackPlay)
