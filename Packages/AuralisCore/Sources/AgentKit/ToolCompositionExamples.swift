@@ -153,7 +153,7 @@ public enum ToolCompositionExamples {
                 .oneOf(["library_search", "library_resolve_entity"]),
                 .oneOf(["favorite_set", "rating_set"]),
             ],
-            note: "读取收藏/评分状态不调用修改工具；只有用户明确修改时才获得授权。",
+            note: "读取收藏/评分状态不调用修改工具；用户明确修改时直接调用相应工具。",
             readOnly: false
         ),
         ToolCompositionExample(
@@ -234,7 +234,7 @@ public enum ToolCompositionExamples {
         ## 常见工具组合（规划参考）
         以下组合是典型规划参考，不是固定流程。已有必要事实/ID 时可以跳过解析步骤；
         也可以根据任务增加其他只读工具。不要为了匹配示例机械执行每一步。
-        Mutation 仍必须经过 Runtime 的精确授权与确认。
+        普通可逆操作按用户请求直接调用；只有工具 Registry 明确要求确认的操作才经过 Runtime 的可见确认。
         """
         let lines = examples.map { example -> String in
             var line = "- \(example.goal)：\(Self.render(steps: example.steps))"

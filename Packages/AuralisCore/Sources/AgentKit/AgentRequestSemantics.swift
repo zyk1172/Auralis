@@ -1,7 +1,7 @@
 import AIKit
 import Foundation
 
-/// The single semantic result shared by routing, ranking and authorization.
+/// The single semantic result shared by routing and ranking.
 ///
 /// This is a signal layer, not a capability gate. A model-visible tool that
 /// is not shortlisted can still be discovered through `tool_search`. The
@@ -94,7 +94,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let inherited = continuation ? normalized(historyText) : ""
         let rawValue = [inherited, current].filter { !$0.isEmpty }.joined(separator: " ")
         // Playlist names are entity literals, not secondary commands. Mask the
-        // literal only for operation authorization so a name like “暂停” cannot
+        // literal only for operation inference so a name like “暂停” cannot
         // compile into a second command. Safety guards (instructional/explanatory)
         // always read the raw utterance because masking can consume phrases such
         // as “怎么操作” that appear after a space-separated entity slot.
@@ -116,7 +116,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "怎么", "如何", "怎样", "怎么才能", "怎么用", "是什么", "是什么意思", "是什么功能", "有什么作用",
             "how do i", "how does", "what does",
         ])
-        let suppressesMutationAuthorization = instructionalQuery && !executionRequestPhrase
+        let suppressesMutationIntent = instructionalQuery && !executionRequestPhrase
 
         let quantityQuery = has(["有多少", "多少", "数量", "几位", "几张", "几首歌"])
         let query = has([
@@ -189,7 +189,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let explicitNonMusicAnnotationTarget = has([
             "这本书", "书籍", "网页", "文章", "文档", "链接", "电影", "颜色", "排版", "观点", "想法",
         ])
-        // Positive target signal is the authorization boundary. “收藏这本书”
+        // Positive target signal is the intent boundary. “收藏这本书”
         // and “favorite color” contain no explicit music entity.
         let implicitTrackTitleTarget = annotationAction
             && !explicitNonMusicAnnotationTarget
@@ -227,15 +227,19 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         let requestedIndexBuild = indexMarker && indexBuildAction
         // 执行语义统一入口：教学问句（怎么/如何…）抑制授权时，执行语义同步关闭，
         // 杜绝「授权被抑制但 isRecommendationIndexBuild 仍为 true」的 split-brain。
-        let executableIndexBuild = requestedIndexBuild && !suppressesMutationAuthorization
+        let executableIndexBuild = requestedIndexBuild && !suppressesMutationIntent
         // Playlist names are user data, not commands. “删除歌单 我叫大傻蛋”
         // contains a memory-save phrase only because it is the entity target;
-        // the explicit playlist action owns routing and authorization.
+        // the explicit playlist action owns routing.
         let playlistActionTarget = has(["歌单", "playlist", "播放列表"]) && explicitPlaylistAction
-        let memorySave = !playlistActionTarget && has([
-            "请记住", "记住我的", "记住我", "保存到记忆", "保存记忆", "memory_save",
+        let explicitMemorySave = has([
+            "请记住", "记住我的", "记住我", "以后记住", "帮我记", "记一下", "把这个偏好记住", "偏好记住",
+            "保存到记忆", "保存记忆", "memory_save",
             "创建技能", "skill_create", "我叫", "我的名字是", "我的生日是",
         ])
+        let preferenceMemorySave = (has(["我一般"]) && has(["听歌", "听音乐"]))
+            || (has(["比较喜欢", "我喜欢"]) && has(["女声", "男声", "歌手", "音乐", "歌曲"]))
+        let memorySave = !playlistActionTarget && (explicitMemorySave || preferenceMemorySave)
         let memoryDelete = has([
             "删除记忆", "清除记忆", "忘掉关于我", "忘记关于我", "删除你记住", "删掉你记住",
             "把我的生日忘掉", "忘掉我的生日", "忘记我的名字", "memory_delete", "memory_clear",
@@ -287,6 +291,14 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             "跑步", "睡觉", "睡前", "放松", "安静", "有精神", "高能量", "来点", "来几首", "放几首", "想听",
             "适合", "给我选", "给我挑", "推荐一些", "挑几首", "选几首", "recommend", "shuffle",
         ]) || (has(["选", "挑"]) && has(["首", "歌", "歌曲"]))
+        // 在音乐发现请求中，“列入清单，顺序播放”是明确的临时播放队列
+        // 组合，而不是仅仅给出推荐结果。这里把自然语言编译成
+        // queueReplace，供 selector 暴露 queue_replace；只有同时存在数量、
+        // 清单动作和顺序播放意图才命中，不会让普通“推荐几个歌单”获得写入面。
+        let orderedPlaybackQueueRequest = recommendationRequest
+            && hasSongQuantity
+            && has(["列入清单", "列入播放清单", "放入清单", "加入清单"])
+            && has(["顺序播放", "按顺序播放", "播放"])
         let genericSearch = has(["搜索", "查找", "查询", "找歌", "哪首", "哪个专辑", "谁唱的", "search"])
 
         let isMusicContext = explicitMusicNouns
@@ -372,7 +384,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         // 裸“换成/换为/替换成”不再授权任何 mutation。
         // instructional query（怎么/如何/怎样…）整体抑制 mutation 授权编译，
         // 但「帮我/请/给我」等执行词可覆盖该抑制。
-        if !suppressesMutationAuthorization, strongPlaybackAction, !playbackQuery {
+        if !suppressesMutationIntent, strongPlaybackAction, !playbackQuery {
             if has(["暂停", "pause"]) { requested.insert(.playbackPause) }
             else if has(["下一首", "上一首", "next track", "previous track"]) { requested.insert(.playbackNavigation) }
             else if has(["快进", "快退", "跳转", "seek"]) { requested.insert(.playbackSeek) }
@@ -383,7 +395,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
-        if !suppressesMutationAuthorization, explicitQueueAction {
+        if !suppressesMutationIntent, explicitQueueAction {
             if explicitQueueReplace
                 || has(["建立队列", "创建队列", "建立播放队列", "建立一个播放队列"]) {
                 requested.insert(.queueReplace)
@@ -396,20 +408,40 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             if has(["加入队列", "放进队列", "放到队列", "queue_append"]) { requested.insert(.queueAppend) }
         }
 
+        if !suppressesMutationIntent, orderedPlaybackQueueRequest {
+            requested.insert(.queueReplace)
+        }
+
         // 复合意图编译：跨域组合操作。
         // “替换到队列播放 / 用这些歌覆盖当前队列然后开始播放” → queueReplace + playbackPlay。
-        if !suppressesMutationAuthorization, requested.contains(.queueReplace),
-           has(["播放", "开始播放", "开播", "接着放", "放出来"]),
+        // “播放队列”中的“播放”是实体名词，不是播放命令；只有在去掉
+        // 队列/列表/状态等复合名词后仍有播放动词时，才补 playbackPlay。
+        let playbackVerbOutsideNoun = [
+            "播放队列", "播放列表", "播放状态", "正在播放什么", "当前播放什么",
+            "最近播放", "最近听过", "播放历史",
+        ].reduce(value) { $0.replacingOccurrences(of: $1, with: "") }.contains("播放")
+        let queueReplacementAlsoPlays = playbackVerbOutsideNoun
+            || has(["开始播放", "顺序播放", "按顺序播放", "接着播放", "开播", "放出来"])
+        if !suppressesMutationIntent, requested.contains(.queueReplace),
+           queueReplacementAlsoPlays,
            !requested.contains(.playbackPause),
            !requested.contains(.playbackNavigation) {
             requested.insert(.playbackPlay)
         }
         // “加入队列并播放下一首” → queueAppend + queuePlayNext。
-        if !suppressesMutationAuthorization, requested.contains(.queueAppend), has(["播放下一首", "接下来播放", "下一首播放"]) {
+        if !suppressesMutationIntent, requested.contains(.queueAppend), has(["播放下一首", "接下来播放", "下一首播放"]) {
             requested.insert(.queuePlayNext)
         }
+        // “把这首歌加入队列并播放下一首” is a queue composition, not a
+        // request to invoke the global next-track navigation command. Keep
+        // the completion contract focused on the two queue operations the
+        // user actually asked for; a standalone “下一首” still retains
+        // playbackNavigation above.
+        if requested.contains(.queuePlayNext) {
+            requested.remove(.playbackNavigation)
+        }
 
-        if !suppressesMutationAuthorization, explicitPlaylistAction {
+        if !suppressesMutationIntent, explicitPlaylistAction {
             if has(["创建歌单", "新建歌单", "playlist_create"])
                 || (has(["歌单", "playlist", "播放列表"]) && has(["创建", "新建", "建一个", "建立"])) {
                 requested.insert(.playlistCreate)
@@ -436,7 +468,7 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
-        if !suppressesMutationAuthorization, explicitAnnotationAction {
+        if !suppressesMutationIntent, explicitAnnotationAction {
             if ratingMutation { requested.insert(.ratingSet) }
             else if has(["不喜欢", "不感兴趣", "dislike"]) { requested.insert(.dislikedSet) }
             else if has(["rating", "rate", "评分", "打分"]) {
@@ -446,16 +478,16 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             else { requested.insert(.favoriteSet) }
         }
         if executableIndexBuild { requested.insert(.recommendationIndexWrite) }
-        if !suppressesMutationAuthorization, serverMutation, !playlistActionTarget {
+        if !suppressesMutationIntent, serverMutation, !playlistActionTarget {
             if has(["删除服务器", "server_remove", "remove server"]) { requested.insert(.serverRemove) }
             else if has(["切换服务器", "server_switch", "switch server"]) { requested.insert(.serverSwitch) }
             else if has(["同步", "sync", "曲库同步"]) { requested.insert(.serverSync) }
             else { requested.insert(.serverConfigure) }
         }
-        if !suppressesMutationAuthorization, downloadContext, isMusicContext, !query {
+        if !suppressesMutationIntent, downloadContext, isMusicContext, !query {
             requested.insert(has(["离线", "offline", "media_download_offline"]) ? .offlineDownload : .downloadSubmit)
         }
-        if !suppressesMutationAuthorization, explicitMemory {
+        if !suppressesMutationIntent, explicitMemory {
             if memoryDelete {
                 if has(["删除技能", "skill_delete"]) { requested.insert(.skillDelete) }
                 else if has(["清除记忆", "memory_clear"]) { requested.insert(.memoryClear) }
@@ -466,12 +498,12 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
             }
         }
 
-        if !suppressesMutationAuthorization, customToolCreate { requested.insert(.customToolCreate) }
-        if !suppressesMutationAuthorization, customToolUpdate { requested.insert(.customToolUpdate) }
-        if !suppressesMutationAuthorization, customToolEnable { requested.insert(.customToolEnable) }
-        if !suppressesMutationAuthorization, customToolDisable { requested.insert(.customToolDisable) }
-        if !suppressesMutationAuthorization, customToolDelete { requested.insert(.customToolDelete) }
-        if !suppressesMutationAuthorization, customToolRepair { requested.insert(.customToolRepair) }
+        if !suppressesMutationIntent, customToolCreate { requested.insert(.customToolCreate) }
+        if !suppressesMutationIntent, customToolUpdate { requested.insert(.customToolUpdate) }
+        if !suppressesMutationIntent, customToolEnable { requested.insert(.customToolEnable) }
+        if !suppressesMutationIntent, customToolDisable { requested.insert(.customToolDisable) }
+        if !suppressesMutationIntent, customToolDelete { requested.insert(.customToolDelete) }
+        if !suppressesMutationIntent, customToolRepair { requested.insert(.customToolRepair) }
 
         if explicitMemory {
             return Self(domain: .memory, operation: requested.isEmpty ? .read : .mutate, isMusicContext: isMusicContext, isContinuation: continuation, requestedOperations: requested, suggestedToolNamespaces: ["memory"])

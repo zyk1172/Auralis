@@ -18,10 +18,10 @@ public struct ToolCatalogEntry: Codable, Hashable, Sendable, Identifiable {
     public let semanticInputs: [String]
     public let semanticOutputs: [String]
     public let permission: ToolPermission
-    /// Canonical authorization operation（无副作用时为 nil）。
+    /// Canonical operation metadata（无副作用时为 nil），用于路由和诊断。
     public let authorizationOperation: String?
-    /// 当前请求是否已获授权。nil 表示调用方未提供授权信息（普通发现查询）。
-    /// false 表示「能力存在但当前请求未授权」——绝不诱导模型反复尝试。
+    /// Legacy compatibility field. Local reversible tools are not hidden behind
+    /// an operation allow-list, so current catalog responses leave this nil.
     public let authorized: Bool?
 
     public init(descriptor: ToolDescriptor) {
@@ -73,8 +73,8 @@ public struct ToolAwarenessEntry: Sendable, Hashable, Identifiable {
     public let semanticInputs: [String]
     public let semanticOutputs: [String]
     public let availability: Availability
-    /// nil for read-only tools; mutations state whether this request grants
-    /// their exact canonical operation.
+    /// Legacy compatibility field. Risk and visible confirmation policy are
+    /// the only execution distinctions; operation metadata is not a grant.
     public let authorized: Bool?
 
     init(
@@ -91,9 +91,8 @@ public struct ToolAwarenessEntry: Sendable, Hashable, Identifiable {
             : descriptor.semanticInputs
         semanticOutputs = descriptor.semanticOutputs
         availability = Self.availability(for: descriptor, environment: environment)
-        authorized = descriptor.permission == .readOnly
-            ? nil
-            : descriptor.isAuthorizedForModelExposure(allowedOperations: authorizedOperations)
+        _ = authorizedOperations
+        authorized = nil
     }
 
     private static func availability(
@@ -121,13 +120,7 @@ public struct ToolAwarenessEntry: Sendable, Hashable, Identifiable {
     var renderedLine: String {
         let inputs = semanticInputs.isEmpty ? "无" : semanticInputs.joined(separator: "、")
         let outputs = semanticOutputs.isEmpty ? "结果" : semanticOutputs.joined(separator: "、")
-        let authorization: String
-        if let authorized {
-            authorization = authorized ? "；当前请求已授权执行" : "；能力存在，但当前请求未授权执行"
-        } else {
-            authorization = ""
-        }
-        return "- \(name)：\(purpose)。输入：\(inputs)；输出：\(outputs)；权限：\(permissionLabel)；状态：\(availability.description)\(authorization)"
+        return "- \(name)：\(purpose)。输入：\(inputs)；输出：\(outputs)；权限：\(permissionLabel)；状态：\(availability.description)"
     }
 
     private var permissionLabel: String {
@@ -184,9 +177,9 @@ public struct ToolCatalog: Sendable {
     }
 
     /// Complete model awareness directory.  It intentionally filters by
-    /// visibility but does not filter mutations by authorization: a model
-    /// must know a capability exists even when Runtime will not execute it in
-    /// this request.  Internal/legacy names never enter this directory.
+    /// visibility but does not filter mutations by semantic operation: a model
+    /// must know a capability exists. Internal/legacy names never enter this
+    /// directory.
     public func awarenessEntries(
         activeSkillID: String? = nil,
         environment: AgentCapabilityEnvironment,
@@ -243,9 +236,9 @@ public struct ToolCatalog: Sendable {
 
     /// 按自然语言做轻量确定性加权检索。
     ///
-    /// 兼容原调用（整句 substring 过滤 + 简单评分）；`authorizedOperations`
-    /// 传入时，mutation 结果会携带 `authorized` 标记：能力存在但当前请求未授权，
-    /// 展示为「可用但未授权」，绝不把它当作当前可执行能力诱导模型反复尝试。
+    /// 兼容原调用（整句 substring 过滤 + 简单评分）。
+    /// `authorizedOperations` 仅为旧调用方保留，不会把普通 mutation 隐藏
+    /// 或标记为不可执行；破坏性工具仍由 descriptor 的确认策略处理。
     ///
     /// 检索不要求 query 完整出现在 summary：tokenize 后 OR 匹配，
     /// “把歌曲安排成下一首播放”也能命中 `queue_play_next`。
@@ -271,15 +264,8 @@ public struct ToolCatalog: Sendable {
             }
             .prefix(min(max(limit, 1), 50))
             .map { descriptor in
-                let authorized: Bool?
-                if let authorizedOperations {
-                    authorized = descriptor.isAuthorizedForModelExposure(
-                        allowedOperations: authorizedOperations
-                    )
-                } else {
-                    authorized = nil
-                }
-                return ToolCatalogEntry(descriptor: descriptor, authorized: authorized)
+                _ = authorizedOperations
+                return ToolCatalogEntry(descriptor: descriptor, authorized: nil)
             }
     }
 

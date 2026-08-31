@@ -180,6 +180,7 @@ public enum AgentUserFacingSanitizer {
         switch message {
         case let .text(value): .text(text(value))
         case let .streaming(value): .streaming(text(value))
+        case let .reasoning(value): .reasoning(text(value))
         case let .error(value): .error(text(value))
         case let .actionPreview(title, detail): .actionPreview(title: text(title), detail: text(detail))
         case let .confirmation(pending): .confirmation(confirmation(pending))

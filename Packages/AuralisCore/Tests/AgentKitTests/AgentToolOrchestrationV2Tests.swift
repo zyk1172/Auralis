@@ -200,7 +200,7 @@ private final class V2Provider: AIProvider, @unchecked Sendable {
                     continuation.yield(.toolCall(call))
                 }
             } else if !response.content.isEmpty {
-                continuation.yield(.delta(response.content))
+                continuation.yield(.answerDelta(response.content))
             }
             continuation.yield(.completed)
             continuation.finish()
@@ -283,22 +283,23 @@ struct AgentToolOrchestrationV2Tests {
         #expect(compound.requestedOperations.contains(.playbackPlay))
     }
 
-    // MARK: P1-2 空 authorization fail-closed
+    // MARK: P1-2 空 authorization 只保留语义元数据，不隐藏本地能力
 
-    @Test("P1 allowedOperations == [] → 零 mutation schema")
-    func emptyAuthorizationExposesZeroMutations() {
+    @Test("P1 allowedOperations == [] 不会隐藏相关 reversible schema")
+    func emptyAuthorizationDoesNotHideReversibleSchemas() {
         for text in ["列出我的歌单", "当前播放状态", "队列里有什么", "有哪些服务器"] {
             let plan = AgentRequestPlan.build(userText: text, history: [])
-            #expect(plan.allowedOperations.isEmpty, "「\(text)」不应授权任何 mutation")
+            #expect(plan.allowedOperations.isEmpty, "「\(text)」没有可推导的 mutation 元数据")
             let selected = ToolSelector.select(plan: plan, all: AgentToolRegistry.all)
-            let mutationCount = selected.filter { $0.permission != .readOnly }.count
-            #expect(mutationCount == 0, "「\(text)」应暴露 0 个 mutation schema，实际 \(mutationCount)")
+            #expect(selected.contains { $0.permission == .readOnly }, "「\(text)」仍应暴露读取能力")
+            #expect(!selected.contains { $0.name == "playlist_delete" || $0.name == "server_remove" }, "读取请求不应暴露无关 destructive schema")
         }
         // 授权非空时只暴露对应 mutation。
         let pausePlan = AgentRequestPlan.build(userText: "暂停播放", history: [])
         #expect(pausePlan.allowedOperations == [.playbackPause])
         let pauseSelected = ToolSelector.select(plan: pausePlan, all: AgentToolRegistry.all)
         let mutations = pauseSelected.filter { $0.permission != .readOnly }.map(\.name)
+        #expect(mutations.contains("playback_pause"))
         #expect(!mutations.contains("playback_next"))
         #expect(!mutations.contains("playback_seek"))
         #expect(!mutations.contains("playback_set_shuffle"))

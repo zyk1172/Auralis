@@ -146,12 +146,14 @@ public final class AgentCoordinator: ObservableObject {
     /// A substantive user request replaces the entry instead of inheriting a
     /// stale task completion or mutation authorization.
     var executionLineages: [UUID: ExecutionLineage] = [:]
-    /// 每个 Run 独立的流式状态（key = runID）。`.streaming` 增量累加进该 run 的气泡，
-    /// 直到收到非流式消息（最终文本 / 工具进度 / 卡片等）把它原地定型为止。
+    /// 每个 Run 独立的流式状态（key = runID）。回答 `.streaming` 增量累加进该 run
+    /// 的气泡；`reasoning` 只保留在运行时展示状态，绝不写入会话。
+    /// 回答直到收到非流式消息（最终文本 / 工具进度 / 卡片等）才原地定型。
     /// 用 runID 隔离后，Session A 的流式气泡永远不会与 Session B 共享。
     private struct AgentStreamingState {
-        var messageID: UUID?
-        var rawText = ""
+        var answerMessageID: UUID?
+        var answerText = ""
+        var reasoningText = ""
     }
     private var streamingStates: [UUID: AgentStreamingState] = [:]
     private var runPresentationStates: [UUID: AssistantRunPresentationState] = [:]
@@ -552,19 +554,14 @@ public final class AgentCoordinator: ObservableObject {
         // 注意命名：本类的 `model` 是 AuralisAppModel，这里必须另起名字避免遮蔽。
         let modelName = aiSettings.model.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 隐私 gating（B2）：按用户权限过滤上下文；权限关闭的字段不进入 Context。
+        // Context 保存本地运行时的完整快照，供本地工具解析实体和执行任务。
+        // 隐私开关只在 SystemPrompt/Provider 回灌边界过滤外发字段，不能让
+        // 本地 queue、播放、歌单或记忆操作因为未允许外发而失去上下文。
         let permissions = privacyPermissionsOverride ?? AIPrivacyPermissions.current()
         let cat = model.catalog
-        let currentTrackTitle = permissions.allowsMetadata
-            ? (cat.isConnected ? model.currentTrack.title : nil)
-            : nil
-        let currentTrackArtist = permissions.allowsMetadata
-            ? (cat.isConnected ? model.currentTrack.artistName : nil)
-            : nil
-        let recentlyPlayedTitles = permissions.allowsPlaybackHistory
-            ? model.recentlyPlayedTracks.prefix(5).map(\.title)
-            : []
-        // 服务器名称 / 目录计数属于运行基础信息（隐私报告未禁此项），最简一致地保留。
+        let currentTrackTitle = cat.isConnected ? model.currentTrack.title : nil
+        let currentTrackArtist = cat.isConnected ? model.currentTrack.artistName : nil
+        let recentlyPlayedTitles = model.recentlyPlayedTracks.prefix(5).map(\.title)
         let context = ToolLoop.Context(
             serverID: cat.activeServerID,
             serverName: cat.isConnected ? cat.account.displayName : nil,
@@ -576,7 +573,7 @@ public final class AgentCoordinator: ObservableObject {
             totalArtists: cat.artists.count,
             totalAlbums: cat.albums.count,
             totalPlaylists: cat.playlists.count,
-            favoriteCount: permissions.allowsFavoritesAndRatings ? model.favoriteTracks.count : 0,
+            favoriteCount: model.favoriteTracks.count,
             recentlyPlayedTitles: recentlyPlayedTitles,
             isShuffled: model.isShuffled,
             repeatMode: model.repeatMode.title,
@@ -1240,13 +1237,6 @@ public final class AgentCoordinator: ObservableObject {
         return operationConfirmations[runID]
     }
 
-    /// 接收 Runner 发出的消息。
-    ///
-    /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
-    /// - `.streaming` 增量 → 累加进当前 in-flight 气泡；没有气泡时先新建一条；
-    /// - 非流式消息（最终 `.text` / 工具进度 / 卡片 / 错误等）→ 若存在 in-flight
-    ///   气泡，则**原地替换**该气泡（同一位置，不另起一条），并持久化最终消息。
-    ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     /// 接收 Runner 发出的消息。消息先绑定 sessionID + runID：
     /// 1. 只有仍登记在目标 session 的 run callback 才被接受（迟到/过期 callback 一律丢弃）；
     /// 2. 持久化永远写入目标 session 的 SessionStore；
@@ -1254,25 +1244,71 @@ public final class AgentCoordinator: ObservableObject {
     ///
     /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
     /// - `.streaming` 增量 → 累加进该 run 的 in-flight 气泡（key = runID）；
-    /// - 非流式消息（最终 `.text` / 工具进度 / 卡片 / 错误等）→ 原地定型 in-flight 气泡并持久化。
+    /// - 运行状态（reasoning / tool progress / action preview / confirmation）
+    ///   只更新 transient presentation，不写入聊天记录；
+    /// - 非流式消息（最终 `.text` / 卡片 / 错误等）→ 原地定型 in-flight 气泡并持久化。
     ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     func receive(_ message: AgentChatMessage, sessionID: UUID, runID: UUID) async {
         // 过期 callback（旧 run 的迟到 token / 旧 run 的 final answer）→ 丢弃，不污染新运行。
         guard ownsRun(runID, sessionID: sessionID) else { return }
         let isActiveSession = activeSessionID == sessionID
 
-        let sanitizedMessage = AgentUserFacingSanitizer.chatMessage(message)
+        var sanitizedMessage = AgentUserFacingSanitizer.chatMessage(message)
+
+        // Reasoning is deliberately a live-only presentation channel.  It
+        // neither creates a transcript bubble nor enters SessionStore, so a
+        // later model turn can never receive hidden chain-of-thought back.
+        if let reasoning = Self.reasoningDeltaText(from: message) {
+            var state = streamingStates[runID] ?? AgentStreamingState(answerMessageID: nil)
+            state.reasoningText += reasoning
+            streamingStates[runID] = state
+            updateReasoningPresentation(
+                AgentUserFacingSanitizer.text(state.reasoningText),
+                sessionID: sessionID,
+                runID: runID
+            )
+            // A provider normally emits one item per event, but keep the
+            // channel boundary item-safe if a compatibility adapter combines
+            // reasoning with an answer in one AgentChatMessage.
+            sanitizedMessage = Self.messageByRemovingTransientItems(
+                from: sanitizedMessage,
+                includingReasoning: true
+            )
+            guard !sanitizedMessage.messages.isEmpty else { return }
+        }
+
         updateRunPresentation(for: sanitizedMessage, sessionID: sessionID, runID: runID)
 
+        // Tool progress and previews describe work in flight. They belong in
+        // the run presentation state, not in the transcript or SessionStore.
+        // The active UI still shows the single weak running indicator.
+        let messageWithoutActivity = Self.messageByRemovingTransientItems(from: sanitizedMessage)
+        if messageWithoutActivity.messages.count != sanitizedMessage.messages.count {
+            updateRunPresentation(
+                for: AgentChatMessage(
+                    id: sanitizedMessage.id,
+                    role: sanitizedMessage.role,
+                    messages: sanitizedMessage.messages.filter { Self.isTransientActivityItem($0) },
+                    createdAt: sanitizedMessage.createdAt
+                ),
+                sessionID: sessionID,
+                runID: runID
+            )
+            sanitizedMessage = messageWithoutActivity
+        }
+        if sanitizedMessage.messages.isEmpty {
+            return
+        }
+
         // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
-        if let delta = Self.streamingDeltaText(from: message) {
-            var state = streamingStates[runID] ?? AgentStreamingState(messageID: nil)
-            state.rawText += delta
+        if let delta = Self.streamingDeltaText(from: sanitizedMessage) {
+            var state = streamingStates[runID] ?? AgentStreamingState(answerMessageID: nil)
+            state.answerText += delta
             if isActiveSession {
-                if let streamingID = state.messageID,
+                if let streamingID = state.answerMessageID,
                    let index = messages.lastIndex(where: { $0.id == streamingID }) {
                     var existing = messages[index]
-                    let accumulated = AgentUserFacingSanitizer.text(state.rawText)
+                    let accumulated = AgentUserFacingSanitizer.text(state.answerText)
                     existing = AgentChatMessage(
                         id: existing.id,
                         role: .assistant,
@@ -1281,16 +1317,16 @@ public final class AgentCoordinator: ObservableObject {
                     )
                     messages[index] = existing
                 } else {
-                    state.messageID = message.id
+                    state.answerMessageID = sanitizedMessage.id
                     messages.append(AgentChatMessage(
-                        id: message.id,
+                        id: sanitizedMessage.id,
                         role: .assistant,
-                        messages: [.streaming(AgentUserFacingSanitizer.text(state.rawText))],
-                        createdAt: message.createdAt
+                        messages: [.streaming(AgentUserFacingSanitizer.text(state.answerText))],
+                        createdAt: sanitizedMessage.createdAt
                     ))
                 }
-            } else if state.messageID == nil {
-                state.messageID = message.id
+            } else if state.answerMessageID == nil {
+                state.answerMessageID = sanitizedMessage.id
             }
             streamingStates[runID] = state
             return
@@ -1299,24 +1335,11 @@ public final class AgentCoordinator: ObservableObject {
         // 非流式消息：把该 run 的 in-flight 气泡原地定型并持久化。
         let state = streamingStates[runID]
         streamingStates[runID] = nil
-        if let streamingID = state?.messageID, isActiveSession,
+        if let streamingID = state?.answerMessageID, isActiveSession,
            let index = messages.lastIndex(where: { $0.id == streamingID }) {
             messages[index] = sanitizedMessage
             await sessionStore.append(sanitizedMessage, to: sessionID)
             return
-        }
-        // Tool activity is transient run state, not a chat transcript.  Keep
-        // exactly one trailing activity row and replace it in both the live
-        // UI and persistence; a long index run no longer fills the screen
-        // with one bubble per status/next/write operation.
-        if Self.isToolProgress(message), isActiveSession,
-           let index = messages.indices.last,
-           messages[index].role == .assistant,
-           Self.isToolProgress(messages[index]) {
-            messages[index] = sanitizedMessage
-            if await sessionStore.replaceTrailingToolProgress(sanitizedMessage, in: sessionID) {
-                return
-            }
         }
         if isActiveSession {
             messages.append(sanitizedMessage)
@@ -1348,6 +1371,8 @@ public final class AgentCoordinator: ObservableObject {
                 presentation.phase = .waitingForConfirmation
             case let .error(text):
                 presentation.phase = .failed(message: text)
+            case .reasoning:
+                presentation.phase = .thinking
             default:
                 break
             }
@@ -1369,11 +1394,63 @@ public final class AgentCoordinator: ObservableObject {
         return pieces.joined()
     }
 
-    private static func isToolProgress(_ message: AgentChatMessage) -> Bool {
-        !message.messages.isEmpty && message.messages.allSatisfy { item in
-            if case .toolProgress = item { return true }
+    /// Provider-explicit reasoning is not an answer delta.  It has a separate
+    /// transient path so it cannot be persisted or replayed as user-visible
+    /// final content.
+    private static func reasoningDeltaText(from message: AgentChatMessage) -> String? {
+        guard message.role == .assistant, !message.messages.isEmpty else { return nil }
+        var pieces: [String] = []
+        for item in message.messages {
+            if case let .reasoning(text) = item { pieces.append(text) }
+        }
+        guard !pieces.isEmpty else { return nil }
+        return pieces.joined()
+    }
+
+    private func updateReasoningPresentation(
+        _ reasoningText: String,
+        sessionID: UUID,
+        runID: UUID
+    ) {
+        guard var presentation = runPresentationStates[runID],
+              presentation.sessionID == sessionID else { return }
+        presentation.reasoningText = reasoningText
+        presentation.phase = .thinking
+        runPresentationStates[runID] = presentation
+        if activeSessionID == sessionID, currentRunID == runID {
+            runPresentationState = presentation
+        }
+    }
+
+    private static func isTransientActivityItem(_ item: AgentMessage) -> Bool {
+        switch item {
+        case .toolProgress, .actionPreview, .confirmation:
+            return true
+        default:
             return false
         }
+    }
+
+    private static func messageByRemovingTransientItems(
+        from message: AgentChatMessage,
+        includingReasoning: Bool = false
+    ) -> AgentChatMessage {
+        let items = message.messages.filter { item in
+            switch item {
+            case .reasoning:
+                return !includingReasoning
+            case .toolProgress, .actionPreview, .confirmation:
+                return false
+            default:
+                return true
+            }
+        }
+        return AgentChatMessage(
+            id: message.id,
+            role: message.role,
+            messages: items,
+            createdAt: message.createdAt
+        )
     }
 
     /// 汇总一条消息里已有的流式文本（用于在 in-flight 气泡上继续累加）。
@@ -1442,9 +1519,9 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
-    /// 运行时操作确认：不可逆工具以及需要补齐具体操作授权的调用都复用同一
-    /// PendingConfirmation 通道。确认属于具体 run/session；模型输出的“确认”、
-    /// “继续”等文本不会进入这里，也不能替代 Runtime 的批准。
+    /// 运行时操作确认只服务于 descriptor 明确声明的高风险/不可逆工具。
+    /// 普通 reversible 工具不会因为语义 operation 缺失而进入这里。确认属于
+    /// 具体 run/session；模型输出的“确认”、“继续”等文本不会进入这里，也不能替代 Runtime 的批准。
     func requestOperationConfirmation(
         _ pending: PendingConfirmation,
         runID: UUID,

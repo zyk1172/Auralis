@@ -4,8 +4,8 @@ import Foundation
 /// Schema shortlist ranking derived from the canonical ToolDescriptor catalog.
 ///
 /// This type is deliberately not a second registry.  Group, namespace, tags,
-/// permission and canonical authorization operation are the only metadata
-/// used to rank a first-round shortlist.  A model-visible tool that is not
+/// permission and canonical operation metadata are used to rank a first-round
+/// shortlist. A model-visible tool that is not
 /// shortlisted remains discoverable through tool_search and executable through
 /// ToolRuntime.
 public enum ToolSelector {
@@ -79,8 +79,8 @@ public enum ToolSelector {
 
     /// Production entry point：消费一次 turn 的共享 `AgentRequestPlan`，不再
     /// 自己重新分析用户文本（避免与 Authorization / Intent 的 split-brain）。
-    /// 同时接收 authorization plan：显式 mutation 请求下，mutation schema 只
-    /// 暴露获准的 canonical operation，避免模型拿一堆无权执行的写工具乱试。
+    /// 同时接收 operation metadata。它只影响相关性排序，不把普通 mutation
+    /// schema 变成 exact-operation 白名单。
     public static func select(
         plan: AgentRequestPlan,
         all: [ToolDescriptor],
@@ -151,6 +151,15 @@ public enum ToolSelector {
 
         func append(_ descriptors: [ToolDescriptor]) {
             for descriptor in descriptors {
+                // A pure recommendation is discovery-only. Keep this guard at
+                // the shared append boundary so intent hints, broker recall,
+                // and recommendation expansion cannot re-introduce an
+                // unrelated reversible mutation after the semantic pass.
+                // Explicit requests such as “推荐并加入队列” carry the
+                // concrete operation and therefore remain eligible.
+                guard !(semantics.domain == .recommendation
+                    && semantics.requestedOperations.isEmpty
+                    && descriptor.permission != .readOnly) else { continue }
                 let canonical = canonicalAliases[descriptor.name] ?? descriptor.name
                 guard canonical == descriptor.name, selectedNames.insert(canonical).inserted else {
                     continue
@@ -190,12 +199,16 @@ public enum ToolSelector {
         // “给我放一组适合通勤的歌”).  Keep the semantic domain as the source
         // of truth, but add the catalog/queue/annotation capabilities that a
         // music-discovery workflow may need.  This is descriptor metadata,
-        // not a second name registry; Runtime authorization still decides
-        // whether a mutation is executable.
+        // not a second name registry; descriptor risk decides whether a
+        // mutation needs visible confirmation.
         if semantics.isMusicContext,
            semantics.suggestedToolNamespaces.contains("recommendation") {
             append(visible.filter { descriptor in
-                discoveryExpansionMatches(descriptor, allowedOperations: allowedOperations)
+                discoveryExpansionMatches(
+                    descriptor,
+                    semantics: semantics,
+                    allowedOperations: allowedOperations
+                )
             })
         }
 
@@ -223,11 +236,10 @@ public enum ToolSelector {
             append(visible.filter { $0.requiredSkillID == activeSkillID })
         }
 
-        // Tool Broker：轻量确定性 relevance ranking（纯本地计算，不产生授权）。
+        // Tool Broker：轻量确定性 relevance ranking（纯本地计算，不产生许可）。
         // 先做宽松召回：即使保守 semantics 第一层没有把工具放进 selected，
-        // utteranceExample bigram 重叠或授权操作命中的工具也会补进来——
-        // 但 mutation 仍必须通过 allowedOperations fail-closed（Recall 宽松、
-        // Authorization 保守）。priority 只参与相关工具间排序，不参与 relevant 判定。
+        // utteranceExample bigram 重叠或 operation metadata 命中的工具也会补进来。
+        // priority 只参与相关工具间排序，不参与执行许可判定。
         let brokered = selected + brokerExtraRecall(
             visible: visible,
             selectedNames: selectedNames,
@@ -287,7 +299,7 @@ public enum ToolSelector {
     }
 
     /// 宽松召回：保守 semantics 未命中的工具，只要 utteranceExample bigram 与用户
-    /// 文本重叠、或授权操作命中，就补进 shortlist。mutation 必须已授权。
+    /// 文本重叠、或 operation metadata 命中，就补进 shortlist。
     private static func brokerExtraRecall(
         visible: [ToolDescriptor],
         selectedNames: Set<String>,
@@ -300,8 +312,18 @@ public enum ToolSelector {
         var result: [ToolDescriptor] = []
         for descriptor in visible {
             guard !selectedNames.contains(descriptor.name) else { continue }
+            // Broker recall is still a relevance pass, but a discovery-only
+            // request must not regain mutation schemas through an utterance
+            // example (or a broad bigram) after recommendation expansion has
+            // intentionally filtered them. Explicit mutation semantics may
+            // use example recall when operation inference is incomplete.
             if descriptor.permission != .readOnly {
-                guard descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations) else { continue }
+                guard semantics.isExplicitMutation else { continue }
+                if !semantics.requestedOperations.isEmpty {
+                    guard let operation = descriptor.authorizationOperation,
+                          semantics.requestedOperations.contains(operation)
+                    else { continue }
+                }
             }
             let exampleHit = descriptor.utteranceExamples.contains { example in
                 let exampleLower = example.lowercased()
@@ -402,22 +424,9 @@ public enum ToolSelector {
             semantics.requestedOperations.contains($0)
         } ?? false
 
-        // 最小权限暴露：production 路径携带 authorization plan 时（allowedOperations
-        // 非 nil，即使为空集合），mutation schema 只暴露获准的 canonical operation
-        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 工具仍走
-        // 下方的 domain/语义过滤，不在此提前放行。
-        // allowedOperations == [] 必须自然得到 0 个 mutation schema，绝不回落到旧的
-        // intent/group 展开或 semantics 的 exactOperation 捷径（fail-closed）。
-        // nil 仅表示 legacy 兼容调用方没有提供授权 plan，保持旧行为。
-        // 模型仍可能通过 tool_search 发现其它工具，但 ToolRuntime 的 exact
-        // authorization 才是最终边界。
-        if allowedOperations != nil, descriptor.permission != .readOnly {
-            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
-        }
         if exactOperation {
-            // Explicitly named operations win ranking only for legacy callers
-            // without an authorization plan; they never override Runtime
-            // authorization.
+            // Explicitly named operations win relevance ranking; they are not
+            // a runtime permission grant.
             return true
         }
 
@@ -431,7 +440,28 @@ public enum ToolSelector {
         }
 
         func readOnly(_ value: Bool = isReadRequest) -> Bool {
+            // Read/discovery requests only receive read schemas. Once the
+            // semantic domain is an explicit mutation, relevant reversible or
+            // destructive tools remain discoverable; confirmation is decided
+            // by the descriptor at execution time.
             !value || descriptor.permission == .readOnly
+        }
+
+        func mutationRelevant() -> Bool {
+            // This is shortlist relevance, not an authorization decision. If
+            // the classifier has no operation metadata, keep the local
+            // mutation visible so a model/tool_search can still recover from
+            // an imperfect semantic parse. When it does have a concrete
+            // operation, avoid flooding an explicit request such as “暂停”
+            // with unrelated queue or playlist schemas.
+            guard descriptor.permission != .readOnly else { return true }
+            guard !semantics.requestedOperations.isEmpty else { return true }
+            guard let operation = descriptor.authorizationOperation else { return true }
+            return semantics.requestedOperations.contains(operation)
+        }
+
+        func relevantMutationOrRead() -> Bool {
+            readOnly() && mutationRelevant()
         }
 
         let domain = semantics.domain
@@ -460,32 +490,37 @@ public enum ToolSelector {
 
         case .musicLibrary:
             if descriptor.group == .catalog || descriptor.group == .server {
-                return readOnly()
-                    && (descriptor.permission == .readOnly || exactOperation)
+                return relevantMutationOrRead()
             }
             return false
 
         case .playback:
             if descriptor.group == .playback {
-                return readOnly()
+                // Queue tools are routed through the queue domain even though
+                // the legacy registry stores them in the playback group.
+                if descriptor.permission != .readOnly, descriptor.sideEffectPolicy == .queue {
+                    return false
+                }
+                return relevantMutationOrRead()
             }
             return descriptor.permission == .readOnly && has("search", "resolve", "current", "now playing")
 
         case .queue:
-            if descriptor.group == .playback || has("queue") {
-                return readOnly() && (descriptor.group == .playback || descriptor.permission == .readOnly)
+            if has("queue") || descriptor.sideEffectPolicy == .queue {
+                return relevantMutationOrRead()
             }
             return false
 
         case .playlist:
             if descriptor.group == .playlist || has("playlist") {
-                return readOnly()
+                return relevantMutationOrRead()
             }
             return descriptor.permission == .readOnly && has("search", "resolve")
 
         case .recommendation:
-            // Recommendation is a read/discovery hint. Mutations only enter
-            // through an exact explicit operation above.
+            // Recommendation is a read/discovery hint. Any mutation must be
+            // explicitly represented by a matching operation or routed to its
+            // concrete domain instead.
             return descriptor.permission == .readOnly
                 && (descriptor.group == .catalog
                     || descriptor.group == .playback
@@ -498,14 +533,14 @@ public enum ToolSelector {
 
         case .download:
             return (descriptor.group == .download || has("download", "offline"))
-                && readOnly()
+                && relevantMutationOrRead()
 
         case .memory:
-            return descriptor.group == .memory && readOnly()
+            return descriptor.group == .memory && relevantMutationOrRead()
         case .server:
-            return descriptor.group == .server && readOnly()
+            return descriptor.group == .server && relevantMutationOrRead()
         case .customTool:
-            return readOnly()
+            return relevantMutationOrRead()
                 && (descriptor.namespace == "tool_builder" || descriptor.customToolID != nil)
         }
 
@@ -513,25 +548,35 @@ public enum ToolSelector {
 
     private static func discoveryExpansionMatches(
         _ descriptor: ToolDescriptor,
+        semantics: AgentRequestSemantics,
         allowedOperations: Set<ToolAuthorizationOperation>?
     ) -> Bool {
         guard descriptor.visibility == .model, descriptor.requiredSkillID == nil else { return false }
 
-        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入
-        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 走 group 过滤。
-        if allowedOperations != nil, descriptor.permission != .readOnly {
-            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
-        }
+        // Recommendation is a discovery/read workflow. Do not widen it into
+        // an implicit mutation surface: a recommendation request commonly has
+        // no requestedOperations at all, and exposing queue/favorite/playback
+        // mutations here would let a weak model perform an unrelated local
+        // write now that Runtime no longer uses exact-operation authorization
+        // as a blanket execution gate. Mutation schemas are admitted only when
+        // semantics carries the concrete operation (or a fixed Skill owns the
+        // workflow and bypasses this model-visible shortlist).
+        let mutationIsRelevant: Bool = {
+            guard descriptor.permission != .readOnly else { return true }
+            guard semantics.isExplicitMutation, !semantics.requestedOperations.isEmpty else { return false }
+            guard let operation = descriptor.authorizationOperation else { return true }
+            return semantics.requestedOperations.contains(operation)
+        }()
 
         switch descriptor.group {
         case .catalog, .annotation:
-            return true
+            return descriptor.permission == .readOnly || mutationIsRelevant
         case .playback:
             // Queue and playback descriptors are grouped together in the
             // canonical registry. Read-only state is always useful; mutation
-            // schemas are discoverable for explicit music workflows and are
-            // still protected by ToolRuntime's operation-level authorization.
-            return true
+            // schemas are discoverable for explicit music workflows.
+            // Destructive descriptors still use the visible confirmation path.
+            return descriptor.permission == .readOnly || mutationIsRelevant
         default:
             return false
         }
@@ -548,10 +593,11 @@ public enum ToolSelector {
               intent != .conversation
         else { return false }
 
-        // 带 authorization plan 时（含空集合）：mutation 只按获准 operation 补入
-        //（Custom Tool 按 derivedAuthorizationOperations 判定）。readOnly 走意图过滤。
-        if allowedOperations != nil, descriptor.permission != .readOnly {
-            return descriptor.isAuthorizedForModelExposure(allowedOperations: allowedOperations)
+        func relevantMutationOrRead(_ descriptor: ToolDescriptor) -> Bool {
+            guard descriptor.permission != .readOnly else { return true }
+            guard !semantics.requestedOperations.isEmpty else { return true }
+            guard let operation = descriptor.authorizationOperation else { return true }
+            return semantics.requestedOperations.contains(operation)
         }
 
         let name = descriptor.name.lowercased()
@@ -567,27 +613,42 @@ public enum ToolSelector {
         case .librarySearch:
             return descriptor.permission == .readOnly && (descriptor.group == .catalog || has("search", "resolve", "catalog"))
         case .playbackControl:
-            return descriptor.group == .playback
+            guard descriptor.group == .playback else { return false }
+            if descriptor.permission != .readOnly, descriptor.sideEffectPolicy == .queue {
+                return false
+            }
+            return relevantMutationOrRead(descriptor)
         case .playbackQuery:
             return descriptor.permission == .readOnly && (descriptor.group == .playback || has("playback", "current", "queue"))
         case .musicDiscovery:
-            return discoveryExpansionMatches(descriptor, allowedOperations: allowedOperations)
+            return discoveryExpansionMatches(
+                descriptor,
+                semantics: semantics,
+                allowedOperations: allowedOperations
+            )
         case .queueManagement, .queueQuery:
-            return descriptor.group == .playback || (descriptor.permission == .readOnly && has("queue", "genre", "select", "catalog"))
+            if (descriptor.group == .playback && descriptor.sideEffectPolicy == .queue) || has("queue") {
+                return relevantMutationOrRead(descriptor)
+            }
+            return descriptor.permission == .readOnly && has("genre", "select", "catalog")
         case .playlistManagement, .playlistQuery:
-            return descriptor.group == .playlist || (descriptor.permission == .readOnly && has("playlist", "search", "catalog"))
+            if descriptor.group == .playlist || has("playlist") {
+                return relevantMutationOrRead(descriptor)
+            }
+            return descriptor.permission == .readOnly && has("search", "catalog")
         case .libraryManagement:
-            return descriptor.group == .catalog && descriptor.permission == .readOnly
+            return descriptor.group == .catalog
         case .serverManagement:
-            return descriptor.group == .server
+            return descriptor.group == .server && relevantMutationOrRead(descriptor)
         case .diagnostics:
             return descriptor.permission == .readOnly && (descriptor.group == .catalog || has("diagnostic", "error", "cache", "stats"))
         case .musicAppreciation:
             return descriptor.permission == .readOnly && (descriptor.group == .catalog || has("music", "evidence", "search"))
         case .musicDownload:
-            return descriptor.group == .download || has("download", "offline", "server")
+            return (descriptor.group == .download || has("download", "offline", "server"))
+                && relevantMutationOrRead(descriptor)
         case .memoryManagement:
-            return descriptor.group == .memory
+            return descriptor.group == .memory && relevantMutationOrRead(descriptor)
         case .conversation:
             return false
         }

@@ -16,7 +16,9 @@ public final class SystemMediaIntegrationController {
     public let interruptions = AudioInterruptionCoordinator()
     public let routes = AudioRouteCoordinator()
 
-    private var started = false
+    /// Internal visibility supports lifecycle regression tests without making
+    /// startup state part of the public media-control API.
+    private(set) var started = false
     /// Verified metadata for the current item.  It is retained across normal
     /// track/progress snapshot refreshes, rather than being tied to a haptics
     /// coordinator callback.
@@ -42,6 +44,10 @@ public final class SystemMediaIntegrationController {
         let coordinator = audioSession
         Task { await coordinator.configure() }
 #if os(iOS)
+        if let mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(mediaServicesResetObserver)
+            self.mediaServicesResetObserver = nil
+        }
         mediaServicesResetObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification,
             object: AVAudioSession.sharedInstance(),
@@ -145,14 +151,17 @@ public final class SystemMediaIntegrationController {
 
     /// 停止播放或退出服务器：清理 Now Playing 与音频会话。
     public func stop() {
+        // `start()` owns observer registration. A complete stop/start cycle
+        // must therefore reopen that gate; otherwise media-services resets,
+        // interruptions and route changes are never registered again.
+        started = false
         internationalStandardRecordingCode = nil
         nowPlaying.clear()
-#if os(iOS)
-        if let mediaServicesResetObserver {
-            NotificationCenter.default.removeObserver(mediaServicesResetObserver)
-            self.mediaServicesResetObserver = nil
-        }
-#endif
+        // Remote/interruption/route observers belong to the app-lifetime
+        // integration, not to the current playback item.  AppModel calls
+        // stop() for user stop, queue exhaustion, sleep timer, and server
+        // removal, then may resume playback without calling start() again.
+        // Keep those observers installed so controls continue to work.
         let coordinator = audioSession
         Task { await coordinator.deactivate() }
     }

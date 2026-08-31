@@ -215,7 +215,7 @@ private final class SkillProvider: AIProvider, @unchecked Sendable {
                     continuation.yield(.toolCall(call))
                 }
             } else if !response.content.isEmpty {
-                continuation.yield(.delta(response.content))
+                continuation.yield(.answerDelta(response.content))
             }
             continuation.yield(.completed)
             continuation.finish()
@@ -303,8 +303,8 @@ struct AgentSkillLoopTests {
         #expect(stopped)
     }
 
-    @Test("P8/P9 tool_search 结果带 authorized=false，且未授权 mutation 不进后续 schema")
-    func toolSearchShowsAuthorizationAndFiltersSchema() async throws {
+    @Test("P8/P9 tool_search 结果不伪造 unauthorized 标记，普通 mutation 可进入后续 schema")
+    func toolSearchKeepsReversibleMutationAvailable() async throws {
         let store = try skillStore()
         try await seedSkillTracks(store, count: 1)
         let provider = SkillProvider([
@@ -327,19 +327,21 @@ struct AgentSkillLoopTests {
             emit: { await collector.append($0) }
         )
         let requests = provider.requests()
-        var foundAuthorizedFlag = false
+        var foundUnauthorizedText = false
         for request in requests.dropFirst() {
             for message in request.transcript.messages where message.role == .tool {
                 if message.content.contains("queue_replace"), message.content.contains("未授权") {
-                    foundAuthorizedFlag = true
+                    foundUnauthorizedText = true
                 }
             }
         }
-        #expect(foundAuthorizedFlag, "模型看到的 tool_search 结果应包含 authorized=false")
+        #expect(!foundUnauthorizedText, "模型看到的 tool_search 结果不应把普通 mutation 标为未授权")
+        var foundQueueReplace = false
         for request in requests.dropFirst() {
             let names = (request.tools ?? []).map(\.name)
-            #expect(!names.contains("queue_replace"), "queue_replace 未授权，不得进入后续 schema")
+            if names.contains("queue_replace") { foundQueueReplace = true }
         }
+        #expect(foundQueueReplace, "普通 reversible queue_replace 应可进入后续 schema")
     }
 }
 

@@ -87,11 +87,11 @@ public struct ConversationEngine: Sendable {
         )
     }
 
-    /// Resolve authorization at the conversation/task boundary.  A short
+    /// Resolve execution lineage at the conversation/task boundary. A short
     /// continuation refers to the last substantive user request, while a
-    /// persisted task goal wins for resume.  ToolLoop never derives consent
-    /// from the current model-loop text. All authorization derives from the
-    /// same shared `AgentRequestPlan` (single semantics per turn).
+    /// persisted task goal wins for resume. ToolLoop never derives user intent
+    /// or destructive confirmation from model-loop text. The same shared
+    /// `AgentRequestPlan` supplies metadata for the whole turn.
     private static func executionLineage(
         userText: String,
         history: [AgentChatMessage],

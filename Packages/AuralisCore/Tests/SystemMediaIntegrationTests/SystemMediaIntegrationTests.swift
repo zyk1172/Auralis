@@ -200,6 +200,31 @@ func repeatModeMapping() {
     #expect(RemoteCommandCoordinator.repeatType(from: .off) == .off)
 }
 
+@Test("System media integration can restart after a full stop")
+@MainActor
+func systemMediaIntegrationResetsStartupGateOnStop() {
+    let controller = SystemMediaIntegrationController()
+    let handlers = RemoteCommandHandlers(
+        onPlay: {},
+        onPause: {},
+        onToggle: {},
+        onPrevious: {},
+        onNext: {},
+        onSeek: { _ in },
+        onShuffle: { _ in },
+        onRepeatMode: { _ in }
+    )
+
+    controller.start(handlers: handlers)
+    #expect(controller.started)
+
+    controller.stop()
+    #expect(controller.started == false)
+
+    controller.start(handlers: handlers)
+    #expect(controller.started)
+}
+
 // MARK: - Live Activity / Widget 刷新节流
 
 @Test("Live Activity 节流：periodic 受间隔限制，显著事件立即更新")

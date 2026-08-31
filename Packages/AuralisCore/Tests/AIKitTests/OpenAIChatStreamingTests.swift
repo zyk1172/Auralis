@@ -131,8 +131,8 @@ struct OpenAIChatStreamingTests {
         }
 
         #expect(events.first == .started(model: "test-model"))
-        #expect(events.contains(.delta("我")))
-        #expect(events.contains(.delta("来")))
+        #expect(events.contains(.answerDelta("我")))
+        #expect(events.contains(.answerDelta("来")))
         let expectedCall = AIToolCall(id: "call_1", name: "searchTrack", arguments: "{\"q\":\"夜曲\"}")
         #expect(events.contains(.toolCall(expectedCall)))
         // toolCall 必须在 completed 之前产出。
@@ -164,7 +164,7 @@ struct OpenAIChatStreamingTests {
             events.append(event)
         }
 
-        #expect(events.contains(.delta("收")))
+        #expect(events.contains(.answerDelta("收")))
         #expect(events.contains(.toolCall(AIToolCall(id: "call_2", name: "playTrack", arguments: "{\"trackID\":\"srv:1\"}"))))
         #expect(events.last == .completed)
     }
@@ -172,6 +172,8 @@ struct OpenAIChatStreamingTests {
     /// 纯文本流：只有 delta + completed，不产出任何 toolCall。
     @Test func streamsPlainTextWithoutToolCalls() async throws {
         let sse = """
+        data: {"choices":[{"delta":{"reasoning_content":"先分析"}}]}
+
         data: {"choices":[{"delta":{"content":"你"}}]}
 
         data: {"choices":[{"delta":{"content":"好"}}]}
@@ -192,10 +194,45 @@ struct OpenAIChatStreamingTests {
             events.append(event)
         }
 
-        #expect(events.contains(.delta("你")))
-        #expect(events.contains(.delta("好")))
+        #expect(events.contains(.reasoningDelta("先分析")))
+        #expect(events.contains(.answerDelta("你")))
+        #expect(events.contains(.answerDelta("好")))
         #expect(events.contains { if case .toolCall = $0 { return true } else { return false } } == false)
         #expect(events.contains(.usage(input: 5, output: 2)))
+        #expect(events.last == .completed)
+    }
+
+    /// 部分 OpenAI-compatible 网关会把 Chat SSE 简化为裸 `delta` 字符串；
+    /// 兼容分支必须保留正文，而不是把它吞成 unknownDelta。
+    @Test func streamsTypelessBareDeltaAsAnswer() async throws {
+        let sse = """
+        data: {"delta":"兼容正文"}
+
+        data: {"choices":[{"delta":"嵌套兼容正文"}]}
+
+        data: {"choices":[{"delta":{"output_text":"兼容字段正文"}}]}
+
+        data: [DONE]
+        """
+        ChatMockURLProtocol.reset(stubs: [
+            .response(statusCode: 200, headers: ["Content-Type": "text/event-stream"], data: Data(sse.utf8))
+        ])
+        let provider = makeProvider()
+
+        var events: [AIStreamEvent] = []
+        for try await event in provider.stream(
+            AICompletionRequest(model: "test-model", messages: [AIMessage(role: .user, content: "hi")])
+        ) {
+            events.append(event)
+        }
+
+        #expect(events.contains(.answerDelta("兼容正文")))
+        #expect(events.contains(.answerDelta("嵌套兼容正文")))
+        #expect(events.contains(.answerDelta("兼容字段正文")))
+        #expect(!events.contains { event in
+            if case .unknownDelta = event { return true }
+            return false
+        })
         #expect(events.last == .completed)
     }
 }

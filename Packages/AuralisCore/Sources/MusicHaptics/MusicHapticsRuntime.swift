@@ -908,6 +908,11 @@ public final class MusicHapticsCoordinator {
     private var preparedLookaheadPreparationIDs: Set<UUID> = []
     private var preparedLookaheadWindows: [UUID: [MusicHapticsAnalysisWindow]] = [:]
     private var preparedLookaheadAnalyzers: [UUID: LookaheadMusicHapticsAnalyzer] = [:]
+    /// A background transition may happen while AVQueuePlayer prepares the
+    /// next item. Retain only the source description and defer opening its
+    /// decoder until foreground; this keeps prepared-next analysis from
+    /// creating background network/PCM work solely for haptics.
+    private var deferredPreparedLookaheadSources: [UUID: MusicHapticsAnalysisSource] = [:]
     private let maximumPreparedLookaheadWindows = 64
     private var currentIdentity: MusicHapticsIdentity?
     private var currentTimeline: MusicHapticsTimeline?
@@ -1260,6 +1265,7 @@ public final class MusicHapticsCoordinator {
         rollingScheduler.stop()
         currentPreparation = preparation
         preparedLookaheadPreparationIDs.remove(preparation.id)
+        deferredPreparedLookaheadSources.removeValue(forKey: preparation.id)
         currentIdentity = preparation.identity
         currentFavorite = preparation.favorite
         currentPosition = max(0, position)
@@ -1279,10 +1285,10 @@ public final class MusicHapticsCoordinator {
         let bufferedWindows = preparedLookaheadWindows.removeValue(forKey: preparation.id) ?? []
         preparation.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: playbackIsPlaying && runtimeOutputEnabled && !hapticsSuspended,
+            isPlaying: playbackIsPlaying && runtimeOutputEnabled && !hapticsSuspended && !isInBackground,
             rate: playbackRate
         )
-        if hapticsSuspended || audioBuffering || !runtimeOutputEnabled || !playbackIsPlaying {
+        if hapticsSuspended || isInBackground || audioBuffering || !runtimeOutputEnabled || !playbackIsPlaying {
             preparation.lookaheadAnalyzer?.pause()
         } else {
             preparation.lookaheadAnalyzer?.resume()
@@ -1295,7 +1301,7 @@ public final class MusicHapticsCoordinator {
             source = .system
         case let .custom(timeline):
             do {
-                if isPlaying, runtimeOutputEnabled, custom.canProduceOutput, !hapticsSuspended {
+                if isPlaying, runtimeOutputEnabled, custom.canProduceOutput, !hapticsSuspended, !isInBackground {
                     try custom.play(
                         timeline,
                         offset: position,
@@ -1311,7 +1317,7 @@ public final class MusicHapticsCoordinator {
         case let .analyzeLookahead(request):
             source = .analyzing
             preparedLookaheadAnalyzers.removeValue(forKey: preparation.id)
-            if !runtimeOutputEnabled || !isPlaying {
+            if !runtimeOutputEnabled || !isPlaying || isInBackground {
                 preparation.lookaheadAnalyzer?.pause()
             } else if failedLookaheadPreparationIDs.remove(preparation.id) != nil {
                 activateRealtimeFallback(preparation)
@@ -1326,6 +1332,23 @@ public final class MusicHapticsCoordinator {
         case .analyze:
             source = .analyzing
         }
+
+        // A next-item preparation can finish before this current preparation
+        // is activated. `startPreparedAnalysis` deliberately defers it while
+        // the coordinator has no authoritative playing state yet; drain that
+        // deferred source at the same activation boundary once audio is known
+        // to be running.
+        if isPlaying,
+           runtimeOutputEnabled,
+           !hapticsSuspended,
+           !isInBackground,
+           !audioBuffering {
+            let deferredPreparedSources = deferredPreparedLookaheadSources
+            deferredPreparedLookaheadSources.removeAll()
+            for (preparationID, source) in deferredPreparedSources {
+                preparedLookaheadAnalyzers[preparationID]?.start(source: source)
+            }
+        }
     }
 
     /// Prepared next items may start decoding before they become current.  It
@@ -1334,8 +1357,19 @@ public final class MusicHapticsCoordinator {
         guard case let .analyzeLookahead(request) = preparation.plan else { return }
         guard let analyzer = preparation.lookaheadAnalyzer else { return }
         preparedLookaheadAnalyzers[preparation.id] = analyzer
-        analyzer.updatePlaybackPosition(0, isPlaying: !hapticsSuspended, rate: 1)
-        if hapticsSuspended { analyzer.pause() } else { analyzer.resume() }
+        let canStart = playbackIsPlaying
+            && !audioBuffering
+            && runtimeOutputEnabled
+            && !hapticsSuspended
+            && !isInBackground
+        analyzer.updatePlaybackPosition(0, isPlaying: canStart, rate: 1)
+        if !canStart {
+            analyzer.pause()
+            deferredPreparedLookaheadSources[preparation.id] = request.analysisSource
+            return
+        }
+        deferredPreparedLookaheadSources.removeValue(forKey: preparation.id)
+        analyzer.resume()
         analyzer.start(source: request.analysisSource)
     }
 
@@ -1347,6 +1381,7 @@ public final class MusicHapticsCoordinator {
         preparedLookaheadAnalyzers.removeValue(forKey: preparation.id)
         preparedLookaheadPreparationIDs.remove(preparation.id)
         preparedLookaheadWindows.removeValue(forKey: preparation.id)
+        deferredPreparedLookaheadSources.removeValue(forKey: preparation.id)
         failedLookaheadPreparationIDs.remove(preparation.id)
         // A prepared item may already have decoded useful PCM/lookahead. It
         // is being replaced, not invalidated; finish its sidecar so the
@@ -1401,9 +1436,18 @@ public final class MusicHapticsCoordinator {
         audioBuffering = false
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: runtimeOutputEnabled && !hapticsSuspended,
+            isPlaying: runtimeOutputEnabled && !hapticsSuspended && !isInBackground,
             rate: playbackRate
         )
+        if isInBackground {
+            // Do not restart decoders or create a new Core Haptics player in
+            // the background. Existing scheduled output is left untouched.
+            activeAnalysisSink?.pause()
+            currentPreparation?.lookaheadAnalyzer?.pause()
+            preparedLookaheadAnalyzers.values.forEach { $0.pause() }
+            rollingScheduler.pause()
+            return
+        }
         if hapticsSuspended || !runtimeOutputEnabled {
             activeAnalysisSink?.pause()
             currentPreparation?.lookaheadAnalyzer?.pause()
@@ -1413,6 +1457,20 @@ public final class MusicHapticsCoordinator {
             return
         }
         activeAnalysisSink?.resume()
+        // A prepared-next request can finish while AVPlayer is buffering or
+        // paused. Drain it only after playback resumes; otherwise the async
+        // completion would open an optional decoder while audio is not moving.
+        let deferredPreparedSources = deferredPreparedLookaheadSources
+        deferredPreparedLookaheadSources.removeAll()
+        for (preparationID, source) in deferredPreparedSources {
+            preparedLookaheadAnalyzers[preparationID]?.start(source: source)
+        }
+        if case let .analyzeLookahead(request) = currentPlan {
+            // A preparation activated while paused deliberately has not
+            // opened its decoder.  Resume must therefore ensure the current
+            // analyzer is started before merely releasing its pause gate.
+            currentPreparation?.lookaheadAnalyzer?.start(source: request.analysisSource)
+        }
         currentPreparation?.lookaheadAnalyzer?.resume()
         preparedLookaheadAnalyzers.values.forEach { $0.resume() }
         if source == .custom, let timeline = currentTimeline {
@@ -1447,15 +1505,15 @@ public final class MusicHapticsCoordinator {
         playbackIsPlaying = playing
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: playing && runtimeOutputEnabled && !hapticsSuspended,
+            isPlaying: playing && runtimeOutputEnabled && !hapticsSuspended && !isInBackground,
             rate: playbackRate
         )
-        if playing && runtimeOutputEnabled && !hapticsSuspended {
+        if playing && runtimeOutputEnabled && !hapticsSuspended && !isInBackground {
             currentPreparation?.lookaheadAnalyzer?.resume()
         } else {
             currentPreparation?.lookaheadAnalyzer?.pause()
         }
-        guard !hapticsSuspended, runtimeOutputEnabled else { return }
+        guard !hapticsSuspended, !isInBackground, runtimeOutputEnabled else { return }
         activeAnalysisSink?.seek(to: currentPosition)
         if source == .custom {
             custom.seek(
@@ -1477,6 +1535,13 @@ public final class MusicHapticsCoordinator {
         isPlaying: Bool,
         rate: Double = 1
     ) {
+        // This callback is driven by the UI/progress display and may arrive
+        // after the scene has already entered the background.  Background
+        // playback keeps AVPlayer as the clock source; accepting a late UI
+        // tick here would overwrite that clock and make the foreground
+        // rebase start from stale data.  The next active transition supplies
+        // the authoritative AVPlayer position explicitly.
+        guard !isInBackground else { return }
         let previousPosition = currentPosition
         currentPosition = max(0, position)
         let safeRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
@@ -1484,7 +1549,7 @@ public final class MusicHapticsCoordinator {
         playbackRate = safeRate
         playbackIsPlaying = isPlaying
         if isPlaying { audioBuffering = false }
-        let analysisCanRun = isPlaying && !audioBuffering && runtimeOutputEnabled && !hapticsSuspended
+        let analysisCanRun = isPlaying && !audioBuffering && runtimeOutputEnabled && !hapticsSuspended && !isInBackground
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
             isPlaying: analysisCanRun,
@@ -1501,12 +1566,13 @@ public final class MusicHapticsCoordinator {
             custom.stop()
             activeAnalysisSink?.seek(to: currentPosition)
         }
-        if rateChanged, runtimeOutputEnabled, !hapticsSuspended, !audioBuffering {
+        if rateChanged, runtimeOutputEnabled, !hapticsSuspended, !isInBackground, !audioBuffering {
             rebaseForPlaybackRateChange(position: currentPosition, isPlaying: isPlaying)
         }
         guard case .analyzeLookahead = currentPlan,
               runtimeOutputEnabled,
-              !hapticsSuspended else { return }
+              !hapticsSuspended,
+              !isInBackground else { return }
         pumpScheduler(position: currentPosition, isPlaying: isPlaying)
     }
 
@@ -1602,11 +1668,16 @@ public final class MusicHapticsCoordinator {
     }
 
     /// A background scene transition alone does not prove that Core Haptics
-    /// has been suspended. Keep an already-running engine/player and let the
-    /// engine's typed stopped reason decide when analysis must be paused.
+    /// has been suspended. Keep already-created output alive, but pause all
+    /// decoder/DSP sidecars and stop scheduling new future windows. Audio has
+    /// priority over optional haptic analysis while the app is backgrounded.
     public func applicationDidEnterBackground() {
         isInBackground = true
         custom.applicationDidEnterBackground()
+        rollingScheduler.pause()
+        activeAnalysisSink?.pause()
+        currentPreparation?.lookaheadAnalyzer?.pause()
+        preparedLookaheadAnalyzers.values.forEach { $0.pause() }
     }
 
     /// Rebase all future output from the authoritative AVPlayer position after
@@ -1626,6 +1697,20 @@ public final class MusicHapticsCoordinator {
         foregroundRecoveryCount += 1
         if runtimeOutputEnabled {
             custom.restartIfNeeded()
+        }
+        // Any lookahead decoder withheld while backgrounded starts only after
+        // the authoritative AVPlayer position has been rebased, and only when
+        // audio is actually playing. A paused foreground scene must not open
+        // an optional decoder just because it became active.
+        if isPlaying, runtimeOutputEnabled {
+            if case let .analyzeLookahead(request) = currentPlan {
+                currentPreparation?.lookaheadAnalyzer?.start(source: request.analysisSource)
+            }
+            let deferredPreparedSources = deferredPreparedLookaheadSources
+            deferredPreparedLookaheadSources.removeAll()
+            for (preparationID, source) in deferredPreparedSources {
+                preparedLookaheadAnalyzers[preparationID]?.start(source: source)
+            }
         }
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
@@ -1696,6 +1781,7 @@ public final class MusicHapticsCoordinator {
         if let currentID = currentPreparation?.id {
             preparedLookaheadPreparationIDs.remove(currentID)
             preparedLookaheadWindows.removeValue(forKey: currentID)
+            deferredPreparedLookaheadSources.removeValue(forKey: currentID)
         }
         warmupTask?.cancel()
         warmupTask = nil
@@ -1708,6 +1794,15 @@ public final class MusicHapticsCoordinator {
 
     public func stop() {
         finishPartial(reason: .stopped)
+        // A full playback stop invalidates prepared-next sidecars as well as
+        // the current one. Otherwise a decoder that was opened for the next
+        // item can keep reading after the player has stopped, with callbacks
+        // retained by the coordinator even though no item can become current.
+        preparedLookaheadAnalyzers.values.forEach { $0.finishPartial(reason: .stopped) }
+        preparedLookaheadAnalyzers.removeAll()
+        preparedLookaheadPreparationIDs.removeAll()
+        preparedLookaheadWindows.removeAll()
+        deferredPreparedLookaheadSources.removeAll()
         currentPreparation = nil
         currentTimeline = nil
         currentIdentity = nil
@@ -2264,6 +2359,7 @@ public final class MusicHapticsCoordinator {
               playbackIsPlaying,
               runtimeOutputEnabled,
               !hapticsSuspended,
+              !isInBackground,
               !audioBuffering,
               currentPlan.kind == .analyze || realtimeFallbackPreparationID == preparationID
         else { return }
@@ -2315,7 +2411,8 @@ public final class MusicHapticsCoordinator {
         }
         guard case .analyzeLookahead = currentPlan,
               runtimeOutputEnabled,
-              !hapticsSuspended else { return }
+              !hapticsSuspended,
+              !isInBackground else { return }
         let scheduled = rollingScheduler.ingest(window)
         analysisSnapshot = MusicHapticsAnalysisSnapshot(
             analyzedRanges: analysisSnapshot.analyzedRanges,

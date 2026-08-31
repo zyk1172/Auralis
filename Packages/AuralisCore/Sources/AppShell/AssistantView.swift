@@ -10,6 +10,22 @@ import UIKit
 import AppKit
 #endif
 
+private struct AssistantConversationViewportBottomPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct AssistantConversationContentBottomPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// AI 助手主界面：左侧会话列表，右侧结构化消息流。
 ///
 /// 交互要点：
@@ -21,6 +37,9 @@ struct AssistantView: View {
     /// 末尾锚点必须是独立视图：最后一条消息在流式输出时高度会变化，而其 id 不变。
     /// 用稳定的底部锚点滚动，才能始终贴住最新工具进度和回复结尾。
     private static let conversationEndID = "assistant-conversation-end"
+    private static let conversationScrollCoordinateSpace = "assistant-conversation-scroll"
+    /// 距底部不超过此距离时，新的流式内容才会自动跟随；用户上翻阅读时不抢回滚动位置。
+    private static let autoFollowThreshold: CGFloat = 80
 
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -37,6 +56,9 @@ struct AssistantView: View {
     @State private var isBatchManaging = false
     @State private var selectedSessionIDs: Set<UUID> = []
     @State private var confirmBatchDelete = false
+    @State private var isFollowingConversationOutput = true
+    @State private var conversationViewportBottom: CGFloat = .zero
+    @State private var conversationContentBottom: CGFloat = .zero
     /// 输入框焦点：仅供本页用 @FocusState 管理，以便点击空白 / 拖动 / 发送时收起键盘。
     @FocusState private var assistantInputFocused: Bool
 
@@ -148,8 +170,8 @@ struct AssistantView: View {
         } message: { consent in
             Text("\(consent.purpose)\n\(consent.fields.map { "· \($0)" }.joined(separator: "\n"))")
         }
-        // 运行时确认：不可逆工具或原始请求语义不足以覆盖某个具体修改时，
-        // 都通过同一个 PendingConfirmation 通道挂起；模型文本不会自行授予权限。
+        // 运行时确认：只有 descriptor 明确标记为 destructive/需显式批准的工具
+        // 才通过 PendingConfirmation 挂起；模型文本不会自行替代可见确认。
         .alert(
             Text(agent.pendingOperationConfirmation?.title ?? String(localized: "确认操作", bundle: .module)),
             isPresented: Binding(
@@ -430,25 +452,44 @@ struct AssistantView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: AuralisSpacing.large) {
                         if agent.messages.isEmpty { emptyState }
-                        ForEach(agent.messages) { message in
-                            messageRow(message).id(message.id)
-                        }
+                        conversationMessageRows()
                         if agent.isRunning { runningIndicator }
                         Color.clear
                             .frame(height: 1)
                             .id(Self.conversationEndID)
                     }
                     .padding(AuralisSpacing.large)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: AssistantConversationContentBottomPreferenceKey.self,
+                                value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
+                            )
+                        }
+                    }
                     // 点击聊天空白区域收起键盘（不影响卡片自身的点按）。
                     .onTapGesture { assistantInputFocused = false }
                 }
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: AssistantConversationViewportBottomPreferenceKey.self,
+                            value: geometry.frame(in: .named(Self.conversationScrollCoordinateSpace)).maxY
+                        )
+                    }
+                }
+                .coordinateSpace(name: Self.conversationScrollCoordinateSpace)
                 .reportsBottomDockScroll(source: .assistant)
                 // 向下拖动聊天列表时交互式收起键盘。
                 .scrollDismissesKeyboard(.immediately)
                 // 首次打开 / 切换历史会话也必须落在最新消息，而不仅是新消息 append 时。
-                .onAppear { scrollConversationToEnd(proxy, animated: false) }
+                .onAppear {
+                    isFollowingConversationOutput = true
+                    scrollConversationToEnd(proxy, animated: false, force: true)
+                }
                 .onChange(of: agent.activeSessionID) { _, _ in
-                    scrollConversationToEnd(proxy, animated: false)
+                    isFollowingConversationOutput = true
+                    scrollConversationToEnd(proxy, animated: false, force: true)
                 }
                 .onChange(of: agent.messages.count) { _, _ in
                     scrollConversationToEnd(proxy, animated: true)
@@ -457,6 +498,14 @@ struct AssistantView: View {
                 // 并延后一帧，等新高度完成布局后再贴到底部。
                 .onReceive(agent.objectWillChange) { _ in
                     scrollConversationToEnd(proxy, animated: false)
+                }
+                .onPreferenceChange(AssistantConversationViewportBottomPreferenceKey.self) { value in
+                    conversationViewportBottom = value
+                    updateConversationAutoFollowState()
+                }
+                .onPreferenceChange(AssistantConversationContentBottomPreferenceKey.self) { value in
+                    conversationContentBottom = value
+                    updateConversationAutoFollowState()
                 }
             }
         }
@@ -511,7 +560,56 @@ struct AssistantView: View {
         #endif
     }
 
-    private func scrollConversationToEnd(_ proxy: ScrollViewProxy, animated: Bool) {
+    /// Keep live reasoning immediately before the assistant messages produced
+    /// by the current turn. Rendering it after the whole transcript made a
+    /// completed answer appear first while the run was still finishing, which
+    /// inverted the intended process → answer hierarchy.
+    @ViewBuilder
+    private func conversationMessageRows() -> some View {
+        let reasoning: String? = {
+            guard let presentation = agent.runPresentationState else { return nil }
+            let text = presentation.reasoningText
+            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+        }()
+        let latestUserIndex = agent.messages.lastIndex(where: { $0.role == .user })
+
+        // A run normally always emits its user message first. Keep a safe
+        // fallback for restored/compatibility states so reasoning cannot land
+        // below an existing assistant answer when that anchor is absent.
+        if let reasoning, latestUserIndex == nil {
+            transientReasoningRow(reasoning)
+        }
+
+        ForEach(Array(agent.messages.enumerated()), id: \.element.id) { index, message in
+            if let reasoning,
+               let latestUserIndex,
+               index == latestUserIndex + 1 {
+                transientReasoningRow(reasoning)
+            }
+            messageRow(message).id(message.id)
+        }
+
+        // When the run has only emitted the user message so far, place the
+        // live row after that message; subsequent assistant output will render
+        // below it on the next update.
+        if let reasoning,
+           let latestUserIndex,
+           latestUserIndex == agent.messages.count - 1 {
+            transientReasoningRow(reasoning)
+        }
+    }
+
+    private func scrollConversationToEnd(
+        _ proxy: ScrollViewProxy,
+        animated: Bool,
+        force: Bool = false
+    ) {
+        // Capture the state before the new streaming chunk changes content
+        // height. A large single chunk can temporarily move the bottom more
+        // than the threshold before this async scroll runs; that must not
+        // make a user who was already following output fall behind.
+        let shouldFollow = force || isFollowingConversationOutput
+        guard shouldFollow else { return }
         DispatchQueue.main.async {
             if animated {
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -521,6 +619,12 @@ struct AssistantView: View {
                 proxy.scrollTo(Self.conversationEndID, anchor: .bottom)
             }
         }
+    }
+
+    private func updateConversationAutoFollowState() {
+        guard conversationViewportBottom > 0 else { return }
+        isFollowingConversationOutput = conversationContentBottom - conversationViewportBottom
+            <= Self.autoFollowThreshold
     }
 
     private var header: some View {
@@ -645,12 +749,33 @@ struct AssistantView: View {
             // is active.  AgentTask remains useful for persisted deterministic
             // workflow diagnostics, but must not race a generic streaming run.
             Text(agent.runPresentationState?.phase.displayText
-                 ?? String(localized: "正在处理…", bundle: .module)).font(.caption)
+                 ?? String(localized: "正在处理…", bundle: .module)).font(.caption2)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             Button(String(localized: "停止", bundle: .module)) { agent.cancel() }
                 .buttonStyle(HapticBorderedButtonStyle())
                 .controlSize(.small)
         }
+    }
+
+    /// 思考内容只从 `AssistantRunPresentationState` 读取，运行结束即被清除，
+    /// 不会作为 `AgentChatMessage` 写入本地会话或被后续模型调用回放。
+    private func transientReasoningRow(_ reasoning: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label("思考中…", systemImage: "brain.head.profile")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+            ChatMarkdownContent(source: reasoning, compact: true)
+                .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .opacity(0.82)
+                .textSelection(.enabled)
+                .frame(maxHeight: 120, alignment: .topLeading)
+                .clipped()
+        }
+        .padding(.horizontal, AuralisSpacing.small)
+        .padding(.vertical, 4)
+        .background(theme.colorTokens.surface.color.opacity(0.24))
+        .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
+        .frame(maxWidth: 560, alignment: .leading)
     }
 
     @ViewBuilder
@@ -713,6 +838,12 @@ struct AssistantView: View {
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.medium))
             .frame(maxWidth: 560, alignment: .leading)
             .textSelection(.enabled)
+
+        // Reasoning is never meant to survive as a chat-message payload.  If
+        // an older/corrupt local session contains one, keep it invisible
+        // rather than revealing or replaying it as a durable assistant answer.
+        case .reasoning:
+            EmptyView()
 
         case let .trackCards(cards):
             TrackCardList(cards: cards, agent: agent, theme: theme)
@@ -782,19 +913,21 @@ struct AssistantView: View {
 
         case let .actionPreview(title, detail):
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.bold())
-                    .foregroundStyle(theme.colorTokens.primaryText.color)
-                Text(detail).font(.caption)
+                Text(title).font(.caption2.weight(.semibold))
+                    .foregroundStyle(theme.colorTokens.secondaryText.color)
+                Text(detail).font(.caption2)
                     .foregroundStyle(theme.colorTokens.secondaryText.color)
             }
-            .padding(AuralisSpacing.medium)
-            .background(theme.colorTokens.surface.color)
+            .padding(.horizontal, AuralisSpacing.small)
+            .padding(.vertical, 4)
+            .background(theme.colorTokens.surface.color.opacity(0.22))
             .clipShape(RoundedRectangle(cornerRadius: AuralisRadius.small))
 
         case let .toolProgress(step):
             Label(step, systemImage: "gearshape.arrow.trianglehead.2.clockwise.rotate.90")
                 .font(.caption2)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
+                .opacity(0.78)
 
         case let .error(text):
             Label(text, systemImage: "exclamationmark.triangle.fill")
@@ -876,10 +1009,14 @@ private struct ChatMarkdownContent: View {
     }
 
     let source: String
+    /// Process text (reasoning/tool activity) must stay visually subordinate
+    /// even when it contains Markdown headings or lists. The final answer
+    /// keeps the richer body hierarchy by using the default style.
+    var compact = false
 
     var body: some View {
         let blocks = Self.parse(source)
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: compact ? 3 : 9) {
             ForEach(blocks.indices, id: \.self) { index in
                 blockView(blocks[index])
             }
@@ -892,25 +1029,33 @@ private struct ChatMarkdownContent: View {
         switch block {
         case let .heading(level, text):
             richText(text)
-                .font(level == 1 ? .title3.weight(.bold) : .headline.weight(.semibold))
-                .padding(.top, level == 1 ? 2 : 0)
+                .font(compact
+                    ? .caption.weight(.regular)
+                    : (level == 1 ? .title3.weight(.bold) : .headline.weight(.semibold)))
+                .padding(.top, compact ? 0 : (level == 1 ? 2 : 0))
         case let .bullet(marker, text):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: compact ? 4 : 8) {
                 Text(marker)
-                    .font(.subheadline.weight(.semibold))
+                    .font(compact ? .caption2.weight(.regular) : .subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .frame(minWidth: 15, alignment: .trailing)
+                    .frame(minWidth: compact ? 10 : 15, alignment: .trailing)
                 richText(text)
-                    .lineSpacing(2)
+                    .lineSpacing(compact ? 0 : 2)
+                    .font(compact ? .caption2 : .body)
             }
         case let .paragraph(text):
             richText(text)
-                .lineSpacing(3)
+                .lineSpacing(compact ? 0 : 3)
+                .font(compact ? .caption2 : .body)
         }
     }
 
     /// 保留行内强调、链接和代码；流式时遇到不完整 Markdown 则显示原文。
     private func richText(_ source: String) -> Text {
+        // Process text must not regain body-sized emphasis through Markdown
+        // attributes.  Its container already applies the compact hierarchy;
+        // a plain Text keeps headings/strong spans subordinate as well.
+        guard !compact else { return Text(source) }
         guard let attributed = try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)

@@ -240,7 +240,11 @@ public struct AnthropicMessagesProvider: AIProvider {
                             let delta = object["delta"] as? [String: Any] ?? [:]
                             switch delta["type"] as? String {
                             case "text_delta":
-                                if let text = delta["text"] as? String { continuation.yield(.delta(text)) }
+                                if let text = delta["text"] as? String { continuation.yield(.answerDelta(text)) }
+                            case "thinking_delta":
+                                if let thinking = delta["thinking"] as? String {
+                                    continuation.yield(.reasoningDelta(thinking))
+                                }
                             case "input_json_delta":
                                 if let index = object["index"] as? Int,
                                    var fragment = toolFragments[index],
@@ -524,10 +528,12 @@ public struct AnthropicMessagesProvider: AIProvider {
         }
         let blocks = object["content"] as? [[String: Any]] ?? []
         var text = ""
+        var reasoning = ""
         var calls: [AIToolCall] = []
         for block in blocks {
             switch block["type"] as? String {
             case "text": text += block["text"] as? String ?? ""
+            case "thinking": reasoning += block["thinking"] as? String ?? ""
             case "tool_use":
                 let input = block["input"] ?? [:]
                 let data = try JSONSerialization.data(withJSONObject: input)
@@ -543,6 +549,7 @@ public struct AnthropicMessagesProvider: AIProvider {
         return AICompletionResponse(
             model: object["model"] as? String ?? fallbackModel,
             content: text,
+            reasoning: reasoning.isEmpty ? nil : reasoning,
             inputTokens: usage?["input_tokens"] as? Int,
             outputTokens: usage?["output_tokens"] as? Int,
             finishReason: object["stop_reason"] as? String,

@@ -146,7 +146,7 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
                 continuation.yield(.started(model: request.model))
                 let chunks = Self.splitForStreaming(content)
                 for chunk in chunks {
-                    continuation.yield(.delta(chunk))
+                    continuation.yield(.answerDelta(chunk))
                 }
                 continuation.yield(.completed)
                 continuation.finish()
@@ -781,7 +781,7 @@ private final class NativeToolAIProvider: AIProvider, @unchecked Sendable {
                 continuation.yield(.started(model: request.model))
                 guard !remaining.isEmpty else {
                     for chunk in Self.splitForStreaming(closing) {
-                        continuation.yield(.delta(chunk))
+                        continuation.yield(.answerDelta(chunk))
                     }
                     continuation.yield(.completed)
                     continuation.finish()
@@ -855,7 +855,7 @@ private final class StreamingTextAIProvider: AIProvider, @unchecked Sendable {
             let task = Task {
                 continuation.yield(.started(model: request.model))
                 for chunk in chunks {
-                    continuation.yield(.delta(chunk))
+                    continuation.yield(.answerDelta(chunk))
                 }
                 continuation.yield(.completed)
                 continuation.finish()
@@ -894,14 +894,14 @@ private final class StreamingToolCallAIProvider: AIProvider, @unchecked Sendable
                 let first = requests.count == 1
                 if first {
                     for chunk in ["好的，我", "来搜索这首歌。"] {
-                        continuation.yield(.delta(chunk))
+                        continuation.yield(.answerDelta(chunk))
                     }
                     for call in calls {
                         continuation.yield(.toolCall(call))
                     }
                 } else {
                     for chunk in ScriptedAIProvider.splitForStreaming(closing) {
-                        continuation.yield(.delta(chunk))
+                        continuation.yield(.answerDelta(chunk))
                     }
                 }
                 continuation.yield(.completed)
@@ -929,10 +929,85 @@ private final class StreamErrorAIProvider: AIProvider, @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield(.started(model: request.model))
-                continuation.yield(.delta("部分"))
+                continuation.yield(.answerDelta("部分"))
                 continuation.finish(throwing: AIProviderError.malformedResponse(detail: detail, retryable: false))
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// First streams only reasoning, then mirrors the real compatibility repair
+/// path: the first non-stream completion has no answer and the repair request
+/// returns a final user-facing answer.
+private final class ReasoningThenAnswerRepairAIProvider: AIProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var completionRequests: [AICompletionRequest] = []
+    private let emitsReasoning: Bool
+
+    init(emitsReasoning: Bool = true) {
+        self.emitsReasoning = emitsReasoning
+    }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "reasoning-repair", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        let attempt = lock.withLock { () -> Int in
+            completionRequests.append(request)
+            return completionRequests.count
+        }
+        if attempt == 1 {
+            return AICompletionResponse(
+                model: request.model,
+                content: "",
+                reasoning: emitsReasoning ? "内部分析" : nil
+            )
+        }
+        return AICompletionResponse(model: request.model, content: "这是面向用户的最终答案。")
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(model: request.model))
+            if emitsReasoning {
+                continuation.yield(.reasoningDelta("内部分析"))
+            }
+            continuation.yield(.completed)
+            continuation.finish()
+        }
+    }
+
+    func recordedCompletionRequests() -> [AICompletionRequest] {
+        lock.withLock { completionRequests }
+    }
+}
+
+private final class LongReasoningAnswerAIProvider: AIProvider, @unchecked Sendable {
+    let answer: String
+    let reasoning: String
+
+    init(answer: String, reasoning: String) {
+        self.answer = answer
+        self.reasoning = reasoning
+    }
+
+    func testConnection() async -> AIConnectionResult {
+        AIConnectionResult(latency: 0, model: "long-answer", message: "ready")
+    }
+
+    func complete(_ request: AICompletionRequest) async -> AICompletionResponse {
+        AICompletionResponse(model: request.model, content: answer, reasoning: reasoning)
+    }
+
+    func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.started(model: request.model))
+            continuation.yield(.reasoningDelta(reasoning))
+            continuation.yield(.answerDelta(answer))
+            continuation.yield(.completed)
+            continuation.finish()
         }
     }
 }
@@ -961,6 +1036,117 @@ func streamingEmitsDeltasAndFinalizes() async {
     #expect(streamed.count == 3)
     // 收尾时产出最终文本。
     #expect(await collector.containsText("你好，已完成。"))
+}
+
+@Test("Streaming: reasoning stays separate and empty answer triggers a disabled-reasoning repair")
+func reasoningOnlyStreamRepairsFinalAnswerWithoutMixingChannels() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let provider = ReasoningThenAnswerRepairAIProvider()
+
+    await AgentRunner.run(
+        userText: "测试思考与正文分离",
+        provider: provider,
+        model: "reasoning-repair",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    let all = await collector.all()
+    let emitted = all.flatMap(\.messages)
+    #expect(emitted.contains { if case .reasoning("内部分析") = $0 { return true }; return false })
+    #expect(emitted.contains { if case let .streaming(text) = $0 { return text.contains("内部分析") }; return false } == false)
+    #expect(await collector.containsText("这是面向用户的最终答案。"))
+
+    let requests = provider.recordedCompletionRequests()
+    #expect(requests.count == 2)
+    if let repair = requests.last {
+        #expect(repair.tools == nil)
+        #expect(repair.toolChoice == AIToolChoice.none)
+        #expect(repair.reasoning?.mode == .disabled)
+    } else {
+        Issue.record("缺少最终回答修复请求")
+    }
+}
+
+@Test("Streaming: long music appreciation answer survives beside reasoning")
+func longAnswerRemainsCompleteWhenReasoningIsPresent() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let answer = """
+    ## 《路过人间》鉴赏
+    ### 【已核验事实】
+    本地曲目资料已核验。
+    ### 【模型分析】
+    """ + String(repeating: "这首歌的旋律与人声形成细腻的层次。", count: 360) + """
+    ### 【我的私人数据】
+    暂无可用的私人播放数据。
+    ### 【大众评价】
+    暂无可核验的大众评价数据。
+    """
+    let provider = LongReasoningAnswerAIProvider(
+        answer: answer,
+        reasoning: "先核对歌曲信息，再整理可展示的鉴赏内容。"
+    )
+    var initialState = AgentTaskState(intent: .musicAppreciation, goal: "鉴赏当前歌曲")
+    initialState.facts["appreciation.metadata"] = "available"
+    initialState.facts["appreciation.lyrics"] = "unavailable"
+    initialState.facts["appreciation.community"] = "unavailable"
+
+    await AgentRunner.run(
+        userText: "鉴赏当前歌曲",
+        provider: provider,
+        model: "long-answer",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: "路过人间", queueCount: 0),
+        intent: .musicAppreciation,
+        initialTaskState: initialState,
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    let emitted = await collector.all()
+        .flatMap(\.messages)
+    #expect(emitted.contains { item in
+        if case let .reasoning(value) = item {
+            return value == "先核对歌曲信息，再整理可展示的鉴赏内容。"
+        }
+        return false
+    })
+    #expect(emitted.contains { item in
+        if case let .streaming(value) = item { return value == answer }
+        return false
+    })
+    #expect(await collector.containsText(answer))
+    #expect(answer.count > 5_000)
+}
+
+@Test("Streaming: no visible model output also triggers final-answer repair")
+func emptyStreamRepairsFinalAnswer() async {
+    let store = try! makeStore()
+    let bridge = MockAgentBridge()
+    let collector = EmittedCollector()
+    let provider = ReasoningThenAnswerRepairAIProvider(emitsReasoning: false)
+
+    await AgentRunner.run(
+        userText: "测试空回答修复",
+        provider: provider,
+        model: "reasoning-repair",
+        bridge: bridge,
+        catalog: store,
+        context: .init(serverID: "test-server", currentTrackTitle: nil, queueCount: 0),
+        confirm: { _ in true },
+        emit: { await collector.record($0) }
+    )
+
+    #expect(await collector.containsText("这是面向用户的最终答案。"))
+    #expect(provider.recordedCompletionRequests().count == 2)
 }
 
 @Test("Streaming: tool calls collected from stream are executed and loop continues")
@@ -1163,15 +1349,15 @@ func toolSelectorCoversEightRequests() {
     }
 }
 
-// MARK: - 删除服务器是可逆的本地配置清理
+// MARK: - 删除服务器是高影响的本地配置清理
 
-@Test("Delete server executes without an invented confirmation")
-func deleteServerExecutesWithoutInventedConfirmation() async throws {
+@Test("Delete server requires visible confirmation")
+func deleteServerRequiresVisibleConfirmation() async throws {
     let store = try makeStore()
     let bridge = MockAgentBridge()
     let collector = EmittedCollector()
     let provider = ScriptedAIProvider(actionBatches: ["ACTION: {\"tool\":\"removeServer\",\"args\":{\"serverID\":\"srv-x\"}}"])
-    let probe = ConfirmationProbe(policy: false)
+    let probe = ConfirmationProbe(policy: true)
     await AgentRunner.run(
         userText: "删除服务器",
         provider: provider,
@@ -1183,10 +1369,10 @@ func deleteServerExecutesWithoutInventedConfirmation() async throws {
         emit: { await collector.record($0) },
         log: { _ in }
     )
-    // 服务器删除只清理本地配置，属于可逆 mutation；不应引入第二套
-    // 自然语言确认协议。真正不可逆的工具仍由 Runtime confirmation gate 保护。
+    // 删除服务器会移除一整套连接配置，属于高影响本地变更；确认由
+    // ToolLoop 的可见 confirmation policy 触发，避免内部授权文案泄漏给用户。
     #expect(await bridge.removedServers.contains(ServerID(rawValue: "srv-x")))
-    #expect(await probe.calls == 0)
+    #expect(await probe.calls == 1)
 }
 
 

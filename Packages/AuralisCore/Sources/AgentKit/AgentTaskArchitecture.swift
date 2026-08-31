@@ -823,6 +823,19 @@ public enum AgentTaskReducer {
             changed = true
         }
 
+        // Record each canonical mutation that actually returned success. This
+        // feeds the task's completion contract for compound requests (for
+        // example queue append + play-next); it is deliberately independent
+        // from authorization and is never written for a failed call.
+        if descriptor.permission != .readOnly,
+           let operation = descriptor.authorizationOperation {
+            let key = AgentCompletionEvaluator.completionOperationFactKey(operation)
+            if state.facts[key] != "success" {
+                state.facts[key] = "success"
+                changed = true
+            }
+        }
+
         if let payload = result.payload, case let .trackCards(cards) = payload {
             let before = state.candidateIDs.count
             state.candidateIDs.formUnion(cards.map { $0.globalID.description })
@@ -855,11 +868,30 @@ public enum AgentTaskReducer {
 /// 普通聊天不会进入这里；活动 Recommendation Index 路径由专用 Runtime 完整拥有。
 /// index 分支只读取历史 task facts，绝不再向模型下发 batch/commit 控制指令。
 public enum AgentCompletionEvaluator {
+    /// Stable task-state key for a successfully executed canonical mutation.
+    /// The fact records completion progress, not permission; the descriptor's
+    /// risk/confirmation policy still owns whether execution may start.
+    public static func completionOperationFactKey(
+        _ operation: ToolAuthorizationOperation
+    ) -> String {
+        "completion.operation.\(operation.rawValue)"
+    }
+
+    private static func requiredOperationsSatisfied(
+        state: AgentTaskState,
+        requiredOperations: Set<ToolAuthorizationOperation>
+    ) -> Bool {
+        requiredOperations.allSatisfy {
+            state.facts[completionOperationFactKey($0)] == "success"
+        }
+    }
+
     /// 判断任务事实是否已经足够完成，不依赖模型是否又输出了一句客套话。
     /// 播放、搜索、队列、歌单等真实工具成功后，空 content 也不能覆盖成功事实。
     public static func factsSatisfied(
         state: AgentTaskState,
-        policy: AgentTaskPolicy
+        policy: AgentTaskPolicy,
+        requiredCompletionOperations: Set<ToolAuthorizationOperation> = []
     ) -> Bool {
         switch policy.completion {
         case .modelAnswer, .appreciationWithEvidence:
@@ -876,14 +908,41 @@ public enum AgentCompletionEvaluator {
             }
             return true
         case .queueMutation:
+            if !requiredCompletionOperations.isEmpty {
+                return state.facts["sideEffect.queue"] == "success"
+                    && requiredOperationsSatisfied(
+                        state: state,
+                        requiredOperations: requiredCompletionOperations
+                    )
+            }
             return state.facts["sideEffect.queue"] == "success"
         case .playlistMutation:
             let deletesPlaylist = !Set(state.successfulToolNames)
                 .intersection(["playlist_delete", "deletePlaylist"]).isEmpty
+            if !requiredCompletionOperations.isEmpty {
+                let operationFactsSatisfied = requiredOperationsSatisfied(
+                    state: state,
+                    requiredOperations: requiredCompletionOperations
+                )
+                if requiredCompletionOperations.contains(.playlistDelete) || deletesPlaylist {
+                    return operationFactsSatisfied
+                        && state.facts["playlist.deleted.verified"] == "true"
+                }
+                return operationFactsSatisfied
+                    && state.facts["sideEffect.playlist"] == "success"
+            }
             return deletesPlaylist
                 ? state.facts["playlist.deleted.verified"] == "true"
                 : state.facts["sideEffect.playlist"] == "success"
         case .playbackMutation:
+            if !requiredCompletionOperations.isEmpty {
+                return (state.facts["sideEffect.playback"] == "success"
+                    || state.facts["sideEffect.queue"] == "success")
+                    && requiredOperationsSatisfied(
+                        state: state,
+                        requiredOperations: requiredCompletionOperations
+                    )
+            }
             return state.facts["sideEffect.playback"] == "success"
                 || state.facts["sideEffect.queue"] == "success"
         case .indexPendingCountIsZero:
@@ -894,9 +953,14 @@ public enum AgentCompletionEvaluator {
     @discardableResult
     public static func markFactsSatisfied(
         state: inout AgentTaskState,
-        policy: AgentTaskPolicy
+        policy: AgentTaskPolicy,
+        requiredCompletionOperations: Set<ToolAuthorizationOperation> = []
     ) -> Bool {
-        guard factsSatisfied(state: state, policy: policy) else { return false }
+        guard factsSatisfied(
+            state: state,
+            policy: policy,
+            requiredCompletionOperations: requiredCompletionOperations
+        ) else { return false }
         state.completed = true
         state.completionState = .satisfied
         state.status = .completed
@@ -908,11 +972,16 @@ public enum AgentCompletionEvaluator {
         _ answer: String,
         state: inout AgentTaskState,
         policy: AgentTaskPolicy,
-        repairAttempts: Int
+        repairAttempts: Int,
+        requiredCompletionOperations: Set<ToolAuthorizationOperation> = []
     ) -> AgentModelAnswerDecision {
         // 工具事实优先于模型最终文本。部分中转在 tool result 后会返回空 content，
         // 这不应把已经真实完成的播放/搜索/队列操作重新判成失败。
-        if markFactsSatisfied(state: &state, policy: policy) {
+        if markFactsSatisfied(
+            state: &state,
+            policy: policy,
+            requiredCompletionOperations: requiredCompletionOperations
+        ) {
             return .accept
         }
         guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -942,21 +1011,43 @@ public enum AgentCompletionEvaluator {
                 continuation = "尚未提交最终歌曲选择。请基于真实候选调用 result_present_tracks(trackIDs=[最终歌曲]) 提交。"
             }
         case .queueMutation:
-            satisfied = state.facts["sideEffect.queue"] == "success"
-            continuation = "队列修改尚未得到成功工具结果。请执行获准的队列工具；不要仅用文字声称已经完成。"
+            satisfied = factsSatisfied(
+                state: state,
+                policy: policy,
+                requiredCompletionOperations: requiredCompletionOperations
+            )
+            continuation = requiredCompletionOperations.isEmpty
+                ? "队列修改尚未得到成功工具结果。请执行获准的队列工具；不要仅用文字声称已经完成。"
+                : "队列任务仍有未完成的操作。请执行尚未成功的队列工具；不要重复已经成功的步骤，也不要仅用文字声称已经完成。"
         case .playlistMutation:
             let deletesPlaylist = !Set(state.successfulToolNames)
                 .intersection(["playlist_delete", "deletePlaylist"]).isEmpty
             if deletesPlaylist {
-                satisfied = state.facts["playlist.deleted.verified"] == "true"
+                satisfied = factsSatisfied(
+                    state: state,
+                    policy: policy,
+                    requiredCompletionOperations: requiredCompletionOperations
+                )
                 continuation = "删除歌单尚未同时通过服务器与本地目录核验。请依据真实删除结果回答，不要仅用文字声称完成。"
             } else {
-                satisfied = state.facts["sideEffect.playlist"] == "success"
-                continuation = "歌单修改尚未得到成功工具结果。请执行获准的歌单工具；不要仅用文字声称已经完成。"
+                satisfied = factsSatisfied(
+                    state: state,
+                    policy: policy,
+                    requiredCompletionOperations: requiredCompletionOperations
+                )
+                continuation = requiredCompletionOperations.isEmpty
+                    ? "歌单修改尚未得到成功工具结果。请执行获准的歌单工具；不要仅用文字声称已经完成。"
+                    : "歌单任务仍有未完成的操作。请执行尚未成功的歌单工具；不要重复已经成功的步骤，也不要仅用文字声称已经完成。"
             }
         case .playbackMutation:
-            satisfied = state.facts["sideEffect.playback"] == "success" || state.facts["sideEffect.queue"] == "success"
-            continuation = "播放操作尚未得到成功工具结果。请执行获准的播放工具；不要仅用文字声称已经完成。"
+            satisfied = factsSatisfied(
+                state: state,
+                policy: policy,
+                requiredCompletionOperations: requiredCompletionOperations
+            )
+            continuation = requiredCompletionOperations.isEmpty
+                ? "播放操作尚未得到成功工具结果。请执行获准的播放工具；不要仅用文字声称已经完成。"
+                : "播放任务仍有未完成的操作。请执行尚未成功的播放工具；不要重复已经成功的步骤，也不要仅用文字声称已经完成。"
         case .indexPendingCountIsZero:
             // v3 完整完成只由固定 taxonomy 分类的 authoritative pending 决定。
             let pendingFixed = state.facts["recommendation.index.pending"]

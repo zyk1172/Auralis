@@ -22,8 +22,6 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
     case unknownParameter(String)
     case invalidParameter(name: String, expected: String, value: String)
     case skillUnavailable(String)
-    case modelWriteMissingAuthorizationOperation(String)
-    case mutationAuthorizationMissing(String)
     case executionLeaseRevoked(String)
     case mutationResourceBusy(String)
 
@@ -34,17 +32,15 @@ public enum ToolRuntimeError: Error, LocalizedError, Equatable, Sendable {
         case let .unknownParameter(name): "工具不接受参数：\(name)"
         case let .invalidParameter(name, expected, value): "参数 \(name) 应为 \(expected)，实际为：\(value)"
         case let .skillUnavailable(name): "工具 \(name) 只能由受信任的内置 Skill 执行"
-        case let .modelWriteMissingAuthorizationOperation(name): "工具 \(name) 缺少副作用授权操作声明，已拒绝执行"
-        case let .mutationAuthorizationMissing(name): "工具 \(name) 缺少当前请求的副作用授权，已拒绝执行"
         case let .executionLeaseRevoked(name): "工具 \(name) 所属运行已失效，未执行副作用"
         case let .mutationResourceBusy(resource): "资源 \(resource) 正被另一个运行修改，当前操作未执行"
         }
     }
 }
 
-/// Capability granted by a trusted Runtime to one deterministic Skill.  It is
-/// independent from user-language authorization: an internal primitive needs
-/// both the originating lineage authorization and this scoped authority.
+/// Capability granted by a trusted Runtime to one deterministic Skill. It is
+/// an internal ownership check for hidden state-machine primitives, not a
+/// user-facing permission or an operation whitelist for ordinary tools.
 public struct ToolExecutionAuthority: Sendable, Equatable {
     public let skillID: String
     public let lineageID: UUID
@@ -128,51 +124,21 @@ public struct ToolRuntime {
             )
         }
 
-        if let denial = ToolPrivacyPolicy.denialResult(
-            for: descriptor,
-            call: call,
-            permissions: resolvedPrivacy
-        ) {
-            return denial
-        }
-
         do {
             // Internal state-machine primitives are executable only by their
-            // trusted built-in skill.  Visibility controls discovery; this is
+            // trusted built-in skill. Visibility controls discovery; this is
             // the runtime enforcement boundary for direct/malformed calls.
             if let requiredSkillID = descriptor.requiredSkillID {
                 guard executionAuthority?.skillID == requiredSkillID else {
                     throw ToolRuntimeError.skillUnavailable(call.name)
                 }
             }
-            if descriptor.visibility == .model,
-               descriptor.permission != .readOnly,
-               descriptor.authorizationOperation == nil,
-               descriptor.customToolID == nil {
-                throw ToolRuntimeError.modelWriteMissingAuthorizationOperation(call.name)
-            }
             try validate(call, descriptor: descriptor)
             if descriptor.permission != .readOnly {
-                guard let authorizationContext else {
-                    throw ToolRuntimeError.mutationAuthorizationMissing(call.name)
-                }
-                switch authorizationContext.decision(for: descriptor, call: call) {
-                case .allowed:
-                    break
-                case let .denied(reason):
-                    return ToolResult(
-                        call: call,
-                        permission: descriptor.permission,
-                        success: false,
-                        summary: reason,
-                        failure: ToolFailureEnvelope(
-                            toolName: descriptor.name,
-                            phase: .authorization,
-                            code: "mutation_authorization_denied",
-                            retryable: false
-                        )
-                    )
-                }
+                // A semantic operation set is routing/telemetry metadata, not
+                // a second permission wall. Reversible local tools execute
+                // without an exact match; destructive approval is handled by
+                // ToolLoop's visible confirmation policy.
                 guard await executionLease.isValid() else {
                     throw ToolRuntimeError.executionLeaseRevoked(call.name)
                 }
@@ -460,7 +426,7 @@ public struct ToolRuntime {
                         recommendationIndexExecutionRegistry: context.recommendationIndexExecutionRegistry,
                         customToolRegistry: context.customToolRegistry,
                         availableToolDescriptors: context.availableToolDescriptors,
-                    capabilityEnvironment: context.capabilityEnvironment,
+                        capabilityEnvironment: context.capabilityEnvironment,
                         runID: runID,
                         callID: nil,
                         metricsCollector: metricsCollector
@@ -507,10 +473,6 @@ public struct ToolRuntime {
             phase = .inputValidation; code = "invalid_arguments"; retryable = false
         case .skillUnavailable:
             phase = .authorization; code = "skill_unavailable"; retryable = false
-        case .modelWriteMissingAuthorizationOperation:
-            phase = .authorization; code = "missing_authorization_operation"; retryable = false
-        case .mutationAuthorizationMissing:
-            phase = .authorization; code = "missing_authorization_context"; retryable = false
         case .executionLeaseRevoked:
             phase = .resourceLease; code = "execution_lease_revoked"; retryable = false
         case .mutationResourceBusy:

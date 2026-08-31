@@ -632,7 +632,10 @@ public struct OpenAICompatibleProvider: AIProvider {
                 do {
                     let response = try await complete(request)
                     continuation.yield(.started(model: response.model))
-                    if !response.content.isEmpty { continuation.yield(.delta(response.content)) }
+                    if let reasoning = response.reasoning, !reasoning.isEmpty {
+                        continuation.yield(.reasoningDelta(reasoning))
+                    }
+                    if !response.content.isEmpty { continuation.yield(.answerDelta(response.content)) }
                     for toolCall in response.toolCalls ?? [] { continuation.yield(.toolCall(toolCall)) }
                     if let citations = response.webCitations, !citations.isEmpty {
                         continuation.yield(.webCitations(citations))
@@ -675,8 +678,11 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 continuation.finish()
                                 return
                             }
-                            if let delta = Self.streamDelta(from: message.data) {
-                                continuation.yield(.delta(delta))
+                            for event in Self.streamEvents(
+                                from: message.data,
+                                toolCallArgumentsInFlight: !toolCallFragments.isEmpty
+                            ) {
+                                continuation.yield(event)
                             }
                             if let usage = Self.streamUsage(from: message.data) {
                                 continuation.yield(.usage(input: usage.input, output: usage.output))
@@ -713,8 +719,11 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.finish()
                             return
                         }
-                        if let delta = Self.streamDelta(from: message.data) {
-                            continuation.yield(.delta(delta))
+                        for event in Self.streamEvents(
+                            from: message.data,
+                            toolCallArgumentsInFlight: !toolCallFragments.isEmpty
+                        ) {
+                            continuation.yield(event)
                         }
                         if let usage = Self.streamUsage(from: message.data) {
                             continuation.yield(.usage(input: usage.input, output: usage.output))
@@ -783,7 +792,8 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// Responses API 流式：SSE 事件按 `data: {"type":...}` 解析，
     /// 映射到现有 `AIStreamEvent`：
-    /// - `response.output_text.delta` → `.delta`
+    /// - `response.reasoning*_text.delta` → `.reasoningDelta`
+    /// - `response.output_text.delta` → `.answerDelta`
     /// - `response.output_item.done`（function_call）→ `.toolCall`
     /// - `[DONE]` / `response.completed` / 流自然结束 → `.completed`
     /// - `response.failed` / `error` → 上抛
@@ -816,10 +826,17 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 continuation.yield(.toolCall(toolCall))
                                 continue
                             }
-                            let parsed = Self.parseResponsesStreamEvent(message.data)
+                            let parsed = Self.parseResponsesStreamEvent(
+                                message.data,
+                                allowTypelessAnswer: responseToolCallFragments.isEmpty
+                            )
                             switch parsed {
-                            case let .text(text):
-                                continuation.yield(.delta(text))
+                            case let .reasoning(text):
+                                continuation.yield(.reasoningDelta(text))
+                            case let .answer(text):
+                                continuation.yield(.answerDelta(text))
+                            case let .unknownDelta(text):
+                                continuation.yield(.unknownDelta(text))
                             case let .toolCall(call):
                                 continuation.yield(.toolCall(call))
                             case let .webCitations(citations):
@@ -859,10 +876,17 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.yield(.toolCall(toolCall))
                             continue
                         }
-                        let parsed = Self.parseResponsesStreamEvent(message.data)
+                        let parsed = Self.parseResponsesStreamEvent(
+                            message.data,
+                            allowTypelessAnswer: responseToolCallFragments.isEmpty
+                        )
                         switch parsed {
-                        case let .text(text):
-                            continuation.yield(.delta(text))
+                        case let .reasoning(text):
+                            continuation.yield(.reasoningDelta(text))
+                        case let .answer(text):
+                            continuation.yield(.answerDelta(text))
+                        case let .unknownDelta(text):
+                            continuation.yield(.unknownDelta(text))
                         case let .toolCall(call):
                             continuation.yield(.toolCall(call))
                         case let .webCitations(citations):
@@ -1641,15 +1665,24 @@ public struct OpenAICompatibleProvider: AIProvider {
     /// `content` 缺失或为 null 时返回空字符串而非报错（例如仅返回 tool_calls 的响应）。
     static func extractContent(from object: [String: Any]) -> String? {
         guard let choices = object["choices"] as? [[String: Any]], let first = choices.first else {
-            return nil
+            // A few OpenAI-compatible gateways return a minimal
+            // {"delta":"text"} object even for a non-stream request.
+            // Preserve it as answer text instead of reporting a successful
+            // empty response.
+            return plainText(from: object["delta"])
         }
         if let message = first["message"] as? [String: Any] {
-            // 只返回 content。思考链（reasoning_content）由 reasoningContent(from:) 单独提取，
-            // 绝不作为用户可见内容（避免把「思考链」展示出来）。
+            // `content` is the final answer. Thinking is extracted through a
+            // separate channel and never silently substituted here.
             return plainText(from: message["content"]) ?? ""
         }
         if let delta = first["delta"] as? [String: Any] {
             return plainText(from: delta["content"]) ?? ""
+        }
+        // Some Chat-compatible gateways simplify choices[0].delta to a plain
+        // string instead of an object. Treat that shape as answer text too.
+        if let deltaText = plainText(from: first["delta"]) {
+            return deltaText
         }
         if let legacy = first["text"] as? String {
             return legacy // 旧版 /v1/completions 风格
@@ -1657,13 +1690,18 @@ public struct OpenAICompatibleProvider: AIProvider {
         return nil
     }
 
-    /// 提取思考链（reasoning_content），仅内部保存，不展示给用户。
+    /// Extract provider reasoning without ever treating it as final content.
+    /// The coordinator may display it transiently for the active run only.
     static func reasoningContent(from object: [String: Any]) -> String? {
         guard let choices = object["choices"] as? [[String: Any]], let first = choices.first,
-              let message = first["message"] as? [String: Any],
-              let reasoning = message["reasoning_content"] as? String, !reasoning.isEmpty
+              let message = first["message"] as? [String: Any]
         else { return nil }
-        return reasoning
+        for key in ["reasoning_content", "reasoning", "thinking"] {
+            if let reasoning = plainText(from: message[key]), !reasoning.isEmpty {
+                return reasoning
+            }
+        }
+        return nil
     }
 
     /// 解析 `choices[0].message.tool_calls`（原生 function calling）。
@@ -1766,10 +1804,14 @@ public struct OpenAICompatibleProvider: AIProvider {
     // MARK: - Responses API (POST /v1/responses)
 
     /// Responses SSE 单事件解析结果。与现有 stream 事件模型对齐：
-    /// `.text` → `.delta`、`.toolCall` → `.toolCall`、`.done` → `.completed`、
+    /// `.reasoning` / `.answer` map to their explicit stream channels;
+    /// `.unknownDelta` carries compatibility text that could not be classified
+    /// by the codec. Tool calls and completion stay provider-neutral.
     /// `.failed` → 上抛错误、`.ignore` → 跳过。
     enum ResponsesStreamParseResult: Equatable, Sendable {
-        case text(String)
+        case reasoning(String)
+        case answer(String)
+        case unknownDelta(String)
         case toolCall(AIToolCall)
         case webCitations([AIWebCitation])
         case done
@@ -2023,18 +2065,24 @@ public struct OpenAICompatibleProvider: AIProvider {
     }
 
     /// 解析一条 Responses SSE 事件（`data: {"type":...}`）。
-    /// 覆盖 `response.output_text.delta` / `response.output_item.done` /
-    /// `response.completed` / `response.incomplete` / `response.failed` / `error`；
-    /// 无 `type` 但带 `delta` 字段的网关偏差也兜住。
-    static func parseResponsesStreamEvent(_ data: String) -> ResponsesStreamParseResult {
+    /// 覆盖已知正文、思考、工具与终结事件。兼容网关发出的无 type 裸
+    /// `delta` 在没有工具参数事件上下文时按正文处理，避免静默丢字。
+    static func parseResponsesStreamEvent(
+        _ data: String,
+        allowTypelessAnswer: Bool = true
+    ) -> ResponsesStreamParseResult {
         guard let payload = data.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
         else { return .ignore }
 
         switch object["type"] as? String {
+        case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+            if let delta = object["delta"] as? String, !delta.isEmpty { return .reasoning(delta) }
+            if let text = object["text"] as? String, !text.isEmpty { return .reasoning(text) }
+            return .ignore
         case "response.output_text.delta":
-            if let delta = object["delta"] as? String, !delta.isEmpty { return .text(delta) }
-            if let text = object["text"] as? String, !text.isEmpty { return .text(text) }
+            if let delta = object["delta"] as? String, !delta.isEmpty { return .answer(delta) }
+            if let text = object["text"] as? String, !text.isEmpty { return .answer(text) }
             return .ignore
         case "response.output_item.done":
             // OpenAI 原生 Responses API 的流式事件把「完整条目」放在 `item` 字段
@@ -2066,8 +2114,7 @@ public struct OpenAICompatibleProvider: AIProvider {
             return .failed(responseErrorMessage(from: object) ?? String(localized: "未知错误", bundle: .module))
         case let type? where type.hasPrefix("response."):
             // 其余所有语义事件都不是正文，统一忽略，避免掉进下面的默认兜底：
-            // - response.reasoning_text.delta / reasoning_summary_text.delta 字段也叫 delta，
-            //   是思考链，绝不能输出给用户；
+            // - reasoning 已在上方单独映射到瞬态思考通道；
             // - response.function_call_arguments.delta 字段也叫 delta，是工具参数的
             //   增量分片，若当正文输出会把参数 JSON 打在聊天里（工具调用仍会因
             //   output_item.done 解析失败而丢失）；
@@ -2075,8 +2122,15 @@ public struct OpenAICompatibleProvider: AIProvider {
             //   同样不是用户正文（正文已由 output_text.delta 增量覆盖）。
             return .ignore
         default:
-            // 容错：无 type 字段的网关偏差，看到 delta 就当作文本增量。
-            if let delta = object["delta"] as? String, !delta.isEmpty { return .text(delta) }
+            // A type-less gateway delta is the common OpenAI-compatible
+            // output shape. Typed function-call argument events are handled
+            // by the response.* branch above, so this fallback can preserve
+            // the text instead of silently dropping it.
+            if allowTypelessAnswer,
+               let delta = object["delta"] as? String,
+               !delta.isEmpty {
+                return .answer(delta)
+            }
             return .ignore
         }
     }
@@ -2130,7 +2184,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                 outputTokens = (usage["output_tokens"] as? Int) ?? (usage["completion_tokens"] as? Int) ?? outputTokens
             }
             switch parseResponsesStreamEvent(payload) {
-            case let .text(piece):
+            case let .answer(piece):
                 merged += piece
             default:
                 break
@@ -2227,14 +2281,50 @@ public struct OpenAICompatibleProvider: AIProvider {
         }
     }
 
-    private nonisolated static func streamDelta(from data: String) -> String? {
+    /// Projects explicitly named Chat Completions channels. Some
+    /// OpenAI-compatible gateways place reasoning in `reasoning_content`,
+    /// others use `reasoning` or `thinking`; all remain distinct from content.
+    /// For a minimal typeless {"delta":"..."} gateway event, preserve the
+    /// text as an answer unless it is visibly a tool-call fragment.
+    private nonisolated static func streamEvents(
+        from data: String,
+        toolCallArgumentsInFlight: Bool = false
+    ) -> [AIStreamEvent] {
         guard let payload = data.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              let choices = object["choices"] as? [[String: Any]],
-              let delta = choices.first?["delta"] as? [String: Any]
-        else {
-            return nil
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        else { return [] }
+        var events: [AIStreamEvent] = []
+        if let choices = object["choices"] as? [[String: Any]],
+           let delta = choices.first?["delta"] as? [String: Any] {
+            for key in ["reasoning_content", "reasoning", "thinking"] {
+                if let reasoning = plainText(from: delta[key]), !reasoning.isEmpty {
+                    events.append(.reasoningDelta(reasoning))
+                }
+            }
+            // Chat-compatible gateways sometimes use `output_text` or the
+            // legacy `text` key instead of OpenAI's `content`. They are still
+            // explicit answer channels and must not fall through to a silent
+            // drop just because the provider omitted its usual field name.
+            for key in ["content", "output_text", "text"] {
+                if let answer = plainText(from: delta[key]), !answer.isEmpty {
+                    events.append(.answerDelta(answer))
+                }
+            }
         }
-        return plainText(from: delta["content"])
+        if events.isEmpty, !toolCallArgumentsInFlight,
+           Self.streamToolCallFragments(from: data).isEmpty {
+            let bareDelta = plainText(from: object["delta"])
+                ?? (object["choices"] as? [[String: Any]]).flatMap { choices in
+                    choices.first.flatMap { choice in
+                        plainText(from: choice["delta"])
+                            ?? plainText(from: choice["output_text"])
+                            ?? plainText(from: choice["text"])
+                    }
+                }
+            if let bareDelta, !bareDelta.isEmpty {
+                events.append(.answerDelta(bareDelta))
+            }
+        }
+        return events
     }
 }

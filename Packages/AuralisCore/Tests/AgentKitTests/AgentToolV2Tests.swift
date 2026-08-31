@@ -77,7 +77,7 @@ private final class IndexScriptedProvider: AIProvider, @unchecked Sendable {
     func stream(_ request: AICompletionRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.started(model: request.model))
-            continuation.yield(.delta(batches.isEmpty ? "已处理完成" : batches.removeFirst()))
+            continuation.yield(.answerDelta(batches.isEmpty ? "已处理完成" : batches.removeFirst()))
             continuation.yield(.completed)
             continuation.finish()
         }
@@ -115,7 +115,7 @@ private final class NativeIndexProvider: AIProvider, @unchecked Sendable {
                 let call = calls.removeFirst()
                 continuation.yield(.toolCall(call))
             } else {
-                continuation.yield(.delta("索引已完成。"))
+                continuation.yield(.answerDelta("索引已完成。"))
             }
             continuation.yield(.completed)
             continuation.finish()
@@ -168,7 +168,7 @@ private final class NativeJSONIndexProvider: AIProvider, @unchecked Sendable {
         let response = nextResponse()
         return AsyncThrowingStream { continuation in
             continuation.yield(.started(model: request.model))
-            continuation.yield(.delta(response))
+            continuation.yield(.answerDelta(response))
             continuation.yield(.completed)
             continuation.finish()
         }
@@ -232,12 +232,12 @@ private final class TransientNativeIndexProvider: AIProvider, @unchecked Sendabl
                 continuation.finish(throwing: error)
             case let .text(text):
                 continuation.yield(.started(model: request.model))
-                continuation.yield(.delta(text))
+                continuation.yield(.answerDelta(text))
                 continuation.yield(.completed)
                 continuation.finish()
             case .final:
                 continuation.yield(.started(model: request.model))
-                continuation.yield(.delta("索引已完成。"))
+                continuation.yield(.answerDelta("索引已完成。"))
                 continuation.yield(.completed)
                 continuation.finish()
             }
@@ -676,8 +676,9 @@ func v2FavoriteAndRatingPrivacyGate() async throws {
     #expect(trustedMutation.success)
     #expect(await trustedBridge.likedTracks.contains(GlobalID(serverID: serverID, remoteID: "private-track")))
 
-    // The canonical Runtime boundary still requires exact mutation
-    // authorization; the disclosure switch is not that authorization.
+    // The canonical Runtime boundary must not require a second exact-operation
+    // grant for an ordinary reversible local mutation. Disclosure controls
+    // what is sent to a provider, not whether the local executor can run.
     let mutationCall = ToolCall(
         name: "favorite_set",
         arguments: ["targetType": "song", "targetID": "s:private-track", "value": "true"]
@@ -691,7 +692,7 @@ func v2FavoriteAndRatingPrivacyGate() async throws {
         privacyPermissions: AIPrivacyPermissions(),
         executionLease: ToolExecutionLease(runID: UUID(), sessionID: UUID(), generation: 1)
     )
-    #expect(!missingAuthorization.success)
+    #expect(missingAuthorization.success)
 
     let authorizedBridge = MockAgentBridge(activeServerID: serverID)
     let authorization = SideEffectAuthorizationContext(originalUserRequest: "收藏这首歌")
@@ -741,10 +742,11 @@ func v2LyricsPrivacyGate() async throws {
     #expect(visible.summary.contains("绝密歌词正文"))
 }
 
-@Test("历史读取与个人筛选在对应隐私权限关闭时不执行")
-func v2PersonalStateToolsRequireDisclosurePermission() async throws {
+@Test("隐私关闭时历史读取与个人筛选仍在本地执行")
+func v2PersonalStateToolsRemainLocallyExecutable() async throws {
     let store = try makeV2Store()
     try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "1", title: "Private Song")])
+    try await store.setFavorite(GlobalID(serverID: "s", remoteID: "1"), value: true)
     let bridge = MockAgentBridge(activeServerID: "s")
 
     var permissions = AIPrivacyPermissions()
@@ -758,8 +760,7 @@ func v2PersonalStateToolsRequireDisclosurePermission() async throws {
         systemService: nil,
         privacyPermissions: permissions
     )
-    #expect(!recent.success)
-    #expect(recent.summary.contains("播放历史已按隐私设置隐藏"))
+    #expect(recent.success)
 
     let favoriteFilter = await AgentToolkit.executeV2(
         ToolCall(name: "library_select_tracks", arguments: ["favoritesOnly": "true"]),
@@ -769,8 +770,7 @@ func v2PersonalStateToolsRequireDisclosurePermission() async throws {
         systemService: nil,
         privacyPermissions: permissions
     )
-    #expect(!favoriteFilter.success)
-    #expect(favoriteFilter.summary.contains("收藏与评分已按隐私设置隐藏"))
+    #expect(favoriteFilter.success)
 
     let historySort = await AgentToolkit.executeV2(
         ToolCall(name: "library_select_tracks", arguments: ["sort": "recentlyPlayed"]),
@@ -780,8 +780,7 @@ func v2PersonalStateToolsRequireDisclosurePermission() async throws {
         systemService: nil,
         privacyPermissions: permissions
     )
-    #expect(!historySort.success)
-    #expect(historySort.summary.contains("播放历史已按隐私设置隐藏"))
+    #expect(historySort.success)
 
     try await store.setDisliked(GlobalID(serverID: "s", remoteID: "1"), value: true)
     let personalStateHidden = await AgentToolkit.executeV2(
@@ -809,13 +808,13 @@ func v2PersonalStateToolsRequireDisclosurePermission() async throws {
         systemService: nil,
         privacyPermissions: metadataPermissions
     )
-    #expect(!hiddenSummary.success)
-    #expect(hiddenSummary.summary.contains("歌曲元数据已按隐私设置隐藏"))
+    #expect(hiddenSummary.success)
 }
 
-@Test("元数据关闭时 queue_get 与 result_present_tracks 由 descriptor 统一拒绝")
-func v2MetadataDescriptorGuardsQueueAndPresentation() async throws {
+@Test("元数据关闭时 queue_get 与 result_present_tracks 仍本地执行")
+func v2MetadataDoesNotBlockQueueAndPresentation() async throws {
     let store = try makeV2Store()
+    try await seedV2(store, [makeV2Track(serverID: "s", remoteID: "t1", title: "Queue Track")])
     let bridge = MockAgentBridge(activeServerID: "s")
     var permissions = AIPrivacyPermissions()
     permissions.allowsMetadata = false
@@ -830,8 +829,7 @@ func v2MetadataDescriptorGuardsQueueAndPresentation() async throws {
         systemService: nil,
         privacyPermissions: permissions
     )
-    #expect(!queue.success)
-    #expect(queue.summary.contains("歌曲元数据已按隐私设置隐藏"))
+    #expect(queue.success)
 
     let presentationDescriptor = try #require(AgentToolRegistry.descriptor(for: "result_present_tracks"))
     #expect(presentationDescriptor.requiredDisclosureCategories.contains(.metadata))
@@ -843,8 +841,7 @@ func v2MetadataDescriptorGuardsQueueAndPresentation() async throws {
         systemService: nil,
         privacyPermissions: permissions
     )
-    #expect(!presentation.success)
-    #expect(presentation.summary.contains("歌曲元数据已按隐私设置隐藏"))
+    #expect(presentation.success)
 }
 
 @Test("v2 server_test_connection reports real result")
@@ -906,7 +903,7 @@ func v2Diagnostics() async throws {
 
 @Suite("队列 v2 工具")
 struct QueueV2Tests {
-    @Test("queue_replace / queue_clear 均直接执行（无确认要求）")
+    @Test("queue_replace 直接执行，queue_clear 由高风险策略标记确认")
     func confirmationAndExecution() async throws {
         let store = try makeV2Store()
         let tracks = [
@@ -916,10 +913,12 @@ struct QueueV2Tests {
         try await seedV2(store, tracks)
         let bridge = MockAgentBridge(activeServerID: "s")
 
-        // permissive direct execution：队列工具不再要求确认，且被视为可逆操作。
+        // 普通队列变更可直接执行；清空整个队列属于高影响操作，由
+        // ToolLoop 在进入执行前展示确认。底层 registry 执行器本身只负责
+        // 执行已经通过上层确认的调用。
         #expect(AgentToolRegistry.descriptor(for: "queue_replace")?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
-        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.confirmationPolicy == Optional(ToolConfirmationPolicy.none))
-        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.permission == .reversible)
+        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.confirmationPolicy.requiresExplicitUserApproval == true)
+        #expect(AgentToolRegistry.descriptor(for: "queue_clear")?.permission == .destructive)
 
         let clear = await AgentToolkit.executeV2(
             ToolCall(name: "queue_clear", arguments: [:]),
@@ -1119,8 +1118,8 @@ struct StatsToolTests {
             systemService: system,
             privacyPermissions: metadataHidden
         )
-        #expect(!hidden.success)
-        #expect(hidden.summary.contains("歌曲元数据已按隐私设置隐藏"))
+        #expect(hidden.success)
+        #expect(hidden.summary.contains("最常听"))
     }
 
     @Test("stats_get_format_distribution 走系统服务")

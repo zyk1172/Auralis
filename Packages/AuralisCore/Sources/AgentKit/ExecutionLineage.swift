@@ -1,7 +1,7 @@
 import Foundation
 
 /// A conversation may keep all of its semantic history, while executable
-/// authority belongs to exactly one user-request lineage.  This value is
+/// context belongs to exactly one user-request lineage. This value is
 /// created at the conversation/task boundary and is never derived from model
 /// output, tool output, web content, or a stale completion state.
 public struct ExecutionLineage: Sendable, Hashable {
@@ -54,7 +54,7 @@ public struct ExecutionLineage: Sendable, Hashable {
 
     /// Bind a persisted task to a fresh run generation.  A persisted goal is
     /// trusted task state; the user's short resume phrase is not reinterpreted
-    /// as a new authorization source.
+    /// as a new operation whitelist or permission grant.
     public static func resumedTask(
         goal: String,
         taskID: UUID,

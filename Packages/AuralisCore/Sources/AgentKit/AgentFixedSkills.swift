@@ -9,8 +9,8 @@ import LocalCatalog
 // - 稳定、多步骤、mutation 顺序确定的组合任务交给 Skill，LLM 只负责语义选歌；
 // - Skill-owned mutation 对模型隐藏（selectedTools 移除 + privateToolNames），
 //   由 Skill 内部通过 forcedSkillCall 固定调用 canonical ToolRuntime 工具，
-//   继续获得 authorization / lease / validation / confirmation / metrics；
-// - Skill 不扩权：requiredOperations 必须 ⊆ 当前 allowedOperations 才激活；
+//   继续获得 lease / validation / confirmation / metrics；
+// - Skill 由语义触发，requiredOperations 仅作为能力/诊断元数据，不是执行 gate；
 // - completion 只基于真实 canonical tool result + state verification，
 //   模型正文永远是 provisional。
 
@@ -84,7 +84,7 @@ public struct BuiltInQueueReplacePlaybackSkill: AgentStatefulSkill {
     public let instructions = """
         当前任务由固定 Skill「替换队列并播放」编排：你只负责在音乐库中找到用户想要的歌曲并调用 \
         result_present_tracks(trackIDs=[最终歌曲]) 提交最终候选。不要自己调用 queue_replace / \
-        queue_clear / queue_append / queue_play_next 等队列写操作——队列替换与（如获授权）播放由系统 \
+        queue_clear / queue_append / queue_play_next 等队列写操作——队列替换与（如请求）播放由系统 \
         确定性执行并验证。
         """
     public var privateToolNames: Set<String> { QueueReplacePlaybackSkill.ownedMutationTools }
@@ -162,13 +162,22 @@ final class QueueReplacePlaybackSkillRuntime: AgentStatefulSkillRuntime, @unchec
         // 用户请求中的目标数量（“十首 → 10”）在激活时编译进来；模型即使提交超量
         // 候选，Skill 也只取目标数量。
         targetCount = activation?.inferredTargetCount
+        if let activation {
+            allowsPlayback = activation.semantics.requestedOperations.contains(.playbackPlay)
+        } else {
+            // Compatibility callers that construct the runtime without an
+            // activation context retain the historical combined behavior.
+            allowsPlayback = true
+        }
     }
 
     public func configure(maxOutputTokens: Int) {}
 
     public func configure(authorization: SideEffectAuthorizationContext) {
-        // 只消费既有授权：Skill 是否播放完全由用户已授权的 operations 决定。
-        allowsPlayback = authorization.allowedOperations.contains(.playbackPlay)
+        // The operation set is telemetry only. Playback follows the semantic
+        // request compiled into the activation context, not an exact
+        // authorization match.
+        _ = authorization
     }
 
     public func nextStep() -> AgentSkillStep {
@@ -364,7 +373,8 @@ public struct BuiltInPlaylistBuildSkill: AgentStatefulSkill {
     ) -> Bool {
         _ = userText
         _ = initialTaskState
-        // 只有同时授权 create + add 才进入完整 Skill；仅 create 走单步 canonical 执行。
+        // 只有同时请求 create + add 才进入完整 Skill；仅 create 走单步
+        // canonical 执行。这里是组合流程路由，不是本地工具执行许可。
         return semantics.requestedOperations.contains(.playlistCreate)
             && semantics.requestedOperations.contains(.playlistAdd)
     }

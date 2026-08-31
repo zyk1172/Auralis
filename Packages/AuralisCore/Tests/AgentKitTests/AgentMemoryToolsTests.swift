@@ -212,6 +212,41 @@ struct AgentMemoryToolsTests {
         )
         #expect(result.success)
         #expect(service.memories.count == 1)
+
+        // Reversible local writes do not require a second exact-operation
+        // grant. This is the regression for the former Runtime
+        // The old semantic authorization failure must not recur.
+        let runID = UUID()
+        let runtimeResult = await ToolRuntime.execute(
+            ToolCall(name: "memory_save", arguments: [
+                "key": .string("偏好"),
+                "value": .string("喜欢周杰伦"),
+            ]),
+            bridge: BridgeStub(),
+            catalog: catalog,
+            serverID: nil,
+            systemService: service,
+            executionLease: ToolExecutionLease(runID: runID, sessionID: runID, generation: 0)
+        )
+        #expect(runtimeResult.success)
+        #expect(service.memories.contains { $0.key == "偏好" && $0.value == "喜欢周杰伦" })
+    }
+
+    @Test("自然语言偏好请求都能发现 memory_save")
+    func preferencePhrasesSelectMemorySave() {
+        let requests = [
+            "记住我喜欢周杰伦",
+            "以后记住，我比较喜欢女声",
+            "帮我记一下，我不喜欢古典音乐",
+            "我一般晚上听歌",
+            "把这个偏好记住",
+        ]
+        for text in requests {
+            let semantics = AgentRequestSemantics.analyze(text)
+            #expect(semantics.requestedOperations.contains(.memorySave), "「\(text)」应编译为 memorySave")
+            let selected = ToolSelector.select(for: text, all: AgentToolRegistry.all)
+            #expect(selected.contains { $0.name == "memory_save" }, "「\(text)」应发现 memory_save")
+        }
     }
 }
 

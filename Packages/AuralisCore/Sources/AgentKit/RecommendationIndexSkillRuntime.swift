@@ -2147,6 +2147,8 @@ public enum RecommendationIndexSkillRuntime {
         switch payload {
         case let .text(value), let .streaming(value):
             projection = value
+        case .reasoning:
+            return nil
         case let .trackCards(cards):
             projection = cards.prefix(20).map { "《\($0.title)》-\($0.artistName)" }.joined(separator: "、")
         case let .albumCards(cards):

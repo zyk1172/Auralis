@@ -67,7 +67,7 @@ private final class ScriptedAIProvider: AIProvider, @unchecked Sendable {
                 continuation.yield(.started(model: request.model))
                 let chunks = Self.splitForStreaming(content)
                 for chunk in chunks {
-                    continuation.yield(.delta(chunk))
+                    continuation.yield(.answerDelta(chunk))
                 }
                 continuation.yield(.completed)
                 continuation.finish()

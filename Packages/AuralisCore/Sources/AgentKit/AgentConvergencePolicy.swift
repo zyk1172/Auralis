@@ -9,7 +9,7 @@ import Foundation
 /// 收敛按「行为模式」触发，而不是把不同参数的合法批量读取当作死循环：
 /// - 完全相同 tool+参数：最多真正执行/尝试有限次；
 /// - tool_search 是能力发现，不是主链路：单任务有次数上限；
-/// - 连续授权拒绝、连续 malformed、连续无新证据都是明确的失败信号；
+/// - 连续 malformed、连续无新证据都是明确的失败信号；
 /// - 模型轮次 / 总工具调用是兜底看门狗，防止任何异常路径无限循环。
 public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
     /// 普通任务模型轮次上限。原实现默认 1000；交互式普通聊天应 fail-fast。
@@ -22,8 +22,6 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
     public var maxNoProgressRounds: Int
     /// 单任务 tool_search 调用上限。
     public var maxToolSearches: Int
-    /// 连续授权拒绝上限（同一请求内 Runtime 判定 denied）。
-    public var maxConsecutiveAuthorizationDenials: Int
     /// 连续 malformed 参数上限。
     public var maxConsecutiveMalformedCalls: Int
     /// 连续搜索工具无新证据的上限（现有工作集提示的上限之上再加硬停止）。
@@ -35,7 +33,6 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         maxIdenticalToolCalls: Int = 2,
         maxNoProgressRounds: Int = 3,
         maxToolSearches: Int = 3,
-        maxConsecutiveAuthorizationDenials: Int = 2,
         maxConsecutiveMalformedCalls: Int = 3,
         maxSameToolNoNewEvidence: Int = 3
     ) {
@@ -44,7 +41,6 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         self.maxIdenticalToolCalls = maxIdenticalToolCalls
         self.maxNoProgressRounds = maxNoProgressRounds
         self.maxToolSearches = maxToolSearches
-        self.maxConsecutiveAuthorizationDenials = maxConsecutiveAuthorizationDenials
         self.maxConsecutiveMalformedCalls = maxConsecutiveMalformedCalls
         self.maxSameToolNoNewEvidence = maxSameToolNoNewEvidence
     }
@@ -59,13 +55,12 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         maxIdenticalToolCalls: 2,
         maxNoProgressRounds: 3,
         maxToolSearches: 3,
-        maxConsecutiveAuthorizationDenials: 2,
         maxConsecutiveMalformedCalls: 3,
         maxSameToolNoNewEvidence: 3
     )
 
     /// Legacy `AgentRunner` 兼容面保留的历史契约：不设累计轮次/调用上限，
-    /// 只保留防呆模式（相同参数、搜索无新证据、授权拒绝、malformed）。
+    /// 只保留防呆模式（相同参数、搜索无新证据、malformed）。
     /// 生产路径（ConversationEngine）不使用此预算。
     public static let legacyPermissive = AgentConvergencePolicy(
         maxModelRounds: 1_000,
@@ -73,7 +68,6 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         maxIdenticalToolCalls: Int.max,
         maxNoProgressRounds: .max,
         maxToolSearches: 8,
-        maxConsecutiveAuthorizationDenials: 8,
         maxConsecutiveMalformedCalls: 8,
         maxSameToolNoNewEvidence: .max
     )
@@ -86,7 +80,6 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         maxIdenticalToolCalls: 8,
         maxNoProgressRounds: 8,
         maxToolSearches: 8,
-        maxConsecutiveAuthorizationDenials: 8,
         maxConsecutiveMalformedCalls: 8,
         maxSameToolNoNewEvidence: 8
     )
@@ -99,7 +92,6 @@ public enum AgentConvergenceStopReason: String, Sendable, Equatable, Codable {
     case identicalToolCall
     case noProgress
     case toolSearchExhausted
-    case repeatedAuthorizationDenial
     case repeatedMalformedCall
     case noNewEvidence
     case unsupportedCapability
@@ -115,8 +107,6 @@ public enum AgentConvergenceStopReason: String, Sendable, Equatable, Codable {
             return "已经反复尝试但没有取得新的进展，本次停止继续。"
         case .toolSearchExhausted:
             return "当前工具能力不足以完成这个操作，已停止继续搜索。"
-        case .repeatedAuthorizationDenial:
-            return "反复尝试了当前请求未获授权的操作，已停止；如需该操作请重新明确说明。"
         case .repeatedMalformedCall:
             return "模型连续返回了无法解析的工具调用，已停止本次交互。"
         case .noNewEvidence:
@@ -135,7 +125,6 @@ public struct AgentConvergenceTracker: Sendable {
     public private(set) var identicalToolCallStreak = 0
     public private(set) var noProgressStreak = 0
     public private(set) var toolSearchCount = 0
-    public private(set) var consecutiveAuthorizationDenials = 0
     public private(set) var consecutiveMalformedCalls = 0
     public private(set) var lastSignature: String?
     /// 每个搜索工具独立的“连续无新证据”streak（不同工具互不污染）。
@@ -197,14 +186,6 @@ public struct AgentConvergenceTracker: Sendable {
         toolSearchCount += 1
     }
 
-    public mutating func recordAuthorizationDenial() {
-        consecutiveAuthorizationDenials += 1
-    }
-
-    public mutating func recordAuthorizationAllowance() {
-        consecutiveAuthorizationDenials = 0
-    }
-
     public mutating func recordMalformedCall() {
         consecutiveMalformedCalls += 1
     }
@@ -232,9 +213,6 @@ public struct AgentConvergenceTracker: Sendable {
         if identicalToolCallStreak >= policy.maxIdenticalToolCalls { return .identicalToolCall }
         if noProgressStreak >= policy.maxNoProgressRounds { return .noProgress }
         if toolSearchCount >= policy.maxToolSearches { return .toolSearchExhausted }
-        if consecutiveAuthorizationDenials >= policy.maxConsecutiveAuthorizationDenials {
-            return .repeatedAuthorizationDenial
-        }
         if consecutiveMalformedCalls >= policy.maxConsecutiveMalformedCalls {
             return .repeatedMalformedCall
         }

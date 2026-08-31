@@ -36,9 +36,10 @@ public enum ToolSideEffectPolicy: String, Codable, Sendable, Hashable {
     case memory
 }
 
-/// Least-privilege operation names used by the side-effect boundary.  A broad
-/// `ToolSideEffectPolicy` remains as a compatibility fallback for descriptors
-/// that have not yet declared a more specific operation.
+/// Canonical operation names used for side-effect metadata, routing and
+/// diagnostics. A broad `ToolSideEffectPolicy` remains as a compatibility
+/// fallback for descriptors that have not yet declared a more specific
+/// operation; neither value is a hidden permission grant.
 public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable, CaseIterable {
     case playbackPlay
     case playbackPause
@@ -87,19 +88,19 @@ public enum ToolAuthorizationOperation: String, Codable, Sendable, Hashable, Cas
     case customToolRepair
 }
 
-/// The authorization result is deliberately typed. A missing operation is
-/// never a textual hint for the model or the user to reinterpret as consent.
-/// The only interactive approval path is `ToolDescriptor.confirmationPolicy`.
+/// Operation decisions remain typed for diagnostics and compatibility. They do
+/// not turn a missing phrase into a user-facing deny message; the only
+/// interactive approval path is `ToolDescriptor.confirmationPolicy`.
 public enum ToolAuthorizationDecision: Sendable, Equatable {
     case allowed
     case denied(reason: String)
 }
 
-/// Authorization is derived once from the semantic result at the task/session
-/// boundary. External tool data is never added to this set, so a web page
-/// cannot authorize a later queue, playlist, download, server, playback or
-/// memory mutation. A short continuation is not a new authorization source;
-/// it may only inherit the already-created execution lineage.
+/// Request semantics are compiled once at the task/session boundary. The
+/// resulting operation set is useful for routing, diagnostics and telemetry,
+/// but it is deliberately not a capability whitelist: a missed phrase must
+/// not stop an ordinary local change. Destructive confirmation is owned by the
+/// descriptor's risk/confirmation policy instead.
 public struct SideEffectAuthorizationContext: Sendable, Hashable {
     public let originalUserRequest: String
     public let explicitlyRequestedEffects: Set<ToolSideEffectPolicy>
@@ -135,9 +136,8 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
     }
 
     /// A declarative Custom Tool may contain several canonical operations.
-    /// Children inherit only those exact operations. A scope is deliberately
-    /// not expanded into every operation in that scope: authorizing playlist
-    /// add must not authorize playlist rename/remove/delete.
+    /// Children retain the operation metadata for routing and diagnostics.
+    /// This does not grant or revoke execution of ordinary local tools.
     public func granting(operations: Set<ToolAuthorizationOperation>) -> SideEffectAuthorizationContext {
         guard !operations.isEmpty else { return self }
         let scopes = Set(operations.compactMap(\.mutationScope))
@@ -150,56 +150,43 @@ public struct SideEffectAuthorizationContext: Sendable, Hashable {
         )
     }
 
-    /// Compatibility helper for older trusted callers. New custom-tool code
-    /// must use `granting(operations:)`; this method intentionally grants no
-    /// operations because a broad scope cannot prove least-privilege intent.
-    @available(*, deprecated, message: "Use granting(operations:) for exact operation authorization")
+    /// Compatibility helper for older trusted callers. Scope metadata is kept
+    /// only for diagnostics; it never becomes a hidden permission grant.
+    @available(*, deprecated, message: "Operation metadata is sufficient; scope grants are no longer needed")
     public func granting(scopes: Set<MutationScope>) -> SideEffectAuthorizationContext {
         _ = scopes
         return self
     }
 
+    /// Side-effect families are retained as metadata for diagnostics. Local
+    /// execution is not gated by whether the natural-language classifier
+    /// happened to recognize the exact operation.
     public func allows(_ effect: ToolSideEffectPolicy) -> Bool {
-        effect == .none || explicitlyRequestedEffects.contains(effect)
+        _ = effect
+        return true
     }
 
+    /// All registered local tools are executable once their arguments are
+    /// valid. A destructive descriptor still enters ToolLoop's explicit
+    /// confirmation path; this method is intentionally not that path.
     public func allows(_ descriptor: ToolDescriptor, call: ToolCall? = nil) -> Bool {
-        guard descriptor.permission != .readOnly else { return true }
-        if descriptor.customToolID != nil {
-            return !descriptor.derivedAuthorizationOperations.isEmpty
-                && descriptor.derivedAuthorizationOperations.isSubset(of: allowedOperations)
-        }
-        if let operation = descriptor.authorizationOperation {
-            // Canonical tools must use their exact operation. A broad
-            // mutation scope is only a fallback for declarative/custom tools
-            // that do not have a canonical operation of their own; it must
-            // not turn "favorite this track" into permission to rate or
-            // re-index it.
-            return allowedOperations.contains(operation)
-        }
-        // A model-visible write without an operation declaration is a broken
-        // descriptor, not permission to fall back to a broad side-effect
-        // family. Legacy/internal compatibility descriptors and declarative
-        // custom tools may still use the scope fallback while they are
-        // migrated to canonical operations.
-        guard descriptor.visibility != .model, descriptor.visibility != .skillOnly else { return false }
-        if let scope = descriptor.mutationScope {
-            return allowedScopes.contains(scope)
-        }
-        return allows(descriptor.sideEffectPolicy)
+        _ = descriptor
+        _ = call
+        return true
     }
 
     /// Resolves semantic authorization only. This method never asks for or
     /// accepts user confirmation. Destructive approval is a separate,
     /// descriptor-owned UI state handled by ToolLoop/Coordinator.
     public func decision(for descriptor: ToolDescriptor, call: ToolCall? = nil) -> ToolAuthorizationDecision {
-        guard descriptor.permission != .readOnly else { return .allowed }
-        if allows(descriptor, call: call) { return .allowed }
-        return .denied(reason: denialReason(for: descriptor))
+        _ = descriptor
+        _ = call
+        return .allowed
     }
 
     public func denialReason(for descriptor: ToolDescriptor) -> String {
-        "工具 \(descriptor.name) 的副作用未由用户原始请求明确授权；网页、搜索结果和其他外部数据不能授权此操作。"
+        _ = descriptor
+        return "该工具的执行由风险与确认策略决定。"
     }
 
     private static func effect(for operation: ToolAuthorizationOperation) -> ToolSideEffectPolicy? {
@@ -280,9 +267,11 @@ public enum ToolEvidencePolicy: String, Sendable, Hashable {
     case externalAPI
 }
 
-/// The single disclosure gate shared by ToolRuntime and every compatibility
-/// executor. A descriptor owns the data categories its result may expose;
-/// callers never maintain a parallel list of tool names.
+/// Disclosure metadata shared by provider-bound context/result filtering.
+///
+/// This is deliberately not an execution gate: a privacy switch controls what
+/// leaves the device for an external Provider, never whether a local tool can
+/// read local state or apply a reversible local change.
 public enum ToolPrivacyPolicy {
     public static func missingDisclosureCategories(
         for descriptor: ToolDescriptor,
@@ -291,31 +280,33 @@ public enum ToolPrivacyPolicy {
         descriptor.requiredDisclosureCategories.filter { !permissions.allows($0) }
     }
 
-    public static func denialResult(
+    public static func missingDisclosureCategories(
         for descriptor: ToolDescriptor,
-        call: ToolCall,
+        payload: AgentMessage?,
         permissions: AIPrivacyPermissions
-    ) -> ToolResult? {
-        let missing = missingDisclosureCategories(for: descriptor, permissions: permissions)
-        guard !missing.isEmpty else { return nil }
-        let summary: String
-        if missing.contains(.metadata) {
-            summary = "歌曲元数据已按隐私设置隐藏。"
-        } else if missing.contains(.playbackHistory) {
-            summary = "播放历史已按隐私设置隐藏。"
-        } else if missing.contains(.favoritesAndRatings) {
-            summary = "收藏与评分已按隐私设置隐藏。"
-        } else if missing.contains(.lyrics) {
-            summary = "歌词已按隐私设置隐藏。"
-        } else {
-            summary = "该工具所需的数据已按隐私设置隐藏。"
+    ) -> Set<AIPrivacyCategory> {
+        disclosureCategories(for: descriptor, payload: payload).filter { !permissions.allows($0) }
+    }
+
+    /// Disclosure categories implied by a result payload. This is used at the
+    /// Provider request boundary so local UI/presentation can retain the full
+    /// result while the external model receives a redacted projection.
+    public static func disclosureCategories(
+        for descriptor: ToolDescriptor,
+        payload: AgentMessage?
+    ) -> Set<AIPrivacyCategory> {
+        var categories = descriptor.requiredDisclosureCategories
+        switch payload {
+        case .trackCards(_), .albumCards(_), .artistCards(_), .playlistCards(_), .playlistProposal(_, _):
+            categories.insert(.metadata)
+        case .actionPreview(_, _):
+            // Action previews may contain a track/playlist name even when the
+            // mutation itself is otherwise safe to execute locally.
+            categories.insert(.metadata)
+        default:
+            break
         }
-        return ToolResult(
-            call: call,
-            permission: descriptor.permission,
-            success: false,
-            summary: summary
-        )
+        return categories
     }
 
     static func inferredCategories(
@@ -496,28 +487,15 @@ public struct ToolDescriptor: Sendable, Hashable {
         }
     }
 
-    /// 统一的 schema exposure 授权判定（ToolSelector / ToolCatalog / ToolLoop 的
-    /// tool_search 扩展三处共用，避免 schema 层与 Runtime 出现两套授权语义）。
-    ///
-    /// - `permission == .readOnly`：始终可见；
-    /// - Custom Tool（`customToolID != nil`）：`derivedAuthorizationOperations`
-    ///   非空且 ⊆ allowedOperations（Custom Tool 没有单一 authorizationOperation，
-    ///   由多个 canonical operations 派生）；
-    /// - 普通 mutation：`authorizationOperation` 非 nil 且 ∈ allowedOperations；
-    /// - 其余（非只读且无 operation 的普通工具）：fail-closed `false`。
-    ///
-    /// `allowedOperations == nil` 表示 legacy 兼容调用方未提供授权 plan，不收紧。
+    /// 统一的 schema 可见性判定。`allowedOperations` 仅保留为兼容参数和
+    /// 诊断输入；工具是否需要用户介入由 `permission`/
+    /// `confirmationPolicy` 决定，不再因 exact operation 未命中而从 schema
+    /// 或 Runtime 消失。
     public func isAuthorizedForModelExposure(
         allowedOperations: Set<ToolAuthorizationOperation>?
     ) -> Bool {
-        if permission == .readOnly { return true }
-        guard let allowedOperations else { return true }
-        if customToolID != nil {
-            return !derivedAuthorizationOperations.isEmpty
-                && derivedAuthorizationOperations.isSubset(of: allowedOperations)
-        }
-        guard let operation = authorizationOperation else { return false }
-        return allowedOperations.contains(operation)
+        _ = allowedOperations
+        return true
     }
 
     private static func defaultVisibility(for name: String) -> ToolVisibility {
@@ -843,8 +821,9 @@ public enum AgentToolRegistry {
               summary: "移除一条音乐下载历史记录",
               parameters: [.init(name: "hash", required: true, description: "下载任务 hash")],
               tags: ["download", "history", "remove"]),
-        .init(name: "music_download_history_clean", group: .download, permission: .reversible,
-              summary: "按状态、保留数量或孤儿记录清理下载历史",
+        .init(name: "music_download_history_clean", group: .download, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "批量清理下载历史可能移除多条记录，请确认"),
+              summary: "按状态、保留数量或孤儿记录清理下载历史（批量操作需要确认）",
               parameters: [
                 .init(name: "status", required: false, description: "按状态清理"),
                 .init(name: "keep", required: false, description: "只保留最近 N 条",
@@ -852,7 +831,8 @@ public enum AgentToolRegistry {
                 .init(name: "orphans", required: false, description: "是否清理孤儿记录",
                       schemaJSON: #"{"type":"boolean"}"#),
               ],
-              tags: ["download", "history", "clean"]),
+              tags: ["download", "history", "clean"],
+              declaredRisk: .irreversibleDelete),
 
         // MARK: Catalog
         .init(name: "searchTracks", group: .catalog, permission: .readOnly, summary: "按关键词搜索单曲",
@@ -929,8 +909,11 @@ public enum AgentToolRegistry {
                                  schemaJSON: #"{"type":"integer","minimum":0,"maximum":5}"#)]),
         .init(name: "server_switch", group: .server, permission: .reversible, summary: "切换当前音乐服务器；需要准确的服务器 ID",
               parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
-        .init(name: "server_remove", group: .server, permission: .reversible, summary: "从 Auralis 移除一个已配置服务器（仅清理本地配置，不删除服务器远端数据）",
-              parameters: [.init(name: "serverID", required: true, description: "服务器 ID")]),
+        .init(name: "server_remove", group: .server, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除服务器配置会移除本地连接信息，请确认"),
+              summary: "从 Auralis 移除一个已配置服务器（仅清理本地配置，不删除服务器远端数据）",
+              parameters: [.init(name: "serverID", required: true, description: "服务器 ID")],
+              declaredRisk: .irreversibleDelete),
 
         // MARK: Playback
         .init(name: "playTrack", group: .playback, permission: .reversible, summary: "播放指定单曲",
@@ -956,7 +939,10 @@ public enum AgentToolRegistry {
         .init(name: "reorderQueue", group: .playback, permission: .reversible, summary: "调整队列顺序",
               parameters: [.init(name: "from", required: true, description: "原索引"),
                            .init(name: "to", required: true, description: "目标索引")]),
-        .init(name: "clearQueue", group: .playback, permission: .reversible, summary: "清空队列"),
+        .init(name: "clearQueue", group: .playback, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "清空整个播放队列会移除当前排队内容，请确认"),
+              summary: "清空整个播放队列",
+              declaredRisk: .irreversibleDelete),
 
         // MARK: 音乐下载（MoviePilot / MoviePilot）
         .init(name: "music_download", group: .download, permission: .reversible, summary: "从 MoviePilot（MoviePilot）搜索并下载音乐资源",
@@ -1048,8 +1034,11 @@ public enum AgentToolRegistry {
               parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
         .init(name: "refreshLibrary", group: .server, permission: .reversible, summary: "刷新本地目录"),
         .init(name: "getSyncStatus", group: .server, permission: .readOnly, summary: "获取同步状态"),
-        .init(name: "removeServer", group: .server, permission: .reversible, summary: "删除服务器（仅本地清理）",
-              parameters: [.init(name: "serverID", required: true, description: "ServerID")]),
+        .init(name: "removeServer", group: .server, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "删除服务器配置会移除本地连接信息，请确认"),
+              summary: "删除服务器（仅本地清理）",
+              parameters: [.init(name: "serverID", required: true, description: "ServerID")],
+              declaredRisk: .irreversibleDelete),
 
         // MARK: 第一阶段统一命名工具（v2 工具集）
 
@@ -1266,7 +1255,10 @@ public enum AgentToolRegistry {
                                  schemaJSON: #"{"type":"array","items":{"type":"string"}}"#)],
               semanticInputs: ["TrackIDs"],
               semanticOutputs: ["QueueMutation"]),
-        .init(name: "queue_clear", group: .playback, permission: .reversible, summary: "清空播放队列"),
+        .init(name: "queue_clear", group: .playback, permission: .destructive,
+              confirmationPolicy: .explicitUserApproval(reason: "清空整个播放队列会移除当前排队内容，请确认"),
+              summary: "清空整个播放队列",
+              declaredRisk: .irreversibleDelete),
         .init(name: "queue_shuffle_remaining", group: .playback, permission: .reversible, summary: "只随机尚未播放的剩余队列"),
         .init(name: "queue_move", group: .playback, permission: .reversible, summary: "调整队列中歌曲顺序",
               parameters: [
@@ -1423,11 +1415,9 @@ public enum AgentToolRegistry {
                 .init(name: "value", required: true, description: "要记住的内容"),
               ]),
         .init(name: "memory_list", group: .memory, permission: .readOnly, summary: "查看已记住的关于主人的信息"),
-        .init(name: "memory_delete", group: .memory, permission: .destructive,
-              confirmationPolicy: .explicitUserApproval(reason: "删除记忆不可逆，且不会自动生成恢复副本"),
-              summary: "删除一条记忆（不可逆，需要用户批准）",
-              parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")],
-              declaredRisk: .irreversibleDelete),
+        .init(name: "memory_delete", group: .memory, permission: .reversible,
+              summary: "删除一条明确指定的记忆",
+              parameters: [.init(name: "key", required: true, description: "要删除的记忆字段名")]),
         .init(name: "memory_clear", group: .memory, permission: .destructive,
               confirmationPolicy: .explicitUserApproval(reason: "清空全部记忆不可逆，且不会自动生成恢复副本"),
               summary: "清空全部记忆（不可逆，需要用户批准）", declaredRisk: .irreversibleDelete),
@@ -1641,13 +1631,6 @@ public enum AgentToolRegistry {
             resourceLeaseRegistry: MutationResourceLeaseRegistry(),
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
-        if let denial = ToolPrivacyPolicy.denialResult(
-            for: descriptor,
-            call: call,
-            permissions: context.privacyPermissions
-        ) {
-            return denial
-        }
         if let requiredSkillID = descriptor.requiredSkillID,
            context.executionAuthority?.skillID != requiredSkillID {
             return ToolResult(
@@ -1727,9 +1710,9 @@ public enum AgentToolRegistry {
             let query = canonicalCall.optionalString("query") ?? ""
             let namespace = canonicalCall.optionalString("namespace")
             let limit = min(max((try? canonicalCall.int("limit")) ?? Int(canonicalCall.optionalString("limit") ?? "") ?? 8, 1), 50)
-            // 授权感知：当前 run 的 allowedOperations 传入检索，mutation 结果携带
-            // authorized 标记（能力存在但当前请求未授权 = false），模型能直接看到，
-            // 而不是只在下一轮 schema 阶段被悄悄过滤。
+            // 保留 operation metadata 供检索排序与诊断；它不会把普通本地
+            // mutation 隐藏或标记成不可执行。破坏性工具由 Runtime/ToolLoop
+            // 在执行前走可见确认。
             let authorizedOperations = context.authorizationContext?.allowedOperations
             let entries = ToolCatalog(descriptors: context.availableToolDescriptors)
                 .search(
@@ -1858,7 +1841,7 @@ public enum AgentToolRegistry {
         case "music_download_search", "music_download_submit", "music_download_status",
              "music_download_tasks", "music_download_history", "music_download_history_remove",
              "music_download_history_clean":
-            guard let systemService, let legacyDescriptor = Self.descriptor(for: "music_download") else {
+            guard let systemService else {
                 return .fail(canonicalCall, canonicalDescriptor, "音乐下载系统服务不可用。")
             }
             var legacyArguments = canonicalCall.arguments
@@ -1875,7 +1858,12 @@ public enum AgentToolRegistry {
             legacyArguments["action"] = .string(action)
             return await SystemToolExecutor.execute(
                 ToolCall(name: "music_download", arguments: legacyArguments),
-                descriptor: legacyDescriptor,
+                // Keep the canonical operation's risk/confirmation metadata
+                // while reusing the legacy service adapter. In particular,
+                // history_clean must remain destructive after this
+                // compatibility hop instead of being downgraded to the
+                // reversible umbrella descriptor.
+                descriptor: canonicalDescriptor,
                 systemService: systemService,
                 privacyPermissions: privacyPermissions,
                 allowsLyrics: allowsLyrics
