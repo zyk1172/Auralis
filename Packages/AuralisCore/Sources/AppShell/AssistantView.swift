@@ -452,13 +452,7 @@ struct AssistantView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: AuralisSpacing.large) {
                         if agent.messages.isEmpty { emptyState }
-                        ForEach(agent.messages) { message in
-                            messageRow(message).id(message.id)
-                        }
-                        if let reasoning = agent.runPresentationState?.reasoningText,
-                           !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            transientReasoningRow(reasoning)
-                        }
+                        conversationMessageRows()
                         if agent.isRunning { runningIndicator }
                         Color.clear
                             .frame(height: 1)
@@ -564,6 +558,45 @@ struct AssistantView: View {
                 .padding(.bottom, MacUIVisualTokens.FloatingPlayer.bottomInset)
         }
         #endif
+    }
+
+    /// Keep live reasoning immediately before the assistant messages produced
+    /// by the current turn. Rendering it after the whole transcript made a
+    /// completed answer appear first while the run was still finishing, which
+    /// inverted the intended process → answer hierarchy.
+    @ViewBuilder
+    private func conversationMessageRows() -> some View {
+        let reasoning: String? = {
+            guard let presentation = agent.runPresentationState else { return nil }
+            let text = presentation.reasoningText
+            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+        }()
+        let latestUserIndex = agent.messages.lastIndex(where: { $0.role == .user })
+
+        // A run normally always emits its user message first. Keep a safe
+        // fallback for restored/compatibility states so reasoning cannot land
+        // below an existing assistant answer when that anchor is absent.
+        if let reasoning, latestUserIndex == nil {
+            transientReasoningRow(reasoning)
+        }
+
+        ForEach(Array(agent.messages.enumerated()), id: \.element.id) { index, message in
+            if let reasoning,
+               let latestUserIndex,
+               index == latestUserIndex + 1 {
+                transientReasoningRow(reasoning)
+            }
+            messageRow(message).id(message.id)
+        }
+
+        // When the run has only emitted the user message so far, place the
+        // live row after that message; subsequent assistant output will render
+        // below it on the next update.
+        if let reasoning,
+           let latestUserIndex,
+           latestUserIndex == agent.messages.count - 1 {
+            transientReasoningRow(reasoning)
+        }
     }
 
     private func scrollConversationToEnd(
@@ -731,8 +764,7 @@ struct AssistantView: View {
             Label("思考中…", systemImage: "brain.head.profile")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
-            ChatMarkdownContent(source: reasoning)
-                .font(.caption2)
+            ChatMarkdownContent(source: reasoning, compact: true)
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
                 .opacity(0.82)
                 .textSelection(.enabled)
@@ -977,10 +1009,14 @@ private struct ChatMarkdownContent: View {
     }
 
     let source: String
+    /// Process text (reasoning/tool activity) must stay visually subordinate
+    /// even when it contains Markdown headings or lists. The final answer
+    /// keeps the richer body hierarchy by using the default style.
+    var compact = false
 
     var body: some View {
         let blocks = Self.parse(source)
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: compact ? 3 : 9) {
             ForEach(blocks.indices, id: \.self) { index in
                 blockView(blocks[index])
             }
@@ -993,25 +1029,33 @@ private struct ChatMarkdownContent: View {
         switch block {
         case let .heading(level, text):
             richText(text)
-                .font(level == 1 ? .title3.weight(.bold) : .headline.weight(.semibold))
-                .padding(.top, level == 1 ? 2 : 0)
+                .font(compact
+                    ? .caption.weight(.regular)
+                    : (level == 1 ? .title3.weight(.bold) : .headline.weight(.semibold)))
+                .padding(.top, compact ? 0 : (level == 1 ? 2 : 0))
         case let .bullet(marker, text):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: compact ? 4 : 8) {
                 Text(marker)
-                    .font(.subheadline.weight(.semibold))
+                    .font(compact ? .caption2.weight(.regular) : .subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .frame(minWidth: 15, alignment: .trailing)
+                    .frame(minWidth: compact ? 10 : 15, alignment: .trailing)
                 richText(text)
-                    .lineSpacing(2)
+                    .lineSpacing(compact ? 0 : 2)
+                    .font(compact ? .caption2 : .body)
             }
         case let .paragraph(text):
             richText(text)
-                .lineSpacing(3)
+                .lineSpacing(compact ? 0 : 3)
+                .font(compact ? .caption2 : .body)
         }
     }
 
     /// 保留行内强调、链接和代码；流式时遇到不完整 Markdown 则显示原文。
     private func richText(_ source: String) -> Text {
+        // Process text must not regain body-sized emphasis through Markdown
+        // attributes.  Its container already applies the compact hierarchy;
+        // a plain Text keeps headings/strong spans subordinate as well.
+        guard !compact else { return Text(source) }
         guard let attributed = try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)

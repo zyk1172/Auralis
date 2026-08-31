@@ -14,6 +14,12 @@ public struct AgentRequestPlan: Sendable {
     public let semantics: AgentRequestSemantics
     public let intent: AgentTaskIntent
     public let policy: AgentTaskPolicy
+    /// Deterministic completion contract for compound local mutations. This
+    /// is intentionally separate from authorization metadata: the operation
+    /// set describes which successful effects the task must observe before it
+    /// can finish, while Runtime still decides execution from descriptor risk
+    /// and confirmation policy.
+    public let requiredCompletionOperations: Set<ToolAuthorizationOperation>
     /// 当前 lineage 的副作用语义元数据。短续写继承上一 lineage；新完整请求从
     /// 当前语义重新编译。它用于路由和诊断，不是普通本地工具的执行白名单。
     public let authorization: SideEffectAuthorizationContext
@@ -30,15 +36,36 @@ public struct AgentRequestPlan: Sendable {
         intent: AgentTaskIntent,
         policy: AgentTaskPolicy,
         authorization: SideEffectAuthorizationContext,
-        executionLineage: ExecutionLineage? = nil
+        executionLineage: ExecutionLineage? = nil,
+        completionSemantics: AgentRequestSemantics? = nil
     ) {
         self.currentUserText = currentUserText
         self.relevantHistoryText = relevantHistoryText
         self.semantics = semantics
         self.intent = intent
         self.policy = policy
+        self.requiredCompletionOperations = Self.compileRequiredCompletionOperations(
+            semantics: completionSemantics ?? semantics,
+            policy: policy
+        )
         self.authorization = authorization
         self.executionLineage = executionLineage
+    }
+
+    /// Compile completion requirements once at the task boundary. A missing
+    /// operation is deliberately represented by an empty set: that preserves
+    /// the existing broad predicate for legacy/ambiguous requests without
+    /// turning semantic operation inference into an execution permission gate.
+    private static func compileRequiredCompletionOperations(
+        semantics: AgentRequestSemantics,
+        policy: AgentTaskPolicy
+    ) -> Set<ToolAuthorizationOperation> {
+        switch policy.completion {
+        case .queueMutation, .playlistMutation, .playbackMutation:
+            return semantics.requestedOperations
+        default:
+            return []
+        }
     }
 
     /// 在 conversation/task 边界构建一次计划。
@@ -97,6 +124,19 @@ public struct AgentRequestPlan: Sendable {
                 semantics: semantics
             )
         }
+        // A resumed task/explicit continuation may use a short current
+        // message such as “继续”. Its route and policy still belong to the
+        // original goal, so preserve that goal's completion contract without
+        // turning the authorization metadata into an execution gate.
+        let completionSemantics: AgentRequestSemantics? = {
+            guard let source = executionLineage?.sourceRequest
+                    ?? initialTaskState?.goal,
+                  !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  source.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(userText.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame
+            else { return nil }
+            return AgentRequestSemantics.analyze(source)
+        }()
         return AgentRequestPlan(
             currentUserText: userText,
             relevantHistoryText: relevantHistoryText,
@@ -104,7 +144,8 @@ public struct AgentRequestPlan: Sendable {
             intent: intent,
             policy: policy,
             authorization: authorization,
-            executionLineage: executionLineage
+            executionLineage: executionLineage,
+            completionSemantics: completionSemantics
         )
     }
 }

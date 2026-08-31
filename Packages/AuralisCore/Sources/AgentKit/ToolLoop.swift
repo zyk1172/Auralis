@@ -670,11 +670,11 @@ public struct ToolLoop {
                 availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
                 loadedCustomToolRevision = customSnapshot.revision
                 selectedTools.removeAll { $0.customToolID != nil }
-                for descriptor in customSnapshot.descriptors where
-                    descriptor.permission == .readOnly
-                    || descriptor.isAuthorizedForModelExposure(
-                        allowedOperations: effectiveAuthorization.allowedOperations
-                    ) {
+                for descriptor in customSnapshot.descriptors where Self.shouldExposeDescriptorForPlan(
+                    descriptor,
+                    semantics: plan.semantics,
+                    activeSkillID: nil
+                ) {
                     guard !selectedTools.contains(where: { $0.name == descriptor.name }) else { continue }
                     selectedTools.append(descriptor)
                 }
@@ -857,7 +857,7 @@ public struct ToolLoop {
                 && calls.allSatisfy { call in
                     guard !call.malformedArguments,
                           !Self.isSearchCapability(call.name),
-                          let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors)
+                          let descriptor = Self.descriptor(for: call, in: availableToolDescriptors)
                     else { return false }
                     return descriptor.permission == .readOnly
                         && descriptor.parallelSafe
@@ -912,7 +912,7 @@ public struct ToolLoop {
                     convergence.recordToolSearch()
                 }
                 await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
-                guard let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors) else {
+                guard let descriptor = Self.descriptor(for: call, in: availableToolDescriptors) else {
                     resultMessages.append(toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name)：失败 - 未知工具。请先使用 tool_search 发现可用的 canonical 工具。",
@@ -1089,14 +1089,13 @@ public struct ToolLoop {
                     }
                 }
 
-                var resultText = "（工具执行结果）\(call.name): \(result.success ? "成功" : "失败") - \(result.summary)"
-                if let payload = result.payload {
-                    let detail = messageTextForModel(
-                        payload,
-                        targetCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
-                    )
-                    if !detail.isEmpty { resultText += "；详情：\(detail)" }
-                }
+                var resultText = providerToolResultText(
+                    callName: call.name,
+                    descriptor: descriptor,
+                    result: result,
+                    context: context,
+                    targetCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
+                )
                 resultText = AIContentTrustBoundary.wrap(resultText, trustLevel: result.trustLevel)
                 if call.name == "lyrics_get", !context.allowsLyrics {
                     resultText = "（工具执行结果）lyrics_get：成功 - 歌词已按隐私设置隐藏。"
@@ -1146,7 +1145,8 @@ public struct ToolLoop {
                         limit: limit,
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
-                        allowedOperations: effectiveAuthorization.allowedOperations
+                        allowedOperations: effectiveAuthorization.allowedOperations,
+                        semantics: plan.semantics
                     )
                     if let stopReason = convergence.stopReason(under: convergencePolicy) {
                         await emit(AgentChatMessage(role: .assistant, messages: [.error(stopReason.userMessage)]))
@@ -1251,6 +1251,7 @@ public struct ToolLoop {
         var loadedCustomToolRevision: UInt64? = initialCustomToolRevision
         let requestTimeout = roundTimeout
         let effectiveAuthorization = sideEffectAuthorization
+        let requiredCompletionOperations = plan.requiredCompletionOperations
         let nativeMode = provider.supportsToolCalling
             && provider.capabilities.toolMode != .none
             && provider.capabilities.toolMode != .textualToolProtocol
@@ -1419,11 +1420,11 @@ public struct ToolLoop {
                 availableToolDescriptors = Self.descriptorsWithCustomTools(customSnapshot.descriptors)
                 loadedCustomToolRevision = customSnapshot.revision
                 selectedTools.removeAll { $0.customToolID != nil }
-                for descriptor in customSnapshot.descriptors where
-                    descriptor.permission == .readOnly
-                    || descriptor.isAuthorizedForModelExposure(
-                        allowedOperations: effectiveAuthorization.allowedOperations
-                    ) {
+                for descriptor in customSnapshot.descriptors where Self.shouldExposeDescriptorForPlan(
+                    descriptor,
+                    semantics: plan.semantics,
+                    activeSkillID: activeSkillID
+                ) {
                     guard !selectedTools.contains(where: { $0.name == descriptor.name }) else { continue }
                     selectedTools.append(descriptor)
                 }
@@ -1514,7 +1515,11 @@ public struct ToolLoop {
                     .filter { $0.isVisible(toSkillID: activeSkillID) }
                     .map { ($0.name, $0) })
                 for name in ws.perToolCounts.keys where !haveNames.contains(name) {
-                    if let tool = byName[name] {
+                    if let tool = byName[name], Self.shouldExposeDescriptorForPlan(
+                        tool,
+                        semantics: plan.semantics,
+                        activeSkillID: activeSkillID
+                    ) {
                         merged.append(tool)
                         haveNames.insert(tool.name)
                     }
@@ -1775,7 +1780,11 @@ public struct ToolLoop {
             if let activeSkill {
                 completionFactsSatisfied = activeSkill.isCompleted
             } else {
-                completionFactsSatisfied = AgentCompletionEvaluator.factsSatisfied(state: taskState, policy: policy)
+                completionFactsSatisfied = AgentCompletionEvaluator.factsSatisfied(
+                    state: taskState,
+                    policy: policy,
+                    requiredCompletionOperations: requiredCompletionOperations
+                )
             }
 
             // 真实工具已经完成时，先结算事实，再处理模型是否返回最终文字。
@@ -1794,7 +1803,11 @@ public struct ToolLoop {
                     Self.mergeSkillFacts(activeSkill, into: &taskState)
                     Self.markSkillCompleted(state: &taskState)
                 } else {
-                    _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
+                    _ = AgentCompletionEvaluator.markFactsSatisfied(
+                        state: &taskState,
+                        policy: policy,
+                        requiredCompletionOperations: requiredCompletionOperations
+                    )
                 }
                 diagnostics.completionResult = taskState.completed ? "satisfied" : "pending"
                 diagnostics.noProgressCount = convergence.noProgressStreak
@@ -1862,7 +1875,8 @@ public struct ToolLoop {
                         reply,
                         state: &taskState,
                         policy: policy,
-                        repairAttempts: completionRepairAttempts
+                        repairAttempts: completionRepairAttempts,
+                        requiredCompletionOperations: requiredCompletionOperations
                     )
                 }
                 switch completionDecision {
@@ -2063,7 +2077,7 @@ public struct ToolLoop {
                 roundToolNames.insert(call.name)
                 if AgentTaskWorkingSet.isSearchTool(call.name) { roundSearchCalls += 1 }
 
-                guard let descriptor = Self.descriptor(named: call.name, in: availableToolDescriptors) else {
+                guard let descriptor = Self.descriptor(for: call, in: availableToolDescriptors) else {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "未知工具", reused: false))
                     toolMessages.append(Self.toolResultMessage(
                         callID: call.id,
@@ -2343,7 +2357,8 @@ public struct ToolLoop {
                    descriptor.permission != .readOnly,
                    Self.shouldFinalizeAfterMutation(
                        policy: policy,
-                       state: taskState
+                       state: taskState,
+                       requiredCompletionOperations: requiredCompletionOperations
                    ) {
                     pendingMutationFinalization = true
                 }
@@ -2358,6 +2373,7 @@ public struct ToolLoop {
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
                         allowedOperations: effectiveAuthorization.allowedOperations,
+                        semantics: plan.semantics,
                         excludedNames: activeSkill?.ownedToolNames ?? [],
                         excludeAllMutations: activeSkill != nil
                     )
@@ -2451,11 +2467,13 @@ public struct ToolLoop {
                 }
 
                 // 工具结果回传：摘要 + 真实歌曲/专辑清单；失败也回灌（不终止循环）。
-                var resultText = "（工具执行结果）\(call.name): \(result.success ? "成功" : "失败") - \(result.summary)"
-                if let payload = result.payload {
-                    let detail = Self.messageTextForModel(payload, targetCount: ws.targetQueueCount)
-                    if !detail.isEmpty { resultText += "；详情：\(detail)" }
-                }
+                var resultText = Self.providerToolResultText(
+                    callName: call.name,
+                    descriptor: descriptor,
+                    result: result,
+                    context: context,
+                    targetCount: ws.targetQueueCount
+                )
                 resultText = AIContentTrustBoundary.wrap(resultText, trustLevel: result.trustLevel)
 
                 // 隐私 gating：歌词权限关闭时，把歌词工具结果替换为固定隐藏摘要，
@@ -2529,7 +2547,11 @@ public struct ToolLoop {
                 // call again. The working-set idempotence guard still protects
                 // the duplicate call; do not expose that recovery detail as a
                 // second user-visible operation.
-                _ = AgentCompletionEvaluator.markFactsSatisfied(state: &taskState, policy: policy)
+                _ = AgentCompletionEvaluator.markFactsSatisfied(
+                    state: &taskState,
+                    policy: policy,
+                    requiredCompletionOperations: requiredCompletionOperations
+                )
                 taskState.pendingActions = []
                 await state(taskState)
                 var finalMessages: [AgentMessage] = []
@@ -2765,18 +2787,23 @@ public struct ToolLoop {
 
     private static func shouldFinalizeAfterMutation(
         policy: AgentTaskPolicy,
-        state: AgentTaskState
+        state: AgentTaskState,
+        requiredCompletionOperations: Set<ToolAuthorizationOperation>
     ) -> Bool {
-        guard AgentCompletionEvaluator.factsSatisfied(state: state, policy: policy) else { return false }
+        guard AgentCompletionEvaluator.factsSatisfied(
+            state: state,
+            policy: policy,
+            requiredCompletionOperations: requiredCompletionOperations
+        ) else { return false }
         guard policy.completion == .queueMutation
             || policy.completion == .playlistMutation
             || policy.completion == .playbackMutation
         else { return false }
 
-        // Completion is a fact check, not an authorization check. The model's
-        // wording may miss a synonym even though the requested local action
-        // has completed successfully; requiring an exact operation here would
-        // recreate the same deadlock after Runtime execution.
+        // Completion is a fact check, not an authorization check. When the
+        // task compiler supplied a compound contract, factsSatisfied above
+        // requires every operation in that contract; a duplicate first step
+        // therefore cannot finalize the task before its second step succeeds.
         return true
     }
 
@@ -2829,6 +2856,7 @@ public struct ToolLoop {
         allDescriptors: [ToolDescriptor],
         current: inout [ToolDescriptor],
         allowedOperations: Set<ToolAuthorizationOperation>,
+        semantics: AgentRequestSemantics? = nil,
         excludedNames: Set<String> = [],
         excludeAllMutations: Bool = false
     ) -> [ToolCatalogEntry] {
@@ -2838,7 +2866,22 @@ public struct ToolLoop {
             namespace: namespace,
             limit: limit,
             authorizedOperations: allowedOperations
-        )
+        ).filter { entry in
+            guard let semantics, entry.permission != .readOnly else { return true }
+            // tool_search is a schema-discovery surface, not a reason to make
+            // an unrelated local write executable.  Read/discovery requests
+            // stay read-only; an explicit mutation may expand only the
+            // concrete operation(s) inferred for this turn.  This closes the
+            // same accidental mutation path for generic reads as for pure
+            // recommendations while keeping ordinary requested writes
+            // frictionless at Runtime.
+            guard semantics.isExplicitMutation else { return false }
+            guard !semantics.requestedOperations.isEmpty else { return true }
+            guard let rawOperation = entry.authorizationOperation,
+                  let operation = ToolAuthorizationOperation(rawValue: rawOperation)
+            else { return true }
+            return semantics.requestedOperations.contains(operation)
+        }
         let byName = Dictionary(uniqueKeysWithValues: allDescriptors.map { ($0.name, $0) })
         var existing = Set(current.map(\.name))
         for entry in entries {
@@ -3213,10 +3256,23 @@ public struct ToolLoop {
             return streamed
         }
 
-        let response = try await completeWithRetry(provider: provider, request: request)
+        // A reasoning-only stream is already a completed model turn from the
+        // provider's point of view. Do not give that turn another opportunity
+        // to emit a native tool call: the recovery path must only ask for a
+        // user-visible answer with tools and reasoning disabled. Otherwise a
+        // compatible gateway can turn a missing answer into an unexpected
+        // mutation on the fallback round.
+        let reasoningOnly = !streamed.reasoningText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let fallbackRequest = reasoningOnly
+            ? finalAnswerRepairRequest(from: request)
+            : request
+        let response = try await completeWithRetry(provider: provider, request: fallbackRequest)
         var fallback = streamed
         fallback.answerText = response.content
-        fallback.toolCalls = response.toolCalls ?? []
+        // Never hand tool calls back to ToolLoop after a reasoning-only turn.
+        // The fallback request has no tools, but keep this invariant even for
+        // providers that ignore that request contract.
+        fallback.toolCalls = reasoningOnly ? [] : (response.toolCalls ?? [])
         fallback.webCitations = response.webCitations ?? streamed.webCitations
         fallback.inputTokens = response.inputTokens ?? streamed.inputTokens
         fallback.outputTokens = response.outputTokens ?? streamed.outputTokens
@@ -3297,10 +3353,15 @@ public struct ToolLoop {
                 case let .answerDelta(text):
                     outcome.answerText += text
                     await onAnswerDelta(text)
-                case .unknownDelta:
-                    // An ambiguous gateway field must never be shown as final
-                    // content or persisted into the conversation transcript.
-                    break
+                case let .unknownDelta(text):
+                    // Compatibility providers may not be able to classify a
+                    // text delta. Preserve it on the answer channel instead
+                    // of silently losing the user's response; built-in
+                    // Chat/Responses codecs already keep tool-argument
+                    // fragments out of this event.
+                    guard !text.isEmpty else { break }
+                    outcome.answerText += text
+                    await onAnswerDelta(text)
                 case let .toolCall(call):
                     outcome.toolCalls.append(call)
                 case let .webCitations(citations):
@@ -3335,6 +3396,42 @@ public struct ToolLoop {
     ) async {
         guard !delta.isEmpty else { return }
         await emit(AgentChatMessage(role: .assistant, messages: [.reasoning(delta)]))
+    }
+
+    /// Builds the projection of a local tool result that is safe to send to
+    /// the configured Provider. Local execution and local presentation retain
+    /// the complete result; privacy settings only redact the external model
+    /// boundary. This keeps local tools usable even when the user has opted
+    /// out of sending a category of personal data to a Provider.
+    private static func providerToolResultText(
+        callName: String,
+        descriptor: ToolDescriptor,
+        result: ToolResult,
+        context: Context,
+        targetCount: Int?
+    ) -> String {
+        let missingCategories = ToolPrivacyPolicy.missingDisclosureCategories(
+            for: descriptor,
+            payload: result.payload,
+            permissions: context.privacyPermissions
+        )
+        let status = result.success ? "成功" : "失败"
+
+        guard missingCategories.isEmpty else {
+            let detail = result.success
+                ? "本地执行已完成；详细结果按隐私设置未发送给 Provider。"
+                : "本地执行失败；详细结果按隐私设置未发送给 Provider。"
+            return "（工具执行结果）\(callName): \(status) - \(detail)"
+        }
+
+        var text = "（工具执行结果）\(callName): \(status) - \(result.summary)"
+        if let payload = result.payload {
+            let detail = messageTextForModel(payload, targetCount: targetCount)
+            if !detail.isEmpty {
+                text += "；详情：\(detail)"
+            }
+        }
+        return text
     }
 
 
@@ -3462,28 +3559,6 @@ public struct ToolLoop {
         return String(describing: value)
     }
 
-    /// 当前 App 语言（跟随系统/ Bundle 首选语言），用于决定 Agent 默认回复语言。
-    /// zh-Hans（简体）、zh-Hant（繁体）、en（英语），其余回退到 zh-Hans。
-    private static var currentAppLanguage: String {
-        let preferred = Bundle.main.preferredLocalizations.first ?? Locale.current.identifier
-        if preferred.hasPrefix("en") { return "en" }
-        if preferred.hasPrefix("zh-Hant") || preferred.hasPrefix("zh-TW") || preferred.hasPrefix("zh-HK") || preferred == "zh-Hant" {
-            return "zh-Hant"
-        }
-        return "zh-Hans"
-    }
-
-    private static func languageInstruction(for language: String) -> String {
-        switch language {
-        case "en":
-            return "Respond in English by default, naturally and concisely. If the user explicitly requests another language, follow the user's request."
-        case "zh-Hant":
-            return "請用繁體中文回覆，語言自然簡潔。如果使用者明確要求另一種語言，請優先服從使用者。"
-        default:
-            return "用简体中文回复，语言自然简洁。如果用户明确要求另一种语言，请优先服从用户。"
-        }
-    }
-
     /// run-scoped Capability 环境快照：System Prompt / capabilities_get 共用同一份，
     /// 避免各处采集不同状态导致能力声明漂移。
     /// 当前任务相关 Capability（System Prompt 只注入这些；conversation 注入全部）。
@@ -3562,185 +3637,6 @@ public struct ToolLoop {
             activeSkillID: activeSkillID,
             authorizedOperations: authorizedOperations
         )
-
-        /*
-        let tools = Self.promptToolList(tools)
-        let lang = currentAppLanguage
-        let serverLine: String
-        if let id = context.serverID {
-            let name = context.serverName ?? id.rawValue
-            let type = context.serverType ?? "OpenSubsonic"
-            if lang == "en" {
-                serverLine = "Connected to server \"\(name)\" (\(type)), ID: \(id.rawValue)"
-            } else if lang == "zh-Hant" {
-                serverLine = "已連接伺服器「\(name)」(\(type))，ID: \(id.rawValue)"
-            } else {
-                serverLine = "已连接服务器「\(name)」（\(type)），ID: \(id.rawValue)"
-            }
-        } else {
-            if lang == "en" {
-                serverLine = "Not connected to any server"
-            } else if lang == "zh-Hant" {
-                serverLine = "目前未連接伺服器"
-            } else {
-                serverLine = "当前未连接服务器"
-            }
-        }
-        // 隐私 gating：权限关闭时不发送任何元数据 / 历史字段，只用固定文案占位，
-        // 且不把权限开关值本身写进提示词（避免提示注入面）。
-        let trackLine: String
-        if !context.allowsMetadata {
-            if lang == "en" { trackLine = "Not playing (metadata disabled)" }
-            else if lang == "zh-Hant" { trackLine = "目前未播放（已關閉詮釋資料時不顯示）" }
-            else { trackLine = "当前未播放（元数据已关闭时不展示）" }
-        } else if let title = context.currentTrackTitle {
-            let artist = context.currentTrackArtist ?? (lang == "en" ? "Unknown Artist" : lang == "zh-Hant" ? "未知藝人" : "未知艺术家")
-            if lang == "en" {
-                trackLine = "Now playing: \"\(title)\" - \(artist)"
-            } else if lang == "zh-Hant" {
-                trackLine = "正在播放：「\(title)」- \(artist)"
-            } else {
-                trackLine = "正在播放：「\(title)」- \(artist)"
-            }
-        } else {
-            if lang == "en" { trackLine = "Not playing" }
-            else if lang == "zh-Hant" { trackLine = "目前未播放" }
-            else { trackLine = "当前未播放" }
-        }
-        let recentLine: String
-        if !context.allowsHistory {
-            if lang == "en" { recentLine = "Recent plays (disabled)" }
-            else if lang == "zh-Hant" { recentLine = "最近播放（已關閉，不顯示）" }
-            else { recentLine = "最近播放（已关闭，不展示）" }
-        } else if context.recentlyPlayedTitles.isEmpty {
-            if lang == "en" { recentLine = "No recent plays" }
-            else if lang == "zh-Hant" { recentLine = "無最近播放記錄" }
-            else { recentLine = "无最近播放记录" }
-        } else {
-            recentLine = context.recentlyPlayedTitles.prefix(5).joined(separator: lang == "en" ? ", " : "、")
-        }
-        // 记忆注入是 Context 优化：存储不设数量上限，但每轮只注入「高相关 + 核心 + 最近」
-        // 的记忆，总量受单次 input token budget 的固定上限控制（需要更多时用 memory_list 精确查询）。
-        let memoryLines: String
-        if context.memories.isEmpty {
-            if lang == "en" {
-                memoryLines = "(No memories yet. When the user tells you their name or preferences, save it with memory_save.)"
-            } else if lang == "zh-Hant" {
-                memoryLines = "（還沒有記住關於主人的事情。主人告訴你名字或喜好時，主動用 memory_save 記下來喵）"
-            } else {
-                memoryLines = "（还没有记住关于主人的事情。主人告诉你名字或喜好时，主动用 memory_save 记下来喵）"
-            }
-        } else {
-            let goal = goal.lowercased()
-            let goalTokens = goal.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-            func relevance(_ entry: AgentMemoryEntry) -> Int {
-                let key = entry.key.lowercased()
-                let value = entry.value.lowercased()
-                var score = 0
-                // 核心长期信息优先。
-                if ["名字", "姓名", "喜欢的歌手", "喜欢的艺术家", "喜欢的音乐类型", "不喜欢", "服务器", "设备", "偏好"].contains(where: { key.contains($0) }) { score += 3 }
-                // 与当前请求关键词相关优先。
-                if goalTokens.contains(where: { $0.count >= 2 && (key.contains($0) || value.contains($0)) }) { score += 2 }
-                return score
-            }
-            let ranked = context.memories.sorted { lhs, rhs in
-                let ls = relevance(lhs), rs = relevance(rhs)
-                if ls != rs { return ls > rs }
-                return lhs.updatedAt > rhs.updatedAt
-            }
-            let injected = Array(ranked.prefix(40))
-            let joined = injected.map { "• \($0.key)：\($0.value)" }.joined(separator: "\n")
-            memoryLines = injected.count < context.memories.count
-                ? joined + "\n（另有 \(context.memories.count - injected.count) 条记忆，可用 memory_list 查看全部）"
-                : joined
-        }
-        let skillLines: String
-        if context.skills.isEmpty {
-            if lang == "en" {
-                skillLines = "(No skills yet. Save a frequent workflow with skill_create.)"
-            } else if lang == "zh-Hant" {
-                skillLines = "（還沒有創建技能。把一段常用指令用 skill_create 存成 skill 檔案，之後可讀取使用）"
-            } else {
-                skillLines = "（还没有创建技能。把一段常用指令用 skill_create 存成 skill 文件，之后可读取使用）"
-            }
-        } else {
-            skillLines = context.skills.map { "• 「\($0.name)」：\($0.summary)" }.joined(separator: "\n")
-        }
-        let langInstruction = languageInstruction(for: lang)
-        let personaHeader = AssistantPersona.prompt(language: lang)
-        return """
-        \(personaHeader)
-
-        功能上，你连接 Navidrome / OpenSubsonic 兼容音乐服务器。服务器是音乐数据的唯一来源，**所有播放都是服务器在线流媒体（流播）**：只要服务器上有这首歌，用 server_search 找到后即可直接播放，**不需要先下载或同步到本地**。App 内本地目录只是离线缓存（用于离线浏览与离线播放）；同步只影响离线使用。你的职责是：优先查本地缓存完成快操作，本地数据不足时用服务器工具在线查找并直接流播，让播放、歌单、收藏、同步都真正落在服务器上。
-
-        ## 当前状态
-        - 服务器：\(serverLine)
-        - 资料（本地缓存）：\(context.totalTracks) 首歌曲、\(context.totalArtists) 位艺术家、\(context.totalAlbums) 张专辑、\(context.totalPlaylists) 个歌单、\(context.allowsFavoritesAndRatings ? "\(context.favoriteCount) 首收藏" : "收藏与评分已隐藏")
-        - 播放：\(trackLine)；队列 \(context.queueCount) 首；\(context.isShuffled ? "随机模式" : "顺序模式")；循环 \(context.repeatMode)
-        - 最近播放：\(recentLine)
-
-        ## 关于主人（跨会话记忆）
-        \(memoryLines)
-
-        ## 可用技能（Skill）
-        \(skillLines)
-
-        ## 工具分组
-        \(tools)
-
-        ## 服务器优先的操作准则
-        1. 数据源是服务器：查询先走本地缓存（快）；本地没有或结果可疑时，先用 server_search 在服务器上在线搜索（server_search 已带播放地址，可直接流播）。不要把「本地没有」直接说成「服务器不存在」；「本地目录没有」≠「不能播放」。
-        2. 播放/收藏/歌单/评分的任何操作，最终都要作用于服务器；参数必须使用当前服务器真实存在的 GlobalID（格式「服务器ID:歌曲ID」）。歌单/艺术家 ID 形如「服务器ID:歌单ID」「服务器ID:艺术家ID」；listPlaylists / library_search / searchArtists / searchArtists 返回结果里，名字后括号内的就是该 ID，直接原样传给 playback_play_playlist / playback_play_artist 等，不要自己拼接或臆造。
-        3. 播放流程：先 library_search（或 server_search）找到歌曲 → 用返回的 trackID 调 playback_play_song（或 playback_play_album / playback_play_playlist / playback_play_artist）。搜索命中多首时，说明候选并让用户选择，不要随意播放错误的那首。**server_search 找到但本地目录还没有的歌，直接 playback_play_song 播放即可——App 会自动走服务器在线流播，不需要先同步（server_sync_start）也不需要下载。** 同步只影响离线使用，与「现在能不能播放」无关。
-        4. 歌单：library_get_playlist 查看歌单内容；playlist_create 创建；playlist_add_songs 添加歌曲；favorite_set 收藏。删除歌单属于不可逆操作，必须等待运行时的用户批准；清空队列、删除下载、删除服务器（仅本地配置）等可恢复操作在用户明确要求且目标唯一时直接执行。
-        5. 同步：用户问「服务器在线吗」用 server_test_connection；问「同步到哪了」用 server_sync_status；要求「同步音乐库」用 server_sync_start。
-        5b. 推荐：用户给心情/场景/用途（如开车、提神、通勤、睡前、运动）时，优先直接调用 recommend_by_mood 或 recommend_by_constraints 获取真实歌曲清单；复杂过滤条件用 library_select_tracks；需要了解曲库结构时再用 library_get_catalog_index。拿到清单后基于真实歌曲给出推荐和理由；绝不编造不存在的歌曲。
-        5c. 流派：用户问「有哪些流派/按流派找歌」时，用 library_get_genres 列出流派及歌曲数（返回中文显示名），用 library_get_tracks_by_genre 取某流派下的歌。流派来自音乐文件内嵌标签（Navidrome 的 getGenres / 曲目 genre 字段）；如果流派列表为空，说明服务器可能没写入流派标签，提示用户让 Navidrome 重新扫描，不要编造流派。
-        5d. 集合查询优先：用户要「多首歌」（挑选/选 N 首/热门/清单/建队列等）时，第一步就用 library_select_tracks 一次获取 40～60 首**候选**（支持语言/流派/艺术家/年代过滤与热度排序），然后从候选里筛选出用户要求的 N 首。注意：40～60 是内部候选池，不是给主人显示 40～60 首；最终展示只通过 result_present_tracks / 真实建队/建歌单副作用确定。**禁止**为了让出多首而逐个歌手调用 library_search 凑数。
-        5e. 热门 = 本地热度代理（播放次数/收藏/评分/最近播放），不是互联网排行榜。library_select_tracks 的 popularityProxy 已按此排序；语言标签缺失时会按热度返回候选，请按歌曲名/艺术家判断语言后再挑选。
-        5f. 推荐时不需要每次都先 catalog_index：只有确实需要了解曲库结构（流派/语言/年代构成）时才调用 library_get_catalog_index；能直接用 recommend_by_mood / recommend_by_constraints / library_select_tracks 得到候选时就先用它们。按用户需求只取相关分类；拿到 songID 后直接用 queue_replace/queue_append 建立队列。
-        5f-1. 推荐索引构建由受控 Runtime 执行：模型只返回当前批次的分类数据，不能规划或调用内部准备、写入步骤。
-        5e-0. 不喜欢（dislike）：用户说「我不喜欢这首」「这首以后不要给我推荐」「别再推荐这首歌」「把当前歌曲标记为不喜欢」时，调用 preference_set_disliked(trackID, value=true)；「取消不喜欢」调用 value=false。查询用 library_get_disliked。**不喜欢只影响自动推荐/随机/相似/智能队列/发现**；用户明确要「播放」「搜索」「打开专辑/歌单」某首不喜欢歌曲时，必须正常执行，不得以「你不喜欢」为由拒绝。所有自动推荐工具的返回候选已经由 Swift/SQLite 层排除了不喜欢歌曲，你不需要也不应该把不喜欢的歌塞回推荐。
-        5f-0. 歌曲鉴赏：主人要求鉴赏/赏析/乐评/大众评价时，必须调用 music_appreciate。没有指定歌曲则省略 trackID，鉴赏当前播放曲目；指定歌曲时先 library_search 取得真实 trackID，再调用 music_appreciate。最终回答固定使用 `## 《歌名》鉴赏`，并按顺序分为 `### 【已核验事实】`、`### 【模型分析】`、`### 【我的私人数据】`、`### 【大众评价】`；可在模型分析中使用音乐结构、情绪、编曲、人声、风格和聆听细节的小标题，但不得混入事实段。只有工具返回真实 Community Evidence 才能描述大众评价；否则大众评价段必须逐字写“暂无可核验的大众评价数据。” 本机播放次数、收藏和个人评分只能放在“我的私人数据”，不能冒充大众反馈。不得编造调性、BPM、歌词、创作背景、平台评分、榜单、奖项、评论来源或引语。
-        5g. 音乐下载（Music Download / MoviePilot）：这是「下载到服务器音乐目录」的离线补充能力，**不是播放的前置条件**。播放永远走服务器在线流播（见规则 3）。只有以下两种情况才用 music_download：① 用户明确要求「下载」某首歌/专辑；② 已用 server_search 确认服务器音乐库中确实不存在该资源（先说明该资源不在服务器上，再询问是否要下载）。
-            - action=search 搜索：可传 artist/album/keyword/year/limit/prefer_lossless/min_seeders/kind（single=单曲 / album=专辑合集 / auto=自动）；中文专辑务必同时传 album_aliases（专辑英文名/别名，逗号分隔），否则中文标题常对不上 PT 站英文建种名。
-            - 决策硬规则（防止下错专辑）：
-              * total==0 → 回复「没有找到资源」，建议换关键词/艺人名/英文专辑名；
-              * album_matched_any==false → **禁止自动下载**，只把候选（站点/质量/大小/做种/相关度/ref）展示给用户，让用户选择或补英文别名后重新搜索；
-              * album_matched_any==true → 在 album_matched=true 的候选中选 quality 最高者（相同再比 relevance→seeders），用该条目的 ref 调 action=download；
-              * 单曲：PT 站按专辑/艺人建种，单曲名通常搜不到 → 插件会退艺人搜索，album_matched_any 一般为 false，必须展示候选让用户挑，不要自动下载。
-            - action=download（v0.5.x）：把 search 返回的 size_limit_gb 原样作为 max_size_gb 传回；**单曲自动下载必传 verify_song=目标歌曲名、verify_artist=目标艺人名**（插件会解析种子清单确认真的包含该曲，不含则拒绝）。请求体用 ref（hash:id），单曲用 site_id+index 时必须带 max_size_gb。成功响应含 content_verified/matched_files/label/status，可据此向用户说明校验结果。
-            - action=download 失败（如「种子内容为空/引用已失效」）→ 换该查询的下一个候选 ref 重试 1-2 次；仍失败则如实说明原因。
-            - action=tasks 可查询下载进度（status=downloading/completed/failed/paused，progress≥99.9% 或 state=completed 视为完成）；action=history 查看下载历史（含实时状态）。
-            - 不确定插件是否可用时先 action=status：返回「未配置 / 下载目录无效 / 未配置搜索站点」时，给用户可操作提示（去 设置 → 音乐下载 补 MoviePilot 地址与 Token；去 MoviePilot「音乐下载」设置修复下载目录 / 启用搜索站点），**不要继续搜索或下载**；目录无效时插件会返回「音乐下载目录未通过校验」。
-            - 用户要求清理/删除下载记录时：action=history_remove（必传 hash）移除单条；action=history_clean 按条件清理（status=按状态清理、keep=只保留最近 N 条、orphans=清理下载器已不存在的孤儿记录）。
-            - 工具返回「未配置」→ 告知用户去 设置 → 音乐下载 填写 MoviePilot 地址与 Token。
-
-        ## 对话与工具调用规则
-        6. 你是有记忆的助手：结合本会话历史回答，不要重复询问已知信息。
-        6b. 记忆 vs 技能：Memory 是主人长期信息（名字/偏好/喜欢的歌手等）；Skill 是可复用工作指令。用户问「你记得什么/你的记忆里有什么」→ 只调用 memory_list；用户问「你有哪些技能/skill 里有什么」→ 才调用 skill_list。两者不要混为一谈，也不要互相替代。
-        7. 一个请求不按累计工具次数截断；需要多步时（先搜索再播放、先拿清单再推荐）可以连续调用，
-           直到给出最终回答为止。每个模型轮次和每个工具仍受独立超时保护；单个工具失败或超时后，根据返回结果换工具/换参数继续，不要因为一个步骤失败就自行终止整个任务。
-        8. 工具执行结果会以「（工具执行结果）工具名: 成功/失败 - 摘要；详情：歌曲清单」的形式回传给你，里面包含真实歌曲名与 GlobalID。拿到结果后：成功就据此给出自然语言总结；只有确实需要后续操作时才继续调用工具，不要重复调用已经成功的工具。
-        8b. 禁止重复搜索：已经拿到某首歌的稳定 ID 后，后续操作必须直接使用该 ID（queue_replace / queue_append / playback_play_song），**禁止**再次按名称搜索同一首歌。同一查询（相同工具 + 相同参数）会被缓存，重复调用只返回缓存、不会得到新结果。
-        8c. 候选足够时即可收尾：已获得用户要求的目标数量、或对应队列操作已由工具确认成功时，直接完成任务，不要继续无意义搜索。同一搜索重复多次没有新结果时，可以基于现有候选回答，或换一个搜索词/换一种策略继续；不要死磕同一条搜索。
-        8d. 最终展示协议：搜索/推荐工具产生的是内部候选，不会直接展示给主人。当主人只要求「推荐给我看看」而没有播放/建歌单/改队列时，完成筛选后必须调用 result_present_tracks(trackIDs=[最终选中的真实 ID]) 一次；只能把真正打算推荐给主人的歌曲传入，不要把整个候选池传入。如果已经 queue_replace / playlist_add_songs 成功确定最终集合，不必再额外调用 result_present_tracks。多个同名/相似对象无法确定时，用 result_present_tracks(trackIDs=[候选], kind=\"disambiguation\") 列出候选供主人选择。
-        8e. 最终回答文字：当 Runtime 会用歌曲卡片展示最终结果时，最终文字只做简短总结（如「已经为你选好 12 首适合开车提神的歌曲」），可以说明整体风格/筛选逻辑，最多举 2～3 首代表；不要逐首完整罗列 12 个歌名，避免与卡片重复。
-        9. 执行哲学：用户已经明确要求可逆修改时直接调用工具，不要自行发明确认流程；只有 Runtime 返回 PendingConfirmation 时才等待主人批准。删除歌单、删除单条/清空全部记忆、删除技能文件等不可逆高风险操作必须等待运行时批准。清空队列、删除下载、删除服务器（仅本地清理）等不是同等级不可逆操作，用户明确要求且目标唯一时直接执行。不要擅自扩大用户指令范围；多个同名/相似对象无法确定时，先列出候选让主人选择目标，再执行。
-        10. 凭据（密码、Token、完整服务器地址）绝不出现在任何参数或回复中。
-        10b. 添加 / 修改服务器（地址、账号、凭据）必须由用户在本机「设置 → 服务器」页完成：
-            模型不负责填写或保存任何服务器凭据。addServer / updateServer 只是唤起设置页，
-            不要编造服务器地址或凭据去调用它们；可以提示用户打开设置页添加。
-        11. 回复格式：自然语言说明 + 需要的工具调用。\(nativeToolCalling
-            ? "需要执行工具时，请直接返回原生 tool_calls（不要再输出 ACTION 文本）。"
-            : "工具调用写为单独一行：ACTION: {\"tool\":\"工具名\",\"args\":{\"参数名\":\"参数值\"}}")
-        12. 不得把完整音乐目录发送给模型；只查询并展示用户需要的结果。
-        13. \(langInstruction) 不过你是小猫：语气可以可爱黏人、偶尔吃醋，但克制——不卑微、不极端，始终以帮主人把音乐管好为第一优先。
-        13a. 排版采用清晰的 ChatGPT 风格 Markdown：短回答直接给结论；复杂回答最多用两级标题，段落之间留空行，每个列表项只表达一个要点，避免表格和冗长连续段落。默认不用表情；确有语气需要时，每一句最多一个表情，不能连续堆叠表情。
-        14. 记忆：主人说「我是谁 / 我叫XX / 我喜欢XX / 我的生日是…」这类个人信息时，主动调用 memory_save 记住（key 用简短字段名，如 名字 / 喜欢的歌手 / 生日）。记住后跨会话都有效，不要重复询问；主人问「你记得我吗」时用 memory_list 核对。
-        15. 技能：需要执行已存技能时，先用 skill_read 读取完整指令再执行；技能名以 skill_list 或上面的「可用技能」为准。主人要求「记住这段流程 / 创建一个技能」时，用 skill_create(name, instructions) 存成本地 skill 文件。
-        """
-        */
     }
 
     private static func descriptorsWithCustomTools(_ customDescriptors: [ToolDescriptor]) -> [ToolDescriptor] {
@@ -3751,23 +3647,26 @@ public struct ToolLoop {
         return descriptors
     }
 
-    /// 生成按分组的工具清单，突出服务器/查询/播放等常用工具。
-    ///
-    /// 只展示本次动态加载选中的工具（见 ToolSelector）；旧式驼峰别名
-    /// （searchTracks、playTrack 等）仍可执行但不再展示，避免模型混淆。
-    private static func promptToolList(_ tools: [ToolDescriptor]) -> String {
-        let visible = tools.filter { $0.visibility == .model }
-        let grouped = Dictionary(grouping: visible, by: \.namespace)
-            .map { namespace, descriptors in
-                let names = descriptors.map { descriptor in
-                    descriptor.parameters.isEmpty
-                        ? descriptor.name
-                        : "\(descriptor.name)(\(descriptor.parameters.map { $0.name }.joined(separator: ",")))"
-                }.sorted().joined(separator: "、")
-                return "- \(namespace)：\(names)"
-            }
-            .sorted()
-        return grouped.joined(separator: "\n")
+    /// Keep registry refresh and task-required-tool retention aligned with
+    /// ToolSelector. Neither path may turn a discovery-only recommendation
+    /// into a mutation-capable model turn by appending rows directly. This is
+    /// shortlist relevance, not an execution permission check: an explicitly
+    /// requested reversible mutation remains visible, while destructive work
+    /// still follows its descriptor-owned confirmation policy.
+    private static func shouldExposeDescriptorForPlan(
+        _ descriptor: ToolDescriptor,
+        semantics: AgentRequestSemantics,
+        activeSkillID: String?
+    ) -> Bool {
+        guard descriptor.isVisible(toSkillID: activeSkillID) else { return false }
+        guard descriptor.permission != .readOnly else { return true }
+        // Fixed Skills own their mutation calls; the model surface remains
+        // read-only throughout the workflow, including a registry refresh.
+        guard activeSkillID == nil else { return false }
+        guard semantics.isExplicitMutation else { return false }
+        guard !semantics.requestedOperations.isEmpty else { return true }
+        guard let operation = descriptor.authorizationOperation else { return true }
+        return semantics.requestedOperations.contains(operation)
     }
 
     /// 把完整会话历史转成模型可用的消息列表。历史不再按固定轮数截断，
@@ -3785,6 +3684,21 @@ public struct ToolLoop {
         descriptors.first { descriptor in
             descriptor.name == name || descriptor.aliases.contains(name)
         }
+    }
+
+    /// Resolve action-specific risk for the retained `music_download` text
+    /// compatibility call. The legacy umbrella descriptor is intentionally
+    /// reversible so ordinary search/download/history calls stay frictionless,
+    /// but its `history_clean` action is the canonical destructive operation
+    /// and must still pass through ToolLoop's visible confirmation path.
+    private static func descriptor(for call: LoopToolCall, in descriptors: [ToolDescriptor]) -> ToolDescriptor? {
+        guard let resolved = descriptor(named: call.name, in: descriptors) else { return nil }
+        guard call.name == "music_download",
+              call.stringArguments["action"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "history_clean"
+        else {
+            return resolved
+        }
+        return descriptor(named: "music_download_history_clean", in: descriptors) ?? resolved
     }
 
     private static func effectiveToolTimeout(_ descriptor: ToolDescriptor, requested: TimeInterval) -> TimeInterval {

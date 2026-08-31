@@ -536,6 +536,45 @@ struct AgentRuntimeArchitectureTests {
         #expect(second == .accept)
     }
 
+    @Test("compound mutation completion waits for every requested operation")
+    func compoundMutationCompletionRequiresAllOperations() {
+        let plan = AgentRequestPlan.build(userText: "把这首歌加入队列并播放下一首", history: [])
+        #expect(plan.requiredCompletionOperations == [.queueAppend, .queuePlayNext])
+
+        var state = AgentTaskState(intent: .queueManagement, goal: plan.currentUserText)
+        state.facts["sideEffect.queue"] = "success"
+        state.facts[AgentCompletionEvaluator.completionOperationFactKey(.queueAppend)] = "success"
+
+        #expect(!AgentCompletionEvaluator.factsSatisfied(
+            state: state,
+            policy: plan.policy,
+            requiredCompletionOperations: plan.requiredCompletionOperations
+        ))
+
+        state.facts[AgentCompletionEvaluator.completionOperationFactKey(.queuePlayNext)] = "success"
+        #expect(AgentCompletionEvaluator.factsSatisfied(
+            state: state,
+            policy: plan.policy,
+            requiredCompletionOperations: plan.requiredCompletionOperations
+        ))
+    }
+
+    @Test("task reducer records canonical mutation completion facts")
+    func taskReducerRecordsCanonicalMutationCompletionFact() {
+        var state = AgentTaskState(intent: .queueManagement, goal: "加入队列")
+        let descriptor = AgentToolRegistry.descriptor(for: "queue_append")!
+        let result = ToolResult(
+            call: .init(name: descriptor.name),
+            permission: descriptor.permission,
+            success: true,
+            summary: "已加入队列",
+            facts: [:]
+        )
+
+        _ = AgentTaskReducer.apply(result: result, descriptor: descriptor, to: &state)
+        #expect(state.facts[AgentCompletionEvaluator.completionOperationFactKey(.queueAppend)] == "success")
+    }
+
     @Test func playlistDeleteCompletionRequiresVerifiedRuntimeFact() {
         var state = AgentTaskState(intent: .playlistManagement, goal: "删除歌单")
         let descriptor = AgentToolRegistry.descriptor(for: "playlist_delete")!

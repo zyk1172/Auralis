@@ -428,6 +428,32 @@ private func syntheticRhythmicSignal(sampleRate: Double, seconds: Int) -> [Float
     #expect(scheduler.scheduledUntil == 8)
 }
 
+@Test @MainActor func coordinatorBackgroundForegroundUsesAuthoritativePosition() async {
+    let suiteName = "music-haptics-lifecycle-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let coordinator = MusicHapticsCoordinator(defaults: defaults)
+    coordinator.updatePlaybackPosition(12, isPlaying: true)
+    coordinator.applicationDidEnterBackground()
+
+    // A late UI/progress callback must not move the haptics clock while the
+    // scene is backgrounded; AVPlayer remains the source of truth.
+    coordinator.updatePlaybackPosition(99, isPlaying: true)
+    let background = await coordinator.diagnostics()
+    #expect(background.playbackPosition == 12)
+
+    coordinator.applicationDidBecomeActive(position: 37.5, isPlaying: false)
+    let foreground = await coordinator.diagnostics()
+    #expect(foreground.playbackPosition == 37.5)
+    #expect(foreground.foregroundRecoveryCount == 1)
+
+    coordinator.applicationDidBecomeActive(position: 42, isPlaying: true)
+    let recovered = await coordinator.diagnostics()
+    #expect(recovered.playbackPosition == 42)
+    #expect(recovered.foregroundRecoveryCount == 2)
+}
+
 @Test func partialCheckpointRoundTripPreservesHoles() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }

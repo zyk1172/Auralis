@@ -267,9 +267,11 @@ public enum ToolEvidencePolicy: String, Sendable, Hashable {
     case externalAPI
 }
 
-/// The single disclosure gate shared by ToolRuntime and every compatibility
-/// executor. A descriptor owns the data categories its result may expose;
-/// callers never maintain a parallel list of tool names.
+/// Disclosure metadata shared by provider-bound context/result filtering.
+///
+/// This is deliberately not an execution gate: a privacy switch controls what
+/// leaves the device for an external Provider, never whether a local tool can
+/// read local state or apply a reversible local change.
 public enum ToolPrivacyPolicy {
     public static func missingDisclosureCategories(
         for descriptor: ToolDescriptor,
@@ -278,35 +280,33 @@ public enum ToolPrivacyPolicy {
         descriptor.requiredDisclosureCategories.filter { !permissions.allows($0) }
     }
 
-    public static func denialResult(
+    public static func missingDisclosureCategories(
         for descriptor: ToolDescriptor,
-        call: ToolCall,
+        payload: AgentMessage?,
         permissions: AIPrivacyPermissions
-    ) -> ToolResult? {
-        // Privacy permissions govern data sent to an external provider. They
-        // must never disable a local mutation such as memory_save, playback,
-        // queue or playlist editing.
-        guard descriptor.permission == .readOnly else { return nil }
-        let missing = missingDisclosureCategories(for: descriptor, permissions: permissions)
-        guard !missing.isEmpty else { return nil }
-        let summary: String
-        if missing.contains(.metadata) {
-            summary = "歌曲元数据已按隐私设置隐藏。"
-        } else if missing.contains(.playbackHistory) {
-            summary = "播放历史已按隐私设置隐藏。"
-        } else if missing.contains(.favoritesAndRatings) {
-            summary = "收藏与评分已按隐私设置隐藏。"
-        } else if missing.contains(.lyrics) {
-            summary = "歌词已按隐私设置隐藏。"
-        } else {
-            summary = "该工具所需的数据已按隐私设置隐藏。"
+    ) -> Set<AIPrivacyCategory> {
+        disclosureCategories(for: descriptor, payload: payload).filter { !permissions.allows($0) }
+    }
+
+    /// Disclosure categories implied by a result payload. This is used at the
+    /// Provider request boundary so local UI/presentation can retain the full
+    /// result while the external model receives a redacted projection.
+    public static func disclosureCategories(
+        for descriptor: ToolDescriptor,
+        payload: AgentMessage?
+    ) -> Set<AIPrivacyCategory> {
+        var categories = descriptor.requiredDisclosureCategories
+        switch payload {
+        case .trackCards(_), .albumCards(_), .artistCards(_), .playlistCards(_), .playlistProposal(_, _):
+            categories.insert(.metadata)
+        case .actionPreview(_, _):
+            // Action previews may contain a track/playlist name even when the
+            // mutation itself is otherwise safe to execute locally.
+            categories.insert(.metadata)
+        default:
+            break
         }
-        return ToolResult(
-            call: call,
-            permission: descriptor.permission,
-            success: false,
-            summary: summary
-        )
+        return categories
     }
 
     static func inferredCategories(
@@ -1631,13 +1631,6 @@ public enum AgentToolRegistry {
             resourceLeaseRegistry: MutationResourceLeaseRegistry(),
             recommendationIndexExecutionRegistry: recommendationIndexExecutionRegistry
         )
-        if let denial = ToolPrivacyPolicy.denialResult(
-            for: descriptor,
-            call: call,
-            permissions: context.privacyPermissions
-        ) {
-            return denial
-        }
         if let requiredSkillID = descriptor.requiredSkillID,
            context.executionAuthority?.skillID != requiredSkillID {
             return ToolResult(
@@ -1848,7 +1841,7 @@ public enum AgentToolRegistry {
         case "music_download_search", "music_download_submit", "music_download_status",
              "music_download_tasks", "music_download_history", "music_download_history_remove",
              "music_download_history_clean":
-            guard let systemService, let legacyDescriptor = Self.descriptor(for: "music_download") else {
+            guard let systemService else {
                 return .fail(canonicalCall, canonicalDescriptor, "音乐下载系统服务不可用。")
             }
             var legacyArguments = canonicalCall.arguments
@@ -1865,7 +1858,12 @@ public enum AgentToolRegistry {
             legacyArguments["action"] = .string(action)
             return await SystemToolExecutor.execute(
                 ToolCall(name: "music_download", arguments: legacyArguments),
-                descriptor: legacyDescriptor,
+                // Keep the canonical operation's risk/confirmation metadata
+                // while reusing the legacy service adapter. In particular,
+                // history_clean must remain destructive after this
+                // compatibility hop instead of being downgraded to the
+                // reversible umbrella descriptor.
+                descriptor: canonicalDescriptor,
                 systemService: systemService,
                 privacyPermissions: privacyPermissions,
                 allowsLyrics: allowsLyrics

@@ -412,6 +412,14 @@ public struct AgentRequestSemantics: Sendable, Equatable, Hashable {
         if !suppressesMutationIntent, requested.contains(.queueAppend), has(["播放下一首", "接下来播放", "下一首播放"]) {
             requested.insert(.queuePlayNext)
         }
+        // “把这首歌加入队列并播放下一首” is a queue composition, not a
+        // request to invoke the global next-track navigation command. Keep
+        // the completion contract focused on the two queue operations the
+        // user actually asked for; a standalone “下一首” still retains
+        // playbackNavigation above.
+        if requested.contains(.queuePlayNext) {
+            requested.remove(.playbackNavigation)
+        }
 
         if !suppressesMutationIntent, explicitPlaylistAction {
             if has(["创建歌单", "新建歌单", "playlist_create"])

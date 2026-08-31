@@ -210,6 +210,8 @@ struct OpenAIChatStreamingTests {
 
         data: {"choices":[{"delta":"嵌套兼容正文"}]}
 
+        data: {"choices":[{"delta":{"output_text":"兼容字段正文"}}]}
+
         data: [DONE]
         """
         ChatMockURLProtocol.reset(stubs: [
@@ -226,7 +228,11 @@ struct OpenAIChatStreamingTests {
 
         #expect(events.contains(.answerDelta("兼容正文")))
         #expect(events.contains(.answerDelta("嵌套兼容正文")))
-        #expect(!events.contains(.unknownDelta))
+        #expect(events.contains(.answerDelta("兼容字段正文")))
+        #expect(!events.contains { event in
+            if case .unknownDelta = event { return true }
+            return false
+        })
         #expect(events.last == .completed)
     }
 }

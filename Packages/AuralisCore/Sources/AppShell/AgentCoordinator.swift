@@ -554,19 +554,14 @@ public final class AgentCoordinator: ObservableObject {
         // 注意命名：本类的 `model` 是 AuralisAppModel，这里必须另起名字避免遮蔽。
         let modelName = aiSettings.model.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 隐私 gating（B2）：按用户权限过滤上下文；权限关闭的字段不进入 Context。
+        // Context 保存本地运行时的完整快照，供本地工具解析实体和执行任务。
+        // 隐私开关只在 SystemPrompt/Provider 回灌边界过滤外发字段，不能让
+        // 本地 queue、播放、歌单或记忆操作因为未允许外发而失去上下文。
         let permissions = privacyPermissionsOverride ?? AIPrivacyPermissions.current()
         let cat = model.catalog
-        let currentTrackTitle = permissions.allowsMetadata
-            ? (cat.isConnected ? model.currentTrack.title : nil)
-            : nil
-        let currentTrackArtist = permissions.allowsMetadata
-            ? (cat.isConnected ? model.currentTrack.artistName : nil)
-            : nil
-        let recentlyPlayedTitles = permissions.allowsPlaybackHistory
-            ? model.recentlyPlayedTracks.prefix(5).map(\.title)
-            : []
-        // 服务器名称 / 目录计数属于运行基础信息（隐私报告未禁此项），最简一致地保留。
+        let currentTrackTitle = cat.isConnected ? model.currentTrack.title : nil
+        let currentTrackArtist = cat.isConnected ? model.currentTrack.artistName : nil
+        let recentlyPlayedTitles = model.recentlyPlayedTracks.prefix(5).map(\.title)
         let context = ToolLoop.Context(
             serverID: cat.activeServerID,
             serverName: cat.isConnected ? cat.account.displayName : nil,
@@ -578,7 +573,7 @@ public final class AgentCoordinator: ObservableObject {
             totalArtists: cat.artists.count,
             totalAlbums: cat.albums.count,
             totalPlaylists: cat.playlists.count,
-            favoriteCount: permissions.allowsFavoritesAndRatings ? model.favoriteTracks.count : 0,
+            favoriteCount: model.favoriteTracks.count,
             recentlyPlayedTitles: recentlyPlayedTitles,
             isShuffled: model.isShuffled,
             repeatMode: model.repeatMode.title,
@@ -1249,8 +1244,8 @@ public final class AgentCoordinator: ObservableObject {
     ///
     /// 流式处理规则（保证「流式半成品 + 成品」不重复出现）：
     /// - `.streaming` 增量 → 累加进该 run 的 in-flight 气泡（key = runID）；
-    /// - 运行状态（tool progress / action preview）只更新 transient presentation，
-    ///   不写入聊天记录；
+    /// - 运行状态（reasoning / tool progress / action preview / confirmation）
+    ///   只更新 transient presentation，不写入聊天记录；
     /// - 非流式消息（最终 `.text` / 卡片 / 错误等）→ 原地定型 in-flight 气泡并持久化。
     ///   流式增量本身不写盘，收尾时统一落一次，避免每 token 一次磁盘写。
     func receive(_ message: AgentChatMessage, sessionID: UUID, runID: UUID) async {
@@ -1258,7 +1253,7 @@ public final class AgentCoordinator: ObservableObject {
         guard ownsRun(runID, sessionID: sessionID) else { return }
         let isActiveSession = activeSessionID == sessionID
 
-        let sanitizedMessage = AgentUserFacingSanitizer.chatMessage(message)
+        var sanitizedMessage = AgentUserFacingSanitizer.chatMessage(message)
 
         // Reasoning is deliberately a live-only presentation channel.  It
         // neither creates a transcript bubble nor enters SessionStore, so a
@@ -1272,7 +1267,14 @@ public final class AgentCoordinator: ObservableObject {
                 sessionID: sessionID,
                 runID: runID
             )
-            return
+            // A provider normally emits one item per event, but keep the
+            // channel boundary item-safe if a compatibility adapter combines
+            // reasoning with an answer in one AgentChatMessage.
+            sanitizedMessage = Self.messageByRemovingTransientItems(
+                from: sanitizedMessage,
+                includingReasoning: true
+            )
+            guard !sanitizedMessage.messages.isEmpty else { return }
         }
 
         updateRunPresentation(for: sanitizedMessage, sessionID: sessionID, runID: runID)
@@ -1280,12 +1282,26 @@ public final class AgentCoordinator: ObservableObject {
         // Tool progress and previews describe work in flight. They belong in
         // the run presentation state, not in the transcript or SessionStore.
         // The active UI still shows the single weak running indicator.
-        if Self.isTransientActivity(sanitizedMessage) {
+        let messageWithoutActivity = Self.messageByRemovingTransientItems(from: sanitizedMessage)
+        if messageWithoutActivity.messages.count != sanitizedMessage.messages.count {
+            updateRunPresentation(
+                for: AgentChatMessage(
+                    id: sanitizedMessage.id,
+                    role: sanitizedMessage.role,
+                    messages: sanitizedMessage.messages.filter { Self.isTransientActivityItem($0) },
+                    createdAt: sanitizedMessage.createdAt
+                ),
+                sessionID: sessionID,
+                runID: runID
+            )
+            sanitizedMessage = messageWithoutActivity
+        }
+        if sanitizedMessage.messages.isEmpty {
             return
         }
 
         // 流式增量：累加进该 run 的 in-flight 气泡（只在活动会话上更新 UI）。
-        if let delta = Self.streamingDeltaText(from: message) {
+        if let delta = Self.streamingDeltaText(from: sanitizedMessage) {
             var state = streamingStates[runID] ?? AgentStreamingState(answerMessageID: nil)
             state.answerText += delta
             if isActiveSession {
@@ -1301,16 +1317,16 @@ public final class AgentCoordinator: ObservableObject {
                     )
                     messages[index] = existing
                 } else {
-                    state.answerMessageID = message.id
+                    state.answerMessageID = sanitizedMessage.id
                     messages.append(AgentChatMessage(
-                        id: message.id,
+                        id: sanitizedMessage.id,
                         role: .assistant,
                         messages: [.streaming(AgentUserFacingSanitizer.text(state.answerText))],
-                        createdAt: message.createdAt
+                        createdAt: sanitizedMessage.createdAt
                     ))
                 }
             } else if state.answerMessageID == nil {
-                state.answerMessageID = message.id
+                state.answerMessageID = sanitizedMessage.id
             }
             streamingStates[runID] = state
             return
@@ -1406,15 +1422,35 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
-    private static func isTransientActivity(_ message: AgentChatMessage) -> Bool {
-        !message.messages.isEmpty && message.messages.allSatisfy { item in
+    private static func isTransientActivityItem(_ item: AgentMessage) -> Bool {
+        switch item {
+        case .toolProgress, .actionPreview, .confirmation:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func messageByRemovingTransientItems(
+        from message: AgentChatMessage,
+        includingReasoning: Bool = false
+    ) -> AgentChatMessage {
+        let items = message.messages.filter { item in
             switch item {
-            case .toolProgress, .actionPreview:
-                return true
-            default:
+            case .reasoning:
+                return !includingReasoning
+            case .toolProgress, .actionPreview, .confirmation:
                 return false
+            default:
+                return true
             }
         }
+        return AgentChatMessage(
+            id: message.id,
+            role: message.role,
+            messages: items,
+            createdAt: message.createdAt
+        )
     }
 
     /// 汇总一条消息里已有的流式文本（用于在 in-flight 气泡上继续累加）。
@@ -1483,9 +1519,9 @@ public final class AgentCoordinator: ObservableObject {
         }
     }
 
-    /// 运行时操作确认：不可逆工具以及需要补齐具体操作授权的调用都复用同一
-    /// PendingConfirmation 通道。确认属于具体 run/session；模型输出的“确认”、
-    /// “继续”等文本不会进入这里，也不能替代 Runtime 的批准。
+    /// 运行时操作确认只服务于 descriptor 明确声明的高风险/不可逆工具。
+    /// 普通 reversible 工具不会因为语义 operation 缺失而进入这里。确认属于
+    /// 具体 run/session；模型输出的“确认”、“继续”等文本不会进入这里，也不能替代 Runtime 的批准。
     func requestOperationConfirmation(
         _ pending: PendingConfirmation,
         runID: UUID,

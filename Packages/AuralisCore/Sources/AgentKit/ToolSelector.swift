@@ -151,6 +151,15 @@ public enum ToolSelector {
 
         func append(_ descriptors: [ToolDescriptor]) {
             for descriptor in descriptors {
+                // A pure recommendation is discovery-only. Keep this guard at
+                // the shared append boundary so intent hints, broker recall,
+                // and recommendation expansion cannot re-introduce an
+                // unrelated reversible mutation after the semantic pass.
+                // Explicit requests such as “推荐并加入队列” carry the
+                // concrete operation and therefore remain eligible.
+                guard !(semantics.domain == .recommendation
+                    && semantics.requestedOperations.isEmpty
+                    && descriptor.permission != .readOnly) else { continue }
                 let canonical = canonicalAliases[descriptor.name] ?? descriptor.name
                 guard canonical == descriptor.name, selectedNames.insert(canonical).inserted else {
                     continue
@@ -303,6 +312,19 @@ public enum ToolSelector {
         var result: [ToolDescriptor] = []
         for descriptor in visible {
             guard !selectedNames.contains(descriptor.name) else { continue }
+            // Broker recall is still a relevance pass, but a discovery-only
+            // request must not regain mutation schemas through an utterance
+            // example (or a broad bigram) after recommendation expansion has
+            // intentionally filtered them. Explicit mutation semantics may
+            // use example recall when operation inference is incomplete.
+            if descriptor.permission != .readOnly {
+                guard semantics.isExplicitMutation else { continue }
+                if !semantics.requestedOperations.isEmpty {
+                    guard let operation = descriptor.authorizationOperation,
+                          semantics.requestedOperations.contains(operation)
+                    else { continue }
+                }
+            }
             let exampleHit = descriptor.utteranceExamples.contains { example in
                 let exampleLower = example.lowercased()
                 // 完整示例子串命中 = 高置信度 admission。
@@ -531,22 +553,17 @@ public enum ToolSelector {
     ) -> Bool {
         guard descriptor.visibility == .model, descriptor.requiredSkillID == nil else { return false }
 
-        // A recommendation request is a multi-step workflow: the model may
-        // need to collect candidates, replace/append the queue, start
-        // playback, or apply an annotation. Keep that workflow surface
-        // available without treating any of it as pre-authorization.
-        if semantics.suggestedToolNamespaces.contains("recommendation") {
-            switch descriptor.group {
-            case .catalog, .annotation, .playback:
-                return true
-            default:
-                break
-            }
-        }
-
+        // Recommendation is a discovery/read workflow. Do not widen it into
+        // an implicit mutation surface: a recommendation request commonly has
+        // no requestedOperations at all, and exposing queue/favorite/playback
+        // mutations here would let a weak model perform an unrelated local
+        // write now that Runtime no longer uses exact-operation authorization
+        // as a blanket execution gate. Mutation schemas are admitted only when
+        // semantics carries the concrete operation (or a fixed Skill owns the
+        // workflow and bypasses this model-visible shortlist).
         let mutationIsRelevant: Bool = {
             guard descriptor.permission != .readOnly else { return true }
-            guard !semantics.requestedOperations.isEmpty else { return false }
+            guard semantics.isExplicitMutation, !semantics.requestedOperations.isEmpty else { return false }
             guard let operation = descriptor.authorizationOperation else { return true }
             return semantics.requestedOperations.contains(operation)
         }()

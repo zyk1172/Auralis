@@ -117,13 +117,6 @@ public struct AgentToolkit {
         let allowsHistory = privacyPermissions.allowsPlaybackHistory
         let allowsLyrics = privacyPermissions.allowsLyrics
         let allowsFavoritesAndRatings = privacyPermissions.allowsFavoritesAndRatings
-        if let denial = ToolPrivacyPolicy.denialResult(
-            for: descriptor,
-            call: call,
-            permissions: privacyPermissions
-        ) {
-            return denial
-        }
         if RecommendationIndexToolService.handles(call.name) {
             return try await RecommendationIndexToolService.execute(
                 call,
@@ -165,22 +158,13 @@ public struct AgentToolkit {
             guard let artist = try await catalog.getArtist(gid) else { return .fail(call, descriptor, "艺术家不存在") }
             return .ok(call, descriptor, "已获取艺术家", .artistCards([ArtistCard(globalID: gid, name: artist.name, albumCount: artist.albumCount)]))
         case "getFavorites":
-            guard allowsFavoritesAndRatings else {
-                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
-            }
             let list = try await catalog.getFavorites(serverID: serverID)
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "getRecentHistory":
-            guard allowsHistory else {
-                return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
-            }
             let limit = (try? intParam(call, "limit")) ?? 50
             let list = try await catalog.getRecentHistory(serverID: serverID, limit: max(1, limit))
             return .ok(call, descriptor, "最近播放 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "getLeastPlayed", "library_get_least_played":
-            guard allowsHistory else {
-                return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
-            }
             let limit = (try? intParam(call, "limit")) ?? 50
             let list = try await catalog.getLeastPlayed(serverID: serverID, limit: max(1, limit))
             return .ok(call, descriptor, "最少播放 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
@@ -557,9 +541,6 @@ public struct AgentToolkit {
             let kind = (try? require(call, "kind"))?.lowercased() ?? "all"
             let onlyFavorites = (try? boolParam(call, "onlyFavorites")) ?? false
             let onlyOffline = (try? boolParam(call, "onlyOffline")) ?? false
-            guard !onlyFavorites || allowsFavoritesAndRatings else {
-                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
-            }
             let safeLimit = min(max(limit, 1), 100)
             var tracks = try await catalog.searchTracks(query: query, serverID: serverID)
             if onlyFavorites { tracks = tracks.filter(\.isFavorite) }
@@ -662,13 +643,6 @@ public struct AgentToolkit {
             // playableOnly 已弃用（deprecated）：不因瞬时未缓存 streamURL 排除可播放歌曲。
             _ = (try? boolParam(call, "playableOnly")) ?? false
             let sort = (try? require(call, "sort"))?.lowercased() ?? "popularityProxy"
-            guard (!favoritesOnly && sort != "favorites") || allowsFavoritesAndRatings else {
-                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
-            }
-            guard (!excludeRecentlyPlayed && sort != "recentlyplayed") || allowsHistory else {
-                return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
-            }
-
             var tracks = try await catalog.allTracks(serverID: serverID)
             if favoritesOnly { tracks = tracks.filter(\.isFavorite) }
             if !genres.isEmpty {
@@ -901,16 +875,10 @@ public struct AgentToolkit {
             guard let (playlist, tracks) = try await catalog.getPlaylist(gid) else { return .fail(call, descriptor, "歌单不存在") }
             return .ok(call, descriptor, playlist.name, .playlistProposal(name: playlist.name, tracks: tracks.prefix(50).map { TrackCard.from(CatalogTrackSummary(globalID: GlobalID(serverID: gid.serverID, remoteID: $0.id.rawValue), title: $0.title, artistName: $0.artistName, albumTitle: $0.albumTitle, duration: $0.duration, isFavorite: $0.isFavorite, userRating: 0, isDownloaded: false)) }))
         case "library_get_recently_played":
-            guard allowsHistory else {
-                return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
-            }
             let limit = (try? intParam(call, "limit")) ?? 20
             let list = try await catalog.getRecentHistory(serverID: serverID, limit: min(max(limit, 1), 100))
             return .ok(call, descriptor, "最近播放 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "library_get_starred":
-            guard allowsFavoritesAndRatings else {
-                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
-            }
             let list = try await catalog.getFavorites(serverID: serverID)
             return .ok(call, descriptor, "收藏 \(list.count) 首", .trackCards(list.map(TrackCard.from)))
         case "library_get_random_songs":
@@ -987,12 +955,6 @@ public struct AgentToolkit {
             // 按分类取歌曲清单（artist/album/genre/language/year/favorites/recent/popular/all），
             // 只含元数据（无歌词/海报），供模型按需注入对话后做推荐。
             let category = (try? require(call, "category"))?.lowercased() ?? "all"
-            guard category != "favorites" || allowsFavoritesAndRatings else {
-                return .fail(call, descriptor, "收藏与评分已按隐私设置隐藏。")
-            }
-            guard !["recent", "popular"].contains(category) || allowsHistory else {
-                return .fail(call, descriptor, "播放历史已按隐私设置隐藏。")
-            }
             let value = call.optionalString("value")
             let limit = (try? intParam(call, "limit")) ?? 100
             let lines = try await catalog.catalogTracks(

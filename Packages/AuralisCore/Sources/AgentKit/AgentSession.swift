@@ -112,13 +112,23 @@ public actor SessionStore {
     }
 
     public func append(_ message: AgentChatMessage, to id: UUID) {
-        // Reasoning, tool progress and action previews describe a live run;
-        // they are never durable conversation facts. Keep this invariant at
-        // the storage boundary as well as in AgentCoordinator so a future
-        // caller cannot accidentally pollute SessionStore.
-        guard !Self.isTransientActivity(message) else { return }
+        // Reasoning, streaming partials, tool progress, confirmations and
+        // action previews describe a live run; they are never durable
+        // conversation facts. Keep this invariant at the storage boundary as
+        // well as in AgentCoordinator so a future caller cannot accidentally
+        // pollute SessionStore. Filter per item so a compatibility adapter
+        // cannot persist a transient item merely because it shared a message
+        // with durable content.
+        let durableItems = message.messages.filter { !Self.isTransientActivity($0) }
+        guard !durableItems.isEmpty else { return }
+        let durableMessage = AgentChatMessage(
+            id: message.id,
+            role: message.role,
+            messages: durableItems,
+            createdAt: message.createdAt
+        )
         guard var session = cache[id] else { return }
-        session.messages.append(message)
+        session.messages.append(durableMessage)
         session.updatedAt = .now
         if session.title == "新会话", let firstUser = session.messages.first(where: { $0.role == .user }) {
             session.title = Self.deriveTitle(from: firstUser)
@@ -171,14 +181,12 @@ public actor SessionStore {
         persistSafely(operation: "delete")
     }
 
-    private static func isTransientActivity(_ message: AgentChatMessage) -> Bool {
-        !message.messages.isEmpty && message.messages.allSatisfy { item in
-            switch item {
-            case .reasoning, .toolProgress, .actionPreview:
-                return true
-            default:
-                return false
-            }
+    private static func isTransientActivity(_ message: AgentMessage) -> Bool {
+        switch message {
+        case .reasoning, .toolProgress, .actionPreview, .confirmation, .streaming:
+            return true
+        default:
+            return false
         }
     }
 
@@ -236,8 +244,26 @@ public actor SessionStore {
     private static func decode(from url: URL) -> [UUID: AgentSession]? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let list = try? JSONDecoder().decode([AgentSession].self, from: data) else { return nil }
+        // Migrate sessions written by older builds that persisted transient
+        // reasoning/progress items.  The storage boundary now guarantees that
+        // process state cannot reappear in the transcript or be replayed to a
+        // later model turn, even before the next append rewrites the file.
+        let sanitized = list.map { session -> AgentSession in
+            var session = session
+            session.messages = session.messages.compactMap { message in
+                let durableItems = message.messages.filter { !Self.isTransientActivity($0) }
+                guard !durableItems.isEmpty else { return nil }
+                return AgentChatMessage(
+                    id: message.id,
+                    role: message.role,
+                    messages: durableItems,
+                    createdAt: message.createdAt
+                )
+            }
+            return session
+        }
         // 用 uniquingKeysWith 兜底重复 id，避免 Dictionary(uniqueKeysWithValues:) 直接 fatalError
-        return Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return Dictionary(sanitized.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private static func deriveTitle(from message: AgentChatMessage) -> String {

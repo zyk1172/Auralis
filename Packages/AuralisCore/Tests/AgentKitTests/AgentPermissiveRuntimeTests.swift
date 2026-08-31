@@ -942,9 +942,11 @@ struct AgentPermissiveRuntimeTests {
         #expect(!favNames.contains("getFavorites"))
     }
 
-    @Test("TEST28 发现/播放/队列/歌单/收藏/不喜欢等常用工具均可获得")
+    @Test("TEST28 发现请求只获得读取能力，显式播放才获得播放 mutation")
     func commonToolsAreObtainable() {
-        // §6.1：音乐发现任务一次就能拿到推荐、队列、播放、收藏、不喜欢等工具。
+        // 推荐扩展只扩大 discovery/read surface。这里的“放一组”仍然是
+        // 用户明确要求播放，因此只保留 playbackPlay 对应的播放 schemas；
+        // queue/favorite 等无关 reversible mutation 不得被 namespace 广播带入。
         let discovery = ToolSelector.select(
             for: "给我放一组适合开车提神的歌",
             intent: .musicDiscovery,
@@ -956,13 +958,35 @@ struct AgentPermissiveRuntimeTests {
         #expect(names.contains("recommend_by_constraints"))
         #expect(names.contains("library_select_tracks"))
         #expect(names.contains("library_get_catalog_index"))
-        #expect(names.contains("queue_replace"))
-        #expect(names.contains("queue_append"))
         #expect(names.contains("playback_play_song"))
         #expect(names.contains("playback_play_playlist"))
-        #expect(names.contains("favorite_set"))
-        #expect(names.contains("preference_set_disliked"))
+        #expect(!names.contains("queue_replace"))
+        #expect(!names.contains("queue_append"))
+        #expect(!names.contains("favorite_set"))
+        #expect(!names.contains("preference_set_disliked"))
         #expect(names.contains("lyrics_get"))
+    }
+
+    @Test("TEST28b 纯推荐歌单不会暴露无关 reversible mutation")
+    func pureRecommendationDoesNotExposeMutations() {
+        let semantics = AgentRequestSemantics.analyze("推荐几个适合通勤的歌单")
+        #expect(semantics.domain == .recommendation)
+        #expect(semantics.requestedOperations.isEmpty)
+
+        let names = Set(ToolSelector.select(
+            for: "推荐几个适合通勤的歌单",
+            all: AgentToolRegistry.all
+        ).map(\.name))
+
+        #expect(names.contains("recommend_by_mood") || names.contains("recommend_by_constraints"))
+        #expect(names.contains("library_search") || names.contains("library_select_tracks"))
+        for mutation in [
+            "favorite_set", "rating_set", "preference_set_disliked",
+            "queue_append", "queue_append_many", "queue_play_next", "queue_replace",
+            "playback_play_song", "playback_play_playlist",
+        ] {
+            #expect(!names.contains(mutation), "纯推荐不应暴露 (mutation)")
+        }
     }
 
     // MARK: - TEST 29：Typed Array Schema + canonical-only
@@ -1341,8 +1365,8 @@ struct AgentPermissiveRuntimeTests {
         #expect(groups == [12])
     }
 
-    @Test("TEST65 创建歌单：60 候选 → playlist_add_songs 12 → 只显示 12")
-    func playlistCreationShowsOnlyAdded() async throws {
+    @Test("TEST65 向已有歌单添加：60 候选 → playlist_add_songs 12 → 只显示 12")
+    func playlistAddShowsOnlyAdded() async throws {
         let store = try makePermStore()
         let tracks = (0..<60).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
         try await seedPerm(store, tracks)
@@ -1355,7 +1379,7 @@ struct AgentPermissiveRuntimeTests {
             #"ACTION: {"tool":"playlist_add_songs","args":{"playlistID":"test-server:pl-a","trackIDs":"\#(ids)"}}"#,
         ], closing: "已创建歌单《开车提神》· 12 首。")
         await AgentRunner.run(
-            userText: "帮我建一个 12 首开车提神歌单",
+            userText: "帮我把 12 首开车提神的歌加入歌单《开车提神》",
             provider: provider,
             model: "scripted-model",
             bridge: bridge,

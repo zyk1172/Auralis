@@ -124,14 +124,6 @@ public struct ToolRuntime {
             )
         }
 
-        if let denial = ToolPrivacyPolicy.denialResult(
-            for: descriptor,
-            call: call,
-            permissions: resolvedPrivacy
-        ) {
-            return denial
-        }
-
         do {
             // Internal state-machine primitives are executable only by their
             // trusted built-in skill. Visibility controls discovery; this is

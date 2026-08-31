@@ -835,8 +835,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                                 continuation.yield(.reasoningDelta(text))
                             case let .answer(text):
                                 continuation.yield(.answerDelta(text))
-                            case .unknownDelta:
-                                continuation.yield(.unknownDelta)
+                            case let .unknownDelta(text):
+                                continuation.yield(.unknownDelta(text))
                             case let .toolCall(call):
                                 continuation.yield(.toolCall(call))
                             case let .webCitations(citations):
@@ -885,8 +885,8 @@ public struct OpenAICompatibleProvider: AIProvider {
                             continuation.yield(.reasoningDelta(text))
                         case let .answer(text):
                             continuation.yield(.answerDelta(text))
-                        case .unknownDelta:
-                            continuation.yield(.unknownDelta)
+                        case let .unknownDelta(text):
+                            continuation.yield(.unknownDelta(text))
                         case let .toolCall(call):
                             continuation.yield(.toolCall(call))
                         case let .webCitations(citations):
@@ -1805,13 +1805,13 @@ public struct OpenAICompatibleProvider: AIProvider {
 
     /// Responses SSE 单事件解析结果。与现有 stream 事件模型对齐：
     /// `.reasoning` / `.answer` map to their explicit stream channels;
-    /// `.unknownDelta` remains reserved for truly unsupported events. Tool
-    /// calls and completion stay provider-neutral.
+    /// `.unknownDelta` carries compatibility text that could not be classified
+    /// by the codec. Tool calls and completion stay provider-neutral.
     /// `.failed` → 上抛错误、`.ignore` → 跳过。
     enum ResponsesStreamParseResult: Equatable, Sendable {
         case reasoning(String)
         case answer(String)
-        case unknownDelta
+        case unknownDelta(String)
         case toolCall(AIToolCall)
         case webCitations([AIWebCitation])
         case done
@@ -2301,15 +2301,25 @@ public struct OpenAICompatibleProvider: AIProvider {
                     events.append(.reasoningDelta(reasoning))
                 }
             }
-            if let answer = plainText(from: delta["content"]), !answer.isEmpty {
-                events.append(.answerDelta(answer))
+            // Chat-compatible gateways sometimes use `output_text` or the
+            // legacy `text` key instead of OpenAI's `content`. They are still
+            // explicit answer channels and must not fall through to a silent
+            // drop just because the provider omitted its usual field name.
+            for key in ["content", "output_text", "text"] {
+                if let answer = plainText(from: delta[key]), !answer.isEmpty {
+                    events.append(.answerDelta(answer))
+                }
             }
         }
         if events.isEmpty, !toolCallArgumentsInFlight,
            Self.streamToolCallFragments(from: data).isEmpty {
             let bareDelta = plainText(from: object["delta"])
                 ?? (object["choices"] as? [[String: Any]]).flatMap { choices in
-                    choices.first.flatMap { plainText(from: $0["delta"]) }
+                    choices.first.flatMap { choice in
+                        plainText(from: choice["delta"])
+                            ?? plainText(from: choice["output_text"])
+                            ?? plainText(from: choice["text"])
+                    }
                 }
             if let bareDelta, !bareDelta.isEmpty {
                 events.append(.answerDelta(bareDelta))

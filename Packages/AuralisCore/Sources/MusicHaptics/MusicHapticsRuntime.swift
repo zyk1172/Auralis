@@ -1332,6 +1332,23 @@ public final class MusicHapticsCoordinator {
         case .analyze:
             source = .analyzing
         }
+
+        // A next-item preparation can finish before this current preparation
+        // is activated. `startPreparedAnalysis` deliberately defers it while
+        // the coordinator has no authoritative playing state yet; drain that
+        // deferred source at the same activation boundary once audio is known
+        // to be running.
+        if isPlaying,
+           runtimeOutputEnabled,
+           !hapticsSuspended,
+           !isInBackground,
+           !audioBuffering {
+            let deferredPreparedSources = deferredPreparedLookaheadSources
+            deferredPreparedLookaheadSources.removeAll()
+            for (preparationID, source) in deferredPreparedSources {
+                preparedLookaheadAnalyzers[preparationID]?.start(source: source)
+            }
+        }
     }
 
     /// Prepared next items may start decoding before they become current.  It
@@ -1340,8 +1357,13 @@ public final class MusicHapticsCoordinator {
         guard case let .analyzeLookahead(request) = preparation.plan else { return }
         guard let analyzer = preparation.lookaheadAnalyzer else { return }
         preparedLookaheadAnalyzers[preparation.id] = analyzer
-        analyzer.updatePlaybackPosition(0, isPlaying: !hapticsSuspended && !isInBackground, rate: 1)
-        if hapticsSuspended || isInBackground {
+        let canStart = playbackIsPlaying
+            && !audioBuffering
+            && runtimeOutputEnabled
+            && !hapticsSuspended
+            && !isInBackground
+        analyzer.updatePlaybackPosition(0, isPlaying: canStart, rate: 1)
+        if !canStart {
             analyzer.pause()
             deferredPreparedLookaheadSources[preparation.id] = request.analysisSource
             return
@@ -1435,6 +1457,14 @@ public final class MusicHapticsCoordinator {
             return
         }
         activeAnalysisSink?.resume()
+        // A prepared-next request can finish while AVPlayer is buffering or
+        // paused. Drain it only after playback resumes; otherwise the async
+        // completion would open an optional decoder while audio is not moving.
+        let deferredPreparedSources = deferredPreparedLookaheadSources
+        deferredPreparedLookaheadSources.removeAll()
+        for (preparationID, source) in deferredPreparedSources {
+            preparedLookaheadAnalyzers[preparationID]?.start(source: source)
+        }
         if case let .analyzeLookahead(request) = currentPlan {
             // A preparation activated while paused deliberately has not
             // opened its decoder.  Resume must therefore ensure the current
