@@ -35,6 +35,7 @@
 		DE2E4474991E5F09F514D763 /* AssistantAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C361144E585E27577F3148B /* AssistantAppIntent.swift */; };
 		E63C605044B7EDBF230C0FFE /* LaunchExperienceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DDE4627502072B5917D02B /* LaunchExperienceView.swift */; };
 		E76FDDD286F4D8186A721B0C /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 277C164815EFE9449940797F /* InfoPlist.xcstrings */; };
+		F2E8B0C1D4A67F908B3D4A52 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B4A0E7D9C2F14B8A93D6E501 /* LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +102,7 @@
 		AA25390D86BDC4807DC0F7CF /* AuralisIntents.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AuralisIntents.entitlements; sourceTree = "<group>"; };
 		C30EC713D0C122CE058E2658 /* BuildProvenance.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildProvenance.generated.swift; sourceTree = "<group>"; };
 		D6DDE4627502072B5917D02B /* LaunchExperienceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchExperienceView.swift; sourceTree = "<group>"; };
+		B4A0E7D9C2F14B8A93D6E501 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		DAC296141E6A4EE8085AFDE2 /* NowPlayingWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingWidget.swift; sourceTree = "<group>"; };
 		EBF41918A59E1038580AD9CE /* IntentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentHandler.swift; sourceTree = "<group>"; };
 		F7FF4CE3EC2EF7AFE5C6F006 /* AppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntents.swift; sourceTree = "<group>"; };
@@ -242,6 +244,7 @@
 				1C17241D49F118BD819B4F7A /* AuralisApp.swift */,
 				C30EC713D0C122CE058E2658 /* BuildProvenance.generated.swift */,
 				D6DDE4627502072B5917D02B /* LaunchExperienceView.swift */,
+				B4A0E7D9C2F14B8A93D6E501 /* LaunchScreen.storyboard */,
 				7661C85FE41D3637B3F6239E /* Intents */,
 				01D35E0B7E33395DCEF1FD35 /* LiveActivity */,
 				537240F55E4B105B80C97A1C /* Resources */,
@@ -451,6 +454,7 @@
 			files = (
 				CCAA560CAB98317A3003C422 /* AppIcon.icon in Resources */,
 				20F4CEED549B426035A9144A /* Assets.xcassets in Resources */,
+				F2E8B0C1D4A67F908B3D4A52 /* LaunchScreen.storyboard in Resources */,
 				E76FDDD286F4D8186A721B0C /* InfoPlist.xcstrings in Resources */,
 				8E4AD7B00E7328844A3677FE /* Localizable.xcstrings in Resources */,
 			);

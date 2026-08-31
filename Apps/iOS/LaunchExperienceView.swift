@@ -25,17 +25,22 @@ struct LaunchExperienceView: View {
             }
         }
         .task {
-            _ = Task { @MainActor in
-                guard !isUISmokeLaunch else { return }
-                await AuralisAppModel.shared.prepareForApplicationLaunch()
-            }
+            guard !isUISmokeLaunch else { return }
 
-            // The static system launch screen has system-owned timing. Once
-            // SwiftUI owns the first frame, keep this handoff deterministic:
-            // 1.8s of solid artwork followed by a 0.2s fade. Restoration and
-            // warm-up continue in `startup` without delaying or extending the
-            // visual experience.
-            try? await Task.sleep(for: .milliseconds(1_800))
+            // The static storyboard owns the first system frame. Once
+            // SwiftUI takes over, keep the same artwork visible until both
+            // the minimum display interval and the process-wide critical
+            // launch restoration have completed. Catalog refresh remains in
+            // the scene-active background path and is not part of this gate.
+            async let startup: Void = AuralisAppModel.shared.prepareForApplicationLaunch()
+            async let minimumDuration: Void = Task.sleep(for: .seconds(2))
+
+            do {
+                try await minimumDuration
+            } catch {
+                return
+            }
+            await startup
 
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.20)) {
@@ -51,11 +56,18 @@ private struct LaunchOverlay: View {
         ZStack {
             Color("LaunchBackground")
 
-            Image("LaunchGlyph")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 112, height: 112)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            GeometryReader { geometry in
+                Image("LaunchGlyph")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 112, height: 112)
+                    // Match LaunchScreen.storyboard: centerY is 0.8 of the
+                    // view center, i.e. 40% of the full screen height.
+                    .position(
+                        x: geometry.size.width / 2,
+                        y: geometry.size.height * 0.40
+                    )
+            }
 
             VStack(spacing: 8) {
                 Spacer()

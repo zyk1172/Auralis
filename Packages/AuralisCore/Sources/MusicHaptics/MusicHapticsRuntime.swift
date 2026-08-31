@@ -392,8 +392,41 @@ public final class SystemMusicHapticsAdapter {
     }
 }
 
+/// Output seam for the coordinator. The production implementation below is
+/// the Core Haptics engine; the seam lets an integration test observe the
+/// exact windows handed off after scheduler decisions without requiring a
+/// physical Taptic Engine.
 @MainActor
-final class CustomMusicHapticsEngine {
+protocol MusicHapticsOutputEngine: AnyObject {
+    var state: MusicHapticsEngineState { get }
+    var applicationSuspended: Bool { get }
+    var lastStopReason: String? { get }
+    var supportsHaptics: Bool { get }
+    var canProduceOutput: Bool { get }
+
+    func setActualSuspensionHandler(_ handler: (() -> Void)?)
+    func warmUp()
+    func play(
+        _ timeline: MusicHapticsTimeline,
+        offset: TimeInterval,
+        playbackRate: Double
+    ) throws
+    func play(
+        _ window: MusicHapticsAnalysisWindow,
+        from currentPosition: TimeInterval,
+        intensity: MusicHapticsIntensity,
+        playbackRate: Double
+    )
+    func pause()
+    func resume(at offset: TimeInterval, playbackRate: Double)
+    func seek(to offset: TimeInterval, playing: Bool, playbackRate: Double)
+    func stop()
+    func applicationDidEnterBackground()
+    func restartIfNeeded()
+}
+
+@MainActor
+final class CustomMusicHapticsEngine: MusicHapticsOutputEngine {
     private(set) var state: MusicHapticsEngineState = .notCreated
     private(set) var applicationSuspended = false
     private(set) var lastStopReason: String?
@@ -916,9 +949,10 @@ public final class MusicHapticsCoordinator {
 
     private let store: MusicHapticsStore
     private let system = SystemMusicHapticsAdapter()
-    private let custom = CustomMusicHapticsEngine()
+    private let custom: any MusicHapticsOutputEngine
     private let rollingScheduler: RollingMusicHapticsScheduler
     private let defaults: UserDefaults
+    private let isFeatureAvailable: Bool
     private var analysisSourceProvider: (any MusicHapticsAnalysisSourceProvider)?
     private var failedLookaheadPreparationIDs: Set<UUID> = []
     private var lookaheadDiagnosticReasons: [UUID: MusicHapticsAnalysisDiagnostic] = [:]
@@ -965,14 +999,35 @@ public final class MusicHapticsCoordinator {
     /// playback wait for disk I/O.
     private var inMemoryPartials: [String: MusicHapticsPartialCheckpoint] = [:]
 
-    public init(
+    public convenience init(
         store: MusicHapticsStore = MusicHapticsStore(),
         defaults: UserDefaults = .standard,
         analysisSourceProvider: (any MusicHapticsAnalysisSourceProvider)? = nil
     ) {
+        self.init(
+            store: store,
+            defaults: defaults,
+            analysisSourceProvider: analysisSourceProvider,
+            outputEngine: CustomMusicHapticsEngine(),
+            isFeatureAvailable: MusicHapticsPlatformPolicy.isFeatureAvailable
+        )
+    }
+
+    /// Internal injection seam for coordinator integration tests. Production
+    /// callers use the Core Haptics implementation selected by the public
+    /// initializer above.
+    init(
+        store: MusicHapticsStore = MusicHapticsStore(),
+        defaults: UserDefaults = .standard,
+        analysisSourceProvider: (any MusicHapticsAnalysisSourceProvider)? = nil,
+        outputEngine: any MusicHapticsOutputEngine,
+        isFeatureAvailable: Bool = MusicHapticsPlatformPolicy.isFeatureAvailable
+    ) {
         self.store = store
         self.defaults = defaults
         self.analysisSourceProvider = analysisSourceProvider
+        self.custom = outputEngine
+        self.isFeatureAvailable = isFeatureAvailable
         let policy = MusicHapticsAnalysisPerformancePolicy.current
         self.rollingScheduler = RollingMusicHapticsScheduler(
             analysisLeadTarget: policy.analysisLeadTarget,
@@ -997,7 +1052,7 @@ public final class MusicHapticsCoordinator {
     }
 
     public var supportsHaptics: Bool {
-        MusicHapticsPlatformPolicy.isFeatureAvailable && custom.supportsHaptics
+        isFeatureAvailable && custom.supportsHaptics
     }
 
     /// Resolves system/custom/analyze exactly once and creates only the
@@ -1010,7 +1065,7 @@ public final class MusicHapticsCoordinator {
         playbackURL: URL? = nil
     ) async -> MusicHapticsPlaybackPreparation {
         let startedAt = ContinuousClock.now
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+        guard isFeatureAvailable else {
             let systemAvailability = MusicHapticsSystemAvailability(
                 hasISRC: identity.isrc != nil,
                 active: false,
@@ -1268,7 +1323,7 @@ public final class MusicHapticsCoordinator {
         let effectiveEnabled = preparation.preference.effective(
             globalEnabled: globalEnabled
         )
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable,
+        guard isFeatureAvailable,
               effectiveEnabled else {
             runtimeOutputEnabled = false
             source = .none
@@ -1870,7 +1925,7 @@ public final class MusicHapticsCoordinator {
     /// so its value reflects the user's setting while a sidecar is still
     /// preparing, rather than waiting for a plan to exist.
     public func effectiveEnabled(for identity: MusicHapticsIdentity) async -> Bool {
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return false }
+        guard isFeatureAvailable else { return false }
         let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false
         let preference = (try? await store.preference(for: identity)) ?? .inherit
         return preference.effective(globalEnabled: globalEnabled)
@@ -1939,7 +1994,7 @@ public final class MusicHapticsCoordinator {
     }
 
     public func favoriteChanged(_ favorite: Bool, identity: MusicHapticsIdentity) {
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return }
+        guard isFeatureAvailable else { return }
         currentFavorite = favorite
         Task { try? await store.updateFavorite(favorite, for: identity) }
     }
@@ -1953,7 +2008,7 @@ public final class MusicHapticsCoordinator {
     public func usage() async -> MusicHapticsUsage { (try? await store.usage()) ?? MusicHapticsUsage() }
 
     public func reconcile(_ tracks: [MusicHapticsIdentity], authoritative: Bool) async {
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable else { return }
+        guard isFeatureAvailable else { return }
         try? await store.reconcile(with: tracks, authoritative: authoritative)
     }
 
@@ -2133,7 +2188,7 @@ public final class MusicHapticsCoordinator {
     /// exposes the runtime state of another track, so an open information
     /// sheet cannot accidentally display the currently playing song's plan.
     public func assetInfo(for identity: MusicHapticsIdentity) async -> MusicHapticsAssetInfo {
-        guard MusicHapticsPlatformPolicy.isFeatureAvailable else {
+        guard isFeatureAvailable else {
             return MusicHapticsAssetInfo(origin: .none, state: .unavailable)
         }
         let globalEnabled = defaults.object(forKey: Self.enabledDefaultsKey) as? Bool ?? false

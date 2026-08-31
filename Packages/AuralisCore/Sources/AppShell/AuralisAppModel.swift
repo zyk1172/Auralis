@@ -5550,9 +5550,10 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
-    /// Performs process-wide warm-up and restores local app state once. The
-    /// caller may keep rendering the launch overlay while this task continues;
-    /// no network result is required to dismiss that overlay.
+    /// Performs process-wide warm-up and restores critical local app state
+    /// once. The launch overlay awaits this task together with its minimum
+    /// display duration; catalog refresh and other network maintenance remain
+    /// outside this critical path.
     public func prepareForApplicationLaunch() async {
         if let applicationLaunchTask {
             await applicationLaunchTask.value
