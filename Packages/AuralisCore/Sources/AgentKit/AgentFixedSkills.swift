@@ -621,10 +621,15 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             }
             return .none
         case "playlist_create", "createPlaylist":
+            // Facts are the canonical create contract; structured cards and
+            // legacy text remain compatibility fallbacks for older executors.
+            let rawPlaylistID = result.facts["playlist.created.globalID"]
+                ?? Self.extractPlaylistID(from: result.payload, fallback: result.summary)
+            guard let playlistID = rawPlaylistID, GlobalID(playlistID) != nil else {
+                return .fail("歌单创建结果缺少有效 playlistID；服务器状态可能已发生变化，请先核验，禁止自动重新创建。")
+            }
             playlistCreated = true
-            // Structured cards are the canonical create result; legacy text is
-            // only a compatibility fallback.
-            createdPlaylistID = Self.extractPlaylistID(from: result.payload, fallback: result.summary)
+            createdPlaylistID = playlistID
             transition(to: .addingTracks)
             return .none
         case "playlist_add_songs", "addTracksToPlaylist":
@@ -640,20 +645,33 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
                 return .fail("歌单验证失败：验证结果格式无效（\(result.summary)）。")
             }
             verifiedTrackIDs.formUnion(tracks.map(\.globalID.description))
-            let missing = selectedTrackIDs.filter { !verifiedTrackIDs.contains($0) }
-            if missing.isEmpty {
-                transition(to: .completed)
+            if result.facts["playlist.hasMore"] == "true" {
+                let nextOffset = Int(result.facts["playlist.nextOffset"] ?? "")
+                    ?? (verificationOffset + tracks.count)
+                guard nextOffset > verificationOffset else {
+                    return .fail("歌单验证失败：分页验证没有推进（当前 offset=\(verificationOffset)）。")
+                }
+                verificationOffset = nextOffset
                 return .none
             }
-            guard result.facts["playlist.hasMore"] == "true" else {
+
+            // 新建歌单的目标状态是精确集合，而不是“提交的歌曲都出现了”。
+            // 只有明确读到最后一页后，才同时检查缺失、额外歌曲和总数。
+            let expectedTrackIDs = Set(selectedTrackIDs)
+            let missing = expectedTrackIDs.subtracting(verifiedTrackIDs)
+            guard missing.isEmpty else {
                 return .fail("歌单验证失败：有 \(missing.count) 首提交的歌曲未出现在歌单中。")
             }
-            let nextOffset = Int(result.facts["playlist.nextOffset"] ?? "")
-                ?? (verificationOffset + tracks.count)
-            guard nextOffset > verificationOffset else {
-                return .fail("歌单验证失败：分页验证没有推进（当前 offset=\(verificationOffset)）。")
+            let extra = verifiedTrackIDs.subtracting(expectedTrackIDs)
+            guard extra.isEmpty else {
+                return .fail("歌单验证失败：出现 \(extra.count) 首未提交的歌曲。")
             }
-            verificationOffset = nextOffset
+            if let rawTotal = result.facts["playlist.totalCount"],
+               let total = Int(rawTotal),
+               total != expectedTrackIDs.count {
+                return .fail("歌单验证失败：实际 \(total) 首，预期 \(expectedTrackIDs.count) 首。")
+            }
+            transition(to: .completed)
             return .none
         default:
             return .none

@@ -194,6 +194,42 @@ public struct ToolLoop {
         case textualAction
         case skillForced
         case skillGenerated
+
+        var isRuntimeOwned: Bool {
+            switch self {
+            case .skillForced, .skillGenerated:
+                return true
+            case .providerNative, .textualAction:
+                return false
+            }
+        }
+
+        var isModelOwned: Bool { !isRuntimeOwned }
+    }
+
+    /// Provider 一次请求发出前的 schema admission 快照。
+    /// `tool_search` 可以扩展下一轮 schema，但不得让同一份 Provider 响应
+    /// 中稍后出现的调用获得本轮尚未见过的工具权限。
+    private struct RoundToolAdmission: Sendable {
+        private let names: Set<String>
+
+        init(_ selectedTools: [ToolDescriptor]) {
+            var names = Set<String>()
+            for descriptor in selectedTools {
+                names.insert(descriptor.name)
+                names.insert(ToolSelector.canonicalAliases[descriptor.name] ?? descriptor.name)
+                for alias in descriptor.aliases {
+                    names.insert(alias)
+                    names.insert(ToolSelector.canonicalAliases[alias] ?? alias)
+                }
+            }
+            self.names = names
+        }
+
+        func contains(_ call: LoopToolCall) -> Bool {
+            let canonicalName = ToolSelector.canonicalAliases[call.name] ?? call.name
+            return names.contains(call.name) || names.contains(canonicalName)
+        }
     }
 
     /// Model calls must come from the tool schema loaded for this round.
@@ -201,7 +237,7 @@ public struct ToolLoop {
     /// calls are Runtime-owned control-flow edges rather than model authority.
     private static func isModelToolCallAdmitted(
         _ call: LoopToolCall,
-        selectedTools: [ToolDescriptor]
+        admission: RoundToolAdmission
     ) -> Bool {
         switch call.origin {
         case .skillForced, .skillGenerated:
@@ -212,9 +248,7 @@ public struct ToolLoop {
             // alias is admitted only when its canonical descriptor was
             // loaded for this round; this does not broaden the model schema
             // or grant a hidden capability.
-            let canonicalName = ToolSelector.canonicalAliases[call.name] ?? call.name
-            return descriptor(named: call.name, in: selectedTools) != nil
-                || descriptor(named: canonicalName, in: selectedTools) != nil
+            return admission.contains(call)
         }
     }
 
@@ -725,6 +759,7 @@ public struct ToolLoop {
             let toolDefinitions = nativeMode
                 ? ToolSelector.toolDefinitions(from: modelTools, strict: provider.capabilities.supportsStrictSchema)
                 : []
+            let roundAdmission = RoundToolAdmission(selectedTools)
             let schemaTokens = nativeMode ? ContextManager.estimatedTokens(toolDefinitions) : 0
             let inputBudget = ContextManager.inputBudget(
                 capabilities: provider.capabilities,
@@ -874,7 +909,7 @@ public struct ToolLoop {
                 && calls.count > 1
                 && calls.allSatisfy { call in
                     guard !call.malformedArguments,
-                          Self.isModelToolCallAdmitted(call, selectedTools: selectedTools),
+                          Self.isModelToolCallAdmitted(call, admission: roundAdmission),
                           !Self.isSearchCapability(call.name),
                           let descriptor = Self.descriptor(for: call, in: availableToolDescriptors)
                     else { return false }
@@ -931,7 +966,7 @@ public struct ToolLoop {
                     convergence.recordToolSearch()
                 }
                 await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
-                guard Self.isModelToolCallAdmitted(call, selectedTools: selectedTools) else {
+                guard Self.isModelToolCallAdmitted(call, admission: roundAdmission) else {
                     resultMessages.append(toolResultMessage(
                         callID: call.id,
                         content: "（工具执行结果）\(call.name)：未执行 - 该工具尚未加载到本轮工具 schema。如确实需要此能力，请先使用 tool_search 发现并加载。",
@@ -1172,8 +1207,7 @@ public struct ToolLoop {
                         limit: limit,
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
-                        allowedOperations: effectiveAuthorization.allowedOperations,
-                        semantics: plan.semantics
+                        allowedOperations: effectiveAuthorization.allowedOperations
                     )
                     if let stopReason = convergence.stopReason(under: convergencePolicy) {
                         await emit(AgentChatMessage(role: .assistant, messages: [.error(stopReason.userMessage)]))
@@ -1565,6 +1599,7 @@ public struct ToolLoop {
                     activeSkillID: activeSkillID
                 )
             }
+            let roundAdmission = RoundToolAdmission(selectedTools)
 
             // A stateful skill owns mandatory control-flow edges. The model is
             // only asked for a turn when the skill explicitly says so.
@@ -2049,7 +2084,7 @@ public struct ToolLoop {
                 // 反复 tool_search 一个永远不会进入模型 schema 的工具。
                 if let activeSkill,
                    activeSkill.ownedToolNames.contains(call.name),
-                   call.origin != .skillForced {
+                   call.origin.isModelOwned {
                     let failureText = "（工具执行结果）\(call.name)：当前由 Stateful Skill 自动管理，不能由模型直接调用，也不需要通过 tool_search 加载。请继续使用搜索/推荐/选择工具，完成后调用 result_present_tracks 提交最终歌曲；系统会自动执行该步骤。"
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Skill-owned 操作由 Runtime 管理", reused: false))
                     toolMessages.append(Self.toolResultMessage(
@@ -2060,7 +2095,7 @@ public struct ToolLoop {
                     continue
                 }
 
-                guard Self.isModelToolCallAdmitted(call, selectedTools: selectedTools) else {
+                guard Self.isModelToolCallAdmitted(call, admission: roundAdmission) else {
                     let failureText = "（工具执行结果）\(call.name)：未执行 - 该工具尚未加载到本轮工具 schema。如确实需要此能力，请先使用 tool_search 发现并加载。"
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "工具尚未加载到本轮 schema", reused: false))
                     toolMessages.append(Self.toolResultMessage(
@@ -2088,7 +2123,7 @@ public struct ToolLoop {
                 // origin == .skillForced 的 forced call 执行。
                 if activeSkill != nil,
                    descriptor.permission != .readOnly,
-                   call.origin != .skillForced {
+                   call.origin.isModelOwned {
                     let failureText = "（工具执行结果）\(call.name)：本任务由固定 Skill 编排，写操作由系统确定性执行；请只使用搜索/推荐/选择类工具收集候选。"
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Skill 模式拒绝模型直接写调用", reused: false))
@@ -2367,7 +2402,6 @@ public struct ToolLoop {
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
                         allowedOperations: effectiveAuthorization.allowedOperations,
-                        semantics: plan.semantics,
                         excludedNames: activeSkill?.ownedToolNames ?? [],
                         excludeAllMutations: activeSkill != nil
                     )
@@ -2860,7 +2894,6 @@ public struct ToolLoop {
         allDescriptors: [ToolDescriptor],
         current: inout [ToolDescriptor],
         allowedOperations: Set<ToolAuthorizationOperation>,
-        semantics: AgentRequestSemantics? = nil,
         excludedNames: Set<String> = [],
         excludeAllMutations: Bool = false
     ) -> ToolSearchExpansionResult {
@@ -2870,33 +2903,7 @@ public struct ToolLoop {
             namespace: namespace,
             limit: limit,
             authorizedOperations: allowedOperations
-        ).filter { entry in
-            guard let semantics, entry.permission != .readOnly else { return true }
-            // `tool_search` is an explicit model request for a capability.
-            // For ordinary music/queue/playlist turns, let a matching
-            // mutation descriptor enter the next schema even when the first
-            // semantic pass only identified a neighboring domain (for
-            // example, “播放一首歌” followed by a search for “替换队列”).
-            // This is discovery, not an execution authorization decision;
-            // ToolRuntime still applies argument validation and the
-            // descriptor-owned confirmation policy.
-            //
-            // A read/discovery turn must not turn a model-generated search
-            // into an unrelated write. Ordinary mutation turns may discover
-            // a neighboring reversible operation explicitly (for example,
-            // “播放一首歌” followed by a search for “替换队列”).
-            guard semantics.isExplicitMutation else { return false }
-            // Recommendation-only turns are the one important exception:
-            // recommendation expansion must not turn a read request into an
-            // unrelated write. An explicit compound request such as
-            // “推荐并加入队列” retains only its concrete operation(s).
-            guard semantics.domain == .recommendation else { return true }
-            guard !semantics.requestedOperations.isEmpty else { return true }
-            guard let rawOperation = entry.authorizationOperation,
-                  let operation = ToolAuthorizationOperation(rawValue: rawOperation)
-            else { return true }
-            return semantics.requestedOperations.contains(operation)
-        }
+        )
         let byName = Dictionary(uniqueKeysWithValues: allDescriptors.map { ($0.name, $0) })
         var existing = Set(current.map(\.name))
         var addedEntries: [ToolCatalogEntry] = []
