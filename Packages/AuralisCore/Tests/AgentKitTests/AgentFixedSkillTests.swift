@@ -7,7 +7,7 @@ import Testing
 
 // MARK: - Built-in Fixed Skills 与 loop 级收敛测试
 //
-// P6/P8/P9：loop 级搜索收敛 / tool_search 授权可见性
+// P6/P8/P9：loop 级搜索诊断 / tool_search 授权可见性
 // N1-N9：QueueReplacePlaybackSkill
 // O1-O6：PlaylistBuildSkill
 
@@ -278,8 +278,8 @@ private let skillServerID: ServerID = "v2"
 @Suite("Agent orchestration v2 loop")
 struct AgentSkillLoopTests {
 
-    @Test("P6 同一搜索反复无新结果 → 收敛停止")
-    func sameSearchNoEvidenceConverges() async throws {
+    @Test("P6 同一搜索反复无新结果 → 仅累计诊断，不提前停止")
+    func sameSearchNoEvidenceRemainsModelControlled() async throws {
         let store = try skillStore()
         let collector = SkillCollector()
         let provider = SkillProvider(Array(repeating: skillResponse(
@@ -298,9 +298,8 @@ struct AgentSkillLoopTests {
             confirm: { _ in true },
             emit: { await collector.append($0) }
         )
-        #expect(provider.requests().count <= 4, "连续无新结果后应停止")
-        let stopped = await collector.containsError("没有获得新的结果")
-        #expect(stopped)
+        #expect(provider.requests().count >= 4, "连续无新结果不应触发 convergence 提前停止")
+        #expect(await collector.containsError("没有获得新的结果") == false)
     }
 
     @Test("P8/P9 tool_search 结果不伪造 unauthorized 标记，普通 mutation 可进入后续 schema")

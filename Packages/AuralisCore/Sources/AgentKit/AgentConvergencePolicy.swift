@@ -1,30 +1,24 @@
 import Foundation
 
-/// 普通交互式 Agent 的确定性收敛策略。
+/// 普通交互式 Agent 的收敛诊断配置。
 ///
-/// 目标是把「同一请求反复不收敛」从纯诊断变成可执行的行为边界，同时不破坏
-/// 批量任务（Recommendation Index 走专用 Runtime，不经过这里；legacy
-/// `AgentRunner` 兼容面保持宽松预算）。
-///
-/// 收敛按「行为模式」触发，而不是把不同参数的合法批量读取当作死循环：
-/// - 完全相同 tool+参数：最多真正执行/尝试有限次；
-/// - tool_search 是能力发现，不是主链路：单任务有次数上限；
-/// - 连续 malformed、连续无新证据都是明确的失败信号；
-/// - 模型轮次 / 总工具调用是兜底看门狗，防止任何异常路径无限循环。
+/// 这些字段保留为兼容性、遥测和诊断数据。普通 Agent 是否继续调用工具，
+/// 由模型根据真实工具结果决定；此 tracker 不再因为这些计数主动终止普通 Agent。
+/// Recommendation Index 仍然走专用 Runtime，不经过普通 Agent 循环。
 public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
-    /// 普通任务模型轮次上限。原实现默认 1000；交互式普通聊天应 fail-fast。
+    /// 诊断用的模型轮次阈值；不作为普通 Agent 的终止条件。
     public var maxModelRounds: Int
-    /// 普通任务总工具调用上限。
+    /// 诊断用的总工具调用阈值；不作为普通 Agent 的终止条件。
     public var maxTotalToolCalls: Int
-    /// 相同 tool + 相同规范化参数连续出现的上限（缓存命中和幂等跳过不计数）。
+    /// 诊断用的相同 tool + 相同规范化参数阈值（缓存命中和幂等跳过不计数）。
     public var maxIdenticalToolCalls: Int
-    /// 连续没有新增事实/证据的轮次上限。
+    /// 诊断用的连续无新增事实/证据轮次阈值。
     public var maxNoProgressRounds: Int
-    /// 单任务 tool_search 调用上限。
+    /// 诊断用的单任务 tool_search 调用阈值。
     public var maxToolSearches: Int
-    /// 连续 malformed 参数上限。
+    /// 诊断用的连续 malformed 参数阈值。
     public var maxConsecutiveMalformedCalls: Int
-    /// 连续搜索工具无新证据的上限（现有工作集提示的上限之上再加硬停止）。
+    /// 诊断用的连续搜索工具无新证据阈值。
     public var maxSameToolNoNewEvidence: Int
 
     public init(
@@ -45,10 +39,10 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         self.maxSameToolNoNewEvidence = maxSameToolNoNewEvidence
     }
 
-    /// 交互式普通聊天的严格预算。
+    /// 交互式普通聊天的默认诊断阈值集合；不构成执行预算。
     public static let interactive = AgentConvergencePolicy()
 
-    /// 需要较多轮次但仍应 fail-fast 的复合任务（搜索→选择→写队列→播放等）。
+    /// 复合任务（搜索→选择→写队列→播放等）的诊断阈值集合。
     public static let compoundTask = AgentConvergencePolicy(
         maxModelRounds: 24,
         maxTotalToolCalls: 48,
@@ -59,8 +53,7 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         maxSameToolNoNewEvidence: 3
     )
 
-    /// Legacy `AgentRunner` 兼容面保留的历史契约：不设累计轮次/调用上限，
-    /// 只保留防呆模式（相同参数、搜索无新证据、malformed）。
+    /// Legacy `AgentRunner` 兼容面保留的历史阈值集合。
     /// 生产路径（ConversationEngine）不使用此预算。
     public static let legacyPermissive = AgentConvergencePolicy(
         maxModelRounds: 1_000,
@@ -72,7 +65,7 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
         maxSameToolNoNewEvidence: .max
     )
 
-    /// 长任务（下载批量 / 推荐索引等）保留自己的宽松预算；推荐索引实际走
+    /// 长任务（下载批量 / 推荐索引等）保留自己的诊断阈值集合；推荐索引实际走
     /// RecommendationIndexSkillRuntime，不经过普通 Agent 循环。
     public static let longRunning = AgentConvergencePolicy(
         maxModelRounds: 10_000,
@@ -85,7 +78,7 @@ public struct AgentConvergencePolicy: Sendable, Equatable, Codable {
     )
 }
 
-/// 收敛停止的可诊断原因。用户提示由 `userMessage` 生成，避免模糊的「任务失败」。
+/// 历史收敛停止原因枚举。保留 `userMessage` 与 Codable API 供兼容和诊断使用。
 public enum AgentConvergenceStopReason: String, Sendable, Equatable, Codable {
     case modelRoundLimit
     case totalToolCallLimit
@@ -129,7 +122,7 @@ public struct AgentConvergenceTracker: Sendable {
     public private(set) var lastSignature: String?
     /// 每个搜索工具独立的“连续无新证据”streak（不同工具互不污染）。
     public private(set) var searchNoNewEvidenceStreakByTool: [String: Int] = [:]
-    /// 已达到收敛阈值的搜索工具名（从 schema 移除，避免模型反复尝试）。
+    /// 兼容性的搜索工具集合；普通 Agent 不会由 tracker 自动标记或移除工具。
     public private(set) var exhaustedSearchTools: Set<String> = []
 
     public init() {}
@@ -157,7 +150,7 @@ public struct AgentConvergenceTracker: Sendable {
 
     /// 搜索工具结果返回后调用：按工具名独立累计 no-new-evidence。
     /// 产生新 evidence → 重置该工具 streak；无新 → 累计。
-    /// 返回 true 表示该工具已达到收敛阈值（调用方应从 schema 移除该工具）。
+    /// 只累计诊断 streak；返回值保留兼容性，普通 Agent 始终可以继续使用该工具。
     @discardableResult
     public mutating func recordSearchOutcome(
         toolName: String,
@@ -169,17 +162,16 @@ public struct AgentConvergenceTracker: Sendable {
         } else {
             let streak = (searchNoNewEvidenceStreakByTool[toolName] ?? 0) + 1
             searchNoNewEvidenceStreakByTool[toolName] = streak
-            if streak >= policy.maxSameToolNoNewEvidence {
-                exhaustedSearchTools.insert(toolName)
-                return true
-            }
         }
+        _ = policy
         return false
     }
 
-    /// 该搜索工具是否已达到收敛阈值（应停止使用该工具 / 触发任务停止）。
+    /// 保留搜索耗尽查询 API；普通 Agent 不会因诊断 streak 耗尽工具。
     public func isSearchExhausted(_ toolName: String, under policy: AgentConvergencePolicy) -> Bool {
-        (searchNoNewEvidenceStreakByTool[toolName] ?? 0) >= policy.maxSameToolNoNewEvidence
+        _ = toolName
+        _ = policy
+        return false
     }
 
     public mutating func recordToolSearch() {
@@ -203,24 +195,13 @@ public struct AgentConvergenceTracker: Sendable {
         noProgressStreak += 1
     }
 
-    /// 返回第一个命中的停止原因；nil 表示可以继续。
+    /// 保留停止原因 API；普通 Agent 的 convergence 计数只做诊断，因此始终返回 nil。
     public func stopReason(
         under policy: AgentConvergencePolicy,
         tolerateSearchExhaustion: Bool = false
     ) -> AgentConvergenceStopReason? {
-        if modelRounds >= policy.maxModelRounds { return .modelRoundLimit }
-        if totalToolCalls >= policy.maxTotalToolCalls { return .totalToolCallLimit }
-        if identicalToolCallStreak >= policy.maxIdenticalToolCalls { return .identicalToolCall }
-        if noProgressStreak >= policy.maxNoProgressRounds { return .noProgress }
-        if toolSearchCount >= policy.maxToolSearches { return .toolSearchExhausted }
-        if consecutiveMalformedCalls >= policy.maxConsecutiveMalformedCalls {
-            return .repeatedMalformedCall
-        }
-        // A single exhausted search path must not kill a run when a distinct
-        // canonical path remains (for example music_appreciate). For ordinary
-        // search-only requests, exhaustion remains a diagnosable stop reason.
-        let hasExhaustedSearch = searchNoNewEvidenceStreakByTool.values
-            .contains(where: { $0 >= policy.maxSameToolNoNewEvidence })
-        return hasExhaustedSearch && !tolerateSearchExhaustion ? .noNewEvidence : nil
+        _ = policy
+        _ = tolerateSearchExhaustion
+        return nil
     }
 }

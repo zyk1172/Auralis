@@ -344,8 +344,8 @@ struct AgentToolOrchestrationV2Tests {
 
     // MARK: P2-3 malformed 必须连续
 
-    @Test("P5 malformed → valid → malformed 不触发连续限制")
-    func malformedStreakRequiresConsecutive() {
+    @Test("P5 malformed 计数不会终止普通 Agent")
+    func malformedStreakIsDiagnosticOnly() {
         var tracker = AgentConvergenceTracker()
         let policy = AgentConvergencePolicy(maxConsecutiveMalformedCalls: 3)
         tracker.recordMalformedCall()
@@ -355,7 +355,8 @@ struct AgentToolOrchestrationV2Tests {
         tracker.recordMalformedCall()
         #expect(tracker.stopReason(under: policy) == nil, "连续 2 次尚未达阈值")
         tracker.recordMalformedCall()
-        #expect(tracker.stopReason(under: policy) == .repeatedMalformedCall, "连续 3 次 malformed 才触发")
+        #expect(tracker.consecutiveMalformedCalls == 3, "malformed streak 仍保留给 diagnostics")
+        #expect(tracker.stopReason(under: policy) == nil, "malformed 不再由 convergence 终止普通 Agent")
     }
 
     // MARK: P2-2 noNewEvidence
@@ -372,19 +373,55 @@ struct AgentToolOrchestrationV2Tests {
         tracker.recordSearchOutcome(toolName: "library_search", foundNewEvidence: false, policy: policy)
         tracker.recordSearchOutcome(toolName: "web_search", foundNewEvidence: false, policy: policy)
         tracker.recordSearchOutcome(toolName: "library_search", foundNewEvidence: false, policy: policy)
-        #expect(!tracker.isSearchExhausted("library_search", under: policy), "library_search 连续 2 次尚未达阈值")
+        #expect(!tracker.isSearchExhausted("library_search", under: policy), "library_search 连续 2 次仍可继续")
         tracker.recordSearchOutcome(toolName: "library_search", foundNewEvidence: false, policy: policy)
-        #expect(tracker.isSearchExhausted("library_search", under: policy), "library_search 连续 3 次无新应收敛")
+        #expect(tracker.searchNoNewEvidenceStreakByTool["library_search"] == 3)
+        #expect(!tracker.isSearchExhausted("library_search", under: policy), "达到阈值也不能耗尽搜索工具")
         #expect(!tracker.isSearchExhausted("web_search", under: policy), "web_search 只累计 1 次，不受 library_search 污染")
-        // Search-only tasks stop with a diagnosable reason.
-        #expect(tracker.stopReason(under: policy) == .noNewEvidence)
-        // Exhausting one search path removes that path, but must not terminate
-        // a task while another canonical path (for example music_appreciate)
-        // remains available.
+        #expect(tracker.exhaustedSearchTools.isEmpty, "搜索工具集合保留但不再自动标记耗尽")
+        #expect(tracker.stopReason(under: policy) == nil, "搜索无新证据不再终止普通 Agent")
         #expect(tracker.stopReason(
             under: policy,
             tolerateSearchExhaustion: true
         ) == nil)
+    }
+
+    @Test("P8 convergence 计数不再限制轮次或工具调用次数")
+    func convergenceCountersNeverTerminateOrdinaryAgent() {
+        var tracker = AgentConvergenceTracker()
+        let policy = AgentConvergencePolicy(
+            maxModelRounds: 1,
+            maxTotalToolCalls: 1,
+            maxIdenticalToolCalls: 1,
+            maxNoProgressRounds: 1,
+            maxToolSearches: 1,
+            maxConsecutiveMalformedCalls: 1,
+            maxSameToolNoNewEvidence: 1
+        )
+
+        for _ in 0..<10 {
+            tracker.recordModelRound()
+            tracker.recordTotalCall()
+            tracker.recordToolExecution(signature: "library_search|q=same")
+            tracker.recordNoProgress()
+            tracker.recordToolSearch()
+            tracker.recordMalformedCall()
+            _ = tracker.recordSearchOutcome(
+                toolName: "library_search",
+                foundNewEvidence: false,
+                policy: policy
+            )
+        }
+
+        #expect(tracker.modelRounds == 10)
+        #expect(tracker.totalToolCalls == 10)
+        #expect(tracker.toolSearchCount == 10)
+        #expect(tracker.identicalToolCallStreak == 10)
+        #expect(tracker.noProgressStreak == 10)
+        #expect(tracker.consecutiveMalformedCalls == 10)
+        #expect(!tracker.isSearchExhausted("library_search", under: policy))
+        #expect(tracker.exhaustedSearchTools.isEmpty)
+        #expect(tracker.stopReason(under: policy) == nil)
     }
 
     // MARK: P10 推荐索引长任务不受影响
