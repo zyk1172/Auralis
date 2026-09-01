@@ -869,6 +869,90 @@ struct PlaylistBuildSkillTests {
         ))
         #expect(runtime.facts["playlist.skill.playlistName"] == "通勤", "生产路径歌单名来自编译值，实际：\(runtime.facts["playlist.skill.playlistName"] ?? "nil")")
     }
+
+    @Test("O11 歌单验证按页推进并从 checkpoint 继续，不重复核验已完成范围")
+    func playlistVerificationPaginatesAndResumesCheckpoint() throws {
+        let selectedIDs = (0..<150).map { "\(skillServerID.rawValue):t\($0)" }
+        let checkpoint = PlaylistBuildSkillCheckpointForTest(
+            playlistID: "\(skillServerID.rawValue):existing-playlist",
+            playlistName: "大歌单",
+            targetCount: 150,
+            createdPlaylist: true,
+            selectedTrackIDs: selectedIDs,
+            tracksAdded: true,
+            phase: "verifyingPlaylist",
+            verificationOffset: 0,
+            verifiedTrackIDs: nil
+        )
+        let data = try JSONEncoder().encode(checkpoint)
+        let json = String(data: data, encoding: .utf8)
+        let runtime = BuiltInPlaylistBuildSkill().makeRuntime(checkpointJSON: json)
+
+        guard case let .executeTool(firstName, firstArguments) = runtime.nextStep() else {
+            Issue.record("验证恢复后第一步应为分页读取歌单")
+            return
+        }
+        #expect(firstName == "library_get_playlist")
+        #expect(firstArguments["offset"] == .number(0))
+        #expect(firstArguments["limit"] == .number(100))
+
+        func cards(for range: Range<Int>) -> [TrackCard] {
+            range.map { index in
+                TrackCard(
+                    globalID: GlobalID(serverID: skillServerID, remoteID: "t\(index)"),
+                    title: "歌 \(index)",
+                    artistName: "周杰伦",
+                    albumTitle: "专辑 \(index)",
+                    duration: 200,
+                    isFavorite: false
+                )
+            }
+        }
+
+        let firstResult = ToolResult(
+            call: ToolCall(name: "library_get_playlist", arguments: firstArguments),
+            permission: .readOnly,
+            success: true,
+            summary: "歌单第一批",
+            payload: .playlistProposal(name: "大歌单", tracks: cards(for: 0..<100)),
+            facts: [
+                "playlist.hasMore": "true",
+                "playlist.nextOffset": "100",
+            ]
+        )
+        #expect(runtime.consumeToolResult(name: firstName, result: firstResult) == .none)
+
+        let partialJSON = try #require(runtime.checkpointJSON())
+        let partialData = try #require(partialJSON.data(using: .utf8))
+        let partial = try JSONDecoder().decode(PlaylistBuildSkillCheckpointForTest.self, from: partialData)
+        #expect(partial.verificationOffset == 100)
+        #expect(partial.verifiedTrackIDs?.count == 100)
+
+        // 模拟应用暂停/恢复：只从 checkpoint 的下一页继续，已经核验的 0..<100
+        // 不会再次进入 Runtime 的验证集合。
+        let resumed = BuiltInPlaylistBuildSkill().makeRuntime(checkpointJSON: partialJSON)
+        guard case let .executeTool(secondName, secondArguments) = resumed.nextStep() else {
+            Issue.record("checkpoint 恢复后应继续读取第二页")
+            return
+        }
+        #expect(secondName == "library_get_playlist")
+        #expect(secondArguments["offset"] == .number(100))
+        #expect(secondArguments["limit"] == .number(100))
+
+        let secondResult = ToolResult(
+            call: ToolCall(name: "library_get_playlist", arguments: secondArguments),
+            permission: .readOnly,
+            success: true,
+            summary: "歌单第二批",
+            payload: .playlistProposal(name: "大歌单", tracks: cards(for: 100..<150)),
+            facts: [
+                "playlist.hasMore": "false",
+                "playlist.nextOffset": "150",
+            ]
+        )
+        #expect(resumed.consumeToolResult(name: secondName, result: secondResult) == .none)
+        #expect(resumed.isCompleted)
+    }
 }
 
 private final class NameBox: @unchecked Sendable {
@@ -884,6 +968,32 @@ private struct PlaylistBuildSkillCheckpointForTest: Codable {
     var targetCount: Int?
     var createdPlaylist: Bool
     var selectedTrackIDs: [String]?
+    var tracksAdded: Bool?
+    var phase: String?
+    var verificationOffset: Int?
+    var verifiedTrackIDs: [String]?
+
+    init(
+        playlistID: String?,
+        playlistName: String,
+        targetCount: Int?,
+        createdPlaylist: Bool,
+        selectedTrackIDs: [String]?,
+        tracksAdded: Bool? = nil,
+        phase: String? = nil,
+        verificationOffset: Int? = nil,
+        verifiedTrackIDs: [String]? = nil
+    ) {
+        self.playlistID = playlistID
+        self.playlistName = playlistName
+        self.targetCount = targetCount
+        self.createdPlaylist = createdPlaylist
+        self.selectedTrackIDs = selectedTrackIDs
+        self.tracksAdded = tracksAdded
+        self.phase = phase
+        self.verificationOffset = verificationOffset
+        self.verifiedTrackIDs = verifiedTrackIDs
+    }
 }
 
 // MARK: - Custom Tool schema exposure（P1-4 回归）

@@ -196,6 +196,28 @@ public struct ToolLoop {
         case skillGenerated
     }
 
+    /// Model calls must come from the tool schema loaded for this round.
+    /// Stateful Skills may emit their own forced/generated calls because those
+    /// calls are Runtime-owned control-flow edges rather than model authority.
+    private static func isModelToolCallAdmitted(
+        _ call: LoopToolCall,
+        selectedTools: [ToolDescriptor]
+    ) -> Bool {
+        switch call.origin {
+        case .skillForced, .skillGenerated:
+            return true
+        case .providerNative, .textualAction:
+            // Provider schema uses canonical names, while the textual
+            // compatibility protocol may still emit a legacy alias.  An
+            // alias is admitted only when its canonical descriptor was
+            // loaded for this round; this does not broaden the model schema
+            // or grant a hidden capability.
+            let canonicalName = ToolSelector.canonicalAliases[call.name] ?? call.name
+            return descriptor(named: call.name, in: selectedTools) != nil
+                || descriptor(named: canonicalName, in: selectedTools) != nil
+        }
+    }
+
     private static func parallelResultKey(for call: LoopToolCall, index: Int) -> String {
         call.id ?? "parallel-\(index)"
     }
@@ -404,7 +426,6 @@ public struct ToolLoop {
         }
         if let provider {
             if !requestSemantics.requiresSideEffect,
-               requestSemantics.domain != .recommendation,
                resolvedPolicy.completion != .appreciationWithEvidence,
                initialTaskState == nil {
                 await runGenericChat(
@@ -845,6 +866,7 @@ public struct ToolLoop {
                 && calls.count > 1
                 && calls.allSatisfy { call in
                     guard !call.malformedArguments,
+                          Self.isModelToolCallAdmitted(call, selectedTools: selectedTools),
                           !Self.isSearchCapability(call.name),
                           let descriptor = Self.descriptor(for: call, in: availableToolDescriptors)
                     else { return false }
@@ -901,6 +923,14 @@ public struct ToolLoop {
                     convergence.recordToolSearch()
                 }
                 await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
+                guard Self.isModelToolCallAdmitted(call, selectedTools: selectedTools) else {
+                    resultMessages.append(toolResultMessage(
+                        callID: call.id,
+                        content: "（工具执行结果）\(call.name)：未执行 - 该工具尚未加载到本轮工具 schema。如确实需要此能力，请先使用 tool_search 发现并加载。",
+                        native: nativeMode
+                    ))
+                    continue
+                }
                 guard let descriptor = Self.descriptor(for: call, in: availableToolDescriptors) else {
                     resultMessages.append(toolResultMessage(
                         callID: call.id,
@@ -1368,23 +1398,12 @@ public struct ToolLoop {
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
-        // 已提示过模型调用 result_present_tracks（只 repair 一次，避免无限循环）。
-        var didRequestFinalSelection = false
         // 任务工作集：任务级结果缓存、重复调用保护、候选/队列统计、诊断轨迹。
-        var ws = AgentTaskWorkingSet(
-            targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
-        )
-        // AI final-selection 上限 50：超过时 fail-fast。单轮模型可见候选窗口
-        // 最多 50 个真实 TrackID，而 finalSelection completion 要求达到
-        // targetCount——若接受 targetCount>50 会进入「目标无法满足」的死路，
-        // 必须在任务建立边界就明确拒绝，而不是静默截断误导模型。
-        if let target = ws.targetQueueCount, target > 50 {
-            await emit(AgentChatMessage(
-                role: .assistant,
-                messages: [.error("当前一次 AI 选歌任务最多支持 50 首（本次要求 \(target) 首）。请缩小数量或分批进行。")]
-            ))
-            return
-        }
+        let mutationTargetCount: Int? = {
+            guard activeSkill != nil || plan.semantics.requiresSideEffect else { return nil }
+            return inferredTargetCount
+        }()
+        var ws = AgentTaskWorkingSet(targetQueueCount: mutationTargetCount)
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
@@ -1781,12 +1800,7 @@ public struct ToolLoop {
             if nativeCalls.isEmpty,
                textActions.isEmpty,
                skillInternalCall == nil,
-               completionFactsSatisfied,
-               !(intent == .musicDiscovery
-                    && !didRequestFinalSelection
-                    && !presentation.candidateOrder.isEmpty
-                    && presentation.resolvedFinalCards.isEmpty
-                    && presentation.disambiguationTracks.isEmpty) {
+               completionFactsSatisfied {
                 let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
                 if activeSkill != nil {
                     Self.mergeSkillFacts(activeSkill, into: &taskState)
@@ -1804,21 +1818,6 @@ public struct ToolLoop {
                 await state(taskState)
                 if intent == .librarySearch || intent == .libraryManagement {
                     presentation.applySearchFallback()
-                }
-                // 推荐任务在模型已经完成候选查询、但只返回空/纯 reasoning 时，仍须把有限的
-                // 确定性结果落到最终展示；候选池不能直接在更早的错误分支中泄漏给用户。
-                if intent == .musicDiscovery,
-                   didRequestFinalSelection,
-                   presentation.resolvedFinalCards.isEmpty,
-                   !presentation.candidateOrder.isEmpty,
-                   presentation.disambiguationTracks.isEmpty {
-                    let target = max(ws.targetQueueCount ?? 5, 1)
-                    let chosen = Array(presentation.candidateOrder.prefix(target))
-                    let cards = chosen.compactMap { presentation.candidateTracks[$0] }
-                    if !cards.isEmpty {
-                        presentation.setFinalTracks(cards)
-                        taskState.selectedIDs = Set(cards.map { $0.globalID.description })
-                    }
                 }
                 presentation.applyAlbumFallbackIfNeeded()
                 if let finalMessage = presentation.finalMessage() {
@@ -1873,25 +1872,6 @@ public struct ToolLoop {
                 }
                 switch completionDecision {
                 case .accept:
-                    // 纯推荐任务（musicDiscovery）：已有候选但既没有显式 final（result_present_tracks）
-                    // 也没有真实 queue/playlist 副作用时，先要求模型调用 result_present_tracks 选择
-                    // 真正最终推荐的歌曲，而不是让用户看到“零卡片”或把候选当结果。只 repair 一次。
-                    if intent == .musicDiscovery,
-                       !didRequestFinalSelection,
-                       !presentation.candidateOrder.isEmpty,
-                       presentation.resolvedFinalCards.isEmpty,
-                       presentation.disambiguationTracks.isEmpty {
-                        didRequestFinalSelection = true
-                        completionRepairAttempts += 1
-                        let instruction = "你已经取得候选歌曲，但还没有确定最终展示结果。请调用 result_present_tracks(trackIDs=[真正最终推荐给主人的歌曲]) 一次；只把最终选定的歌曲传入，不要把整个候选池传入。"
-                        taskState.pendingActions = [instruction]
-                        taskState.status = .waitingForTool
-                        taskState.updatedAt = .now
-                        await state(taskState)
-                        conversation.append(AIMessage(role: .assistant, content: reply))
-                        conversation.append(AIMessage(role: .user, content: "系统完成条件校验：\(instruction)"))
-                        continue
-                    }
                     diagnostics.completionResult = taskState.completed ? "satisfied" : "accepted"
                     diagnostics.noProgressCount = convergence.noProgressStreak
                     taskState.diagnostics = diagnostics
@@ -1902,20 +1882,6 @@ public struct ToolLoop {
                         presentation.applySearchFallback()
                     }
                     presentation.applyAlbumFallbackIfNeeded()
-                    // 纯推荐任务：repair 一次后模型仍没调用 result_present_tracks 时，
-                    // Runtime 做确定性兜底——按用户要求数量（默认 5）从候选里取，绝不泄漏整个候选池。
-                    if intent == .musicDiscovery,
-                       presentation.resolvedFinalCards.isEmpty,
-                       !presentation.candidateOrder.isEmpty,
-                       presentation.disambiguationTracks.isEmpty {
-                        let target = max(ws.targetQueueCount ?? 5, 1)
-                        let chosen = Array(presentation.candidateOrder.prefix(target))
-                        let cards = chosen.compactMap { presentation.candidateTracks[$0] }
-                        if !cards.isEmpty {
-                            presentation.setFinalTracks(cards)
-                            taskState.selectedIDs = Set(cards.map { $0.globalID.description })
-                        }
-                    }
                     if let finalMessage = presentation.finalMessage() {
                         await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
                     }
@@ -2068,6 +2034,17 @@ public struct ToolLoop {
                 }
                 roundToolNames.insert(call.name)
                 if AgentTaskWorkingSet.isSearchTool(call.name) { roundSearchCalls += 1 }
+
+                guard Self.isModelToolCallAdmitted(call, selectedTools: selectedTools) else {
+                    let failureText = "（工具执行结果）\(call.name)：未执行 - 该工具尚未加载到本轮工具 schema。如确实需要此能力，请先使用 tool_search 发现并加载。"
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "工具尚未加载到本轮 schema", reused: false))
+                    toolMessages.append(Self.toolResultMessage(
+                        callID: call.id,
+                        content: failureText,
+                        native: nativeMode
+                    ))
+                    continue
+                }
 
                 guard let descriptor = Self.descriptor(for: call, in: availableToolDescriptors) else {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "未知工具", reused: false))
@@ -3440,20 +3417,15 @@ public struct ToolLoop {
 
     /// 把结构化消息（卡片）转成模型可读的文本，使工具结果中的歌曲清单可见。
     /// 可见窗口是 targetCount 感知的：用户要求 N 首时，模型至少能看到
-    /// max(N, 10) 个真实候选（上限 50），避免“Runtime 有 50 首、模型只看到
-    /// 5 首”导致多首任务无法完成。其余用总数概括。
+    /// max(N, 10) 个真实候选（单次上下文最多 50 个）。这个窗口只限制单批
+    /// 回灌，不限制整个任务的目标数量；模型可以通过分页或排除 ID 继续取得后续结果。
     static func messageTextForModel(_ message: AgentMessage, targetCount: Int? = nil) -> String {
         let visibleCount = min(max(targetCount ?? 10, 10), 50)
         let trackLine = { (cards: [TrackCard]) -> String in
             let shown = cards.prefix(visibleCount)
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
             if cards.count > visibleCount {
-                if let targetCount, targetCount > 50 {
-                    // 候选超过单轮可见上限：明确告知，避免模型误以为只能拿到 50 首而
-                    // 提前 final。完整候选由 Runtime 持有，可通过更精确条件分批查询。
-                    return "\(list)…候选共 \(cards.count) 首（单轮已展示前 50；超过上限，请用更精确的筛选条件缩小范围，或确认是否需要这么多）"
-                }
-                return "\(list)…等 \(cards.count) 首"
+                return "\(list)…本批工具结果共 \(cards.count) 首；当前上下文仅投影前 \(visibleCount) 首。这是单批上下文窗口，不是任务数量上限。如果用户任务需要更多歌曲，请继续使用分页、excludeTrackIDs 或后续查询取得下一批，不要要求用户缩小原任务。"
             }
             return list
         }

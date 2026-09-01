@@ -892,7 +892,39 @@ public struct AgentToolkit {
         case "library_get_playlist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             guard let (playlist, tracks) = try await catalog.getPlaylist(gid) else { return .fail(call, descriptor, "歌单不存在") }
-            return .ok(call, descriptor, playlist.name, .playlistProposal(name: playlist.name, tracks: tracks.prefix(50).map { TrackCard.from(CatalogTrackSummary(globalID: GlobalID(serverID: gid.serverID, remoteID: $0.id.rawValue), title: $0.title, artistName: $0.artistName, albumTitle: $0.albumTitle, duration: $0.duration, isFavorite: $0.isFavorite, userRating: 0, isDownloaded: false)) }))
+            let offset = max((try? intParam(call, "offset")) ?? 0, 0)
+            let limit = min(max((try? intParam(call, "limit")) ?? 50, 1), 200)
+            let total = tracks.count
+            let safeOffset = min(offset, total)
+            let page = Array(tracks.dropFirst(safeOffset).prefix(limit))
+            let returned = page.count
+            let nextOffset = safeOffset + returned
+            let hasMore = nextOffset < total
+            let cards = page.map { track in
+                TrackCard.from(CatalogTrackSummary(
+                    globalID: GlobalID(serverID: gid.serverID, remoteID: track.id.rawValue),
+                    title: track.title,
+                    artistName: track.artistName,
+                    albumTitle: track.albumTitle,
+                    duration: track.duration,
+                    isFavorite: track.isFavorite,
+                    userRating: 0,
+                    isDownloaded: false
+                ))
+            }
+            return .ok(
+                call,
+                descriptor,
+                "歌单「\(playlist.name)」共 \(total) 首；本批返回 \(returned) 首，offset=\(safeOffset)，nextOffset=\(nextOffset)，hasMore=\(hasMore)",
+                .playlistProposal(name: playlist.name, tracks: cards),
+                facts: [
+                    "playlist.totalCount": "\(total)",
+                    "playlist.offset": "\(safeOffset)",
+                    "playlist.returnedCount": "\(returned)",
+                    "playlist.nextOffset": "\(nextOffset)",
+                    "playlist.hasMore": hasMore ? "true" : "false",
+                ]
+            )
         case "library_get_recently_played":
             let limit = (try? intParam(call, "limit")) ?? 20
             let list = try await catalog.getRecentHistory(serverID: serverID, limit: min(max(limit, 1), 100))

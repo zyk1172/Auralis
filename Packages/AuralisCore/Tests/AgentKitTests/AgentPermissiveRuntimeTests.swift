@@ -1027,7 +1027,7 @@ struct AgentPermissiveRuntimeTests {
         #expect(!names.contains("removeServer"))
     }
 
-    // MARK: - TEST 31：musicDiscovery 无显式 final 时要求 result_present_tracks
+    // MARK: - TEST 31：musicDiscovery 的普通推荐由模型回答收尾
 
     @Test("TEST COUNT-02 中文数量 12：模型忘调 final → Runtime 兜底显示 12 首（不是 5）")
     func chineseCountFallbackUsesTwelve() async throws {
@@ -1058,20 +1058,19 @@ struct AgentPermissiveRuntimeTests {
         #expect(groups == [12])
     }
 
-    @Test("TEST31 纯推荐忘调 result_present_tracks → Runtime 提示一次后再放行")
-    func discoveryForcesFinalSelection() async throws {
+    @Test("TEST31 纯推荐不强制 result_present_tracks，模型回答即可完成")
+    func discoveryUsesModelOwnedCompletion() async throws {
         let store = try makePermStore()
         try await seedPerm(store, [makePermTrack(serverID: "test-server", remoteID: "t1", title: "歌")])
         let bridge = PermissiveBridge()
         let system = PermissiveSystemService()
         system.recommendationTracks = [permCard(GlobalID(serverID: "test-server", remoteID: "t1"), title: "歌")]
         let collector = PermissiveCollector()
-        // 模型只推荐（产生候选），忘记调用 result_present_tracks，直接给最终回答。
+        // 模型只推荐（产生候选），随后直接给最终回答；Runtime 不再插入
+        // result_present_tracks repair，也不代替模型选择最终结果。
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"开车提神"}}"#,
             "已经为你选好 1 首适合开车提神的歌。",
-            #"ACTION: {"tool":"result_present_tracks","args":{"trackIDs":["test-server:t1"]}}"#,
-            "完成。",
         ])
         await AgentRunner.run(
             userText: "推荐一首开车提神的歌给我看看",
@@ -1084,15 +1083,14 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        // 第二轮应出现要求调用 result_present_tracks 的完成校验指令。
-        #expect(provider.requests.count >= 3)
-        let repairSeen = provider.requests.dropFirst().contains { req in
+        #expect(provider.requests.count == 2)
+        #expect(provider.requests.dropFirst().contains { req in
             req.messages.contains { $0.role == .user && $0.content.contains("result_present_tracks") }
-        }
-        #expect(repairSeen)
-        // 模型在提示后提交 result_present_tracks final → 完成条件满足，展示 1 首。
-        let groups = await collector.trackCardGroupCounts()
-        #expect(groups == [1])
+        } == false)
+        // 纯推荐的候选结果可以随工具结果缓冲并展示；Runtime 不凭候选池
+        // 自行插入 result_present_tracks repair，也不代替模型选择最终结果。
+        #expect(await collector.containsText("已经为你选好 1 首"))
+        #expect(await collector.trackCardGroupCounts() == [1])
     }
 
     // MARK: - TEST 23 / 24：隐私与凭据
@@ -1104,10 +1102,11 @@ struct AgentPermissiveRuntimeTests {
         let bridge = PermissiveBridge()
         let system = PermissiveSystemService()
         let provider = PermissiveScriptedProvider(actionBatches: [
+            #"ACTION: {"tool":"tool_search","args":{"query":"lyrics"}}"#,
             #"ACTION: {"tool":"lyrics_get","args":{"trackID":"test-server:t1"}}"#,
         ], closing: "歌词已处理。")
         await AgentRunner.run(
-            userText: "看歌词",
+            userText: "查看这首歌的歌词，并总结它的主题",
             provider: provider,
             model: "scripted-model",
             bridge: bridge,
@@ -1459,7 +1458,7 @@ struct AgentPermissiveRuntimeTests {
             do { _ = try await group.next() } catch { Issue.record("取消后任务未能及时结束") }
             group.cancelAll()
         }
-        // Cancel 时绝不倾倒候选（40 首，不触发 >50 fail-fast，保持 cancel 语义）。
+        // Cancel 时绝不倾倒候选；取消语义独立于任务数量窗口。
         #expect(await collector.containsAnyTrackCards() == false)
         #expect(await collector.containsText("已取消"))
     }
@@ -1567,17 +1566,20 @@ struct AgentPermissiveRuntimeTests {
         #expect(await collector.containsText("【已核验事实】"))
     }
 
-    @Test("TEST-50 超过 50 首的任务在建立边界 fail-fast")
-    func overFiftyFailsFast() async throws {
+    @Test("TEST-50 超过旧 50 首窗口时不由 Runtime fail-fast")
+    func overFiftyDoesNotFailFast() async throws {
         let store = try makePermStore()
         let tracks = (0..<60).map { makePermTrack(serverID: "test-server", remoteID: "t\($0)", title: "歌\($0)") }
         try await seedPerm(store, tracks)
         let bridge = PermissiveBridge()
         let system = PermissiveSystemService()
+        system.recommendationTracks = tracks.map {
+            permCard(GlobalID(serverID: "test-server", remoteID: $0.id.rawValue), title: $0.title)
+        }
         let collector = PermissiveCollector()
         let provider = PermissiveScriptedProvider(actionBatches: [
             #"ACTION: {"tool":"recommend_by_mood","args":{"mood":"深夜"}}"#,
-        ])
+        ], closing: "已返回可用的深夜候选。")
         await AgentRunner.run(
             userText: "推荐 80 首适合深夜开的歌",
             provider: provider,
@@ -1591,10 +1593,11 @@ struct AgentPermissiveRuntimeTests {
             confirm: { _ in true },
             emit: { await collector.record($0) }
         )
-        // fail-fast：明确告知上限，不进入永远无法满足的 targetCount=80 死路。
-        #expect(await collector.containsError("最多支持 50 首"))
-        // 不执行任何 mutation / 不展示候选。
-        #expect(await collector.containsAnyTrackCards() == false)
+        // 50 只是单次上下文投影窗口，不是整项任务上限；模型仍能拿到
+        // 工具结果并自行决定如何回答。
+        #expect(provider.requests.count >= 2)
+        #expect(await collector.containsError("最多支持 50 首") == false)
+        #expect(await collector.containsAnyTrackCards())
         #expect(await collector.containsError("没有进展") == false)
     }
 
