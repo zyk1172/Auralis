@@ -294,7 +294,7 @@ public struct AgentTaskPolicy: Codable, Equatable, Sendable {
         case .playbackQuery:
             return .init(intent: intent, scopes: [.catalogRead, .diagnosticsRead], allowedToolGroups: [.catalog, .playback], allowedPermissions: read)
         case .musicDiscovery:
-            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .finalTrackSelection, convergence: .compoundTask)
+            return .init(intent: intent, scopes: [.catalogRead, .serverRead, .queueWrite, .externalRead], allowedToolGroups: [.catalog, .server, .playback], allowedPermissions: write, maxRisk: .medium, completion: .modelAnswer, convergence: .compoundTask)
         case .queueManagement:
             return .init(intent: intent, scopes: [.catalogRead, .playbackWrite, .queueWrite], allowedToolGroups: [.catalog, .playback], allowedPermissions: destructive, maxRisk: .high, completion: .queueMutation, convergence: .compoundTask)
         case .queueQuery:

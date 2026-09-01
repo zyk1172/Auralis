@@ -101,16 +101,18 @@ public struct AgentTaskWorkingSet: Sendable {
     /// 由 Intent 的 Completion Predicate 决定何时完成。
     public static func inferredTargetQueueCount(from text: String) -> Int? {
         // 1) 阿拉伯数字：12首 / 20首歌 / 给我12首 / 推荐20首歌曲
-        let pattern = #"(?:找|推荐|选择|播放|来|给我)?\s*(\d{1,3})\s*首(?:歌|歌曲)?"#
+        let pattern = #"(?:找|推荐|选择|播放|来|给我)?\s*(\d+)\s*首(?:歌|歌曲)?"#
         if let regex = try? NSRegularExpression(pattern: pattern),
            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
            let range = Range(match.range(at: 1), in: text),
            let count = Int(text[range]),
-           (1...200).contains(count) {
+           count > 0 {
             return count
         }
-        // 2) 中文数字：十二首 / 二十三首 / 一百二十三首 / 两百首（紧邻“首/首歌/首歌曲”才计）
-        let chinesePattern = #"([零〇一二两三四五六七八九十百]{1,8})\s*首(?:歌|歌曲)?"#
+        // 2) 中文数字：十二首 / 二十三首 / 一百二十三首 / 两百首 / 一万首
+        // （紧邻“首/首歌/首歌曲”才计）。不在这里设置任务数量上限；单次工具
+        // 的 page size 与任务总量是两个不同的边界。
+        let chinesePattern = #"([零〇一二两三四五六七八九十百千万]{1,16})\s*首(?:歌|歌曲)?"#
         guard let chineseRegex = try? NSRegularExpression(pattern: chinesePattern),
               let match = chineseRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let range = Range(match.range(at: 1), in: text)
@@ -118,7 +120,7 @@ public struct AgentTaskWorkingSet: Sendable {
         return parseChineseCount(String(text[range]))
     }
 
-    /// 中文数字解析：支持 零〇一二两三四五六七八九十百（最大 200）。
+    /// 中文数字解析：支持 零〇一二两三四五六七八九十百千万，不设置任务数量上限。
     /// “2020年的歌”不会命中（必须紧邻 首/首歌/首歌曲）。
     static func parseChineseCount(_ value: String) -> Int? {
         let digits: [Character: Int] = [
@@ -126,26 +128,33 @@ public struct AgentTaskWorkingSet: Sendable {
             "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
             "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
         ]
+        let units: [Character: Int] = [
+            "十": 10, "百": 100, "千": 1_000, "万": 10_000,
+        ]
         var total = 0
-        var digit: Int?
+        var section = 0
+        var number = 0
         for ch in value {
-            if let number = digits[ch] {
-                digit = number
+            if let digit = digits[ch] {
+                number = digit
                 continue
             }
-            switch ch {
-            case "十":
-                total += (digit ?? 1) * 10
-                digit = nil
-            case "百":
-                total += (digit ?? 1) * 100
-                digit = nil
-            default:
+            guard let unit = units[ch] else {
                 return nil
             }
+            if unit == 10_000 {
+                section += number
+                if section == 0 { section = 1 }
+                total += section * unit
+                section = 0
+                number = 0
+            } else {
+                section += (number == 0 ? 1 : number) * unit
+                number = 0
+            }
         }
-        total += digit ?? 0
-        return (1...200).contains(total) ? total : nil
+        let result = total + section + number
+        return result > 0 ? result : nil
     }
 
     // MARK: - 签名与缓存

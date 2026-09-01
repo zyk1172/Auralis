@@ -194,6 +194,62 @@ public struct ToolLoop {
         case textualAction
         case skillForced
         case skillGenerated
+
+        var isRuntimeOwned: Bool {
+            switch self {
+            case .skillForced, .skillGenerated:
+                return true
+            case .providerNative, .textualAction:
+                return false
+            }
+        }
+
+        var isModelOwned: Bool { !isRuntimeOwned }
+    }
+
+    /// Provider 一次请求发出前的 schema admission 快照。
+    /// `tool_search` 可以扩展下一轮 schema，但不得让同一份 Provider 响应
+    /// 中稍后出现的调用获得本轮尚未见过的工具权限。
+    private struct RoundToolAdmission: Sendable {
+        private let names: Set<String>
+
+        init(_ selectedTools: [ToolDescriptor]) {
+            var names = Set<String>()
+            for descriptor in selectedTools {
+                names.insert(descriptor.name)
+                names.insert(ToolSelector.canonicalAliases[descriptor.name] ?? descriptor.name)
+                for alias in descriptor.aliases {
+                    names.insert(alias)
+                    names.insert(ToolSelector.canonicalAliases[alias] ?? alias)
+                }
+            }
+            self.names = names
+        }
+
+        func contains(_ call: LoopToolCall) -> Bool {
+            let canonicalName = ToolSelector.canonicalAliases[call.name] ?? call.name
+            return names.contains(call.name) || names.contains(canonicalName)
+        }
+    }
+
+    /// Model calls must come from the tool schema loaded for this round.
+    /// Stateful Skills may emit their own forced/generated calls because those
+    /// calls are Runtime-owned control-flow edges rather than model authority.
+    private static func isModelToolCallAdmitted(
+        _ call: LoopToolCall,
+        admission: RoundToolAdmission
+    ) -> Bool {
+        switch call.origin {
+        case .skillForced, .skillGenerated:
+            return true
+        case .providerNative, .textualAction:
+            // Provider schema uses canonical names, while the textual
+            // compatibility protocol may still emit a legacy alias.  An
+            // alias is admitted only when its canonical descriptor was
+            // loaded for this round; this does not broaden the model schema
+            // or grant a hidden capability.
+            return admission.contains(call)
+        }
     }
 
     private static func parallelResultKey(for call: LoopToolCall, index: Int) -> String {
@@ -203,6 +259,14 @@ public struct ToolLoop {
     private enum ToolArgumentParseResult {
         case success([String: AIJSONValue])
         case malformed(rawLength: Int)
+    }
+
+    /// Separates what `tool_search` discovered from what the current model
+    /// schema actually accepted.  A Stateful Skill can intentionally discover
+    /// an owned mutation while still refusing to expose it to the model.
+    private struct ToolSearchExpansionResult {
+        let discoveredEntries: [ToolCatalogEntry]
+        let addedEntries: [ToolCatalogEntry]
     }
 
     /// 执行一次用户请求。
@@ -404,7 +468,6 @@ public struct ToolLoop {
         }
         if let provider {
             if !requestSemantics.requiresSideEffect,
-               requestSemantics.domain != .recommendation,
                resolvedPolicy.completion != .appreciationWithEvidence,
                initialTaskState == nil {
                 await runGenericChat(
@@ -696,6 +759,7 @@ public struct ToolLoop {
             let toolDefinitions = nativeMode
                 ? ToolSelector.toolDefinitions(from: modelTools, strict: provider.capabilities.supportsStrictSchema)
                 : []
+            let roundAdmission = RoundToolAdmission(selectedTools)
             let schemaTokens = nativeMode ? ContextManager.estimatedTokens(toolDefinitions) : 0
             let inputBudget = ContextManager.inputBudget(
                 capabilities: provider.capabilities,
@@ -845,6 +909,7 @@ public struct ToolLoop {
                 && calls.count > 1
                 && calls.allSatisfy { call in
                     guard !call.malformedArguments,
+                          Self.isModelToolCallAdmitted(call, admission: roundAdmission),
                           !Self.isSearchCapability(call.name),
                           let descriptor = Self.descriptor(for: call, in: availableToolDescriptors)
                     else { return false }
@@ -901,6 +966,14 @@ public struct ToolLoop {
                     convergence.recordToolSearch()
                 }
                 await progress(AgentProgress(toolSteps: toolSteps, currentStep: "执行 \(call.name)"))
+                guard Self.isModelToolCallAdmitted(call, admission: roundAdmission) else {
+                    resultMessages.append(toolResultMessage(
+                        callID: call.id,
+                        content: "（工具执行结果）\(call.name)：未执行 - 该工具尚未加载到本轮工具 schema。如确实需要此能力，请先使用 tool_search 发现并加载。",
+                        native: nativeMode
+                    ))
+                    continue
+                }
                 guard let descriptor = Self.descriptor(for: call, in: availableToolDescriptors) else {
                     resultMessages.append(toolResultMessage(
                         callID: call.id,
@@ -1128,14 +1201,13 @@ public struct ToolLoop {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    Self.expandToolsFromSearch(
+                    _ = Self.expandToolsFromSearch(
                         query: query,
                         namespace: namespace,
                         limit: limit,
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
-                        allowedOperations: effectiveAuthorization.allowedOperations,
-                        semantics: plan.semantics
+                        allowedOperations: effectiveAuthorization.allowedOperations
                     )
                     if let stopReason = convergence.stopReason(under: convergencePolicy) {
                         await emit(AgentChatMessage(role: .assistant, messages: [.error(stopReason.userMessage)]))
@@ -1368,23 +1440,12 @@ public struct ToolLoop {
         // 展示状态：候选池（内部，绝不上屏）与最终展示彻底分离。
         // 最终展示只来自 result_present_tracks / 真实副作用 / 搜索收尾合并。
         var presentation = AgentPresentationState()
-        // 已提示过模型调用 result_present_tracks（只 repair 一次，避免无限循环）。
-        var didRequestFinalSelection = false
         // 任务工作集：任务级结果缓存、重复调用保护、候选/队列统计、诊断轨迹。
-        var ws = AgentTaskWorkingSet(
-            targetQueueCount: AgentTaskWorkingSet.inferredTargetQueueCount(from: userText)
-        )
-        // AI final-selection 上限 50：超过时 fail-fast。单轮模型可见候选窗口
-        // 最多 50 个真实 TrackID，而 finalSelection completion 要求达到
-        // targetCount——若接受 targetCount>50 会进入「目标无法满足」的死路，
-        // 必须在任务建立边界就明确拒绝，而不是静默截断误导模型。
-        if let target = ws.targetQueueCount, target > 50 {
-            await emit(AgentChatMessage(
-                role: .assistant,
-                messages: [.error("当前一次 AI 选歌任务最多支持 50 首（本次要求 \(target) 首）。请缩小数量或分批进行。")]
-            ))
-            return
-        }
+        let mutationTargetCount: Int? = {
+            guard activeSkill != nil || plan.semantics.requiresSideEffect else { return nil }
+            return inferredTargetCount
+        }()
+        var ws = AgentTaskWorkingSet(targetQueueCount: mutationTargetCount)
         // 用户拒绝后同一轮模型可能再次发出完全相同的调用；记住拒绝签名，
         // 后续只回灌“仍未执行”，避免反复弹窗或在无界面入口形成循环。
         var deniedConfirmationSignatures = Set<String>()
@@ -1538,6 +1599,7 @@ public struct ToolLoop {
                     activeSkillID: activeSkillID
                 )
             }
+            let roundAdmission = RoundToolAdmission(selectedTools)
 
             // A stateful skill owns mandatory control-flow edges. The model is
             // only asked for a turn when the skill explicitly says so.
@@ -1781,12 +1843,7 @@ public struct ToolLoop {
             if nativeCalls.isEmpty,
                textActions.isEmpty,
                skillInternalCall == nil,
-               completionFactsSatisfied,
-               !(intent == .musicDiscovery
-                    && !didRequestFinalSelection
-                    && !presentation.candidateOrder.isEmpty
-                    && presentation.resolvedFinalCards.isEmpty
-                    && presentation.disambiguationTracks.isEmpty) {
+               completionFactsSatisfied {
                 let reply = Self.formatAssistantReply(streamedText.trimmingCharacters(in: .whitespacesAndNewlines))
                 if activeSkill != nil {
                     Self.mergeSkillFacts(activeSkill, into: &taskState)
@@ -1804,21 +1861,6 @@ public struct ToolLoop {
                 await state(taskState)
                 if intent == .librarySearch || intent == .libraryManagement {
                     presentation.applySearchFallback()
-                }
-                // 推荐任务在模型已经完成候选查询、但只返回空/纯 reasoning 时，仍须把有限的
-                // 确定性结果落到最终展示；候选池不能直接在更早的错误分支中泄漏给用户。
-                if intent == .musicDiscovery,
-                   didRequestFinalSelection,
-                   presentation.resolvedFinalCards.isEmpty,
-                   !presentation.candidateOrder.isEmpty,
-                   presentation.disambiguationTracks.isEmpty {
-                    let target = max(ws.targetQueueCount ?? 5, 1)
-                    let chosen = Array(presentation.candidateOrder.prefix(target))
-                    let cards = chosen.compactMap { presentation.candidateTracks[$0] }
-                    if !cards.isEmpty {
-                        presentation.setFinalTracks(cards)
-                        taskState.selectedIDs = Set(cards.map { $0.globalID.description })
-                    }
                 }
                 presentation.applyAlbumFallbackIfNeeded()
                 if let finalMessage = presentation.finalMessage() {
@@ -1873,25 +1915,6 @@ public struct ToolLoop {
                 }
                 switch completionDecision {
                 case .accept:
-                    // 纯推荐任务（musicDiscovery）：已有候选但既没有显式 final（result_present_tracks）
-                    // 也没有真实 queue/playlist 副作用时，先要求模型调用 result_present_tracks 选择
-                    // 真正最终推荐的歌曲，而不是让用户看到“零卡片”或把候选当结果。只 repair 一次。
-                    if intent == .musicDiscovery,
-                       !didRequestFinalSelection,
-                       !presentation.candidateOrder.isEmpty,
-                       presentation.resolvedFinalCards.isEmpty,
-                       presentation.disambiguationTracks.isEmpty {
-                        didRequestFinalSelection = true
-                        completionRepairAttempts += 1
-                        let instruction = "你已经取得候选歌曲，但还没有确定最终展示结果。请调用 result_present_tracks(trackIDs=[真正最终推荐给主人的歌曲]) 一次；只把最终选定的歌曲传入，不要把整个候选池传入。"
-                        taskState.pendingActions = [instruction]
-                        taskState.status = .waitingForTool
-                        taskState.updatedAt = .now
-                        await state(taskState)
-                        conversation.append(AIMessage(role: .assistant, content: reply))
-                        conversation.append(AIMessage(role: .user, content: "系统完成条件校验：\(instruction)"))
-                        continue
-                    }
                     diagnostics.completionResult = taskState.completed ? "satisfied" : "accepted"
                     diagnostics.noProgressCount = convergence.noProgressStreak
                     taskState.diagnostics = diagnostics
@@ -1902,20 +1925,6 @@ public struct ToolLoop {
                         presentation.applySearchFallback()
                     }
                     presentation.applyAlbumFallbackIfNeeded()
-                    // 纯推荐任务：repair 一次后模型仍没调用 result_present_tracks 时，
-                    // Runtime 做确定性兜底——按用户要求数量（默认 5）从候选里取，绝不泄漏整个候选池。
-                    if intent == .musicDiscovery,
-                       presentation.resolvedFinalCards.isEmpty,
-                       !presentation.candidateOrder.isEmpty,
-                       presentation.disambiguationTracks.isEmpty {
-                        let target = max(ws.targetQueueCount ?? 5, 1)
-                        let chosen = Array(presentation.candidateOrder.prefix(target))
-                        let cards = chosen.compactMap { presentation.candidateTracks[$0] }
-                        if !cards.isEmpty {
-                            presentation.setFinalTracks(cards)
-                            taskState.selectedIDs = Set(cards.map { $0.globalID.description })
-                        }
-                    }
                     if let finalMessage = presentation.finalMessage() {
                         await emit(AgentChatMessage(role: .assistant, messages: [finalMessage]))
                     }
@@ -2045,6 +2054,7 @@ public struct ToolLoop {
 
             for rawCall in calls {
                 var call = rawCall
+                var skillOwnedToolsNotLoaded: [String] = []
                 if let activeSkill, activeSkill.ownedToolNames.contains(call.name) {
                     call.arguments = activeSkill.prepareToolCall(name: call.name, arguments: call.arguments)
                     Self.mergeSkillFacts(activeSkill, into: &taskState)
@@ -2069,6 +2079,33 @@ public struct ToolLoop {
                 roundToolNames.insert(call.name)
                 if AgentTaskWorkingSet.isSearchTool(call.name) { roundSearchCalls += 1 }
 
+                // Stateful Skill-owned mutation 是 Runtime 的内部编排步骤，不是
+                // “尚未加载”的普通模型工具。优先给出正确反馈，避免模型被诱导
+                // 反复 tool_search 一个永远不会进入模型 schema 的工具。
+                if let activeSkill,
+                   activeSkill.ownedToolNames.contains(call.name),
+                   call.origin.isModelOwned {
+                    let failureText = "（工具执行结果）\(call.name)：当前由 Stateful Skill 自动管理，不能由模型直接调用，也不需要通过 tool_search 加载。请继续使用搜索/推荐/选择工具，完成后调用 result_present_tracks 提交最终歌曲；系统会自动执行该步骤。"
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Skill-owned 操作由 Runtime 管理", reused: false))
+                    toolMessages.append(Self.toolResultMessage(
+                        callID: call.id,
+                        content: failureText,
+                        native: nativeMode
+                    ))
+                    continue
+                }
+
+                guard Self.isModelToolCallAdmitted(call, admission: roundAdmission) else {
+                    let failureText = "（工具执行结果）\(call.name)：未执行 - 该工具尚未加载到本轮工具 schema。如确实需要此能力，请先使用 tool_search 发现并加载。"
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "工具尚未加载到本轮 schema", reused: false))
+                    toolMessages.append(Self.toolResultMessage(
+                        callID: call.id,
+                        content: failureText,
+                        native: nativeMode
+                    ))
+                    continue
+                }
+
                 guard let descriptor = Self.descriptor(for: call, in: availableToolDescriptors) else {
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "未知工具", reused: false))
                     toolMessages.append(Self.toolResultMessage(
@@ -2086,7 +2123,7 @@ public struct ToolLoop {
                 // origin == .skillForced 的 forced call 执行。
                 if activeSkill != nil,
                    descriptor.permission != .readOnly,
-                   call.origin != .skillForced {
+                   call.origin.isModelOwned {
                     let failureText = "（工具执行结果）\(call.name)：本任务由固定 Skill 编排，写操作由系统确定性执行；请只使用搜索/推荐/选择类工具收集候选。"
                     taskState.errors.append(failureText)
                     ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Skill 模式拒绝模型直接写调用", reused: false))
@@ -2358,22 +2395,27 @@ public struct ToolLoop {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    let discoveredEntries = Self.expandToolsFromSearch(
+                    let expansion = Self.expandToolsFromSearch(
                         query: query,
                         namespace: namespace,
                         limit: limit,
                         allDescriptors: availableToolDescriptors,
                         current: &selectedTools,
                         allowedOperations: effectiveAuthorization.allowedOperations,
-                        semantics: plan.semantics,
                         excludedNames: activeSkill?.ownedToolNames ?? [],
                         excludeAllMutations: activeSkill != nil
                     )
-                    let addedDiscoveredTool = !discoveredEntries.isEmpty
+                    let discoveredEntries = expansion.discoveredEntries
+                    let addedToolToSchema = !expansion.addedEntries.isEmpty
                     diagnostics.recordToolSearch(query: query, returned: discoveredEntries.map(\.name))
-        // 搜索结果只携带能力和风险元数据；普通本地 mutation 不因
-        // 语义分析遗漏而被标成不可执行。
-                    if nativeMode, addedDiscoveredTool {
+                    // 搜索结果只携带能力和风险元数据；普通本地 mutation 不因
+                    // 语义分析遗漏而被标成不可执行。
+                    if let activeSkill {
+                        skillOwnedToolsNotLoaded = discoveredEntries
+                            .map(\.name)
+                            .filter { activeSkill.ownedToolNames.contains($0) }
+                    }
+                    if nativeMode, addedToolToSchema {
                         toolDefinitions = ToolSelector.toolDefinitions(
                             from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
                             strict: provider.capabilities.supportsStrictSchema,
@@ -2474,6 +2516,10 @@ public struct ToolLoop {
                 // 这里在回灌边界统一拦截，避免修改 AgentKit 外部文件。
                 if call.name == "lyrics_get", !context.allowsLyrics {
                     resultText = "（工具执行结果）lyrics_get: 成功 - 歌词已按隐私设置隐藏（不发送歌词内容）。"
+                }
+                if !skillOwnedToolsNotLoaded.isEmpty {
+                    let names = skillOwnedToolsNotLoaded.joined(separator: "、")
+                    resultText += "\n当前 Stateful Skill 负责的工具（\(names)）不会加入本轮模型 schema，也不能通过 tool_search 加载；请继续调用 result_present_tracks 提交最终歌曲，系统会自动完成这些操作。"
                 }
 
                 // ④ 更新工作集：先观察候选（用于诊断），再缓存最终结果。
@@ -2839,8 +2885,8 @@ public struct ToolLoop {
     /// their visible confirmation policy.
     /// Skill 激活时，Skill-owned mutation（excludedNames）也不进入 schema——
     /// 主路径由 Skill 内部固定调用。
-    /// 返回完整搜索结果（含能力/风险元数据），调用方可以附加提示文本。
-    @discardableResult
+    /// 返回发现结果与实际加入当前 schema 的结果，避免 Skill 禁止加载的
+    /// mutation 被误报成“已加载”。
     private static func expandToolsFromSearch(
         query: String,
         namespace: String?,
@@ -2848,45 +2894,19 @@ public struct ToolLoop {
         allDescriptors: [ToolDescriptor],
         current: inout [ToolDescriptor],
         allowedOperations: Set<ToolAuthorizationOperation>,
-        semantics: AgentRequestSemantics? = nil,
         excludedNames: Set<String> = [],
         excludeAllMutations: Bool = false
-    ) -> [ToolCatalogEntry] {
+    ) -> ToolSearchExpansionResult {
         let catalog = ToolCatalog(descriptors: allDescriptors)
         let entries = catalog.search(
             query: query,
             namespace: namespace,
             limit: limit,
             authorizedOperations: allowedOperations
-        ).filter { entry in
-            guard let semantics, entry.permission != .readOnly else { return true }
-            // `tool_search` is an explicit model request for a capability.
-            // For ordinary music/queue/playlist turns, let a matching
-            // mutation descriptor enter the next schema even when the first
-            // semantic pass only identified a neighboring domain (for
-            // example, “播放一首歌” followed by a search for “替换队列”).
-            // This is discovery, not an execution authorization decision;
-            // ToolRuntime still applies argument validation and the
-            // descriptor-owned confirmation policy.
-            //
-            // A read/discovery turn must not turn a model-generated search
-            // into an unrelated write. Ordinary mutation turns may discover
-            // a neighboring reversible operation explicitly (for example,
-            // “播放一首歌” followed by a search for “替换队列”).
-            guard semantics.isExplicitMutation else { return false }
-            // Recommendation-only turns are the one important exception:
-            // recommendation expansion must not turn a read request into an
-            // unrelated write. An explicit compound request such as
-            // “推荐并加入队列” retains only its concrete operation(s).
-            guard semantics.domain == .recommendation else { return true }
-            guard !semantics.requestedOperations.isEmpty else { return true }
-            guard let rawOperation = entry.authorizationOperation,
-                  let operation = ToolAuthorizationOperation(rawValue: rawOperation)
-            else { return true }
-            return semantics.requestedOperations.contains(operation)
-        }
+        )
         let byName = Dictionary(uniqueKeysWithValues: allDescriptors.map { ($0.name, $0) })
         var existing = Set(current.map(\.name))
+        var addedEntries: [ToolCatalogEntry] = []
         for entry in entries {
             guard !existing.contains(entry.name), let tool = byName[entry.name] else { continue }
             if excludedNames.contains(tool.name) { continue }
@@ -2897,8 +2917,12 @@ public struct ToolLoop {
             }
             current.append(tool)
             existing.insert(tool.name)
+            addedEntries.append(entry)
         }
-        return entries
+        return ToolSearchExpansionResult(
+            discoveredEntries: entries,
+            addedEntries: addedEntries
+        )
     }
 
     /// One bounded recovery when a non-chat model turn explicitly signals it
@@ -3440,20 +3464,15 @@ public struct ToolLoop {
 
     /// 把结构化消息（卡片）转成模型可读的文本，使工具结果中的歌曲清单可见。
     /// 可见窗口是 targetCount 感知的：用户要求 N 首时，模型至少能看到
-    /// max(N, 10) 个真实候选（上限 50），避免“Runtime 有 50 首、模型只看到
-    /// 5 首”导致多首任务无法完成。其余用总数概括。
+    /// max(N, 10) 个真实候选（单次上下文最多 50 个）。这个窗口只限制单批
+    /// 回灌，不限制整个任务的目标数量；模型可以通过分页或排除 ID 继续取得后续结果。
     static func messageTextForModel(_ message: AgentMessage, targetCount: Int? = nil) -> String {
         let visibleCount = min(max(targetCount ?? 10, 10), 50)
         let trackLine = { (cards: [TrackCard]) -> String in
             let shown = cards.prefix(visibleCount)
             let list = shown.map { "《\($0.title)》-\($0.artistName)（\($0.globalID.description)）" }.joined(separator: "、")
             if cards.count > visibleCount {
-                if let targetCount, targetCount > 50 {
-                    // 候选超过单轮可见上限：明确告知，避免模型误以为只能拿到 50 首而
-                    // 提前 final。完整候选由 Runtime 持有，可通过更精确条件分批查询。
-                    return "\(list)…候选共 \(cards.count) 首（单轮已展示前 50；超过上限，请用更精确的筛选条件缩小范围，或确认是否需要这么多）"
-                }
-                return "\(list)…等 \(cards.count) 首"
+                return "\(list)…本批工具结果共 \(cards.count) 首；当前上下文仅投影前 \(visibleCount) 首。这是单批上下文窗口，不是任务数量上限。如果用户任务需要更多歌曲，请继续使用分页、excludeTrackIDs 或后续查询取得下一批，不要要求用户缩小原任务。"
             }
             return list
         }

@@ -397,8 +397,8 @@ public struct BuiltInPlaylistBuildSkill: AgentStatefulSkill {
 }
 
 /// PlaylistBuild 的可恢复 checkpoint。恢复所必需的最小状态：已创建歌单 ID、
-/// 已选候选、已加歌标记、当前 phase。旧版本 checkpoint 缺少新字段时用
-/// decodeIfPresent 兼容回退。
+/// 已选候选、已加歌标记、当前 phase，以及分页验证的断点与已核验歌曲集合。
+/// 旧版本 checkpoint 缺少新字段时用 decodeIfPresent 兼容回退。
 private struct PlaylistBuildCheckpoint: Codable {
     var playlistID: String?
     var playlistName: String
@@ -407,6 +407,8 @@ private struct PlaylistBuildCheckpoint: Codable {
     var selectedTrackIDs: [String]?
     var tracksAdded: Bool?
     var phase: String?
+    var verificationOffset: Int?
+    var verifiedTrackIDs: [String]?
 
     var jsonString: String? {
         guard let data = try? JSONEncoder().encode(self) else { return nil }
@@ -446,6 +448,9 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
     private var playlistCreated = false
     private var tracksAdded = false
     private var transitionCount = 0
+    private var verificationOffset = 0
+    private var verifiedTrackIDs: Set<String> = []
+    private let verificationPageSize = 100
 
     public var skillID: String { PlaylistBuildSkill.id }
     public var privateToolNames: Set<String> { PlaylistBuildSkill.ownedMutationTools }
@@ -487,6 +492,8 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
         playlistCreated = checkpoint?.createdPlaylist ?? false
         tracksAdded = checkpoint?.tracksAdded ?? false
         selectedTrackIDs = checkpoint?.selectedTrackIDs ?? []
+        verificationOffset = max(checkpoint?.verificationOffset ?? 0, 0)
+        verifiedTrackIDs = Set(checkpoint?.verifiedTrackIDs ?? [])
         // 完整恢复：按 checkpoint 保存的 phase + 状态推进，而不是无条件 addingTracks。
         switch checkpoint?.phase {
         case "verifyingPlaylist":
@@ -551,7 +558,11 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             }
             return .executeTool(
                 name: "library_get_playlist",
-                arguments: ["playlistID": .string(playlistID)]
+                arguments: [
+                    "playlistID": .string(playlistID),
+                    "offset": .number(Double(verificationOffset)),
+                    "limit": .number(Double(verificationPageSize)),
+                ]
             )
         case .completed:
             return .completed(message: "歌单已创建并加入歌曲。")
@@ -601,6 +612,8 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             } else {
                 selectedTrackIDs = ids
             }
+            verificationOffset = 0
+            verifiedTrackIDs = []
             if createdPlaylistID != nil {
                 transition(to: .addingTracks)
             } else {
@@ -608,30 +621,55 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             }
             return .none
         case "playlist_create", "createPlaylist":
+            // Facts are the canonical create contract; structured cards and
+            // legacy text remain compatibility fallbacks for older executors.
+            let rawPlaylistID = result.facts["playlist.created.globalID"]
+                ?? Self.extractPlaylistID(from: result.payload, fallback: result.summary)
+            guard let playlistID = rawPlaylistID, GlobalID(playlistID) != nil else {
+                return .fail("歌单创建结果缺少有效 playlistID；服务器状态可能已发生变化，请先核验，禁止自动重新创建。")
+            }
             playlistCreated = true
-            // Structured cards are the canonical create result; legacy text is
-            // only a compatibility fallback.
-            createdPlaylistID = Self.extractPlaylistID(from: result.payload, fallback: result.summary)
+            createdPlaylistID = playlistID
             transition(to: .addingTracks)
             return .none
         case "playlist_add_songs", "addTracksToPlaylist":
             tracksAdded = true
+            verificationOffset = 0
+            verifiedTrackIDs = []
             transition(to: .verifyingPlaylist)
             return .none
         case "library_get_playlist", "getPlaylist":
-            // 目标状态确认：payload 格式本身就是验证结果，空歌单也是结果。
-            // 有没有 tracks 不是“要不要验证”的条件——数量与成员必须符合预期。
-            guard case let .playlistProposal(name, tracks) = result.payload else {
+            // 目标状态确认支持分页：每一页都并入已核验集合，只有所有提交的
+            // ID 都出现后才完成；若仍缺失且服务端明确有下一页，则继续读取。
+            guard case let .playlistProposal(_, tracks) = result.payload else {
                 return .fail("歌单验证失败：验证结果格式无效（\(result.summary)）。")
             }
-            let expected = max(targetCount ?? selectedTrackIDs.count, 0)
-            guard tracks.count >= expected else {
-                return .fail("歌单验证失败：歌单「\(name)」只有 \(tracks.count) 首，少于预期 \(expected) 首。")
+            verifiedTrackIDs.formUnion(tracks.map(\.globalID.description))
+            if result.facts["playlist.hasMore"] == "true" {
+                let nextOffset = Int(result.facts["playlist.nextOffset"] ?? "")
+                    ?? (verificationOffset + tracks.count)
+                guard nextOffset > verificationOffset else {
+                    return .fail("歌单验证失败：分页验证没有推进（当前 offset=\(verificationOffset)）。")
+                }
+                verificationOffset = nextOffset
+                return .none
             }
-            let present = Set(tracks.map(\.globalID.description))
-            let missing = selectedTrackIDs.filter { !present.contains($0) }
+
+            // 新建歌单的目标状态是精确集合，而不是“提交的歌曲都出现了”。
+            // 只有明确读到最后一页后，才同时检查缺失、额外歌曲和总数。
+            let expectedTrackIDs = Set(selectedTrackIDs)
+            let missing = expectedTrackIDs.subtracting(verifiedTrackIDs)
             guard missing.isEmpty else {
                 return .fail("歌单验证失败：有 \(missing.count) 首提交的歌曲未出现在歌单中。")
+            }
+            let extra = verifiedTrackIDs.subtracting(expectedTrackIDs)
+            guard extra.isEmpty else {
+                return .fail("歌单验证失败：出现 \(extra.count) 首未提交的歌曲。")
+            }
+            if let rawTotal = result.facts["playlist.totalCount"],
+               let total = Int(rawTotal),
+               total != expectedTrackIDs.count {
+                return .fail("歌单验证失败：实际 \(total) 首，预期 \(expectedTrackIDs.count) 首。")
             }
             transition(to: .completed)
             return .none
@@ -684,7 +722,9 @@ final class PlaylistBuildSkillRuntime: AgentStatefulSkillRuntime, @unchecked Sen
             createdPlaylist: playlistCreated,
             selectedTrackIDs: selectedTrackIDs.isEmpty ? nil : selectedTrackIDs,
             tracksAdded: tracksAdded,
-            phase: phase.label
+            phase: phase.label,
+            verificationOffset: verificationOffset,
+            verifiedTrackIDs: verifiedTrackIDs.isEmpty ? nil : verifiedTrackIDs.sorted()
         ).jsonString
     }
 

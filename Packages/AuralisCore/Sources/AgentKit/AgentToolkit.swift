@@ -290,10 +290,13 @@ public struct AgentToolkit {
             return .ok(call, descriptor, playlist.name, .playlistProposal(name: playlist.name, tracks: tracks.map { TrackCard.from(CatalogTrackSummary(globalID: GlobalID(serverID: gid.serverID, remoteID: $0.id.rawValue), title: $0.title, artistName: $0.artistName, albumTitle: $0.albumTitle, duration: $0.duration, isFavorite: $0.isFavorite, userRating: 0, isDownloaded: false)) }))
         case "createPlaylist":
             let name = try require(call, "name")
-            guard let gid = await bridge.createPlaylist(name: name) else {
-                return .fail(call, descriptor, "创建歌单失败")
-            }
-            return .ok(call, descriptor, "已创建歌单", .playlistCards([PlaylistCard(globalID: gid, name: name, trackCount: 0, isReadOnly: false)]))
+            return await createPlaylistToolResult(
+                call,
+                descriptor: descriptor,
+                name: name,
+                bridge: bridge,
+                catalog: catalog
+            )
         case "renamePlaylist", "playlist_rename":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             let name = try require(call, "name")
@@ -302,7 +305,14 @@ public struct AgentToolkit {
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            return mutationToolResult(call, descriptor, await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids))
+            return await addTracksToPlaylistToolResult(
+                call,
+                descriptor: descriptor,
+                playlistGID: gid,
+                trackGIDs: gids,
+                bridge: bridge,
+                catalog: catalog
+            )
         case "removeTracksFromPlaylist", "playlist_remove_songs":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
@@ -892,7 +902,39 @@ public struct AgentToolkit {
         case "library_get_playlist":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             guard let (playlist, tracks) = try await catalog.getPlaylist(gid) else { return .fail(call, descriptor, "歌单不存在") }
-            return .ok(call, descriptor, playlist.name, .playlistProposal(name: playlist.name, tracks: tracks.prefix(50).map { TrackCard.from(CatalogTrackSummary(globalID: GlobalID(serverID: gid.serverID, remoteID: $0.id.rawValue), title: $0.title, artistName: $0.artistName, albumTitle: $0.albumTitle, duration: $0.duration, isFavorite: $0.isFavorite, userRating: 0, isDownloaded: false)) }))
+            let offset = max((try? intParam(call, "offset")) ?? 0, 0)
+            let limit = min(max((try? intParam(call, "limit")) ?? 50, 1), 200)
+            let total = tracks.count
+            let safeOffset = min(offset, total)
+            let page = Array(tracks.dropFirst(safeOffset).prefix(limit))
+            let returned = page.count
+            let nextOffset = safeOffset + returned
+            let hasMore = nextOffset < total
+            let cards = page.map { track in
+                TrackCard.from(CatalogTrackSummary(
+                    globalID: GlobalID(serverID: gid.serverID, remoteID: track.id.rawValue),
+                    title: track.title,
+                    artistName: track.artistName,
+                    albumTitle: track.albumTitle,
+                    duration: track.duration,
+                    isFavorite: track.isFavorite,
+                    userRating: 0,
+                    isDownloaded: false
+                ))
+            }
+            return .ok(
+                call,
+                descriptor,
+                "歌单「\(playlist.name)」共 \(total) 首；本批返回 \(returned) 首，offset=\(safeOffset)，nextOffset=\(nextOffset)，hasMore=\(hasMore)",
+                .playlistProposal(name: playlist.name, tracks: cards),
+                facts: [
+                    "playlist.totalCount": "\(total)",
+                    "playlist.offset": "\(safeOffset)",
+                    "playlist.returnedCount": "\(returned)",
+                    "playlist.nextOffset": "\(nextOffset)",
+                    "playlist.hasMore": hasMore ? "true" : "false",
+                ]
+            )
         case "library_get_recently_played":
             let limit = (try? intParam(call, "limit")) ?? 20
             let list = try await catalog.getRecentHistory(serverID: serverID, limit: min(max(limit, 1), 100))
@@ -1211,13 +1253,25 @@ public struct AgentToolkit {
             }
         case "playlist_create":
             let name = try require(call, "name")
-            guard let gid = await bridge.createPlaylist(name: name) else { return .fail(call, descriptor, "创建歌单失败") }
-            return .ok(call, descriptor, "已创建歌单", .playlistCards([PlaylistCard(globalID: gid, name: name, trackCount: 0, isReadOnly: false)]))
+            return await createPlaylistToolResult(
+                call,
+                descriptor: descriptor,
+                name: name,
+                bridge: bridge,
+                catalog: catalog
+            )
         case "playlist_add_songs":
             let gid = try await requirePlaylistID(call, "playlistID", catalog: catalog, serverID: serverID)
             try await requireReadOnlyPlaylist(gid, catalog: catalog)
             let gids = try await requireTrackIDs(call, "trackIDs", catalog: catalog, serverID: serverID)
-            return mutationToolResult(call, descriptor, await bridge.addTracksToPlaylist(playlistGID: gid, trackGIDs: gids))
+            return await addTracksToPlaylistToolResult(
+                call,
+                descriptor: descriptor,
+                playlistGID: gid,
+                trackGIDs: gids,
+                bridge: bridge,
+                catalog: catalog
+            )
 
         // MARK: 规范服务器工具
 
@@ -1653,6 +1707,150 @@ public struct AgentToolkit {
         let disliked = (try? await catalog.dislikedTrackIDs(serverID: serverID)) ?? []
         guard !disliked.isEmpty else { return summaries }
         return summaries.filter { !disliked.contains($0.globalID) }
+    }
+
+    /// 创建歌单后立即把服务器确认的实体写入 Agent 使用的 canonical store。
+    ///
+    /// `AgentBridge` 的生产实现会更新 AppModel，但 Agent 查询使用的是独立的
+    /// `LocalCatalogStore`。如果这里不做 write-through，紧接着的
+    /// `playlist_add_songs` 会把刚创建的真实 ID 错判为不存在。远程创建成功而本地
+    /// 写入或回读失败时必须报告不可确定副作用，禁止上层自动重试创建。
+    private static func createPlaylistToolResult(
+        _ call: ToolCall,
+        descriptor: ToolDescriptor,
+        name: String,
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore
+    ) async -> ToolResult {
+        guard let gid = await bridge.createPlaylist(name: name) else {
+            return .fail(call, descriptor, "创建歌单失败")
+        }
+
+        let card = PlaylistCard(
+            globalID: gid,
+            name: name,
+            trackCount: 0,
+            isReadOnly: false
+        )
+        let remoteFacts = [
+            "playlist.created.globalID": gid.description,
+            "playlist.created.remoteConfirmed": "true",
+        ]
+
+        do {
+            try await catalog.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: gid.remoteID),
+                    serverID: gid.serverID,
+                    name: name,
+                    trackIDs: []
+                ),
+                serverID: gid.serverID
+            )
+            let summaries = try await catalog.listPlaylists(serverID: gid.serverID)
+            guard summaries.contains(where: { $0.globalID == gid }) else {
+                throw AgentToolError.invalidEntityID("playlistID", gid.description)
+            }
+        } catch {
+            return ToolResult(
+                call: call,
+                permission: descriptor.permission,
+                success: false,
+                summary: "服务器已创建歌单「\(name)」，但本地目录更新失败；禁止自动重复创建，请先同步并核验。",
+                payload: .playlistCards([card]),
+                facts: remoteFacts,
+                presentationRole: descriptor.defaultPresentationRole,
+                hasIndeterminateSideEffect: true
+            )
+        }
+
+        return .ok(
+            call,
+            descriptor,
+            "已创建歌单",
+            .playlistCards([card]),
+            facts: remoteFacts.merging([
+                "playlist.created.verifiedLocalWriteThrough": "true",
+            ]) { _, newValue in newValue }
+        )
+    }
+
+    /// 对服务器确认的加歌做本地 write-through，并在写入后回读确认。
+    /// 服务器已经成功时，本地同步失败不能映射为普通可重试错误，否则会重复加歌。
+    private static func addTracksToPlaylistToolResult(
+        _ call: ToolCall,
+        descriptor: ToolDescriptor,
+        playlistGID: GlobalID,
+        trackGIDs: [GlobalID],
+        bridge: AgentBridge,
+        catalog: LocalCatalogStore
+    ) async -> ToolResult {
+        let mutation = await bridge.addTracksToPlaylist(
+            playlistGID: playlistGID,
+            trackGIDs: trackGIDs
+        )
+        switch mutation.state {
+        case .failed, .indeterminate:
+            return mutationToolResult(call, descriptor, mutation)
+        case .confirmed:
+            let remoteFacts = [
+                "playlist.add.remoteConfirmed": "true",
+                "playlist.add.globalID": playlistGID.description,
+                "playlist.add.count": "\(trackGIDs.count)",
+            ]
+            do {
+                guard let (playlist, _) = try await catalog.getPlaylist(playlistGID) else {
+                    throw AgentToolError.invalidEntityID("playlistID", playlistGID.description)
+                }
+                guard let existing = try await catalog.listPlaylists(serverID: playlistGID.serverID)
+                    .first(where: { $0.globalID == playlistGID })
+                else {
+                    throw AgentToolError.invalidEntityID("playlistID", playlistGID.description)
+                }
+
+                let updatedTrackGIDs = existing.trackIDs + trackGIDs
+                let updatedPlaylist = Playlist(
+                    id: playlist.id,
+                    serverID: playlist.serverID,
+                    name: playlist.name,
+                    trackIDs: updatedTrackGIDs.map { TrackID(rawValue: $0.remoteID) },
+                    comment: playlist.comment,
+                    modifiedAt: .now,
+                    isReadOnly: playlist.isReadOnly,
+                    validUntil: playlist.validUntil
+                )
+                try await catalog.upsertPlaylist(
+                    updatedPlaylist,
+                    serverID: playlistGID.serverID,
+                    isReadOnly: playlist.isReadOnly
+                )
+
+                let persisted = try await catalog.listPlaylists(serverID: playlistGID.serverID)
+                    .first(where: { $0.globalID == playlistGID })
+                guard persisted?.trackIDs == updatedTrackGIDs else {
+                    throw AgentToolError.invalidEntityID("playlistID", playlistGID.description)
+                }
+            } catch {
+                return ToolResult(
+                    call: call,
+                    permission: descriptor.permission,
+                    success: false,
+                    summary: "服务器已确认歌曲加入歌单，但本地目录更新失败；禁止自动重复添加，请同步后核验。",
+                    facts: remoteFacts,
+                    presentationRole: descriptor.defaultPresentationRole,
+                    hasIndeterminateSideEffect: true
+                )
+            }
+
+            return .ok(
+                call,
+                descriptor,
+                "已添加 \(trackGIDs.count) 首",
+                facts: remoteFacts.merging([
+                    "playlist.add.verifiedLocalWriteThrough": "true",
+                ]) { _, newValue in newValue }
+            )
+        }
     }
 
     private static func requireReadOnlyPlaylist(_ gid: GlobalID, catalog: LocalCatalogStore) async throws {

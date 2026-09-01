@@ -69,7 +69,7 @@ func reversibleMutationIsAwareAndExecutable() {
 // - Tool Broker Top-K：自然语言 → 高相关工具召回，无关工具被截断
 // - tool_search 排名：utteranceExamples + coverage 加权
 // - CandidateSet：targetCount 感知的模型可见窗口（不再固定前 5 首）
-// - musicDiscovery completion：必须 final selection 才完成
+// - musicDiscovery completion：普通推荐由模型回答决定，不强制 final selection
 // - Authorization 与 Tool Relevance 分离
 
 @Suite("Agent tool broker")
@@ -231,7 +231,8 @@ struct AgentToolBrokerTests {
         for i in 0..<20 {
             #expect(text.contains("v2:t\(i)"), "模型应能看到第 \(i) 个候选 ID")
         }
-        #expect(text.contains("等 50 首"))
+        #expect(text.contains("本批工具结果共 50 首"))
+        #expect(text.contains("不是任务数量上限"))
     }
 
     @Test("CandidateSet：无 targetCount 时默认展示 10 首")
@@ -248,28 +249,11 @@ struct AgentToolBrokerTests {
 
     // MARK: - Completion（用户 36/37）
 
-    @Test("Completion：musicDiscovery 必须 final selection 才完成")
-    func musicDiscoveryRequiresFinalSelection() {
+    @Test("Completion：普通 musicDiscovery 由模型回答决定，不强制 final selection")
+    func musicDiscoveryUsesModelAnswerCompletion() {
         let policy = AgentTaskPolicy.policy(for: .musicDiscovery)
-        #expect(policy.completion == .finalTrackSelection)
-
-        // 只有搜索成功、无 final selection → 不完成。
-        var state = AgentTaskState(intent: .musicDiscovery, goal: "推荐")
-        state.successfulToolNames = ["library_search"]
-        state.successfulToolCount = 1
-        #expect(!AgentCompletionEvaluator.factsSatisfied(state: state, policy: policy),
-                "只有工具成功、无 final selection 不得完成")
-
-        // 有 final selection 但不足 targetCount → 不完成。
-        state.facts["task.finalSelection.count"] = "5"
-        state.facts["task.targetCount"] = "20"
-        #expect(!AgentCompletionEvaluator.factsSatisfied(state: state, policy: policy),
-                "final 5/20 不得完成")
-
-        // final selection 达标 → 完成。
-        state.facts["task.finalSelection.count"] = "20"
-        #expect(AgentCompletionEvaluator.factsSatisfied(state: state, policy: policy),
-                "final 20/20 应完成")
+        #expect(policy.completion == .modelAnswer)
+        #expect(AgentCompletionPredicate.finalTrackSelection.predicateName == "finalTrackSelection")
     }
 
     // MARK: - Authorization 与 Relevance 分离（用户 39/40）
@@ -336,13 +320,14 @@ struct AgentToolBrokerTests {
         #expect(irrelevant.count <= 2, "无关工具应被 Top-K 裁剪，实际：\(irrelevant.map(\.name))")
     }
 
-    @Test("R2 候选超过 50 首时明确提示上限而非静默截断")
-    func candidateOverFiftyNotice() {
+    @Test("R2 单批候选超过上下文窗口时说明分页，而不是限制任务数量")
+    func candidateOverFiftyExplainsPaging() {
         let cards = (0..<80).map { i in
             TrackCard(globalID: GlobalID(serverID: "v2", remoteID: "t\(i)"), title: "歌\(i)", artistName: "艺人", albumTitle: "专辑", duration: 200, isFavorite: false)
         }
         let text = ToolLoop.messageTextForModel(.trackCards(cards), targetCount: 80)
-        #expect(text.contains("超过上限"), "应提示单轮上限")
+        #expect(text.contains("单批上下文窗口"), "应说明这是单批上下文窗口")
+        #expect(text.contains("不是任务数量上限"), "不得把单批窗口描述成任务上限")
         #expect(text.contains("80"), "应说明候选总数")
     }
 

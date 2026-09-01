@@ -721,13 +721,21 @@ struct AgentRuntimeArchitectureTests {
         ("来一百二十三首", 123),
         ("来两百首", 200),
         ("来一百零二首", 102),
+        ("推荐三百首", 300),
+        ("推荐一千首", 1000),
+        ("推荐一千零五十首", 1050),
+        ("推荐一万首", 10_000),
+        ("推荐300首", 300),
+        ("推荐1000首", 1000),
+        ("创建300首歌单", 300),
+        ("选择三百首歌曲", 300),
+        ("来两百零一首", 201),
     ])
     func chineseQueueCounts(_ text: String, _ expected: Int) {
         #expect(AgentTaskWorkingSet.inferredTargetQueueCount(from: text) == expected)
     }
 
     @Test(arguments: [
-        "来两百零一首",
         "2020年的歌",
         "给我一些歌",
         "晚上十点提醒我",

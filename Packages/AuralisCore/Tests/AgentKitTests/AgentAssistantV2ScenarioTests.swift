@@ -339,6 +339,88 @@ func ordinaryConversationIsFirstClass() async throws {
     #expect(provider.requests().count == 1)
 }
 
+@Test("纯推荐由模型回答收尾，不强制 result_present_tracks")
+func pureRecommendationUsesModelOwnedCompletion() async throws {
+    let serverID: ServerID = "recommendation-server"
+    let store = try scenarioStore()
+    let tracks = (0..<3).map {
+        scenarioTrack(serverID: serverID, remoteID: "track-\($0)", title: "深夜歌曲 \($0)")
+    }
+    try await seedScenario(store, tracks: tracks)
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "select-recommendations",
+            name: "library_select_tracks",
+            arguments: ["limit": .number(3)]
+        )]),
+        scenarioResponse(content: "这三首适合深夜聆听。"),
+    ])
+    let bridge = MockAgentBridge(activeServerID: serverID)
+    let collector = ScenarioMessageCollector()
+
+    await ConversationEngine().run(
+        userText: "推荐 3 首适合深夜的歌",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(serverID: serverID),
+        intent: .musicDiscovery,
+        policy: .policy(for: .musicDiscovery),
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    let requests = provider.requests()
+    #expect(requests.count == 2)
+    #expect(await collector.containsText("这三首适合深夜聆听"))
+    #expect(requests.dropFirst().contains { request in
+        request.messages.contains { message in
+            message.role == .user && message.content.contains("result_present_tracks")
+        }
+    } == false)
+    #expect(bridge.replacedQueues.isEmpty)
+    #expect(bridge.playedTracks.isEmpty)
+}
+
+@Test("普通 Agent 不能执行未加载到本轮 schema 的隐藏 mutation")
+func genericLoopRejectsHiddenMutationCall() async throws {
+    let provider = ScenarioProvider([
+        scenarioResponse(calls: [scenarioCall(
+            id: "hidden-queue-replace",
+            name: "queue_replace",
+            arguments: [
+                "trackIDs": .array([.string("hidden-server:track")]),
+            ]
+        )]),
+        scenarioResponse(content: "我继续按对话回答，不执行未加载的队列操作。"),
+    ])
+    let store = try scenarioStore()
+    let bridge = MockAgentBridge()
+    let collector = ScenarioMessageCollector()
+
+    await ConversationEngine().run(
+        userText: "解释一下黑洞信息悖论。",
+        provider: provider,
+        model: "scenario",
+        bridge: bridge,
+        catalog: store,
+        context: ToolLoop.Context(),
+        intent: .conversation,
+        policy: .policy(for: .conversation),
+        confirm: { _ in true },
+        emit: { message in await collector.append(message) }
+    )
+
+    let requests = provider.requests()
+    #expect(requests.count == 2)
+    #expect(requests[1].messages.contains { message in
+        message.content.contains("尚未加载到本轮工具 schema")
+    })
+    #expect(bridge.replacedQueues.isEmpty)
+    #expect(await collector.containsText("不执行未加载的队列操作"))
+}
+
 @Test("Deterministic collection/status reads bypass planning and execute one canonical tool")
 func deterministicReadFastPathUsesExactlyOneTargetTool() async throws {
     let cases: [(String, String, [String: AIJSONValue])] = [
@@ -939,15 +1021,15 @@ func missingMutationOperationDoesNotBlockReversibleTool() async throws {
         isContinuation: false
     )
     let lineage = ExecutionLineage(
-        sourceRequest: "处理歌单 Test",
+        sourceRequest: "把这首歌曲加入歌单 Test",
         authorization: SideEffectAuthorizationContext(
-            sourceRequest: "处理歌单 Test",
+            sourceRequest: "把这首歌曲加入歌单 Test",
             semantics: semantics
         )
     )
 
     await ConversationEngine().run(
-        userText: "处理歌单 Test",
+        userText: "把这首歌曲加入歌单 Test",
         provider: provider,
         model: "scenario",
         bridge: bridge,

@@ -596,6 +596,74 @@ func agentListPlaylistsReturnsRealCount() async throws {
     #expect(result.summary.contains("3"))
 }
 
+@Test("Agent library_get_playlist returns bounded pages and continuation facts")
+func agentGetPlaylistPaginatesLargePlaylist() async throws {
+    let store = try makeStore()
+    let serverID: ServerID = "test-server"
+    let tracks = (0..<250).map { index in
+        makeTrack(serverID: serverID, remoteID: "page-\(index)", title: "Page Song \(index)")
+    }
+    try await seed(store, tracks)
+    try await store.upsertPlaylist(
+        Playlist(
+            id: "pl-page",
+            serverID: serverID,
+            name: "分页歌单",
+            trackIDs: tracks.map(\.id)
+        ),
+        serverID: serverID
+    )
+
+    let bridge = MockAgentBridge()
+    let firstPage = await AgentToolkit.execute(
+        ToolCall(
+            name: "library_get_playlist",
+            arguments: [
+                "playlistID": "test-server:pl-page",
+                "offset": "0",
+                "limit": "200",
+            ]
+        ),
+        bridge: bridge,
+        catalog: store,
+        serverID: serverID
+    )
+
+    #expect(firstPage.success)
+    #expect(firstPage.facts["playlist.totalCount"] == "250")
+    #expect(firstPage.facts["playlist.offset"] == "0")
+    #expect(firstPage.facts["playlist.returnedCount"] == "200")
+    #expect(firstPage.facts["playlist.nextOffset"] == "200")
+    #expect(firstPage.facts["playlist.hasMore"] == "true")
+    if case let .playlistProposal(_, cards)? = firstPage.payload {
+        #expect(cards.count == 200)
+        #expect(cards.first?.globalID.description == "test-server:page-0")
+        #expect(cards.last?.globalID.description == "test-server:page-199")
+    } else {
+        Issue.record("library_get_playlist 应返回分页 playlistProposal payload")
+    }
+
+    let secondPage = await AgentToolkit.execute(
+        ToolCall(
+            name: "library_get_playlist",
+            arguments: [
+                "playlistID": "test-server:pl-page",
+                "offset": "200",
+                "limit": "200",
+            ]
+        ),
+        bridge: bridge,
+        catalog: store,
+        serverID: serverID
+    )
+
+    #expect(secondPage.success)
+    #expect(secondPage.facts["playlist.offset"] == "200")
+    #expect(secondPage.facts["playlist.returnedCount"] == "50")
+    #expect(secondPage.facts["playlist.nextOffset"] == "250")
+    #expect(secondPage.facts["playlist.hasMore"] == "false")
+}
+
 // MARK: - LLM 消息角色（HTTP 400 回归）
 
 /// 工具执行结果必须用合法角色（user）回传，不能使用 role: .tool——
@@ -1414,11 +1482,13 @@ func cardsBufferedUntilFinalAnswer() async throws {
     }
     let collector = EmittedCollector()
     let provider = ScriptedAIProvider(actionBatches: [
-        "ACTION: {\"tool\":\"getFavorites\",\"args\":{}}",
+        "ACTION: {\"tool\":\"library_search\",\"args\":{\"query\":\"Fav\"}}",
         "已为你列出收藏。",
     ])
     await AgentRunner.run(
-        userText: "我的收藏",
+        // 复合请求应走模型 loop，避免 deterministic direct-read fast path
+        // 在测试 Provider 介入前直接完成。
+        userText: "搜索我的收藏，然后列出结果",
         provider: provider,
         model: "scripted-model",
         bridge: bridge,
