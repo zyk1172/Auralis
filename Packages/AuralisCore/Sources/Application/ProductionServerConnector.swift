@@ -468,18 +468,6 @@ public actor ProductionServerConnector: ServerConnecting {
         return await Self.makeStreamURL(client: client, trackID: trackID.rawValue, quality: streamQuality)
     }
 
-    /// 构造独立的 haptics lookahead sidecar。它只改变服务器转码参数，
-    /// 不会发起第二次完整原始音频下载；如果服务器不支持转码，分析器会
-    /// 失败并把正常 AVPlayer 播放留在原路径。
-    public func musicHapticsAnalysisURL(serverID: ServerID, trackID: TrackID) async -> URL? {
-        guard let client = clients[serverID] else { return nil }
-        return try? await client.makeStreamURL(
-            trackID: trackID.rawValue,
-            maxBitRate: 96,
-            format: "mp3"
-        )
-    }
-
     /// 探针分页上限（500/页 → 最多 20,000 张专辑）。达到上限仍未翻完时视为
     /// 「无法可靠判定」，返回 nil 走保守全量，而不是无限翻页。
     private static let maximumProbePages = 40

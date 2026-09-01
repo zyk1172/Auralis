@@ -11,16 +11,14 @@ public enum MusicHapticsDriftGuardBand: String, Sendable, Equatable {
 
 @MainActor
 public final class RollingMusicHapticsScheduler {
-    public let analysisLeadTarget: TimeInterval
     public let hapticCommitHorizon: TimeInterval
-    public var targetLead: TimeInterval { analysisLeadTarget }
-    public var schedulingHorizon: TimeInterval { analysisLeadTarget }
     public private(set) var playbackPosition: TimeInterval = 0
     public private(set) var scheduledUntil: TimeInterval = 0
     public private(set) var rollingWindowCount: Int = 0
     public private(set) var isPlaying = false
     public private(set) var hapticDriftSeconds: TimeInterval = 0
     public private(set) var driftGuardBand: MusicHapticsDriftGuardBand = .stable
+    public private(set) var currentEventSource: MusicHapticsEventSource = .none
 
     private var windows: [MusicHapticsAnalysisWindow] = []
     private var scheduledKeys: Set<String> = []
@@ -32,19 +30,8 @@ public final class RollingMusicHapticsScheduler {
     private var hapticFlushRequested = false
 
     public init(
-        targetLead: TimeInterval = 8,
-        schedulingHorizon: TimeInterval = 18
-    ) {
-        self.analysisLeadTarget = max(0.5, targetLead)
-        self.hapticCommitHorizon = max(0.5, schedulingHorizon)
-        self.commitSlices = false
-    }
-
-    public init(
-        analysisLeadTarget: TimeInterval = 10,
         hapticCommitHorizon: TimeInterval = 3
     ) {
-        self.analysisLeadTarget = min(max(analysisLeadTarget, 8), 20)
         self.hapticCommitHorizon = min(max(hapticCommitHorizon, 2.5), 4)
         self.commitSlices = true
     }
@@ -52,23 +39,37 @@ public final class RollingMusicHapticsScheduler {
     @discardableResult
     public func ingest(_ window: MusicHapticsAnalysisWindow) -> [MusicHapticsAnalysisWindow] {
         guard window.endTime > window.startTime else { return [] }
-        // A late progress callback may replace a window with the same start
-        // time but a longer end time.  Its old key must be released or the
-        // corrected window would remain permanently marked as scheduled.
+        // Realtime tap and original-stream lookahead intentionally overlap.
+        // Keep one merged range for every overlap so a late lookahead window
+        // upgrades the source without replaying already committed realtime
+        // events. The slice cursor is carried to the merged key.
+        var mergedWindow = window
         var replacementCursor: TimeInterval?
-        for existing in windows where abs(existing.startTime - window.startTime) < 0.001 {
+        var replacementWasScheduled = false
+        var mergedKeys: Set<String> = []
+        for existing in windows where rangesOverlap(existing, window) {
             let existingKey = key(for: existing)
+            mergedKeys.insert(existingKey)
             if let cursor = sliceCursors[existingKey] {
                 replacementCursor = max(replacementCursor ?? existing.startTime, cursor)
             }
+            replacementWasScheduled = replacementWasScheduled || scheduledKeys.contains(existingKey)
             scheduledKeys.remove(existingKey)
             sliceCursors.removeValue(forKey: existingKey)
+            mergedWindow = merge(existing, mergedWindow)
         }
-        windows.removeAll { abs($0.startTime - window.startTime) < 0.001 }
-        windows.append(window)
+        windows.removeAll { mergedKeys.contains(key(for: $0)) }
+        windows.append(mergedWindow)
         windows.sort { $0.startTime < $1.startTime }
         if commitSlices, let replacementCursor {
-            sliceCursors[key(for: window)] = min(window.endTime, max(window.startTime, replacementCursor))
+            sliceCursors[key(for: mergedWindow)] = min(
+                mergedWindow.endTime,
+                max(mergedWindow.startTime, replacementCursor)
+            )
+        } else if !commitSlices, replacementWasScheduled {
+            // Legacy whole-window callers have already received this range;
+            // retain that fact after changing its source/range key.
+            scheduledKeys.insert(key(for: mergedWindow))
         }
         rollingWindowCount = windows.count
         return pump()
@@ -155,6 +156,7 @@ public final class RollingMusicHapticsScheduler {
         scheduledUntil = 0
         rollingWindowCount = 0
         playbackPosition = 0
+        currentEventSource = .none
         resetTimingAnchor()
     }
 
@@ -183,11 +185,10 @@ public final class RollingMusicHapticsScheduler {
 
     private func pump() -> [MusicHapticsAnalysisWindow] {
         guard isPlaying else { return [] }
-        let upperBound = playbackPosition + analysisLeadTarget
+        let commitUpperBound = playbackPosition + hapticCommitHorizon
         var scheduled: [MusicHapticsAnalysisWindow] = []
         for window in windows where window.endTime > playbackPosition
-            && window.startTime <= upperBound
-            && window.analysisPosition > playbackPosition {
+            && (!commitSlices || window.startTime < commitUpperBound) {
             let windowKey = key(for: window)
             if !commitSlices {
                 guard scheduledKeys.insert(windowKey).inserted else { continue }
@@ -201,9 +202,16 @@ public final class RollingMusicHapticsScheduler {
             guard sliceEnd > sliceStart else { continue }
             let slice = window.sliced(from: sliceStart, to: sliceEnd)
             sliceCursors[windowKey] = sliceEnd
-            scheduledUntil = max(scheduledUntil, sliceEnd)
-            if !slice.events.isEmpty { scheduled.append(slice) }
+            // `scheduledUntil` describes haptic output handed to the output
+            // engine, not an analysis interval that happened to contain no
+            // events.  Keep advancing the cursor through quiet material, but
+            // do not claim a silent slice was committed.
+            if !slice.events.isEmpty {
+                scheduledUntil = max(scheduledUntil, sliceEnd)
+                scheduled.append(slice)
+            }
         }
+        updateCurrentEventSource(from: scheduled)
         return scheduled
     }
 
@@ -214,6 +222,7 @@ public final class RollingMusicHapticsScheduler {
         scheduledKeys = scheduledKeys.filter { liveKeys.contains($0) }
         sliceCursors = sliceCursors.filter { liveKeys.contains($0.key) }
         if scheduledUntil < playbackPosition { scheduledUntil = playbackPosition }
+        if windows.isEmpty { currentEventSource = .none }
     }
 
     private func updateDrift(position: TimeInterval, rate: Double) {
@@ -255,5 +264,84 @@ public final class RollingMusicHapticsScheduler {
 
     private func key(for window: MusicHapticsAnalysisWindow) -> String {
         String(format: "%.3f-%.3f", window.startTime, window.endTime)
+    }
+
+    private func rangesOverlap(
+        _ lhs: MusicHapticsAnalysisWindow,
+        _ rhs: MusicHapticsAnalysisWindow
+    ) -> Bool {
+        lhs.startTime < rhs.endTime - 0.001
+            && rhs.startTime < lhs.endTime - 0.001
+    }
+
+    private func merge(
+        _ lhs: MusicHapticsAnalysisWindow,
+        _ rhs: MusicHapticsAnalysisWindow
+    ) -> MusicHapticsAnalysisWindow {
+        let sourceMode: MusicHapticsAnalysisMode = if lhs.sourceMode == .remoteOriginal || rhs.sourceMode == .remoteOriginal {
+            .remoteOriginal
+        } else if lhs.sourceMode == .realtimeTap || rhs.sourceMode == .realtimeTap {
+            .realtimeTap
+        } else {
+            .local
+        }
+        let lhsIsRemote = lhs.sourceMode == .remoteOriginal
+        let rhsIsRemote = rhs.sourceMode == .remoteOriginal
+        let events: [MusicHapticsEvent]
+        if lhsIsRemote && !rhsIsRemote {
+            // A realtime event that overlaps a reliable original-stream
+            // window is a backup copy, not a second pulse. Keep realtime only
+            // outside the remote-covered interval.
+            events = MusicHapticsEventDeduplicator.merge(
+                lhs.events + rhs.events.filter { !overlaps($0, lhs.startTime..<lhs.endTime) }
+            )
+        } else if rhsIsRemote && !lhsIsRemote {
+            events = MusicHapticsEventDeduplicator.merge(
+                rhs.events + lhs.events.filter { !overlaps($0, rhs.startTime..<rhs.endTime) }
+            )
+        } else {
+            events = MusicHapticsEventDeduplicator.merge(lhs.events + rhs.events)
+        }
+        return MusicHapticsAnalysisWindow(
+            startTime: min(lhs.startTime, rhs.startTime),
+            endTime: max(lhs.endTime, rhs.endTime),
+            analysisPosition: max(lhs.analysisPosition, rhs.analysisPosition),
+            events: events,
+            coverage: max(lhs.coverage, rhs.coverage),
+            analysisSpeedX: max(lhs.analysisSpeedX, rhs.analysisSpeedX),
+            tempoBPM: rhs.tempoBPM ?? lhs.tempoBPM,
+            beatConfidence: max(lhs.beatConfidence, rhs.beatConfidence),
+            sourceMode: sourceMode,
+            eventCount: max(lhs.eventCount, rhs.eventCount),
+            transientCount: max(lhs.transientCount, rhs.transientCount),
+            continuousCount: max(lhs.continuousCount, rhs.continuousCount),
+            mixerDiagnostics: rhs.mixerDiagnostics
+        )
+    }
+
+    private func overlaps(
+        _ event: MusicHapticsEvent,
+        _ range: Range<TimeInterval>
+    ) -> Bool {
+        let eventEnd = event.time + (event.duration ?? 0)
+        if event.kind == .transient {
+            return event.time >= range.lowerBound && event.time < range.upperBound
+        }
+        return eventEnd > range.lowerBound && event.time < range.upperBound
+    }
+
+    private func updateCurrentEventSource(from scheduled: [MusicHapticsAnalysisWindow]) {
+        let sources = Set(scheduled.map { window -> MusicHapticsEventSource in
+            switch window.sourceMode {
+            case .remoteOriginal: return .remoteOriginal
+            case .realtimeTap: return .realtimeTap
+            case .local: return .none
+            }
+        }.filter { $0 != .none })
+        switch sources.count {
+        case 0: break
+        case 1: currentEventSource = sources.first ?? .none
+        default: currentEventSource = .mixed
+        }
     }
 }

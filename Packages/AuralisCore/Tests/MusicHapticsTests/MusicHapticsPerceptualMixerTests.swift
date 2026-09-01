@@ -224,7 +224,7 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
 }
 
 @Test @MainActor func commitSchedulerNeverHandsOutMoreThanHapticHorizon() {
-    let scheduler = RollingMusicHapticsScheduler(analysisLeadTarget: 10, hapticCommitHorizon: 3)
+    let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
     let window = MusicHapticsAnalysisWindow(
         startTime: 0,
         endTime: 6,
@@ -249,7 +249,7 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
 }
 
 @Test @MainActor func schedulerDriftGuardFlushesLargeClockError() {
-    let scheduler = RollingMusicHapticsScheduler(analysisLeadTarget: 10, hapticCommitHorizon: 3)
+    let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
     let window = MusicHapticsAnalysisWindow(
         startTime: 0,
         endTime: 12,
@@ -270,7 +270,7 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
 }
 
 @Test @MainActor func schedulerDriftGuardMarksSmallErrorForNextWindow() {
-    let scheduler = RollingMusicHapticsScheduler(analysisLeadTarget: 10, hapticCommitHorizon: 3)
+    let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
     let window = MusicHapticsAnalysisWindow(
         startTime: 0,
         endTime: 6,
@@ -289,7 +289,7 @@ private func texture(_ time: TimeInterval, duration: TimeInterval = 0.24) -> Mus
 }
 
 @Test @MainActor func schedulerPauseAndForegroundSeekDropOldFutureSlices() {
-    let scheduler = RollingMusicHapticsScheduler(analysisLeadTarget: 10, hapticCommitHorizon: 3)
+    let scheduler = RollingMusicHapticsScheduler(hapticCommitHorizon: 3)
     let window = MusicHapticsAnalysisWindow(
         startTime: 0,
         endTime: 90,

@@ -3,24 +3,15 @@ import Foundation
 
 public struct MusicHapticsAnalysisPerformancePolicy: Hashable, Sendable {
     public let fftFrameStride: Int
-    public let targetLead: TimeInterval
-    public let schedulingHorizon: TimeInterval
-    public let analysisLeadTarget: TimeInterval
     public let hapticCommitHorizon: TimeInterval
     public let isLowPowerMode: Bool
 
     public init(
         fftFrameStride: Int = 1,
-        targetLead: TimeInterval = 8,
-        schedulingHorizon: TimeInterval = 18,
-        analysisLeadTarget: TimeInterval? = nil,
         hapticCommitHorizon: TimeInterval = 3,
         isLowPowerMode: Bool = false
     ) {
         self.fftFrameStride = max(1, fftFrameStride)
-        self.targetLead = max(0.5, targetLead)
-        self.schedulingHorizon = max(self.targetLead, schedulingHorizon)
-        self.analysisLeadTarget = min(max(analysisLeadTarget ?? targetLead, 8), 20)
         self.hapticCommitHorizon = min(max(hapticCommitHorizon, 2.5), 4)
         self.isLowPowerMode = isLowPowerMode
     }
@@ -31,10 +22,10 @@ public struct MusicHapticsAnalysisPerformancePolicy: Hashable, Sendable {
         let thermal = process.thermalState
         let lowPower = process.isLowPowerModeEnabled
         if thermal == .critical {
-            return Self(fftFrameStride: 4, targetLead: 3, schedulingHorizon: 8, analysisLeadTarget: 8, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
+            return Self(fftFrameStride: 4, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
         }
         if thermal == .serious || lowPower {
-            return Self(fftFrameStride: 2, targetLead: 5, schedulingHorizon: 12, analysisLeadTarget: 8, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
+            return Self(fftFrameStride: 2, hapticCommitHorizon: 2.5, isLowPowerMode: lowPower)
         }
         #endif
         return Self()
@@ -114,6 +105,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     private var hopSize = 256
     private var fft: vDSP.FFT<DSPSplitComplex>?
     private var pending: [Float] = []
+    /// Logical read cursor for the pending PCM. `removeFirst` on every hop
+    /// copies the remaining audio and can make the utility consumer fall
+    /// behind a real-time tap. Compact this bounded buffer periodically
+    /// instead of paying that cost for each FFT hop.
+    private var pendingReadOffset = 0
     private var pendingStart: TimeInterval?
     private var analysisFrameIndex = 0
     private var window: [Float] = []
@@ -132,6 +128,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     private var activeTextureLastSnapshotTime: TimeInterval?
     private var rmsHistory: [Float] = []
     private var onsetHistory: [Float] = []
+    private var energyDBHistory: [Float] = []
     private var beatTracker = MusicHapticsBeatTracker()
     private var totalEventCount = 0
     private var totalTransientCount = 0
@@ -173,19 +170,21 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
               sampleRate > 0
         else { return [] }
         configureIfNeeded(sampleRate: sampleRate)
+        let bufferedCount = pending.count - pendingReadOffset
         if let pendingStart,
            previousFrameTime.isFinite,
-           abs(startTime - (pendingStart + Double(pending.count) / sampleRate)) > 0.5 {
+           abs(startTime - (pendingStart + Double(bufferedCount) / sampleRate)) > 0.5 {
             resetRollingState()
             self.pendingStart = startTime
-        } else if pending.isEmpty {
+        } else if bufferedCount == 0 {
             self.pendingStart = startTime
         }
         pending.append(contentsOf: monoSamples.map { min(max($0.isFinite ? $0 : 0, -1), 1) })
 
         var frames: [MusicHapticsCandidateFrame] = []
-        while pending.count >= frameSize, let frameStart = pendingStart {
-            let frame = Array(pending.prefix(frameSize))
+        while pending.count - pendingReadOffset >= frameSize, let frameStart = pendingStart {
+            let frameEnd = pendingReadOffset + frameSize
+            let frame = Array(pending[pendingReadOffset..<frameEnd])
             if analysisFrameIndex % configuration.fftFrameStride == 0 {
                 frames.append(analyze(frame: frame, time: frameStart))
             } else {
@@ -203,8 +202,9 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
                 )
             }
             analysisFrameIndex += 1
-            pending.removeFirst(min(hopSize, pending.count))
+            pendingReadOffset += min(hopSize, frameSize)
             pendingStart = frameStart + Double(hopSize) / sampleRate
+            compactPendingIfNeeded()
         }
         return frames
     }
@@ -217,12 +217,12 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
     }
 
     public mutating func finishCandidates() -> [MusicHapticsCandidateFrame] {
-        guard !pending.isEmpty, let frameStart = pendingStart else {
+        guard pending.count - pendingReadOffset > 0, let frameStart = pendingStart else {
             guard let texture = finishTexture() else { return [] }
             recordFinalizedEvent(texture)
             return [MusicHapticsCandidateFrame(time: texture.time, events: [texture])]
         }
-        var frame = pending
+        var frame = Array(pending[pendingReadOffset...])
         frame.append(contentsOf: repeatElement(0, count: max(0, frameSize - frame.count)))
         var result = analyze(frame: Array(frame.prefix(frameSize)), time: frameStart)
         if let texture = finishTexture() {
@@ -238,6 +238,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
             )
         }
         pending.removeAll(keepingCapacity: false)
+        pendingReadOffset = 0
         pendingStart = nil
         return [result]
     }
@@ -290,6 +291,7 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
 
     private mutating func resetRollingState(keepSampleRate: Bool = true) {
         pending.removeAll(keepingCapacity: true)
+        pendingReadOffset = 0
         pendingStart = nil
         previousSpectrum.removeAll(keepingCapacity: true)
         previousFrameTime = -.infinity
@@ -305,8 +307,17 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         activeTextureLastSnapshotTime = nil
         rmsHistory.removeAll(keepingCapacity: true)
         onsetHistory.removeAll(keepingCapacity: true)
+        energyDBHistory.removeAll(keepingCapacity: true)
         beatTracker.reset()
         if !keepSampleRate { sampleRate = nil }
+    }
+
+    private mutating func compactPendingIfNeeded() {
+        guard pendingReadOffset > 0,
+              pendingReadOffset >= 8_192 || pendingReadOffset * 2 >= pending.count
+        else { return }
+        pending.removeFirst(pendingReadOffset)
+        pendingReadOffset = 0
     }
 
     private mutating func analyze(frame: [Float], time: TimeInterval) -> MusicHapticsCandidateFrame {
@@ -334,8 +345,11 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let onset = max(0, safeRMS - previousRMS)
             + logOnset * 0.02
             + flux * 0.35
-        appendRolling(&rmsHistory, value: safeRMS, limit: historyLimit(sampleRate: sampleRate))
-        appendRolling(&onsetHistory, value: onset, limit: historyLimit(sampleRate: sampleRate))
+        let rollingLimit = historyLimit(sampleRate: sampleRate)
+        appendRolling(&rmsHistory, value: safeRMS, limit: rollingLimit)
+        appendRolling(&onsetHistory, value: onset, limit: rollingLimit)
+        let energyDB = 20 * log10(max(safeRMS, 0.00001))
+        appendRolling(&energyDBHistory, value: energyDB, limit: rollingLimit)
 
         let onsetThreshold = adaptiveThreshold(onsetHistory, multiplier: 2.8, floor: 0.0005)
         let rmsThreshold = adaptiveThreshold(rmsHistory, multiplier: 2.2, floor: 0.004)
@@ -354,19 +368,32 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         var events: [MusicHapticsEvent] = []
         if isTransient || beat.isBeat {
             let eventClass = classAndShape.eventClass
-            let energyPart = min(1, safeRMS / max(rmsThreshold, 0.004))
-            let onsetPart = min(1, onset / max(onsetThreshold, 0.0005))
-            let beatPart: Float
+            // Thresholds decide whether an event is emitted; they must not
+            // also pin its loudness to the same value.  Map energy against
+            // the track's recent dB distribution and map the attack against
+            // the amount by which it clears the onset threshold.
+            let energyPosition = smoothstep(
+                edge0: percentile(energyDBHistory, percentile: 0.20),
+                edge1: percentile(energyDBHistory, percentile: 0.95),
+                value: energyDB
+            )
+            let onsetRatio = onset / max(onsetThreshold, 0.0005)
+            let attackStrength = 1 - exp(-0.85 * max(0, onsetRatio - 1))
+            let beatAccent: Float
             if beat.isBeat {
-                beatPart = switch beat.strength {
-                case .strongBeat: 0.22
-                case .normalBeat: 0.10
-                case .subBeat: 0
+                beatAccent = switch beat.strength {
+                case .strongBeat: 0.16
+                case .normalBeat: 0.07
+                case .subBeat: 0.02
                 }
             } else {
-                beatPart = 0
+                beatAccent = 0
             }
-            let intensity = min(0.92, 0.25 + energyPart * 0.25 + onsetPart * 0.37 + beatPart)
+            let perceptualBase = min(
+                1,
+                max(0, 0.10 + energyPosition * 0.42 + attackStrength * 0.34 + beatAccent)
+            )
+            let intensity = Float(pow(Double(perceptualBase), 0.85))
             let duration: TimeInterval = eventClass == .highPercussion ? 0.045 : 0.085
             events.append(MusicHapticsEvent(
                 time: time,
@@ -450,14 +477,24 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         totalEventCount += events.count
         totalTransientCount += events.filter { $0.kind == .transient }.count
         totalContinuousCount += events.filter { $0.kind == .continuous }.count
-        let energyLevel = min(1, safeRMS / max(0.02, rmsThreshold * 4))
+        let energyLevel = smoothstep(
+            edge0: percentile(energyDBHistory, percentile: 0.20),
+            edge1: percentile(energyDBHistory, percentile: 0.95),
+            value: energyDB
+        )
+        let slowEnergyDB = 20 * log10(max(slowEnvelope, 0.00001))
+        let slowEnergy = smoothstep(
+            edge0: percentile(energyDBHistory, percentile: 0.20),
+            edge1: percentile(energyDBHistory, percentile: 0.95),
+            value: slowEnergyDB
+        )
         let isQuiet = safeRMS < max(0.003, rmsThreshold * 0.95)
             && onset < onsetThreshold * 1.20
         return MusicHapticsCandidateFrame(
             time: time,
             events: events,
             energyLevel: energyLevel,
-            slowEnergy: min(1, slowEnvelope / max(0.02, rmsThreshold * 4)),
+            slowEnergy: slowEnergy,
             onsetActivity: min(1, onset / max(onsetThreshold, 0.0005)),
             beat: beat,
             isQuiet: isQuiet
@@ -698,6 +735,12 @@ public struct MusicHapticsDSPProcessor: @unchecked Sendable {
         let sorted = values.sorted()
         let index = min(sorted.count - 1, max(0, Int(Double(sorted.count - 1) * percentile)))
         return sorted[index]
+    }
+
+    private func smoothstep(edge0: Float, edge1: Float, value: Float) -> Float {
+        guard edge1 > edge0 + 0.0001 else { return 0.5 }
+        let t = min(1, max(0, (value - edge0) / (edge1 - edge0)))
+        return t * t * (3 - 2 * t)
     }
 
     private func historyLimit(sampleRate: Double) -> Int {

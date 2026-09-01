@@ -1,4 +1,6 @@
 import Foundation
+import Dispatch
+import Synchronization
 
 /// PCM hand-off point used by the playback engine. Implementations must be
 /// real-time safe: `consumePCM` is called from AVFoundation's audio processing
@@ -7,8 +9,27 @@ public protocol MusicHapticsAnalysisSink: AnyObject, Sendable {
     /// Called after the PlaybackEngine successfully installs the audio mix.
     /// `begin(format:)` is invoked later when AVFoundation prepares the tap.
     func tapAttached()
+    /// True only after the PlaybackEngine has successfully installed the tap.
+    /// The realtime path is a continuously available safety source while an
+    /// independent original-stream analyzer runs in parallel.
+    var tapIsAttached: Bool { get }
+    /// Called from the tap's prepare phase, after AVFoundation exposes the
+    /// actual processing format and maximum callback size. Implementations
+    /// use this to size bounded storage before the first render callback.
+    func configurePCMStorage(format: MusicHapticsPCMFormat, maxFrames: Int)
     func begin(format: MusicHapticsPCMFormat)
     func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int)
+    /// Reserves a preallocated PCM slot for the audio render callback. The
+    /// callback must only copy into the returned buffer and then commit it.
+    /// Returning nil drops the disposable haptics frame without affecting
+    /// authoritative audio playback.
+    func beginPCMFrame(
+        time: TimeInterval,
+        format: MusicHapticsPCMFormat,
+        frameCount: Int
+    ) -> UnsafeMutableRawBufferPointer?
+    func commitPCMFrame()
+    func abortPCMFrame()
     func pause()
     func resume()
     func seek(to position: TimeInterval)
@@ -17,66 +38,259 @@ public protocol MusicHapticsAnalysisSink: AnyObject, Sendable {
     func cancel()
 }
 
+public extension MusicHapticsAnalysisSink {
+    var tapIsAttached: Bool { false }
+
+    func configurePCMStorage(format _: MusicHapticsPCMFormat, maxFrames _: Int) {}
+
+    func beginPCMFrame(
+        time: TimeInterval,
+        format: MusicHapticsPCMFormat,
+        frameCount: Int
+    ) -> UnsafeMutableRawBufferPointer? { nil }
+
+    func commitPCMFrame() {}
+    func abortPCMFrame() {}
+}
+
 /// Optional checkpoint access for analyzers that can preserve work without
 /// terminating the current analysis session.
 public protocol MusicHapticsPartialCheckpointProvider: AnyObject, Sendable {
     func partialCheckpoint() async -> MusicHapticsPartialCheckpoint
 }
 
-/// A bounded PCM sidecar for a single playback. It intentionally owns neither
-/// the player nor the network connection; it receives decoded frames already
-/// fetched by AVPlayer and analyzes them on a utility task.
-public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, MusicHapticsPartialCheckpointProvider, @unchecked Sendable {
-    private let lock = NSLock()
-    private struct PendingFrame {
+/// A bounded single-producer/single-consumer PCM ring. The producer is the
+/// AVFoundation audio callback; the consumer is the utility analysis task.
+/// All storage and metadata are allocated before playback starts. Publishing a
+/// slot uses release/acquire atomics, so the callback never allocates, locks or
+/// creates a task.
+private final class MusicHapticsPCMFrameRing: @unchecked Sendable {
+    struct Frame: @unchecked Sendable {
         let bytes: Data
         let time: TimeInterval
         let format: MusicHapticsPCMFormat
         let frameCount: Int
+        let generation: UInt64
     }
 
-    private enum PendingOperation {
-        case seek(TimeInterval)
-        case frame(PendingFrame)
+    private final class Slot: @unchecked Sendable {
+        let storage: UnsafeMutableRawPointer
+        var byteCount = 0
+        var time: TimeInterval = 0
+        var format: MusicHapticsPCMFormat?
+        var frameCount = 0
+        var generation: UInt64 = 0
+
+        init(byteCapacity: Int) {
+            storage = .allocate(
+                byteCount: byteCapacity,
+                alignment: MemoryLayout<UInt64>.alignment
+            )
+        }
+
+        deinit { storage.deallocate() }
     }
 
-    private var pending: [PendingFrame] = []
-    /// A seek is a control barrier. It is kept ahead of all PCM enqueued after
-    /// the seek, even if the utility drain is still finishing one old frame.
+    private var slots: [Slot] = []
+    private var slotCount: UInt64 = 0
+    private var slotByteCapacity = 0
+    private let writeIndex = Atomic<UInt64>(0)
+    private let readIndex = Atomic<UInt64>(0)
+    private let producerInFlight = Atomic<UInt8>(0)
+    /// Pre-created wakeup used by the utility consumer. The render callback
+    /// only signals after publishing a slot; it never creates a task or
+    /// allocates storage.
+    private let dataAvailable = DispatchSemaphore(value: 0)
+    /// Only the single audio producer touches this value.
+    private var reservedIndex: UInt64?
+    private let slotCountLimit = 32
+    private let slotByteCapacityLimit = 2 * 1024 * 1024
+    private let slotMemoryCapacityLimit = 8 * 1024 * 1024
+
+    init() {}
+
+    /// Allocates from the real tap format instead of assuming a fixed byte
+    /// size. A few dozen slots absorb utility-thread scheduling bursts while
+    /// keeping total memory bounded; the audio callback never performs this
+    /// work.
+    func configure(format: MusicHapticsPCMFormat, maxFrames: Int) {
+        guard format.isValid else { return }
+        let safeFrames = max(1, maxFrames)
+        guard let requiredBytes = Self.byteCount(format: format, frameCount: safeFrames), requiredBytes > 0 else { return }
+        // Keep the queue bounded even if a malformed/custom tap reports an
+        // absurd maxFrames value. Real AVAudioMix callbacks are far below this
+        // limit; an oversized callback is reported as a dropped frame rather
+        // than allocating an unbounded render-side buffer.
+        guard requiredBytes <= slotByteCapacityLimit else { return }
+        // Keep the total preallocated queue bounded as well. Large callback
+        // batches get fewer slots, while normal callbacks still receive the
+        // full burst-absorption depth.
+        let desiredSlotCount = min(
+            slotCountLimit,
+            max(4, slotMemoryCapacityLimit / requiredBytes)
+        )
+        if slotCount >= UInt64(desiredSlotCount), slotByteCapacity >= requiredBytes { return }
+        guard writeIndex.load(ordering: .acquiring) == readIndex.load(ordering: .acquiring),
+              producerInFlight.load(ordering: .acquiring) == 0,
+              reservedIndex == nil
+        else { return }
+        slots = (0..<desiredSlotCount).map { _ in Slot(byteCapacity: requiredBytes) }
+        slotCount = UInt64(desiredSlotCount)
+        slotByteCapacity = requiredBytes
+        writeIndex.store(0, ordering: .releasing)
+        readIndex.store(0, ordering: .releasing)
+    }
+
+    func begin(
+        time: TimeInterval,
+        format: MusicHapticsPCMFormat,
+        frameCount: Int,
+        generation: UInt64
+    ) -> UnsafeMutableRawBufferPointer? {
+        guard reservedIndex == nil,
+              slotCount > 0,
+              time.isFinite,
+              time >= 0,
+              format.isValid,
+              frameCount > 0,
+              let byteCount = Self.byteCount(format: format, frameCount: frameCount),
+              byteCount <= slotByteCapacity
+        else { return nil }
+
+        let write = writeIndex.load(ordering: .relaxed)
+        let read = readIndex.load(ordering: .acquiring)
+        guard write &- read < slotCount else { return nil }
+
+        producerInFlight.store(1, ordering: .releasing)
+        let slot = slots[Int(write % slotCount)]
+        slot.byteCount = byteCount
+        slot.time = time
+        slot.format = format
+        slot.frameCount = frameCount
+        slot.generation = generation
+        reservedIndex = write
+        return UnsafeMutableRawBufferPointer(start: slot.storage, count: byteCount)
+    }
+
+    func commit() {
+        guard let reservedIndex else { return }
+        writeIndex.store(reservedIndex &+ 1, ordering: .releasing)
+        self.reservedIndex = nil
+        producerInFlight.store(0, ordering: .releasing)
+        dataAvailable.signal()
+    }
+
+    func abort() {
+        guard reservedIndex != nil else { return }
+        reservedIndex = nil
+        producerInFlight.store(0, ordering: .releasing)
+    }
+
+    func wakeConsumer() {
+        dataAvailable.signal()
+    }
+
+    func waitForData(timeout: DispatchTimeInterval) {
+        _ = dataAvailable.wait(timeout: .now() + timeout)
+    }
+
+    func dequeue() -> Frame? {
+        let read = readIndex.load(ordering: .relaxed)
+        let write = writeIndex.load(ordering: .acquiring)
+        guard read < write else { return nil }
+        let slot = slots[Int(read % slotCount)]
+        guard let format = slot.format, slot.byteCount > 0, slot.frameCount > 0 else {
+            readIndex.store(read &+ 1, ordering: .releasing)
+            return nil
+        }
+        let frame = Frame(
+            bytes: Data(bytes: slot.storage, count: slot.byteCount),
+            time: slot.time,
+            format: format,
+            frameCount: slot.frameCount,
+            generation: slot.generation
+        )
+        readIndex.store(read &+ 1, ordering: .releasing)
+        return frame
+    }
+
+    var isEmpty: Bool {
+        readIndex.load(ordering: .relaxed) >= writeIndex.load(ordering: .acquiring)
+    }
+
+    var isProducerIdle: Bool {
+        producerInFlight.load(ordering: .acquiring) == 0
+    }
+
+    private static func byteCount(format: MusicHapticsPCMFormat, frameCount: Int) -> Int? {
+        guard frameCount > 0, format.isValid else { return nil }
+        if format.interleaved {
+            let result = frameCount.multipliedReportingOverflow(by: format.bytesPerFrame)
+            return result.overflow ? nil : result.partialValue
+        }
+        let sampleCount = frameCount.multipliedReportingOverflow(by: format.channels)
+        guard !sampleCount.overflow else { return nil }
+        let result = sampleCount.partialValue.multipliedReportingOverflow(by: format.bytesPerSample)
+        return result.overflow ? nil : result.partialValue
+    }
+}
+
+/// A bounded PCM sidecar for a single playback. It intentionally owns neither
+/// the player nor the network connection; it receives decoded frames already
+/// fetched by AVPlayer and analyzes them on a utility task.
+public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, MusicHapticsPartialCheckpointProvider, @unchecked Sendable {
+    private enum Lifecycle {
+        static let active: UInt8 = 1
+        static let paused: UInt8 = 2
+        static let finishing: UInt8 = 3
+        static let cancelled: UInt8 = 4
+    }
+
+    private let pcmRing = MusicHapticsPCMFrameRing()
+    private let lifecycle = Atomic<UInt8>(Lifecycle.active)
+    private let generation = Atomic<UInt64>(0)
+    private let droppedFrameCount = Atomic<UInt64>(0)
+    private let droppedAudioNanoseconds = Atomic<UInt64>(0)
+    /// Control/progress state only. The audio callback uses the ring and
+    /// atomics exclusively and never takes this lock.
+    private let stateLock = NSLock()
     private var pendingSeek: TimeInterval?
-    private var draining = false
-    private var paused = false
-    private var cancelled = false
-    private var finished = false
+    private var drainTask: Task<Void, Never>?
     private var tapWasAttached = false
     private var pcmFormat: MusicHapticsPCMFormat?
-    private var droppedFrames = 0
-    private var finishReason: MusicHapticsAnalysisFinishReason?
+    /// Only the audio producer touches these two fields. They let an
+    /// abort caused by an unexpected AudioBufferList shape count the
+    /// discarded duration as well as a full ring, without adding a lock or
+    /// allocation to the render callback.
+    private var reservedFrameFormat: MusicHapticsPCMFormat?
+    private var reservedFrameCount = 0
     private let identity: MusicHapticsIdentity
     private let duration: TimeInterval
     private let onResult: @Sendable (MusicHapticsAnalysisResult) -> Void
     private let onProgress: @Sendable (MusicHapticsAnalysisSnapshot) -> Void
     private let onWindow: @Sendable (MusicHapticsAnalysisWindow) -> Void
-    // 64 audio callbacks is a bounded queue of roughly several seconds for
-    // normal AVAudio PCM buffers. It absorbs short utility-task scheduling
-    // bursts without allowing an unbounded sidecar to affect playback.
-    private let maximumPendingFrames = 64
+    private var finishReason: MusicHapticsAnalysisFinishReason?
+    private var finishDelivered = false
 
     private actor Accumulator {
         let identity: MusicHapticsIdentity
         var events: [MusicHapticsEvent] = []
         var newlyAnalyzedEvents: [MusicHapticsEvent] = []
         var ranges: [MusicHapticsTimeRange] = []
-        var lastFrameTime: TimeInterval = -.infinity
+        var lastFrameTime: TimeInterval = -Double.infinity
         var analysisPosition: TimeInterval = 0
         var lastWindowEnd: TimeInterval = 0
         var processor = MusicHapticsDSPProcessor()
         var mixer = MusicHapticsPerceptualMixer()
         let duration: TimeInterval
-        private let progressiveWindowAdvance: TimeInterval = 0.25
+        /// Realtime output is intentionally in the 50–100ms range. This is
+        /// independent from lookahead persistence buckets.
+        private let progressiveWindowAdvance: TimeInterval = 0.075
         var eventCount = 0
         var transientCount = 0
         var continuousCount = 0
+        var processedAudioDuration: TimeInterval = 0
+        var processingWallDuration: TimeInterval = 0
 
         init(identity: MusicHapticsIdentity, duration: TimeInterval, partial: MusicHapticsPartialCheckpoint?) {
             self.identity = identity
@@ -96,8 +310,12 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             eventCount = events.count
             transientCount = events.filter { $0.kind == .transient }.count
             continuousCount = events.filter { $0.kind == .continuous }.count
-            analysisPosition = compatiblePartial?.firstUnanalyzedPosition ?? 0
-            lastWindowEnd = analysisPosition
+            // The persisted ranges describe coverage, not the realtime tap's
+            // current PCM cursor. The latter must begin at the first callback
+            // after activation so diagnostics do not claim that the tap has
+            // processed an entire cached track before audio reaches it.
+            analysisPosition = 0
+            lastWindowEnd = 0
         }
 
         func append(
@@ -106,6 +324,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             format: MusicHapticsPCMFormat,
             frameCount: Int
         ) -> MusicHapticsAnalysisWindow? {
+            let processingStartedAt = ProcessInfo.processInfo.systemUptime
             guard format.isValid, frameCount > 0,
                   let mono = MusicHapticsPCMDecoder.decodeMono(
                       bytes: bytes,
@@ -129,6 +348,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             let timeWasAlreadyAnalyzed = ranges.contains {
                 time >= $0.lowerBound && time + frameDuration <= $0.upperBound
             }
+            var newlyProcessedDuration: TimeInterval = 0
             if timeWasAlreadyAnalyzed {
                 // A resumed sidecar may replay bytes that are already in the
                 // checkpoint. Do not let their state bridge into the first
@@ -147,9 +367,14 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
                 eventCount += produced.count
                 transientCount += produced.filter { $0.kind == .transient }.count
                 continuousCount += produced.filter { $0.kind == .continuous }.count
+                newlyProcessedDuration = frameDuration
             }
             lastFrameTime = time
             analysisPosition = max(analysisPosition, time + frameDuration)
+            if newlyProcessedDuration > 0 {
+                processedAudioDuration += newlyProcessedDuration
+                processingWallDuration += max(0, ProcessInfo.processInfo.systemUptime - processingStartedAt)
+            }
             insertRange(MusicHapticsTimeRange(
                 lowerBound: time,
                 upperBound: max(time, time + frameDuration)
@@ -180,11 +405,10 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
                 analysisPosition: analysisPosition,
                 events: windowEvents,
                 coverage: coverage,
-                analysisSpeedX: 1,
+                analysisSpeedX: measuredSpeed,
                 tempoBPM: processor.diagnostics.tempoBPM,
                 beatConfidence: processor.diagnostics.beatConfidence,
                 sourceMode: .realtimeTap,
-                analysisStreamBitrate: nil,
                 eventCount: eventCount,
                 transientCount: transientCount,
                 continuousCount: continuousCount,
@@ -233,7 +457,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             processor = MusicHapticsDSPProcessor()
             mixer.reset()
             newlyAnalyzedEvents.removeAll(keepingCapacity: true)
-            lastFrameTime = -.infinity
+            lastFrameTime = -Double.infinity
             analysisPosition = min(duration, max(0, position))
             lastWindowEnd = analysisPosition
         }
@@ -254,6 +478,7 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
             tapAttached: Bool,
             pcmFormat: MusicHapticsPCMFormat?,
             droppedFrames: Int,
+            droppedAudioDuration: TimeInterval = 0,
             finishReason: MusicHapticsAnalysisFinishReason? = nil
         ) -> MusicHapticsAnalysisSnapshot {
             let diagnostics = processor.diagnostics
@@ -264,16 +489,25 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
                 coverage: coverage,
                 eventCount: eventCount,
                 droppedFrames: droppedFrames,
+                droppedAudioDuration: droppedAudioDuration,
                 finishReason: finishReason,
                 analysisMode: .realtimeTap,
                 analysisPosition: max(analysisPosition, diagnostics.analysisPosition),
-                analysisSpeedX: 1,
+                analysisSpeedX: measuredSpeed,
+                realtimeAnalysisPosition: max(analysisPosition, diagnostics.analysisPosition),
+                realtimeAnalysisSpeedX: measuredSpeed,
+                currentEventSource: .realtimeTap,
                 tempoBPM: diagnostics.tempoBPM,
                 beatConfidence: diagnostics.beatConfidence,
                 transientCount: transientCount,
                 continuousCount: continuousCount,
                 mixerDiagnostics: mixer.diagnostics
             )
+        }
+
+        private var measuredSpeed: Double {
+            guard processingWallDuration > 0 else { return 0 }
+            return processedAudioDuration / processingWallDuration
         }
 
         var coverage: Double {
@@ -325,69 +559,139 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
     }
 
     public func tapAttached() {
-        lock.withLock { tapWasAttached = true }
+        stateLock.withLock { tapWasAttached = true }
         publishProgress()
+    }
+
+    public var tapIsAttached: Bool {
+        stateLock.withLock { tapWasAttached }
+    }
+
+    public func configurePCMStorage(format: MusicHapticsPCMFormat, maxFrames: Int) {
+        pcmRing.configure(format: format, maxFrames: maxFrames)
     }
 
     public func begin(format: MusicHapticsPCMFormat) {
-        lock.withLock { pcmFormat = format }
+        // Non-AVFoundation callers do not have a maxFrames value. Allocate a
+        // conservative format-derived fallback; the real tap prepare path
+        // immediately replaces it with AVFoundation's actual maximum.
+        pcmRing.configure(format: format, maxFrames: 4_096)
+        stateLock.withLock {
+            guard lifecycle.load(ordering: .acquiring) != Lifecycle.cancelled else { return }
+            pcmFormat = format
+        }
+        ensureDrainTask()
         publishProgress()
     }
 
+    /// Compatibility entry point for non-render callers and existing tests.
+    /// The realtime tap uses beginPCMFrame/commitPCMFrame below so it never
+    /// constructs Data on the audio thread.
     public func consumePCM(_ bytes: Data, time: TimeInterval, format: MusicHapticsPCMFormat, frameCount: Int) {
         guard !bytes.isEmpty, time.isFinite, time >= 0, format.isValid, frameCount > 0 else { return }
-        let shouldStartDrain = lock.withLock { () -> Bool in
-            guard !cancelled, !finished, !paused else { return false }
-            if pending.count >= maximumPendingFrames, let dropped = pending.first {
-                pending.removeFirst()
-                droppedFrames += max(0, dropped.frameCount)
-            }
-            pending.append(PendingFrame(bytes: bytes, time: time, format: format, frameCount: frameCount))
-            guard !draining else { return false }
-            draining = true
-            return true
+        // This compatibility entry point is used by tests and non-AVFoundation
+        // callers that do not have a tap `prepare` callback. The real render
+        // path configures storage before its first callback and never executes
+        // this allocation path.
+        pcmRing.configure(format: format, maxFrames: max(4_096, frameCount))
+        guard let destination = beginPCMFrame(time: time, format: format, frameCount: frameCount),
+              destination.count == bytes.count
+        else {
+            abortPCMFrame()
+            return
         }
-        if shouldStartDrain {
-            Task.detached(priority: .utility) { [weak self] in await self?.drain() }
+        bytes.withUnsafeBytes { source in
+            guard let sourceBase = source.baseAddress, let destinationBase = destination.baseAddress else { return }
+            destinationBase.copyMemory(from: sourceBase, byteCount: source.count)
         }
+        commitPCMFrame()
+        ensureDrainTask()
+    }
+
+    public func beginPCMFrame(
+        time: TimeInterval,
+        format: MusicHapticsPCMFormat,
+        frameCount: Int
+    ) -> UnsafeMutableRawBufferPointer? {
+        guard lifecycle.load(ordering: .acquiring) == Lifecycle.active else {
+            recordDroppedAudio(format: format, frameCount: frameCount)
+            return nil
+        }
+        let currentGeneration = generation.load(ordering: .acquiring)
+        guard let destination = pcmRing.begin(
+            time: time,
+            format: format,
+            frameCount: frameCount,
+            generation: currentGeneration
+        ) else {
+            recordDroppedAudio(format: format, frameCount: frameCount)
+            return nil
+        }
+        reservedFrameFormat = format
+        reservedFrameCount = frameCount
+        // A control transition may have happened between the first lifecycle
+        // check and the reservation. Abort such a slot before it is published.
+        guard lifecycle.load(ordering: .acquiring) == Lifecycle.active else {
+            pcmRing.abort()
+            reservedFrameFormat = nil
+            reservedFrameCount = 0
+            recordDroppedAudio(format: format, frameCount: frameCount)
+            return nil
+        }
+        return destination
+    }
+
+    public func commitPCMFrame() {
+        pcmRing.commit()
+        reservedFrameFormat = nil
+        reservedFrameCount = 0
+    }
+
+    public func abortPCMFrame() {
+        pcmRing.abort()
+        if let format = reservedFrameFormat, reservedFrameCount > 0 {
+            recordDroppedAudio(format: format, frameCount: reservedFrameCount)
+        }
+        reservedFrameFormat = nil
+        reservedFrameCount = 0
     }
 
     public func pause() {
-        lock.withLock {
-            guard !cancelled, !finished else { return }
-            paused = true
-            pending.removeAll(keepingCapacity: true)
+        stateLock.withLock {
+            let state = lifecycle.load(ordering: .acquiring)
+            guard state != Lifecycle.cancelled, state != Lifecycle.finishing else { return }
+            lifecycle.store(Lifecycle.paused, ordering: .releasing)
+            generation.wrappingAdd(1, ordering: .acquiringAndReleasing)
             pendingSeek = nil
         }
+        pcmRing.wakeConsumer()
     }
 
     public func resume() {
-        let shouldStartDrain = lock.withLock { () -> Bool in
-            guard !cancelled, !finished else { return false }
-            paused = false
-            guard !draining, pendingSeek != nil || !pending.isEmpty else { return false }
-            draining = true
+        let shouldResume = stateLock.withLock { () -> Bool in
+            let state = lifecycle.load(ordering: .acquiring)
+            guard state != Lifecycle.cancelled, state != Lifecycle.finishing else { return false }
+            lifecycle.store(Lifecycle.active, ordering: .releasing)
             return true
         }
-        if shouldStartDrain {
-            Task.detached(priority: .utility) { [weak self] in await self?.drain() }
+        if shouldResume {
+            ensureDrainTask()
+            pcmRing.wakeConsumer()
         }
     }
 
     public func seek(to position: TimeInterval) {
         let safePosition = max(0, position.isFinite ? position : 0)
-        let shouldStartDrain = lock.withLock { () -> Bool in
-            guard !cancelled, !finished else { return false }
-            // PCM already queued before a seek belongs to the old playback
-            // segment. Drop it before the next tap callback can enqueue more.
-            pending.removeAll()
+        let shouldStartDrain = stateLock.withLock { () -> Bool in
+            let state = lifecycle.load(ordering: .acquiring)
+            guard state != Lifecycle.cancelled, state != Lifecycle.finishing else { return false }
             pendingSeek = safePosition
-            guard !paused, !draining else { return false }
-            draining = true
+            generation.wrappingAdd(1, ordering: .acquiringAndReleasing)
             return true
         }
         if shouldStartDrain {
-            Task.detached(priority: .utility) { [weak self] in await self?.drain() }
+            ensureDrainTask()
+            pcmRing.wakeConsumer()
         }
     }
 
@@ -400,12 +704,13 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
     }
 
     public func cancel() {
-        lock.withLock {
-            cancelled = true
-            paused = false
-            pending.removeAll()
-            draining = false
+        stateLock.withLock {
+            lifecycle.store(Lifecycle.cancelled, ordering: .releasing)
+            pendingSeek = nil
+            drainTask?.cancel()
+            drainTask = nil
         }
+        pcmRing.wakeConsumer()
     }
 
     public func partialCheckpoint() async -> MusicHapticsPartialCheckpoint {
@@ -413,80 +718,107 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
     }
 
     private func finish(reason: MusicHapticsAnalysisFinishReason) {
-        let shouldStartDrain = lock.withLock { () -> Bool in
-            guard !cancelled, !finished else { return false }
-            finished = true
+        let shouldStartDrain = stateLock.withLock { () -> Bool in
+            let state = lifecycle.load(ordering: .acquiring)
+            guard state != Lifecycle.cancelled, state != Lifecycle.finishing else { return false }
             finishReason = reason
-            guard !draining, pendingSeek != nil || !pending.isEmpty else { return false }
-            draining = true
+            lifecycle.store(Lifecycle.finishing, ordering: .releasing)
             return true
         }
         if shouldStartDrain {
-            Task.detached(priority: .utility) { [weak self] in await self?.drain() }
+            ensureDrainTask()
+            pcmRing.wakeConsumer()
         }
-        Task.detached(priority: .utility) { [weak self] in await self?.finishAfterDraining() }
     }
 
-    private func drain() async {
-        while true {
-            let operation: PendingOperation? = lock.withLock {
-                guard !cancelled else {
-                    pending.removeAll()
-                    pendingSeek = nil
-                    draining = false
-                    return nil
-                }
-                guard !paused else {
-                    draining = false
-                    return nil
-                }
-                if let pendingSeek {
-                    self.pendingSeek = nil
-                    return .seek(pendingSeek)
-                }
-                guard !pending.isEmpty else {
-                    draining = false
-                    return nil
-                }
-                return .frame(pending.removeFirst())
+    private func ensureDrainTask() {
+        stateLock.withLock {
+            guard drainTask == nil,
+                  lifecycle.load(ordering: .acquiring) != Lifecycle.cancelled
+            else { return }
+            drainTask = Task.detached(priority: .utility) { [weak self] in
+                await self?.drainLoop()
             }
-            guard let operation else { return }
-            switch operation {
-            case let .seek(position):
+        }
+    }
+
+    private func drainLoop() async {
+        while !Task.isCancelled {
+            let state = lifecycle.load(ordering: .acquiring)
+            guard state != Lifecycle.cancelled else { return }
+
+            if let position = takePendingSeek() {
                 await accumulator.seek(to: position)
-            case let .frame(frame):
-                if let window = await accumulator.append(
+                continue
+            }
+
+            if let frame = pcmRing.dequeue() {
+                // Pauses/seeks invalidate queued PCM by generation. The audio
+                // path stays authoritative; stale haptics work is disposable.
+                guard (state == Lifecycle.active || state == Lifecycle.finishing),
+                      frame.generation == generation.load(ordering: .acquiring)
+                else { continue }
+                let window = await accumulator.append(
                     bytes: frame.bytes,
                     time: frame.time,
                     format: frame.format,
                     frameCount: frame.frameCount
-                ) {
-                    onWindow(window)
-                }
+                )
+                guard frame.generation == generation.load(ordering: .acquiring) else { continue }
+                if let window { onWindow(window) }
+                continue
             }
+
+            if state == Lifecycle.finishing,
+               pcmRing.isEmpty,
+               pcmRing.isProducerIdle {
+                await finishAfterDraining()
+                return
+            }
+
+            if state == Lifecycle.paused {
+                // Discard pre-pause slots while paused so resume never holds
+                // a stale backlog. No frame is accepted by beginPCMFrame.
+                while pcmRing.dequeue() != nil {}
+            }
+            // PCM windows are consumed as soon as a slot is published. The
+            // timeout is only a bounded safety net for producer/finish races;
+            // it reduces idle wakeups from ~500/s to at most ~50/s.
+            pcmRing.waitForData(timeout: .milliseconds(20))
+        }
+    }
+
+    private func takePendingSeek() -> TimeInterval? {
+        stateLock.withLock {
+            defer { pendingSeek = nil }
+            return pendingSeek
         }
     }
 
     private func finishAfterDraining() async {
-        while lock.withLock({ draining || !pending.isEmpty }) {
-            try? await Task.sleep(for: .milliseconds(2))
+        // A callback that reserved a slot before finish() must either commit
+        // or abort before the terminal result is materialized.
+        while !pcmRing.isEmpty || !pcmRing.isProducerIdle {
+            pcmRing.waitForData(timeout: .milliseconds(20))
         }
         await accumulator.flush()
         let checkpoint = await accumulator.checkpoint(identity: identity, duration: duration)
-        let state = lock.withLock {
+        let state = stateLock.withLock {
             (
-                cancelled: cancelled,
+                cancelled: lifecycle.load(ordering: .acquiring) == Lifecycle.cancelled,
                 tapAttached: tapWasAttached,
                 pcmFormat: pcmFormat,
-                droppedFrames: droppedFrames,
-                reason: finishReason
+                reason: finishReason,
+                shouldDeliver: !finishDelivered
             )
         }
-        guard !state.cancelled, let reason = state.reason else { return }
+        guard !state.cancelled, state.shouldDeliver, let reason = state.reason else { return }
+        stateLock.withLock { finishDelivered = true }
         let snapshot = await accumulator.snapshot(
             tapAttached: state.tapAttached,
             pcmFormat: state.pcmFormat,
-            droppedFrames: state.droppedFrames,
+            droppedFrames: droppedFrameCountValue,
+            droppedAudioDuration: droppedAudioDurationValue,
             finishReason: reason
         )
         onResult(MusicHapticsAnalysisResult(
@@ -500,18 +832,35 @@ public final class StreamingMusicHapticsAnalyzer: MusicHapticsAnalysisSink, Musi
     private func publishProgress() {
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            let state = self.lock.withLock {
+            let state = self.stateLock.withLock {
                 (
                     tapAttached: self.tapWasAttached,
-                    pcmFormat: self.pcmFormat,
-                    droppedFrames: self.droppedFrames
+                    pcmFormat: self.pcmFormat
                 )
             }
             self.onProgress(await self.accumulator.snapshot(
                 tapAttached: state.tapAttached,
                 pcmFormat: state.pcmFormat,
-                droppedFrames: state.droppedFrames
+                droppedFrames: self.droppedFrameCountValue,
+                droppedAudioDuration: self.droppedAudioDurationValue
             ))
         }
+    }
+
+    private var droppedFrameCountValue: Int {
+        Int(clamping: droppedFrameCount.load(ordering: .acquiring))
+    }
+
+    private var droppedAudioDurationValue: TimeInterval {
+        Double(droppedAudioNanoseconds.load(ordering: .acquiring)) / 1_000_000_000
+    }
+
+    private func recordDroppedAudio(format: MusicHapticsPCMFormat, frameCount: Int) {
+        let frames = UInt64(max(0, frameCount))
+        droppedFrameCount.wrappingAdd(frames, ordering: .relaxed)
+        let nanoseconds = UInt64(
+            max(0, (Double(max(0, frameCount)) / max(format.sampleRate, 1)) * 1_000_000_000)
+        )
+        droppedAudioNanoseconds.wrappingAdd(nanoseconds, ordering: .relaxed)
     }
 }

@@ -69,6 +69,27 @@ struct MusicHapticsPCMBridgeTests {
         #expect(format?.bytesPerFrame == 4)
     }
 
+    @Test("Int24 stereo interleaved ASBD maps without a fixed 16-bit assumption")
+    func int24StereoInterleavedFormat() {
+        let format = MusicHapticsPCMBridge.makeFormat(from: AudioStreamBasicDescription(
+            mSampleRate: 96_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 6,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 6,
+            mChannelsPerFrame: 2,
+            mBitsPerChannel: 24,
+            mReserved: 0
+        ))
+
+        #expect(format?.sampleType == .int24)
+        #expect(format?.channels == 2)
+        #expect(format?.interleaved == true)
+        #expect(format?.bytesPerSample == 3)
+        #expect(format?.bytesPerFrame == 6)
+    }
+
     @Test("two-buffer planar AudioBufferList is copied as channel planes")
     func copiesPlanarAudioBufferList() {
         let format = MusicHapticsPCMBridge.makeFormat(from: AudioStreamBasicDescription(

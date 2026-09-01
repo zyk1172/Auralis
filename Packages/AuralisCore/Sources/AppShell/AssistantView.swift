@@ -26,6 +26,14 @@ private struct AssistantConversationContentBottomPreferenceKey: PreferenceKey {
     }
 }
 
+private enum AssistantSheet: String, Identifiable {
+    case sessions
+    case librarySearch
+    case actionLog
+
+    var id: String { rawValue }
+}
+
 /// AI 助手主界面：左侧会话列表，右侧结构化消息流。
 ///
 /// 交互要点：
@@ -46,9 +54,7 @@ struct AssistantView: View {
 
     @ObservedObject private var agent: AgentCoordinator
     @AppStorage("auralis.ai.enabled") private var aiEnabled = true
-    @State private var showsSessionListSheet = false
-    @State private var showsLibrarySearch = false
-    @State private var showsActionLog = false
+    @State private var presentedSheet: AssistantSheet?
     @State private var renamingSession: AgentSession?
     @State private var renameText = ""
     @State private var deletingSession: AgentSession?
@@ -89,22 +95,35 @@ struct AssistantView: View {
             // 桌面式 Sidebar 分支）；宽屏只通过可用宽度约束布局，不切换 UI 架构。
             conversation
                 .frame(maxWidth: .infinity)
-            .sheet(isPresented: $showsSessionListSheet) {
-                #if os(macOS)
-                sessionSidebar
-                    // macOS sheet 会按内容的理想尺寸计算；不给明确高度时，List
-                    // 会在标题、搜索框和底部操作记录之间被压缩到不可见。
-                    .frame(
-                        minWidth: 360,
-                        idealWidth: 380,
-                        minHeight: 500,
-                        idealHeight: 600
-                    )
-                #else
-                sessionSidebar
-                    .presentationDetents([.medium, .large])
-                    .presentationBackground(.ultraThinMaterial)
-                #endif
+            .sheet(item: $presentedSheet) { sheet in
+                switch sheet {
+                case .sessions:
+                    #if os(macOS)
+                    sessionSidebar
+                        // macOS sheet 会按内容的理想尺寸计算；不给明确高度时，List
+                        // 会在标题、搜索框和底部操作记录之间被压缩到不可见。
+                        .frame(
+                            minWidth: 360,
+                            idealWidth: 380,
+                            minHeight: 500,
+                            idealHeight: 600
+                        )
+                    #else
+                    sessionSidebar
+                        .presentationDetents([.medium, .large])
+                        .presentationBackground(.ultraThinMaterial)
+                    #endif
+                case .librarySearch:
+                    NavigationStack {
+                        SearchView(model: model, theme: theme)
+                            .navigationTitle(String(localized: "搜索音乐库", bundle: .module))
+                            #if os(iOS)
+                            .navigationBarTitleDisplayMode(.inline)
+                            #endif
+                    }
+                case .actionLog:
+                    ActionLogSheet(agent: agent, theme: theme)
+                }
             }
         }
         .background {
@@ -116,7 +135,6 @@ struct AssistantView: View {
             theme.colorTokens.background.color
             #endif
         }
-        .task { await agent.bootstrap() }
         .alert(String(localized: "重命名会话", bundle: .module), isPresented: Binding(
             get: { renamingSession != nil },
             set: { if !$0 { renamingSession = nil } }
@@ -205,18 +223,6 @@ struct AssistantView: View {
             }
         } message: { pending in
             Text(pending.detail)
-        }
-        .sheet(isPresented: $showsActionLog) {
-            ActionLogSheet(agent: agent, theme: theme)
-        }
-        .sheet(isPresented: $showsLibrarySearch) {
-            NavigationStack {
-                SearchView(model: model, theme: theme)
-                    .navigationTitle(String(localized: "搜索音乐库", bundle: .module))
-                    #if os(iOS)
-                    .navigationBarTitleDisplayMode(.inline)
-                    #endif
-            }
         }
         .onChange(of: model.shouldPresentAssistantSearch) { _, shouldPresent in
             presentAssistantSearchIfNeeded()
@@ -320,7 +326,7 @@ struct AssistantView: View {
             }
             Divider()
             Button {
-                showsActionLog = true
+                presentedSheet = .actionLog
             } label: {
                 Label(
                     String(localized: "操作记录（\(agent.actionRecords.count)）", bundle: .module),
@@ -654,7 +660,7 @@ struct AssistantView: View {
                 accessibilityLabel: String(localized: "搜索音乐库", bundle: .module),
                 help: String(localized: "搜索音乐库（兜底）", bundle: .module)
             ) {
-                showsLibrarySearch = true
+                presentedSheet = .librarySearch
             }
             sessionListButton
         }
@@ -700,14 +706,14 @@ struct AssistantView: View {
             help: String(localized: "会话列表", bundle: .module)
         ) {
             // iPhone / iPad 统一：会话列表始终以 sheet 呈现。
-            showsSessionListSheet = true
+            presentedSheet = .sessions
         }
     }
 
     private func presentAssistantSearchIfNeeded() {
         guard model.shouldPresentAssistantSearch else { return }
         model.shouldPresentAssistantSearch = false
-        showsLibrarySearch = true
+        presentedSheet = .librarySearch
     }
 
     /// 统一助手标题栏图标按钮的字形框和点击框。SF Symbol 的实际绘制边界不同，

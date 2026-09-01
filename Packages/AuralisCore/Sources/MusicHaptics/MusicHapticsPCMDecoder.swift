@@ -83,6 +83,38 @@ enum MusicHapticsPCMDecoder {
                 bits = UInt16(raw[offset]) | UInt16(raw[offset + 1]) << 8
             }
             return Float32(Int16(bitPattern: bits)) / 32_768
+        case .int24:
+            let bits: Int32
+            if format.isBigEndian {
+                let unsigned = Int32(raw[offset]) << 16
+                    | Int32(raw[offset + 1]) << 8
+                    | Int32(raw[offset + 2])
+                bits = (unsigned & 0x0080_0000) != 0
+                    ? unsigned | ~0x00FF_FFFF
+                    : unsigned
+            } else {
+                let unsigned = Int32(raw[offset])
+                    | Int32(raw[offset + 1]) << 8
+                    | Int32(raw[offset + 2]) << 16
+                bits = (unsigned & 0x0080_0000) != 0
+                    ? unsigned | ~0x00FF_FFFF
+                    : unsigned
+            }
+            return Float32(bits) / 8_388_608
+        case .int32:
+            let bits: UInt32
+            if format.isBigEndian {
+                bits = UInt32(raw[offset]) << 24
+                    | UInt32(raw[offset + 1]) << 16
+                    | UInt32(raw[offset + 2]) << 8
+                    | UInt32(raw[offset + 3])
+            } else {
+                bits = UInt32(raw[offset])
+                    | UInt32(raw[offset + 1]) << 8
+                    | UInt32(raw[offset + 2]) << 16
+                    | UInt32(raw[offset + 3]) << 24
+            }
+            return Float32(Int32(bitPattern: bits)) / 2_147_483_648
         }
     }
 }

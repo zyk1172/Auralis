@@ -75,6 +75,11 @@ public final class AgentCoordinator: ObservableObject {
     @Published public private(set) var recommendationIndexExecutionState: RecommendationIndexExecutionState = .idle
     /// 会话列表搜索词。
     @Published public var sessionQuery = "" { didSet { refreshSessionList() } }
+
+    /// Bootstrap is owned by the application launch coordinator. Keeping one
+    /// task here makes repeated launch/view requests idempotent and prevents a
+    /// first-frame sheet presentation from racing session reload publishes.
+    private var bootstrapTask: Task<Void, Never>?
     /// 是否在会话列表里显示已归档会话（默认隐藏）。
     @Published public var showArchivedSessions = false { didSet { refreshSessionList() } }
 
@@ -247,8 +252,27 @@ public final class AgentCoordinator: ObservableObject {
 
     // MARK: - Bootstrap
 
-    /// 恢复上次的会话列表、操作日志与偏好。
+    /// Starts bootstrap once and lets concurrent callers observe the same work.
+    public func bootstrapIfNeeded() async {
+        if let bootstrapTask {
+            await bootstrapTask.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performBootstrap()
+        }
+        bootstrapTask = task
+        await task.value
+    }
+
+    /// Compatibility entry point for existing callers/tests.
     public func bootstrap() async {
+        await bootstrapIfNeeded()
+    }
+
+    /// 恢复上次的会话列表、操作日志与偏好。
+    private func performBootstrap() async {
         // App 重启：把上次仍在运行的任务标记为 interrupted，不自动重放已完成的写操作。
         taskStore.markInterruptedOnLaunch()
         await migrateLegacyDislikedIfNeeded()

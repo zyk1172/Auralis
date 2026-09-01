@@ -6,8 +6,8 @@ import Testing
 @testable import PlaybackEngine
 
 /// The main music URL is an invariant across every Music Haptics path. The
-/// sidecar may use a separate low-bitrate analysis source, but it must never
-/// become the AVPlayer source.
+/// independent analyzer reads the same original URL, but it must never become
+/// the AVPlayer source or mutate the current item.
 @Suite("AVFoundation audio fidelity invariant", .serialized)
 struct AVFoundationAudioFidelityTests {
     @Test("Music Haptics never replaces the original AVPlayer URL")
@@ -16,9 +16,7 @@ struct AVFoundationAudioFidelityTests {
         let originalURL = try #require(
             URL(string: "https://media.example.test/original.flac?quality=original")
         )
-        let analysisURL = try #require(
-            URL(string: "https://haptics.example.test/sidecar.mp3?bitrate=96")
-        )
+        let analysisURL = originalURL
         let track = Track(
             id: TrackID(rawValue: "fidelity"),
             serverID: "server",
@@ -43,9 +41,7 @@ struct AVFoundationAudioFidelityTests {
             identity: identity,
             favorite: false,
             duration: 60,
-            analysisSource: .remoteLookahead(
-                MusicHapticsRemoteLookaheadSource(url: analysisURL, bitrate: 96)
-            )
+            analysisSource: .remoteOriginal(analysisURL)
         )
         let cachedTimeline = MusicHapticsTimeline(
             identity: identity,
@@ -79,14 +75,14 @@ struct AVFoundationAudioFidelityTests {
                 fullTimelineExists: false,
                 partialExists: false,
                 analysisSink: nil,
-                realtimeFallbackSink: fallbackSink
+                realtimeTapSink: fallbackSink
             )
 
             engine.setMusicHapticsPlaybackPreparation(preparation)
             try await engine.play(track: track)
 
             if let fallbackSink {
-                engine.activateMusicHapticsRealtimeFallback(
+                engine.activateMusicHapticsRealtimeTap(
                     preparationID: preparation.id,
                     sink: fallbackSink
                 )

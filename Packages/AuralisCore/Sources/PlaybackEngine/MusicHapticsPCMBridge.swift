@@ -24,6 +24,12 @@ enum MusicHapticsPCMBridge {
         } else if flags & kAudioFormatFlagIsSignedInteger != 0, bitsPerChannel == 16 {
             sampleType = .int16
             bytesPerSample = MemoryLayout<Int16>.size
+        } else if flags & kAudioFormatFlagIsSignedInteger != 0, bitsPerChannel == 24 {
+            sampleType = .int24
+            bytesPerSample = 3
+        } else if flags & kAudioFormatFlagIsSignedInteger != 0, bitsPerChannel == 32 {
+            sampleType = .int32
+            bytesPerSample = MemoryLayout<Int32>.size
         } else {
             return nil
         }
@@ -59,23 +65,37 @@ enum MusicHapticsPCMBridge {
         frameCount: Int,
         format: MusicHapticsPCMFormat
     ) -> Data? {
-        guard frameCount > 0, format.isValid else { return nil }
+        guard let expectedBytes = canonicalByteCount(frameCount: frameCount, format: format) else { return nil }
+        var payload = Data(repeating: 0, count: expectedBytes)
+        let copied = payload.withUnsafeMutableBytes { destination in
+            copyPayload(
+                into: destination,
+                from: bufferList,
+                frameCount: frameCount,
+                format: format
+            )
+        }
+        guard copied == expectedBytes else { return nil }
+        return payload
+    }
+
+    /// Copies directly into caller-owned storage. This is the render-callback
+    /// path: it performs validation and memcpy only, with no Data allocation or
+    /// synchronization.
+    @discardableResult
+    static func copyPayload(
+        into destination: UnsafeMutableRawBufferPointer,
+        from bufferList: UnsafeMutablePointer<AudioBufferList>,
+        frameCount: Int,
+        format: MusicHapticsPCMFormat
+    ) -> Int? {
+        guard let expectedBytes = canonicalByteCount(frameCount: frameCount, format: format),
+              destination.count >= expectedBytes,
+              destination.baseAddress != nil
+        else { return nil }
         let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
         let expectedBufferCount = format.interleaved ? 1 : format.channels
         guard buffers.count == expectedBufferCount else { return nil }
-
-        let expectedBytes: Int
-        if format.interleaved {
-            let result = frameCount.multipliedReportingOverflow(by: format.bytesPerFrame)
-            guard !result.overflow else { return nil }
-            expectedBytes = result.partialValue
-        } else {
-            let sampleCount = frameCount.multipliedReportingOverflow(by: format.channels)
-            guard !sampleCount.overflow else { return nil }
-            let result = sampleCount.partialValue.multipliedReportingOverflow(by: format.bytesPerSample)
-            guard !result.overflow else { return nil }
-            expectedBytes = result.partialValue
-        }
 
         var totalBytes = 0
         for buffer in buffers {
@@ -87,11 +107,31 @@ enum MusicHapticsPCMBridge {
         }
         guard totalBytes == expectedBytes else { return nil }
 
-        var payload = Data(capacity: totalBytes)
+        var destinationOffset = 0
         for buffer in buffers {
             let byteCount = Int(buffer.mDataByteSize)
-            payload.append(contentsOf: UnsafeRawBufferPointer(start: buffer.mData, count: byteCount))
+            guard let source = buffer.mData, let destinationBase = destination.baseAddress else { return nil }
+            destinationBase.advanced(by: destinationOffset).copyMemory(
+                from: source,
+                byteCount: byteCount
+            )
+            destinationOffset += byteCount
         }
-        return payload
+        return destinationOffset
+    }
+
+    private static func canonicalByteCount(
+        frameCount: Int,
+        format: MusicHapticsPCMFormat
+    ) -> Int? {
+        guard frameCount > 0, format.isValid else { return nil }
+        if format.interleaved {
+            let result = frameCount.multipliedReportingOverflow(by: format.bytesPerFrame)
+            return result.overflow ? nil : result.partialValue
+        }
+        let sampleCount = frameCount.multipliedReportingOverflow(by: format.channels)
+        guard !sampleCount.overflow else { return nil }
+        let result = sampleCount.partialValue.multipliedReportingOverflow(by: format.bytesPerSample)
+        return result.overflow ? nil : result.partialValue
     }
 }

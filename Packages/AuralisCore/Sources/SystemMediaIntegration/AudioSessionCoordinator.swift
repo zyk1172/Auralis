@@ -483,12 +483,12 @@ internal func performAudioSession(
     }
 }
 
-/// 每个分类允许的路由选项：allowBluetoothHFP 只能用于 .record / .playAndRecord，
-/// 搭配 .playback 会返回 OSStatus -50（paramErr）；其余分类不附加任何选项。
+/// 每个分类允许的路由选项：allowAirPlay 只需要在 .playAndRecord 下显式
+/// 配置；.playback 已由系统隐式支持 AirPlay，显式传入会返回 OSStatus -50。
 private func categoryOptions(for category: AVAudioSession.Category) -> AVAudioSession.CategoryOptions {
     switch category {
     case .playback:
-        return [.allowAirPlay]
+        return []
     case .playAndRecord:
         return [.allowAirPlay, .allowBluetoothHFP]
     default:

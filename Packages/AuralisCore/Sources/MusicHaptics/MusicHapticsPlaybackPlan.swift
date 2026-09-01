@@ -9,7 +9,7 @@ public enum MusicHapticsSource: Sendable, Equatable {
 
 /// The one decision made for a track before its AVPlayerItem is created.
 /// A plan is descriptive only; the PlaybackEngine decides how to attach the
-/// already-created sidecar without delaying audio startup.
+/// optional realtime analysis tap without replacing the authoritative item.
 public enum MusicHapticsPlanKind: String, Codable, Hashable, Sendable {
     case disabled
     case system
@@ -34,6 +34,10 @@ public struct MusicHapticsTimeRange: Codable, Hashable, Sendable {
     /// Treat a small gap as adjacency so coverage does not fragment merely
     /// because two decoders rounded the same boundary differently.
     public static let adjacencyTolerance: TimeInterval = 0.020
+    /// A short final tail is held to a stricter standard than a PCM buffer
+    /// boundary.  This keeps ordinary callback rounding from fragmenting
+    /// ranges while ensuring an actually missing tail is still resumed.
+    public static let completionTolerance: TimeInterval = 0.002
 
     public let lowerBound: TimeInterval
     public let upperBound: TimeInterval
@@ -47,7 +51,7 @@ public struct MusicHapticsTimeRange: Codable, Hashable, Sendable {
 }
 
 public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
-    public static let formatVersion = 1
+    public static let formatVersion = 2
 
     public let formatVersion: Int
     public let identity: MusicHapticsIdentity
@@ -61,11 +65,15 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
     public let tempoBPM: Double?
     public let beatConfidence: Double?
     public let beatPhase: Double?
+    /// Byte/packet anchors captured by the incremental decoder. They are
+    /// advisory: a decoder may fall back to a safe keyframe/header restart,
+    /// but a resumed session never re-runs DSP for an already covered range.
+    public let decoderResumePoints: [MusicHapticsDecoderResumePoint]
 
     private enum CodingKeys: String, CodingKey {
         case formatVersion, identity, algorithmVersion, duration
         case analyzedRanges, events, coverage, updatedAt
-        case mixMode, tempoBPM, beatConfidence, beatPhase
+        case mixMode, tempoBPM, beatConfidence, beatPhase, decoderResumePoints
     }
 
     public init(
@@ -80,7 +88,8 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         mixMode: MusicHapticsMixMode? = .fullMix,
         tempoBPM: Double? = nil,
         beatConfidence: Double? = nil,
-        beatPhase: Double? = nil
+        beatPhase: Double? = nil,
+        decoderResumePoints: [MusicHapticsDecoderResumePoint] = []
     ) {
         let safeDuration = max(0, duration.isFinite ? duration : 0)
         self.formatVersion = formatVersion
@@ -104,6 +113,7 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         self.tempoBPM = tempoBPM?.isFinite == true ? tempoBPM : nil
         self.beatConfidence = beatConfidence?.isFinite == true ? min(max(beatConfidence!, 0), 1) : nil
         self.beatPhase = beatPhase?.isFinite == true ? beatPhase : nil
+        self.decoderResumePoints = Self.normalizeResumePoints(decoderResumePoints, duration: safeDuration)
     }
 
     public init(from decoder: Decoder) throws {
@@ -121,7 +131,8 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
             mixMode: try container.decodeIfPresent(MusicHapticsMixMode.self, forKey: .mixMode),
             tempoBPM: try container.decodeIfPresent(Double.self, forKey: .tempoBPM),
             beatConfidence: try container.decodeIfPresent(Double.self, forKey: .beatConfidence),
-            beatPhase: try container.decodeIfPresent(Double.self, forKey: .beatPhase)
+            beatPhase: try container.decodeIfPresent(Double.self, forKey: .beatPhase),
+            decoderResumePoints: try container.decodeIfPresent([MusicHapticsDecoderResumePoint].self, forKey: .decoderResumePoints) ?? []
         )
     }
 
@@ -129,11 +140,46 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         analyzedRanges.reduce(0) { $0 + $1.duration }
     }
 
-    public var isComplete: Bool { coverage >= 0.95 }
+    /// Promotion requires the complete normalized range, not an arbitrary
+    /// percentage. A near-complete checkpoint is still partial so a later
+    /// playback can analyze the real uncovered tail instead of silently
+    /// dropping it from the persisted timeline.
+    public var isComplete: Bool {
+        duration <= 0 || (
+            uncoveredRanges.isEmpty
+                && coverage >= 0.999
+                && analyzedDuration >= duration - MusicHapticsTimeRange.completionTolerance
+        )
+    }
 
     public var isCurrentAlgorithm: Bool {
         formatVersion == Self.formatVersion
             && algorithmVersion == MusicHapticsTimeline.algorithmVersion
+    }
+
+    /// The complement of `analyzedRanges`, preserving every interior hole.
+    /// This is the range list a resumed decoder should use instead of a single
+    /// first-unanalysed high-water mark.
+    public var uncoveredRanges: [MusicHapticsTimeRange] {
+        guard duration > 0 else { return [] }
+        var cursor: TimeInterval = 0
+        var result: [MusicHapticsTimeRange] = []
+        for range in analyzedRanges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if range.lowerBound > cursor + MusicHapticsTimeRange.adjacencyTolerance {
+                result.append(MusicHapticsTimeRange(lowerBound: cursor, upperBound: range.lowerBound))
+            }
+            cursor = max(cursor, range.upperBound)
+        }
+        if cursor < duration - MusicHapticsTimeRange.completionTolerance {
+            result.append(MusicHapticsTimeRange(lowerBound: cursor, upperBound: duration))
+        }
+        return result
+    }
+
+    public func resumePoint(for range: MusicHapticsTimeRange) -> MusicHapticsDecoderResumePoint? {
+        decoderResumePoints
+            .filter { $0.position <= range.lowerBound + MusicHapticsTimeRange.adjacencyTolerance }
+            .max { $0.position < $1.position }
     }
 
     /// Returns the first real uncovered position. Ranges after this position
@@ -163,6 +209,39 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         )
     }
 
+    /// Rehydrates already analyzed event ranges into scheduler windows. A
+    /// partial checkpoint is not eligible for the `.custom` plan, but its
+    /// existing events are still authoritative for the covered playback
+    /// interval while the decoder fills the remaining holes.
+    public func analysisWindows(
+        sourceMode: MusicHapticsAnalysisMode
+    ) -> [MusicHapticsAnalysisWindow] {
+        analyzedRanges.compactMap { range in
+            let events = events.filter { event in
+                let eventEnd = event.time + (event.duration ?? 0)
+                if event.kind == .transient {
+                    return event.time >= range.lowerBound && event.time < range.upperBound
+                }
+                return eventEnd > range.lowerBound && event.time < range.upperBound
+            }
+            guard !events.isEmpty else { return nil }
+            return MusicHapticsAnalysisWindow(
+                startTime: range.lowerBound,
+                endTime: range.upperBound,
+                analysisPosition: range.upperBound,
+                events: events,
+                coverage: coverage,
+                analysisSpeedX: 0,
+                tempoBPM: tempoBPM,
+                beatConfidence: beatConfidence ?? 0,
+                sourceMode: sourceMode,
+                eventCount: events.count,
+                transientCount: events.filter { $0.kind == .transient }.count,
+                continuousCount: events.filter { $0.kind == .continuous }.count
+            )
+        }
+    }
+
     /// Merges two checkpoints for the same recording without collapsing their
     /// coverage to a single high-water mark. This is used when rapid A→B→A
     /// switching lets completion callbacks reach the Store out of order.
@@ -180,6 +259,7 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         let mergedTempo = other.tempoBPM ?? tempoBPM
         let mergedBeatConfidence = other.beatConfidence ?? beatConfidence
         let mergedBeatPhase = other.beatPhase ?? beatPhase
+        let mergedResumePoints = decoderResumePoints + other.decoderResumePoints
         let mergedUpdatedAt = max(updatedAt, other.updatedAt)
         let mergedFormatVersion = max(formatVersion, other.formatVersion)
 
@@ -194,7 +274,8 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
             mixMode: mergedMixMode,
             tempoBPM: mergedTempo,
             beatConfidence: mergedBeatConfidence,
-            beatPhase: mergedBeatPhase
+            beatPhase: mergedBeatPhase,
+            decoderResumePoints: mergedResumePoints
         )
     }
 
@@ -226,11 +307,45 @@ public struct MusicHapticsPartialCheckpoint: Codable, Hashable, Sendable {
         }
         return result
     }
+
+    private static func normalizeResumePoints(
+        _ input: [MusicHapticsDecoderResumePoint],
+        duration: TimeInterval
+    ) -> [MusicHapticsDecoderResumePoint] {
+        var byPosition: [Int64: MusicHapticsDecoderResumePoint] = [:]
+        for point in input {
+            guard point.position.isFinite, point.position >= 0,
+                  point.position <= duration,
+                  point.byteOffset >= 0,
+                  point.packetIndex >= 0
+            else { continue }
+            let key = Int64((point.position * 1_000).rounded())
+            if let existing = byPosition[key], existing.byteOffset >= point.byteOffset { continue }
+            byPosition[key] = point
+        }
+        return byPosition.values.sorted { $0.position < $1.position }
+    }
+}
+
+/// A safe-to-persist byte/packet anchor emitted by the original-stream
+/// incremental decoder. No URL or response header is stored here. `byteOffset`
+/// is a best-effort range anchor; the decoder may move to an earlier packet or
+/// keyframe when the format requires preroll.
+public struct MusicHapticsDecoderResumePoint: Codable, Hashable, Sendable {
+    public let position: TimeInterval
+    public let byteOffset: Int64
+    public let packetIndex: Int64
+
+    public init(position: TimeInterval, byteOffset: Int64, packetIndex: Int64) {
+        self.position = max(0, position.isFinite ? position : 0)
+        self.byteOffset = max(0, byteOffset)
+        self.packetIndex = max(0, packetIndex)
+    }
 }
 
 public struct MusicHapticsAnalysisRequest: Codable, Hashable, Sendable {
     /// Shared short preparation budget.  It is used by both lookahead
-    /// warm-up diagnostics and the AppShell identity-priority sidecar; public
+    /// warm-up diagnostics and the AppShell identity-priority analysis; public
     /// metadata must never become an unbounded playback dependency.
     public static let defaultWarmupDeadline: Duration = .milliseconds(350)
 
@@ -367,12 +482,17 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
     public var coverage: Double
     public var eventCount: Int
     public var droppedFrames: Int
+    public var droppedAudioDuration: TimeInterval
     public var finishReason: MusicHapticsAnalysisFinishReason?
     public var analysisMode: MusicHapticsAnalysisMode
-    /// Requested server-side transcode ceiling only; never a URL or token.
-    public var analysisStreamBitrate: Int?
     public var analysisPosition: TimeInterval
     public var analysisSpeedX: Double
+    public var remoteAnalysisPosition: TimeInterval
+    public var realtimeAnalysisPosition: TimeInterval
+    public var remoteAnalysisSpeedX: Double
+    public var realtimeAnalysisSpeedX: Double
+    public var remoteDecoderState: MusicHapticsRemoteDecoderState
+    public var currentEventSource: MusicHapticsEventSource
     public var tempoBPM: Double?
     public var beatConfidence: Double
     public var transientCount: Int
@@ -386,11 +506,17 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
         coverage: Double = 0,
         eventCount: Int = 0,
         droppedFrames: Int = 0,
+        droppedAudioDuration: TimeInterval = 0,
         finishReason: MusicHapticsAnalysisFinishReason? = nil,
         analysisMode: MusicHapticsAnalysisMode = .realtimeTap,
-        analysisStreamBitrate: Int? = nil,
         analysisPosition: TimeInterval = 0,
         analysisSpeedX: Double = 0,
+        remoteAnalysisPosition: TimeInterval = 0,
+        realtimeAnalysisPosition: TimeInterval = 0,
+        remoteAnalysisSpeedX: Double = 0,
+        realtimeAnalysisSpeedX: Double = 0,
+        remoteDecoderState: MusicHapticsRemoteDecoderState = .idle,
+        currentEventSource: MusicHapticsEventSource = .none,
         tempoBPM: Double? = nil,
         beatConfidence: Double = 0,
         transientCount: Int = 0,
@@ -403,11 +529,17 @@ public struct MusicHapticsAnalysisSnapshot: Hashable, Sendable {
         self.coverage = min(max(coverage, 0), 1)
         self.eventCount = max(0, eventCount)
         self.droppedFrames = max(0, droppedFrames)
+        self.droppedAudioDuration = max(0, droppedAudioDuration.isFinite ? droppedAudioDuration : 0)
         self.finishReason = finishReason
         self.analysisMode = analysisMode
-        self.analysisStreamBitrate = analysisStreamBitrate.map { max(1, $0) }
         self.analysisPosition = max(0, analysisPosition)
         self.analysisSpeedX = max(0, analysisSpeedX)
+        self.remoteAnalysisPosition = max(0, remoteAnalysisPosition)
+        self.realtimeAnalysisPosition = max(0, realtimeAnalysisPosition)
+        self.remoteAnalysisSpeedX = max(0, remoteAnalysisSpeedX)
+        self.realtimeAnalysisSpeedX = max(0, realtimeAnalysisSpeedX)
+        self.remoteDecoderState = remoteDecoderState
+        self.currentEventSource = currentEventSource
         self.tempoBPM = tempoBPM
         self.beatConfidence = min(max(beatConfidence, 0), 1)
         self.transientCount = max(0, transientCount)

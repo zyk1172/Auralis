@@ -183,9 +183,6 @@ public protocol ServerConnecting: Sendable {
     /// 重新获取单曲的带认证播放地址（流地址过期 / 播放失败后刷新）。
     /// 返回的 URL 只用于 AVPlayer 内部播放，不得发送给大模型。
     func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL?
-    /// 构造 Music Haptics 专用低码率分析流。只返回短生命周期的带认证地址，
-    /// 不触发完整原始音频下载；MusicHaptics 模块不会看到 connector/凭据。
-    func musicHapticsAnalysisURL(serverID: ServerID, trackID: TrackID) async -> URL?
     /// 在服务器上在线搜索歌曲（本地无结果时使用）；失败时抛出（与“无结果”区分）。
     func serverSearch(query: String, limit: Int, serverID: ServerID) async throws -> [Track]
     /// 按 ID 从服务器拉取单曲（getSong）并补流地址；本地目录未同步时用于在线流播。
@@ -281,7 +278,6 @@ public extension ServerConnecting {
     func refreshAuxiliaryData(serverID: ServerID) async -> AuxiliaryLibraryData? { nil }
     func tracks(byGenre name: String, serverID: ServerID) async throws -> [Track] { [] }
     func refreshStreamURL(serverID: ServerID, trackID: TrackID) async -> URL? { nil }
-    func musicHapticsAnalysisURL(serverID: ServerID, trackID: TrackID) async -> URL? { nil }
     func serverSearch(query: String, limit: Int, serverID: ServerID) async throws -> [Track] { [] }
     func serverTrack(serverID: ServerID, trackID: TrackID) async throws -> Track? { nil }
     func librarySongCount(serverID: ServerID) async -> Int? { nil }
