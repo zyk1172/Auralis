@@ -2,8 +2,8 @@
 import AppShell
 
 enum BuildProvenanceGenerated {
-    static let gitCommit = "b3b2afa7"
-    static let gitBranch = "codex/audio-session-state-machine"
+    static let gitCommit = "868a8bc2"
+    static let gitBranch = "codex/agent-runtime-boundary-followup"
     static let buildConfiguration = "Debug"
     static let appVersion = "1.0.2"
     static let buildNumber = "3"
