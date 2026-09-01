@@ -937,6 +937,10 @@ public final class MusicHapticsPlaybackPreparation {
     /// parallel with the independent decoder. The scheduler chooses it for a
     /// gap before a remote decoder terminal error is available.
     public let realtimeTapSink: (any MusicHapticsAnalysisSink)?
+    /// The AVPlayer generation that installed this preparation.  It is set by
+    /// the playback engine only for diagnostics; it never participates in the
+    /// haptics plan or controls the player.
+    public private(set) var playbackItemGeneration: Int?
     /// Source-compatible spelling for integrations compiled against the
     /// earlier PR. The value is no longer failure-only: it is attached and
     /// consumed in parallel with the original-stream analyzer.
@@ -974,6 +978,10 @@ public final class MusicHapticsPlaybackPreparation {
         self.analysisSink = analysisSink
         self.realtimeTapSink = realtimeTapSink
         self.lookaheadAnalyzer = lookaheadAnalyzer
+    }
+
+    public func recordPlaybackItemGeneration(_ generation: Int) {
+        playbackItemGeneration = generation
     }
 }
 
@@ -1364,6 +1372,15 @@ public final class MusicHapticsCoordinator {
                     Task { @MainActor [weak self] in
                         self?.handleLookaheadDecoderFailure(
                             failure,
+                            preparationID: preparationID,
+                            identity: identity
+                        )
+                    }
+                },
+                onDecoderFormat: { [weak self] format in
+                    Task { @MainActor [weak self] in
+                        self?.handleLookaheadDecoderFormat(
+                            format,
                             preparationID: preparationID,
                             identity: identity
                         )
@@ -2757,6 +2774,22 @@ public final class MusicHapticsCoordinator {
         )
     }
 
+    private func handleLookaheadDecoderFormat(
+        _ format: MusicHapticsProgressiveDecoderFormatInfo,
+        preparationID: UUID,
+        identity: MusicHapticsIdentity
+    ) {
+        guard currentPreparation?.id == preparationID
+                || preparedLookaheadPreparationIDs.contains(preparationID)
+        else { return }
+        let itemGeneration = currentPreparation?.id == preparationID
+            ? currentPreparation?.playbackItemGeneration
+            : nil
+        musicHapticsLogger.debug(
+            "HAPTICS_REMOTE_FORMAT track=\(self.diagnosticTrack(identity), privacy: .public) preparation_id=\(preparationID.uuidString, privacy: .public) item_generation=\(itemGeneration ?? -1, privacy: .public) format_id=\(format.formatIDString, privacy: .public) sample_rate=\(format.sampleRate, privacy: .public) channels=\(format.channels, privacy: .public) bits_per_channel=\(format.bitsPerChannel, privacy: .public) bytes_per_packet=\(format.bytesPerPacket, privacy: .public) frames_per_packet=\(format.framesPerPacket, privacy: .public) format_flags=\(format.formatFlags, privacy: .public) decoder_path=\(format.decoderPath.rawValue, privacy: .public)"
+        )
+    }
+
     private func activateRealtimeTapIfAvailable(
         _ preparation: MusicHapticsPlaybackPreparation,
         identity: MusicHapticsIdentity
@@ -2780,7 +2813,7 @@ public final class MusicHapticsCoordinator {
         analysisFailureDetail = lookaheadDecoderFailures[preparation.id]?.summary
         analysisSnapshot.tapAttached = true
         musicHapticsLogger.debug(
-            "HAPTICS_SOURCE_SWITCH track=\(self.diagnosticTrack(identity), privacy: .public) source=realtime_tap reason=preplay_ready"
+            "HAPTICS_SOURCE_SWITCH track=\(self.diagnosticTrack(identity), privacy: .public) preparation_id=\(preparation.id.uuidString, privacy: .public) item_generation=\(preparation.playbackItemGeneration ?? -1, privacy: .public) source=realtime_tap reason=preplay_ready"
         )
         return true
     }
@@ -3079,8 +3112,10 @@ public final class MusicHapticsCoordinator {
         reason: String
     ) {
         guard previous != current, current != .none else { return }
+        let preparationLabel = self.currentPreparation?.id.uuidString ?? "none"
+        let itemGeneration = self.currentPreparation?.playbackItemGeneration ?? -1
         musicHapticsLogger.debug(
-            "HAPTICS_SOURCE_SWITCH track=\(self.diagnosticTrack(identity), privacy: .public) source=\(current.rawValue, privacy: .public) previous=\(previous.rawValue, privacy: .public) reason=\(reason, privacy: .public)"
+            "HAPTICS_SOURCE_SWITCH track=\(self.diagnosticTrack(identity), privacy: .public) preparation_id=\(preparationLabel, privacy: .public) item_generation=\(itemGeneration, privacy: .public) source=\(current.rawValue, privacy: .public) previous=\(previous.rawValue, privacy: .public) reason=\(reason, privacy: .public)"
         )
     }
 

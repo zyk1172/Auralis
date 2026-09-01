@@ -1,4 +1,5 @@
 import Foundation
+import AudioToolbox
 import Testing
 @testable import MusicHaptics
 
@@ -28,6 +29,74 @@ struct MusicHapticsOriginalStreamTests {
         #expect(capture.firstPCMBeforeResponseFinished == true)
         #expect(capture.chunkCount > 0)
         #expect(capture.lastPosition > 0)
+    }
+
+    @Test("a progressive original WAV uses the PCM decoder path without a compressed buffer")
+    func progressiveDecoderAcceptsLinearPCM() async throws {
+        let server = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: makeWAVData(duration: 0.75),
+            contentType: "audio/wav",
+            responseChunkSize: 512,
+            responseChunkDelay: 0.01
+        )
+        try await server.start()
+        defer { server.stop() }
+
+        let capture = DecoderCapture()
+        let formats = DecoderFormatCapture()
+        let decoder = MusicHapticsProgressiveAudioDecoder(chunkByteCapacity: 512)
+        try await decoder.decode(
+            url: server.url,
+            onPCM: { chunk in
+                capture.append(chunk, responseFinished: server.bodyFinished)
+            },
+            onFormat: { formats.append($0) }
+        )
+
+        let format = try #require(formats.first)
+        #expect(format.formatID == UInt32(kAudioFormatLinearPCM))
+        #expect(format.decoderPath == .pcm)
+        #expect(format.channels == 1)
+        #expect(format.bitsPerChannel == 16)
+        #expect(capture.firstPCMBeforeResponseFinished == true)
+        #expect(capture.chunkCount > 0)
+        #expect(capture.lastPosition > 0)
+    }
+
+    @Test("an unsupported original stream fails safely without constructing a compressed buffer")
+    func progressiveDecoderRejectsUnsupportedInputFormatSafely() async throws {
+        let server = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: makeWAVData(duration: 0.5, audioFormat: 7, bitsPerSample: 8),
+            contentType: "audio/basic",
+            responseChunkSize: 512
+        )
+        try await server.start()
+        defer { server.stop() }
+
+        let capture = DecoderCapture()
+        let formats = DecoderFormatCapture()
+        let decoder = MusicHapticsProgressiveAudioDecoder(chunkByteCapacity: 512)
+        do {
+            try await decoder.decode(
+                url: server.url,
+                onPCM: { chunk in
+                    capture.append(chunk, responseFinished: server.bodyFinished)
+                },
+                onFormat: { formats.append($0) }
+            )
+            Issue.record("The unsupported μ-law stream unexpectedly decoded successfully")
+        } catch let error as MusicHapticsProgressiveDecoderError {
+            #expect(error == .unsupportedInputFormat(UInt32(kAudioFormatULaw)))
+        } catch {
+            Issue.record("Unexpected decoder error: \(error)")
+        }
+
+        let format = try #require(formats.first)
+        #expect(format.formatID == UInt32(kAudioFormatULaw))
+        #expect(format.decoderPath == .unsupported)
+        #expect(capture.chunkCount == 0)
     }
 
     @Test("v2.4 cache miss uses the original remote FLAC and produces analysis before EOF")
@@ -444,29 +513,34 @@ struct MusicHapticsOriginalStreamTests {
                 onWindow: { capture.append(window: $0) }
             )
             holder.analyzer = analyzer
-            let format = int16MonoFormat(sampleRate: 22_050)
-            analyzer.tapAttached()
-            analyzer.configurePCMStorage(format: format, maxFrames: 2_205)
-            analyzer.begin(format: format)
-            let pcm = makeSyntheticPCM(duration: duration, sampleRate: 22_050)
-            let bytesPerFrame = 2
-            let framesPerChunk = 2_205
-            for chunkIndex in 0..<Int(duration * 10) {
-                let start = chunkIndex * framesPerChunk * bytesPerFrame
-                let end = min(pcm.count, start + framesPerChunk * bytesPerFrame)
-                guard start < end else { break }
-                analyzer.consumePCM(
-                    pcm.subdata(in: start..<end),
-                    time: Double(chunkIndex) * 0.1,
-                    format: format,
-                    frameCount: (end - start) / bytesPerFrame
-                )
-                // Feed faster than playback, but below the measured utility
-                // consumer throughput. This models a fast callback burst
-                // without intentionally overrunning the bounded ring.
-                Thread.sleep(forTimeInterval: 0.02)
+            Task { @MainActor in
+                let format = int16MonoFormat(sampleRate: 22_050)
+                analyzer.tapAttached()
+                analyzer.configurePCMStorage(format: format, maxFrames: 2_205)
+                analyzer.begin(format: format)
+                let pcm = makeSyntheticPCM(duration: duration, sampleRate: 22_050)
+                let bytesPerFrame = 2
+                let framesPerChunk = 2_205
+                for chunkIndex in 0..<Int(duration * 10) {
+                    let start = chunkIndex * framesPerChunk * bytesPerFrame
+                    let end = min(pcm.count, start + framesPerChunk * bytesPerFrame)
+                    guard start < end else { break }
+                    analyzer.consumePCM(
+                        pcm.subdata(in: start..<end),
+                        time: Double(chunkIndex) * 0.1,
+                        format: format,
+                        frameCount: (end - start) / bytesPerFrame
+                    )
+                    // Keep the injected realtime source just below the utility
+                    // consumer's Debug-build throughput. The render callback is
+                    // never allowed to wait in production; this pacing only keeps
+                    // this 40-second continuity test from deliberately filling a
+                    // bounded ring and turning expected disposable drops into a
+                    // flaky failure.
+                    try? await Task.sleep(for: .milliseconds(125))
+                }
+                analyzer.finishPartial(reason: .naturalEnd)
             }
-            analyzer.finishPartial(reason: .naturalEnd)
         }
         holder.analyzer = nil
 
@@ -490,13 +564,16 @@ struct MusicHapticsOriginalStreamTests {
         }
         let playbackPosition = 30.0
         let lead = result.snapshot.analysisPosition - playbackPosition
+        let analysisPosition = result.snapshot.analysisPosition
+        let analysisSpeedX = result.snapshot.realtimeAnalysisSpeedX
+        let droppedFrames = result.snapshot.droppedFrames
         print(
             "HAPTICS_TEST_METRICS playbackPosition=\(playbackPosition) " +
-            "analysisPosition=\(result.snapshot.analysisPosition) " +
+            "analysisPosition=\(analysisPosition) " +
             "analysisLeadSeconds=\(lead) " +
-            "analysisSpeedX=\(result.snapshot.realtimeAnalysisSpeedX) " +
+            "analysisSpeedX=\(analysisSpeedX) " +
             "scheduledUntil=\(scheduler.scheduledUntil) " +
-            "droppedFrames=\(result.snapshot.droppedFrames)"
+            "droppedFrames=\(droppedFrames)"
         )
         #expect(scheduler.scheduledUntil >= playbackPosition)
     }
@@ -709,6 +786,19 @@ private final class DecoderCapture: @unchecked Sendable {
     }
 }
 
+private final class DecoderFormatCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedFormats: [MusicHapticsProgressiveDecoderFormatInfo] = []
+
+    var first: MusicHapticsProgressiveDecoderFormatInfo? {
+        lock.withLock { storedFormats.first }
+    }
+
+    func append(_ format: MusicHapticsProgressiveDecoderFormatInfo) {
+        lock.withLock { storedFormats.append(format) }
+    }
+}
+
 private final class AnalysisCapture: @unchecked Sendable {
     private let lock = NSLock()
     private var storedWindows: [MusicHapticsAnalysisWindow] = []
@@ -781,4 +871,52 @@ private func makeSyntheticPCM(duration: TimeInterval, sampleRate: Double) -> Dat
         withUnsafeBytes(of: &sample) { data.append(contentsOf: $0) }
     }
     return data
+}
+
+func makeWAVData(
+    duration: TimeInterval,
+    sampleRate: Int = 44_100,
+    audioFormat: UInt16 = 1,
+    bitsPerSample: Int = 16
+) -> Data {
+    let channels = 1
+    let safeDuration = max(0, duration)
+    let frameCount = max(1, Int((safeDuration * Double(sampleRate)).rounded()))
+    let bytesPerSample = max(1, (bitsPerSample + 7) / 8)
+    let blockAlign = channels * bytesPerSample
+    let dataSize = frameCount * blockAlign
+    var data = Data()
+    data.append(contentsOf: Data("RIFF".utf8))
+    data.appendLittleEndian(UInt32(36 + dataSize))
+    data.append(contentsOf: Data("WAVE".utf8))
+    data.append(contentsOf: Data("fmt ".utf8))
+    data.appendLittleEndian(UInt32(16))
+    data.appendLittleEndian(audioFormat)
+    data.appendLittleEndian(UInt16(channels))
+    data.appendLittleEndian(UInt32(sampleRate))
+    data.appendLittleEndian(UInt32(sampleRate * blockAlign))
+    data.appendLittleEndian(UInt16(blockAlign))
+    data.appendLittleEndian(UInt16(bitsPerSample))
+    data.append(contentsOf: Data("data".utf8))
+    data.appendLittleEndian(UInt32(dataSize))
+
+    if audioFormat == 7 || audioFormat == 6 {
+        data.append(contentsOf: Data(repeating: 0xff, count: dataSize))
+    } else {
+        for frame in 0..<frameCount {
+            let time = Double(frame) / Double(sampleRate)
+            let sample = Int16((sin(time * 2 * .pi * 220) * 0.25 * Double(Int16.max)).rounded())
+            data.appendLittleEndian(sample)
+        }
+    }
+    return data
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var littleEndianValue = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndianValue) { bytes in
+            append(contentsOf: bytes)
+        }
+    }
 }

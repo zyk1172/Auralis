@@ -137,6 +137,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
     public typealias FailureHandler = @Sendable () -> Void
     public typealias DiagnosticHandler = @Sendable (MusicHapticsAnalysisDiagnostic) -> Void
     public typealias DecoderFailureHandler = @Sendable (MusicHapticsDecoderFailure) -> Void
+    public typealias DecoderFormatHandler = @Sendable (MusicHapticsProgressiveDecoderFormatInfo) -> Void
     public typealias FallbackSourceProvider = @Sendable (MusicHapticsAnalysisSource) async -> [MusicHapticsAnalysisSource]
 
     private let lock = NSLock()
@@ -148,6 +149,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
     private let onFailure: FailureHandler
     private let onDiagnostic: DiagnosticHandler
     private let onDecoderFailure: DecoderFailureHandler
+    private let onDecoderFormat: DecoderFormatHandler
     private let fallbackSourceProvider: FallbackSourceProvider
     private let state: State
     private var task: Task<Void, Never>?
@@ -167,6 +169,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         onFailure: @escaping FailureHandler = {},
         onDiagnostic: @escaping DiagnosticHandler = { _ in },
         onDecoderFailure: @escaping DecoderFailureHandler = { _ in },
+        onDecoderFormat: @escaping DecoderFormatHandler = { _ in },
         fallbackSourceProvider: @escaping FallbackSourceProvider = { _ in [] }
     ) {
         self.identity = identity
@@ -178,6 +181,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         self.onFailure = onFailure
         self.onDiagnostic = onDiagnostic
         self.onDecoderFailure = onDecoderFailure
+        self.onDecoderFormat = onDecoderFormat
         self.fallbackSourceProvider = fallbackSourceProvider
         let compatiblePartial = partial.flatMap {
             $0.isCurrentAlgorithm
@@ -370,6 +374,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                         self.onProgress(result.snapshot)
                     },
                     onMetrics: { metricsBox.update($0) },
+                    onFormat: onDecoderFormat,
                     onResumePoint: { [state] point in
                         await state.recordResumePoint(point)
                     }
@@ -442,6 +447,8 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
             case .noAudioFormat: return (.noAudioFormat, "AuralisMusicHaptics", 0)
             case .converterUnavailable: return (.converterInitFailed, "AVAudioConverter", 0)
             case let .converter(status): return (.converterFailed, "AVAudioConverter", Int(status))
+            case let .converterNSError(domain, code): return (.converterFailed, domain, code)
+            case let .unsupportedInputFormat(formatID): return (.unsupportedInputFormat, "AudioFileStream", Int(formatID))
             case .sampleDataUnavailable: return (.sampleDataUnavailable, "AudioFileStream", 0)
             case .noAudioPacket: return (.noAudioPacket, "AudioFileStream", 0)
             }

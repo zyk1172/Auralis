@@ -1,4 +1,5 @@
 import Foundation
+import AudioToolbox
 import Testing
 @testable import MusicHaptics
 
@@ -175,6 +176,94 @@ struct MusicHapticsCoordinatorIntegrationTests {
         #expect(diagnostics.eventCount > 0)
         #expect(output.playedWindows.contains { !$0.events.isEmpty })
         #expect(server.requestCount == 1)
+    }
+
+    @Test("an unsupported remote format keeps the pre-play realtime tap alive")
+    @MainActor
+    func unsupportedRemoteFormatKeepsRealtimeContinuity() async throws {
+        let suiteName = "music-haptics-coordinator-unsupported-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.set(true, forKey: MusicHapticsCoordinator.enabledDefaultsKey)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auralis-haptics-coordinator-unsupported-\(UUID().uuidString)", isDirectory: true)
+        let server = try LocalHTTPAudioServer(
+            statusCode: 200,
+            body: makeWAVData(duration: 0.75, audioFormat: 7, bitsPerSample: 8),
+            contentType: "audio/basic",
+            responseChunkSize: 512
+        )
+        try await server.start()
+        defer { server.stop() }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let output = RecordingMusicHapticsOutputEngine()
+        let coordinator = MusicHapticsCoordinator(
+            store: MusicHapticsStore(root: root.appendingPathComponent("store", isDirectory: true)),
+            defaults: defaults,
+            analysisSourceProvider: InjectedRemoteAnalysisSourceProvider(
+                primary: .remoteOriginal(server.url)
+            ),
+            outputEngine: output,
+            isFeatureAvailable: true
+        )
+        defer { coordinator.stop() }
+
+        let identity = MusicHapticsIdentity(
+            serverID: "integration-server",
+            remoteID: "unsupported-format",
+            title: "Unsupported Format",
+            artist: "Auralis",
+            durationMilliseconds: 750
+        )
+        let preparation = await coordinator.preparePlayback(
+            identity: identity,
+            favorite: false,
+            duration: 0.75,
+            playbackURL: server.url
+        )
+        guard let realtime = preparation.realtimeTapSink else {
+            Issue.record("The remote plan must install a realtime tap sink before playback")
+            return
+        }
+        let format = MusicHapticsPCMFormat(
+            sampleRate: 22_050,
+            channels: 1,
+            sampleType: .int16,
+            interleaved: true,
+            bytesPerFrame: 2,
+            bytesPerSample: 2
+        )!
+        realtime.tapAttached()
+        realtime.configurePCMStorage(format: format, maxFrames: 2_205)
+        realtime.begin(format: format)
+
+        coordinator.activate(preparation, position: 0, isPlaying: true)
+        let pcm = makeCoordinatorPCM(duration: 0.75)
+        realtime.consumePCM(pcm, time: 0, format: format, frameCount: pcm.count / 2)
+
+        var diagnostics = await coordinator.diagnostics()
+        for _ in 0..<60 {
+            if diagnostics.decoderFailureStage == MusicHapticsAnalysisDiagnostic.unsupportedInputFormat.rawValue,
+               diagnostics.currentEventSource == .realtimeTap,
+               diagnostics.eventCount > 0 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            diagnostics = await coordinator.diagnostics()
+        }
+
+        #expect(diagnostics.source == .analyzing)
+        #expect(diagnostics.planReason == "remote_decoder_failed_realtime_continuity")
+        #expect(diagnostics.analysisFailureReason == MusicHapticsAnalysisDiagnostic.unsupportedInputFormat.rawValue)
+        #expect(diagnostics.decoderFailureStage == MusicHapticsAnalysisDiagnostic.unsupportedInputFormat.rawValue)
+        #expect(diagnostics.decoderFailureDomain == "AudioFileStream")
+        #expect(diagnostics.decoderFailureCode == Int(kAudioFormatULaw))
+        #expect(diagnostics.currentEventSource == .realtimeTap)
+        #expect(diagnostics.realtimeAnalysisPosition > 0)
+        #expect(diagnostics.eventCount > 0)
+        #expect(output.playedWindows.contains { !$0.events.isEmpty })
     }
 
     @Test("without the pre-play tap, failure is explicit rather than silently reported as healthy")

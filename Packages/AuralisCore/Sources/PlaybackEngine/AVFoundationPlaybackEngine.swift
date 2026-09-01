@@ -170,13 +170,20 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             // is the source of the first-seconds pause/stutter. Fail closed for
             // this disposable sidecar; audio remains untouched.
             sink.cancel()
-            logSkippedTapSetup(for: preparation.plan)
+            logSkippedTapSetup(
+                for: preparation.plan,
+                preparationID: preparation.id,
+                generation: playGeneration,
+                trackLabel: currentTrack?.id.rawValue ?? "unknown"
+            )
             return false
         } else if let sink = realtimeTapSink(for: preparation) {
+            let trackLabel = currentTrack?.id.rawValue ?? "unknown"
+            let itemGeneration = playGeneration
             if sink.tapIsAttached {
                 activeRealtimeTapPreparationID = preparation.id
                 AuralisLog.playback.debug(
-                    "HAPTICS_REALTIME_TAP_READY preparation=\(preparation.id.uuidString, privacy: .public) phase=late_install"
+                    "HAPTICS_REALTIME_TAP_READY track=\(trackLabel, privacy: .public) preparation_id=\(preparation.id.uuidString, privacy: .public) item_generation=\(itemGeneration, privacy: .public) phase=late_install"
                 )
             } else {
                 // This preparation arrived after the current item started. Do
@@ -184,12 +191,22 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                 // realtime_fallback_forbidden and fail the haptics path closed.
                 sink.cancel()
                 AuralisLog.playback.debug(
-                    "HAPTICS_REALTIME_TAP_FORBIDDEN preparation=\(preparation.id.uuidString, privacy: .public) phase=late_install"
+                    "HAPTICS_REALTIME_TAP_FORBIDDEN track=\(trackLabel, privacy: .public) preparation_id=\(preparation.id.uuidString, privacy: .public) item_generation=\(itemGeneration, privacy: .public) phase=late_install"
                 )
             }
-            logSkippedTapSetup(for: preparation.plan)
+            logSkippedTapSetup(
+                for: preparation.plan,
+                preparationID: preparation.id,
+                generation: playGeneration,
+                trackLabel: currentTrack?.id.rawValue ?? "unknown"
+            )
         } else {
-            logSkippedTapSetup(for: preparation.plan)
+            logSkippedTapSetup(
+                for: preparation.plan,
+                preparationID: preparation.id,
+                generation: playGeneration,
+                trackLabel: currentTrack?.id.rawValue ?? "unknown"
+            )
         }
         return true
     }
@@ -214,15 +231,23 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         finishPreparedMusicHaptics(reason: .preparationReplaced)
         preparedMusicHapticsPreparation = preparation
         if let sink = realtimeTapSink(for: preparation) {
+            preparation.recordPlaybackItemGeneration(playGeneration)
             scheduleTapSetup(
                 for: item,
                 sink: sink,
                 isPrepared: true,
                 generation: playGeneration,
+                preparationID: preparation.id,
+                trackLabel: preparedTrack?.id.rawValue ?? "unknown",
                 planLabel: preparation.plan.kind.rawValue
             )
         } else {
-            logSkippedTapSetup(for: preparation.plan)
+            logSkippedTapSetup(
+                for: preparation.plan,
+                preparationID: preparation.id,
+                generation: playGeneration,
+                trackLabel: preparedTrack?.id.rawValue ?? "unknown"
+            )
         }
         return true
     }
@@ -324,8 +349,11 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         pendingMusicHapticsPreparation = nil
         activeMusicHapticsPreparation = preparation
         activeRealtimeTapPreparationID = nil
+        var didAttemptTapSetup = false
         if let preparation,
            let sink = realtimeTapSink(for: preparation) {
+            didAttemptTapSetup = true
+            preparation.recordPlaybackItemGeneration(generation)
             if let mix = await Self.makeAudioMix(for: item, sink: sink) {
                 item.audioMix = mix
                 sink.tapAttached()
@@ -334,7 +362,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                 }
             } else {
                 sink.cancel()
-                logTapSetupFailure(for: preparation.plan)
+                logTapSetupFailure(
+                    for: preparation.plan,
+                    preparationID: preparation.id,
+                    generation: generation,
+                    trackLabel: track.id.rawValue
+                )
             }
         }
         let itemMs = durationMs(itemStart.duration(to: .now))
@@ -376,8 +409,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observeCurrentItem(for: player)
         observeDuration(for: item)
 
-        if preparation?.plan.kind != .analyze {
-            logSkippedTapSetup(for: preparation?.plan)
+        if !didAttemptTapSetup {
+            logSkippedTapSetup(
+                for: preparation?.plan,
+                preparationID: preparation?.id,
+                generation: generation,
+                trackLabel: track.id.rawValue
+            )
         }
 
         CrashLog.shared.log("调用 player.play()")
@@ -441,15 +479,23 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         observePreparedItemFailure(for: item)
         if let preparation = musicHapticsPreparation,
            let sink = realtimeTapSink(for: preparation) {
+            preparation.recordPlaybackItemGeneration(playGeneration)
             scheduleTapSetup(
                 for: item,
                 sink: sink,
                 isPrepared: true,
                 generation: playGeneration,
+                preparationID: preparation.id,
+                trackLabel: track.id.rawValue,
                 planLabel: preparation.plan.kind.rawValue
             )
         } else {
-            logSkippedTapSetup(for: musicHapticsPreparation?.plan)
+            logSkippedTapSetup(
+                for: musicHapticsPreparation?.plan,
+                preparationID: musicHapticsPreparation?.id,
+                generation: playGeneration,
+                trackLabel: track.id.rawValue
+            )
         }
     }
 
@@ -957,11 +1003,18 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         sink: any MusicHapticsAnalysisSink,
         isPrepared: Bool,
         generation: Int,
+        preparationID: UUID,
+        trackLabel: String,
         planLabel: String = "analyze"
     ) {
         guard isPrepared else {
             sink.cancel()
-            logSkippedTapSetup(for: nil)
+            logSkippedTapSetup(
+                for: nil,
+                preparationID: preparationID,
+                generation: generation,
+                trackLabel: trackLabel
+            )
             return
         }
         let setupStart = ContinuousClock.now
@@ -984,12 +1037,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                 attached = false
                 let plan = planLabel
                 AuralisLog.playback.debug(
-                    "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false failed=true plan=\(plan, privacy: .public)"
+                    "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false failed=true track=\(trackLabel, privacy: .public) preparation_id=\(preparationID.uuidString, privacy: .public) item_generation=\(generation, privacy: .public) plan=\(plan, privacy: .public)"
                 )
             }
             let setupMs = self.durationMs(setupStart.duration(to: .now))
             AuralisLog.playback.debug(
-                "HAPTICS_TAP_SETUP_MS duration_ms=\(setupMs, privacy: .public) attached=\(attached, privacy: .public) prepared=\(isPrepared, privacy: .public) plan=\(planLabel, privacy: .public)"
+                "HAPTICS_TAP_SETUP_MS duration_ms=\(setupMs, privacy: .public) attached=\(attached, privacy: .public) prepared=\(isPrepared, privacy: .public) track=\(trackLabel, privacy: .public) preparation_id=\(preparationID.uuidString, privacy: .public) item_generation=\(generation, privacy: .public) plan=\(planLabel, privacy: .public)"
             )
         }
         if isPrepared {
@@ -1066,17 +1119,31 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         return String(value.prefix(64)).isEmpty ? "unknown" : String(value.prefix(64))
     }
 
-    private func logSkippedTapSetup(for plan: MusicHapticsPlaybackPlan?) {
+    private func logSkippedTapSetup(
+        for plan: MusicHapticsPlaybackPlan?,
+        preparationID: UUID? = nil,
+        generation: Int? = nil,
+        trackLabel: String = "unknown"
+    ) {
         let planKind = plan?.kind.rawValue ?? MusicHapticsPlanKind.disabled.rawValue
+        let preparationLabel = preparationID?.uuidString ?? "none"
+        let itemGeneration = generation ?? -1
         AuralisLog.playback.debug(
-            "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false skipped=true plan=\(planKind, privacy: .public)"
+            "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false skipped=true track=\(trackLabel, privacy: .public) preparation_id=\(preparationLabel, privacy: .public) item_generation=\(itemGeneration, privacy: .public) plan=\(planKind, privacy: .public)"
         )
     }
 
-    private func logTapSetupFailure(for plan: MusicHapticsPlaybackPlan?) {
+    private func logTapSetupFailure(
+        for plan: MusicHapticsPlaybackPlan?,
+        preparationID: UUID? = nil,
+        generation: Int? = nil,
+        trackLabel: String = "unknown"
+    ) {
         let planKind = plan?.kind.rawValue ?? MusicHapticsPlanKind.disabled.rawValue
+        let preparationLabel = preparationID?.uuidString ?? "none"
+        let itemGeneration = generation ?? -1
         AuralisLog.playback.debug(
-            "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false failed=true plan=\(planKind, privacy: .public)"
+            "HAPTICS_TAP_SETUP_MS duration_ms=0 attached=false failed=true track=\(trackLabel, privacy: .public) preparation_id=\(preparationLabel, privacy: .public) item_generation=\(itemGeneration, privacy: .public) plan=\(planKind, privacy: .public)"
         )
     }
 

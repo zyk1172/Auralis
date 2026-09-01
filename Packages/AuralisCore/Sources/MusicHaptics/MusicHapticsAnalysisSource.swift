@@ -39,6 +39,7 @@ public enum MusicHapticsAnalysisDiagnostic: String, Codable, Hashable, Sendable 
     case streamPropertyFailed = "stream_property_failed"
     case converterInitFailed = "converter_init_failed"
     case converterFailed = "converter_failed"
+    case unsupportedInputFormat = "unsupported_input_format"
     case noAudioFormat = "no_audio_format"
     case noAudioPacket = "no_audio_packet"
     case sampleDataUnavailable = "sample_data_unavailable"

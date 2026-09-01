@@ -55,6 +55,59 @@ public struct MusicHapticsProgressiveDecoderMetrics: Sendable, Equatable {
     }
 }
 
+public enum MusicHapticsProgressiveDecoderInputPath: String, Sendable, Equatable {
+    case pcm
+    case compressed
+    case unsupported
+}
+
+/// The format selected by AudioFileStream before the first packet is decoded.
+/// It is intentionally value-only so it can be logged across the actor/task
+/// boundary without retaining AudioToolbox pointers or any source URL.
+public struct MusicHapticsProgressiveDecoderFormatInfo: Sendable, Equatable {
+    public let formatID: UInt32
+    public let sampleRate: Double
+    public let channels: Int
+    public let bitsPerChannel: Int
+    public let bytesPerPacket: Int
+    public let framesPerPacket: Int
+    public let formatFlags: UInt32
+    public let decoderPath: MusicHapticsProgressiveDecoderInputPath
+
+    public init(
+        formatID: UInt32,
+        sampleRate: Double,
+        channels: Int,
+        bitsPerChannel: Int,
+        bytesPerPacket: Int,
+        framesPerPacket: Int,
+        formatFlags: UInt32,
+        decoderPath: MusicHapticsProgressiveDecoderInputPath
+    ) {
+        self.formatID = formatID
+        self.sampleRate = max(0, sampleRate.isFinite ? sampleRate : 0)
+        self.channels = max(0, channels)
+        self.bitsPerChannel = max(0, bitsPerChannel)
+        self.bytesPerPacket = max(0, bytesPerPacket)
+        self.framesPerPacket = max(0, framesPerPacket)
+        self.formatFlags = formatFlags
+        self.decoderPath = decoderPath
+    }
+
+    public var formatIDString: String {
+        let bytes = [
+            UInt8((formatID >> 24) & 0xff),
+            UInt8((formatID >> 16) & 0xff),
+            UInt8((formatID >> 8) & 0xff),
+            UInt8(formatID & 0xff)
+        ]
+        let isPrintable = bytes.allSatisfy { $0 >= 0x20 && $0 <= 0x7e }
+        return isPrintable
+            ? String(decoding: bytes, as: UTF8.self)
+            : String(format: "0x%08X", formatID)
+    }
+}
+
 public enum MusicHapticsProgressiveDecoderError: Error, Sendable, Equatable {
     case invalidURL
     case nonHTTPResponse
@@ -66,6 +119,8 @@ public enum MusicHapticsProgressiveDecoderError: Error, Sendable, Equatable {
     case noAudioFormat
     case converterUnavailable
     case converter(OSStatus)
+    case converterNSError(domain: String, code: Int)
+    case unsupportedInputFormat(UInt32)
     case sampleDataUnavailable
     case noAudioPacket
 }
@@ -79,6 +134,7 @@ public enum MusicHapticsProgressiveDecoderError: Error, Sendable, Equatable {
 public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
     public typealias PCMHandler = @Sendable (MusicHapticsDecodedPCMChunk) async -> Void
     public typealias MetricsHandler = @Sendable (MusicHapticsProgressiveDecoderMetrics) -> Void
+    public typealias FormatHandler = @Sendable (MusicHapticsProgressiveDecoderFormatInfo) -> Void
     public typealias ResumePointHandler = @Sendable (MusicHapticsDecoderResumePoint) async -> Void
 
     private let chunkByteCapacity: Int
@@ -101,6 +157,7 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
         stopAtPosition: TimeInterval? = nil,
         onPCM: @escaping PCMHandler,
         onMetrics: @escaping MetricsHandler = { _ in },
+        onFormat: @escaping FormatHandler = { _ in },
         onResumePoint: @escaping ResumePointHandler = { _ in }
     ) async throws {
         guard url.isFileURL || url.scheme?.isEmpty == false else {
@@ -133,10 +190,18 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
         let startedAt = ContinuousClock.now
         var bytesReceived: Int64 = 0
 
+        let reportFormatIfNeeded: @Sendable () -> Void = {
+            if let format = parser.takeFormatInfo() {
+                onFormat(format)
+            }
+        }
+
         var stoppedAtTarget = false
         let consume: @Sendable (Data, Int64, Bool, Int64) async throws -> Bool = { [parser] data, baseOffset, responseComplete, bytesReceived in
             guard !data.isEmpty else { return true }
             try parser.parse(data: data, baseOffset: baseOffset)
+            reportFormatIfNeeded()
+            try parser.throwIfUnsupportedInputFormat()
             let packets = parser.takePackets()
             for packet in packets {
                 let chunks = try parser.decode(packet: packet)
@@ -176,6 +241,8 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
         }
 
         let drainPendingPackets: @Sendable (Bool, Int64) async throws -> Void = { [parser] responseComplete, receivedBytes in
+            reportFormatIfNeeded()
+            try parser.throwIfUnsupportedInputFormat()
             let packets = parser.takePackets()
             for packet in packets {
                 let chunks = try parser.decode(packet: packet)
@@ -213,6 +280,7 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                     let count = min(chunkByteCapacity, Int(headerEnd - headerOffset))
                     guard let data = try file.read(upToCount: count), !data.isEmpty else { break }
                     try parser.parse(data: data, baseOffset: headerOffset)
+                    reportFormatIfNeeded()
                     _ = parser.takePackets()
                     headerOffset += Int64(data.count)
                 }
@@ -280,6 +348,7 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                     headerBuffer.append(byte)
                     if headerBuffer.count >= chunkByteCapacity {
                         try parser.parse(data: headerBuffer, baseOffset: headerOffset)
+                        reportFormatIfNeeded()
                         _ = parser.takePackets()
                         headerOffset += Int64(headerBuffer.count)
                         headerBuffer.removeAll(keepingCapacity: true)
@@ -288,6 +357,7 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                 }
                 if !headerBuffer.isEmpty {
                     try parser.parse(data: headerBuffer, baseOffset: headerOffset)
+                    reportFormatIfNeeded()
                     _ = parser.takePackets()
                 }
                 guard parser.isConfigured else { throw parser.configurationFailure }
@@ -369,6 +439,8 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                 return
             }
             try parser.finish()
+            reportFormatIfNeeded()
+            try parser.throwIfUnsupportedInputFormat()
             let packets = parser.takePackets()
             for packet in packets {
                 let chunks = try parser.decode(packet: packet)
@@ -420,6 +492,20 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
     }
 
     private final class StreamParser: @unchecked Sendable {
+        private enum InputPath: Equatable {
+            case pcm
+            case compressed
+            case unsupported(UInt32)
+
+            var publicPath: MusicHapticsProgressiveDecoderInputPath {
+                switch self {
+                case .pcm: return .pcm
+                case .compressed: return .compressed
+                case .unsupported: return .unsupported
+                }
+            }
+        }
+
         struct Packet: @unchecked Sendable {
             let data: Data
             let byteOffset: Int64
@@ -433,6 +519,9 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
         private var converter: AVAudioConverter?
         private let outputFormat: AVAudioFormat
         private let pcmFormat: MusicHapticsPCMFormat
+        private var inputPath: InputPath?
+        private var formatInfo: MusicHapticsProgressiveDecoderFormatInfo?
+        private var didReportFormat = false
         private var pendingPackets: [Packet] = []
         private var inputBaseOffset: Int64 = 0
         private var startPosition: TimeInterval
@@ -481,10 +570,18 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
         }
 
         var isConfigured: Bool {
-            sourceFormat != nil && converter != nil
+            sourceFormat != nil && converter != nil && inputPath != nil && !isUnsupportedInputFormat
+        }
+
+        private var isUnsupportedInputFormat: Bool {
+            if case .unsupported = inputPath { return true }
+            return false
         }
 
         var configurationFailure: MusicHapticsProgressiveDecoderError {
+            if case let .unsupported(formatID) = inputPath {
+                return .unsupportedInputFormat(formatID)
+            }
             if let lastPropertyStatus {
                 return .streamProperty(lastPropertyStatus)
             }
@@ -492,6 +589,18 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                 return .converterUnavailable
             }
             return .noAudioFormat
+        }
+
+        func takeFormatInfo() -> MusicHapticsProgressiveDecoderFormatInfo? {
+            guard let formatInfo, !didReportFormat else { return nil }
+            didReportFormat = true
+            return formatInfo
+        }
+
+        func throwIfUnsupportedInputFormat() throws {
+            if case let .unsupported(formatID) = inputPath {
+                throw MusicHapticsProgressiveDecoderError.unsupportedInputFormat(formatID)
+            }
         }
 
         /// Restores the logical decoder clock after a bounded header prime.
@@ -503,7 +612,7 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
             packetIndex: Int64
         ) throws {
             guard isConfigured else {
-                throw MusicHapticsProgressiveDecoderError.noAudioFormat
+                throw configurationFailure
             }
             startPosition = max(0, position)
             nextPacketFrame = Int64((startPosition * sourceFormat!.sampleRate).rounded())
@@ -525,6 +634,9 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
             stream = nil
             sourceFormat = nil
             converter = nil
+            inputPath = nil
+            formatInfo = nil
+            didReportFormat = false
             lastPropertyStatus = nil
             converterInitializationFailed = false
             pendingPackets.removeAll(keepingCapacity: true)
@@ -586,19 +698,51 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
         }
 
         func decode(packet: Packet) throws -> [MusicHapticsDecodedPCMChunk] {
+            guard let inputPath else {
+                throw MusicHapticsProgressiveDecoderError.noAudioFormat
+            }
+            if case let .unsupported(formatID) = inputPath {
+                throw MusicHapticsProgressiveDecoderError.unsupportedInputFormat(formatID)
+            }
             guard let converter else {
                 throw MusicHapticsProgressiveDecoderError.converterUnavailable
+            }
+            let inputBuffer: AVAudioBuffer
+            switch inputPath {
+            case .pcm:
+                inputBuffer = try makePCMBuffer(packet: packet, converter: converter)
+            case .compressed:
+                inputBuffer = try makeCompressedBuffer(packet: packet, converter: converter)
+            case .unsupported:
+                throw MusicHapticsProgressiveDecoderError.unsupportedInputFormat(
+                    UInt32(converter.inputFormat.streamDescription.pointee.mFormatID)
+                )
+            }
+
+            return try convert(
+                inputBuffer: inputBuffer,
+                packet: packet,
+                converter: converter
+            )
+        }
+
+        private func makeCompressedBuffer(
+            packet: Packet,
+            converter: AVAudioConverter
+        ) throws -> AVAudioCompressedBuffer {
+            let inputASBD = converter.inputFormat.streamDescription.pointee
+            guard Self.decoderPath(for: inputASBD.mFormatID) == .compressed else {
+                throw MusicHapticsProgressiveDecoderError.unsupportedInputFormat(inputASBD.mFormatID)
             }
             guard packet.data.count > 0,
                   packet.data.count <= Int(UInt32.max)
             else {
                 throw MusicHapticsProgressiveDecoderError.sampleDataUnavailable
             }
-            let capacity = packet.data.count
             let compressed = AVAudioCompressedBuffer(
                 format: converter.inputFormat,
                 packetCapacity: 1,
-                maximumPacketSize: capacity
+                maximumPacketSize: packet.data.count
             )
             packet.data.withUnsafeBytes { rawBuffer in
                 if let baseAddress = rawBuffer.baseAddress {
@@ -614,7 +758,65 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                     mDataByteSize: UInt32(packet.data.count)
                 )
             }
+            return compressed
+        }
 
+        private func makePCMBuffer(
+            packet: Packet,
+            converter: AVAudioConverter
+        ) throws -> AVAudioPCMBuffer {
+            let inputASBD = converter.inputFormat.streamDescription.pointee
+            guard inputASBD.mFormatID == kAudioFormatLinearPCM,
+                  packet.frameCount > 0,
+                  packet.frameCount <= Int(AVAudioFrameCount.max),
+                  inputASBD.mBytesPerFrame > 0,
+                  inputASBD.mChannelsPerFrame > 0
+            else {
+                throw MusicHapticsProgressiveDecoderError.unsupportedInputFormat(inputASBD.mFormatID)
+            }
+            guard let buffer = AVAudioPCMBuffer(
+                pcmFormat: converter.inputFormat,
+                frameCapacity: AVAudioFrameCount(packet.frameCount)
+            ) else {
+                throw MusicHapticsProgressiveDecoderError.noAudioFormat
+            }
+            buffer.frameLength = AVAudioFrameCount(packet.frameCount)
+            let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+            guard !buffers.isEmpty else {
+                throw MusicHapticsProgressiveDecoderError.noAudioFormat
+            }
+            let expectedByteCount = buffers.reduce(0) { partial, audioBuffer in
+                partial + Int(audioBuffer.mDataByteSize)
+            }
+            guard packet.data.count >= expectedByteCount,
+                  expectedByteCount > 0
+            else {
+                throw MusicHapticsProgressiveDecoderError.sampleDataUnavailable
+            }
+
+            packet.data.withUnsafeBytes { rawBuffer in
+                guard let baseAddress = rawBuffer.baseAddress else { return }
+                var offset = 0
+                for index in buffers.indices {
+                    let audioBuffer = buffers[index]
+                    let byteCount = Int(audioBuffer.mDataByteSize)
+                    guard byteCount > 0,
+                          let destination = audioBuffer.mData else { return }
+                    destination.copyMemory(
+                        from: baseAddress.advanced(by: offset),
+                        byteCount: byteCount
+                    )
+                    offset += byteCount
+                }
+            }
+            return buffer
+        }
+
+        private func convert(
+            inputBuffer: AVAudioBuffer,
+            packet: Packet,
+            converter: AVAudioConverter
+        ) throws -> [MusicHapticsDecodedPCMChunk] {
             var inputUsed = false
             var chunks: [MusicHapticsDecodedPCMChunk] = []
             while true {
@@ -632,11 +834,14 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                     }
                     inputUsed = true
                     status.pointee = .haveData
-                    return compressed
+                    return inputBuffer
                 }
                 if let conversionError {
                     let nsError = conversionError as NSError
-                    throw MusicHapticsProgressiveDecoderError.converter(OSStatus(nsError.code))
+                    throw MusicHapticsProgressiveDecoderError.converterNSError(
+                        domain: nsError.domain,
+                        code: nsError.code
+                    )
                 }
                 if output.frameLength > 0 {
                     guard let channel = output.floatChannelData?[0] else {
@@ -686,7 +891,10 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                 }
                 if let conversionError {
                     let nsError = conversionError as NSError
-                    throw MusicHapticsProgressiveDecoderError.converter(OSStatus(nsError.code))
+                    throw MusicHapticsProgressiveDecoderError.converterNSError(
+                        domain: nsError.domain,
+                        code: nsError.code
+                    )
                 }
                 guard output.frameLength > 0 else { return }
                 guard let channel = output.floatChannelData?[0] else { return }
@@ -722,10 +930,32 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
             guard let stream,
                   let sourceFormat = sourceFormatFromStream(stream)
             else { return }
+            let inputPath = Self.decoderPath(for: sourceFormat.streamDescription.pointee.mFormatID)
+            if self.inputPath != inputPath {
+                self.inputPath = inputPath
+                let asbd = sourceFormat.streamDescription.pointee
+                formatInfo = MusicHapticsProgressiveDecoderFormatInfo(
+                    formatID: UInt32(asbd.mFormatID),
+                    sampleRate: asbd.mSampleRate,
+                    channels: Int(asbd.mChannelsPerFrame),
+                    bitsPerChannel: Int(asbd.mBitsPerChannel),
+                    bytesPerPacket: Int(asbd.mBytesPerPacket),
+                    framesPerPacket: Int(asbd.mFramesPerPacket),
+                    formatFlags: UInt32(asbd.mFormatFlags),
+                    decoderPath: inputPath.publicPath
+                )
+                didReportFormat = false
+            }
             if !didSetPacketClock {
                 self.sourceFormat = sourceFormat
                 nextPacketFrame = Int64((startPosition * sourceFormat.sampleRate).rounded())
                 didSetPacketClock = true
+            }
+            self.sourceFormat = sourceFormat
+            if case .unsupported = inputPath {
+                converter = nil
+                converterInitializationFailed = false
+                return
             }
             if let converter {
                 if let cookie = magicCookie(from: stream) {
@@ -744,6 +974,37 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                 converter.magicCookie = cookie
             }
             self.converter = converter
+        }
+
+        private static func decoderPath(for formatID: AudioFormatID) -> InputPath {
+            let rawFormatID = UInt32(formatID)
+            switch formatID {
+            case kAudioFormatLinearPCM:
+                return .pcm
+            case kAudioFormatAC3,
+                 kAudioFormat60958AC3,
+                 kAudioFormatAppleIMA4,
+                 kAudioFormatMPEG4AAC,
+                 kAudioFormatMPEGLayer1,
+                 kAudioFormatMPEGLayer2,
+                 kAudioFormatMPEGLayer3,
+                 kAudioFormatAppleLossless,
+                 kAudioFormatMPEG4AAC_HE,
+                 kAudioFormatMPEG4AAC_LD,
+                 kAudioFormatMPEG4AAC_ELD,
+                 kAudioFormatMPEG4AAC_ELD_SBR,
+                 kAudioFormatMPEG4AAC_ELD_V2,
+                 kAudioFormatMPEG4AAC_HE_V2,
+                 kAudioFormatMPEG4AAC_Spatial,
+                 kAudioFormatFLAC,
+                 kAudioFormatOpus,
+                 kAudioFormatAPAC:
+                return .compressed
+            case kAudioFormatALaw, kAudioFormatULaw:
+                return .unsupported(rawFormatID)
+            default:
+                return .unsupported(rawFormatID)
+            }
         }
 
         private func sourceFormatFromStream(_ stream: AudioFileStreamID) -> AVAudioFormat? {
@@ -816,6 +1077,36 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
         ) {
             guard numberBytes > 0, numberPackets > 0 else { return }
             let data = Data(bytes: inputData, count: numberBytes)
+            if case .pcm = inputPath {
+                guard let sourceFormat,
+                      sourceFormat.streamDescription.pointee.mBytesPerFrame > 0,
+                      sourceFormat.streamDescription.pointee.mChannelsPerFrame > 0
+                else { return }
+                let bytesPerFrame = Int(sourceFormat.streamDescription.pointee.mBytesPerFrame)
+                let frameCount = data.count / bytesPerFrame
+                guard frameCount > 0 else { return }
+                let byteCount = frameCount * bytesPerFrame
+                let packetData = data.prefix(byteCount)
+                let startPosition: TimeInterval
+                if sourceFormat.sampleRate > 0 {
+                    startPosition = Double(nextPacketFrame) / sourceFormat.sampleRate
+                } else {
+                    startPosition = 0
+                }
+                pendingPackets.append(Packet(
+                    data: Data(packetData),
+                    byteOffset: inputBaseOffset,
+                    packetIndex: nextPacketIndex,
+                    frameCount: frameCount,
+                    startPosition: startPosition
+                ))
+                lastPacket = pendingPackets.last
+                packetsDecoded += 1
+                nextPacketIndex += 1
+                nextPacketFrame += Int64(frameCount)
+                return
+            }
+            guard case .compressed = inputPath else { return }
             let bytesPerPacket = sourceFormat?.streamDescription.pointee.mBytesPerPacket ?? 0
             var relativeOffset = 0
             for index in 0..<numberPackets {
@@ -870,5 +1161,6 @@ public final class MusicHapticsProgressiveAudioDecoder: @unchecked Sendable {
                 relativeOffset = packetOffset + packetSize
             }
         }
+
     }
 }
