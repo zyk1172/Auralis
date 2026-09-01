@@ -1058,9 +1058,9 @@ func genericSearchRemainsModelControlledAfterNoNewResults() async throws {
     let requests = provider.requests()
     #expect(await collector.containsError("没有获得新的结果") == false)
     #expect(await collector.containsText("没有查到可靠来源"))
-    // 三次空结果之后仍然把 web_search 留给模型；是否继续由模型决定。
+    // 三次空结果的最后一次规划请求仍保留 web_search；最终回答请求可以不带工具。
     #expect(requests.count >= 4)
-    #expect(requests.last?.tools?.contains { $0.name == "web_search" } == true)
+    #expect(requests.dropLast().last?.tools?.contains { $0.name == "web_search" } == true)
 }
 
 @Test("side-effect metadata is retained without becoming an execution whitelist")
