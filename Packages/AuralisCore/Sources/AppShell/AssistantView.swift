@@ -1133,7 +1133,10 @@ private struct TrackCardList: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
                 } label: {
-                    Label(expanded ? String(localized: "收起", bundle: .module) : "展开其余 \(cards.count - 5) 首", systemImage: expanded ? "chevron.up" : "chevron.down")
+                    Label(
+                        expanded ? String(localized: "收起", bundle: .module) : String(localized: "展开其余 \(cards.count - 5) 首", bundle: .module),
+                        systemImage: expanded ? "chevron.up" : "chevron.down"
+                    )
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.accent.color)
                 }
@@ -1172,7 +1175,10 @@ private struct AlbumCardList: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
                 } label: {
-                    Label(expanded ? String(localized: "收起", bundle: .module) : "展开其余 \(cards.count - 5) 张", systemImage: expanded ? "chevron.up" : "chevron.down")
+                    Label(
+                        expanded ? String(localized: "收起", bundle: .module) : String(localized: "展开其余 \(cards.count - 5) 张", bundle: .module),
+                        systemImage: expanded ? "chevron.up" : "chevron.down"
+                    )
                         .font(.caption)
                         .foregroundStyle(theme.colorTokens.accent.color)
                 }
