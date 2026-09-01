@@ -9,8 +9,8 @@ import Testing
 //
 // 覆盖实机场景：
 // A 总体统计 / B 限定统计 / C 队列复合任务 / D 同义表达 / E 删除歌单单次确认 /
-// F 拒绝后不重复弹窗 / G unsupported capability fail-fast / H 续写 /
-// I tool_search 自然语言检索 / J tool_search 收敛 / L mutation speculative text /
+// F 拒绝后不重复弹窗 / G generic Agent 交给模型判断能力 / H 续写 /
+// I tool_search 自然语言检索 / J tool_search 诊断计数 / L mutation speculative text /
 // M 模型自创确认不阻塞 / K Anthropic 顺序（放 AIKitTests）。
 
 // MARK: - Test doubles（自包含，避免与其它测试文件私有符号冲突）
@@ -550,13 +550,14 @@ struct AgentToolOrchestrationRegressionTests {
         #expect(stoppedText || stoppedError)
     }
 
-    // MARK: - 场景 G：unsupported capability fail-fast
+    // MARK: - 场景 G：generic Agent 不在模型规划前 fail-fast
 
-    @Test("G 删除曲婉婷的所有歌曲：无服务器曲库删除工具 → 立即 fail-fast，不 tool_search")
-    func unsupportedTrackDeletionFailsFast() async throws {
+    @Test("G 删除曲婉婷的所有歌曲：Runtime 允许模型先规划并查询能力")
+    func unsupportedTrackDeletionAllowsModelPlanning() async throws {
         let store = try orchestrationStore()
         let provider = OrchestrationProvider([
             orchestrationResponse(calls: [orchestrationCall(id: "s1", name: "tool_search", arguments: ["query": .string("删除歌曲")])]),
+            orchestrationResponse(content: "当前工具结果无法确认删除能力，我会如实说明。"),
         ])
         let collector = OrchestrationCollector()
         let runID = UUID()
@@ -572,9 +573,9 @@ struct AgentToolOrchestrationRegressionTests {
             confirm: { _ in true },
             emit: { await collector.append($0) }
         )
-        #expect(provider.requests().isEmpty, "不支持的能力不得进入模型规划/tool_search 循环")
-        let unsupported = await collector.containsError("没有删除音乐服务器曲库文件")
-        #expect(unsupported)
+        #expect(provider.requests().count >= 2, "generic Agent 应先让模型规划并处理 tool_search 结果")
+        #expect(await collector.containsText("当前工具结果无法确认删除能力"))
+        #expect(await collector.containsError("没有删除音乐服务器曲库文件") == false, "能力诊断不得在模型规划前直接终止")
     }
 
     // MARK: - 场景 H：续写
@@ -620,10 +621,10 @@ struct AgentToolOrchestrationRegressionTests {
         #expect(entries.allSatisfy { !$0.summary.contains("未授权") })
     }
 
-    // MARK: - 场景 J：tool_search 收敛
+    // MARK: - 场景 J：tool_search 诊断计数
 
-    @Test("J 找不到能力的 tool_search 达到阈值后停止，返回可诊断原因")
-    func toolSearchThrashConverges() async throws {
+    @Test("J 找不到能力时重复 tool_search 不由 convergence 提前停止")
+    func toolSearchThrashRemainsModelControlled() async throws {
         let store = try orchestrationStore()
         let collector = OrchestrationCollector()
         let provider = OrchestrationProvider(Array(repeating: orchestrationResponse(
@@ -642,11 +643,9 @@ struct AgentToolOrchestrationRegressionTests {
             confirm: { _ in true },
             emit: { await collector.append($0) }
         )
-        // 最多 3 次 tool_search 后停止，不能无限循环。
-        #expect(provider.requests().count <= 4)
-        let exhausted = await collector.containsError("当前工具能力不足以完成这个操作")
-        let stopped = await collector.containsError("已停止")
-        #expect(exhausted || stopped)
+        // 8 次调用已经超过旧的 tool_search 阈值；普通 Agent 仍由模型决定何时结束。
+        #expect(provider.requests().count >= 8)
+        #expect(await collector.containsError("当前工具能力不足以完成这个操作") == false)
     }
 
     // MARK: - 场景 L/M：mutation provisional 文本

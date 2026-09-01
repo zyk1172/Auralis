@@ -1031,8 +1031,8 @@ func genericShortlistUsesExplicitContext() {
     #expect(!ambiguousTools.contains("queue_append"))
 }
 
-@Test("generic search converges after repeated empty evidence")
-func genericSearchConvergesAfterNoNewResults() async throws {
+@Test("generic search does not stop after repeated empty evidence")
+func genericSearchRemainsModelControlledAfterNoNewResults() async throws {
     let provider = ScenarioProvider([
         scenarioResponse(calls: [scenarioCall(id: "web-1", name: "web_search", arguments: ["query": .string("不存在的关键词 1")])]),
         scenarioResponse(calls: [scenarioCall(id: "web-2", name: "web_search", arguments: ["query": .string("不存在的关键词 2")])]),
@@ -1055,12 +1055,12 @@ func genericSearchConvergesAfterNoNewResults() async throws {
         emit: { message in await collector.append(message) }
     )
 
-    #expect(await collector.containsError("没有获得新的结果"))
     let requests = provider.requests()
-    // v2 收敛语义：同一搜索连续无新证据达到阈值后任务停止（fail-fast），
-    // 不再要求模型继续基于空结果作答。
-    #expect(requests.count <= 4)
-    #expect(requests.last?.tools?.contains { $0.name == "web_search" } == false)
+    #expect(await collector.containsError("没有获得新的结果") == false)
+    #expect(await collector.containsText("没有查到可靠来源"))
+    // 三次空结果之后仍然把 web_search 留给模型；是否继续由模型决定。
+    #expect(requests.count >= 4)
+    #expect(requests.last?.tools?.contains { $0.name == "web_search" } == true)
 }
 
 @Test("side-effect metadata is retained without becoming an execution whitelist")

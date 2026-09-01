@@ -616,7 +616,7 @@ public struct ToolLoop {
         if provider.capabilities.toolMode == .none {
             selectedTools = []
         }
-        // 普通聊天同样使用行为收敛看门狗：不再允许无限轮次。
+        // 普通聊天保留行为计数供 diagnostics；这些计数不作为 convergence 终止条件。
         var convergence = AgentConvergenceTracker()
         var toolChoice: AIToolChoice? = nativeMode && provider.capabilities.supportsToolChoice ? .auto : nil
         var conversation = [AIMessage(
@@ -645,9 +645,8 @@ public struct ToolLoop {
         // A one-time, Runtime-owned read-only expansion is a recovery from a
         // thin first schema window, not a substitute for model planning.
         var didAutomaticToolExpansion = false
-        // Search exhaustion is per capability, not a global tool-call cap.
-        // It stops a backend that keeps returning no new evidence while all
-        // unrelated tools and ordinary conversation remain available.
+        // Search evidence is tracked per capability for diagnostics. The
+        // streak does not remove a tool or stop ordinary model planning.
         var searchEvidenceByTool: [String: Set<String>] = [:]
         // Generic chat has no task completion evaluator, but read-only music
         // results still need the same buffered UI presentation contract as
@@ -1091,9 +1090,9 @@ public struct ToolLoop {
                     resultText = "（工具执行结果）lyrics_get：成功 - 歌词已按隐私设置隐藏。"
                 }
                 resultText = ContextManager.truncateToolResult(resultText, limit: descriptor.maxResultCharacters)
-                // 搜索收敛（generic chat 与 deterministic task 共用同一 tracker）：
-                // 结果返回后判定是否产生新 evidence，按工具独立累计 streak，达阈值移除工具。
-                // 失败/空结果也视为“没有新证据”，防止反复失败不收敛。
+                // 搜索诊断（generic chat 与 deterministic task 共用同一 tracker）：
+                // 结果返回后判定是否产生新 evidence，按工具独立累计 streak；
+                // 失败/空结果也视为“没有新证据”，但不会移除工具或终止循环。
                 if Self.isSearchCapability(call.name) {
                     var foundNewEvidence = false
                     if result.success, let evidence = Self.searchEvidenceIDs(from: result.payload) {
@@ -1397,8 +1396,8 @@ public struct ToolLoop {
         // couple of times, but it must never turn a non-compliant provider
         // into an unbounded correction loop.
         var skillOutputRepairAttempts = 0
-        // 行为收敛看门狗：普通 Agent fail-fast；Recommendation Index 走专用
-        // Runtime 不受影响；legacy AgentRunner 兼容面使用宽松预算。
+        // 行为计数供 diagnostics；普通 Agent 不因 convergence 阈值 fail-fast。
+        // Recommendation Index 仍走专用 Runtime，legacy AgentRunner 兼容面不变。
         var convergence = AgentConvergenceTracker()
         // Mutation / deterministic 任务的模型正文是 provisional：完成条件满足前
         // 不实时上屏，避免“已经替换好了”在真实副作用成功前误导用户。
@@ -2171,13 +2170,13 @@ public struct ToolLoop {
                 }
 
                 // ② 任务级缓存：同一工具 + 规范化参数已执行过 → 直接复用结果。
-                // 搜索类工具的重复调用同样记为「无新结果」，连续多次后触发停止搜索。
+                // 搜索类工具的重复调用同样记为「无新结果」，仅用于诊断 streak。
                 if descriptor.cachePolicy == .task,
                    let cachedText = ws.tryReuse(tool: call.name, args: stringArguments) {
                     var text = cachedText
                     if AgentTaskWorkingSet.isSearchTool(call.name) {
                         _ = ws.observeCandidates([])
-                        // 缓存命中 = 同一搜索再次请求但没有任何新结果：计入收敛 streak。
+                        // 缓存命中 = 同一搜索再次请求但没有任何新结果：计入诊断 streak。
                         let exhausted = convergence.recordSearchOutcome(
                             toolName: call.name,
                             foundNewEvidence: false,
@@ -2477,9 +2476,9 @@ public struct ToolLoop {
                     resultText = "（工具执行结果）lyrics_get: 成功 - 歌词已按隐私设置隐藏（不发送歌词内容）。"
                 }
 
-                // ④ 更新工作集：先观察候选（决定是否触发停止搜索），再缓存最终结果。
-                // 搜索收敛：结果返回后再判定是否产生新 evidence（working set 候选指纹
-                // before/after 对比），按工具独立累计 streak；达阈值从 schema 移除。
+                // ④ 更新工作集：先观察候选（用于诊断），再缓存最终结果。
+                // 搜索诊断：结果返回后判定是否产生新 evidence（working set 候选指纹
+                // before/after 对比），按工具独立累计 streak；不从 schema 移除工具。
                 if AgentTaskWorkingSet.isSearchTool(call.name) {
                     var foundNewEvidence = false
                     if let payload = result.payload, case let .trackCards(cards) = payload {
