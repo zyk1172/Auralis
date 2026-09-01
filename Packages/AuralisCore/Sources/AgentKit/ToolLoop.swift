@@ -227,6 +227,14 @@ public struct ToolLoop {
         case malformed(rawLength: Int)
     }
 
+    /// Separates what `tool_search` discovered from what the current model
+    /// schema actually accepted.  A Stateful Skill can intentionally discover
+    /// an owned mutation while still refusing to expose it to the model.
+    private struct ToolSearchExpansionResult {
+        let discoveredEntries: [ToolCatalogEntry]
+        let addedEntries: [ToolCatalogEntry]
+    }
+
     /// 执行一次用户请求。
     /// - Parameters:
     ///   - provider: AI Provider；为 nil 时 AI Assistant 明确返回不可用（只保留
@@ -1158,7 +1166,7 @@ public struct ToolLoop {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    Self.expandToolsFromSearch(
+                    _ = Self.expandToolsFromSearch(
                         query: query,
                         namespace: namespace,
                         limit: limit,
@@ -2011,6 +2019,7 @@ public struct ToolLoop {
 
             for rawCall in calls {
                 var call = rawCall
+                var skillOwnedToolsNotLoaded: [String] = []
                 if let activeSkill, activeSkill.ownedToolNames.contains(call.name) {
                     call.arguments = activeSkill.prepareToolCall(name: call.name, arguments: call.arguments)
                     Self.mergeSkillFacts(activeSkill, into: &taskState)
@@ -2034,6 +2043,22 @@ public struct ToolLoop {
                 }
                 roundToolNames.insert(call.name)
                 if AgentTaskWorkingSet.isSearchTool(call.name) { roundSearchCalls += 1 }
+
+                // Stateful Skill-owned mutation 是 Runtime 的内部编排步骤，不是
+                // “尚未加载”的普通模型工具。优先给出正确反馈，避免模型被诱导
+                // 反复 tool_search 一个永远不会进入模型 schema 的工具。
+                if let activeSkill,
+                   activeSkill.ownedToolNames.contains(call.name),
+                   call.origin != .skillForced {
+                    let failureText = "（工具执行结果）\(call.name)：当前由 Stateful Skill 自动管理，不能由模型直接调用，也不需要通过 tool_search 加载。请继续使用搜索/推荐/选择工具，完成后调用 result_present_tracks 提交最终歌曲；系统会自动执行该步骤。"
+                    ws.recordTrace(AgentToolTrace(tool: call.name, args: diagnosticArgs, summary: "Skill-owned 操作由 Runtime 管理", reused: false))
+                    toolMessages.append(Self.toolResultMessage(
+                        callID: call.id,
+                        content: failureText,
+                        native: nativeMode
+                    ))
+                    continue
+                }
 
                 guard Self.isModelToolCallAdmitted(call, selectedTools: selectedTools) else {
                     let failureText = "（工具执行结果）\(call.name)：未执行 - 该工具尚未加载到本轮工具 schema。如确实需要此能力，请先使用 tool_search 发现并加载。"
@@ -2335,7 +2360,7 @@ public struct ToolLoop {
                     let query = stringArguments["query"] ?? ""
                     let namespace = stringArguments["namespace"]
                     let limit = min(max(Int(stringArguments["limit"] ?? "8") ?? 8, 1), 50)
-                    let discoveredEntries = Self.expandToolsFromSearch(
+                    let expansion = Self.expandToolsFromSearch(
                         query: query,
                         namespace: namespace,
                         limit: limit,
@@ -2346,11 +2371,17 @@ public struct ToolLoop {
                         excludedNames: activeSkill?.ownedToolNames ?? [],
                         excludeAllMutations: activeSkill != nil
                     )
-                    let addedDiscoveredTool = !discoveredEntries.isEmpty
+                    let discoveredEntries = expansion.discoveredEntries
+                    let addedToolToSchema = !expansion.addedEntries.isEmpty
                     diagnostics.recordToolSearch(query: query, returned: discoveredEntries.map(\.name))
-        // 搜索结果只携带能力和风险元数据；普通本地 mutation 不因
-        // 语义分析遗漏而被标成不可执行。
-                    if nativeMode, addedDiscoveredTool {
+                    // 搜索结果只携带能力和风险元数据；普通本地 mutation 不因
+                    // 语义分析遗漏而被标成不可执行。
+                    if let activeSkill {
+                        skillOwnedToolsNotLoaded = discoveredEntries
+                            .map(\.name)
+                            .filter { activeSkill.ownedToolNames.contains($0) }
+                    }
+                    if nativeMode, addedToolToSchema {
                         toolDefinitions = ToolSelector.toolDefinitions(
                             from: Self.localModelTools(selectedTools, capabilities: provider.capabilities),
                             strict: provider.capabilities.supportsStrictSchema,
@@ -2451,6 +2482,10 @@ public struct ToolLoop {
                 // 这里在回灌边界统一拦截，避免修改 AgentKit 外部文件。
                 if call.name == "lyrics_get", !context.allowsLyrics {
                     resultText = "（工具执行结果）lyrics_get: 成功 - 歌词已按隐私设置隐藏（不发送歌词内容）。"
+                }
+                if !skillOwnedToolsNotLoaded.isEmpty {
+                    let names = skillOwnedToolsNotLoaded.joined(separator: "、")
+                    resultText += "\n当前 Stateful Skill 负责的工具（\(names)）不会加入本轮模型 schema，也不能通过 tool_search 加载；请继续调用 result_present_tracks 提交最终歌曲，系统会自动完成这些操作。"
                 }
 
                 // ④ 更新工作集：先观察候选（用于诊断），再缓存最终结果。
@@ -2816,8 +2851,8 @@ public struct ToolLoop {
     /// their visible confirmation policy.
     /// Skill 激活时，Skill-owned mutation（excludedNames）也不进入 schema——
     /// 主路径由 Skill 内部固定调用。
-    /// 返回完整搜索结果（含能力/风险元数据），调用方可以附加提示文本。
-    @discardableResult
+    /// 返回发现结果与实际加入当前 schema 的结果，避免 Skill 禁止加载的
+    /// mutation 被误报成“已加载”。
     private static func expandToolsFromSearch(
         query: String,
         namespace: String?,
@@ -2828,7 +2863,7 @@ public struct ToolLoop {
         semantics: AgentRequestSemantics? = nil,
         excludedNames: Set<String> = [],
         excludeAllMutations: Bool = false
-    ) -> [ToolCatalogEntry] {
+    ) -> ToolSearchExpansionResult {
         let catalog = ToolCatalog(descriptors: allDescriptors)
         let entries = catalog.search(
             query: query,
@@ -2864,6 +2899,7 @@ public struct ToolLoop {
         }
         let byName = Dictionary(uniqueKeysWithValues: allDescriptors.map { ($0.name, $0) })
         var existing = Set(current.map(\.name))
+        var addedEntries: [ToolCatalogEntry] = []
         for entry in entries {
             guard !existing.contains(entry.name), let tool = byName[entry.name] else { continue }
             if excludedNames.contains(tool.name) { continue }
@@ -2874,8 +2910,12 @@ public struct ToolLoop {
             }
             current.append(tool)
             existing.insert(tool.name)
+            addedEntries.append(entry)
         }
-        return entries
+        return ToolSearchExpansionResult(
+            discoveredEntries: entries,
+            addedEntries: addedEntries
+        )
     }
 
     /// One bounded recovery when a non-chat model turn explicitly signals it

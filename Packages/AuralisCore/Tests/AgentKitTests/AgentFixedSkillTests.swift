@@ -706,6 +706,142 @@ struct PlaylistBuildSkillTests {
         #expect(completed, "强验证通过后应 completed")
     }
 
+    @Test("P1 Stateful Skill-owned mutation 不误报为未加载工具，并继续由 Runtime 完成")
+    func modelCallingSkillOwnedMutationGetsSkillFeedbackAndRuntimeCompletes() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let bridge = SkillBridge()
+        let playlistNameBox = NameBox()
+        bridge.onPlaylistCreated = { name, gid in
+            playlistNameBox.set(name)
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: gid.remoteID),
+                    serverID: "v2",
+                    name: name,
+                    trackIDs: []
+                ),
+                serverID: "v2"
+            )
+        }
+        bridge.onTracksAdded = { playlistGID, trackGIDs in
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: playlistGID.remoteID),
+                    serverID: "v2",
+                    name: playlistNameBox.get(),
+                    trackIDs: trackGIDs.map { TrackID(rawValue: $0.remoteID) }
+                ),
+                serverID: "v2"
+            )
+        }
+        let ids = (0..<3).map { "\(skillServerID.rawValue):t\($0)" }
+        let provider = SkillProvider([
+            // playlist_create 是 Skill-owned mutation；模型即使绕过隐藏 schema，
+            // 也必须得到 Skill 专属反馈，而不是被引导去 tool_search。
+            skillResponse(calls: [skillCall(
+                id: "m1",
+                name: "playlist_create",
+                arguments: ["name": .string("模型不应直接创建")]
+            )]),
+            skillResponse(calls: [skillCall(
+                id: "c1",
+                name: "result_present_tracks",
+                arguments: ["trackIDs": .array(ids.map(AIJSONValue.string))]
+            )]),
+        ])
+        _ = await Self.runPlaylistSkill(
+            userText: "创建一个通勤歌单，加入这 3 首歌",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+
+        let requests = provider.requests()
+        let feedback = requests
+            .dropFirst()
+            .flatMap(\.messages)
+            .map(\.content)
+            .first { $0.contains("Stateful Skill 自动管理") }
+        #expect(feedback != nil, "模型误调用 Skill-owned mutation 时应收到 Runtime-owned 反馈")
+        #expect(feedback?.contains("请先使用 tool_search") == false,
+                "Skill-owned mutation 不应被误导去 tool_search")
+        #expect(bridge.createdPlaylistNames == ["通勤"], "歌单创建仍必须由 Skill Runtime 执行一次")
+        #expect(bridge.addedToPlaylist.count == 1, "模型被拒绝后应继续完成 Skill 的 add 步骤")
+        #expect(bridge.addedToPlaylist.first?.1.count == 3)
+    }
+
+    @Test("P1 Stateful Skill tool_search 发现 owned mutation 但不伪报已加入 schema")
+    func toolSearchDoesNotPretendSkillOwnedMutationLoaded() async throws {
+        let store = try skillStore()
+        try await seedSkillTracks(store, count: 3)
+        let bridge = SkillBridge()
+        let playlistNameBox = NameBox()
+        bridge.onPlaylistCreated = { name, gid in
+            playlistNameBox.set(name)
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: gid.remoteID),
+                    serverID: "v2",
+                    name: name,
+                    trackIDs: []
+                ),
+                serverID: "v2"
+            )
+        }
+        bridge.onTracksAdded = { playlistGID, trackGIDs in
+            try await store.upsertPlaylist(
+                Playlist(
+                    id: PlaylistID(rawValue: playlistGID.remoteID),
+                    serverID: "v2",
+                    name: playlistNameBox.get(),
+                    trackIDs: trackGIDs.map { TrackID(rawValue: $0.remoteID) }
+                ),
+                serverID: "v2"
+            )
+        }
+        let ids = (0..<3).map { "\(skillServerID.rawValue):t\($0)" }
+        let provider = SkillProvider([
+            skillResponse(calls: [skillCall(
+                id: "s1",
+                name: "tool_search",
+                arguments: ["query": .string("playlist_create")]
+            )]),
+            skillResponse(calls: [skillCall(
+                id: "c1",
+                name: "result_present_tracks",
+                arguments: ["trackIDs": .array(ids.map(AIJSONValue.string))]
+            )]),
+        ])
+        _ = await Self.runPlaylistSkill(
+            userText: "创建一个通勤歌单，加入这 3 首歌",
+            store: store,
+            bridge: bridge,
+            provider: provider
+        )
+
+        let requests = provider.requests()
+        let searchFeedback = requests
+            .dropFirst()
+            .flatMap(\.messages)
+            .map(\.content)
+            .first { $0.contains("不会加入本轮模型 schema") }
+        #expect(searchFeedback != nil,
+                "tool_search 发现 Skill-owned mutation 时应明确说明它不会被模型加载")
+        #expect(searchFeedback?.contains("不能通过 tool_search 加载") == true)
+        #expect(searchFeedback?.contains("未执行 - 该工具尚未加载") == false,
+                "Skill-owned mutation 不应使用普通未加载工具的误导反馈")
+
+        let exposedOwnedMutation = requests.dropFirst().contains { request in
+            (request.tools ?? []).contains { tool in
+                tool.name == "playlist_create" || tool.name == "playlist_add_songs"
+            }
+        }
+        #expect(!exposedOwnedMutation, "Skill-owned mutation 即使被搜索到也不能进入模型 schema")
+        #expect(bridge.createdPlaylistNames == ["通勤"])
+        #expect(bridge.addedToPlaylist.count == 1)
+    }
+
     @Test("O4/O5 create 成功 + add 失败 → 不重新 create、不删歌单、partial 报告")
     func createSuccessAddFailurePreservesPartial() async throws {
         let store = try skillStore()
