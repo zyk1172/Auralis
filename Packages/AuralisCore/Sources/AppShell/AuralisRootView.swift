@@ -145,6 +145,14 @@ final class HomeChromeState: ObservableObject {
     }
 }
 
+/// 只有首页与音乐库的根 Dock 拥有 NavigationStack 的底部避让空间。
+/// AI 页的输入栏需要响应键盘安全区，因此由 AssistantView 独占那一层 inset。
+enum BottomDockReservationPolicy {
+    static func rootOwnsReservation(for section: AppSection) -> Bool {
+        section == .home || section == .library
+    }
+}
+
 /// 兼容既有页面和测试的名称；新的代码应使用 HomeChromeState。
 typealias BottomDockScrollCoordinator = HomeChromeState
 
@@ -358,11 +366,16 @@ private struct IOSMusicShell: View {
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
         .id(model.selectedSection)
-        // 这是整个 NavigationStack（包括歌单/专辑/艺术家详情）的唯一底部避让源。
-        // 之前把 inset 放在 SectionContent 与详情页各自一层，二级页面会叠加
-        // 两次安全区；现在由共享 Home chrome 在根容器一次性保留真实 Dock 高度。
+        // 首页 / 音乐库的 Dock 是整个 NavigationStack（包括歌单/专辑/艺术家详情）
+        // 的唯一底部避让源。AI 助手的输入栏需要跟随键盘，因此由 AssistantView
+        // 自己拥有安全区；根容器在 AI 页不再重复保留一份 Dock 高度。
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            Color.clear.frame(height: dockReservedHeight)
+            if BottomDockReservationPolicy.rootOwnsReservation(for: model.selectedSection) {
+                DockReservationProgressHost(
+                    coordinator: homeChromeState,
+                    hasAccessory: true
+                )
+            }
         }
         .overlay(alignment: .bottom) {
             dockOverlay
@@ -411,18 +424,6 @@ private struct IOSMusicShell: View {
 
     private var showsAssistantAccessory: Bool {
         model.selectedSection == .assistant
-    }
-
-    private var hasDockAccessory: Bool {
-        showsPlaybackAccessory || showsAssistantAccessory
-    }
-
-    private var dockReservedHeight: CGFloat {
-        guard hasDockAccessory else { return 0 }
-        return homeChromeState.metrics.reservedHeight(
-            hasAccessory: true,
-            collapseProgress: homeChromeState.collapseProgress
-        )
     }
 
     private var collapsedDockAccessory: CollapsedDockAccessory? {
@@ -491,6 +492,25 @@ private struct IOSMusicShell: View {
         )
     }
 
+}
+
+/// 将根容器的底部避让订阅限制在透明 reservation 本身，避免 IOSMusicShell、
+/// NavigationStack 和当前页面因 collapseProgress 变化而整体重新求值。
+private struct DockReservationProgressHost: View {
+    @ObservedObject var coordinator: HomeChromeState
+    let hasAccessory: Bool
+
+    var body: some View {
+        Color.clear
+            .frame(
+                height: coordinator.metrics.reservedHeight(
+                    hasAccessory: hasAccessory,
+                    collapseProgress: coordinator.collapseProgress
+                )
+            )
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
 }
 
 /// 底部安全区的连续变化仍保留原有最终布局，但订阅被限制在当前 SectionContent，
