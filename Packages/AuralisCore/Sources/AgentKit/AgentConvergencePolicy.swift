@@ -169,17 +169,16 @@ public struct AgentConvergenceTracker: Sendable {
         } else {
             let streak = (searchNoNewEvidenceStreakByTool[toolName] ?? 0) + 1
             searchNoNewEvidenceStreakByTool[toolName] = streak
-            if streak >= policy.maxSameToolNoNewEvidence {
-                exhaustedSearchTools.insert(toolName)
-                return true
-            }
         }
+        _ = policy
         return false
     }
 
     /// 该搜索工具是否已达到收敛阈值（应停止使用该工具 / 触发任务停止）。
     public func isSearchExhausted(_ toolName: String, under policy: AgentConvergencePolicy) -> Bool {
-        (searchNoNewEvidenceStreakByTool[toolName] ?? 0) >= policy.maxSameToolNoNewEvidence
+        _ = toolName
+        _ = policy
+        return false
     }
 
     public mutating func recordToolSearch() {
@@ -208,19 +207,8 @@ public struct AgentConvergenceTracker: Sendable {
         under policy: AgentConvergencePolicy,
         tolerateSearchExhaustion: Bool = false
     ) -> AgentConvergenceStopReason? {
-        if modelRounds >= policy.maxModelRounds { return .modelRoundLimit }
-        if totalToolCalls >= policy.maxTotalToolCalls { return .totalToolCallLimit }
-        if identicalToolCallStreak >= policy.maxIdenticalToolCalls { return .identicalToolCall }
-        if noProgressStreak >= policy.maxNoProgressRounds { return .noProgress }
-        if toolSearchCount >= policy.maxToolSearches { return .toolSearchExhausted }
-        if consecutiveMalformedCalls >= policy.maxConsecutiveMalformedCalls {
-            return .repeatedMalformedCall
-        }
-        // A single exhausted search path must not kill a run when a distinct
-        // canonical path remains (for example music_appreciate). For ordinary
-        // search-only requests, exhaustion remains a diagnosable stop reason.
-        let hasExhaustedSearch = searchNoNewEvidenceStreakByTool.values
-            .contains(where: { $0 >= policy.maxSameToolNoNewEvidence })
-        return hasExhaustedSearch && !tolerateSearchExhaustion ? .noNewEvidence : nil
+        _ = policy
+        _ = tolerateSearchExhaustion
+        return nil
     }
 }

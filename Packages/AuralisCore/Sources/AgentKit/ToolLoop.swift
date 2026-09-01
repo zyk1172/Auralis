@@ -328,18 +328,8 @@ public struct ToolLoop {
             )
             return
         }
-        // 不支持的能力必须 fail-fast：注册表里根本没有对应 canonical capability
-        // 时（例如“删除曲婉婷的所有歌曲”没有服务器曲库文件删除工具），不能让模型
-        // 无限 tool_search 或长期停留在“正在回复…”。
-        if workflowRoute.kind == .generic,
-           let unsupported = AgentCapabilityCoverage.unsupportedReason(
-               text: userText,
-               semantics: requestSemantics,
-               descriptors: availableToolDescriptors
-           ) {
-            await emit(AgentChatMessage(role: .assistant, messages: [.error(unsupported)]))
-            return
-        }
+        // Generic Agent 不再在模型规划前由 Runtime 判定“能力不足”并提前结束。
+        // 工具可用性与真实执行结果交给模型，由模型决定继续、换策略或结束。
         if workflowRoute.kind == .recommendationIndex {
             await observeRecommendationIndex(RecommendationIndexExecutionEvent(
                 kind: .routeSelected,
