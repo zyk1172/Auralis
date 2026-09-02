@@ -262,16 +262,33 @@ public struct AuralisRootView: View {
     @discardableResult
     private func configureUISmokeLaunchIfRequested() -> Bool {
         let arguments = Set(CommandLine.arguments)
+        let isDockInteractionSmoke = arguments.contains("-auralis-ui-smoke-dock-home")
+            || arguments.contains("-auralis-ui-smoke-dock-library")
         guard arguments.contains("-auralis-ui-smoke")
             || arguments.contains("-auralis-ui-smoke-now-playing")
-            || arguments.contains("-auralis-ui-smoke-assistant") else { return false }
+            || arguments.contains("-auralis-ui-smoke-assistant")
+            || isDockInteractionSmoke else { return false }
 
         // A fresh test installation has no server account. Skip normal restore
         // entirely so neither the setup sheet nor a persisted-account probe can
         // block the shell before the UI test inspects it.
         model.shouldPresentServerSetup = false
+        if arguments.contains("-auralis-ui-smoke-dock-library") {
+            model.selectTopLevelSection(.library)
+        } else if arguments.contains("-auralis-ui-smoke-dock-home") {
+            model.selectTopLevelSection(.home)
+        }
         if arguments.contains("-auralis-ui-smoke-now-playing") {
             model.isNowPlayingPresented = true
+        }
+        if isDockInteractionSmoke {
+            // Section changes intentionally reset the shared Chrome state. Wait
+            // for that normal reset to finish, then put this smoke fixture at the
+            // terminal compact state without changing production launch behavior.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                homeChromeState.setCollapseProgress(1)
+            }
         }
         return true
     }
@@ -310,8 +327,39 @@ enum IOSLayoutMetrics {
 /// 缩短到中间胶囊，透明的左右区域仍会打开播放页。这个纯函数让命中区域可以
 /// 在不渲染 SwiftUI View 的测试中被锁定，并同时覆盖 iPhone 与 iPad 宽度。
 enum BottomDockLayoutMetrics {
+    enum InteractionLayer: Equatable {
+        case morphing
+        case compact
+    }
+
     static let playerCollapseWidth: CGFloat = 128
     static let minimumBarHeight: CGFloat = 56
+    /// 进入终态后使用真实的紧凑 Dock 交互树，而不是继续让展开态容器接收点击。
+    static let compactInteractionThreshold: CGFloat = 0.96
+
+    static func interactionLayer(for collapseProgress: CGFloat) -> InteractionLayer {
+        let progress = min(max(collapseProgress, 0), 1)
+        return progress >= compactInteractionThreshold ? .compact : .morphing
+    }
+
+    static func usesCompactInteraction(collapseProgress: CGFloat) -> Bool {
+        interactionLayer(for: collapseProgress) == .compact
+    }
+
+    static func expandedInteractionHeight(
+        barHeight: CGFloat = minimumBarHeight,
+        spacing: CGFloat = BottomChromeMetrics.standard.spacing,
+        bottomPadding: CGFloat = BottomChromeMetrics.standard.bottomPadding
+    ) -> CGFloat {
+        barHeight * 2 + spacing + bottomPadding
+    }
+
+    static func compactInteractionHeight(
+        barHeight: CGFloat = minimumBarHeight,
+        bottomPadding: CGFloat = BottomChromeMetrics.standard.bottomPadding
+    ) -> CGFloat {
+        barHeight + bottomPadding
+    }
 
     static func playerWidth(
         fullWidth: CGFloat,
@@ -568,6 +616,32 @@ struct BottomDockScrollReportingModifier: ViewModifier {
 
 /// 将高频进度订阅限制在 Dock 本身。IOSMusicShell、NavigationStack 和当前页面不再
 /// 因为用户滚动一两个像素而整体重新求值。
+///
+/// `collapseProgress` 是在手势结束时一次性写入的目标端点；如果直接用它做条件分支，
+/// `CollapsedDock` 会在动画第一帧就替换掉 Morphing 视觉层。这个桥接 View 让条件分支
+/// 读取 SwiftUI 正在插值的进度，因此 Morphing 保持完整动画，终态才切换交互树。
+private struct AnimatedDockProgress<Content: View>: View, @preconcurrency Animatable {
+    var progress: CGFloat
+    private let content: (CGFloat) -> Content
+
+    init(
+        progress: CGFloat,
+        @ViewBuilder content: @escaping (CGFloat) -> Content
+    ) {
+        self.progress = progress
+        self.content = content
+    }
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    var body: some View {
+        content(progress)
+    }
+}
+
 private struct MorphingBottomDockProgressHost: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -578,15 +652,42 @@ private struct MorphingBottomDockProgressHost: View {
     let onSelect: (AppSection) -> Void
 
     var body: some View {
-        MorphingBottomDock(
-            model: model,
-            theme: theme,
-            accessory: accessory,
-            progress: coordinator.collapseProgress,
-            onExpand: onExpand,
-            onAssistant: onAssistant,
-            onSelect: onSelect
-        )
+        AnimatedDockProgress(progress: coordinator.collapseProgress) { progress in
+            if let accessory,
+               BottomDockLayoutMetrics.interactionLayer(for: progress) == .compact {
+                CollapsedDock(
+                    model: model,
+                    theme: theme,
+                    accessory: accessory,
+                    onHome: onExpand,
+                    onAssistant: onAssistant
+                )
+                .frame(maxWidth: .infinity)
+                .frame(
+                    height: BottomDockLayoutMetrics.compactInteractionHeight(
+                        barHeight: bottomBarHeight,
+                        bottomPadding: dockBottomPadding
+                    ),
+                    alignment: .bottom
+                )
+            } else {
+                MorphingBottomDock(
+                    model: model,
+                    theme: theme,
+                    accessory: accessory,
+                    progress: progress,
+                    onExpand: onExpand,
+                    onAssistant: onAssistant,
+                    onSelect: onSelect
+                )
+                // The Morphing layer is present only during the transition. Keep this
+                // explicit so a future overlap change cannot restore the old hit region.
+                .allowsHitTesting(
+                    accessory == nil
+                        || BottomDockLayoutMetrics.interactionLayer(for: progress) == .morphing
+                )
+            }
+        }
     }
 }
 
@@ -596,8 +697,8 @@ extension View {
     }
 }
 
-/// 展开态与紧凑态共用的一套底部组件。所有位置都由 progress 插值计算，
-/// 因而播放器、主页和 AI 入口都是同一个 View 在移动和变形，而非两套 UI 交叉淡入淡出。
+/// 展开过程仍由同一个 Morphing 视觉层完成；到达终态后由 ProgressHost 切换到
+/// 真正 62pt 的 CollapsedDock 交互树，避免移动中的展开态容器继续覆盖旧位置。
 private struct MorphingBottomDock: View {
     @ObservedObject var model: AuralisAppModel
     let theme: BuiltInTheme
@@ -619,7 +720,11 @@ private struct MorphingBottomDock: View {
             ExpandedDock(model: model, theme: theme, showsPlayer: false, onSelect: onSelect)
         } else {
             GeometryReader { proxy in
-                let height = bottomBarHeight * 2 + dockSpacing + dockBottomPadding
+                let height = BottomDockLayoutMetrics.expandedInteractionHeight(
+                    barHeight: bottomBarHeight,
+                    spacing: dockSpacing,
+                    bottomPadding: dockBottomPadding
+                )
                 let horizontalInset: CGFloat = 16
                 let fullWidth = max(proxy.size.width - horizontalInset * 2, 0)
                 let navCenterY = height - dockBottomPadding - bottomBarHeight / 2
@@ -680,7 +785,13 @@ private struct MorphingBottomDock: View {
                 .frame(width: proxy.size.width, height: height, alignment: .bottom)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: bottomBarHeight * 2 + dockSpacing + dockBottomPadding)
+            .frame(
+                height: BottomDockLayoutMetrics.expandedInteractionHeight(
+                    barHeight: bottomBarHeight,
+                    spacing: dockSpacing,
+                    bottomPadding: dockBottomPadding
+                )
+            )
         }
     }
 
@@ -718,7 +829,7 @@ private struct MorphingBottomDock: View {
             switch section {
             case .home:
                 // 完整导航栏仍是原有的“进入首页”；只有收拢完成后，首页圆按钮才承担展开职责。
-                if p >= 0.96 {
+                if BottomDockLayoutMetrics.usesCompactInteraction(collapseProgress: p) {
                     onExpand()
                 } else {
                     onSelect(.home)
@@ -869,6 +980,8 @@ private struct CollapsedDock: View {
                     .onTapGesture {
                         model.isNowPlayingPresented = true
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("auralis.dock.compactPlayer")
                 case .assistant:
                     // AI 页的中间区域由 AssistantView 的真实输入栏占用；
                     // 这里只保留与两端圆形入口等高的透明槽位，不能再叠一层玻璃。

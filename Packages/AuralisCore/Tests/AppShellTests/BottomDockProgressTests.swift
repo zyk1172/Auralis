@@ -31,8 +31,8 @@ struct BottomDockProgressTests {
         #expect(BottomDockProgressReducer.terminalProgress(for: .init(width: 2, height: 320)) == 0)
     }
 
-    @Test("播放器命中区域跟随可视胶囊，不覆盖完整 Dock")
-    func playerHitRegionUsesVisibleWidth() {
+    @Test("播放器可视胶囊使用独立宽度几何")
+    func playerWidthUsesVisibleCapsuleGeometry() {
         let fullWidth: CGFloat = 760
         #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: fullWidth, collapseProgress: 0) == fullWidth)
         #expect(BottomDockLayoutMetrics.playerWidth(fullWidth: fullWidth, collapseProgress: 1) == 632)

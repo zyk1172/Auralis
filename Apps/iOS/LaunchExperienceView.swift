@@ -12,6 +12,8 @@ struct LaunchExperienceView: View {
         return arguments.contains("-auralis-ui-smoke")
             || arguments.contains("-auralis-ui-smoke-now-playing")
             || arguments.contains("-auralis-ui-smoke-assistant")
+            || arguments.contains("-auralis-ui-smoke-dock-home")
+            || arguments.contains("-auralis-ui-smoke-dock-library")
     }
 
     var body: some View {

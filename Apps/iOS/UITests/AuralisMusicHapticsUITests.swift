@@ -1,3 +1,4 @@
+import CoreGraphics
 import XCTest
 
 @MainActor
@@ -100,5 +101,38 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 10), "Session sheet did not present")
         Thread.sleep(forTimeInterval: 2)
         XCTAssertTrue(title.exists, "Session sheet must survive delayed launch bootstrap")
+    }
+
+    func testHomeCollapsedDockDoesNotHitExpandedPlayerRegion() throws {
+        assertCollapsedDockHitTesting(with: "-auralis-ui-smoke-dock-home")
+    }
+
+    func testLibraryCollapsedDockDoesNotHitExpandedPlayerRegion() throws {
+        assertCollapsedDockHitTesting(with: "-auralis-ui-smoke-dock-library")
+    }
+
+    private func assertCollapsedDockHitTesting(with smokeArgument: String) {
+        launchSmokeApp(with: smokeArgument)
+
+        let compactPlayer = app.descendants(matching: .any)["auralis.dock.compactPlayer"].firstMatch
+        XCTAssertTrue(
+            compactPlayer.waitForExistence(timeout: 15),
+            "Collapsed Dock must expose the real compact player interaction element"
+        )
+
+        // On the iPhone target the expanded player center is about 98pt above
+        // the bottom edge (126pt container, 28pt player center). This coordinate
+        // is intentionally outside the 62pt terminal Dock.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88)).tap()
+        XCTAssertFalse(
+            app.staticTexts["正在播放"].waitForExistence(timeout: 1),
+            "The old expanded player region must not open Now Playing after collapse"
+        )
+
+        compactPlayer.tap()
+        XCTAssertTrue(
+            app.staticTexts["正在播放"].waitForExistence(timeout: 10),
+            "The real compact player capsule must still open Now Playing"
+        )
     }
 }
