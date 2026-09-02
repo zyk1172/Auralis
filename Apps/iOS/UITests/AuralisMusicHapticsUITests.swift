@@ -120,8 +120,8 @@ final class AuralisMusicHapticsUITests: XCTestCase {
 
         assertBottomContentIsAboveDock(
             contentIdentifier: "auralis.home.librarySummary",
-            dockIdentifier: "auralis.dock.compact",
-            description: "Home library summary must remain above the compact Dock"
+            dockIdentifier: "auralis.dock.compactPlayer",
+            description: "Home library summary must remain above the compact Dock player"
         )
     }
 
@@ -132,19 +132,21 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertTrue(tracksScope.waitForExistence(timeout: 15), "Library must expose the songs scope")
         tracksScope.tap()
 
-        let table = app.tables.firstMatch
-        XCTAssertTrue(table.waitForExistence(timeout: 15), "Library songs must be rendered by a List")
-        scrollToBottom(table)
+        // Identify the actual List rather than relying on its UIKit element
+        // classification, which differs across supported simulator runtimes.
+        let collectionView = app.descendants(matching: .any)["auralis.library.tracks"].firstMatch
+        XCTAssertTrue(collectionView.waitForExistence(timeout: 15), "Library songs must expose a scrollable collection")
+        scrollToBottom(collectionView)
 
-        let lastTrack = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label CONTAINS[c] %@", "Dock clearance track 36")
-        ).firstMatch
-        XCTAssertTrue(lastTrack.waitForExistence(timeout: 10), "The deterministic last library track must be visible")
+        // Query the row button rather than its inner text so the frame covers
+        // the full tappable cell, not only the title glyphs.
+        let lastTrack = app.buttons["auralis.library.track.dock-clearance-track-36"].firstMatch
+        XCTAssertTrue(lastTrack.waitForExistence(timeout: 10), "The deterministic last library track cell must be visible")
 
         assertBottomContentIsAboveDock(
             content: lastTrack,
-            dockIdentifier: "auralis.dock.compact",
-            description: "The last library track must remain above the compact Dock"
+            dockIdentifier: "auralis.dock.compactPlayer",
+            description: "The last library track must remain above the compact Dock player"
         )
     }
 

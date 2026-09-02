@@ -2641,7 +2641,7 @@ public final class AuralisAppModel: ObservableObject {
         let artistID: ArtistID = "dock-clearance-artist"
         let albumID: AlbumID = "dock-clearance-album"
         let account = ServerAccount(id: serverID, displayName: "Dock clearance smoke")
-        let tracks = (1...36).map { index in
+        let tracks = (1...36).map { (index: Int) in
             Track(
                 id: TrackID(rawValue: "dock-clearance-track-\(index)"),
                 serverID: serverID,

@@ -86,6 +86,7 @@ struct LibraryView: View {
                     }
                         .buttonStyle(HapticPlainButtonStyle())
                         .accessibilityLabel(String(localized: "播放《\(track.title)》，艺术家 \(track.artistName)", bundle: .module))
+                        .accessibilityIdentifier("auralis.library.track.\(track.id.rawValue)")
                         .contextMenu {
                             Button(String(localized: "立即播放", bundle: .module)) { model.selectAndPlay(track) }
                             Button(String(localized: "下一首播放", bundle: .module)) { insertNext(track) }
@@ -108,6 +109,7 @@ struct LibraryView: View {
                         }
                 }
                 .listStyle(.plain)
+                .accessibilityIdentifier("auralis.library.tracks")
                 .reportsBottomDockScroll(source: .library)
             }
         }

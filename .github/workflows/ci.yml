@@ -158,15 +158,44 @@ jobs:
             echo "::error::An established iPhone Simulator is required for this PR's iOS UI smoke gate."
             exit 1
           fi
+          # xcodebuild can discover an available device before SpringBoard and
+          # Accessibility are ready. Wait for the already-created simulator
+          # explicitly so a boot race cannot fail the UI runner before any test
+          # body executes.
+          ensure_simulator_ready() {
+            local simulator_state
+            simulator_state="$(xcrun simctl list devices | awk -v id="$simulator_id" '$0 ~ id { if ($0 ~ /Booted/) print "Booted"; else if ($0 ~ /Booting/) print "Booting"; else print "Stopped"; exit }')"
+            case "$simulator_state" in
+              Booted|Booting) ;;
+              *) xcrun simctl boot "$simulator_id" ;;
+            esac
+            xcrun simctl bootstatus "$simulator_id" -b
+          }
+          ensure_simulator_ready
           test_log="$RUNNER_TEMP/auralis-ui-smoke.log"
-          xcodebuild \
-            -project Auralis.xcodeproj \
-            -scheme Auralis \
-            -configuration Debug \
-            -destination "platform=iOS Simulator,id=$simulator_id" \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:AuralisUITests \
-            test | tee "$test_log"
+          run_ui_tests() {
+            local output_log="$1"
+            xcodebuild \
+              -project Auralis.xcodeproj \
+              -scheme Auralis \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,id=$simulator_id" \
+              -parallel-testing-enabled NO \
+              CODE_SIGNING_ALLOWED=NO \
+              -only-testing:AuralisUITests \
+              test | tee "$output_log"
+          }
+          if ! run_ui_tests "$test_log"; then
+            if ! grep -Eq 'Timed out waiting for AX loaded notification|Failed to initialize for UI testing|Failure collecting diagnostics from simulator' "$test_log"; then
+              exit 1
+            fi
+            echo "::warning::Simulator UI test infrastructure failed to initialize; restarting the established simulator once."
+            xcrun simctl shutdown "$simulator_id" || true
+            ensure_simulator_ready
+            retry_log="$RUNNER_TEMP/auralis-ui-smoke-retry.log"
+            run_ui_tests "$retry_log"
+            test_log="$retry_log"
+          fi
           if ! grep -Eq 'Executed [1-9][0-9]* tests, with 0 failures' "$test_log"; then
             echo "::error::AuralisUITests did not report an executed passing test run."
             exit 1
