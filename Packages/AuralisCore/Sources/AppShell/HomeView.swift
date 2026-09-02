@@ -361,6 +361,8 @@ struct HomeView: View {
             stat("\(model.catalog.tracks.count)", String(localized: "歌曲", bundle: .module))
             stat("\(model.catalog.playlists.count)", String(localized: "歌单", bundle: .module))
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("auralis.home.librarySummary")
     }
 
     private func stat(_ value: String, _ label: String) -> some View {

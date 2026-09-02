@@ -26,6 +26,34 @@ private struct AssistantConversationContentBottomPreferenceKey: PreferenceKey {
     }
 }
 
+/// AI 输入栏与根 Dock 共享端点进度，但不共享安全区所有权。
+/// 进度必须被 clamp，保证异常输入也不会把输入栏推入 Dock 之外。
+struct AssistantDockInputLayout {
+    static func horizontalPadding(
+        focused: Bool,
+        metrics: BottomChromeMetrics,
+        collapseProgress: CGFloat
+    ) -> CGFloat {
+        guard !focused else { return 0 }
+        return (metrics.dockHeight + metrics.spacing) * normalized(collapseProgress)
+    }
+
+    static func bottomPadding(
+        focused: Bool,
+        metrics: BottomChromeMetrics,
+        collapseProgress: CGFloat,
+        focusedBottomPadding: CGFloat = AuralisSpacing.small
+    ) -> CGFloat {
+        guard !focused else { return focusedBottomPadding }
+        return metrics.bottomPadding
+            + (metrics.spacing + metrics.dockHeight) * (1 - normalized(collapseProgress))
+    }
+
+    private static func normalized(_ progress: CGFloat) -> CGFloat {
+        min(max(progress, 0), 1)
+    }
+}
+
 private enum AssistantSheet: String, Identifiable {
     case sessions
     case librarySearch
@@ -69,16 +97,6 @@ struct AssistantView: View {
     @FocusState private var assistantInputFocused: Bool
 
     @Environment(\.bottomDockScrollCoordinator) private var bottomDockScroll: BottomDockScrollCoordinator?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var bottomChromeMetrics: BottomChromeMetrics {
-        bottomDockScroll?.metrics ?? .standard
-    }
-
-    private var bottomDockCollapseProgress: CGFloat {
-        bottomDockScroll?.collapseProgress ?? 0
-    }
-
     init(model: AuralisAppModel, theme: BuiltInTheme) {
         self.model = model
         self.theme = theme
@@ -519,42 +537,29 @@ struct AssistantView: View {
         #if os(iOS)
         // 输入框作为底部安全区浮层：只有它响应键盘安全区（随键盘上移），
         // 主菜单栏由根 Dock 覆盖层渲染并忽略键盘（固定在屏幕底部、被键盘遮挡）。
-        // 浮层内容只含「输入框 + 8pt 间距」这一固定 64pt 高度，两态 frame 完全一致：
-        // 键盘关闭时输入框底边停在距安全区底 8pt 处（即主菜单栏上方 8pt）；
-        // 键盘打开时输入框底边停在距键盘顶 8pt 处。输入框宽度/高度/圆角始终不变。
+        // 根 Shell 在 AI 页不再重复保留 Dock 高度，避免输入框与 Dock 叠加避让。
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: $assistantInputFocused)
-                // iPad 宽屏：与底部 Dock 共用同一浮动控件最大宽度并居中，不横贯整屏。
-                .frame(maxWidth: IOSLayoutMetrics.floatingChromeMaxWidth)
-                .frame(maxWidth: .infinity)
-                // 收拢态时输入栏进入底部导航栏的中间槽位；一旦获得输入焦点、键盘弹出，
-                // 必须立即恢复完整输入宽度，而不能继续沿用窄胶囊。
-                .padding(
-                    .horizontal,
-                    assistantInputFocused
-                        ? 0
-                        : (bottomChromeMetrics.dockHeight + bottomChromeMetrics.spacing) * bottomDockCollapseProgress
+            if let coordinator = bottomDockScroll {
+                AssistantDockInputProgressHost(
+                    coordinator: coordinator,
+                    model: model,
+                    agent: agent,
+                    theme: theme,
+                    focus: $assistantInputFocused,
+                    focused: assistantInputFocused
                 )
-                // 键盘关闭时：主菜单栏是独立的底部 overlay（忽略键盘），会覆盖在屏幕最底，
-                // 这里额外预留主菜单栏真实占用高度，让输入框停在它上方 8pt（dockSpacing）。
-                // 键盘打开时：主菜单栏已被键盘遮住，输入框随键盘上移，只需保留很小间隙，
-                // 避免「键盘与输入框之间一大段空白」。
-                // iPhone 与 iPad 共用同一底部 Dock：统一按 Dock 收拢进度避让
-                // （收拢态输入栏进入 Dock 中间槽位；展开态输入栏停在 Dock 上方）。
-                .padding(
-                    .bottom,
-                    assistantInputFocused
-                        ? AuralisSpacing.small
-                        : bottomChromeMetrics.bottomPadding
-                            + (bottomChromeMetrics.spacing + bottomChromeMetrics.dockHeight)
-                            * (1 - bottomDockCollapseProgress)
+            } else {
+                // 保留独立预览 / 测试构造 AssistantView 时的安全默认值。
+                AssistantDockInputBarLayout(
+                    model: model,
+                    agent: agent,
+                    theme: theme,
+                    focus: $assistantInputFocused,
+                    focused: assistantInputFocused,
+                    metrics: .standard,
+                    collapseProgress: 0
                 )
-                // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
-                // 不再按拖动位移逐帧改变宽度，快滑和慢滑的视觉节奏完全一致。
-                .animation(
-                    BottomDockMotion.animation(reduceMotion: reduceMotion),
-                    value: bottomDockCollapseProgress
-                )
+            }
         }
         #else
         // macOS：AI 输入胶囊与常规悬浮播放条共用窗口底部基线。AI 页的播放封面
@@ -990,6 +995,70 @@ struct AssistantView: View {
         }
     }
 }
+
+#if os(iOS)
+/// 只让 AI 输入栏订阅 HomeChromeState。聊天页本身不需要因 Dock 进度变化而重算。
+private struct AssistantDockInputProgressHost: View {
+    @ObservedObject var coordinator: HomeChromeState
+    @ObservedObject var model: AuralisAppModel
+    @ObservedObject var agent: AgentCoordinator
+    let theme: BuiltInTheme
+    var focus: FocusState<Bool>.Binding
+    let focused: Bool
+
+    var body: some View {
+        AssistantDockInputBarLayout(
+            model: model,
+            agent: agent,
+            theme: theme,
+            focus: focus,
+            focused: focused,
+            metrics: coordinator.metrics,
+            collapseProgress: coordinator.collapseProgress
+        )
+    }
+}
+
+/// 输入栏的安全区布局保持为纯参数视图，便于无 UI 回归测试验证两端几何。
+private struct AssistantDockInputBarLayout: View {
+    @ObservedObject var model: AuralisAppModel
+    @ObservedObject var agent: AgentCoordinator
+    let theme: BuiltInTheme
+    var focus: FocusState<Bool>.Binding
+    let focused: Bool
+    let metrics: BottomChromeMetrics
+    let collapseProgress: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        DockAssistantInputBar(model: model, agent: agent, theme: theme, focus: focus)
+            // iPad 宽屏：与底部 Dock 共用同一浮动控件最大宽度并居中，不横贯整屏。
+            .frame(maxWidth: IOSLayoutMetrics.floatingChromeMaxWidth)
+            .frame(maxWidth: .infinity)
+            .padding(
+                .horizontal,
+                AssistantDockInputLayout.horizontalPadding(
+                    focused: focused,
+                    metrics: metrics,
+                    collapseProgress: collapseProgress
+                )
+            )
+            .padding(
+                .bottom,
+                AssistantDockInputLayout.bottomPadding(
+                    focused: focused,
+                    metrics: metrics,
+                    collapseProgress: collapseProgress
+                )
+            )
+            // 输入框与根 Dock 读取同一个端点状态，并使用同一固定时长曲线。
+            .animation(
+                BottomDockMotion.animation(reduceMotion: reduceMotion),
+                value: collapseProgress
+            )
+    }
+}
+#endif
 
 /// 助手回答一律作为纯文本复制，避免 `ShareLink` / 文本拖放将长消息导出为文件。
 private enum AssistantTextPasteboard {

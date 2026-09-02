@@ -1,3 +1,4 @@
+import CoreGraphics
 import XCTest
 
 @MainActor
@@ -100,5 +101,109 @@ final class AuralisMusicHapticsUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 10), "Session sheet did not present")
         Thread.sleep(forTimeInterval: 2)
         XCTAssertTrue(title.exists, "Session sheet must survive delayed launch bootstrap")
+    }
+
+    func testHomeCollapsedDockDoesNotHitExpandedPlayerRegion() throws {
+        assertCollapsedDockHitTesting(with: "-auralis-ui-smoke-dock-home")
+    }
+
+    func testLibraryCollapsedDockDoesNotHitExpandedPlayerRegion() throws {
+        assertCollapsedDockHitTesting(with: "-auralis-ui-smoke-dock-library")
+    }
+
+    func testHomeCompactDockLeavesLibrarySummaryAboveDock() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-dock-clearance-home")
+
+        let scrollView = app.scrollViews.firstMatch
+        XCTAssertTrue(scrollView.waitForExistence(timeout: 15), "Home must expose its real ScrollView")
+        scrollToBottom(scrollView)
+
+        assertBottomContentIsAboveDock(
+            contentIdentifier: "auralis.home.librarySummary",
+            dockIdentifier: "auralis.dock.compactPlayer",
+            description: "Home library summary must remain above the compact Dock player"
+        )
+    }
+
+    func testLibraryCompactDockLeavesLastTrackAboveDock() throws {
+        launchSmokeApp(with: "-auralis-ui-smoke-dock-clearance-library")
+
+        let tracksScope = app.buttons["歌曲"].firstMatch
+        XCTAssertTrue(tracksScope.waitForExistence(timeout: 15), "Library must expose the songs scope")
+        tracksScope.tap()
+
+        // Identify the actual List rather than relying on its UIKit element
+        // classification, which differs across supported simulator runtimes.
+        let collectionView = app.descendants(matching: .any)["auralis.library.tracks"].firstMatch
+        XCTAssertTrue(collectionView.waitForExistence(timeout: 15), "Library songs must expose a scrollable collection")
+        scrollToBottom(collectionView)
+
+        // Query the row button rather than its inner text so the frame covers
+        // the full tappable cell, not only the title glyphs.
+        let lastTrack = app.buttons["auralis.library.track.dock-clearance-track-36"].firstMatch
+        XCTAssertTrue(lastTrack.waitForExistence(timeout: 10), "The deterministic last library track cell must be visible")
+
+        assertBottomContentIsAboveDock(
+            content: lastTrack,
+            dockIdentifier: "auralis.dock.compactPlayer",
+            description: "The last library track must remain above the compact Dock player"
+        )
+    }
+
+    private func assertCollapsedDockHitTesting(with smokeArgument: String) {
+        launchSmokeApp(with: smokeArgument)
+
+        let compactPlayer = app.descendants(matching: .any)["auralis.dock.compactPlayer"].firstMatch
+        XCTAssertTrue(
+            compactPlayer.waitForExistence(timeout: 15),
+            "Collapsed Dock must expose the real compact player interaction element"
+        )
+
+        // On the iPhone target the expanded player center is about 98pt above
+        // the bottom edge (126pt container, 28pt player center). This coordinate
+        // is intentionally outside the 62pt terminal Dock.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88)).tap()
+        XCTAssertFalse(
+            app.staticTexts["正在播放"].waitForExistence(timeout: 1),
+            "The old expanded player region must not open Now Playing after collapse"
+        )
+
+        compactPlayer.tap()
+        XCTAssertTrue(
+            app.staticTexts["正在播放"].waitForExistence(timeout: 10),
+            "The real compact player capsule must still open Now Playing"
+        )
+    }
+
+    private func scrollToBottom(_ container: XCUIElement) {
+        for _ in 0..<10 {
+            container.swipeUp()
+        }
+    }
+
+    private func assertBottomContentIsAboveDock(
+        contentIdentifier: String,
+        dockIdentifier: String,
+        description: String
+    ) {
+        let content = app.descendants(matching: .any)[contentIdentifier].firstMatch
+        XCTAssertTrue(content.waitForExistence(timeout: 10), "Missing \(contentIdentifier)")
+        assertBottomContentIsAboveDock(content: content, dockIdentifier: dockIdentifier, description: description)
+    }
+
+    private func assertBottomContentIsAboveDock(
+        content: XCUIElement,
+        dockIdentifier: String,
+        description: String
+    ) {
+        let dock = app.descendants(matching: .any)[dockIdentifier].firstMatch
+        XCTAssertTrue(dock.waitForExistence(timeout: 10), "Missing \(dockIdentifier)")
+        XCTAssertFalse(content.frame.isEmpty, "\(description): content frame must be measurable")
+        XCTAssertFalse(dock.frame.isEmpty, "\(description): Dock frame must be measurable")
+        XCTAssertLessThanOrEqual(
+            content.frame.maxY,
+            dock.frame.minY + 1,
+            description
+        )
     }
 }

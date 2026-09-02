@@ -2633,6 +2633,61 @@ public final class AuralisAppModel: ObservableObject {
         selectedSection = section
     }
 
+#if os(iOS)
+    /// UI smoke 专用的确定性目录：让首页和音乐库真正渲染可滚动内容，
+    /// 不依赖开发机上是否残留服务器账户或本地数据库。生产启动路径不会调用。
+    func installDockClearanceUISmokeCatalog() {
+        let serverID: ServerID = "dock-clearance-smoke"
+        let artistID: ArtistID = "dock-clearance-artist"
+        let albumID: AlbumID = "dock-clearance-album"
+        let account = ServerAccount(id: serverID, displayName: "Dock clearance smoke")
+        let tracks = (1...36).map { (index: Int) in
+            Track(
+                id: TrackID(rawValue: "dock-clearance-track-\(index)"),
+                serverID: serverID,
+                albumID: albumID,
+                artistID: artistID,
+                title: "Dock clearance track \(index)",
+                artistName: "Dock clearance artist",
+                albumTitle: "Dock clearance album",
+                duration: 180,
+                trackNumber: index,
+                genres: ["Smoke"],
+                isFavorite: true
+            )
+        }
+
+        resetHomeLayout()
+        catalog = LibraryCatalog(
+            account: account,
+            artists: [Artist(id: artistID, serverID: serverID, name: "Dock clearance artist", albumCount: 1)],
+            albums: [Album(
+                id: albumID,
+                serverID: serverID,
+                artistID: artistID,
+                title: "Dock clearance album",
+                artistName: "Dock clearance artist",
+                genre: "Smoke",
+                songCount: tracks.count
+            )],
+            tracks: tracks,
+            genres: [Genre(name: "Smoke", songCount: tracks.count)],
+            playlists: [Playlist(
+                id: "dock-clearance-playlist",
+                serverID: serverID,
+                name: "Dock clearance playlist",
+                trackIDs: tracks.map(\.id)
+            )],
+            history: [],
+            downloads: [],
+            lyrics: [:],
+            recommendations: []
+        )
+        reconcileLibraryAddedDates(tracks: tracks, serverID: serverID)
+        refreshHomeSnapshots()
+    }
+#endif
+
     /// 测试钩子：确定性等待 apply() 排队的后台派生（首页货架 / 随机音乐 /
     /// library-added 对齐）完成。生产 UI 首帧不等待它（首屏只依赖 catalog 本身）。
     func awaitPendingApplyDerivations() async {
