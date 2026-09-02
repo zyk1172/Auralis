@@ -498,7 +498,6 @@
       }
     },
     "%@：%+.1f dB" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2022,6 +2021,9 @@
           }
         }
       }
+    },
+    "Tavily API Key" : {
+
     },
     "Tavily Key 仅保存于系统 Keychain。启用后优先用于 Recommendation Index 的定向公开音乐补证；未配置或失败时继续使用本地元数据。" : {
       "localizations" : {
@@ -7022,6 +7024,22 @@
         }
       }
     },
+    "展开其余 %lld 位" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand %lld More Artists"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開其餘 %lld 位"
+          }
+        }
+      }
+    },
     "展开其余 %lld 张" : {
       "localizations" : {
         "en" : {
@@ -7050,22 +7068,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "展開其餘 %lld 首"
-          }
-        }
-      }
-    },
-    "展开其余 %lld 位" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Expand %lld More Artists"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "展開其餘 %lld 位"
           }
         }
       }
@@ -10398,6 +10400,9 @@
           }
         }
       }
+    },
+    "更新" : {
+
     },
     "更新 (title)" : {
       "localizations" : {
