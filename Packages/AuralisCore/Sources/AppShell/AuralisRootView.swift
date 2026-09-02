@@ -145,11 +145,12 @@ final class HomeChromeState: ObservableObject {
     }
 }
 
-/// 只有首页与音乐库的根 Dock 拥有 NavigationStack 的底部避让空间。
-/// AI 页的输入栏需要响应键盘安全区，因此由 AssistantView 独占那一层 inset。
+/// 滚动内容本身拥有 Dock 的底部避让空间；AI 页的输入栏需要响应键盘安全区，
+/// 因此由 AssistantView 独占那一层 inset。根容器只负责 overlay，不再给内容树
+/// 追加一份会与滚动容器重复的 reservation。
 enum BottomDockReservationPolicy {
-    static func rootOwnsReservation(for section: AppSection) -> Bool {
-        section == .home || section == .library
+    static func scrollOwnsReservation(for source: HomeChromeScrollSource) -> Bool {
+        source != .assistant
     }
 }
 
@@ -264,6 +265,10 @@ public struct AuralisRootView: View {
         let arguments = Set(CommandLine.arguments)
         let isDockInteractionSmoke = arguments.contains("-auralis-ui-smoke-dock-home")
             || arguments.contains("-auralis-ui-smoke-dock-library")
+            || arguments.contains("-auralis-ui-smoke-dock-clearance-home")
+            || arguments.contains("-auralis-ui-smoke-dock-clearance-library")
+        let isDockClearanceSmoke = arguments.contains("-auralis-ui-smoke-dock-clearance-home")
+            || arguments.contains("-auralis-ui-smoke-dock-clearance-library")
         guard arguments.contains("-auralis-ui-smoke")
             || arguments.contains("-auralis-ui-smoke-now-playing")
             || arguments.contains("-auralis-ui-smoke-assistant")
@@ -273,9 +278,16 @@ public struct AuralisRootView: View {
         // entirely so neither the setup sheet nor a persisted-account probe can
         // block the shell before the UI test inspects it.
         model.shouldPresentServerSetup = false
+        if isDockClearanceSmoke {
+            model.installDockClearanceUISmokeCatalog()
+        }
         if arguments.contains("-auralis-ui-smoke-dock-library") {
             model.selectTopLevelSection(.library)
         } else if arguments.contains("-auralis-ui-smoke-dock-home") {
+            model.selectTopLevelSection(.home)
+        } else if arguments.contains("-auralis-ui-smoke-dock-clearance-library") {
+            model.selectTopLevelSection(.library)
+        } else if arguments.contains("-auralis-ui-smoke-dock-clearance-home") {
             model.selectTopLevelSection(.home)
         }
         if arguments.contains("-auralis-ui-smoke-now-playing") {
@@ -414,17 +426,9 @@ private struct IOSMusicShell: View {
         // Dock 切换的是应用一级分区；若当前停在设置/资料库的二级 NavigationLink，
         // 必须丢弃旧路径并回到新分区根页，不能让二级页面“悬在”新的根内容之上。
         .id(model.selectedSection)
-        // 首页 / 音乐库的 Dock 是整个 NavigationStack（包括歌单/专辑/艺术家详情）
-        // 的唯一底部避让源。AI 助手的输入栏需要跟随键盘，因此由 AssistantView
-        // 自己拥有安全区；根容器在 AI 页不再重复保留一份 Dock 高度。
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if BottomDockReservationPolicy.rootOwnsReservation(for: model.selectedSection) {
-                DockReservationProgressHost(
-                    coordinator: homeChromeState,
-                    hasAccessory: true
-                )
-            }
-        }
+        // Dock 作为 overlay 固定在根容器上；Home / Library / BrowseDetail 的实际
+        // ScrollView/List 通过 reportsBottomDockScroll 自己持有动态 clearance，
+        // AssistantView 则由输入栏自己的 safeAreaInset 持有。根层不再重复避让内容。
         .overlay(alignment: .bottom) {
             dockOverlay
                 .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -542,17 +546,16 @@ private struct IOSMusicShell: View {
 
 }
 
-/// 将根容器的底部避让订阅限制在透明 reservation 本身，避免 IOSMusicShell、
-/// NavigationStack 和当前页面因 collapseProgress 变化而整体重新求值。
-private struct DockReservationProgressHost: View {
+/// 将 Dock clearance 订阅限制在真正的滚动容器上，避免 NavigationStack、
+/// 当前页面和非滚动内容因 collapseProgress 变化而整体重新求值。
+private struct BottomDockScrollClearanceHost: View {
     @ObservedObject var coordinator: HomeChromeState
-    let hasAccessory: Bool
 
     var body: some View {
         Color.clear
             .frame(
                 height: coordinator.metrics.reservedHeight(
-                    hasAccessory: hasAccessory,
+                    hasAccessory: true,
                     collapseProgress: coordinator.collapseProgress
                 )
             )
@@ -592,6 +595,15 @@ struct BottomDockScrollReportingModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            // clearance 必须附着在实际的 ScrollView/List 上，才能把最后一项
+            // 的可滚动范围延伸到 compact Dock 上方；AssistantView 的输入框
+            // 已经拥有自己的 safeAreaInset，不能在这里再算一层。
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let coordinator,
+                   BottomDockReservationPolicy.scrollOwnsReservation(for: source) {
+                    BottomDockScrollClearanceHost(coordinator: coordinator)
+                }
+            }
             .onAppear {
                 coordinator?.beginInteraction(source: source)
             }
@@ -1003,6 +1015,8 @@ private struct CollapsedDock: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
         .padding(.bottom, dockBottomPadding)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("auralis.dock.compact")
     }
 }
 

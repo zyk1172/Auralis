@@ -14,6 +14,8 @@ struct LaunchExperienceView: View {
             || arguments.contains("-auralis-ui-smoke-assistant")
             || arguments.contains("-auralis-ui-smoke-dock-home")
             || arguments.contains("-auralis-ui-smoke-dock-library")
+            || arguments.contains("-auralis-ui-smoke-dock-clearance-home")
+            || arguments.contains("-auralis-ui-smoke-dock-clearance-library")
     }
 
     var body: some View {

@@ -5,12 +5,12 @@ import Testing
 
 @Suite("底部 Dock 安全区归属")
 struct BottomDockReservationTests {
-    @Test("AI 助手由输入栏独占底部安全区")
-    func assistantDoesNotUseRootReservation() {
-        #expect(!BottomDockReservationPolicy.rootOwnsReservation(for: .assistant))
-        #expect(BottomDockReservationPolicy.rootOwnsReservation(for: .home))
-        #expect(BottomDockReservationPolicy.rootOwnsReservation(for: .library))
-        #expect(!BottomDockReservationPolicy.rootOwnsReservation(for: .settings))
+    @Test("实际滚动容器负责内容避让，AI 助手由输入栏独占")
+    func scrollClearanceOwnership() {
+        #expect(BottomDockReservationPolicy.scrollOwnsReservation(for: .home))
+        #expect(BottomDockReservationPolicy.scrollOwnsReservation(for: .library))
+        #expect(BottomDockReservationPolicy.scrollOwnsReservation(for: .browseDetail))
+        #expect(!BottomDockReservationPolicy.scrollOwnsReservation(for: .assistant))
     }
 
     @Test("输入栏在展开与收拢端点分别避让 Dock")
