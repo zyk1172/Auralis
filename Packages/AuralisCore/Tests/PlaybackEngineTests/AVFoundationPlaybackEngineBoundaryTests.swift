@@ -82,6 +82,28 @@ struct AVFoundationPlaybackEngineBoundaryTests {
         #expect(preparedBox.count == 0)
     }
 
+    @Test("播放中周期性 AVPlayer timing 更新持续提供权威位置")
+    @MainActor
+    func periodicTimingUpdatesAdvanceAuthoritativePosition() async throws {
+        let url = try makeWAV(duration: 2, name: "timing")
+        let engine = AVFoundationPlaybackEngine()
+        let updates = LockedTimingUpdates()
+        await engine.setPlaybackTimingHandler { update in
+            updates.append(update)
+        }
+
+        try await engine.play(track: track("timing", url: url))
+        let received = await waitUntil(timeout: .seconds(4)) {
+            updates.value.filter { !$0.isStateTransition }.count >= 2
+        }
+        #expect(received)
+        let positions = updates.value
+            .filter { !$0.isStateTransition }
+            .compactMap(\.position)
+        #expect((positions.last ?? 0) > (positions.first ?? 0))
+        engine.stop()
+    }
+
     @Test("prepared 推进触发 preparedStartedHandler 且不触发 trackEnded")
     @MainActor
     func preparedAdvanceFiresPreparedStartedExactlyOnce() async throws {
@@ -182,5 +204,20 @@ private final class LockedStrings: @unchecked Sendable {
     func append(_ element: String) {
         lock.lock(); defer { lock.unlock() }
         _value.append(element)
+    }
+}
+
+private final class LockedTimingUpdates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: [PlaybackTimingUpdate] = []
+
+    var value: [PlaybackTimingUpdate] {
+        lock.lock(); defer { lock.unlock() }
+        return _value
+    }
+
+    func append(_ update: PlaybackTimingUpdate) {
+        lock.lock(); defer { lock.unlock() }
+        _value.append(update)
     }
 }

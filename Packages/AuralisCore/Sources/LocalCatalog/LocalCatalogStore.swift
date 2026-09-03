@@ -264,6 +264,7 @@ public actor LocalCatalogStore: LibrarySyncStore {
             isrc TEXT,
             match_confidence REAL NOT NULL,
             match_method TEXT NOT NULL,
+            matcher_revision INTEGER,
             verified_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS external_music_candidates (
@@ -324,9 +325,9 @@ public actor LocalCatalogStore: LibrarySyncStore {
     /// 不再用一组必然失败的 ALTER TABLE 作为列存在性探测。
     nonisolated private func runAdditiveSchemaMigrations() throws {
         let key = "catalog_additive_columns"
-        // Bumped to 2 because semantic_tag_rules_version was added after some
-        // databases had already recorded version = 1; those must re-run.
-        let targetVersion: Int64 = 2
+        // Bumped to 3 because matcher_revision was added after some databases
+        // had already recorded version = 2; those must re-run.
+        let targetVersion: Int64 = 3
         let applied = try db.query(
             "SELECT version FROM catalog_migrations WHERE key = ?",
             [.text(key)]
@@ -348,6 +349,11 @@ public actor LocalCatalogStore: LibrarySyncStore {
             try addColumnIfMissing(table: "sync_meta", column: "remote_probe_kind", definition: "TEXT")
             try addColumnIfMissing(table: "sync_meta", column: "last_probe_at", definition: "REAL")
             try addColumnIfMissing(table: "sync_meta", column: "last_validated_at", definition: "REAL")
+            try addColumnIfMissing(
+                table: "external_music_identities",
+                column: "matcher_revision",
+                definition: "INTEGER"
+            )
             try db.run(
                 """
                 INSERT INTO catalog_migrations (key, version, applied_at) VALUES (?, ?, ?)

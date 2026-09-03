@@ -36,11 +36,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var stalledObserver: NSObjectProtocol?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlObservation: NSKeyValueObservation?
+    private var periodicTimeObserver: Any?
     private var trackEndedHandler: (@Sendable () -> Void)?
     /// 播放中途失败（流地址失效 / 解码失败 / 网络错误）时通知 AppModel 刷新并重试。
     private var playbackFailureHandler: (@Sendable () -> Void)?
-    /// AVPlayer timeControlStatus transition callback for haptic scheduling
-    /// and other sidecars that must follow the real player clock.
+    /// AVPlayer transition and periodic timing callbacks for haptic scheduling
+    /// and other sidecars that must follow the real player clock, including
+    /// while UI progress publishing is stopped in the background.
     private var playbackTimingHandler: (@Sendable (PlaybackTimingUpdate) -> Void)?
     /// 播放代际计数：快速切歌时被取代的旧 play() 任务不得再接管 AVPlayer/观察者（P1-7）。
     private var playGeneration = 0
@@ -317,6 +319,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
             itemStatusObservation = nil
             timeControlObservation?.invalidate()
             timeControlObservation = nil
+            removePeriodicTimeObserver(from: reusedPlayer)
             reusedPlayer?.pause()
             reusedPlayer?.removeAllItems()
             preparedItem = nil
@@ -652,6 +655,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         itemStatusObservation = nil
         timeControlObservation?.invalidate()
         timeControlObservation = nil
+        removePeriodicTimeObserver()
         avPlayer?.pause()
         cancelTapSetupTasks()
         finishActiveMusicHaptics(reason: .stopped)
@@ -866,6 +870,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         itemStatusObservation = nil
         timeControlObservation?.invalidate()
         timeControlObservation = nil
+        removePeriodicTimeObserver()
         cancelStallTimeout()
     }
 
@@ -929,6 +934,7 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
     /// 观察播放速率控制状态：缓冲中 / 恢复播放，供 UI 与诊断使用。
     private func observeTimeControl(for player: AVPlayer) {
+        removePeriodicTimeObserver(from: player)
         timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             Task { @MainActor [weak self] in
                 guard let self, self.timeControlObservation != nil,
@@ -951,6 +957,34 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
                 }
             }
         }
+        let observedGeneration = playGeneration
+        periodicTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            let seconds = time.seconds
+            guard seconds.isFinite, seconds >= 0 else { return }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.playGeneration == observedGeneration,
+                      self.avPlayer != nil,
+                      self.avPlayer?.timeControlStatus == .playing
+                else { return }
+                let rate = self.avPlayer?.rate ?? 0
+                self.playbackTimingHandler?(PlaybackTimingUpdate(
+                    state: .playing,
+                    position: seconds,
+                    rate: rate > 0 ? rate : self.playbackRate,
+                    isStateTransition: false
+                ))
+            }
+        }
+    }
+
+    private func removePeriodicTimeObserver(from player: AVPlayer? = nil) {
+        guard let periodicTimeObserver else { return }
+        (player ?? avPlayer)?.removeTimeObserver(periodicTimeObserver)
+        self.periodicTimeObserver = nil
     }
 
     private func reportPlaybackFailure() {

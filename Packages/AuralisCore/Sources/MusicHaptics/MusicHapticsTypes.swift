@@ -67,8 +67,28 @@ public struct MusicHapticsIdentity: Codable, Hashable, Sendable {
     public var artist: String
     public var album: String?
     public var durationMilliseconds: Int
+    /// Optional provenance from the external identity matcher. MusicHaptics
+    /// keeps these as primitive values so the runtime does not depend on the
+    /// LocalCatalog module, while diagnostics can still explain why an ISRC
+    /// was or was not trusted.
+    public var identityMatchMethod: String?
+    public var identityMatchConfidence: Double?
+    public var identityMatcherRevision: Int?
 
-    public init(globalID: String? = nil, serverID: String? = nil, remoteID: String? = nil, isrc: String? = nil, recordingMBID: String? = nil, title: String, artist: String, album: String? = nil, durationMilliseconds: Int) {
+    public init(
+        globalID: String? = nil,
+        serverID: String? = nil,
+        remoteID: String? = nil,
+        isrc: String? = nil,
+        recordingMBID: String? = nil,
+        title: String,
+        artist: String,
+        album: String? = nil,
+        durationMilliseconds: Int,
+        identityMatchMethod: String? = nil,
+        identityMatchConfidence: Double? = nil,
+        identityMatcherRevision: Int? = nil
+    ) {
         self.globalID = globalID
         self.serverID = serverID
         self.remoteID = remoteID
@@ -78,10 +98,33 @@ public struct MusicHapticsIdentity: Codable, Hashable, Sendable {
         self.artist = artist
         self.album = album
         self.durationMilliseconds = max(0, durationMilliseconds)
+        self.identityMatchMethod = identityMatchMethod
+        self.identityMatchConfidence = identityMatchConfidence
+        self.identityMatcherRevision = identityMatcherRevision
     }
 
-    public init(track: Track, isrc: String? = nil, recordingMBID: String? = nil) {
-        self.init(globalID: "\(track.serverID.rawValue):\(track.id.rawValue)", serverID: track.serverID.rawValue, remoteID: track.id.rawValue, isrc: isrc, recordingMBID: recordingMBID, title: track.title, artist: track.artistName, album: track.albumTitle, durationMilliseconds: Int((track.duration * 1_000).rounded()))
+    public init(
+        track: Track,
+        isrc: String? = nil,
+        recordingMBID: String? = nil,
+        identityMatchMethod: String? = nil,
+        identityMatchConfidence: Double? = nil,
+        identityMatcherRevision: Int? = nil
+    ) {
+        self.init(
+            globalID: "\(track.serverID.rawValue):\(track.id.rawValue)",
+            serverID: track.serverID.rawValue,
+            remoteID: track.id.rawValue,
+            isrc: isrc,
+            recordingMBID: recordingMBID,
+            title: track.title,
+            artist: track.artistName,
+            album: track.albumTitle,
+            durationMilliseconds: Int((track.duration * 1_000).rounded()),
+            identityMatchMethod: identityMatchMethod,
+            identityMatchConfidence: identityMatchConfidence,
+            identityMatcherRevision: identityMatcherRevision
+        )
     }
 
     public var stableKey: String {

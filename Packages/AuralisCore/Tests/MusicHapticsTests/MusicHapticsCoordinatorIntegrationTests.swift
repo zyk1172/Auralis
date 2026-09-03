@@ -325,6 +325,82 @@ struct MusicHapticsCoordinatorIntegrationTests {
         #expect(diagnostics.decoderFailureDomain == "AudioFileStream")
         #expect(output.playedWindows.isEmpty)
     }
+
+    @Test("Scene background does not suspend haptics, while actual suspension does")
+    @MainActor
+    func sceneBackgroundAndActualSuspensionHaveSeparateState() async {
+        let suiteName = "music-haptics-coordinator-lifecycle-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.set(true, forKey: MusicHapticsCoordinator.enabledDefaultsKey)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let identity = MusicHapticsIdentity(
+            serverID: "integration-server",
+            remoteID: "lifecycle",
+            title: "Lifecycle",
+            artist: "Auralis",
+            durationMilliseconds: 10_000
+        )
+        let timeline = MusicHapticsTimeline(
+            identity: identity,
+            duration: 10,
+            analyzedDuration: 10,
+            analysisCoverage: 1,
+            events: []
+        )
+        let preparation = MusicHapticsPlaybackPreparation(
+            identity: identity,
+            favorite: false,
+            plan: .custom(timeline),
+            reason: "timeline_available",
+            systemAvailability: MusicHapticsSystemAvailability(
+                hasISRC: false,
+                active: false,
+                timelineAvailable: false
+            ),
+            fullTimelineExists: true,
+            partialExists: false,
+            effectiveEnabled: true,
+            analysisSink: nil
+        )
+        let output = RecordingMusicHapticsOutputEngine()
+        let coordinator = MusicHapticsCoordinator(
+            defaults: defaults,
+            outputEngine: output,
+            isFeatureAvailable: true
+        )
+        defer { coordinator.stop() }
+
+        coordinator.activate(preparation, position: 0, isPlaying: true)
+        coordinator.applicationDidEnterBackground()
+
+        #expect(output.backgroundTransitionCount == 1)
+        #expect(output.pauseCount == 0)
+        var background = await coordinator.diagnostics()
+        #expect(background.isInBackground)
+        #expect(!background.hapticsSuspended)
+
+        coordinator.updatePlaybackPosition(
+            3,
+            isPlaying: true,
+            source: .playbackEngine
+        )
+        background = await coordinator.diagnostics()
+        #expect(background.playbackPosition == 3)
+
+        output.triggerActualSuspension()
+        let suspended = await coordinator.diagnostics()
+        #expect(suspended.hapticsSuspended)
+        #expect(suspended.applicationSuspended)
+
+        coordinator.applicationDidBecomeActive(position: 7, isPlaying: true)
+        let recovered = await coordinator.diagnostics()
+        #expect(!recovered.isInBackground)
+        #expect(!recovered.hapticsSuspended)
+        #expect(recovered.playbackPosition == 7)
+        #expect(recovered.foregroundRecoveryCount == 1)
+        #expect(output.restartCount == 1)
+    }
 }
 
 private struct InjectedRemoteAnalysisSourceProvider: MusicHapticsAnalysisSourceProvider {
@@ -354,8 +430,14 @@ private final class RecordingMusicHapticsOutputEngine: MusicHapticsOutputEngine 
     let supportsHaptics = true
     var canProduceOutput: Bool { !applicationSuspended }
     private(set) var playedWindows: [MusicHapticsAnalysisWindow] = []
+    private(set) var pauseCount = 0
+    private(set) var backgroundTransitionCount = 0
+    private(set) var restartCount = 0
+    private var actualSuspensionHandler: (() -> Void)?
 
-    func setActualSuspensionHandler(_ handler: (() -> Void)?) {}
+    func setActualSuspensionHandler(_ handler: (() -> Void)?) {
+        actualSuspensionHandler = handler
+    }
 
     func warmUp() {
         state = .running
@@ -379,7 +461,7 @@ private final class RecordingMusicHapticsOutputEngine: MusicHapticsOutputEngine 
         playedWindows.append(window)
     }
 
-    func pause() {}
+    func pause() { pauseCount += 1 }
     func resume(at offset: TimeInterval, playbackRate: Double) { state = .running }
     func seek(to offset: TimeInterval, playing: Bool, playbackRate: Double) {
         if playing { state = .running }
@@ -387,12 +469,19 @@ private final class RecordingMusicHapticsOutputEngine: MusicHapticsOutputEngine 
     func stop() {}
 
     func applicationDidEnterBackground() {
-        applicationSuspended = true
+        backgroundTransitionCount += 1
     }
 
     func restartIfNeeded() {
+        restartCount += 1
         applicationSuspended = false
         state = .running
+    }
+
+    func triggerActualSuspension() {
+        applicationSuspended = true
+        state = .needsRestart
+        actualSuspensionHandler?()
     }
 }
 

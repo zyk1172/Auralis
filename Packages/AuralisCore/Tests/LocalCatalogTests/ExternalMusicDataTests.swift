@@ -36,6 +36,41 @@ struct ExternalMusicDataTests {
         ) == nil)
     }
 
+    @Test("Matcher revision 区分当前身份、旧身份与用户确认身份")
+    func matcherRevisionTrustPolicy() async throws {
+        let globalID = GlobalID(serverID: "nas", remoteID: "revision")
+        let current = ExternalMusicIdentity(
+            globalTrackID: globalID,
+            recordingMBID: "current-recording",
+            matchConfidence: 0.95,
+            matchMethod: .metadataExact
+        )
+        let legacy = ExternalMusicIdentity(
+            globalTrackID: globalID,
+            recordingMBID: "legacy-recording",
+            matchConfidence: 0.95,
+            matchMethod: .metadataExact,
+            matcherRevision: nil
+        )
+        let confirmedLegacy = ExternalMusicIdentity(
+            globalTrackID: globalID,
+            recordingMBID: "confirmed-recording",
+            matchConfidence: 0,
+            matchMethod: .userConfirmed,
+            matcherRevision: nil
+        )
+
+        #expect(current.matcherRevision == ExternalMusicIdentity.currentMatcherRevision)
+        #expect(current.isTrustedForCurrentMatcher)
+        #expect(legacy.matcherRevision == nil)
+        #expect(!legacy.isTrustedForCurrentMatcher)
+        #expect(confirmedLegacy.isTrustedForCurrentMatcher)
+
+        let store = try externalDataStore()
+        try await store.upsertExternalMusicIdentity(legacy)
+        #expect(try await store.externalMusicIdentity(for: globalID)?.matcherRevision == nil)
+    }
+
     @Test("中等置信度候选不自动写成正式身份")
     func candidateDoesNotAutoBind() async throws {
         let store = try externalDataStore()

@@ -1017,13 +1017,30 @@ public final class AuralisAppModel: ObservableObject {
         await mediaIntegration.audioSession.activate()
     }
 
-    /// AVPlayer timeControlStatus is the authoritative buffering/playback
-    /// signal for Music Haptics. UI progress remains a fallback display tick;
-    /// it is not used to decide whether future haptics may be committed.
+    /// AVPlayer timeControlStatus and periodic position samples are the
+    /// authoritative playback signal for Music Haptics. UI progress remains a
+    /// fallback display tick; it is not used to decide whether future
+    /// haptics may be committed while background audio is active.
     private func handlePlaybackTimingUpdate(_ update: PlaybackTimingUpdate) {
+        // A periodic sample that was queued immediately before a pause must
+        // not resurrect the paused state or sidecar. State transitions are
+        // delivered separately and remain authoritative for pause/buffering.
+        if !update.isStateTransition {
+            guard update.state == .playing, playbackState == .playing else { return }
+        }
         if let position = update.position {
             playbackPosition = position
+            // UI progress deliberately stops in the background, but AVPlayer's
+            // timing callback continues to be the authoritative haptics clock
+            // while background audio is active.
+            musicHaptics.updatePlaybackPosition(
+                position,
+                isPlaying: update.state == .playing,
+                rate: Double(update.rate),
+                source: .playbackEngine
+            )
         }
+        guard update.isStateTransition else { return }
         switch update.state {
         case .buffering, .stalled:
             playbackState = update.state == .buffering ? .buffering : .stalled
@@ -2463,10 +2480,13 @@ public final class AuralisAppModel: ObservableObject {
         defaults.set(Double(clamped), forKey: Self.playbackRateDefaultsKey)
         Task {
             await engine.setRate(clamped)
+            let authoritativePosition = await engine.currentPosition() ?? self.playbackPosition
+            self.playbackPosition = max(0, authoritativePosition)
             self.musicHaptics.updatePlaybackPosition(
-                self.playbackPosition,
+                authoritativePosition,
                 isPlaying: self.playbackState == .playing,
-                rate: Double(clamped)
+                rate: Double(clamped),
+                source: .playbackEngine
             )
             mediaIntegration.playbackStateChanged(
                 isPlaying: playbackState == .playing,
@@ -3156,11 +3176,14 @@ public final class AuralisAppModel: ObservableObject {
     private func cachedMusicHapticsIdentity(for track: Track) async -> MusicHapticsIdentity {
         let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
         let external = try? await catalogCoordinator.store.externalMusicIdentity(for: globalID)
-        let trusted = (external?.matchConfidence ?? 0) >= ExternalMusicIdentity.stableMatchThreshold
+        let trusted = external?.isTrustedForCurrentMatcher == true
         return MusicHapticsIdentity(
             track: track,
             isrc: trusted ? external?.isrc : nil,
-            recordingMBID: trusted ? external?.recordingMBID : nil
+            recordingMBID: trusted ? external?.recordingMBID : nil,
+            identityMatchMethod: trusted ? external?.matchMethod.rawValue : nil,
+            identityMatchConfidence: trusted ? external?.matchConfidence : nil,
+            identityMatcherRevision: trusted ? external?.matcherRevision : nil
         )
     }
 
@@ -5039,7 +5062,8 @@ public final class AuralisAppModel: ObservableObject {
             self.musicHaptics.updatePlaybackPosition(
                 self.playbackPosition,
                 isPlaying: self.playbackState == .playing,
-                rate: Double(self.playbackRate)
+                rate: Double(self.playbackRate),
+                source: .uiEstimate
             )
             // 注意：不在这里宣布“歌曲播完”。自然结束的唯一权威事件是
             // AVPlayerItemDidPlayToEndTime + PlayerItemBoundaryCoordinator。

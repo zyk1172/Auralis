@@ -111,7 +111,12 @@ private final class ExternalMusicURLProtocol: URLProtocol, @unchecked Sendable {
             "genres":[{"name":"Jazz"}],"tags":[{"name":"piano"}]}
             """
         } else if path.contains("/recording/rec-1") {
-            body = "{\"rating\":{\"value\":4.5,\"votes-count\":20}}"
+            body = """
+            {"title":"Exact Song","length":200000,"isrcs":["USAAA0000001"],
+            "artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-1"}}],
+            "releases":[{"id":"release-1","title":"Exact Album","release-group":{"id":"rg-1"}}],
+            "rating":{"value":4.5,"votes-count":20}}
+            """
         } else if path.contains("/review") {
             body = """
             {"count":2,"average_rating":{"rating":4.0,"count":3},"reviews":[
@@ -331,6 +336,79 @@ struct ExternalMusicServiceTests {
 
         #expect(result?.isrc == "USABC1234567")
         #expect(ExternalMusicURLProtocol.captured.isEmpty)
+    }
+
+    @Test("旧版稳定身份按当前 Matcher 重新验证并升级 revision")
+    func legacyStableIdentityIsRevalidated() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let globalID = GlobalID(serverID: "nas", remoteID: "legacy-valid")
+        try await store.upsertExternalMusicIdentity(ExternalMusicIdentity(
+            globalTrackID: globalID,
+            recordingMBID: "rec-1",
+            isrc: "USAAA0000001",
+            matchConfidence: 1,
+            matchMethod: .isrc,
+            matcherRevision: nil
+        ))
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            endpoints: .init(
+                musicBrainz: URL(string: "https://musicbrainz.test/ws/2")!,
+                critiqueBrainz: URL(string: "https://critiquebrainz.test/ws/1")!,
+                listenBrainz: URL(string: "https://listenbrainz.test/1")!
+            ),
+            musicBrainzMinimumInterval: 0,
+            preferencesProvider: { ExternalMusicPreferences() }
+        )
+
+        let result = await service.resolveIdentityForSystemHaptics(
+            track: externalMusicTrack(),
+            globalID: globalID
+        )
+
+        #expect(result?.matcherRevision == ExternalMusicIdentity.currentMatcherRevision)
+        #expect(result?.isrc == "USAAA0000001")
+        #expect(ExternalMusicURLProtocol.captured.count == 1)
+        #expect(try await store.externalMusicIdentity(for: globalID)?.matcherRevision == ExternalMusicIdentity.currentMatcherRevision)
+    }
+
+    @Test("旧版错误 ISRC 验证失败后删除并重新匹配")
+    func legacyWrongISRCIsReplacedByCurrentMatcher() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let globalID = GlobalID(serverID: "nas", remoteID: "legacy-wrong")
+        try await store.upsertExternalMusicIdentity(ExternalMusicIdentity(
+            globalTrackID: globalID,
+            recordingMBID: "rec-1",
+            isrc: "USCCC1234567",
+            matchConfidence: 1,
+            matchMethod: .isrc,
+            matcherRevision: nil
+        ))
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            endpoints: .init(
+                musicBrainz: URL(string: "https://musicbrainz.test/ws/2")!,
+                critiqueBrainz: URL(string: "https://critiquebrainz.test/ws/1")!,
+                listenBrainz: URL(string: "https://listenbrainz.test/1")!
+            ),
+            musicBrainzMinimumInterval: 0,
+            preferencesProvider: { ExternalMusicPreferences() }
+        )
+
+        let result = await service.resolveIdentityForSystemHaptics(
+            track: externalMusicTrack(),
+            globalID: globalID
+        )
+
+        #expect(result?.recordingMBID == "rec-1")
+        #expect(result?.isrc == "USAAA0000001")
+        #expect(result?.matcherRevision == ExternalMusicIdentity.currentMatcherRevision)
+        #expect(ExternalMusicURLProtocol.captured.count == 2)
+        #expect(try await store.externalMusicIdentity(for: globalID)?.isrc == "USAAA0000001")
     }
 
     @Test("Haptics 轻量身份解析遵守 MusicBrainz 隐私开关")

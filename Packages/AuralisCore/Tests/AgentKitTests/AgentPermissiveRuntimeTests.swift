@@ -1224,9 +1224,17 @@ struct AgentPermissiveRuntimeTests {
             )
         }
         // 确定性等待：非协作工具真正进入执行后再取消，消除固定 sleep 对调度时序的依赖。
-        let signalDeadline = Date().addingTimeInterval(3)
+        // `swift test --jobs 1` only serializes compilation: Swift Testing
+        // still schedules the complete test surface concurrently. This setup
+        // wait must therefore tolerate CI scheduler contention, while the
+        // cancellation assertion below remains the actual 500 ms contract.
+        let signalDeadline = Date().addingTimeInterval(15)
         while !(await bridge.nonCooperativeStarted.isSignaled()), Date() < signalDeadline {
             try? await Task.sleep(for: .milliseconds(5))
+        }
+        guard await bridge.nonCooperativeStarted.isSignaled() else {
+            Issue.record("非协作工具未在启动窗口内进入执行")
+            return
         }
         task.cancel()
         await withTaskGroup(of: Bool.self) { group in
