@@ -450,16 +450,27 @@ private func syntheticRhythmicSignal(sampleRate: Double, seconds: Int) -> [Float
     coordinator.updatePlaybackPosition(99, isPlaying: true)
     let background = await coordinator.diagnostics()
     #expect(background.playbackPosition == 12)
+    #expect(background.isInBackground)
+    #expect(!background.hapticsSuspended)
+
+    coordinator.updatePlaybackPosition(
+        24,
+        isPlaying: true,
+        source: .playbackEngine
+    )
+    let authoritativeBackground = await coordinator.diagnostics()
+    #expect(authoritativeBackground.playbackPosition == 24)
 
     coordinator.applicationDidBecomeActive(position: 37.5, isPlaying: false)
     let foreground = await coordinator.diagnostics()
     #expect(foreground.playbackPosition == 37.5)
-    #expect(foreground.foregroundRecoveryCount == 1)
+    #expect(!foreground.isInBackground)
+    #expect(foreground.foregroundRecoveryCount == 0)
 
     coordinator.applicationDidBecomeActive(position: 42, isPlaying: true)
     let recovered = await coordinator.diagnostics()
     #expect(recovered.playbackPosition == 42)
-    #expect(recovered.foregroundRecoveryCount == 2)
+    #expect(recovered.foregroundRecoveryCount == 0)
 }
 
 @Test func partialCheckpointRoundTripPreservesHoles() async throws {

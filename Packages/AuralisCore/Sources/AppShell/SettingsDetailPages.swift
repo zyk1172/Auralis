@@ -212,6 +212,12 @@ private struct MusicHapticsDiagnosticsPage: View {
                 LabeledContent("analysisFailureReason", value: displayDiagnostics.analysisFailureReason ?? "none")
                 LabeledContent("analysisFailureDetail", value: displayDiagnostics.analysisFailureDetail ?? "none")
                 LabeledContent("hasISRC", value: displayDiagnostics.hasReliableISRC ? "true" : "false")
+                LabeledContent("identityMatchMethod", value: displayDiagnostics.identityMatchMethod ?? "none")
+                LabeledContent(
+                    "identityMatchConfidence",
+                    value: displayDiagnostics.identityMatchConfidence.map { String(format: "%.3f", $0) } ?? "none"
+                )
+                LabeledContent("identityMatcherRevision", value: displayDiagnostics.identityMatcherRevision.map(String.init) ?? "legacy/none")
                 LabeledContent("systemTimelineAvailable", value: displayDiagnostics.systemTimelineAvailable ? "true" : "false")
                 LabeledContent("fullTimelineExists", value: displayDiagnostics.fullTimelineExists ? "true" : "false")
                 LabeledContent("partialExists", value: displayDiagnostics.partialExists ? "true" : "false")
@@ -268,6 +274,8 @@ private struct MusicHapticsDiagnosticsPage: View {
                 LabeledContent("audioBuffering", value: displayDiagnostics.audioBuffering ? "true" : "false")
                 LabeledContent("hapticEngineState", value: displayDiagnostics.hapticEngineState.rawValue)
                 LabeledContent("applicationSuspended", value: displayDiagnostics.applicationSuspended ? "true" : "false")
+                LabeledContent("isInBackground", value: displayDiagnostics.isInBackground ? "true" : "false")
+                LabeledContent("hapticsSuspended", value: displayDiagnostics.hapticsSuspended ? "true" : "false")
                 LabeledContent("lastHapticStopReason", value: displayDiagnostics.lastHapticStopReason ?? "none")
                 LabeledContent("foregroundRecoveryCount", value: "\(displayDiagnostics.foregroundRecoveryCount)")
                 LabeledContent("analyzedRanges", value: analyzedRangesDescription)

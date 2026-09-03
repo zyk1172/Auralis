@@ -83,6 +83,9 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
     public var effectiveEnabled: Bool
     public var source: MusicHapticsSource
     public var hasReliableISRC: Bool
+    public var identityMatchMethod: String?
+    public var identityMatchConfidence: Double?
+    public var identityMatcherRevision: Int?
     public var analysisState: String
     public var coverage: Double?
     public var timelineExists: Bool
@@ -141,6 +144,8 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
     public var audioBuffering: Bool
     public var hapticEngineState: MusicHapticsEngineState
     public var applicationSuspended: Bool
+    public var isInBackground: Bool
+    public var hapticsSuspended: Bool
     public var lastHapticStopReason: String?
     public var foregroundRecoveryCount: Int
 
@@ -152,6 +157,9 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         effectiveEnabled: Bool,
         source: MusicHapticsSource,
         hasReliableISRC: Bool,
+        identityMatchMethod: String? = nil,
+        identityMatchConfidence: Double? = nil,
+        identityMatcherRevision: Int? = nil,
         analysisState: String = "unknown",
         coverage: Double? = nil,
         timelineExists: Bool = false,
@@ -208,6 +216,8 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         audioBuffering: Bool = false,
         hapticEngineState: MusicHapticsEngineState = .notCreated,
         applicationSuspended: Bool = false,
+        isInBackground: Bool = false,
+        hapticsSuspended: Bool = false,
         lastHapticStopReason: String? = nil,
         foregroundRecoveryCount: Int = 0
     ) {
@@ -218,6 +228,9 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         self.effectiveEnabled = effectiveEnabled
         self.source = source
         self.hasReliableISRC = hasReliableISRC
+        self.identityMatchMethod = identityMatchMethod
+        self.identityMatchConfidence = identityMatchConfidence
+        self.identityMatcherRevision = identityMatcherRevision
         self.analysisState = analysisState
         self.coverage = coverage
         self.timelineExists = timelineExists || fullTimelineExists
@@ -274,6 +287,8 @@ public struct MusicHapticsDiagnostics: Sendable, Equatable {
         self.audioBuffering = audioBuffering
         self.hapticEngineState = hapticEngineState
         self.applicationSuspended = applicationSuspended
+        self.isInBackground = isInBackground
+        self.hapticsSuspended = hapticsSuspended
         self.lastHapticStopReason = lastHapticStopReason
         self.foregroundRecoveryCount = max(0, foregroundRecoveryCount)
     }
@@ -284,6 +299,15 @@ public enum MusicHapticsEngineState: String, Sendable, Equatable {
     case running
     case stopped
     case needsRestart
+}
+
+/// Identifies which component supplied a playback position to the haptics
+/// runtime. UI progress is an estimate and must not overwrite the clock while
+/// a background audio session is still advancing; AVPlayer timing is
+/// authoritative in both foreground and background.
+public enum MusicHapticsClockSource: String, Codable, Hashable, Sendable {
+    case uiEstimate
+    case playbackEngine
 }
 
 /// Maps absolute track time into the real-time domain used by Core Haptics.
@@ -1007,10 +1031,9 @@ public final class MusicHapticsCoordinator {
     private var preparedLookaheadWindows: [UUID: [MusicHapticsAnalysisWindow]] = [:]
     private var preparedLookaheadAnalyzers: [UUID: LookaheadMusicHapticsAnalyzer] = [:]
     private var preparedLookaheadTapSinks: [UUID: any MusicHapticsAnalysisSink] = [:]
-    /// A background transition may happen while AVQueuePlayer prepares the
-    /// next item. Retain only the source description and defer opening its
-    /// decoder until foreground; this keeps prepared-next analysis from
-    /// creating background network/PCM work solely for haptics.
+    /// A prepared-next transition may finish while the player is buffering or
+    /// paused. Retain only the source description until playback is allowed to
+    /// consume it; Scene background alone is not a reason to defer haptics.
     private var deferredPreparedLookaheadSources: [UUID: MusicHapticsAnalysisSource] = [:]
     private let maximumPreparedLookaheadWindows = 64
     private var currentIdentity: MusicHapticsIdentity?
@@ -1498,10 +1521,10 @@ public final class MusicHapticsCoordinator {
         let bufferedWindows = preparedLookaheadWindows.removeValue(forKey: preparation.id) ?? []
         preparation.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: playbackIsPlaying && runtimeOutputEnabled && !hapticsSuspended && !isInBackground,
+            isPlaying: playbackIsPlaying && runtimeOutputEnabled && !hapticsSuspended,
             rate: playbackRate
         )
-        if hapticsSuspended || isInBackground || audioBuffering || !runtimeOutputEnabled || !playbackIsPlaying {
+        if hapticsSuspended || audioBuffering || !runtimeOutputEnabled || !playbackIsPlaying {
             preparation.lookaheadAnalyzer?.pause()
         } else {
             preparation.lookaheadAnalyzer?.resume()
@@ -1514,7 +1537,7 @@ public final class MusicHapticsCoordinator {
             source = .system
         case let .custom(timeline):
             do {
-                if isPlaying, runtimeOutputEnabled, custom.canProduceOutput, !hapticsSuspended, !isInBackground {
+                if isPlaying, runtimeOutputEnabled, custom.canProduceOutput, !hapticsSuspended {
                     try custom.play(
                         timeline,
                         offset: position,
@@ -1539,7 +1562,7 @@ public final class MusicHapticsCoordinator {
                 identity: preparation.identity
             )
             failedLookaheadPreparationIDs.remove(preparation.id)
-            if !runtimeOutputEnabled || !isPlaying || isInBackground {
+            if !runtimeOutputEnabled || !isPlaying || hapticsSuspended {
                 preparation.lookaheadAnalyzer?.pause()
                 preparation.realtimeTapSink?.pause()
             } else {
@@ -1572,7 +1595,6 @@ public final class MusicHapticsCoordinator {
         if isPlaying,
            runtimeOutputEnabled,
            !hapticsSuspended,
-           !isInBackground,
            !audioBuffering {
             let deferredPreparedSources = deferredPreparedLookaheadSources
             deferredPreparedLookaheadSources.removeAll()
@@ -1595,7 +1617,6 @@ public final class MusicHapticsCoordinator {
             && !audioBuffering
             && runtimeOutputEnabled
             && !hapticsSuspended
-            && !isInBackground
         analyzer.updatePlaybackPosition(0, isPlaying: canStart, rate: 1)
         if !canStart {
             analyzer.pause()
@@ -1677,20 +1698,9 @@ public final class MusicHapticsCoordinator {
         audioBuffering = false
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: runtimeOutputEnabled && !hapticsSuspended && !isInBackground,
+            isPlaying: runtimeOutputEnabled && !hapticsSuspended,
             rate: playbackRate
         )
-        if isInBackground {
-            // Do not restart decoders or create a new Core Haptics player in
-            // the background. Existing scheduled output is left untouched.
-            activeAnalysisSink?.pause()
-            currentPreparation?.lookaheadAnalyzer?.pause()
-            currentPreparation?.realtimeTapSink?.pause()
-            preparedLookaheadAnalyzers.values.forEach { $0.pause() }
-            preparedLookaheadTapSinks.values.forEach { $0.pause() }
-            rollingScheduler.pause()
-            return
-        }
         if hapticsSuspended || !runtimeOutputEnabled {
             activeAnalysisSink?.pause()
             currentPreparation?.lookaheadAnalyzer?.pause()
@@ -1752,17 +1762,17 @@ public final class MusicHapticsCoordinator {
         playbackIsPlaying = playing
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: playing && runtimeOutputEnabled && !hapticsSuspended && !isInBackground,
+            isPlaying: playing && runtimeOutputEnabled && !hapticsSuspended,
             rate: playbackRate
         )
-        if playing && runtimeOutputEnabled && !hapticsSuspended && !isInBackground {
+        if playing && runtimeOutputEnabled && !hapticsSuspended {
             currentPreparation?.lookaheadAnalyzer?.resume()
             currentPreparation?.realtimeTapSink?.resume()
         } else {
             currentPreparation?.lookaheadAnalyzer?.pause()
             currentPreparation?.realtimeTapSink?.pause()
         }
-        guard !hapticsSuspended, !isInBackground, runtimeOutputEnabled else { return }
+        guard !hapticsSuspended, runtimeOutputEnabled else { return }
         activeAnalysisSink?.seek(to: currentPosition)
         currentPreparation?.realtimeTapSink?.seek(to: currentPosition)
         if source == .custom {
@@ -1783,7 +1793,8 @@ public final class MusicHapticsCoordinator {
     public func updatePlaybackPosition(
         _ position: TimeInterval,
         isPlaying: Bool,
-        rate: Double = 1
+        rate: Double = 1,
+        source: MusicHapticsClockSource = .uiEstimate
     ) {
         // This callback is driven by the UI/progress display and may arrive
         // after the scene has already entered the background.  Background
@@ -1791,7 +1802,7 @@ public final class MusicHapticsCoordinator {
         // tick here would overwrite that clock and make the foreground
         // rebase start from stale data.  The next active transition supplies
         // the authoritative AVPlayer position explicitly.
-        guard !isInBackground else { return }
+        guard source == .playbackEngine || !isInBackground else { return }
         let previousPosition = currentPosition
         currentPosition = max(0, position)
         let safeRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
@@ -1799,7 +1810,7 @@ public final class MusicHapticsCoordinator {
         playbackRate = safeRate
         playbackIsPlaying = isPlaying
         if isPlaying { audioBuffering = false }
-        let analysisCanRun = isPlaying && !audioBuffering && runtimeOutputEnabled && !hapticsSuspended && !isInBackground
+        let analysisCanRun = isPlaying && !audioBuffering && runtimeOutputEnabled && !hapticsSuspended
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
             isPlaying: analysisCanRun,
@@ -1819,13 +1830,13 @@ public final class MusicHapticsCoordinator {
             activeAnalysisSink?.seek(to: currentPosition)
             currentPreparation?.realtimeTapSink?.seek(to: currentPosition)
         }
-        if rateChanged, runtimeOutputEnabled, !hapticsSuspended, !isInBackground, !audioBuffering {
+        if rateChanged, runtimeOutputEnabled, !hapticsSuspended, !audioBuffering {
             rebaseForPlaybackRateChange(position: currentPosition, isPlaying: isPlaying)
         }
         guard case .analyzeLookahead = currentPlan,
               runtimeOutputEnabled,
               !hapticsSuspended,
-              !isInBackground else { return }
+              !audioBuffering else { return }
         pumpScheduler(position: currentPosition, isPlaying: isPlaying)
     }
 
@@ -1850,7 +1861,9 @@ public final class MusicHapticsCoordinator {
         rollingScheduler.pause()
         activeAnalysisSink?.pause()
         currentPreparation?.lookaheadAnalyzer?.pause()
+        currentPreparation?.realtimeTapSink?.pause()
         preparedLookaheadAnalyzers.values.forEach { $0.pause() }
+        preparedLookaheadTapSinks.values.forEach { $0.pause() }
 
         scheduleCurrentCheckpoint()
     }
@@ -1985,18 +1998,12 @@ public final class MusicHapticsCoordinator {
     }
 
     /// A background scene transition alone does not prove that Core Haptics
-    /// has been suspended. Keep already-created output alive, but pause all
-    /// decoder/DSP sidecars and stop scheduling new future windows. Audio has
-    /// priority over optional haptic analysis while the app is backgrounded.
+    /// has been suspended. Record the lifecycle boundary only; the running
+    /// audio-backed analysis and scheduler remain eligible to advance. The
+    /// Core Haptics stoppedHandler is the only path that enters suspension.
     public func applicationDidEnterBackground() {
         isInBackground = true
         custom.applicationDidEnterBackground()
-        rollingScheduler.pause()
-        activeAnalysisSink?.pause()
-        currentPreparation?.lookaheadAnalyzer?.pause()
-        currentPreparation?.realtimeTapSink?.pause()
-        preparedLookaheadAnalyzers.values.forEach { $0.pause() }
-        preparedLookaheadTapSinks.values.forEach { $0.pause() }
     }
 
     /// Rebase all future output from the authoritative AVPlayer position after
@@ -2008,20 +2015,28 @@ public final class MusicHapticsCoordinator {
         rate: Double = 1
     ) {
         isInBackground = false
-        hapticsSuspended = false
         currentPosition = max(0, position)
         playbackRate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
         playbackIsPlaying = isPlaying
         audioBuffering = false
-        foregroundRecoveryCount += 1
+        let wasHapticsSuspended = hapticsSuspended
+            || custom.applicationSuspended
+            || custom.state == .needsRestart
         if runtimeOutputEnabled {
             custom.restartIfNeeded()
+        }
+        // Do not clear the coordinator gate until the output engine confirms
+        // that its actual suspension/restart state has recovered. A Scene
+        // activation by itself is not a haptics recovery.
+        hapticsSuspended = custom.applicationSuspended || custom.state == .needsRestart
+        if wasHapticsSuspended, !hapticsSuspended {
+            foregroundRecoveryCount += 1
         }
         // Any lookahead decoder withheld while backgrounded starts only after
         // the authoritative AVPlayer position has been rebased, and only when
         // audio is actually playing. A paused foreground scene must not open
         // an optional decoder just because it became active.
-        if isPlaying, runtimeOutputEnabled {
+        if isPlaying, runtimeOutputEnabled, !hapticsSuspended {
             if case let .analyzeLookahead(request) = currentPlan {
                 currentPreparation?.lookaheadAnalyzer?.start(source: request.analysisSource)
             }
@@ -2033,10 +2048,10 @@ public final class MusicHapticsCoordinator {
         }
         currentPreparation?.lookaheadAnalyzer?.updatePlaybackPosition(
             currentPosition,
-            isPlaying: isPlaying && runtimeOutputEnabled && !audioBuffering,
+            isPlaying: isPlaying && runtimeOutputEnabled && !audioBuffering && !hapticsSuspended,
             rate: playbackRate
         )
-        if isPlaying && runtimeOutputEnabled && !audioBuffering {
+        if isPlaying && runtimeOutputEnabled && !audioBuffering && !hapticsSuspended {
             activeAnalysisSink?.resume()
             currentPreparation?.lookaheadAnalyzer?.resume()
             currentPreparation?.realtimeTapSink?.resume()
@@ -2049,7 +2064,7 @@ public final class MusicHapticsCoordinator {
             preparedLookaheadAnalyzers.values.forEach { $0.pause() }
             preparedLookaheadTapSinks.values.forEach { $0.pause() }
         }
-        guard isPlaying, runtimeOutputEnabled else {
+        guard isPlaying, runtimeOutputEnabled, !hapticsSuspended else {
             custom.stop()
             rollingScheduler.updateClock(position: currentPosition, isPlaying: false)
             if !runtimeOutputEnabled { source = .none }
@@ -2330,6 +2345,9 @@ public final class MusicHapticsCoordinator {
             effectiveEnabled: preference.effective(globalEnabled: globalEnabled),
             source: source,
             hasReliableISRC: currentIdentity?.isrc != nil,
+            identityMatchMethod: currentIdentity?.identityMatchMethod,
+            identityMatchConfidence: currentIdentity?.identityMatchConfidence,
+            identityMatcherRevision: currentIdentity?.identityMatcherRevision,
             analysisState: analysisState,
             coverage: currentCoverage,
             timelineExists: fullTimelineExists,
@@ -2388,6 +2406,8 @@ public final class MusicHapticsCoordinator {
             audioBuffering: audioBuffering,
             hapticEngineState: custom.state,
             applicationSuspended: custom.applicationSuspended,
+            isInBackground: isInBackground,
+            hapticsSuspended: hapticsSuspended,
             lastHapticStopReason: custom.lastStopReason,
             foregroundRecoveryCount: foregroundRecoveryCount
         )
@@ -2802,7 +2822,6 @@ public final class MusicHapticsCoordinator {
         if playbackIsPlaying,
            runtimeOutputEnabled,
            !hapticsSuspended,
-           !isInBackground,
            !audioBuffering {
             fallback.resume()
         } else {
@@ -2869,7 +2888,6 @@ public final class MusicHapticsCoordinator {
               playbackIsPlaying,
               runtimeOutputEnabled,
               !hapticsSuspended,
-              !isInBackground,
               !audioBuffering,
               currentPlan.kind == expectedPlan
         else { return }
@@ -3090,7 +3108,6 @@ public final class MusicHapticsCoordinator {
         )
         if runtimeOutputEnabled,
            !hapticsSuspended,
-           !isInBackground,
            !audioBuffering {
             playScheduledWindows(scheduled, position: currentPosition)
         }

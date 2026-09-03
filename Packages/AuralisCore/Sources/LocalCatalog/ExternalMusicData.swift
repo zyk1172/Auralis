@@ -14,6 +14,10 @@ public struct ExternalMusicIdentity: Codable, Sendable, Hashable {
     /// Only identities at or above this score may be persisted as a stable
     /// recording binding or passed to System Music Haptics.
     public static let stableMatchThreshold = 0.90
+    /// Bump this whenever the matching/scoring rules change in a way that can
+    /// alter the recording binding. Legacy automatic identities are lazily
+    /// revalidated instead of being trusted by their timestamp alone.
+    public static let currentMatcherRevision = 2
 
     public let globalTrackID: GlobalID
     public var recordingMBID: String?
@@ -23,6 +27,8 @@ public struct ExternalMusicIdentity: Codable, Sendable, Hashable {
     public var isrc: String?
     public var matchConfidence: Double
     public var matchMethod: ExternalMusicMatchMethod
+    /// Nil means the identity was written before matcher revisions existed.
+    public var matcherRevision: Int?
     public var verifiedAt: Date
 
     public init(
@@ -34,6 +40,7 @@ public struct ExternalMusicIdentity: Codable, Sendable, Hashable {
         isrc: String? = nil,
         matchConfidence: Double,
         matchMethod: ExternalMusicMatchMethod,
+        matcherRevision: Int? = ExternalMusicIdentity.currentMatcherRevision,
         verifiedAt: Date = .now
     ) {
         self.globalTrackID = globalTrackID
@@ -44,6 +51,7 @@ public struct ExternalMusicIdentity: Codable, Sendable, Hashable {
         self.isrc = Self.normalizedISRC(isrc)
         self.matchConfidence = min(max(matchConfidence, 0), 1)
         self.matchMethod = matchMethod
+        self.matcherRevision = matcherRevision
         self.verifiedAt = verifiedAt
     }
 
@@ -65,6 +73,16 @@ public struct ExternalMusicIdentity: Codable, Sendable, Hashable {
         return scalars.reduce(into: "") { result, scalar in
             result.unicodeScalars.append(scalar)
         }
+    }
+
+    /// User confirmation is an explicit override and is never invalidated by
+    /// an automatic matcher revision. All other identities must be both
+    /// stable and produced by the current matcher before they can be trusted
+    /// without a lazy revalidation.
+    public var isTrustedForCurrentMatcher: Bool {
+        matchMethod == .userConfirmed
+            || (matchConfidence >= Self.stableMatchThreshold
+                && matcherRevision == Self.currentMatcherRevision)
     }
 }
 
@@ -259,6 +277,7 @@ public extension LocalCatalogStore {
             isrc: row["isrc"]?.string,
             matchConfidence: row["match_confidence"]?.double ?? 0,
             matchMethod: method,
+            matcherRevision: row["matcher_revision"]?.int.map(Int.init),
             verifiedAt: Date(timeIntervalSince1970: row["verified_at"]?.double ?? 0)
         )
     }
@@ -268,8 +287,8 @@ public extension LocalCatalogStore {
             """
             INSERT INTO external_music_identities(
                 global_track_id, recording_mbid, release_mbid, release_group_mbid,
-                artist_mbid, isrc, match_confidence, match_method, verified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                artist_mbid, isrc, match_confidence, match_method, matcher_revision, verified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(global_track_id) DO UPDATE SET
                 recording_mbid=excluded.recording_mbid,
                 release_mbid=excluded.release_mbid,
@@ -278,6 +297,7 @@ public extension LocalCatalogStore {
                 isrc=excluded.isrc,
                 match_confidence=excluded.match_confidence,
                 match_method=excluded.match_method,
+                matcher_revision=excluded.matcher_revision,
                 verified_at=excluded.verified_at
             """,
             [
@@ -289,6 +309,7 @@ public extension LocalCatalogStore {
                 identity.isrc.map(SQLiteValue.text) ?? .null,
                 .real(identity.matchConfidence),
                 .text(identity.matchMethod.rawValue),
+                identity.matcherRevision.map { .integer(Int64($0)) } ?? .null,
                 .real(identity.verifiedAt.timeIntervalSince1970),
             ]
         )

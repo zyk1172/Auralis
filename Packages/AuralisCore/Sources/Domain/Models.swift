@@ -581,13 +581,23 @@ public struct PlaybackTimingUpdate: Codable, Hashable, Sendable {
     public let state: PlaybackTimingState
     public let position: TimeInterval?
     public let rate: Float
+    /// `true` for a timeControlStatus/state transition, `false` for a
+    /// periodic AVPlayer position sample. Periodic samples advance sidecars
+    /// without replaying pause/resume transition effects.
+    public let isStateTransition: Bool
 
-    public init(state: PlaybackTimingState, position: TimeInterval? = nil, rate: Float = 1) {
+    public init(
+        state: PlaybackTimingState,
+        position: TimeInterval? = nil,
+        rate: Float = 1,
+        isStateTransition: Bool = true
+    ) {
         self.state = state
         self.position = position.flatMap { value in
             value.isFinite ? max(0, value) : nil
         }
         self.rate = min(max(rate.isFinite ? rate : 1, 0.5), 2)
+        self.isStateTransition = isStateTransition
     }
 }
 
