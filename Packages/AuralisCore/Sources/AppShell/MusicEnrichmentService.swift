@@ -13,10 +13,6 @@ public actor MusicEnrichmentService: AgentExternalMusicService {
     private let catalog: LocalCatalogStore
     /// 同一 GlobalID 并发触发（歌曲信息 + Agent + 歌词补全）时共享同一个请求。
     private var inFlight: [EnrichmentKey: Task<AgentExternalMusicResult, Never>] = [:]
-    /// Haptics identity requests have a separate purpose from full enrichment
-    /// and therefore a separate in-flight pool. Concurrent playback,
-    /// preloading and UI requests still share one MusicBrainz identity round.
-    private var identityInFlight: [GlobalID: Task<ExternalMusicIdentity?, Never>] = [:]
 
     private struct EnrichmentKey: Hashable {
         let globalID: GlobalID
@@ -66,15 +62,11 @@ public actor MusicEnrichmentService: AgentExternalMusicService {
         track: Track,
         globalID: GlobalID
     ) async -> ExternalMusicIdentity? {
-        if let existing = identityInFlight[globalID] {
-            return await existing.value
-        }
-        let task = Task { [engine] in
-            await engine.resolveIdentityForSystemHaptics(track: track, globalID: globalID)
-        }
-        identityInFlight[globalID] = task
-        defer { identityInFlight[globalID] = nil }
-        return await task.value
+        // The engine owns the identity-only in-flight pool. Keeping this
+        // entry point as a thin adapter is important: full enrichment and
+        // System Music Haptics must converge on the same search/lookup task
+        // even when they enter through different AppShell call paths.
+        await engine.resolveIdentityForSystemHaptics(track: track, globalID: globalID)
     }
 
     /// 普通清缓存（保留 Stable Identity）。

@@ -165,6 +165,60 @@ struct AVFoundationAudioFidelityTests {
         #expect(!engine.hasPreparedMusicHapticsForTesting)
         engine.stop()
     }
+
+    @Test("Late system Haptics sidecar does not recreate the current audio item")
+    @MainActor
+    func lateSystemHapticsKeepsCurrentAudioItem() async throws {
+        let originalURL = try #require(
+            URL(string: "https://media.example.test/late-upgrade.flac?quality=original")
+        )
+        let track = Track(
+            id: TrackID(rawValue: "late-upgrade"),
+            serverID: "server",
+            albumID: "album",
+            artistID: "artist",
+            title: "Late Upgrade",
+            artistName: "Artist",
+            albumTitle: "Album",
+            duration: 60,
+            streamURL: originalURL
+        )
+        let engine = AVFoundationPlaybackEngine()
+        try await engine.play(track: track)
+        let currentItem = try #require(engine.currentPlaybackItemForTesting)
+        let generation = engine.playGenerationForTesting
+
+        let identity = MusicHapticsIdentity(
+            globalID: "server:late-upgrade",
+            serverID: "server",
+            remoteID: "late-upgrade",
+            isrc: "USAAA0000001",
+            title: track.title,
+            artist: track.artistName,
+            album: track.albumTitle,
+            durationMilliseconds: 60_000
+        )
+        let preparation = MusicHapticsPlaybackPreparation(
+            identity: identity,
+            favorite: false,
+            plan: .system,
+            reason: "late_system_upgrade",
+            systemAvailability: MusicHapticsSystemAvailability(
+                hasISRC: true,
+                active: true,
+                timelineAvailable: true
+            ),
+            fullTimelineExists: false,
+            partialExists: false,
+            analysisSink: nil
+        )
+
+        #expect(engine.installActiveMusicHapticsPlaybackPreparation(preparation))
+        #expect(engine.currentPlaybackItemForTesting === currentItem)
+        #expect(engine.playGenerationForTesting == generation)
+        #expect(engine.currentPlaybackURLForTesting == originalURL)
+        engine.stop()
+    }
 }
 
 private final class FidelityNoopSink: MusicHapticsAnalysisSink, @unchecked Sendable {

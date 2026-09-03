@@ -76,6 +76,18 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
     private var lastMusicBrainzRequestAt: Date?
     private let userAgent: String
     private let preferencesProvider: @Sendable () -> ExternalMusicPreferences
+    /// MusicBrainz recording identity is shared by Haptics and full enrichment.
+    /// The callers have different post-processing needs, but they must never
+    /// start two equivalent search/lookup rounds for the same GlobalID.
+    private struct IdentityResolution: Sendable {
+        let identity: ExternalMusicIdentity?
+        let candidates: [ExternalMusicIdentityCandidate]
+    }
+    private struct ScoredCandidate: Sendable {
+        let candidate: ExternalMusicIdentityCandidate
+        let score: MusicBrainzCandidateScore
+    }
+    private var identityResolutionInFlight: [GlobalID: Task<IdentityResolution, Never>] = [:]
 
     public init(
         catalog: LocalCatalogStore,
@@ -123,42 +135,97 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         }
 
         guard !Task.isCancelled else { return cachedIdentity }
+        let resolution = await resolveStableIdentity(
+            track: track,
+            globalID: globalID,
+            cachedIdentity: cachedIdentity
+        )
+        if resolution.identity?.isrc != nil {
+            externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=musicbrainz_identity")
+        } else if !resolution.candidates.isEmpty {
+            externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=ambiguous_candidates")
+        }
+        return resolution.identity
+    }
+
+    /// Shared identity-only path used by both Haptics and full enrichment.
+    /// It owns the network round, while callers remain free to impose their
+    /// own latency budget or continue with community metadata afterward.
+    private func resolveStableIdentity(
+        track: Track,
+        globalID: GlobalID,
+        cachedIdentity: ExternalMusicIdentity? = nil
+    ) async -> IdentityResolution {
+        if let existing = identityResolutionInFlight[globalID] {
+            return await existing.value
+        }
+        let task = Task { [self] in
+            await self.resolveStableIdentityUnshared(
+                track: track,
+                globalID: globalID,
+                cachedIdentity: cachedIdentity
+            )
+        }
+        identityResolutionInFlight[globalID] = task
+        defer { identityResolutionInFlight[globalID] = nil }
+        return await task.value
+    }
+
+    private func resolveStableIdentityUnshared(
+        track: Track,
+        globalID: GlobalID,
+        cachedIdentity: ExternalMusicIdentity?
+    ) async -> IdentityResolution {
+        let resolvedCachedIdentity: ExternalMusicIdentity?
+        if let cachedIdentity {
+            resolvedCachedIdentity = cachedIdentity
+        } else {
+            resolvedCachedIdentity = try? await catalog.externalMusicIdentity(for: globalID)
+        }
+        guard !Task.isCancelled else {
+            return IdentityResolution(identity: resolvedCachedIdentity, candidates: [])
+        }
         let preferences = preferencesProvider()
         guard preferences.isEnabled(.musicBrainz) else {
             externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=privacy_disabled")
-            return cachedIdentity
+            return IdentityResolution(identity: resolvedCachedIdentity, candidates: [])
         }
 
-        if let cachedIdentity,
-           isStableIdentity(cachedIdentity),
-           let recordingMBID = cachedIdentity.recordingMBID {
-            do {
-                let lookup = try await musicBrainzIdentityLookup(mbid: recordingMBID)
-                let detail = Self.detail(from: lookup, mbid: recordingMBID)
-                let resolved = await backfillMusicBrainzIdentity(cachedIdentity, detail: detail)
-                if resolved?.isrc != nil {
-                    externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=musicbrainz_lookup_isrc")
-                }
-                return resolved
-            } catch {
-                externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=lookup_failed")
-                return cachedIdentity
+        if let resolvedCachedIdentity,
+           isStableIdentity(resolvedCachedIdentity),
+           resolvedCachedIdentity.recordingMBID != nil {
+            // A valid cached ISRC is already the strongest identity and must
+            // remain a zero-network fast path for Haptics.
+            if resolvedCachedIdentity.isrc != nil {
+                return IdentityResolution(identity: resolvedCachedIdentity, candidates: [])
             }
+            let resolved = await lookupISRCIdentity(resolvedCachedIdentity)
+            return IdentityResolution(identity: resolved, candidates: [])
+        }
+
+        if let resolvedCachedIdentity, let isrc = resolvedCachedIdentity.isrc, !isrc.isEmpty {
+            let match = await matchByISRC(isrc, track: track, globalID: globalID)
+            return IdentityResolution(identity: match.identity, candidates: match.candidates)
         }
 
         let match = await match(track: track, globalID: globalID)
-        guard let identity = match.identity else { return nil }
-        if identity.isrc != nil {
-            externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=musicbrainz_search_match")
-            return identity
+        guard let identity = match.identity else {
+            return IdentityResolution(identity: nil, candidates: match.candidates)
         }
+        guard identity.isrc == nil, identity.recordingMBID != nil else {
+            return IdentityResolution(identity: identity, candidates: match.candidates)
+        }
+        let resolved = await lookupISRCIdentity(identity)
+        return IdentityResolution(identity: resolved, candidates: match.candidates)
+    }
 
+    private func lookupISRCIdentity(_ identity: ExternalMusicIdentity) async -> ExternalMusicIdentity {
         guard let recordingMBID = identity.recordingMBID else { return identity }
         do {
             let lookup = try await musicBrainzIdentityLookup(mbid: recordingMBID)
             let detail = Self.detail(from: lookup, mbid: recordingMBID)
-            let resolved = await backfillMusicBrainzIdentity(identity, detail: detail)
-            if resolved?.isrc != nil {
+            let resolved = await backfillMusicBrainzIdentity(identity, detail: detail) ?? identity
+            if resolved.isrc != nil {
                 externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=musicbrainz_lookup_isrc")
             }
             return resolved
@@ -193,20 +260,16 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
 
         var identity: ExternalMusicIdentity?
         var candidates: [ExternalMusicIdentityCandidate] = []
-        // MBID 是稳定外部身份，不因为本地校验时间过期而丢弃；指标有自己的刷新周期。
-        if let cachedIdentity,
-           isStableIdentity(cachedIdentity),
-           cachedIdentity.recordingMBID != nil {
-            identity = cachedIdentity
-        } else if preferences.musicBrainzEnabled,
-                  let cachedIdentity, let isrc = cachedIdentity.isrc, !isrc.isEmpty {
-            let match = await matchByISRC(isrc, track: track, globalID: globalID)
-            identity = match.identity
-            candidates = match.candidates
-        } else if preferences.musicBrainzEnabled {
-            let match = await match(track: track, globalID: globalID)
-            identity = match.identity
-            candidates = match.candidates
+        // Haptics and full enrich share this identity-only round. Full enrich
+        // continues to metrics/reviews only after the shared identity returns.
+        if preferences.musicBrainzEnabled {
+            let resolution = await resolveStableIdentity(
+                track: track,
+                globalID: globalID,
+                cachedIdentity: cachedIdentity
+            )
+            identity = resolution.identity
+            candidates = resolution.candidates
         } else {
             // MusicBrainz 被单独关闭时只能使用本地已有身份，绝不为了其他来源偷偷匹配。
             identity = cachedIdentity
@@ -228,7 +291,10 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         // A full Recording lookup can also be the first place an ISRC appears.
         // Re-read the catalog so the stable identity returned to callers is
         // the same canonical object persisted for the next playback.
-        identity = (try? await catalog.externalMusicIdentity(for: globalID)) ?? identity
+        if let persistedIdentity = try? await catalog.externalMusicIdentity(for: globalID),
+           isStableIdentity(persistedIdentity) {
+            identity = persistedIdentity
+        }
         let critiqueBrainz = await metric(
             for: .critiqueBrainz, identity: identity,
             cached: cachedValue(.critiqueBrainz), preferences: preferences
@@ -430,22 +496,29 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             let response = try JSONDecoder().decode(MBSearchResponse.self, from: data)
             let scored = response.recordings.map { recording in
                 makeCandidate(recording, track: track, globalID: globalID)
-            }.sorted { $0.confidence > $1.confidence }
+            }.sorted { lhs, rhs in
+                lhs.score.rawConfidence > rhs.score.rawConfidence
+            }
 
             guard let best = scored.first else {
                 try? await catalog.replaceExternalMusicCandidates([], for: globalID)
                 return (nil, [])
             }
-            if best.confidence >= ExternalMusicIdentity.stableMatchThreshold {
+            let winnerMargin = scored.dropFirst().first.map {
+                best.score.rawConfidence - $0.score.rawConfidence
+            } ?? .infinity
+            let isUnambiguous = winnerMargin >= MusicBrainzCandidateScorer.minimumWinnerMargin
+            if best.score.confidence >= ExternalMusicIdentity.stableMatchThreshold,
+               isUnambiguous {
                 let identity = ExternalMusicIdentity(
                     globalTrackID: globalID,
-                    recordingMBID: best.recordingMBID,
-                    releaseMBID: best.releaseMBID,
-                    releaseGroupMBID: best.releaseGroupMBID,
-                    artistMBID: best.artistMBID,
-                    isrc: best.isrc,
-                    matchConfidence: best.confidence,
-                    matchMethod: best.matchMethod,
+                    recordingMBID: best.candidate.recordingMBID,
+                    releaseMBID: best.candidate.releaseMBID,
+                    releaseGroupMBID: best.candidate.releaseGroupMBID,
+                    artistMBID: best.candidate.artistMBID,
+                    isrc: best.candidate.isrc,
+                    matchConfidence: best.score.confidence,
+                    matchMethod: best.candidate.matchMethod,
                     verifiedAt: now()
                 )
                 try? await catalog.upsertExternalMusicIdentity(identity)
@@ -453,7 +526,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
                 return (identity, [])
             }
 
-            let medium = Array(scored.filter { $0.confidence >= 0.65 }.prefix(5))
+            let medium = Array(scored.map(\.candidate).filter { $0.confidence >= 0.65 }.prefix(5))
             try? await catalog.replaceExternalMusicCandidates(medium, for: globalID)
             return (nil, medium)
         } catch {
@@ -483,12 +556,18 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
             let data = try await request(url: url, musicBrainz: true)
             let response = try JSONDecoder().decode(MBSearchResponse.self, from: data)
-            let recording = response.recordings.first { recording in
+            guard let recording = response.recordings.first(where: { recording in
                 recording.isrcs?.contains {
                     ExternalMusicIdentity.normalizedISRC($0) == normalizedISRC
                 } == true
-            } ?? response.recordings.first
-            guard let recording else { return (nil, []) }
+            }) else {
+                // ISRC is a strong recording identity. Never fall back to
+                // API order when the returned entities do not contain it.
+                // Remove the unverified ISRC-only cache as well, otherwise a
+                // later Haptics call could treat it as a Stable Identity.
+                try? await catalog.removeExternalMusicIdentity(for: globalID)
+                return (nil, [])
+            }
             // ISRC 对 Recording 匹配权重很高，但 Release 仍要结合专辑/艺人/时长选择，
             // 不直接拿 releases.first。
             let release = recording.releases?.max { lhs, rhs in
@@ -501,7 +580,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
                 releaseMBID: release?.id,
                 releaseGroupMBID: release?.releaseGroup?.id,
                 artistMBID: recording.artistCredit?.first?.artist?.id,
-                isrc: recording.isrcs?.compactMap(ExternalMusicIdentity.normalizedISRC).first ?? normalizedISRC,
+                isrc: normalizedISRC,
                 matchConfidence: 1,
                 matchMethod: .isrc,
                 verifiedAt: now()
@@ -518,12 +597,18 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         _ recording: MBRecording,
         track: Track,
         globalID: GlobalID
-    ) -> ExternalMusicIdentityCandidate {
-        MusicBrainzCandidateScorer.candidate(
-            recording: recording,
-            track: track,
-            globalID: globalID,
-            createdAt: now()
+    ) -> ScoredCandidate {
+        ScoredCandidate(
+            candidate: MusicBrainzCandidateScorer.candidate(
+                recording: recording,
+                track: track,
+                globalID: globalID,
+                createdAt: now()
+            ),
+            score: MusicBrainzCandidateScorer.score(
+                recording: recording,
+                track: track
+            )
         )
     }
 

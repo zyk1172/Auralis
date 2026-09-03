@@ -18,6 +18,9 @@ struct MusicBrainzCandidateScore: Sendable, Equatable {
     let durationDifference: TimeInterval?
     let hardVersionMismatch: Bool
     let hardDurationMismatch: Bool
+    /// Unclamped score used to order candidates and calculate the winner
+    /// margin. Different recordings may otherwise all appear as 1.0.
+    let rawConfidence: Double
     let confidence: Double
 }
 
@@ -27,7 +30,7 @@ struct MusicBrainzCandidateScore: Sendable, Equatable {
 struct MusicBrainzCandidateScorer {
     static let softVersionMarkers: Set<String> = [
         "remaster", "remastered", "deluxe", "anniversary", "edition",
-        "explicit", "mono", "stereo", "bonus", "version",
+        "explicit", "mono", "stereo", "bonus",
         "重制", "重制版", "豪华", "豪华版", "纪念", "纪念版",
     ]
 
@@ -35,6 +38,16 @@ struct MusicBrainzCandidateScorer {
         "live", "concert", "acoustic", "unplugged", "instrumental",
         "karaoke", "cover", "demo", "remix", "现场", "现场版",
         "演唱会", "不插电", "纯音乐", "伴奏", "翻唱", "小样",
+        "re recorded", "rerecorded", "re recording", "new recording",
+        "new version", "taylor s version", "taylor version",
+        "重新录制", "重录", "重录版", "新版录音", "新版本",
+    ]
+
+    static let minimumWinnerMargin = 0.05
+
+    private static let softVersionContextMarkers: Set<String> = [
+        "remaster", "remastered", "deluxe", "anniversary",
+        "重制", "重制版", "豪华", "豪华版", "纪念", "纪念版",
     ]
 
     private static let titleCollaborationMarkers: Set<String> = ["feat", "featuring", "ft"]
@@ -74,7 +87,7 @@ struct MusicBrainzCandidateScorer {
         let titleScore = titleExact ? 0.30 : 0.16 * titleSimilarity
         let artistScore = artistExact ? 0.22 : 0.18 * artistSimilarity
         let strongMatchBonus = titleExact && artistSimilarity >= 0.85 ? 0.08 : 0
-        var confidence = searchScore
+        var rawConfidence = searchScore
             + titleScore
             + artistScore
             + durationScore
@@ -84,9 +97,9 @@ struct MusicBrainzCandidateScorer {
         if hardDurationMismatch {
             // A title/artist collision with a materially different duration
             // must never become an automatic Stable Identity.
-            confidence = min(confidence, 0.74)
+            rawConfidence = min(rawConfidence, 0.74)
         }
-        confidence = min(max(confidence, 0), 1)
+        let confidence = min(max(rawConfidence, 0), 1)
 
         return MusicBrainzCandidateScore(
             searchScore: searchScore,
@@ -101,6 +114,7 @@ struct MusicBrainzCandidateScorer {
             durationDifference: durationDifference,
             hardVersionMismatch: version.hardMismatch,
             hardDurationMismatch: hardDurationMismatch,
+            rawConfidence: rawConfidence,
             confidence: confidence
         )
     }
@@ -142,6 +156,13 @@ struct MusicBrainzCandidateScorer {
         var removedSoftMarker = false
         while end > 0 {
             let token = tokens[end - 1]
+            if token == "version",
+               end > 1,
+               softVersionContextMarkers.contains(tokens[end - 2]) {
+                removedSoftMarker = true
+                end -= 1
+                continue
+            }
             if softVersionMarkers.contains(token) {
                 removedSoftMarker = true
                 end -= 1
@@ -236,24 +257,50 @@ struct MusicBrainzCandidateScorer {
     ) -> (penalty: Double, hardMismatch: Bool) {
         let localMarkers = markerSet(local)
         let remoteMarkers = markerSet(remote)
-        let hardMismatch = hardVersionMarkers.contains {
-            localMarkers.contains($0) != remoteMarkers.contains($0)
+        let hardMismatch = localMarkers.hard.union(remoteMarkers.hard).contains {
+            localMarkers.hard.contains($0) != remoteMarkers.hard.contains($0)
         }
         if hardMismatch { return (0.26, true) }
-        let softMismatch = softVersionMarkers.contains {
-            localMarkers.contains($0) != remoteMarkers.contains($0)
+        let softMismatch = localMarkers.soft.union(remoteMarkers.soft).contains {
+            localMarkers.soft.contains($0) != remoteMarkers.soft.contains($0)
         }
         return (softMismatch ? 0.04 : 0, false)
     }
 
-    private static func markerSet(_ string: String) -> Set<String> {
+    private struct VersionMarkers {
+        let soft: Set<String>
+        let hard: Set<String>
+    }
+
+    private static func markerSet(_ string: String) -> VersionMarkers {
         let text = normalized(string)
-        var markers = Set(text.split(separator: " ").map(String.init))
-        for marker in softVersionMarkers.union(hardVersionMarkers)
-            where marker.unicodeScalars.contains(where: { $0.value > 127 }) && text.contains(marker) {
-            markers.insert(marker)
+        var soft = Set(softVersionMarkers.filter { markerPresent($0, in: text) })
+        var hard = Set(hardVersionMarkers.filter { markerPresent($0, in: text) })
+        if markerPresent("version", in: text) {
+            if softVersionContextMarkers.contains(where: { markerPresent($0, in: text) }) {
+                soft.insert("version")
+            } else {
+                // A bare or year/new-recording Version is not a harmless
+                // remaster suffix. Treat it as a recording-identity guard.
+                hard.insert("version")
+            }
         }
-        return markers
+        return VersionMarkers(soft: soft, hard: hard)
+    }
+
+    private static func markerPresent(_ marker: String, in text: String) -> Bool {
+        let normalizedMarker = normalized(marker)
+        guard !normalizedMarker.isEmpty else { return false }
+        if normalizedMarker.contains(" ") {
+            return text == normalizedMarker
+                || text.hasPrefix(normalizedMarker + " ")
+                || text.hasSuffix(" " + normalizedMarker)
+                || text.contains(" " + normalizedMarker + " ")
+        }
+        if normalizedMarker.unicodeScalars.contains(where: { $0.value > 127 }) {
+            return text.contains(normalizedMarker)
+        }
+        return text.split(separator: " ").contains(Substring(normalizedMarker))
     }
 
     private static func normalizedArtistParts(_ string: String) -> [String] {

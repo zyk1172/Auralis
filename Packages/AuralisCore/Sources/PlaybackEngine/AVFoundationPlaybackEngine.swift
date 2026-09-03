@@ -83,6 +83,14 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         (avPlayer?.currentItem?.asset as? AVURLAsset)?.url
     }
 
+    var currentPlaybackItemForTesting: AVPlayerItem? {
+        avPlayer?.currentItem
+    }
+
+    var playGenerationForTesting: Int {
+        playGeneration
+    }
+
     /// Internal test seam for verifying that sidecar invalidation does not
     /// remove the original prepared audio item.
     var preparedPlaybackURLForTesting: URL? {

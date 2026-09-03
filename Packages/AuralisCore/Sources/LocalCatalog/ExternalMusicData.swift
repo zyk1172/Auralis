@@ -294,6 +294,16 @@ public extension LocalCatalogStore {
         )
     }
 
+    /// Removes an identity whose strong lookup condition was disproven. This
+    /// is intentionally narrower than resetExternalMusicIdentity(), so an
+    /// ISRC mismatch cannot leave a stale Stable Identity trusted by Haptics.
+    func removeExternalMusicIdentity(for globalTrackID: GlobalID) throws {
+        try db.run(
+            "DELETE FROM external_music_identities WHERE global_track_id = ?",
+            [.text(globalTrackID.description)]
+        )
+    }
+
     func replaceExternalMusicCandidates(
         _ candidates: [ExternalMusicIdentityCandidate],
         for globalTrackID: GlobalID

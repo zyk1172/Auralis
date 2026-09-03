@@ -114,4 +114,27 @@ struct MusicEnrichmentDedupeTests {
         #expect(identity1?.recordingMBID == "rec-1")
         #expect(identity2?.isrc == "USAAA0000001")
     }
+
+    @Test("完整 enrich 与 Haptics 身份解析共享同一轮 MusicBrainz 请求")
+    func concurrentFullEnrichAndHapticsShareIdentityRound() async throws {
+        CountingURLProtocol.reset()
+        let store = try makeStore()
+        let service = MusicEnrichmentService(
+            catalog: store,
+            session: session(),
+            musicBrainzMinimumInterval: 0
+        )
+        let globalID = GlobalID(serverID: "nas", remoteID: "full-and-haptics")
+        let t = track()
+
+        async let haptics = service.resolveIdentityForSystemHaptics(track: t, globalID: globalID)
+        async let full = service.enrich(track: t, globalID: globalID)
+        let (hapticsIdentity, fullResult) = await (haptics, full)
+
+        // 共享身份解析后只有一轮：search + full lookup + CritiqueBrainz + ListenBrainz。
+        // 若 Haptics 仍有独立 pool，这里会多出一次 MusicBrainz search。
+        #expect(CountingURLProtocol.count == 4)
+        #expect(hapticsIdentity?.recordingMBID == "rec-1")
+        #expect(fullResult.identity?.recordingMBID == "rec-1")
+    }
 }

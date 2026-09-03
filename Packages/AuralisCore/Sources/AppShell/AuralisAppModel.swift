@@ -519,6 +519,10 @@ public final class AuralisAppModel: ObservableObject {
     /// Process-lifetime context for re-enabling the sidecar without
     /// recreating or seeking the AVPlayer item.
     private var currentHapticsContext: CurrentHapticsContext?
+    /// Continues a first-play identity lookup after the bounded preparation
+    /// deadline. When it resolves, only the Haptics sidecar may be replaced;
+    /// the already-playing AVPlayerItem remains authoritative.
+    private var currentHapticsIdentityUpgradeTask: Task<Void, Never>?
     private var hapticsToggleTask: Task<Void, Never>?
     private var hapticsEffectiveStateTask: Task<Void, Never>?
     private var hapticsPreferenceRevision = 0
@@ -1216,6 +1220,7 @@ public final class AuralisAppModel: ObservableObject {
         hapticsToggleTask = nil
         hapticsEffectiveStateTask?.cancel()
         hapticsEffectiveStateTask = nil
+        cancelCurrentHapticsIdentityUpgrade()
         preparedNextHapticsRefreshTask?.cancel()
         preparedNextHapticsRefreshTask = nil
         audioPreparationGeneration &+= 1
@@ -2165,6 +2170,7 @@ public final class AuralisAppModel: ObservableObject {
 
     private func selectAndPlay(_ track: Track, reconcileQueue: Bool) {
         CrashLog.shared.log("selectAndPlay 开始: \(track.title) (id=\(track.id.rawValue))")
+        cancelCurrentHapticsIdentityUpgrade()
         hapticsToggleTask?.cancel()
         hapticsToggleTask = nil
         hapticsEffectiveStateTask?.cancel()
@@ -2348,6 +2354,11 @@ public final class AuralisAppModel: ObservableObject {
                         position: self.playbackPosition,
                         rate: Double(self.playbackRate),
                         isPlaying: self.playbackState == .playing
+                    )
+                    self.scheduleLateCurrentMusicHapticsIdentityUpgrade(
+                        for: track,
+                        fallbackPreparation: hapticsPreparation,
+                        revision: hapticsPreparationRevision
                     )
                 } else if let hapticsPreparation {
                     // A toggle may have invalidated the sidecar after audio
@@ -3229,10 +3240,103 @@ public final class AuralisAppModel: ObservableObject {
             return identity
         case .deadlineExceeded, .cancelled:
             if case .deadlineExceeded = outcome {
-                CrashLog.shared.log("MUSIC_HAPTICS_IDENTITY source=identity_timeout")
+                // A timeout is an expected latency outcome: audio continues
+                // with the fallback sidecar and a late upgrade may follow.
+                AuralisLog.playback.debug("MUSIC_HAPTICS_IDENTITY source=identity_timeout")
             }
             return cached
         }
+    }
+
+    /// Replaces only a fallback Haptics sidecar when the trusted ISRC arrives
+    /// after the first-play deadline. The audio item, playback position and
+    /// rate are never recreated or changed by this path.
+    private func scheduleLateCurrentMusicHapticsIdentityUpgrade(
+        for track: Track,
+        fallbackPreparation: MusicHapticsPlaybackPreparation,
+        revision: Int
+    ) {
+        guard fallbackPreparation.identity.isrc == nil,
+              fallbackPreparation.plan.kind != .disabled,
+              hapticsPreferenceRevision == revision,
+              queueIdentity(currentTrack) == queueIdentity(track) else { return }
+
+        cancelCurrentHapticsIdentityUpgrade()
+        let requestedIdentity = queueIdentity(track)
+        currentHapticsIdentityUpgradeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let resolved = await self.musicEnrichment.resolveIdentityForSystemHaptics(
+                track: track,
+                globalID: requestedIdentity
+            )
+            guard !Task.isCancelled,
+                  resolved?.isrc != nil,
+                  self.hapticsPreferenceRevision == revision,
+                  self.queueIdentity(self.currentTrack) == requestedIdentity,
+                  self.currentHapticsContext?.trackIdentity == requestedIdentity,
+                  self.currentHapticsContext?.hapticsIdentity == fallbackPreparation.identity
+            else { return }
+
+            guard let context = self.currentHapticsContext else { return }
+            let identity = await self.cachedMusicHapticsIdentity(for: track)
+            guard identity.isrc != nil else { return }
+            let preparation = await self.musicHaptics.preparePlayback(
+                identity: identity,
+                favorite: context.favorite,
+                duration: context.duration,
+                playbackURL: context.playableTrack.streamURL
+            )
+            guard !Task.isCancelled,
+                  preparation.plan.kind == .system,
+                  preparation.systemAvailability.canUseTimeline,
+                  self.hapticsPreferenceRevision == revision,
+                  self.queueIdentity(self.currentTrack) == requestedIdentity,
+                  self.currentHapticsContext?.hapticsIdentity == fallbackPreparation.identity
+            else {
+                self.musicHaptics.discardPreparedAnalysis(preparation)
+                return
+            }
+
+            let position = await self.engine.currentPosition() ?? self.playbackPosition
+            guard !Task.isCancelled,
+                  self.hapticsPreferenceRevision == revision,
+                  self.queueIdentity(self.currentTrack) == requestedIdentity,
+                  self.currentHapticsContext?.hapticsIdentity == fallbackPreparation.identity
+            else {
+                self.musicHaptics.discardPreparedAnalysis(preparation)
+                return
+            }
+
+            if let avEngine = self.engine as? AVFoundationPlaybackEngine,
+               !avEngine.installActiveMusicHapticsPlaybackPreparation(preparation) {
+                self.musicHaptics.discardPreparedAnalysis(preparation)
+                return
+            }
+            self.playbackPosition = max(0, position)
+            self.currentHapticsContext = CurrentHapticsContext(
+                trackIdentity: requestedIdentity,
+                playableTrack: context.playableTrack,
+                hapticsIdentity: preparation.identity,
+                duration: context.duration,
+                favorite: context.favorite
+            )
+            self.currentMusicHapticsEnabled = self.musicHaptics.effectiveEnabled(for: preparation)
+            self.mediaIntegration.setInternationalStandardRecordingCode(preparation.identity.isrc)
+            self.musicHaptics.activate(
+                preparation,
+                position: self.playbackPosition,
+                rate: Double(self.playbackRate),
+                isPlaying: self.playbackState == .playing
+            )
+            AuralisLog.playback.debug(
+                "MUSIC_HAPTICS_IDENTITY_LATE_UPGRADE track=\(requestedIdentity.description, privacy: .public) source=system_isrc"
+            )
+        }
+    }
+
+    private func cancelCurrentHapticsIdentityUpgrade() {
+        currentHapticsIdentityUpgradeTask?.cancel()
+        currentHapticsIdentityUpgradeTask = nil
     }
 
     /// 已下载到本地的曲目（首页「下载」快捷入口与下载浏览页的数据源）。
@@ -3746,6 +3850,7 @@ public final class AuralisAppModel: ObservableObject {
         hapticsToggleTask = nil
         hapticsEffectiveStateTask?.cancel()
         hapticsEffectiveStateTask = nil
+        cancelCurrentHapticsIdentityUpgrade()
         preparedNextHapticsRefreshTask?.cancel()
         preparedNextHapticsRefreshTask = nil
         audioPreparationGeneration &+= 1
@@ -3866,6 +3971,11 @@ public final class AuralisAppModel: ObservableObject {
                             position: self.playbackPosition,
                             rate: Double(self.playbackRate)
                         )
+                        self.scheduleLateCurrentMusicHapticsIdentityUpgrade(
+                            for: self.currentTrack,
+                            fallbackPreparation: restoredHapticsPreparation,
+                            revision: restoredHapticsRevision
+                        )
                     } else if self.hapticsPreferenceRevision == restoredHapticsRevision {
                         self.musicHaptics.resume(
                             position: self.playbackPosition,
@@ -3909,6 +4019,7 @@ public final class AuralisAppModel: ObservableObject {
         hapticsToggleTask = nil
         hapticsEffectiveStateTask?.cancel()
         hapticsEffectiveStateTask = nil
+        cancelCurrentHapticsIdentityUpgrade()
         preparedNextHapticsRefreshTask?.cancel()
         preparedNextHapticsRefreshTask = nil
         audioPreparationGeneration &+= 1
@@ -4108,6 +4219,7 @@ public final class AuralisAppModel: ObservableObject {
         hapticsConfigurationRevision &+= 1
         let configurationRevision = hapticsConfigurationRevision
         hapticsPreferenceRevision &+= 1
+        cancelCurrentHapticsIdentityUpgrade()
         hapticsToggleTask?.cancel()
         hapticsToggleTask = nil
         hapticsEffectiveStateTask?.cancel()
@@ -4192,6 +4304,7 @@ public final class AuralisAppModel: ObservableObject {
         hapticsToggleTask?.cancel()
         hapticsEffectiveStateTask?.cancel()
         hapticsEffectiveStateTask = nil
+        cancelCurrentHapticsIdentityUpgrade()
         hapticsConfigurationRevision &+= 1
         let configurationRevision = hapticsConfigurationRevision
         hapticsPreferenceRevision &+= 1
@@ -5052,6 +5165,7 @@ public final class AuralisAppModel: ObservableObject {
     /// history and platform metadata; calling selectAndPlay here would tear
     /// down the prebuffered player and reintroduce the gap we just removed.
     private func handlePreparedTrackStarted(_ prepared: Track) {
+        cancelCurrentHapticsIdentityUpgrade()
         let preparedHaptics = preparedMusicHapticsPreparation
         let preserveInFlightHaptics = preparedHaptics == nil
             && preparingNextHapticsCandidateIdentity == queueIdentity(prepared)
@@ -5369,6 +5483,7 @@ public final class AuralisAppModel: ObservableObject {
 
     private func pauseAtQueueEnd() {
         lastStopReason = .queueEnded
+        cancelCurrentHapticsIdentityUpgrade()
         playbackPosition = 0
         actualDuration = nil
         musicHaptics.finishPartial(reason: .naturalEnd)
@@ -5434,6 +5549,11 @@ public final class AuralisAppModel: ObservableObject {
                         hapticsPreparation,
                         position: self.playbackPosition,
                         rate: Double(self.playbackRate)
+                    )
+                    self.scheduleLateCurrentMusicHapticsIdentityUpgrade(
+                        for: refreshed,
+                        fallbackPreparation: hapticsPreparation,
+                        revision: hapticsPreparationRevision
                     )
                 }
                 self.syncProgressTimer()

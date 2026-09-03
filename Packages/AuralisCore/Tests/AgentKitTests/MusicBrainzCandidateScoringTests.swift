@@ -50,6 +50,9 @@ struct MusicBrainzCandidateScoringTests {
     func coreTitleNormalization() {
         #expect(MusicBrainzCandidateScorer.normalizedCoreTitle("Song Name (Remastered 2021)") == "song name")
         #expect(MusicBrainzCandidateScorer.normalizedCoreTitle("Song Name - 2011 Remaster") == "song name")
+        #expect(MusicBrainzCandidateScorer.normalizedCoreTitle("Song Name - Remastered Version") == "song name")
+        #expect(MusicBrainzCandidateScorer.normalizedCoreTitle("Song Name - 2024 Version") == "song name 2024 version")
+        #expect(MusicBrainzCandidateScorer.normalizedCoreTitle("Song Name - Taylor's Version") == "song name taylor s version")
         #expect(MusicBrainzCandidateScorer.normalizedCoreTitle("Song Name - Live") == "song name live")
     }
 
@@ -129,6 +132,30 @@ struct MusicBrainzCandidateScoringTests {
                 false
             ),
             (
+                "re-recorded",
+                scoringTrack(title: "Exact Song - Re-recorded"),
+                scoringRecording(id: "re-recorded", title: "Exact Song"),
+                false
+            ),
+            (
+                "Taylor's Version",
+                scoringTrack(title: "Exact Song - Taylor's Version"),
+                scoringRecording(id: "taylors-version", title: "Exact Song"),
+                false
+            ),
+            (
+                "2024 Version",
+                scoringTrack(title: "Exact Song - 2024 Version"),
+                scoringRecording(id: "2024-version", title: "Exact Song"),
+                false
+            ),
+            (
+                "重新录制",
+                scoringTrack(title: "Exact Song - 重新录制"),
+                scoringRecording(id: "rerecorded-cn", title: "Exact Song"),
+                false
+            ),
+            (
                 "large duration mismatch",
                 scoringTrack(title: "Studio Song", duration: 210),
                 scoringRecording(id: "different-duration", title: "Studio Song", duration: 340),
@@ -167,6 +194,24 @@ struct MusicBrainzCandidateScoringTests {
         )
         #expect(duration.hardDurationMismatch)
         #expect(duration.confidence <= 0.74)
+    }
+
+    @Test("保留 raw confidence 以区分被 clamp 的候选")
+    func rawConfidencePreservesWinnerMarginSignal() {
+        let track = scoringTrack(title: "Exact Song")
+        let best = MusicBrainzCandidateScorer.score(
+            recording: scoringRecording(id: "raw-best", title: "Exact Song", searchScore: 100),
+            track: track
+        )
+        let runnerUp = MusicBrainzCandidateScorer.score(
+            recording: scoringRecording(id: "raw-runner-up", title: "Exact Song", searchScore: 99),
+            track: track
+        )
+
+        #expect(best.confidence == 1)
+        #expect(runnerUp.confidence == 1)
+        #expect(best.rawConfidence > runnerUp.rawConfidence)
+        #expect(best.rawConfidence - runnerUp.rawConfidence < MusicBrainzCandidateScorer.minimumWinnerMargin)
     }
 
     @Test("ISRC 统一正规化并拒绝破损值")
