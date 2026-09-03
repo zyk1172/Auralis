@@ -1,6 +1,9 @@
 import Domain
 import Foundation
 import LocalCatalog
+import OSLog
+
+private let externalMusicLogger = Logger(subsystem: "com.auralis.player", category: "ExternalMusic")
 
 public struct AgentExternalMusicResult: Sendable, Equatable {
     public let identity: ExternalMusicIdentity?
@@ -103,6 +106,68 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         try await catalog.resetExternalMusicIdentity()
     }
 
+    /// Resolves only the recording identity needed by System Music Haptics.
+    /// This path deliberately excludes ratings, reviews, community metrics and
+    /// evidence so the Apple-first playback path does not wait on unrelated
+    /// public metadata.
+    public func resolveIdentityForSystemHaptics(
+        track: Track,
+        globalID: GlobalID
+    ) async -> ExternalMusicIdentity? {
+        let cachedIdentity = try? await catalog.externalMusicIdentity(for: globalID)
+        if let cachedIdentity,
+           isStableIdentity(cachedIdentity),
+           cachedIdentity.isrc != nil {
+            externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=cached_isrc")
+            return cachedIdentity
+        }
+
+        guard !Task.isCancelled else { return cachedIdentity }
+        let preferences = preferencesProvider()
+        guard preferences.isEnabled(.musicBrainz) else {
+            externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=privacy_disabled")
+            return cachedIdentity
+        }
+
+        if let cachedIdentity,
+           isStableIdentity(cachedIdentity),
+           let recordingMBID = cachedIdentity.recordingMBID {
+            do {
+                let lookup = try await musicBrainzIdentityLookup(mbid: recordingMBID)
+                let detail = Self.detail(from: lookup, mbid: recordingMBID)
+                let resolved = await backfillMusicBrainzIdentity(cachedIdentity, detail: detail)
+                if resolved?.isrc != nil {
+                    externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=musicbrainz_lookup_isrc")
+                }
+                return resolved
+            } catch {
+                externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=lookup_failed")
+                return cachedIdentity
+            }
+        }
+
+        let match = await match(track: track, globalID: globalID)
+        guard let identity = match.identity else { return nil }
+        if identity.isrc != nil {
+            externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=musicbrainz_search_match")
+            return identity
+        }
+
+        guard let recordingMBID = identity.recordingMBID else { return identity }
+        do {
+            let lookup = try await musicBrainzIdentityLookup(mbid: recordingMBID)
+            let detail = Self.detail(from: lookup, mbid: recordingMBID)
+            let resolved = await backfillMusicBrainzIdentity(identity, detail: detail)
+            if resolved?.isrc != nil {
+                externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=musicbrainz_lookup_isrc")
+            }
+            return resolved
+        } catch {
+            externalMusicLogger.debug("MUSIC_HAPTICS_IDENTITY source=lookup_failed")
+            return identity
+        }
+    }
+
     public func enrich(track: Track, globalID: GlobalID) async -> AgentExternalMusicResult {
         await enrich(track: track, globalID: globalID, forceRefresh: false)
     }
@@ -126,10 +191,12 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             )
         }
 
-        let identity: ExternalMusicIdentity?
+        var identity: ExternalMusicIdentity?
         var candidates: [ExternalMusicIdentityCandidate] = []
         // MBID 是稳定外部身份，不因为本地校验时间过期而丢弃；指标有自己的刷新周期。
-        if let cachedIdentity, cachedIdentity.recordingMBID != nil {
+        if let cachedIdentity,
+           isStableIdentity(cachedIdentity),
+           cachedIdentity.recordingMBID != nil {
             identity = cachedIdentity
         } else if preferences.musicBrainzEnabled,
                   let cachedIdentity, let isrc = cachedIdentity.isrc, !isrc.isEmpty {
@@ -158,6 +225,10 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             cached: cachedValue(.musicBrainz),
             preferences: preferences
         )
+        // A full Recording lookup can also be the first place an ISRC appears.
+        // Re-read the catalog so the stable identity returned to callers is
+        // the same canonical object persisted for the next playback.
+        identity = (try? await catalog.externalMusicIdentity(for: globalID)) ?? identity
         let critiqueBrainz = await metric(
             for: .critiqueBrainz, identity: identity,
             cached: cachedValue(.critiqueBrainz), preferences: preferences
@@ -222,6 +293,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         do {
             let lookup = try await musicBrainzLookup(mbid: mbid)
             let detail = Self.detail(from: lookup, mbid: mbid)
+            _ = await backfillMusicBrainzIdentity(identity, detail: detail)
             guard let rating = lookup.rating, (rating.votesCount ?? 0) > 0 else {
                 return (metric(.musicBrainz, mbid, status: .noData), detail, false)
             }
@@ -279,7 +351,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
             releaseMBID: release?.id,
             releaseGroupMBID: release?.releaseGroup?.id,
             artistMBID: lookup.artistCredit?.first?.artist?.id,
-            isrc: lookup.isrcs?.first,
+            isrc: lookup.isrcs?.compactMap(ExternalMusicIdentity.normalizedISRC).first,
             title: lookup.title,
             artistCredit: artistCreditString(lookup.artistCredit),
             rating: lookup.rating?.value,
@@ -303,7 +375,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         if let cached, isFresh(cached) { return cached }
         guard let identity else { return metric(source, nil, status: .noData) }
         switch source {
-        case .musicBrainz: return await fetchMusicBrainzMetricAndDetail(identity: identity, cached: nil, preferences: ExternalMusicPreferences.current()).metric
+        case .musicBrainz: return await fetchMusicBrainzMetricAndDetail(identity: identity, cached: nil, preferences: preferences).metric
         case .critiqueBrainz: return await fetchCritiqueBrainzMetric(identity: identity)
         case .listenBrainz: return await fetchListenBrainzMetric(identity: identity)
         }
@@ -332,10 +404,26 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
                 url: endpoints.musicBrainz.appendingPathComponent("recording"),
                 resolvingAgainstBaseURL: false
             )
+            let titleTerms = [track.title, MusicBrainzCandidateScorer.normalizedCoreTitle(track.title)]
+                .filter { !$0.isEmpty }
+                .reduce(into: [String]()) { terms, value in
+                    if !terms.contains(value) { terms.append(value) }
+                }
+            let artistTerms = [track.artistName, MusicBrainzCandidateScorer.primaryArtistName(track.artistName)]
+                .filter { !$0.isEmpty }
+                .reduce(into: [String]()) { terms, value in
+                    if !terms.contains(value) { terms.append(value) }
+                }
+            let titleQuery = titleTerms
+                .map { "recording:\"\(lucene($0))\"" }
+                .joined(separator: " OR ")
+            let artistQuery = artistTerms
+                .map { "artist:\"\(lucene($0))\" OR artistname:\"\(lucene($0))\"" }
+                .joined(separator: " OR ")
             components?.queryItems = [
-                URLQueryItem(name: "query", value: "recording:\"\(lucene(track.title))\" AND artist:\"\(lucene(track.artistName))\""),
+                URLQueryItem(name: "query", value: "(\(titleQuery)) AND (\(artistQuery))"),
                 URLQueryItem(name: "fmt", value: "json"),
-                URLQueryItem(name: "limit", value: "8"),
+                URLQueryItem(name: "limit", value: "12"),
             ]
             guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
             let data = try await request(url: url, musicBrainz: true)
@@ -348,7 +436,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
                 try? await catalog.replaceExternalMusicCandidates([], for: globalID)
                 return (nil, [])
             }
-            if best.confidence >= 0.90 {
+            if best.confidence >= ExternalMusicIdentity.stableMatchThreshold {
                 let identity = ExternalMusicIdentity(
                     globalTrackID: globalID,
                     recordingMBID: best.recordingMBID,
@@ -379,24 +467,33 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         track: Track,
         globalID: GlobalID
     ) async -> (identity: ExternalMusicIdentity?, candidates: [ExternalMusicIdentityCandidate]) {
+        guard let normalizedISRC = ExternalMusicIdentity.normalizedISRC(isrc) else {
+            return (nil, [])
+        }
         do {
             var components = URLComponents(
                 url: endpoints.musicBrainz.appendingPathComponent("recording"),
                 resolvingAgainstBaseURL: false
             )
             components?.queryItems = [
-                URLQueryItem(name: "query", value: "isrc:\(lucene(isrc))"),
+                URLQueryItem(name: "query", value: "isrc:\(lucene(normalizedISRC))"),
                 URLQueryItem(name: "fmt", value: "json"),
                 URLQueryItem(name: "limit", value: "2"),
             ]
             guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
             let data = try await request(url: url, musicBrainz: true)
             let response = try JSONDecoder().decode(MBSearchResponse.self, from: data)
-            guard let recording = response.recordings.first else { return (nil, []) }
+            let recording = response.recordings.first { recording in
+                recording.isrcs?.contains {
+                    ExternalMusicIdentity.normalizedISRC($0) == normalizedISRC
+                } == true
+            } ?? response.recordings.first
+            guard let recording else { return (nil, []) }
             // ISRC 对 Recording 匹配权重很高，但 Release 仍要结合专辑/艺人/时长选择，
             // 不直接拿 releases.first。
             let release = recording.releases?.max { lhs, rhs in
-                albumSimilarity(lhs.title, track.albumTitle) < albumSimilarity(rhs.title, track.albumTitle)
+                MusicBrainzCandidateScorer.albumSimilarity(lhs.title, track.albumTitle)
+                    < MusicBrainzCandidateScorer.albumSimilarity(rhs.title, track.albumTitle)
             }
             let identity = ExternalMusicIdentity(
                 globalTrackID: globalID,
@@ -404,7 +501,7 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
                 releaseMBID: release?.id,
                 releaseGroupMBID: release?.releaseGroup?.id,
                 artistMBID: recording.artistCredit?.first?.artist?.id,
-                isrc: recording.isrcs?.first ?? isrc,
+                isrc: recording.isrcs?.compactMap(ExternalMusicIdentity.normalizedISRC).first ?? normalizedISRC,
                 matchConfidence: 1,
                 matchMethod: .isrc,
                 verifiedAt: now()
@@ -422,56 +519,84 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         track: Track,
         globalID: GlobalID
     ) -> ExternalMusicIdentityCandidate {
-        let candidateArtist = Self.artistCreditString(recording.artistCredit)
-        let candidateDuration = recording.length.map { Double($0) / 1_000 }
-        let titleExact = normalized(recording.title) == normalized(track.title)
-        let artistExact = normalized(candidateArtist) == normalized(track.artistName)
-        let durationDifference = candidateDuration.map { abs($0 - track.duration) }
-        let durationScore: Double = switch durationDifference {
-        case .some(let value) where value <= 2: 0.10
-        case .some(let value) where value <= 5: 0.06
-        case .none: 0.03
-        default: 0
-        }
-        let release = recording.releases?.max { lhs, rhs in
-            albumSimilarity(lhs.title, track.albumTitle) < albumSimilarity(rhs.title, track.albumTitle)
-        }
-        var confidence = Double(recording.score ?? 0) / 100 * 0.40
-        confidence += titleExact ? 0.25 : 0.10 * similarity(recording.title, track.title)
-        confidence += artistExact ? 0.20 : 0.08 * similarity(candidateArtist, track.artistName)
-        confidence += durationScore
-        confidence += 0.05 * albumSimilarity(release?.title ?? "", track.albumTitle)
-        confidence -= versionMismatchPenalty(local: track.title + " " + track.albumTitle, remote: recording.title + " " + (release?.title ?? ""))
-        confidence = min(max(confidence, 0), 1)
-        return ExternalMusicIdentityCandidate(
-            globalTrackID: globalID,
-            recordingMBID: recording.id,
-            releaseMBID: release?.id,
-            releaseGroupMBID: release?.releaseGroup?.id,
-            artistMBID: recording.artistCredit?.first?.artist?.id,
-            isrc: recording.isrcs?.first,
-            title: recording.title,
-            artistName: candidateArtist,
-            duration: candidateDuration,
-            confidence: confidence,
-            matchMethod: titleExact && artistExact && (durationDifference ?? 0) <= 5 ? .metadataExact : .metadataFuzzy,
+        MusicBrainzCandidateScorer.candidate(
+            recording: recording,
+            track: track,
+            globalID: globalID,
             createdAt: now()
         )
     }
 
     /// 统一 MB 录音查询（metric + detail 共用，避免重复打 API）。
     private func musicBrainzLookup(mbid: String) async throws -> MBRecordingLookup {
+        try await musicBrainzLookup(
+            mbid: mbid,
+            include: "ratings+isrcs+artist-credits+releases+release-groups+genres+tags"
+        )
+    }
+
+    /// Identity-only lookup. `inc=isrcs` is intentionally kept narrow so a
+    /// first-play Haptics request never expands into metrics or review data.
+    private func musicBrainzIdentityLookup(mbid: String) async throws -> MBRecordingLookup {
+        try await musicBrainzLookup(mbid: mbid, include: "isrcs")
+    }
+
+    private func musicBrainzLookup(
+        mbid: String,
+        include: String
+    ) async throws -> MBRecordingLookup {
         var components = URLComponents(
             url: endpoints.musicBrainz.appendingPathComponent("recording/\(mbid)"),
             resolvingAgainstBaseURL: false
         )
         components?.queryItems = [
-            URLQueryItem(name: "inc", value: "ratings+isrcs+artist-credits+releases+release-groups+genres+tags"),
+            URLQueryItem(name: "inc", value: include),
             URLQueryItem(name: "fmt", value: "json"),
         ]
         guard let url = components?.url else { throw ExternalMusicServiceError.invalidRequest }
         let data = try await request(url: url, musicBrainz: true)
         return try JSONDecoder().decode(MBRecordingLookup.self, from: data)
+    }
+
+    /// A lookup may reveal an ISRC after the recording has already passed the
+    /// stable metadata threshold. Backfill only that trusted identity; a
+    /// medium-confidence candidate can never be promoted merely because its
+    /// detail response contains an ISRC.
+    @discardableResult
+    private func backfillMusicBrainzIdentity(
+        _ identity: ExternalMusicIdentity?,
+        detail: MusicBrainzDetail?
+    ) async -> ExternalMusicIdentity? {
+        guard var identity,
+              isStableIdentity(identity),
+              let detail,
+              let isrc = ExternalMusicIdentity.normalizedISRC(detail.isrc)
+        else { return identity }
+
+        var changed = false
+        if identity.isrc != isrc {
+            identity.isrc = isrc
+            changed = true
+        }
+        if identity.recordingMBID == nil, let recordingMBID = detail.recordingMBID {
+            identity.recordingMBID = recordingMBID
+            changed = true
+        }
+        if identity.releaseMBID == nil, let releaseMBID = detail.releaseMBID {
+            identity.releaseMBID = releaseMBID
+            changed = true
+        }
+        if identity.releaseGroupMBID == nil, let releaseGroupMBID = detail.releaseGroupMBID {
+            identity.releaseGroupMBID = releaseGroupMBID
+            changed = true
+        }
+        if identity.artistMBID == nil, let artistMBID = detail.artistMBID {
+            identity.artistMBID = artistMBID
+            changed = true
+        }
+        guard changed else { return identity }
+        try? await catalog.upsertExternalMusicIdentity(identity)
+        return identity
     }
 
     /// CritiqueBrainz：拉取聚合 + 有限真实评论（默认最多 10 条），容错解析。
@@ -664,30 +789,8 @@ public actor MusicBrainzExternalMusicService: AgentExternalMusicService {
         }
     }
 
-    private func normalized(_ string: String) -> String {
-        string.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
-            .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-    }
-
-    private func similarity(_ lhs: String, _ rhs: String) -> Double {
-        let left = Set(normalized(lhs).split(separator: " "))
-        let right = Set(normalized(rhs).split(separator: " "))
-        guard !left.isEmpty, !right.isEmpty else { return 0 }
-        return Double(left.intersection(right).count) / Double(left.union(right).count)
-    }
-
-    private func albumSimilarity(_ lhs: String, _ rhs: String) -> Double {
-        normalized(lhs) == normalized(rhs) ? 1 : similarity(lhs, rhs)
-    }
-
-    private func versionMismatchPenalty(local: String, remote: String) -> Double {
-        let markers = ["live", "remaster", "deluxe", "instrumental", "cover", "现场", "重制", "豪华", "纯音乐"]
-        let local = normalized(local)
-        let remote = normalized(remote)
-        return markers.contains { local.contains($0) != remote.contains($0) } ? 0.18 : 0
+    private func isStableIdentity(_ identity: ExternalMusicIdentity) -> Bool {
+        identity.matchConfidence >= ExternalMusicIdentity.stableMatchThreshold
     }
 
     /// 多艺术家 credit 用 " & " 连接展示，不再把 ArtistAArtistB 直接拼在一起；
@@ -725,7 +828,7 @@ private struct MBSearchResponse: Decodable {
     let recordings: [MBRecording]
 }
 
-private struct MBRecording: Decodable {
+struct MBRecording: Decodable {
     let id: String
     let score: Int?
     let title: String
@@ -740,14 +843,14 @@ private struct MBRecording: Decodable {
     }
 }
 
-private struct MBArtistCredit: Decodable {
+struct MBArtistCredit: Decodable {
     let name: String
     let artist: MBArtist?
 }
 
-private struct MBArtist: Decodable { let id: String? }
+struct MBArtist: Decodable { let id: String? }
 
-private struct MBRelease: Decodable {
+struct MBRelease: Decodable {
     let id: String
     let title: String
     let date: String?
@@ -759,7 +862,7 @@ private struct MBRelease: Decodable {
     }
 }
 
-private struct MBReleaseGroup: Decodable {
+struct MBReleaseGroup: Decodable {
     let id: String
     let primaryType: String?
 

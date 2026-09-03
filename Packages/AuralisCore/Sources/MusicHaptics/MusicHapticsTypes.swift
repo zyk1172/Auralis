@@ -72,7 +72,7 @@ public struct MusicHapticsIdentity: Codable, Hashable, Sendable {
         self.globalID = globalID
         self.serverID = serverID
         self.remoteID = remoteID
-        self.isrc = Self.normalizedCode(isrc)
+        self.isrc = Self.normalizedISRC(isrc)
         self.recordingMBID = Self.normalizedCode(recordingMBID)
         self.title = title
         self.artist = artist
@@ -113,6 +113,23 @@ public struct MusicHapticsIdentity: Codable, Hashable, Sendable {
         guard let value else { return nil }
         let result = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
         return result.isEmpty ? nil : result
+    }
+
+    private static func normalizedISRC(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let scalars = value.uppercased().unicodeScalars.filter { scalar in
+            switch scalar.value {
+            case 48...57, 65...90: return true
+            default: return false
+            }
+        }
+        guard scalars.count == 12,
+              scalars.prefix(2).allSatisfy({ (65...90).contains($0.value) }),
+              scalars.suffix(7).allSatisfy({ (48...57).contains($0.value) })
+        else { return nil }
+        return scalars.reduce(into: "") { result, scalar in
+            result.unicodeScalars.append(scalar)
+        }
     }
 }
 

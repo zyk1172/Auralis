@@ -6,7 +6,7 @@ import LocalCatalog
 import Testing
 
 /// MusicEnrichmentService：UI / Agent / 歌词补全三路并发时，同一 GlobalID 只发一轮请求。
-@Suite("MusicEnrichment in-flight dedupe")
+@Suite("MusicEnrichment in-flight dedupe", .serialized)
 struct MusicEnrichmentDedupeTests {
     private final class CountingURLProtocol: URLProtocol, @unchecked Sendable {
         nonisolated(unsafe) private static var requests: [URLRequest] = []
@@ -92,5 +92,26 @@ struct MusicEnrichmentDedupeTests {
         #expect(r1.identity?.recordingMBID == "rec-1")
         #expect(r2.identity?.recordingMBID == "rec-1")
         #expect(r1.metrics.hasCommunityEvidence)
+    }
+
+    @Test("concurrent Haptics identity requests share the lightweight round")
+    func concurrentHapticsIdentitySharesOneRound() async throws {
+        CountingURLProtocol.reset()
+        let store = try makeStore()
+        let service = MusicEnrichmentService(
+            catalog: store,
+            session: session(),
+            musicBrainzMinimumInterval: 0
+        )
+        let globalID = GlobalID(serverID: "nas", remoteID: "haptics-track")
+        let t = track()
+
+        async let first = service.resolveIdentityForSystemHaptics(track: t, globalID: globalID)
+        async let second = service.resolveIdentityForSystemHaptics(track: t, globalID: globalID)
+        let (identity1, identity2) = await (first, second)
+
+        #expect(CountingURLProtocol.count == 1)
+        #expect(identity1?.recordingMBID == "rec-1")
+        #expect(identity2?.isrc == "USAAA0000001")
     }
 }

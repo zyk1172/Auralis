@@ -486,11 +486,10 @@ public final class AuralisAppModel: ObservableObject {
     /// Playback-page representation of the effective per-track Haptics state.
     /// The persisted value remains the three-state TrackHapticsPreference.
     @Published public private(set) var currentMusicHapticsEnabled = false
-    /// Identity enrichment is a Haptics preparation hint, never a playback
-    /// prerequisite. Keep its budget aligned with the existing Haptics
-    /// warm-up deadline so a slow public-data request cannot delay algorithm
-    /// output for the current song.
-    private static let hapticsIdentityPreparationDeadline = MusicHapticsAnalysisRequest.defaultWarmupDeadline
+    /// Apple identity preparation gets its own bounded budget. It is longer
+    /// than the algorithm warm-up because a MusicBrainz search can be a real
+    /// network round trip, while the analysis warm-up remains 350 ms.
+    private static let hapticsIdentityPreparationDeadline: Duration = .milliseconds(900)
     /// 播放器音量 0...1，持久化到 UserDefaults。
     @Published public private(set) var volume: Float
     @Published public private(set) var replayGainSettings: ReplayGainSettings
@@ -3146,7 +3145,7 @@ public final class AuralisAppModel: ObservableObject {
     private func cachedMusicHapticsIdentity(for track: Track) async -> MusicHapticsIdentity {
         let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
         let external = try? await catalogCoordinator.store.externalMusicIdentity(for: globalID)
-        let trusted = (external?.matchConfidence ?? 0) >= 0.90
+        let trusted = (external?.matchConfidence ?? 0) >= ExternalMusicIdentity.stableMatchThreshold
         return MusicHapticsIdentity(
             track: track,
             isrc: trusted ? external?.isrc : nil,
@@ -3174,11 +3173,14 @@ public final class AuralisAppModel: ObservableObject {
         }
     }
 
-    /// Uses only the existing enrichment service for the missing-ISRC path.
+    /// Uses only the lightweight identity resolver for the missing-ISRC path.
     /// Its result is deliberately not trusted directly: LocalCatalog is read
     /// again and the same >= 0.90 stable-identity threshold remains the only
     /// authority passed to System Music Haptics.
-    private func prioritizedMusicHapticsIdentity(for track: Track) async -> MusicHapticsIdentity {
+    private func prioritizedMusicHapticsIdentity(
+        for track: Track,
+        deadline: Duration? = hapticsIdentityPreparationDeadline
+    ) async -> MusicHapticsIdentity {
         let cached = await cachedMusicHapticsIdentity(for: track)
         guard cached.isrc == nil, !Task.isCancelled else { return cached }
         let globalID = GlobalID(serverID: track.serverID, remoteID: track.id.rawValue)
@@ -3192,19 +3194,27 @@ public final class AuralisAppModel: ObservableObject {
                 gate.resolve(.cancelled)
                 return
             }
-            _ = await self.musicEnrichment.enrich(track: track, globalID: globalID)
+            _ = await self.musicEnrichment.resolveIdentityForSystemHaptics(
+                track: track,
+                globalID: globalID
+            )
             let enriched = await self.cachedMusicHapticsIdentity(for: track)
             gate.resolve(.resolved(enriched))
         }
 
-        let timeoutTask = Task {
-            do {
-                try await Task.sleep(for: Self.hapticsIdentityPreparationDeadline)
-            } catch {
-                return
+        let timeoutTask: Task<Void, Never>?
+        if let deadline {
+            timeoutTask = Task {
+                do {
+                    try await Task.sleep(for: deadline)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                gate.resolve(.deadlineExceeded)
             }
-            guard !Task.isCancelled else { return }
-            gate.resolve(.deadlineExceeded)
+        } else {
+            timeoutTask = nil
         }
 
         let outcome = await withTaskCancellationHandler(operation: {
@@ -3212,12 +3222,15 @@ public final class AuralisAppModel: ObservableObject {
         }, onCancel: {
             gate.resolve(.cancelled)
         })
-        timeoutTask.cancel()
+        timeoutTask?.cancel()
 
         switch outcome {
         case let .resolved(identity):
             return identity
         case .deadlineExceeded, .cancelled:
+            if case .deadlineExceeded = outcome {
+                CrashLog.shared.log("MUSIC_HAPTICS_IDENTITY source=identity_timeout")
+            }
             return cached
         }
     }
@@ -4401,7 +4414,14 @@ public final class AuralisAppModel: ObservableObject {
             guard !Task.isCancelled,
                   self.hapticsConfigurationRevision == configurationRevision else { return }
 
-            let identity = await self.prioritizedMusicHapticsIdentity(for: candidate)
+            // The next audio item is already buffered independently. Give its
+            // identity resolver the full preload window so a two-step
+            // MusicBrainz search/lookup is not cut off at the first-play 900ms
+            // budget.
+            let identity = await self.prioritizedMusicHapticsIdentity(
+                for: candidate,
+                deadline: nil
+            )
             let preparation = await self.musicHaptics.preparePlayback(
                 identity: identity,
                 favorite: playable.isFavorite,
@@ -5220,7 +5240,12 @@ public final class AuralisAppModel: ObservableObject {
 
             let hapticsConfigurationRevision = self.hapticsConfigurationRevision
             self.preparingNextHapticsConfigurationRevision = hapticsConfigurationRevision
-            let hapticsIdentity = await self.prioritizedMusicHapticsIdentity(for: candidate)
+            // Preloading has no first-play deadline: finish the lightweight
+            // identity round in the background before selecting the sidecar.
+            let hapticsIdentity = await self.prioritizedMusicHapticsIdentity(
+                for: candidate,
+                deadline: nil
+            )
             let preparation = await self.musicHaptics.preparePlayback(
                 identity: hapticsIdentity,
                 favorite: playable.isFavorite,

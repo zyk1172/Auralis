@@ -8,6 +8,14 @@ import Testing
     #expect(original.matchConfidence(with: restored) == 1)
 }
 
+@Test func malformedISRCIsNotPassedToSystemMatching() {
+    let identity = MusicHapticsIdentity(
+        serverID: "server", remoteID: "track", isrc: "not-an-isrc",
+        title: "Song", artist: "Artist", durationMilliseconds: 180_000
+    )
+    #expect(identity.isrc == nil)
+}
+
 @Test func durationGuardRejectsDifferentRecording() {
     let studio = MusicHapticsIdentity(title: "Song", artist: "Artist", durationMilliseconds: 180_000)
     let live = MusicHapticsIdentity(title: "Song", artist: "Artist", durationMilliseconds: 250_000)

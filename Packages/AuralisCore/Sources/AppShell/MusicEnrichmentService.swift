@@ -13,6 +13,10 @@ public actor MusicEnrichmentService: AgentExternalMusicService {
     private let catalog: LocalCatalogStore
     /// 同一 GlobalID 并发触发（歌曲信息 + Agent + 歌词补全）时共享同一个请求。
     private var inFlight: [EnrichmentKey: Task<AgentExternalMusicResult, Never>] = [:]
+    /// Haptics identity requests have a separate purpose from full enrichment
+    /// and therefore a separate in-flight pool. Concurrent playback,
+    /// preloading and UI requests still share one MusicBrainz identity round.
+    private var identityInFlight: [GlobalID: Task<ExternalMusicIdentity?, Never>] = [:]
 
     private struct EnrichmentKey: Hashable {
         let globalID: GlobalID
@@ -22,13 +26,17 @@ public actor MusicEnrichmentService: AgentExternalMusicService {
     public init(
         catalog: LocalCatalogStore,
         session: URLSession = .shared,
+        endpoints: MusicBrainzExternalMusicService.Endpoints = .init(),
+        musicBrainzMinimumInterval: TimeInterval = 1.05,
         userAgent: String = "Auralis/1.0.2 (https://github.com/zyk1172/Auralis)"
     ) {
         self.catalog = catalog
         self.engine = MusicBrainzExternalMusicService(
             catalog: catalog,
             session: session,
-            userAgent: userAgent
+            endpoints: endpoints,
+            userAgent: userAgent,
+            musicBrainzMinimumInterval: musicBrainzMinimumInterval
         )
     }
 
@@ -48,6 +56,24 @@ public actor MusicEnrichmentService: AgentExternalMusicService {
         }
         inFlight[key] = task
         defer { inFlight[key] = nil }
+        return await task.value
+    }
+
+    /// Lightweight AppShell entry point for System Music Haptics. It never
+    /// invokes full `enrich`, so CritiqueBrainz/ListenBrainz/reviews cannot
+    /// accidentally enter the playback-critical identity path.
+    public func resolveIdentityForSystemHaptics(
+        track: Track,
+        globalID: GlobalID
+    ) async -> ExternalMusicIdentity? {
+        if let existing = identityInFlight[globalID] {
+            return await existing.value
+        }
+        let task = Task { [engine] in
+            await engine.resolveIdentityForSystemHaptics(track: track, globalID: globalID)
+        }
+        identityInFlight[globalID] = task
+        defer { identityInFlight[globalID] = nil }
         return await task.value
     }
 

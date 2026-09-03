@@ -37,18 +37,26 @@ private final class ExternalMusicURLProtocol: URLProtocol, @unchecked Sendable {
         let path = request.url?.path ?? ""
         let query = request.url?.query ?? ""
         if path.hasSuffix("/recording") {
-            if query.contains("Multi") {
+            if query.localizedCaseInsensitiveContains("Backfill") {
+                // 搜索结果故意不带 ISRC；轻量 resolver 随后必须执行
+                // `inc=isrcs` 的窄 lookup 并回写 Stable Identity。
+                body = """
+                {"recordings":[{"id":"rec-backfill","score":100,"title":"Backfill Song","length":200000,
+                "artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-backfill"}}],
+                "releases":[{"id":"release-backfill","title":"Exact Album","release-group":{"id":"rg-backfill"}}]}]}
+                """
+            } else if query.contains("Multi") {
                 // 多艺术家：credit 是两个独立 artist。
                 body = """
                 {"recordings":[{"id":"rec-multi","score":100,"title":"Multi Artist Song","length":200000,
                 "artist-credit":[{"name":"ArtistA","artist":{"id":"a1"}},{"name":"ArtistB","artist":{"id":"a2"}}],
                 "releases":[{"id":"release-multi","title":"Exact Album","release-group":{"id":"rg-multi"}}]}]}
                 """
-            } else if query.contains("isrc:TEST") {
+            } else if query.contains("isrc:USABC") {
                 // ISRC 命中多 release：release-wrong 专辑名不匹配，release-right 匹配。
                 body = """
                 {"recordings":[{"id":"rec-isrc","score":100,"title":"ISRC Song","length":200000,
-                "isrcs":["TEST1234"],"artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-1"}}],
+                "isrcs":["US-ABC-12-34567"],"artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-1"}}],
                 "releases":[
                   {"id":"release-wrong","title":"Other Album","release-group":{"id":"rg-wrong"}},
                   {"id":"release-right","title":"Exact Album","release-group":{"id":"rg-right"}}
@@ -61,6 +69,12 @@ private final class ExternalMusicURLProtocol: URLProtocol, @unchecked Sendable {
                 "releases":[{"id":"release-1","title":"Exact Album","release-group":{"id":"rg-1"}}]}]}
                 """
             }
+        } else if path.contains("/recording/rec-backfill") {
+            body = """
+            {"title":"Backfill Song","isrcs":["US-ABC-12-34567"],
+            "artist-credit":[{"name":"Exact Artist","artist":{"id":"artist-backfill"}}],
+            "releases":[{"id":"release-backfill","title":"Exact Album","release-group":{"id":"rg-backfill"}}]}
+            """
         } else if path.contains("/recording/rec-multi") {
             body = """
             {"rating":{"value":4.5,"votes-count":7},"title":"Multi Artist Song",
@@ -188,6 +202,94 @@ struct ExternalMusicServiceTests {
         #expect(popularityJSON["release_group_mbids"] == ["rg-1"])
     }
 
+    @Test("Haptics 轻量身份解析只访问 MusicBrainz 并回写 Lookup ISRC")
+    func lightweightIdentityBackfillsISRCWithoutCommunityRequests() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            endpoints: .init(
+                musicBrainz: URL(string: "https://musicbrainz.test/ws/2")!,
+                critiqueBrainz: URL(string: "https://critiquebrainz.test/ws/1")!,
+                listenBrainz: URL(string: "https://listenbrainz.test/1")!
+            ),
+            musicBrainzMinimumInterval: 0,
+            preferencesProvider: { ExternalMusicPreferences() }
+        )
+        let globalID = GlobalID(serverID: "nas", remoteID: "backfill")
+
+        let identity = await service.resolveIdentityForSystemHaptics(
+            track: Track(
+                id: "backfill", serverID: "nas", albumID: "album-backfill", artistID: "artist-local",
+                title: "Backfill Song", artistName: "Exact Artist", albumTitle: "Exact Album", duration: 200
+            ),
+            globalID: globalID
+        )
+
+        #expect(identity?.recordingMBID == "rec-backfill")
+        #expect(identity?.isrc == "USABC1234567")
+        let requests = ExternalMusicURLProtocol.captured
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0.url?.host == "musicbrainz.test" })
+        #expect(requests.allSatisfy {
+            let path = $0.url?.path ?? ""
+            return !path.contains("review") && !path.contains("popularity")
+        })
+        let lookup = try #require(requests.first { $0.url?.path.contains("/recording/rec-backfill") == true })
+        let query = lookup.url?.query ?? ""
+        #expect(query.contains("inc=isrcs"))
+        #expect(!query.contains("ratings"))
+        #expect(!query.contains("genres"))
+        #expect(try await store.externalMusicIdentity(for: globalID)?.isrc == "USABC1234567")
+    }
+
+    @Test("Haptics 轻量身份解析命中缓存时零网络请求")
+    func lightweightIdentityUsesCachedISRC() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let globalID = GlobalID(serverID: "nas", remoteID: "cached-haptics")
+        try await store.upsertExternalMusicIdentity(ExternalMusicIdentity(
+            globalTrackID: globalID,
+            recordingMBID: "rec-cached",
+            isrc: "us-abc-12-34567",
+            matchConfidence: 1,
+            matchMethod: .isrc
+        ))
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            preferencesProvider: { ExternalMusicPreferences(enabled: false) }
+        )
+
+        let result = await service.resolveIdentityForSystemHaptics(
+            track: externalMusicTrack(),
+            globalID: globalID
+        )
+
+        #expect(result?.isrc == "USABC1234567")
+        #expect(ExternalMusicURLProtocol.captured.isEmpty)
+    }
+
+    @Test("Haptics 轻量身份解析遵守 MusicBrainz 隐私开关")
+    func lightweightIdentityPrivacyGateMakesZeroRequests() async throws {
+        ExternalMusicURLProtocol.reset()
+        let store = try externalMusicTestStore()
+        let service = MusicBrainzExternalMusicService(
+            catalog: store,
+            session: externalMusicSession(),
+            preferencesProvider: { ExternalMusicPreferences(enabled: false) }
+        )
+
+        let result = await service.resolveIdentityForSystemHaptics(
+            track: externalMusicTrack(),
+            globalID: GlobalID(serverID: "nas", remoteID: "privacy-haptics")
+        )
+
+        #expect(result == nil)
+        #expect(ExternalMusicURLProtocol.captured.isEmpty)
+    }
+
     @Test("中等置信度只保存候选不自动绑定")
     func mediumConfidenceStaysCandidate() async throws {
         ExternalMusicURLProtocol.reset()
@@ -206,14 +308,14 @@ struct ExternalMusicServiceTests {
         let globalID = GlobalID(serverID: "nas", remoteID: "ambiguous")
 
         let result = await service.enrich(
-            track: externalMusicTrack(title: "Exact Song Remix"),
+            track: externalMusicTrack(title: "Exact Song Alternate"),
             globalID: globalID
         )
 
         #expect(result.identity == nil)
-        #expect(!result.candidates.isEmpty)
-        #expect(result.candidates[0].confidence >= 0.65)
-        #expect(result.candidates[0].confidence < 0.90)
+        let candidate = try #require(result.candidates.first)
+        #expect(candidate.confidence >= 0.65)
+        #expect(candidate.confidence < 0.90)
         #expect(try await store.externalMusicIdentity(for: globalID) == nil)
     }
 
@@ -422,7 +524,7 @@ struct ExternalMusicServiceTests {
         let globalID = GlobalID(serverID: "nas", remoteID: "isrc-1")
         // 预置只有 ISRC、无 recordingMBID 的身份：触发 matchByISRC。
         try await store.upsertExternalMusicIdentity(ExternalMusicIdentity(
-            globalTrackID: globalID, isrc: "TEST1234",
+            globalTrackID: globalID, isrc: "USABC1234567",
             matchConfidence: 1, matchMethod: .isrc
         ))
         let endpoints = MusicBrainzExternalMusicService.Endpoints(
