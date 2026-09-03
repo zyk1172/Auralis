@@ -3271,8 +3271,17 @@ public final class MusicHapticsCoordinator {
             eventDensity = nil
             sparse = false
         }
+        let availability = systemAvailability.canUseTimeline
+            ? "system_haptics_available"
+            : "system_haptics_unavailable"
+        let selectedSource: String = switch plan {
+        case .system: "system_haptics"
+        case .custom: "fallback_custom_cache"
+        case .analyze, .analyzeLookahead: "fallback_algorithm"
+        case .disabled: "disabled"
+        }
         musicHapticsLogger.debug(
-            "HAPTICS_PLAN track=\(self.diagnosticTrack(identity), privacy: .public) plan=\(plan.kind.rawValue, privacy: .public) reason=\(reason, privacy: .public) hasISRC=\(systemAvailability.hasISRC, privacy: .public) systemActive=\(systemAvailability.active, privacy: .public) systemTimelineAvailable=\(systemAvailability.timelineAvailable, privacy: .public) fullTimelineExists=\(fullTimelineExists, privacy: .public) partialExists=\(partialExists, privacy: .public) coverage=\(coverage ?? -1, privacy: .public) events=\(eventCount, privacy: .public) event_density=\(eventDensity ?? -1, privacy: .public) timeline_suspiciously_sparse=\(sparse, privacy: .public)"
+            "HAPTICS_PLAN track=\(self.diagnosticTrack(identity), privacy: .public) plan=\(plan.kind.rawValue, privacy: .public) reason=\(reason, privacy: .public) availability=\(availability, privacy: .public) selected_source=\(selectedSource, privacy: .public) hasISRC=\(systemAvailability.hasISRC, privacy: .public) systemActive=\(systemAvailability.active, privacy: .public) systemTimelineAvailable=\(systemAvailability.timelineAvailable, privacy: .public) fullTimelineExists=\(fullTimelineExists, privacy: .public) partialExists=\(partialExists, privacy: .public) coverage=\(coverage ?? -1, privacy: .public) events=\(eventCount, privacy: .public) event_density=\(eventDensity ?? -1, privacy: .public) timeline_suspiciously_sparse=\(sparse, privacy: .public)"
         )
     }
 

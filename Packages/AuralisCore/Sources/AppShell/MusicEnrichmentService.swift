@@ -22,13 +22,17 @@ public actor MusicEnrichmentService: AgentExternalMusicService {
     public init(
         catalog: LocalCatalogStore,
         session: URLSession = .shared,
+        endpoints: MusicBrainzExternalMusicService.Endpoints = .init(),
+        musicBrainzMinimumInterval: TimeInterval = 1.05,
         userAgent: String = "Auralis/1.0.2 (https://github.com/zyk1172/Auralis)"
     ) {
         self.catalog = catalog
         self.engine = MusicBrainzExternalMusicService(
             catalog: catalog,
             session: session,
-            userAgent: userAgent
+            endpoints: endpoints,
+            userAgent: userAgent,
+            musicBrainzMinimumInterval: musicBrainzMinimumInterval
         )
     }
 
@@ -49,6 +53,20 @@ public actor MusicEnrichmentService: AgentExternalMusicService {
         inFlight[key] = task
         defer { inFlight[key] = nil }
         return await task.value
+    }
+
+    /// Lightweight AppShell entry point for System Music Haptics. It never
+    /// invokes full `enrich`, so CritiqueBrainz/ListenBrainz/reviews cannot
+    /// accidentally enter the playback-critical identity path.
+    public func resolveIdentityForSystemHaptics(
+        track: Track,
+        globalID: GlobalID
+    ) async -> ExternalMusicIdentity? {
+        // The engine owns the identity-only in-flight pool. Keeping this
+        // entry point as a thin adapter is important: full enrichment and
+        // System Music Haptics must converge on the same search/lookup task
+        // even when they enter through different AppShell call paths.
+        await engine.resolveIdentityForSystemHaptics(track: track, globalID: globalID)
     }
 
     /// 普通清缓存（保留 Stable Identity）。

@@ -11,6 +11,10 @@ public enum ExternalMusicMatchMethod: String, Codable, Sendable, Hashable {
 
 /// 本地曲目到开放音乐数据库实体的持久身份。主键始终是服务器作用域的 GlobalID。
 public struct ExternalMusicIdentity: Codable, Sendable, Hashable {
+    /// Only identities at or above this score may be persisted as a stable
+    /// recording binding or passed to System Music Haptics.
+    public static let stableMatchThreshold = 0.90
+
     public let globalTrackID: GlobalID
     public var recordingMBID: String?
     public var releaseMBID: String?
@@ -37,10 +41,30 @@ public struct ExternalMusicIdentity: Codable, Sendable, Hashable {
         self.releaseMBID = releaseMBID
         self.releaseGroupMBID = releaseGroupMBID
         self.artistMBID = artistMBID
-        self.isrc = isrc
+        self.isrc = Self.normalizedISRC(isrc)
         self.matchConfidence = min(max(matchConfidence, 0), 1)
         self.matchMethod = matchMethod
         self.verifiedAt = verifiedAt
+    }
+
+    /// Canonicalizes an ISRC without allowing malformed values to reach
+    /// Apple media matching. Separators and case differences are accepted at
+    /// the input boundary.
+    public static func normalizedISRC(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let scalars = value.uppercased().unicodeScalars.filter { scalar in
+            switch scalar.value {
+            case 48...57, 65...90: return true
+            default: return false
+            }
+        }
+        guard scalars.count == 12,
+              scalars.prefix(2).allSatisfy({ (65...90).contains($0.value) }),
+              scalars.suffix(7).allSatisfy({ (48...57).contains($0.value) })
+        else { return nil }
+        return scalars.reduce(into: "") { result, scalar in
+            result.unicodeScalars.append(scalar)
+        }
     }
 }
 
@@ -78,7 +102,7 @@ public struct ExternalMusicIdentityCandidate: Codable, Sendable, Hashable {
         self.releaseMBID = releaseMBID
         self.releaseGroupMBID = releaseGroupMBID
         self.artistMBID = artistMBID
-        self.isrc = isrc
+        self.isrc = ExternalMusicIdentity.normalizedISRC(isrc)
         self.title = title
         self.artistName = artistName
         self.duration = duration
@@ -270,6 +294,16 @@ public extension LocalCatalogStore {
         )
     }
 
+    /// Removes an identity whose strong lookup condition was disproven. This
+    /// is intentionally narrower than resetExternalMusicIdentity(), so an
+    /// ISRC mismatch cannot leave a stale Stable Identity trusted by Haptics.
+    func removeExternalMusicIdentity(for globalTrackID: GlobalID) throws {
+        try db.run(
+            "DELETE FROM external_music_identities WHERE global_track_id = ?",
+            [.text(globalTrackID.description)]
+        )
+    }
+
     func replaceExternalMusicCandidates(
         _ candidates: [ExternalMusicIdentityCandidate],
         for globalTrackID: GlobalID
@@ -447,7 +481,7 @@ public struct MusicBrainzDetail: Codable, Sendable, Hashable {
         self.releaseMBID = releaseMBID
         self.releaseGroupMBID = releaseGroupMBID
         self.artistMBID = artistMBID
-        self.isrc = isrc
+        self.isrc = ExternalMusicIdentity.normalizedISRC(isrc)
         self.title = title
         self.artistCredit = artistCredit
         self.rating = rating
