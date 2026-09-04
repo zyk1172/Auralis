@@ -772,7 +772,7 @@ struct AssistantView: View {
     /// 不会作为 `AgentChatMessage` 写入本地会话或被后续模型调用回放。
     private func transientReasoningRow(_ reasoning: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Label("思考中…", systemImage: "brain.head.profile")
+            Label(String(localized: "思考中…", bundle: .module), systemImage: "brain.head.profile")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(theme.colorTokens.secondaryText.color)
             ChatMarkdownContent(source: reasoning, compact: true)
@@ -1318,7 +1318,7 @@ private struct ArtistCardList: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(card.name).font(.subheadline)
                             .foregroundStyle(theme.colorTokens.primaryText.color)
-                        Text("\(card.albumCount) 张专辑")
+                        Text(String(localized: "\(card.albumCount) 张专辑", bundle: .module))
                             .font(.caption2)
                             .foregroundStyle(theme.colorTokens.secondaryText.color)
                     }

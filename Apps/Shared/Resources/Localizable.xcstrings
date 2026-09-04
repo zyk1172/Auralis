@@ -58,13 +58,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "What would you like the AI Assistant to do?"
+            "value" : "What would you like the AI assistant to do?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你想讓 AI 助理做什麼？"
+            "value" : "想讓 AI 助理幫你做什麼？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想让 AI 助手帮你做什么？"
           }
         }
       }
@@ -330,13 +336,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Let the AI Assistant play music, manage playlists, recommend songs, or answer questions about your library"
+            "value" : "Have the AI assistant play music, manage playlists, recommend songs, or answer music library questions"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "讓 AI 助理播放音樂、管理歌單、推薦歌曲或回答音樂庫問題"
+            "value" : "讓 AI 助理播放音樂、管理播放清單、推薦歌曲或回答音樂庫問題"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让 AI 助手播放音乐、管理播放列表、推荐歌曲或回答音乐库问题"
           }
         }
       }

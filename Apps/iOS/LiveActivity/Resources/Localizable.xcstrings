@@ -13,7 +13,13 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "打開 Auralis 開始播放後，這裡會顯示目前歌曲。"
+            "value": "開啟 Auralis 並開始播放，這裡會顯示目前歌曲。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开 Auralis 并开始播放，这里会显示当前歌曲。"
           }
         }
       }
@@ -24,13 +30,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Shows the currently playing song, artist, and progress"
+            "value": "Shows the playing song, artist, and progress"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "顯示目前播放的歌曲、藝術家與進度"
+            "value": "顯示正在播放的歌曲、藝人和進度"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示正在播放的歌曲、艺人和进度"
           }
         }
       }
@@ -41,13 +53,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nothing Playing"
+            "value": "No Song Playing"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "暫無播放"
+            "value": "沒有正在播放的歌曲"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有正在播放的歌曲"
           }
         }
       }

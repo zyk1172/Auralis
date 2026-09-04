@@ -6,13 +6,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis Recommendation Index"
+            "value" : "Auralis AI Recommendation Index"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis 推薦索引"
+            "value" : "Auralis AI 推薦索引"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis AI 推荐索引"
           }
         }
       }
@@ -22,13 +28,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis Legacy Recommendation Index"
+            "value" : "Auralis Legacy AI Recommendation Index"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis 舊版推薦索引"
+            "value" : "Auralis 舊版 AI 推薦索引"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis 旧版 AI 推荐索引"
           }
         }
       }

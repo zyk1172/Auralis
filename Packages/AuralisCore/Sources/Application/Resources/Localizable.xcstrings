@@ -137,13 +137,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Save Library"
+            "value": "Save Music Library"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "儲存資料庫"
+            "value": "儲存音樂庫"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存音乐库"
           }
         }
       }

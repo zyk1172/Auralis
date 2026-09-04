@@ -492,7 +492,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@，已不在本機資料庫"
+            "value" : "%@，已不在本機音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，已不在本地音乐库"
           }
         }
       }
@@ -730,7 +736,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 個歌單"
+            "value" : "%lld 個播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个播放列表"
           }
         }
       }
@@ -1018,7 +1030,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 首 · 已下載到本機的歌曲"
+            "value" : "%lld 首 · 已下載到裝置的歌曲"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 首 · 已下载到设备的歌曲"
           }
         }
       }
@@ -1238,13 +1256,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI & Public Data"
+            "value" : "AI & Public Music Metadata"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AI 與公開資料"
+            "value" : "AI 與公開音樂資料"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 与公开音乐资料"
           }
         }
       }
@@ -1286,13 +1310,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After the AI recommendation index finishes categorization, mood, scene, vocals, texture, style, and listening dimensions will appear here."
+            "value" : "After the AI recommendation index is complete, songs grouped by mood, scene, style, and other dimensions will appear here."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "完成 AI 推薦索引分類後，這裡會顯示情緒、情境、人聲、質感、風格與聽感等維度。"
+            "value" : "完成 AI 推薦索引後，這裡會顯示按情緒、情境、風格等維度整理的歌曲。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成 AI 推荐索引后，这里会显示按情绪、场景、风格等维度整理的歌曲。"
           }
         }
       }
@@ -1383,13 +1413,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The app only persists music library metadata locally (tracks, albums, artists, genres, playlists, favorites, and playback history). Artwork and lyrics are loaded on demand and not cached proactively; offline downloads still use temporary audio cache."
+            "value" : "Auralis only stores music library metadata locally (songs, albums, artists, genres, playlists, favorites, and listening history). Artwork and lyrics load on demand; downloaded songs use audio cache space."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "App 只在本機持久化音樂庫中繼資料（歌曲、專輯、藝術家、流派、歌單、收藏與播放記錄）。封面與歌詞按需從伺服器載入，不主動快取；離線下載的歌曲仍會佔用臨時音訊快取。"
+            "value" : "Auralis 只在本機儲存音樂庫中繼資料（歌曲、專輯、藝人、流派、播放清單、收藏與聽歌記錄）。封面和歌詞按需載入；已下載歌曲會佔用音訊快取空間。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis 只在本机保存音乐库元数据（歌曲、专辑、艺人、流派、播放列表、收藏与听歌记录）。封面和歌词按需加载；已下载歌曲会占用音频缓存空间。"
           }
         }
       }
@@ -1518,7 +1554,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Auralis-推薦索引-%@"
+            "value" : "Auralis-AI 推薦索引-%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auralis-AI 推荐索引-%@"
           }
         }
       }
@@ -1979,13 +2021,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Siri and Shortcuts only use local library names and identifiers for matching and never expose server addresses, accounts, or tokens."
+            "value" : "Siri and Shortcuts only match against local music library names and identifiers; server addresses, accounts, and tokens are never exposed."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Siri 與快捷指令只使用本機資料庫的名稱與識別碼進行比對，不會洩露伺服器位址、帳號或權杖。"
+            "value" : "Siri 與快捷指令只使用本機音樂庫的名稱與識別碼進行比對，不會洩露伺服器位址、帳號或權杖。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Siri 与快捷指令只使用本地音乐库的名称和标识进行匹配，不会暴露服务器地址、账号或令牌。"
           }
         }
       }
@@ -2043,13 +2091,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The Tavily Key is stored only in the system Keychain. When enabled, it is preferred for targeted public-music evidence in Recommendation Index; local metadata remains the fallback when it is not configured or fails."
+            "value" : "The Tavily Key is stored only in the system Keychain. When enabled, the AI recommendation index uses it to supplement public music metadata; local information is used if it is not configured or a request fails."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tavily Key 僅儲存於系統 Keychain。啟用後優先用於 Recommendation Index 的定向公開音樂補證；未設定或失敗時仍使用本機中繼資料。"
+            "value" : "Tavily Key 只儲存在系統 Keychain。啟用後，AI 推薦索引會用它補充公開音樂資料；未設定或要求失敗時使用本機資訊。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tavily Key 只存储在系统 Keychain。启用后，AI 推荐索引会用它补充公开音乐资料；未配置或请求失败时使用本地信息。"
           }
         }
       }
@@ -2272,7 +2326,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "上次處理"
+            "value" : "最近處理"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近处理"
           }
         }
       }
@@ -2442,13 +2502,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Download Locally"
+            "value" : "Download to Device"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下載到本機"
+            "value" : "下載到裝置"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载到设备"
           }
         }
       }
@@ -2458,13 +2524,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Songs downloaded for offline playback will appear here."
+            "value" : "Downloaded songs appear here and can be played offline."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下載到本機的歌曲會出現在這裡。"
+            "value" : "下載完成的歌曲會顯示在這裡，離線也能播放。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载完成的歌曲会显示在这里，断网也能播放。"
           }
         }
       }
@@ -2528,7 +2600,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下載歌單"
+            "value" : "下載播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载播放列表"
           }
         }
       }
@@ -2849,13 +2927,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Temporary Audio Cache"
+            "value" : "Audio Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "臨時音訊快取"
+            "value" : "音訊快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音频缓存"
           }
         }
       }
@@ -3027,13 +3111,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Only local login credentials, library data, and caches are removed; music, playlists, and favorites on the server are not deleted."
+            "value" : "Only local sign-in information, music library data, and caches are removed; music, playlists, and favorites on the server are not deleted."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "僅刪除本機登入憑證、目錄與快取；伺服器上的音樂、歌單和收藏不會被刪除。"
+            "value" : "只會刪除本機的登入資訊、音樂庫資料和快取；伺服器上的音樂、播放清單與收藏不會被刪除。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只会删除本机的登录信息、音乐库数据和缓存；服务器上的音乐、播放列表与收藏不会被删除。"
           }
         }
       }
@@ -3043,13 +3133,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Queries only run on demand when you open features that need public music data, such as song info and song appreciation. Audio files, lyrics, stream URLs, NAS passwords, or your full library are never uploaded. Results are cached for 14 days by default."
+            "value" : "Public music metadata is queried on demand only when a feature needs it, such as song info, appreciation, or the AI Recommendation Index. Audio, lyrics, stream URLs, NAS passwords, and your full music library are never uploaded; results are cached for 14 days by default."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "僅在打開歌曲資訊、歌曲鑑賞等需要公開音樂資料的功能時按需查詢。不會上傳音訊檔案、歌詞、播放位址、NAS 密碼或完整音樂庫。查詢結果預設快取 14 天。"
+            "value" : "公開音樂資料僅在需要相關資料的功能中按需查詢，例如歌曲資訊、歌曲鑑賞和 AI 推薦索引。不會上傳音訊、歌詞、串流位址、NAS 密碼或完整音樂庫；結果預設快取 14 天。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开音乐资料仅在需要相关资料的功能中按需查询，例如歌曲信息、歌曲鉴赏和 AI 推荐索引。不会上传音频、歌词、流媒体地址、NAS 密码或完整音乐库；结果默认缓存 14 天。"
           }
         }
       }
@@ -3123,13 +3219,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Select a library or tool from the left to begin"
+            "value" : "Select a music library or tool on the left to begin"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從左側選擇資料庫或工具開始"
+            "value" : "從左側選擇音樂庫或工具開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从左侧选择音乐库或工具开始"
           }
         }
       }
@@ -3395,13 +3497,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Changing the address will not create a duplicate server or delete your locally synced music library."
+            "value" : "Changing the address will not create a duplicate entry or delete your synced local music library."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "修改位址不會新建重複伺服器，也不會刪除本機已同步的音樂庫。"
+            "value" : "修改位址不會新建重複項目，也不會刪除已同步的本機音樂庫。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修改地址不会新建重复条目，也不会删除已同步的本地音乐库。"
           }
         }
       }
@@ -3443,13 +3551,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow AI to use song metadata for public web searches"
+            "value" : "Allow AI to use song information for public web lookups"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允許 AI 使用歌曲中繼資料進行公開網路搜尋"
+            "value" : "允許 AI 使用歌曲資訊進行公開網路查詢"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 AI 使用歌曲信息进行公开网络查询"
           }
         }
       }
@@ -3491,13 +3605,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow Sending Playback History Summary"
+            "value" : "Allow Sending Listening History Summary"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允許發送播放歷史摘要"
+            "value" : "允許傳送聽歌歷史摘要"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许发送听歌历史摘要"
           }
         }
       }
@@ -3555,13 +3675,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow Some Duplicates"
+            "value" : "Allow Some Repeats"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允許少量重複"
+            "value" : "可以少量重複"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以少量重复"
           }
         }
       }
@@ -3715,13 +3841,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public Music Data"
+            "value" : "Public Music Metadata"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "公開音樂資料"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开音乐资料"
           }
         }
       }
@@ -3731,13 +3863,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public music data is disabled."
+            "value" : "Public music metadata is disabled."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "公開音樂資料已關閉。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开音乐资料已关闭。"
           }
         }
       }
@@ -3747,13 +3885,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public music data is temporarily unavailable. Please check your network connection."
+            "value" : "Public music metadata is temporarily unavailable. Please check your network connection."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "公開音樂資料暫時不可用，請檢查網路連線。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开音乐资料暂时不可用，请检查网络连接。"
           }
         }
       }
@@ -3763,13 +3907,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public music data is temporarily unavailable."
+            "value" : "Public music metadata is temporarily unavailable."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "公開音樂資料暫時不可用。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开音乐资料暂时不可用。"
           }
         }
       }
@@ -3779,13 +3929,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public music data cache cleared (verified music identities retained)."
+            "value" : "Public music metadata cache cleared; verified music identities were retained."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "公開音樂資料快取已清除（保留已驗證的音樂身分）。"
+            "value" : "公開音樂資料快取已清除（已驗證的音樂身分仍保留）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开音乐资料缓存已清除（已核验的音乐身份仍保留）。"
           }
         }
       }
@@ -3795,13 +3951,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public music data request rate limit reached. Please try again later."
+            "value" : "Public music metadata request rate limit reached. Please try again later."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "公開音樂資料請求過於頻繁，請稍後再試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开音乐资料请求过于频繁，请稍后再试。"
           }
         }
       }
@@ -3811,7 +3973,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public Music Data"
+            "value" : "Public Music Metadata"
           }
         },
         "zh-Hant" : {
@@ -3827,13 +3989,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "HTTPS is recommended for public servers."
+            "value" : "Use HTTPS for public server addresses."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "公網伺服器建議使用 HTTPS。"
+            "value" : "公網位址請使用 HTTPS。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公网地址请使用 HTTPS。"
           }
         }
       }
@@ -3843,13 +4011,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "About"
+            "value" : "About Auralis"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "關於"
+            "value" : "關於 Auralis"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于 Auralis"
           }
         }
       }
@@ -3923,13 +4097,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Both LAN and WAN are probed. The LAN is used first when reachable within 30 seconds; the WAN is used only when the LAN is confirmed unreachable."
+            "value" : "Both LAN and public addresses are tested. A reachable LAN address is preferred within 30 seconds; the public address is used only after LAN is confirmed unreachable."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "內網和外網會同時探測。內網在 30 秒內可達時優先使用；只有內網確認不可達時才使用外網。"
+            "value" : "會同時測試區域網路和公網位址。30 秒內可達的區域網路位址優先；只有區域網路確認無法連線時才切換到公網位址。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会同时测试局域网和公网地址。30 秒内可达的局域网地址优先；只有局域网确认不可达时才切换到公网地址。"
           }
         }
       }
@@ -3945,7 +4125,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "內網伺服器位址"
+            "value" : "區域網路伺服器位址"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "局域网服务器地址"
           }
         }
       }
@@ -4259,13 +4445,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Credentials are stored securely in the system Keychain."
+            "value" : "Your account and password are stored only in the system Keychain."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "憑證安全儲存在系統 Keychain 中。"
+            "value" : "帳號與密碼只儲存在系統 Keychain。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账号与密码仅保存在系统 Keychain。"
           }
         }
       }
@@ -4387,13 +4579,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switching only affects your local library and playback session; server data is not modified."
+            "value" : "Switching only affects this device’s music library and playback session; server data is not changed."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切換只影響本機資料庫和播放會話，不會修改伺服器資料。"
+            "value" : "切換只影響本機音樂庫和播放會話，不會改動伺服器上的資料。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换只影响本机音乐库和播放会话，不会改动服务器上的数据。"
           }
         }
       }
@@ -4419,13 +4617,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switch Servers?"
+            "value" : "Switch Music Server?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切換伺服器？"
+            "value" : "切換音樂伺服器？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换音乐服务器？"
           }
         }
       }
@@ -4611,13 +4815,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete All Local Music"
+            "value" : "Delete All Offline Songs"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "刪除全部本機音樂"
+            "value" : "刪除全部離線歌曲"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除全部离线歌曲"
           }
         }
       }
@@ -4627,13 +4837,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete All Local Music?"
+            "value" : "Delete All Offline Songs?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "刪除全部本機音樂？"
+            "value" : "刪除全部離線歌曲？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除全部离线歌曲？"
           }
         }
       }
@@ -4659,13 +4875,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete the %lld selected local songs?"
+            "value" : "Delete the %lld Selected Offline Songs?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "刪除所選的 %lld 首本機音樂？"
+            "value" : "刪除所選的 %lld 首離線歌曲？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除所选的 %lld 首离线歌曲？"
           }
         }
       }
@@ -4761,7 +4983,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "刪除歌單"
+            "value" : "刪除播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除播放列表"
           }
         }
       }
@@ -4777,7 +5005,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "刪除歌單？"
+            "value" : "刪除播放清單？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除播放列表？"
           }
         }
       }
@@ -4793,7 +5027,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "刪除歌單「%@」？"
+            "value" : "刪除播放清單「%@」？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除播放列表「%@」？"
           }
         }
       }
@@ -4841,7 +5081,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "刪除選中的 %lld 個歌單？"
+            "value" : "刪除選中的 %lld 個播放清單？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除选中的 %lld 个播放列表？"
           }
         }
       }
@@ -4964,13 +5210,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Assistant Preferences"
+            "value" : "Recommendation Preferences"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "助理偏好"
+            "value" : "推薦偏好"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推荐偏好"
           }
         }
       }
@@ -5456,7 +5708,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只會刪除歌單本身，不會刪除其中的歌曲。"
+            "value" : "只會刪除播放清單本身，不會刪除其中的歌曲。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只会删除播放列表本身，不会删除其中的歌曲。"
           }
         }
       }
@@ -5466,13 +5724,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Only deletes offline files on this Mac; songs on the music server are not removed."
+            "value" : "Only offline files on this Mac are deleted; songs on the music server are not affected."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只刪除這臺 Mac 上的離線檔案，不會刪除音樂伺服器上的歌曲。"
+            "value" : "只會刪除這臺 Mac 上的離線檔案，不會影響伺服器上的歌曲。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只删除这台 Mac 上的离线文件，不会影响服务器上的歌曲。"
           }
         }
       }
@@ -5482,13 +5746,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Only deletes offline files on this device; songs on the music server are not removed."
+            "value" : "Only offline files on this device are deleted; songs on the music server are not affected."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只刪除這臺裝置上的離線檔案，不會刪除音樂伺服器上的歌曲。"
+            "value" : "只會刪除這臺裝置上的離線檔案，不會影響伺服器上的歌曲。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只删除这台设备上的离线文件，不会影响服务器上的歌曲。"
           }
         }
       }
@@ -5760,13 +6030,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enable AI Features"
+            "value" : "Enable AI Assistant"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啓用 AI 功能"
+            "value" : "啟用 AI 助理"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 AI 助手"
           }
         }
       }
@@ -5776,13 +6052,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enable Tavily Public Search"
+            "value" : "Enable Tavily Search"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用 Tavily 公開搜尋"
+            "value" : "啟用 Tavily 搜尋"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 Tavily 搜索"
           }
         }
       }
@@ -5792,13 +6074,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enable Public Music Data"
+            "value" : "Enable Public Music Metadata"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "啟用公開音樂資料"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用公开音乐资料"
           }
         }
       }
@@ -5888,13 +6176,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Favorite a song from the player or song menu and it will appear here."
+            "value" : "Favorite a song from the player or its menu and it will appear here."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在播放頁或歌曲選單點選愛心收藏後，內容會顯示在這裡。"
+            "value" : "在播放頁或歌曲選單中點按愛心收藏歌曲，內容會顯示在這裡。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在播放页或歌曲菜单中点按爱心收藏歌曲，它们会显示在这里。"
           }
         }
       }
@@ -5904,13 +6198,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Create playlists on the server and they will appear here."
+            "value" : "Created or synced playlists available for adding songs appear here."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在伺服器上建立歌單後，這裡會列出所有可選歌單。"
+            "value" : "建立或同步播放清單後，這裡會列出可新增歌曲的播放清單。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建或同步播放列表后，这里会列出可添加歌曲的播放列表。"
           }
         }
       }
@@ -5920,13 +6220,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Create playlists on the server and they will appear here."
+            "value" : "Created or synced playlists appear here."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在伺服器上建立歌單後，這裡會列出所有歌單。"
+            "value" : "建立或同步播放清單後，它們會顯示在這裡。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建或同步播放列表后，它们会显示在这里。"
           }
         }
       }
@@ -5952,13 +6258,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choose “Download Locally” from a song, album, or playlist menu to play offline."
+            "value" : "Choose “Download to Device” from a song, album, or playlist menu to play offline."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在歌曲、專輯或歌單菜單中選擇“下載到本機”，即可離線播放。"
+            "value" : "在歌曲、專輯或播放清單選單中選擇「下載到裝置」，即可離線播放。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在歌曲、专辑或播放列表菜单中选择“下载到设备”，即可离线播放。"
           }
         }
       }
@@ -6000,13 +6312,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Search Servers Online"
+            "value" : "Search Music Server Online"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在線搜尋伺服器"
+            "value" : "在線搜尋音樂伺服器"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在线搜索音乐服务器"
           }
         }
       }
@@ -6032,13 +6350,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After completing the Recommendation Index in Settings → AI & Public Data, categories will appear here with song counts."
+            "value" : "After completing the AI Recommendation Index in Settings → AI & Public Music Metadata, categories will appear here with song counts."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在設定 → AI 與公開資料中完成推薦索引後，這裡會按歌曲數量顯示分類。"
+            "value" : "在設定 → AI 與公開音樂資料中完成 AI 推薦索引後，這裡會按歌曲數量顯示分類。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在设置 → AI 与公开音乐资料中完成 AI 推荐索引后，这里会按歌曲数量展示分类。"
           }
         }
       }
@@ -6096,13 +6420,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After entering a LAN address and an optional WAN address, Auralis probes both; the LAN is preferred when reachable within 30 seconds, falling back to the WAN only when unreachable. Use a full http:// or https:// URL for the WAN; HTTPS is safer since HTTP sends your call token in plain text. The agent searches and downloads via plugins into your NAS music directory (download only, no scraping/organizing)."
+            "value" : "Enter a LAN address and optional public address and Auralis will test both. A reachable LAN address is preferred within 30 seconds; the public address is used only after LAN is confirmed unreachable. Public addresses must include http:// or https://; HTTPS is safer, while HTTP sends the call token in plain text. The AI assistant searches through the plugin and downloads to the NAS music directory (download only; no scraping or organizing)."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "填寫內網位址及可選外網位址後，Auralis 會同時探測兩端；內網 30 秒內可達則優先使用，內網不可達才降級外網。外網請填寫完整的 http:// 或 https:// 位址；HTTPS 更安全，HTTP 會明文傳輸呼叫 Token。Agent 會通過外掛搜尋並下載到 NAS 音樂目錄（僅下載，不刮削/整理）。"
+            "value" : "填寫區域網路位址和選填的公網位址後，Auralis 會同時測試兩端；區域網路 30 秒內可達時優先使用，確認無法連線後才切換到公網。公網位址必須包含完整的 http:// 或 https://；HTTPS 更安全，HTTP 會以明文傳送呼叫權杖。AI 助理會透過外掛搜尋並下載到 NAS 音樂目錄（僅下載，不刮削或整理）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "填写局域网地址和可选的公网地址后，Auralis 会同时测试两端；局域网 30 秒内可达时优先使用，确认不可达后才切换到公网。公网地址必须包含完整的 http:// 或 https://；HTTPS 更安全，HTTP 会明文传输调用 Token。AI 助手会通过插件搜索并下载到 NAS 音乐目录（仅下载，不刮削或整理）。"
           }
         }
       }
@@ -6182,7 +6512,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份內容：App 設定、音樂伺服器（含登入憑證）、大型語言模型介面、音樂下載外掛（含 Token）。不包含本機資料庫、歌曲、專輯、歌單、收藏、播放記錄、快取或下載檔案。備份檔案使用密碼加密，請妥善保管密碼。"
+            "value" : "備份內容：App 設定、音樂伺服器（含登入憑證）、AI 模型介面、音樂下載外掛（含 Token）。不包含本機音樂庫、歌曲、專輯、播放清單、收藏、播放記錄、快取或下載檔案。備份檔案使用密碼加密，請妥善保管密碼。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份内容：App 设置、音乐服务器（含登录凭据）、AI 模型接口、音乐下载插件（含 Token）。不包含本地数据库、歌曲、专辑、播放列表、收藏、播放记录、缓存或下载文件。备份文件使用密码加密，请妥善保管密码。"
           }
         }
       }
@@ -6342,7 +6678,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "複製歌單"
+            "value" : "複製播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制播放列表"
           }
         }
       }
@@ -6416,13 +6758,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "WAN server address (optional)"
+            "value" : "Public Server Address (Optional)"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外網伺服器位址（可選）"
+            "value" : "公網伺服器位址（選填）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公网服务器地址（可选）"
           }
         }
       }
@@ -6480,13 +6828,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Large Language Model"
+            "value" : "AI Model"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "大型語言模型"
+            "value" : "AI 模型"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 模型"
           }
         }
       }
@@ -6496,13 +6850,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Large Language Model, Recommendation Index & Privacy"
+            "value" : "AI Model, AI Recommendation Index & Privacy Controls"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "大型語言模型、推薦索引與隱私"
+            "value" : "AI 模型、AI 推薦索引與隱私控制"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 模型、AI 推荐索引与隐私控制"
           }
         }
       }
@@ -6576,13 +6936,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Full Rebuild"
+            "value" : "Rebuild"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "完全重建"
+            "value" : "重新建立"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新建立"
           }
         }
       }
@@ -6592,13 +6958,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fully rebuild the library?"
+            "value" : "Rebuild the Local Music Library?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "完全重建目錄？"
+            "value" : "重新建立本機音樂庫？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新建立本地音乐库？"
           }
         }
       }
@@ -6688,13 +7060,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Import Index…"
+            "value" : "Import AI Recommendation Index…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "匯入索引…"
+            "value" : "匯入 AI 推薦索引…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导入 AI 推荐索引…"
           }
         }
       }
@@ -6752,13 +7130,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Export Index…"
+            "value" : "Export AI Recommendation Index…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "導出索引…"
+            "value" : "匯出 AI 推薦索引…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导出 AI 推荐索引…"
           }
         }
       }
@@ -6817,13 +7201,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This removes all classification tags for the current server. Your library, downloads, playback history, and other servers' indexes are unaffected; you can rebuild the index later."
+            "value" : "This deletes all AI categories and tags for the current server. Your music library, downloads, listening history, and indexes for other servers are unaffected; you can rebuild it later."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將刪除目前伺服器的所有分類標籤。音樂庫、下載、播放紀錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
+            "value" : "這會刪除目前伺服器的所有 AI 分類與標籤。不會影響音樂庫、下載、聽歌歷史或其他伺服器的索引；之後可以重新建立。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将删除当前服务器的所有 AI 分类与标签。不会影响音乐库、下载、听歌历史或其他服务器的索引；之后可以重新建立。"
           }
         }
       }
@@ -6834,13 +7224,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This deletes all Recommendation Index categories and AI tags for the current server. Your music library, downloads, playback history, and indexes of other servers are unaffected; you can restart indexing later."
+            "value" : "This deletes all AI Recommendation Index categories and AI tags for the current server. Your music library, downloads, playback history, and indexes of other servers are unaffected; you can restart indexing later."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將刪除目前伺服器的所有推薦索引分類與 AI 標籤。音樂庫、下載、播放記錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
+            "value" : "將刪除目前伺服器的所有 AI 推薦索引分類與 AI 標籤。音樂庫、下載、播放記錄和其他伺服器的索引不會受影響；之後可重新開始索引。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将删除当前服务器的所有 AI 推荐索引分类与 AI 标签。音乐库、下载、播放记录和其他服务器的索引不会受影响；之后可重新开始索引。"
           }
         }
       }
@@ -6856,7 +7252,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將刪除本機儲存的登入憑證、離線目錄與快取；伺服器上的音樂、歌單與收藏不會被刪除。"
+            "value" : "將刪除本機儲存的登入憑證、離線目錄與快取；伺服器上的音樂、播放清單與收藏不會被刪除。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将删除本机保存的登录凭据、离线目录与缓存；服务器上的音乐、播放列表与收藏不会被删除。"
           }
         }
       }
@@ -6866,13 +7268,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Temporarily cached audio files on this device will be deleted; user-downloaded offline music is not removed."
+            "value" : "Audio cache files on this device will be deleted; songs downloaded for offline use will not be removed."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將刪除本機已下載的臨時音訊快取檔案；使用者主動下載的離線音樂不會被刪除。"
+            "value" : "這會刪除本機的音訊快取檔案；主動下載的離線歌曲不會被刪除。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将删除本机的音频缓存文件；主动下载的离线歌曲不会被删除。"
           }
         }
       }
@@ -6882,13 +7290,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "All cached cover images on this device will be deleted. Covers will be loaded from the server on demand in the future."
+            "value" : "All cached artwork on this device will be deleted; artwork will load from the server only when needed afterward."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將刪除本機已快取的全部封面圖片。今後封面只按需從伺服器載入，不再主動快取。"
+            "value" : "這會刪除本機快取的所有封面圖片；之後封面只會在需要時從伺服器載入。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将删除本机缓存的所有封面图片；之后封面会在需要时从服务器加载。"
           }
         }
       }
@@ -6904,7 +7318,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將還原：App 設定、音樂伺服器、大型語言模型與音樂下載設定。不會覆蓋或刪除本機資料庫、歌曲、歌單、收藏、播放記錄、快取或下載檔案。"
+            "value" : "將還原：App 設定、音樂伺服器、AI 模型與音樂下載設定。不會覆蓋或刪除本機音樂庫、歌曲、播放清單、收藏、播放記錄、快取或下載檔案。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将恢复：App 设置、音乐服务器、AI 模型与音乐下载配置。不会覆盖或删除本地数据库、歌曲、播放列表、收藏、播放记录、缓存或下载文件。"
           }
         }
       }
@@ -6920,7 +7340,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將還原：伺服器資訊、大型語言模型設定與其他設定。不會覆蓋或刪除歌曲、歌單、收藏與播放記錄。"
+            "value" : "將還原：伺服器資訊、AI 模型設定與其他設定。不會覆蓋或刪除歌曲、播放清單、收藏與播放記錄。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将恢复：服务器信息、AI 模型配置与其他设置。不会覆盖或删除歌曲、播放列表、收藏与播放记录。"
           }
         }
       }
@@ -6930,13 +7356,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This clears the local library and re-downloads all data from the server, which takes a while. Server data is unaffected."
+            "value" : "This clears the local music library and fetches everything from the server again. It may take some time; server data is unchanged."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將清空本機目錄並從伺服器重新下載全部資料，耗時較長。伺服器資料不受影響。"
+            "value" : "這會清空本機音樂庫並從伺服器重新擷取全部內容，可能需要一段時間；伺服器上的資料不會變更。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将清空本机音乐库并从服务器重新拉取全部内容，可能需要较长时间；服务器上的数据不会改变。"
           }
         }
       }
@@ -7010,13 +7442,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Avoid Duplicates"
+            "value" : "Avoid Repeats When Possible"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "盡量不重複"
+            "value" : "盡量避免重複"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尽量避免重复"
           }
         }
       }
@@ -7592,7 +8030,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "常用歌單"
+            "value" : "常用播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常用播放列表"
           }
         }
       }
@@ -7698,13 +8142,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, content metadata such as song titles, artists, and albums may be sent to the configured AI Provider, Apple iTunes, or Tavily; playback history, favorites, ratings, local paths, stream URLs, and credentials are not sent."
+            "value" : "When enabled, song titles, artists, albums, and other metadata may be sent to configured AI providers, Apple iTunes, or Tavily. Listening history, favorites, ratings, local paths, stream URLs, and credentials are not sent."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，歌曲標題、藝人與專輯等內容中繼資料可能傳送給已設定的 AI Provider、Apple iTunes 或 Tavily；不會傳送播放記錄、收藏、評分、本機路徑、串流位址或認證資料。"
+            "value" : "開啟後，歌曲標題、藝人和專輯等資訊可能傳送給已設定的 AI Provider、Apple iTunes 或 Tavily；不會傳送聽歌歷史、收藏、評分、本機路徑、串流位址或憑證。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后，歌曲标题、艺人和专辑等信息可能发送给已配置的 AI Provider、Apple iTunes 或 Tavily；不会发送听歌历史、收藏、评分、本地路径、流媒体地址或凭据。"
           }
         }
       }
@@ -7714,13 +8164,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Start / Resume Full Index"
+            "value" : "Start/Continue Indexing"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開始/繼續全量索引"
+            "value" : "開始／繼續建立索引"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始/继续建立索引"
           }
         }
       }
@@ -7746,13 +8202,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Start Full Index"
+            "value" : "Start Indexing"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開始全量索引"
+            "value" : "開始建立索引"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始建立索引"
           }
         }
       }
@@ -7858,13 +8320,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The Recommendation Index for the current server has been cleared. You can restart indexing."
+            "value" : "The current server’s AI recommendation index is empty. You can rebuild it."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目前伺服器的推薦索引已清空，可重新開始索引。"
+            "value" : "目前伺服器的 AI 推薦索引已清空，可以重新建立。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前服务器的 AI 推荐索引已清空，可以重新建立。"
           }
         }
       }
@@ -7955,13 +8423,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Current Library"
+            "value" : "Current Music Library"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目前資料庫"
+            "value" : "目前音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前音乐库"
           }
         }
       }
@@ -7971,13 +8445,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No albums are in the current library yet. Try syncing or scanning the library."
+            "value" : "The current music library has no albums yet. Try syncing the music library."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目前資料庫尚無專輯，可能需要同步或掃描音樂庫。"
+            "value" : "目前音樂庫尚無專輯，可能需要同步音樂庫。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前音乐库还没有专辑，可能需要同步音乐库。"
           }
         }
       }
@@ -7987,13 +8467,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No artists are in the current library yet. Try syncing or scanning the library."
+            "value" : "The current music library has no artists yet. Try syncing the music library."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目前資料庫尚無藝術家，可能需要同步或掃描音樂庫。"
+            "value" : "目前音樂庫尚無藝人，可能需要同步音樂庫。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前音乐库还没有艺人，可能需要同步音乐库。"
           }
         }
       }
@@ -8067,13 +8553,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Long Unplayed"
+            "value" : "Not Played Recently"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "很久沒聽"
+            "value" : "久未播放"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "久未播放"
           }
         }
       }
@@ -8634,13 +9126,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sorted by your play count"
+            "value" : "Sorted by Play Count"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "依你的播放次數排序"
+            "value" : "按播放次數排序"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按播放次数排序"
           }
         }
       }
@@ -8826,13 +9324,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recommendation Context"
+            "value" : "Listening Context"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "推薦情境"
+            "value" : "聽歌情境"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "听歌场景"
           }
         }
       }
@@ -8842,13 +9346,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recommendation Index"
+            "value" : "AI Recommendation Index"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "推薦索引"
+            "value" : "AI 推薦索引"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 推荐索引"
           }
         }
       }
@@ -8922,13 +9432,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Search Your Library"
+            "value" : "Search Music Library"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "搜尋你的資料庫"
+            "value" : "搜尋音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索音乐库"
           }
         }
       }
@@ -9459,13 +9975,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Songs with support use system Music Haptics first; for other songs, a haptic track is generated in the background on first playback and used thereafter."
+            "value" : "When a system Music Haptics track is available, use it first; other songs are analyzed in the background on first play and reused thereafter."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "支援的歌曲優先使用系統 Music Haptics；其他歌曲會在首次播放時於背景產生觸覺軌道，之後播放時使用。"
+            "value" : "有系統 Music Haptics 軌道時優先使用；其他歌曲首次播放時會在背景分析，之後直接重複使用。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有系统 Music Haptics 轨道时优先使用；其他歌曲首次播放时会在后台分析，之后直接复用。"
           }
         }
       }
@@ -9603,13 +10125,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Play Random Favorites"
+            "value" : "Shuffle Favorites"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "收藏裡隨便聽"
+            "value" : "隨機播放收藏"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随机听收藏"
           }
         }
       }
@@ -9619,13 +10147,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Saved Haptics Data"
+            "value" : "Saved Haptic Data"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "收藏震動資料"
+            "value" : "已儲存的觸感資料"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的触感数据"
           }
         }
       }
@@ -9683,13 +10217,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Data & Backups"
+            "value" : "Data, Cache & Backups"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "資料與備份"
+            "value" : "資料、快取與備份"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据、缓存与备份"
           }
         }
       }
@@ -9731,13 +10271,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "New Password (leave blank to keep current)"
+            "value" : "New Password (Leave Blank to Keep Current)"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新密碼（留空則不修改）"
+            "value" : "新密碼（留白表示不修改）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新密码（留空表示不修改）"
           }
         }
       }
@@ -9801,7 +10347,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無偏好"
+            "value" : "不設偏好"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不设偏好"
           }
         }
       }
@@ -9897,7 +10449,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無法刪除歌單"
+            "value" : "無法刪除播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法删除播放列表"
           }
         }
       }
@@ -9929,7 +10487,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無法定位歌單所屬伺服器。"
+            "value" : "無法定位播放清單所屬伺服器。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法定位播放列表所属服务器。"
           }
         }
       }
@@ -10067,13 +10631,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Show or hide library items and drag to reorder"
+            "value" : "Show or hide music library items and drag to reorder"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "顯示或隱藏資料庫項目、拖動排序"
+            "value" : "顯示或隱藏音樂庫項目，並拖動調整順序"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示或隐藏音乐库项目，并拖动调整顺序"
           }
         }
       }
@@ -10083,13 +10653,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Standard Haptics Cache"
+            "value" : "Temporary Haptic Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一般震動快取"
+            "value" : "臨時觸感快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "临时触感缓存"
           }
         }
       }
@@ -10265,7 +10841,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "暫無歌單"
+            "value" : "暫無播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无播放列表"
           }
         }
       }
@@ -10585,7 +11167,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器上的歌單也會被刪除，此操作不可撤銷。"
+            "value" : "伺服器上的播放清單也會被刪除，此操作不可撤銷。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器上的播放列表也会被删除，此操作不可撤销。"
           }
         }
       }
@@ -10601,7 +11189,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "該歌單在伺服器上尚未新增歌曲。"
+            "value" : "該播放清單在伺服器上尚未新增歌曲。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器上这个播放列表里还没有添加歌曲。"
           }
         }
       }
@@ -10643,13 +11237,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Server Info"
+            "value" : "Server Connection"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器資訊"
+            "value" : "伺服器連線"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器连接"
           }
         }
       }
@@ -10665,7 +11265,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器可達"
+            "value" : "伺服器可以存取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器可以访问"
           }
         }
       }
@@ -10713,7 +11319,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器名稱與資料庫統計（執行基本資訊）"
+            "value" : "伺服器名稱與音樂庫統計（執行基本資訊）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器名称与音乐库统计（运行基础信息）"
           }
         }
       }
@@ -10793,7 +11405,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器無響應"
+            "value" : "伺服器沒有回應"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器没有响应"
           }
         }
       }
@@ -10809,7 +11427,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器未確認刪除。請檢查網路與歌單權限後重試。"
+            "value" : "伺服器未確認刪除。請檢查網路與播放清單權限後重試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器未确认删除。请检查网络与播放列表权限后重试。"
           }
         }
       }
@@ -10851,13 +11475,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Genres returned by the server from embedded music tags will appear here after you connect and sync."
+            "value" : "Genres read from embedded music-file tags appear here after you connect and sync."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "伺服器回傳的流派（來自音樂檔案內嵌標籤）會顯示在這裡；連線並同步後即可按流派瀏覽。"
+            "value" : "這裡會顯示伺服器從音樂檔案標籤讀取的流派；連線並同步後即可按流派瀏覽。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这里显示服务器从音乐文件标签读取的流派；连接并同步后即可按流派浏览。"
           }
         }
       }
@@ -11187,13 +11817,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No songs, albums, artists, or playlists matched in the local persistent library. Try searching the server online."
+            "value" : "No songs, albums, artists, or playlists matched in the local music library. Try searching the music server online."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機持久化資料庫中沒有同時符合歌曲、專輯、藝術家或歌單的內容。可以嘗試在線搜尋伺服器。"
+            "value" : "本機音樂庫中沒有同時符合歌曲、專輯、藝人或播放清單的內容。可以嘗試在線搜尋音樂伺服器。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地音乐库中没有同时匹配歌曲、专辑、艺人或播放列表的内容。可以尝试在线搜索音乐服务器。"
           }
         }
       }
@@ -11203,13 +11839,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No Local Matches"
+            "value" : "No Matches"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機沒有符合的結果"
+            "value" : "找不到符合的結果"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有找到匹配结果"
           }
         }
       }
@@ -11235,13 +11877,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local Cache"
+            "value" : "Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機快取"
+            "value" : "快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存"
           }
         }
       }
@@ -11251,13 +11899,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local Cache & Configuration Backups"
+            "value" : "Cache, Diagnostics & Settings Backups"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機快取與設定備份"
+            "value" : "快取、診斷與設定備份"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存、诊断与设置备份"
           }
         }
       }
@@ -11283,13 +11937,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local Music Directory"
+            "value" : "Local Music Library"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機音樂目錄"
+            "value" : "本機音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地音乐库"
           }
         }
       }
@@ -11540,13 +12200,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Check and Update Index"
+            "value" : "Check and Update AI Recommendation Index"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "檢查並更新索引"
+            "value" : "檢查並更新 AI 推薦索引"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查并更新 AI 推荐索引"
           }
         }
       }
@@ -11626,7 +12292,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "偵測到資料庫內容變化；執行完整更新"
+            "value" : "偵測到音樂庫內容變化；執行完整更新"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检测到音乐库内容变化，完整更新"
           }
         }
       }
@@ -11636,13 +12308,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Module Visibility & Order"
+            "value" : "Choose Modules & Reorder"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "模組顯示與排序"
+            "value" : "選擇模組並調整順序"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择模块并调整顺序"
           }
         }
       }
@@ -11690,7 +12368,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單"
+            "value" : "播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表"
           }
         }
       }
@@ -11706,7 +12390,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單 · %lld 首"
+            "value" : "播放清單 · %lld 首"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表 · %lld 首"
           }
         }
       }
@@ -11722,7 +12412,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單（%lld）"
+            "value" : "播放清單（%lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表（%lld）"
           }
         }
       }
@@ -11738,7 +12434,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單《%@》"
+            "value" : "播放清單《%@》"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表《%@》"
           }
         }
       }
@@ -11754,7 +12456,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單不可用"
+            "value" : "播放清單不可用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表不可用"
           }
         }
       }
@@ -11770,7 +12478,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單為空"
+            "value" : "播放清單為空"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表为空"
           }
         }
       }
@@ -11786,7 +12500,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單名稱"
+            "value" : "播放清單名稱"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表名称"
           }
         }
       }
@@ -11802,7 +12522,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單操作"
+            "value" : "播放清單操作"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表操作"
           }
         }
       }
@@ -11818,7 +12544,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單暫無歌曲"
+            "value" : "播放清單暫無歌曲"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表暂无歌曲"
           }
         }
       }
@@ -11834,7 +12566,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌單管理與排序"
+            "value" : "播放清單管理與排序"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放列表管理与排序"
           }
         }
       }
@@ -11866,7 +12604,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌曲、專輯、藝術家或歌單"
+            "value" : "歌曲、專輯、藝術家或播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歌曲、专辑、艺术家或播放列表"
           }
         }
       }
@@ -12058,7 +12802,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在載入歌單…"
+            "value" : "正在載入播放清單…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载播放列表…"
           }
         }
       }
@@ -12116,7 +12866,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fetching public music data…"
+            "value" : "Fetching public music metadata…"
           }
         },
         "zh-Hant" : {
@@ -12132,13 +12882,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Searching Your Library"
+            "value" : "Searching Music Library"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在搜尋你的資料庫"
+            "value" : "正在搜尋音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜索音乐库"
           }
         }
       }
@@ -12196,13 +12952,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Testing Connection…"
+            "value" : "Testing Server…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在測試連線…"
+            "value" : "正在測試伺服器…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在测试服务器…"
           }
         }
       }
@@ -12212,13 +12974,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clearing Index…"
+            "value" : "Clearing AI Recommendation Index…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在清空索引…"
+            "value" : "正在清空 AI 推薦索引…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在清空 AI 推荐索引…"
           }
         }
       }
@@ -12260,13 +13028,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Requesting Local Network Access…"
+            "value" : "Requesting Local Network Permission…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在請求本機網路存取…"
+            "value" : "正在申請本機網路權限…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在申请本地网络权限…"
           }
         }
       }
@@ -12308,13 +13082,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Loading Index Status…"
+            "value" : "Loading AI Recommendation Index Status…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在讀取索引狀態…"
+            "value" : "正在讀取 AI 推薦索引狀態…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取 AI 推荐索引状态…"
           }
         }
       }
@@ -12596,13 +13376,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add OpenSubsonic Server"
+            "value" : "Add OpenSubsonic Music Server"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加 OpenSubsonic 伺服器"
+            "value" : "新增 OpenSubsonic 音樂伺服器"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 OpenSubsonic 音乐服务器"
           }
         }
       }
@@ -12618,7 +13404,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新增到歌單"
+            "value" : "新增到播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加到播放列表"
           }
         }
       }
@@ -12634,7 +13426,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新增到歌單《%@》"
+            "value" : "新增到播放清單《%@》"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加到播放列表《%@》"
           }
         }
       }
@@ -12708,13 +13506,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear Temporary Audio"
+            "value" : "Clear Audio Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清理臨時音訊"
+            "value" : "清理音訊快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理音频缓存"
           }
         }
       }
@@ -12724,13 +13528,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear temporary audio cache?"
+            "value" : "Clear Audio Cache?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清理臨時音訊快取？"
+            "value" : "清理音訊快取？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理音频缓存？"
           }
         }
       }
@@ -12740,13 +13550,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear Cached Artwork"
+            "value" : "Clear Artwork Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清理歷史封面"
+            "value" : "清理封面快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理封面缓存"
           }
         }
       }
@@ -12756,13 +13572,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear history cover cache?"
+            "value" : "Clear Artwork Cache?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清理歷史封面快取？"
+            "value" : "清理封面快取？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理封面缓存？"
           }
         }
       }
@@ -12772,13 +13594,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear Cached Lyrics"
+            "value" : "Clear Lyrics Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清理歷史歌詞"
+            "value" : "清理歌詞快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理歌词缓存"
           }
         }
       }
@@ -12788,13 +13616,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear Standard Haptics Cache"
+            "value" : "Clear Temporary Haptic Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清理一般震動快取"
+            "value" : "清理臨時觸感快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理临时触感缓存"
           }
         }
       }
@@ -12868,13 +13702,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear local Recommendation Index?"
+            "value" : "Clear Local AI Recommendation Index?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清空本機推薦索引？"
+            "value" : "清空本機 AI 推薦索引？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清空本机 AI 推荐索引？"
           }
         }
       }
@@ -12900,13 +13740,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear Index"
+            "value" : "Clear AI Recommendation Index"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清空索引"
+            "value" : "清空 AI 推薦索引"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清空 AI 推荐索引"
           }
         }
       }
@@ -12916,13 +13762,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear Index…"
+            "value" : "Clear AI Recommendation Index…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清空索引…"
+            "value" : "清空 AI 推薦索引…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清空 AI 推荐索引…"
           }
         }
       }
@@ -12932,13 +13784,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Failed to clear index: %@"
+            "value" : "Failed to clear AI recommendation index: %@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清空索引失敗：%@"
+            "value" : "清空 AI 推薦索引失敗：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清空 AI 推荐索引失败：%@"
           }
         }
       }
@@ -12964,13 +13822,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clear Public Music Data Cache"
+            "value" : "Clear Public Music Metadata Cache"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "清除公開音樂資料快取"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除公开音乐资料缓存"
           }
         }
       }
@@ -13300,13 +14164,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The library is stored in local SQLite (with a full-text search index), isolated per server. The assistant only queries the results you need and never sends your whole library to the model."
+            "value" : "The catalog is stored in local SQLite and isolated per server. The AI assistant only queries what is needed to complete your request and never sends your entire music library."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目錄儲存在本機 SQLite（含全文檢索索引），按伺服器隔離。助理只查詢你需要的結果，絕不會把整個曲庫發給大型語言模型。"
+            "value" : "目錄儲存在本機 SQLite，並按伺服器隔離。AI 助理只查詢完成要求所需的內容，不會傳送整個音樂庫。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目录保存在本机 SQLite，并按服务器隔离。AI 助手只查询完成请求所需的结果，不会发送整个音乐库。"
           }
         }
       }
@@ -13316,13 +14186,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The library may be out of date; refresh is recommended"
+            "value" : "Music library may be out of date; refresh recommended"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目錄可能已過期，建議刷新"
+            "value" : "音樂庫可能已過期，建議重新整理"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐库可能已过期，建议刷新"
           }
         }
       }
@@ -13556,13 +14432,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remove Current Server (Local Only)"
+            "value" : "Remove Current Server (Local Data Only)"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "移除目前伺服器（僅本機）"
+            "value" : "移除目前伺服器（僅清理本機資料）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除当前服务器（仅清理本机）"
           }
         }
       }
@@ -13572,13 +14454,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remove Server?"
+            "value" : "Remove Music Server?"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "移除伺服器？"
+            "value" : "移除音樂伺服器？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除音乐服务器？"
           }
         }
       }
@@ -13908,13 +14796,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Edit Library"
+            "value" : "Edit Music Library"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "編輯資料庫"
+            "value" : "編輯音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑音乐库"
           }
         }
       }
@@ -14004,13 +14898,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Network Audio Quality & Mini Player Bar"
+            "value" : "Audio Quality, Playback Controls & Mini Player"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "網路音質與迷你播放列"
+            "value" : "音質、播放控制與迷你播放器"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音质、播放控制与迷你播放器"
           }
         }
       }
@@ -14036,13 +14936,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Online Search"
+            "value" : "Public Web Search"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "網路搜尋"
+            "value" : "公開資料搜尋"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "公开资料搜索"
           }
         }
       }
@@ -14154,7 +15060,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動開啟音樂震動"
+            "value" : "自動啟用 Music Haptics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动启用 Music Haptics"
           }
         }
       }
@@ -14346,13 +15258,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow Transcoding on Cellular"
+            "value" : "Allow Server Transcoding on Cellular"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "蜂窩網路允許轉碼"
+            "value" : "行動網路允許伺服器轉碼"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "蜂窝网络允许服务器转码"
           }
         }
       }
@@ -14560,7 +15478,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "該歌單為唯讀歌單，無法刪除。"
+            "value" : "該播放清單為唯讀播放清單，無法刪除。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该播放列表为只读播放列表，无法删除。"
           }
         }
       }
@@ -14576,7 +15500,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "該歌單會同時從音樂伺服器和本機目錄刪除，歌曲檔案不會被刪除。"
+            "value" : "該播放清單會同時從音樂伺服器和本機目錄刪除，歌曲檔案不會被刪除。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该播放列表会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。"
           }
         }
       }
@@ -14592,7 +15522,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "該項目已不在本機資料庫中"
+            "value" : "該項目已不在本機音樂庫中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该项目已不在本地音乐库中"
           }
         }
       }
@@ -14864,7 +15800,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "資料庫"
+            "value" : "音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐库"
           }
         }
       }
@@ -14874,13 +15816,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Library & Playback"
+            "value" : "Music Library & Playback"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "資料庫與播放"
+            "value" : "音樂庫與播放"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐库与播放"
           }
         }
       }
@@ -14890,13 +15838,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Library Statistics"
+            "value" : "Music Library Statistics"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "資料庫統計"
+            "value" : "音樂庫統計"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐库统计"
           }
         }
       }
@@ -14906,13 +15860,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Your Library Has No Songs Yet"
+            "value" : "Your Music Library Has No Songs Yet"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "資料庫還沒有歌曲"
+            "value" : "音樂庫還沒有歌曲"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐库还没有歌曲"
           }
         }
       }
@@ -15003,13 +15963,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enter WAN Address"
+            "value" : "e.g. https://music.example.com"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸入外網位址"
+            "value" : "例如：https://music.example.com"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如：https://music.example.com"
           }
         }
       }
@@ -15035,13 +16001,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enter Display Name"
+            "value" : "e.g. Home Music Library"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸入顯示名稱"
+            "value" : "例如：家庭音樂庫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如：家庭音乐库"
           }
         }
       }
@@ -15051,13 +16023,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enter Server Address"
+            "value" : "e.g. https://music.example.com"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸入伺服器位址"
+            "value" : "例如：https://music.example.com"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如：https://music.example.com"
           }
         }
       }
@@ -15067,13 +16045,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Enter a song, album, artist, or playlist name. Auralis matches it in the persistent local library (available offline)."
+            "value" : "Enter a song, album, artist, or playlist name. Auralis matches it in the local music library, even offline."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "輸入歌曲、專輯、藝術家或歌單名稱，Auralis 會在本機持久化資料庫中比對（離線可用）。"
+            "value" : "輸入歌曲、專輯、藝人或播放清單名稱，Auralis 會在本機音樂庫中比對（離線可用）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入歌曲、专辑、艺人或播放列表名称，Auralis 会在本地音乐库中匹配（离线可用）。"
           }
         }
       }
@@ -15217,7 +16201,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "還沒有歌單"
+            "value" : "還沒有播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有播放列表"
           }
         }
       }
@@ -15313,7 +16303,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這個歌單不在目前資料庫中。"
+            "value" : "這個播放清單不在目前音樂庫中。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个播放列表不在当前音乐库中。"
           }
         }
       }
@@ -15329,7 +16325,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這個歌單還沒有歌曲。"
+            "value" : "這個播放清單還沒有歌曲。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个播放列表还没有歌曲。"
           }
         }
       }
@@ -15345,7 +16347,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這個流派不在目前資料庫中。"
+            "value" : "這個流派不在目前音樂庫中。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个流派不在当前音乐库中。"
           }
         }
       }
@@ -15393,7 +16401,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這位藝術家不在目前資料庫中。"
+            "value" : "這位藝術家不在目前音樂庫中。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这位艺术家不在当前音乐库中。"
           }
         }
       }
@@ -15409,7 +16423,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這張專輯不在目前資料庫中。"
+            "value" : "這張專輯不在目前音樂庫中。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这张专辑不在当前音乐库中。"
           }
         }
       }
@@ -15451,13 +16471,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After connecting a Navidrome or other OpenSubsonic server, your music library will appear here."
+            "value" : "Connect Navidrome or another OpenSubsonic server to see your music library here."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "連線 Navidrome 或其他 OpenSubsonic 伺服器後，你的音樂資料庫會顯示在這裡。"
+            "value" : "連線 Navidrome 或其他 OpenSubsonic 伺服器後，你的音樂庫會顯示在這裡。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接 Navidrome 或其他 OpenSubsonic 服务器后，你的音乐库会显示在这里。"
           }
         }
       }
@@ -15515,13 +16541,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "After connecting and syncing your music library, you can view indexing progress."
+            "value" : "Connect and sync your music library before building the AI recommendation index."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "連線並同步音樂庫後，可檢視索引進度。"
+            "value" : "請先連線並同步音樂庫，再建立 AI 推薦索引。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先连接并同步音乐库，再建立 AI 推荐索引。"
           }
         }
       }
@@ -15595,13 +16627,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connect and sync a server to list all songs here, or play a few random songs from Home first."
+            "value" : "Connect and sync a music server to see all songs here, or start shuffle play from Home."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "連線並同步伺服器後，這裡會列出全部歌曲；也可以先從「首頁」隨機播放幾首。"
+            "value" : "連線並同步音樂伺服器後，這裡會顯示全部歌曲；也可以先從首頁開始隨機播放。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接并同步音乐服务器后，这里会显示全部歌曲；也可以先从首页开始随机播放。"
           }
         }
       }
@@ -15643,13 +16681,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connect Music Server & Download Service"
+            "value" : "Connect a Music Server & Manage Downloads"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "連線音樂伺服器與下載服務"
+            "value" : "連線音樂伺服器，管理離線下載"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接音乐服务器，管理离线下载"
           }
         }
       }
@@ -15697,7 +16741,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選中的歌單會同時從音樂伺服器和本機目錄刪除，歌曲檔案不會被刪除。"
+            "value" : "選中的播放清單會同時從音樂伺服器和本機目錄刪除，歌曲檔案不會被刪除。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选中的播放列表会同时从音乐服务器和本地目录删除，歌曲文件不会被删除。"
           }
         }
       }
@@ -15915,13 +16965,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Configure Model…"
+            "value" : "Configure AI Model…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "設定大型語言模型…"
+            "value" : "設定 AI 模型…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置 AI 模型…"
           }
         }
       }
@@ -16001,7 +17057,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重命名歌單"
+            "value" : "重命名播放清單"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名播放列表"
           }
         }
       }
@@ -16033,7 +17095,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重建"
+            "value" : "重新建立"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新建立"
           }
         }
       }
@@ -16075,13 +17143,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Reset Music Identity Matching…"
+            "value" : "Rematch Music Identities…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重置音樂身分比對…"
+            "value" : "重新比對音樂身分…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新匹配音乐身份…"
           }
         }
       }
@@ -16289,7 +17363,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "隨機音樂"
+            "value" : "隨機播放"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随机播放"
           }
         }
       }
@@ -16315,13 +17395,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Music Download (MoviePilot)"
+            "value" : "Music Downloads (MoviePilot)"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "音樂下載（MoviePilot）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐下载（MoviePilot）"
           }
         }
       }
@@ -16331,13 +17417,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Music Download (MoviePilot) Not Configured"
+            "value" : "Music Downloads (MoviePilot) Not Configured"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "音樂下載（MoviePilot）未設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐下载（MoviePilot）未配置"
           }
         }
       }
@@ -16395,13 +17487,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Music identity matching has been reset; MBID will be re-identified next time you open song info/appreciation."
+            "value" : "Music identities will be rematched; MBIDs will be identified again the next time you open song info or appreciation."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音樂身分比對已重設；下次開啟歌曲資訊/鑑賞時將重新識別 MBID。"
+            "value" : "音樂身分比對已重設；下次開啟歌曲資訊或鑑賞時會重新識別 MBID。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音乐身份匹配已重置；下次打开歌曲信息或鉴赏时会重新识别 MBID。"
           }
         }
       }
@@ -16523,13 +17621,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "About %lld MB; playable offline once downloaded. Already-downloaded songs are skipped automatically."
+            "value" : "About %lld MB; songs can play offline after download. Already-downloaded songs are skipped automatically."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "預計約 %lld MB，下載到本機後可離線播放。已下載的歌曲會自動跳過。"
+            "value" : "預計佔用約 %lld MB；下載完成後可離線播放，已下載的歌曲會自動跳過。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预计占用约 %lld MB；下载完成后可离线播放，已下载的歌曲会自动跳过。"
           }
         }
       }
@@ -16620,13 +17724,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Home Layout"
+            "value" : "Home Content"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "首頁版面設定"
+            "value" : "首頁內容"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首页内容"
           }
         }
       }
@@ -16668,13 +17778,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ReplayGain is off by default. When enabled, the real Track/Album Gain returned by the server is preferred; no generic volume normalization is applied when tags are missing."
+            "value" : "ReplayGain is off by default. When enabled, the Track/Album Gain returned by the server is preferred; volume is not forced when gain tags are missing."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "預設關閉 ReplayGain。啟用後優先使用伺服器返回的真實 Track/Album Gain；缺少標籤時不做普通音量歸一化。"
+            "value" : "預設關閉 ReplayGain。啟用後優先使用伺服器回傳的 Track/Album Gain；沒有增益標籤時不強行調整音量。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭 ReplayGain。启用后优先使用服务器返回的 Track/Album Gain；没有增益标签时不强行调整音量。"
           }
         }
       }
