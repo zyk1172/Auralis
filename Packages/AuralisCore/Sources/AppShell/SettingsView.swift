@@ -45,7 +45,7 @@ struct SettingsView: View {
                     AgentSettingsPage(model: model, theme: theme)
                 } label: {
                     SettingsCategoryRow(
-                        title: "Agent",
+                        title: String(localized: "AI 助手", bundle: .module),
                         subtitle: aiEnabled
                             ? String(localized: "大模型、推荐索引与隐私", bundle: .module)
                             : String(localized: "已关闭", bundle: .module),

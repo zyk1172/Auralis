@@ -75,10 +75,10 @@ private struct LaunchOverlay: View {
 
             VStack(spacing: 8) {
                 Spacer()
-                Text("Auralis · 让你的音乐，只属于你")
+                Text(String(localized: "Auralis · 让你的音乐，只属于你"))
                     .font(.headline)
                     .foregroundStyle(.white)
-                Text("私人曲库 · 离线播放 · 隐私优先 AI")
+                Text(String(localized: "私人曲库 · 离线播放 · 隐私优先 AI"))
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.82))
             }

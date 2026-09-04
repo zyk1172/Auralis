@@ -361,7 +361,7 @@ struct AgentSettingsPage: View {
     private let credentialVault = KeychainCredentialVault()
 
     var body: some View {
-        SettingsDetailForm(title: "Agent", theme: theme) {
+        SettingsDetailForm(title: String(localized: "AI 助手", bundle: .module), theme: theme) {
             Section(String(localized: "大模型", bundle: .module)) {
                 LabeledContent(String(localized: "接口协议", bundle: .module), value: AIEndpointMode.infer(from: aiAPIPath).title)
                 LabeledContent(String(localized: "Base URL", bundle: .module), value: aiBaseURL)
