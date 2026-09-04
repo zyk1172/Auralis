@@ -3133,19 +3133,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Public music metadata is queried only on demand when you open song info or appreciation. Audio, lyrics, stream URLs, NAS passwords, and your full music library are never uploaded; results are cached for 14 days by default."
+            "value" : "Public music metadata is queried on demand only when a feature needs it, such as song info, appreciation, or the AI Recommendation Index. Audio, lyrics, stream URLs, NAS passwords, and your full music library are never uploaded; results are cached for 14 days by default."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只在你開啟歌曲資訊或歌曲鑑賞時按需查詢公開音樂資料。不會上傳音訊、歌詞、串流位址、NAS 密碼或完整音樂庫；結果預設快取 14 天。"
+            "value" : "公開音樂資料僅在需要相關資料的功能中按需查詢，例如歌曲資訊、歌曲鑑賞和 AI 推薦索引。不會上傳音訊、歌詞、串流位址、NAS 密碼或完整音樂庫；結果預設快取 14 天。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只在你打开歌曲信息或歌曲鉴赏时按需查询公开音乐资料。不会上传音频、歌词、流媒体地址、NAS 密码或完整音乐库；结果默认缓存 14 天。"
+            "value" : "公开音乐资料仅在需要相关资料的功能中按需查询，例如歌曲信息、歌曲鉴赏和 AI 推荐索引。不会上传音频、歌词、流媒体地址、NAS 密码或完整音乐库；结果默认缓存 14 天。"
           }
         }
       }
@@ -3551,19 +3551,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow AI to use song information for public lookups"
+            "value" : "Allow AI to use song information for public web lookups"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允許 AI 使用歌曲資訊查詢公開資料"
+            "value" : "允許 AI 使用歌曲資訊進行公開網路查詢"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允许 AI 使用歌曲信息查询公开资料"
+            "value" : "允许 AI 使用歌曲信息进行公开网络查询"
           }
         }
       }
@@ -17493,13 +17493,13 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音樂身分已重新比對；下次開啟歌曲資訊或鑑賞時會重新識別 MBID。"
+            "value" : "音樂身分比對已重設；下次開啟歌曲資訊或鑑賞時會重新識別 MBID。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音乐身份已重新匹配；下次打开歌曲信息或鉴赏时会重新识别 MBID。"
+            "value" : "音乐身份匹配已重置；下次打开歌曲信息或鉴赏时会重新识别 MBID。"
           }
         }
       }
