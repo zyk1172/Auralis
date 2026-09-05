@@ -504,6 +504,7 @@
       }
     },
     "%@：%+.1f dB" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
