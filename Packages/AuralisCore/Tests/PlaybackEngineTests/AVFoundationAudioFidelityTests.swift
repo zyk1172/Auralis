@@ -92,6 +92,10 @@ struct AVFoundationAudioFidelityTests {
                 engine.currentPlaybackURLForTesting == originalURL,
                 "\(testCase.label) changed the main AVPlayer URL"
             )
+            #expect(
+                engine.currentPlaybackItemForTesting?.audioMix == nil,
+                "\(testCase.label) mutated the AVPlayer audio render graph"
+            )
             engine.stop()
         }
     }
@@ -217,6 +221,7 @@ struct AVFoundationAudioFidelityTests {
         #expect(engine.currentPlaybackItemForTesting === currentItem)
         #expect(engine.playGenerationForTesting == generation)
         #expect(engine.currentPlaybackURLForTesting == originalURL)
+        #expect(engine.currentPlaybackItemForTesting?.audioMix == nil)
         engine.stop()
     }
 }
