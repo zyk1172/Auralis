@@ -389,6 +389,10 @@ struct MusicHapticsOriginalStreamTests {
                 onResult: { result in continuation.resume(returning: result) }
             )
             holder.analyzer = analyzer
+            // This fixture tests decoder/checkpoint behavior, not startup throttling.
+            // Simulate an already-running playback clock so the audio-first gate
+            // grants the disposable analyzer a budget.
+            analyzer.updatePlaybackPosition(duration, isPlaying: true)
             analyzer.start(source: .remoteOriginal(firstServer.url))
         }
         holder.analyzer = nil
@@ -719,6 +723,10 @@ struct MusicHapticsOriginalStreamTests {
                 fallbackSourceProvider: { _ in fallbackSources }
             )
             holder.analyzer = analyzer
+            // These fixtures isolate decoder/DSP behavior. Advance the synthetic
+            // playback clock so the production audio-first budget is explicitly
+            // granted instead of bypassing the gate.
+            analyzer.updatePlaybackPosition(duration, isPlaying: true)
             analyzer.start(source: source)
         }
         holder.analyzer = nil
