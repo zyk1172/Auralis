@@ -1,17 +1,30 @@
 import Foundation
 
-/// Coordinates pause/resume for an independent decoder without coupling its
-/// throughput to the authoritative playback clock. Analysis is deliberately
-/// allowed to run to EOF as fast as the network/decoder/CPU permit; the
-/// scheduler owns the short Core Haptics commit horizon separately.
+/// Coordinates pause/resume and resource budgeting for an independent decoder.
+/// Music playback is authoritative: analysis waits through the startup buffer,
+/// stays within a small lookahead window, and immediately yields while playback
+/// is paused or buffering. The haptics sidecar may be late or incomplete; audio
+/// must never be late because of haptics.
 final class MusicHapticsAnalysisControl: @unchecked Sendable {
+    private struct Waiter {
+        let analysisPosition: TimeInterval
+        let sourceDuration: TimeInterval
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    /// Give AVPlayer exclusive access to startup CPU/network bandwidth first.
+    static let startupGraceSeconds: TimeInterval = 1.5
+    /// The scheduler only commits a few seconds ahead. Eight seconds gives the
+    /// haptic renderer margin without allowing a second decoder to race to EOF.
+    static let maximumLeadSeconds: TimeInterval = 8
+
     private let lock = NSLock()
     private var paused = false
     private var cancelled = false
     private var playbackPosition: TimeInterval = 0
     private var playbackRate: Double = 1
     private var isPlaying = true
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [Waiter] = []
 
     init() {}
 
@@ -26,9 +39,7 @@ final class MusicHapticsAnalysisControl: @unchecked Sendable {
             guard !cancelled else { return [] }
             paused = false
             isPlaying = true
-            let result = waiters
-            waiters.removeAll(keepingCapacity: true)
-            return result
+            return takeReadyWaitersLocked()
         }
         continuations.forEach { $0.resume() }
     }
@@ -37,7 +48,7 @@ final class MusicHapticsAnalysisControl: @unchecked Sendable {
         let continuations = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             cancelled = true
             paused = false
-            let result = waiters
+            let result = waiters.map(\.continuation)
             waiters.removeAll(keepingCapacity: false)
             return result
         }
@@ -56,29 +67,32 @@ final class MusicHapticsAnalysisControl: @unchecked Sendable {
             playbackRate = safeRate
             self.isPlaying = isPlaying
             guard !cancelled, !paused, isPlaying else { return [] }
-            guard !waiters.isEmpty else { return [] }
-            let result = waiters
-            waiters.removeAll(keepingCapacity: true)
-            return result
+            return takeReadyWaitersLocked()
         }
         continuations.forEach { $0.resume() }
     }
 
-    /// Wait until analysis is allowed to continue. The position arguments are
-    /// retained for source compatibility with the decoder loop, but are not a
-    /// high-watermark gate: a lookahead decoder may be arbitrarily ahead of
-    /// playback.
+    /// Wait until secondary analysis fits inside the current audio-first budget.
+    /// Callers should invoke this before opening a source and again while PCM is
+    /// consumed so waiting naturally back-pressures networking, decode and DSP.
     func waitUntilReady(
-        analysisPosition _: TimeInterval,
-        sourceDuration _: TimeInterval
+        analysisPosition: TimeInterval,
+        sourceDuration: TimeInterval
     ) async -> Bool {
         await withCheckedContinuation { continuation in
             let resumeImmediately = lock.withLock {
                 if cancelled { return true }
-                if !paused, isPlaying {
+                if canRunLocked(
+                    analysisPosition: analysisPosition,
+                    sourceDuration: sourceDuration
+                ) {
                     return true
                 }
-                waiters.append(continuation)
+                waiters.append(Waiter(
+                    analysisPosition: analysisPosition,
+                    sourceDuration: sourceDuration,
+                    continuation: continuation
+                ))
                 return false
             }
             if resumeImmediately {
@@ -86,6 +100,62 @@ final class MusicHapticsAnalysisControl: @unchecked Sendable {
             }
         }
         return lock.withLock { !cancelled }
+    }
+
+    /// Pure policy seam shared with unit tests.
+    static func analysisMayRun(
+        playbackPosition: TimeInterval,
+        analysisPosition: TimeInterval,
+        sourceDuration: TimeInterval,
+        playbackRate: Double
+    ) -> Bool {
+        let safePlayback = max(0, playbackPosition.isFinite ? playbackPosition : 0)
+        let safeAnalysis = max(0, analysisPosition.isFinite ? analysisPosition : 0)
+        let safeDuration = max(0, sourceDuration.isFinite ? sourceDuration : 0)
+        let safeRate = min(max(playbackRate.isFinite ? playbackRate : 1, 0.5), 2)
+
+        let trackNearlyFinished = safeDuration > 0
+            && safePlayback >= max(0, safeDuration - 0.25)
+        guard safePlayback >= startupGraceSeconds || trackNearlyFinished else {
+            return false
+        }
+
+        let leadBudget = maximumLeadSeconds * max(1, safeRate)
+        let analysisLimit = safePlayback + leadBudget
+        let boundedLimit = safeDuration > 0 ? min(safeDuration, analysisLimit) : analysisLimit
+        return safeAnalysis <= boundedLimit + 0.001
+    }
+
+    private func canRunLocked(
+        analysisPosition: TimeInterval,
+        sourceDuration: TimeInterval
+    ) -> Bool {
+        guard !cancelled, !paused, isPlaying else { return false }
+        return Self.analysisMayRun(
+            playbackPosition: playbackPosition,
+            analysisPosition: analysisPosition,
+            sourceDuration: sourceDuration,
+            playbackRate: playbackRate
+        )
+    }
+
+    private func takeReadyWaitersLocked() -> [CheckedContinuation<Void, Never>] {
+        guard !waiters.isEmpty else { return [] }
+        var ready: [CheckedContinuation<Void, Never>] = []
+        var pending: [Waiter] = []
+        pending.reserveCapacity(waiters.count)
+        for waiter in waiters {
+            if canRunLocked(
+                analysisPosition: waiter.analysisPosition,
+                sourceDuration: waiter.sourceDuration
+            ) {
+                ready.append(waiter.continuation)
+            } else {
+                pending.append(waiter)
+            }
+        }
+        waiters = pending
+        return ready
     }
 
     var diagnostics: (playbackPosition: TimeInterval, playbackRate: Double) {
