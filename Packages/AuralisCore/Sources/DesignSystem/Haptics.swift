@@ -65,7 +65,13 @@ public enum Haptics {
     @MainActor
     public static func impact(_ style: HapticImpact = .light, intensity: Double = 1.0) {
         #if os(iOS)
-        HapticFeedbackPool.shared.impact(style, intensity: intensity)
+        Task { @MainActor in
+            // The button action wins this MainActor turn. Tactile feedback is
+            // best-effort and may arrive one yield later, so a play tap can
+            // enter the audio path before UIKit prepares/fires the generator.
+            await Task.yield()
+            HapticFeedbackPool.shared.impact(style, intensity: intensity)
+        }
         #endif
     }
 
@@ -73,7 +79,10 @@ public enum Haptics {
     @MainActor
     public static func selection() {
         #if os(iOS)
-        HapticFeedbackPool.shared.selectionChanged()
+        Task { @MainActor in
+            await Task.yield()
+            HapticFeedbackPool.shared.selectionChanged()
+        }
         #endif
     }
 
@@ -81,7 +90,10 @@ public enum Haptics {
     @MainActor
     public static func notification(_ type: HapticNotification) {
         #if os(iOS)
-        HapticFeedbackPool.shared.notificationOccurred(type)
+        Task { @MainActor in
+            await Task.yield()
+            HapticFeedbackPool.shared.notificationOccurred(type)
+        }
         #endif
     }
 }

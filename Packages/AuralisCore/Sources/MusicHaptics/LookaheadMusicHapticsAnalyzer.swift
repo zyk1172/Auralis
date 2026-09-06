@@ -196,7 +196,7 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
     }
 
     public func start(source: MusicHapticsAnalysisSource) {
-        let newTask = Task.detached(priority: .utility) { [weak self] in
+        let newTask = Task.detached(priority: .background) { [weak self] in
             guard let self else { return }
             await self.run(source: source)
         }
@@ -258,8 +258,8 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
         var attemptedSources: Set<MusicHapticsAnalysisSource> = [source]
         let maximumRemoteRefreshAttempts = 2
         var remoteRefreshAttempts = 0
-        // This is a persistence/DSP granularity, not a playback lead or
-        // decoder throttle. The original stream is consumed until EOF.
+        // Persistence/DSP windows are small, while the analysis controller
+        // separately limits how far this disposable sidecar may lead playback.
         let windowLength: TimeInterval = 0.5
 
         while true {
@@ -362,6 +362,13 @@ public final class LookaheadMusicHapticsAnalyzer: MusicHapticsPartialCheckpointP
                     stopAtPosition: range.upperBound,
                     onPCM: { [weak self, state, metricsBox] chunk in
                         guard let self else { return }
+                        // decode() awaits this callback, so this gate applies
+                        // real back-pressure to URLSession consumption, PCM
+                        // decode and DSP whenever playback owns the resources.
+                        guard await self.control.waitUntilReady(
+                            analysisPosition: chunk.time,
+                            sourceDuration: self.duration
+                        ) else { return }
                         let result = await state.append(
                             chunk: chunk,
                             within: range,
