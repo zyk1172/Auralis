@@ -19,10 +19,9 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     private var preparedItem: AVPlayerItem?
     private var preparedTrack: Track?
     private var preparedTrackStartedHandler: (@Sendable (Track) -> Void)?
-    /// Optional, sidecar-only decoded PCM analysis for the current item.
-    /// It is installed as an AVAudioMix tap and never owns the AVQueuePlayer.
-    /// The plan is resolved by MusicHapticsCoordinator before play(); this
-    /// engine only consumes that decision.
+    /// Optional Music Haptics sidecar for the current item. Audio playback is
+    /// authoritative: custom haptics may analyze an independent source, but
+    /// this engine never installs a haptics AVAudioMix/tap into AVPlayer.
     private var pendingMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
     private var activeMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
     private var preparedMusicHapticsPreparation: MusicHapticsPlaybackPreparation?
@@ -351,10 +350,8 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         // 只记录脱敏后的地址（去掉查询串，查询串含认证参数）。
         CrashLog.shared.log("创建 AVPlayerItem，URL: \(Self.redactedURL(streamURL))")
         let itemStart = ContinuousClock.now
-        // AVPlayerItem(url:) is intentionally created synchronously. Any
-        // realtime tap was resolved before this item is inserted and
-        // before player.play(); independent original-stream analysis remains
-        // outside the AVPlayer item.
+        // AVPlayerItem creation is the audio startup path. Music Haptics is a
+        // disposable sidecar and is never allowed to add an audio mix/tap here.
         let item = AVPlayerItem(url: streamURL)
         let preparation = pendingMusicHapticsPreparation
         pendingMusicHapticsPreparation = nil
@@ -1036,10 +1033,9 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
 
     // MARK: - Music Haptics sidecar
 
-    /// Resolves the audio track after normal playback has started. This task
-    /// never creates another URL/asset stream: it only loads the track object
-    /// belonging to the already inserted AVPlayerItem, then attaches one
-    /// audio mix to that item.
+    /// Legacy tap setup machinery is retained for source compatibility, but the
+    /// audio-first gate below never supplies a sink to these methods. Haptics
+    /// must not mutate AVPlayerItem.audioMix.
     private func scheduleTapSetup(
         for item: AVPlayerItem,
         sink: any MusicHapticsAnalysisSink,
@@ -1098,19 +1094,12 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
         for item: AVPlayerItem,
         sink: any MusicHapticsAnalysisSink
     ) async -> AVAudioMix? {
-        // iOS/macOS 27 add a track-mix tap specifically for streaming
-        // playback. It does not require loading AVAsset tracks first, so the
-        // haptics tap can be attached before player.play() without making
-        // remote metadata loading part of the audio startup critical path.
         if #available(iOS 27.0, macOS 27.0, tvOS 27.0, visionOS 27.0, *) {
             if let mix = MusicHapticsAudioTap.makeStreamingMix(sink: sink) {
                 return mix
             }
         }
 
-        // Older OS versions require a concrete AVAssetTrack. Loading that key
-        // is the compatibility path; it never creates a second asset or
-        // changes the URL consumed by AVPlayer.
         let tracks: [AVAssetTrack]
         do {
             tracks = try await item.asset.loadTracks(withMediaType: .audio)
@@ -1137,21 +1126,13 @@ public final class AVFoundationPlaybackEngine: PlaybackControlling {
     }
 
     private func realtimeTapSink(
-        for preparation: MusicHapticsPlaybackPreparation
+        for _: MusicHapticsPlaybackPreparation
     ) -> (any MusicHapticsAnalysisSink)? {
-        switch preparation.plan {
-        case .analyze:
-            return preparation.analysisSink
-        case let .analyzeLookahead(request):
-            switch request.analysisSource {
-            case .remoteOriginal:
-                return preparation.realtimeTapSink
-            case .localFile, .realtimeTap:
-                return nil
-            }
-        case .disabled, .system, .custom:
-            return nil
-        }
+        // Hard audio-first invariant: custom haptics is a disposable sidecar.
+        // Never install AVAudioMix/MTAudioProcessingTap into AVPlayer's decode
+        // graph. Independent/cached/system haptics may continue; a path that
+        // requires tapping playback simply fails closed.
+        return nil
     }
 
     private static func safeErrorDomain(_ domain: String) -> String {
