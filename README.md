@@ -8,7 +8,7 @@ Auralis 是一款 SwiftUI 原生实现的私人音乐播放器，作为你自有
 专业播放控制与可选的隐私优先 AI 音乐助手。**没有账号体系、没有广告、不采集行为数据**，
 音乐数据只属于你。
 
-当前版本：`1.0.2`（以 `project.yml` 的 `MARKETING_VERSION` 为唯一事实来源）。
+当前版本：`1.1.0`（以 `project.yml` 的 `MARKETING_VERSION` 为唯一事实来源）。
 
 ---
 

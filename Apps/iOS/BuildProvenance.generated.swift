@@ -2,11 +2,11 @@
 import AppShell
 
 enum BuildProvenanceGenerated {
-    static let gitCommit = "698df7a9"
+    static let gitCommit = "5a2aa30f"
     static let gitBranch = "main"
     static let buildConfiguration = "Release"
-    static let appVersion = "1.0.2"
-    static let buildNumber = "3"
+    static let appVersion = "1.1.0"
+    static let buildNumber = "4"
 
     @MainActor
     static func install() {
