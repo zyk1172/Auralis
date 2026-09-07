@@ -20,6 +20,7 @@ android {
 
 dependencies {
     implementation(project(":core:domain"))
+    implementation(project(":core:data"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:image"))
     implementation(platform(libs.androidx.compose.bom))
