@@ -130,6 +130,12 @@ public enum HapticNotification: Sendable {
 
 // MARK: - 全局按钮样式（轻重缓急）
 
+/// 自定义 ButtonStyle 里禁止再对 `configuration.label` 写 `.buttonStyle(...)`。
+/// `configuration.label` 已经不是外层 Button 本身；继续写 ButtonStyle 不会给当前按钮
+/// 补上系统外观，反而会把样式环境传播给 label 子树。`Menu` / `contextMenu` / Picker
+/// 这类复合系统控件会临时创建内部 Button，继承到该环境后可能出现一次点击不触发、
+/// 必须重复点击的命中问题。触感样式只负责触感，系统/调用点负责视觉样式。
+
 /// 默认轻触（轻）：作为根视图的兜底样式，对未显式设置样式的按钮生效。
 public struct HapticButtonStyle: ButtonStyle, Sendable {
     public var impact: HapticImpact
@@ -148,12 +154,11 @@ public struct HapticButtonStyle: ButtonStyle, Sendable {
     }
 }
 
-/// 主操作（重）：包装 .borderedProminent 外观并触发重冲击，用于播放、发送、确认等关键动作。
+/// 主操作（重）：触发重冲击。视觉外观由调用点提供，不向 label 子树传播 ButtonStyle。
 public struct HapticProminentButtonStyle: ButtonStyle, Sendable {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .buttonStyle(.borderedProminent)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
                     Haptics.impact(.heavy)
@@ -162,12 +167,11 @@ public struct HapticProminentButtonStyle: ButtonStyle, Sendable {
     }
 }
 
-/// 次级操作（缓）：包装 .bordered 外观并触发柔和冲击，用于一般次要按钮。
+/// 次级操作（缓）：触发柔和冲击。视觉外观由调用点提供，不污染 Menu 的内部按钮环境。
 public struct HapticBorderedButtonStyle: ButtonStyle, Sendable {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .buttonStyle(.bordered)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
                     Haptics.impact(.soft)
@@ -176,12 +180,12 @@ public struct HapticBorderedButtonStyle: ButtonStyle, Sendable {
     }
 }
 
-/// 朴素按钮（轻）：替代 .buttonStyle(.plain)，保留无外观并触发轻微冲击，用于列表行与图标按钮。
+/// 朴素按钮（轻）：保留调用点自己的外观，只附加轻微冲击。
+/// 特别注意：列表行经常附带 `contextMenu`，这里不能再向 label 子树写 `.plain`。
 public struct HapticPlainButtonStyle: ButtonStyle, Sendable {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .buttonStyle(.plain)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
                     Haptics.impact(.light)
@@ -190,12 +194,11 @@ public struct HapticPlainButtonStyle: ButtonStyle, Sendable {
     }
 }
 
-/// 无边框按钮（轻）：替代 .buttonStyle(.borderless)，触发轻微冲击。
+/// 无边框按钮（轻）：只附加触感，不向复合控件子树传播 ButtonStyle。
 public struct HapticBorderlessButtonStyle: ButtonStyle, Sendable {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .buttonStyle(.borderless)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
                     Haptics.impact(.light)
@@ -204,12 +207,11 @@ public struct HapticBorderlessButtonStyle: ButtonStyle, Sendable {
     }
 }
 
-/// 破坏性操作（急）：触发错误通知震动，强调这是不可逆的危险操作。
+/// 破坏性操作（急）：触发错误通知震动；视觉外观由调用点提供。
 public struct HapticDestructiveButtonStyle: ButtonStyle, Sendable {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .buttonStyle(.bordered)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
                     Haptics.notification(.error)
