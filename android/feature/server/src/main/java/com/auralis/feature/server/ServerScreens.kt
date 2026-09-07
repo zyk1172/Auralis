@@ -93,7 +93,7 @@ fun ServerListScreen(
             .imePadding(),
     ) {
         HeaderRow(
-            title = stringResource(R.string.server_title),
+            title = stringResource(AuralisR.string.servers),
             onBack = onBack,
             action = {
                 Button(onClick = { state.add() }) {
@@ -509,7 +509,7 @@ fun ServerFormScreen(
                     Spacer(Modifier.width(AuralisSpacing.small))
                     Text(stringResource(R.string.server_testing))
                 } else {
-                    Text(stringResource(R.string.server_test_action))
+                    Text(stringResource(AuralisR.string.test_connection))
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -517,7 +517,7 @@ fun ServerFormScreen(
                 onClick = { state.save() },
                 enabled = state.canSave(),
             ) {
-                Text(stringResource(if (state.busy) R.string.server_saving else R.string.server_save))
+                Text(stringResource(if (state.busy) R.string.server_saving else AuralisR.string.save))
             }
         }
     }

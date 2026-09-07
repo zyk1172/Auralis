@@ -2,7 +2,6 @@
 <!-- R5：feature:server 文案（默认=中文；英文见 values-en）。key 一律 server_ 前缀。 -->
 <resources>
     <!-- 列表页 -->
-    <string name="server_title">服务器</string>
     <string name="server_add_header_button">添加 OpenSubsonic 服务器</string>
     <string name="server_empty_title">尚未添加服务器</string>
     <string name="server_empty_desc_1">Auralis 通过 OpenSubsonic 协议连接你的私有曲库。</string>
@@ -38,9 +37,7 @@
     <string name="server_details_collapse">收起详情</string>
     <string name="server_details_expand">详情</string>
     <string name="server_testing">正在测试连接…</string>
-    <string name="server_test_action">测试连接</string>
     <string name="server_saving">保存中…</string>
-    <string name="server_save">保存</string>
     <!-- 连接阶段 -->
     <string name="server_stage_idle">就绪</string>
     <string name="server_stage_validating">检查地址</string>

@@ -17,7 +17,6 @@
     <string name="home_module_top_artists">Top Artists</string>
     <string name="home_module_top_albums">Top Albums</string>
     <!-- Shelf counts and play counts -->
-    <string name="home_count_tracks">%1$d songs</string>
     <string name="home_count_artists">%1$d artists</string>
     <string name="home_count_albums">%1$d albums</string>
     <string name="home_played_times">Played %1$d times</string>

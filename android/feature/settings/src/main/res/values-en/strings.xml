@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5e English overlay for feature:settings. -->
+<resources>
+    <!-- Root page -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_ai_title">AI Assistant</string>
+    <string name="settings_ai_subtitle_default">Models, recommendation index and privacy</string>
+    <string name="settings_ai_off">Off</string>
+    <string name="settings_ai_not_configured">No model API configured</string>
+    <string name="settings_ai_caption">Model API, API key, and outbound sharing consent.</string>
+    <string name="settings_quality_title">Playback &amp; Quality</string>
+    <string name="settings_quality_subtitle">Network quality and ReplayGain</string>
+    <string name="settings_data_title">Data &amp; Backup</string>
+    <string name="settings_data_subtitle">Local cache management</string>
+    <string name="settings_server_connect_hint">Connect a music server and download service</string>
+    <string name="settings_server_sync_format">%1$s · %2$d songs</string>
+    <string name="settings_server_connected_format">%1$s · Connected</string>
+    <string name="settings_server_connected">Connected to a server</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_home_layout">Home Layout</string>
+    <string name="settings_home_layout_subtitle">Module visibility and order</string>
+    <string name="settings_theme_title">Theme</string>
+    <string name="settings_about">About</string>
+    <string name="settings_version">Version</string>
+    <!-- Playback & quality page -->
+    <string name="settings_network_quality">Network Quality</string>
+    <string name="settings_wifi_original">Wi-Fi: Prefer Original Quality</string>
+    <string name="settings_wifi_original_note">No transcoding on Wi-Fi — prefer the server\'s original quality</string>
+    <string name="settings_cellular_transcode">Allow Transcoding on Cellular</string>
+    <string name="settings_cellular_transcode_note">May allow the server to transcode when cellular downlink is limited (bitrate cap per server configuration)</string>
+    <string name="settings_replaygain_mode">Mode</string>
+    <string name="settings_replaygain_off">Off</string>
+    <string name="settings_replaygain_track">Track Gain</string>
+    <string name="settings_replaygain_album">Album Gain</string>
+    <string name="settings_preamp_format">Preamp: %1$s dB</string>
+    <string name="settings_peak_protection">Peak Protection</string>
+    <string name="settings_peak_protection_note">When enabled, gain is limited by album/track peaks to avoid clipping</string>
+    <string name="settings_replaygain_default_note">ReplayGain is off by default. When enabled, the real Track/Album Gain from the server is used; tracks missing gain tags are not volume-normalized.</string>
+    <!-- Data & backup page -->
+    <string name="settings_local_cache">Local Cache</string>
+    <string name="settings_metadata_title">Library metadata</string>
+    <string name="settings_downloads_title">Offline downloads</string>
+    <string name="settings_downloads_note">Offline downloads are managed under Library → Downloads and are never removed by cache clearing.</string>
+    <string name="settings_lyric_cache_title">Lyrics cache</string>
+    <string name="settings_count_lyrics_format">%1$d items</string>
+    <string name="settings_clear_lyrics">Clear lyrics cache</string>
+    <string name="settings_cover_cache_title">Artwork cache</string>
+    <string name="settings_clear_cover">Clear artwork cache</string>
+    <string name="settings_clear_cover_confirm">Clear artwork cache?</string>
+    <string name="settings_clear_cover_message">This deletes every cached artwork image on this device. Artwork will only be re-fetched from the server on demand. No library metadata is deleted.</string>
+    <string name="settings_clear">Clear</string>
+    <string name="settings_data_note">The app only persists library metadata locally (songs, albums, artists, genres, playlists, favorites and play history). Artwork and lyrics load on demand from the server and can be cleared and re-cached at any time. Android playback streams directly with no temporary audio cache (the difference from Apple\'s local-cache model is documented).</string>
+    <!-- Theme page -->
+    <string name="settings_theme_note">Visually duplicated themes have been merged; older theme selections migrate automatically to the closest new theme.</string>
+    <string name="settings_theme_selected">Selected</string>
+    <!-- AI settings page -->
+    <string name="settings_ai_saved_notice">Saved to this device.</string>
+    <string name="settings_ai_incomplete">Base URL, API path, or model is incomplete — cannot test.</string>
+    <string name="settings_ai_openai_compatible">OpenAI-compatible</string>
+    <string name="settings_ai_diagnostics_format">Streaming: %1$s Native tools: %2$s</string>
+    <string name="settings_ai_connect_success">Connected: model %1$s · latency %2$dms. %3$s</string>
+    <string name="settings_ai_error_auth">Authentication failed (invalid API key?)</string>
+    <string name="settings_ai_error_routing">Model or upstream routing issue (check the model name/address)</string>
+    <string name="settings_ai_error_rate_limited">Rate limited</string>
+    <string name="settings_ai_error_incompatible">Incompatible request: %1$s</string>
+    <string name="settings_ai_error_unavailable">Service unavailable or network error</string>
+    <string name="settings_ai_error_unknown">Unknown error: %1$s</string>
+    <string name="settings_ai_test_failed">Test failed</string>
+    <string name="settings_ai_connect_failed">Connection failed: %1$s</string>
+    <string name="settings_ai_enable">Enable AI Assistant</string>
+    <string name="settings_ai_consent_granted_subtitle">Consent given; revoke below</string>
+    <string name="settings_ai_consent_pending_subtitle">First conversation will ask to confirm sharing</string>
+    <string name="settings_ai_api_section">Model API</string>
+    <string name="settings_ai_base_url_label">Base URL</string>
+    <string name="settings_ai_api_path_label">API path</string>
+    <string name="settings_ai_model_label">Model</string>
+    <string name="settings_ai_key_placeholder_saved">Saved (leave blank to keep)</string>
+    <string name="settings_ai_key_placeholder_new">Enter API Key</string>
+    <string name="settings_ai_key_caption">The API key is stored only in the system secure storage (Keystore), never in preferences. Saving with a blank field does not overwrite the stored key.</string>
+    <string name="settings_ai_advanced_section">Advanced</string>
+    <string name="settings_ai_context_label">Context window (tokens)</string>
+    <string name="settings_ai_output_label">Max output (tokens)</string>
+    <string name="settings_ai_tool_title">Native tool calling</string>
+    <string name="settings_ai_tool_note">When off, the AI can only chat — it cannot play, favorite, or manage playlists</string>
+    <string name="settings_ai_consent_title">Outbound consent</string>
+    <string name="settings_ai_consent_granted_note">You allow content to be sent to the model provider (remembered on this device)</string>
+    <string name="settings_ai_consent_pending_note">Not yet authorized (the first conversation will ask)</string>
+    <string name="settings_ai_consent_revoked_notice">Outbound consent revoked; the next conversation will ask again.</string>
+    <string name="settings_ai_revoke">Revoke</string>
+    <string name="settings_ai_about_section">About</string>
+    <string name="settings_ai_privacy_note">When you chat on the assistant page, content is sent to the model provider you configured. Read-only queries and playback do not depend on the model; write actions (playback/favorites/ratings/playlists) are described in the conversation before running, and destructive actions ask for your approval every time.</string>
+</resources>

@@ -19,7 +19,6 @@
     <string name="home_module_top_artists">常听艺术家</string>
     <string name="home_module_top_albums">常听专辑</string>
     <!-- 货架计数与播放次数 -->
-    <string name="home_count_tracks">%1$d 首</string>
     <string name="home_count_artists">%1$d 位艺人</string>
     <string name="home_count_albums">%1$d 张专辑</string>
     <string name="home_played_times">播放 %1$d 次</string>

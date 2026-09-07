@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- R5 English overlay for feature:server. -->
 <resources>
-    <string name="server_title">Servers</string>
     <string name="server_add_header_button">Add OpenSubsonic Server</string>
     <string name="server_empty_title">No servers yet</string>
     <string name="server_empty_desc_1">Auralis connects to your private music library over the OpenSubsonic protocol.</string>
@@ -35,9 +34,7 @@
     <string name="server_details_collapse">Hide details</string>
     <string name="server_details_expand">Details</string>
     <string name="server_testing">Testing connection…</string>
-    <string name="server_test_action">Test Connection</string>
     <string name="server_saving">Saving…</string>
-    <string name="server_save">Save</string>
     <string name="server_stage_idle">Idle</string>
     <string name="server_stage_validating">Checking address</string>
     <string name="server_stage_storing_credential">Securing credentials</string>

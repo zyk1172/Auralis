@@ -26,6 +26,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -37,6 +39,7 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import kotlinx.coroutines.launch
 
 /**
@@ -57,6 +60,7 @@ fun AiSettingsPage(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current.applicationContext
 
     var enabled by remember { mutableStateOf(true) }
     var consentGiven by remember { mutableStateOf(false) }
@@ -111,7 +115,7 @@ fun AiSettingsPage(
                 apiKeyInput = ""
                 apiKeySaved = true
             }
-            savedNotice = "已保存到本机。"
+            savedNotice = context.getString(R.string.settings_ai_saved_notice)
             testState = null
         }
     }
@@ -119,7 +123,7 @@ fun AiSettingsPage(
     fun testConnection() {
         val settings = currentSettings()
         if (!settings.isComplete) {
-            testState = "接口地址/接口路径/模型不完整，无法测试。" to false
+            testState = context.getString(R.string.settings_ai_incomplete) to false
             return
         }
         scope.launch {
@@ -128,7 +132,7 @@ fun AiSettingsPage(
             runCatching {
                 val config = AiProviderConfiguration(
                     id = "ai.provider.test",
-                    name = "OpenAI 兼容",
+                    name = context.getString(R.string.settings_ai_openai_compatible),
                     baseUrl = settings.baseUrl,
                     apiPath = settings.apiPath,
                     credentialId = AiConnectionSettings.API_KEY_REFERENCE,
@@ -144,35 +148,35 @@ fun AiSettingsPage(
                 provider.testConnection()
             }.onSuccess { result ->
                 val diagnostic = result.diagnostics?.let {
-                    "流式:${it.streaming.name} 原生工具:${it.nativeTools.name}"
+                    context.getString(R.string.settings_ai_diagnostics_format, it.streaming.name, it.nativeTools.name)
                 } ?: ""
-                testState = "连接成功：模型 ${result.model} · 延迟 ${result.latencyMillis}ms。$diagnostic".trim() to true
+                testState = context.getString(R.string.settings_ai_connect_success, result.model, result.latencyMillis, diagnostic).trim() to true
             }.onFailure { e ->
                 val reason = when (e) {
                     is AiProviderException -> when (e.kind) {
-                        AiProviderFailureKind.Authentication -> "鉴权失败（API Key 无效？）"
-                        AiProviderFailureKind.ModelRouting, AiProviderFailureKind.UpstreamRouting -> "模型或上游路由问题（检查模型名/地址）"
-                        AiProviderFailureKind.RateLimited -> "已被限流"
-                        AiProviderFailureKind.IncompatibleRequest -> "请求不兼容：${e.message}"
-                        AiProviderFailureKind.ProviderUnavailable -> "服务不可用或网络异常"
-                        AiProviderFailureKind.Unknown -> "未知错误：${e.message}"
+                        AiProviderFailureKind.Authentication -> context.getString(R.string.settings_ai_error_auth)
+                        AiProviderFailureKind.ModelRouting, AiProviderFailureKind.UpstreamRouting -> context.getString(R.string.settings_ai_error_routing)
+                        AiProviderFailureKind.RateLimited -> context.getString(R.string.settings_ai_error_rate_limited)
+                        AiProviderFailureKind.IncompatibleRequest -> context.getString(R.string.settings_ai_error_incompatible, e.message)
+                        AiProviderFailureKind.ProviderUnavailable -> context.getString(R.string.settings_ai_error_unavailable)
+                        AiProviderFailureKind.Unknown -> context.getString(R.string.settings_ai_error_unknown, e.message)
                     }
-                    else -> e.message ?: "测试失败"
+                    else -> e.message ?: context.getString(R.string.settings_ai_test_failed)
                 }
-                testState = "连接失败：$reason" to false
+                testState = context.getString(R.string.settings_ai_connect_failed, reason) to false
             }
         }
     }
 
     SettingsPageContainer(modifier = modifier) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            item { SettingsDetailTopBar(title = "AI 助手", onBack = onBack) }
+            item { SettingsDetailTopBar(title = stringResource(R.string.settings_ai_title), onBack = onBack) }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = AuralisSpacing.small)) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("启用 AI 助手", style = MaterialTheme.typography.bodyLarge, color = colors.primaryText)
+                        Text(stringResource(R.string.settings_ai_enable), style = MaterialTheme.typography.bodyLarge, color = colors.primaryText)
                         Text(
-                            if (consentGiven) "已授权外发；可在下方撤销" else "首次对话需确认内容外发",
+                            stringResource(if (consentGiven) R.string.settings_ai_consent_granted_subtitle else R.string.settings_ai_consent_pending_subtitle),
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.secondaryText,
                         )
@@ -183,16 +187,16 @@ fun AiSettingsPage(
                     })
                 }
             }
-            item { SettingsSectionTitle("模型接口") }
-            item { FieldLabel("接口地址 baseURL") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_ai_api_section)) }
+            item { FieldLabel(stringResource(R.string.settings_ai_base_url_label)) }
             item {
                 OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it; savedNotice = null }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
-            item { FieldLabel("接口路径 apiPath") }
+            item { FieldLabel(stringResource(R.string.settings_ai_api_path_label)) }
             item {
                 OutlinedTextField(value = apiPath, onValueChange = { apiPath = it; savedNotice = null }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
-            item { FieldLabel("模型 model") }
+            item { FieldLabel(stringResource(R.string.settings_ai_model_label)) }
             item {
                 OutlinedTextField(value = model, onValueChange = { model = it; savedNotice = null }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
@@ -203,15 +207,15 @@ fun AiSettingsPage(
                     onValueChange = { apiKeyInput = it; savedNotice = null },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    placeholder = { Text(if (apiKeySaved) "已保存（留空则不修改）" else "输入 API Key") },
+                    placeholder = { Text(stringResource(if (apiKeySaved) R.string.settings_ai_key_placeholder_saved else R.string.settings_ai_key_placeholder_new)) },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
             item {
-                SettingsCaption("API Key 仅保存在系统安全存储（Keystore），不写入偏好设置。留空保存不会覆盖已存 Key。")
+                SettingsCaption(stringResource(R.string.settings_ai_key_caption))
             }
-            item { SettingsSectionTitle("高级") }
-            item { FieldLabel("上下文窗口（tokens）") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_ai_advanced_section)) }
+            item { FieldLabel(stringResource(R.string.settings_ai_context_label)) }
             item {
                 OutlinedTextField(
                     value = maxContext,
@@ -221,7 +225,7 @@ fun AiSettingsPage(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            item { FieldLabel("单次输出上限（tokens）") }
+            item { FieldLabel(stringResource(R.string.settings_ai_output_label)) }
             item {
                 OutlinedTextField(
                     value = maxOutput,
@@ -234,8 +238,8 @@ fun AiSettingsPage(
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = AuralisSpacing.small)) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("原生工具调用", style = MaterialTheme.typography.bodyLarge, color = colors.primaryText)
-                        Text("关闭后 AI 只能问答，不能执行播放/收藏/歌单等操作", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                        Text(stringResource(R.string.settings_ai_tool_title), style = MaterialTheme.typography.bodyLarge, color = colors.primaryText)
+                        Text(stringResource(R.string.settings_ai_tool_note), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                     }
                     Switch(checked = toolCalling, onCheckedChange = { toolCalling = it; savedNotice = null })
                 }
@@ -243,29 +247,29 @@ fun AiSettingsPage(
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = AuralisSpacing.small)) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("外发授权", style = MaterialTheme.typography.bodyLarge, color = colors.primaryText)
-                        Text(if (consentGiven) "已允许把内容发送到模型服务商（本机记住）" else "尚未授权外发（首次对话会询问）", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                        Text(stringResource(R.string.settings_ai_consent_title), style = MaterialTheme.typography.bodyLarge, color = colors.primaryText)
+                        Text(stringResource(if (consentGiven) R.string.settings_ai_consent_granted_note else R.string.settings_ai_consent_pending_note), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
                     }
                     if (consentGiven) {
                         TextButton(onClick = {
                             scope.launch {
                                 graph.preferences.setAiConsentGiven(false)
                                 consentGiven = false
-                                savedNotice = "已撤销外发授权；下次对话将重新询问。"
+                                savedNotice = context.getString(R.string.settings_ai_consent_revoked_notice)
                             }
-                        }) { Text("撤销授权") }
+                        }) { Text(stringResource(R.string.settings_ai_revoke)) }
                     }
                 }
             }
             item {
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = AuralisSpacing.small)) {
-                    Button(onClick = ::save, modifier = Modifier.weight(1f)) { Text("保存") }
+                    Button(onClick = ::save, modifier = Modifier.weight(1f)) { Text(stringResource(AuralisR.string.save)) }
                     Spacer(Modifier.width(AuralisSpacing.medium))
                     OutlinedButton(
                         onClick = ::testConnection,
                         enabled = currentSettings().isComplete,
                         modifier = Modifier.weight(1f),
-                    ) { Text("测试连接") }
+                    ) { Text(stringResource(AuralisR.string.test_connection)) }
                 }
             }
             savedNotice?.let { notice ->
@@ -276,12 +280,9 @@ fun AiSettingsPage(
                     Text(text, style = MaterialTheme.typography.bodyMedium, color = if (success) colors.success else colors.error)
                 }
             }
-            item { SettingsSectionTitle("说明") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_ai_about_section)) }
             item {
-                SettingsCaption(
-                    "在助手页对话时，内容会发送到你配置的模型服务商。只读查询与播放不依赖模型；" +
-                        "写操作（播放/收藏/评分/歌单）会在对话中说明后执行，删除类操作会逐次请你批准。"
-                )
+                SettingsCaption(stringResource(R.string.settings_ai_privacy_note))
             }
             item { Spacer(Modifier.height(AuralisSpacing.large)) }
         }

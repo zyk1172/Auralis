@@ -29,4 +29,8 @@
     <string name="move_up">Move up</string>
     <string name="move_down">Move down</string>
     <string name="add_server">Add Server</string>
+    <string name="servers">Servers</string>
+    <string name="save">Save</string>
+    <string name="test_connection">Test Connection</string>
+    <string name="count_songs">%1$d songs</string>
 </resources>

@@ -34,4 +34,8 @@
     <string name="move_up">上移</string>
     <string name="move_down">下移</string>
     <string name="add_server">添加服务器</string>
+    <string name="servers">服务器</string>
+    <string name="save">保存</string>
+    <string name="test_connection">测试连接</string>
+    <string name="count_songs">%1$d 首</string>
 </resources>

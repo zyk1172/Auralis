@@ -44,6 +44,9 @@
 共享层新增通用动作动词 play/pause/previous/next/favorite/unfavorite/dislike/undislike/edit/done/
 retry/add_to_playlist）/ `feature:home`（44 处：模块标题 `HomeModuleId.titleRes`/`HomeQuickEntry.titleRes`、
 货架计数/空态/布局编辑页 + `HomeState` 注入 Context；上移/下移/添加服务器提升共享层
-move_up/move_down/add_server，player/server 同义本地 key 一并归一化）。
-待迁移（按量）：library 204 / settings 97 / assistant 245（其中大量为工具/会话文案属
+move_up/move_down/add_server，player/server 同义本地 key 一并归一化）/ `feature:settings`（97 处：
+根页/播放与音质/数据与备份/主题/AI 助手设置页，协程内提示经 LocalContext context.getString；
+保存/测试连接/服务器/歌曲计数提升共享 save/test_connection/servers/count_songs，server
+同义本地 key server_save/server_test_action/server_title、home 的 home_count_tracks 一并归一化）。
+待迁移（按量）：library 204 / assistant 245（其中大量为工具/会话文案属
 边界，实际 UI 面更小）/ app-mobile 31 / app-tv 11 / designsystem 12（共享层按需进 core:designsystem）。

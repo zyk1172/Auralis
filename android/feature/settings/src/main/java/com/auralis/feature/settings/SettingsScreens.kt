@@ -48,6 +48,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auralis.core.data.graph.AuralisGraph
@@ -56,6 +58,7 @@ import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.AuralisThemeController
 import com.auralis.core.designsystem.BuiltInThemes
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.ReplayGainMode
 import com.auralis.core.domain.ServerId
 import com.auralis.core.image.clearArtworkCaches
@@ -124,6 +127,7 @@ private fun SettingsRootPage(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current.applicationContext
 
     // 服务器行副标题：激活服务器名 + 已同步歌曲数（真实查询，无激活则引导文案）。
     var serverSubtitle by remember { mutableStateOf<String?>(null) }
@@ -132,26 +136,30 @@ private fun SettingsRootPage(
         val servers = runCatching { graph.catalogRepository.servers() }.getOrDefault(emptyList())
         val activeId = runCatching { graph.preferences.activeServerIdValue() }.getOrNull()
         if (activeId == null) {
-            serverSubtitle = "连接音乐服务器与下载服务"
+            serverSubtitle = context.getString(R.string.settings_server_connect_hint)
         } else {
             val account = servers.firstOrNull { it.id.value == activeId }
             val count = runCatching { graph.catalogRepository.stats(ServerId(activeId)).trackCount }.getOrNull()
             serverSubtitle = if (account != null) {
-                if (count != null) "${account.displayName} · $count 首歌曲" else "${account.displayName} · 已连接"
+                if (count != null) {
+                    context.getString(R.string.settings_server_sync_format, account.displayName, count)
+                } else {
+                    context.getString(R.string.settings_server_connected_format, account.displayName)
+                }
             } else {
-                "已连接服务器"
+                context.getString(R.string.settings_server_connected)
             }
         }
     }
 
     // AI 助手行副标题：模型接口配置状态（真实读取；未配置/已关闭如实显示）。
-    var aiSubtitle by remember { mutableStateOf("大模型、推荐索引与隐私") }
+    var aiSubtitle by remember { mutableStateOf(context.getString(R.string.settings_ai_subtitle_default)) }
     LaunchedEffect(Unit) {
         val enabled = runCatching { graph.preferences.aiEnabledValue() }.getOrDefault(true)
         val settings = runCatching { graph.preferences.aiConnectionValue() }.getOrNull()
         aiSubtitle = when {
-            !enabled -> "已关闭"
-            settings == null || !settings.isComplete -> "未配置模型接口"
+            !enabled -> context.getString(R.string.settings_ai_off)
+            settings == null || !settings.isComplete -> context.getString(R.string.settings_ai_not_configured)
             else -> settings.model
         }
     }
@@ -160,11 +168,11 @@ private fun SettingsRootPage(
 
     SettingsPageContainer(modifier = modifier) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            item { SettingsDetailTopBar(title = "设置", onBack = onBack) }
-            item { SettingsSectionTitle("设置") }
+            item { SettingsDetailTopBar(title = stringResource(R.string.settings_title), onBack = onBack) }
+            item { SettingsSectionTitle(stringResource(R.string.settings_title)) }
             item {
                 SettingsCategoryRow(
-                    title = "服务器",
+                    title = stringResource(AuralisR.string.servers),
                     subtitle = serverSubtitle ?: "…",
                     icon = Icons.Filled.Dns,
                     onClick = onOpenServers,
@@ -173,17 +181,17 @@ private fun SettingsRootPage(
             item { SettingsDivider() }
             item {
                 SettingsCategoryRow(
-                    title = "AI 助手",
+                    title = stringResource(R.string.settings_ai_title),
                     subtitle = aiSubtitle,
                     icon = Icons.Filled.AutoAwesome,
                     onClick = onOpenAiSettings,
                 )
-                SettingsCaption("模型接口、API Key 与外发授权。")
+                SettingsCaption(stringResource(R.string.settings_ai_caption))
             }
             item {
                 SettingsCategoryRow(
-                    title = "播放与音质",
-                    subtitle = "网络音质与 ReplayGain",
+                    title = stringResource(R.string.settings_quality_title),
+                    subtitle = stringResource(R.string.settings_quality_subtitle),
                     icon = Icons.AutoMirrored.Filled.VolumeUp,
                     onClick = onOpenQuality,
                 )
@@ -191,18 +199,18 @@ private fun SettingsRootPage(
             item { SettingsDivider() }
             item {
                 SettingsCategoryRow(
-                    title = "数据与备份",
-                    subtitle = "本地缓存管理",
+                    title = stringResource(R.string.settings_data_title),
+                    subtitle = stringResource(R.string.settings_data_subtitle),
                     icon = Icons.Filled.Storage,
                     onClick = onOpenData,
                 )
             }
 
-            item { SettingsSectionTitle("外观") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_appearance)) }
             item {
                 SettingsCategoryRow(
-                    title = "首页布局",
-                    subtitle = "模块显示与排序",
+                    title = stringResource(R.string.settings_home_layout),
+                    subtitle = stringResource(R.string.settings_home_layout_subtitle),
                     icon = Icons.Filled.Tune,
                     onClick = onEditHomeLayout,
                 )
@@ -210,14 +218,14 @@ private fun SettingsRootPage(
             item { SettingsDivider() }
             item {
                 SettingsCategoryRow(
-                    title = "主题",
+                    title = stringResource(R.string.settings_theme_title),
                     subtitle = theme.name,
                     icon = Icons.Filled.Palette,
                     onClick = onOpenTheme,
                 )
             }
 
-            item { SettingsSectionTitle("关于") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_about)) }
             item {
                 val context = graph.appContext
                 val version = remember(context) {
@@ -238,7 +246,7 @@ private fun SettingsRootPage(
                         "${info.versionName} ($code)"
                     }.getOrDefault("—")
                 }
-                SettingsValueRow(title = "版本", value = version)
+                SettingsValueRow(title = stringResource(R.string.settings_version), value = version)
             }
             item { Spacer(Modifier.height(AuralisSpacing.large)) }
         }
@@ -294,13 +302,13 @@ private fun QualitySettingsPage(
 
     SettingsPageContainer(modifier = modifier) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            item { SettingsDetailTopBar(title = "播放与音质", onBack = onBack) }
+            item { SettingsDetailTopBar(title = stringResource(R.string.settings_quality_title), onBack = onBack) }
 
-            item { SettingsSectionTitle("网络音质") }
+            item { SettingsSectionTitle(stringResource(R.string.settings_network_quality)) }
             item {
                 SettingsSwitchRow(
-                    title = "Wi-Fi 优先原始音质",
-                    subtitle = "Wi-Fi 下不做转码，优先服务器原始音质",
+                    title = stringResource(R.string.settings_wifi_original),
+                    subtitle = stringResource(R.string.settings_wifi_original_note),
                     checked = quality.highQualityWifi,
                     onCheckedChange = { v -> setQuality { it.copy(highQualityWifi = v) } },
                 )
@@ -308,8 +316,8 @@ private fun QualitySettingsPage(
             item { SettingsDivider() }
             item {
                 SettingsSwitchRow(
-                    title = "蜂窝网络允许转码",
-                    subtitle = "蜂窝网络下行受限时可允许服务器转码（码率上限按服务器配置）",
+                    title = stringResource(R.string.settings_cellular_transcode),
+                    subtitle = stringResource(R.string.settings_cellular_transcode_note),
                     checked = quality.cellularTranscoding,
                     onCheckedChange = { v -> setQuality { it.copy(cellularTranscoding = v) } },
                 )
@@ -317,7 +325,7 @@ private fun QualitySettingsPage(
 
             item { SettingsSectionTitle("ReplayGain") }
             item {
-                SettingsCaption("模式")
+                SettingsCaption(stringResource(R.string.settings_replaygain_mode))
                 ReplayGainMode.entries.forEach { mode ->
                     Row(
                         modifier = Modifier
@@ -332,11 +340,13 @@ private fun QualitySettingsPage(
                         )
                         Spacer(Modifier.width(AuralisSpacing.small))
                         Text(
-                            when (mode) {
-                                ReplayGainMode.Off -> "关闭"
-                                ReplayGainMode.Track -> "曲目增益"
-                                ReplayGainMode.Album -> "专辑增益"
-                            },
+                            stringResource(
+                                when (mode) {
+                                    ReplayGainMode.Off -> R.string.settings_replaygain_off
+                                    ReplayGainMode.Track -> R.string.settings_replaygain_track
+                                    ReplayGainMode.Album -> R.string.settings_replaygain_album
+                                },
+                            ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.primaryText,
                         )
@@ -345,7 +355,7 @@ private fun QualitySettingsPage(
             }
             item { SettingsDivider() }
             item {
-                SettingsCaption("前级：${String.format(Locale.US, "%+.1f", displayedPreamp)} dB")
+                SettingsCaption(stringResource(R.string.settings_preamp_format, String.format(Locale.US, "%+.1f", displayedPreamp)))
                 Slider(
                     value = displayedPreamp.toFloat(),
                     onValueChange = { preampDrag = it.toDouble() },
@@ -371,15 +381,15 @@ private fun QualitySettingsPage(
             }
             item {
                 SettingsSwitchRow(
-                    title = "峰值保护",
-                    subtitle = "启用后按专辑/曲目峰值限制增益，避免削波",
+                    title = stringResource(R.string.settings_peak_protection),
+                    subtitle = stringResource(R.string.settings_peak_protection_note),
                     checked = replayGain.peakProtection,
                     onCheckedChange = { v -> setReplayGain { it.copy(peakProtection = v) } },
                     enabled = replayGain.mode != ReplayGainMode.Off,
                 )
             }
             item {
-                SettingsCaption("默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。")
+                SettingsCaption(stringResource(R.string.settings_replaygain_default_note))
             }
             item { Spacer(Modifier.height(AuralisSpacing.large)) }
         }
@@ -449,29 +459,29 @@ private fun DataAndBackupPage(
 
     SettingsPageContainer(modifier = modifier) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            item { SettingsDetailTopBar(title = "数据与备份", onBack = onBack) }
-            item { SettingsSectionTitle("本地缓存") }
+            item { SettingsDetailTopBar(title = stringResource(R.string.settings_data_title), onBack = onBack) }
+            item { SettingsSectionTitle(stringResource(R.string.settings_local_cache)) }
             item {
                 SettingsValueRow(
-                    title = "音乐库元数据",
+                    title = stringResource(R.string.settings_metadata_title),
                     value = metadataBytes?.let { formatBytes(it) } ?: "…",
                 )
             }
             item { SettingsDivider() }
             item {
                 SettingsValueRow(
-                    title = "离线下载",
-                    value = downloadedCount?.let { "$it 首" } ?: "…",
+                    title = stringResource(R.string.settings_downloads_title),
+                    value = downloadedCount?.let { stringResource(AuralisR.string.count_songs, it) } ?: "…",
                 )
             }
             item {
-                SettingsCaption("离线下载的歌曲在「音乐库 → 下载」中管理，不会被缓存清理删除。")
+                SettingsCaption(stringResource(R.string.settings_downloads_note))
             }
             item { SettingsDivider() }
             item {
                 SettingsValueRow(
-                    title = "歌词缓存",
-                    value = lyricCount?.let { "$it 条" } ?: "…",
+                    title = stringResource(R.string.settings_lyric_cache_title),
+                    value = lyricCount?.let { stringResource(R.string.settings_count_lyrics_format, it) } ?: "…",
                 )
                 TextButton(
                     onClick = ::clearLyrics,
@@ -481,14 +491,14 @@ private fun DataAndBackupPage(
                     if (workingLyrics) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     } else {
-                        Text("清理歌词缓存", color = colors.accent)
+                        Text(stringResource(R.string.settings_clear_lyrics), color = colors.accent)
                     }
                 }
             }
             item { SettingsDivider() }
             item {
                 SettingsValueRow(
-                    title = "封面缓存",
+                    title = stringResource(R.string.settings_cover_cache_title),
                     value = coverCacheBytes?.let { formatBytes(it) } ?: "…",
                 )
                 TextButton(
@@ -499,16 +509,12 @@ private fun DataAndBackupPage(
                     if (workingArtwork) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     } else {
-                        Text("清理封面缓存", color = colors.accent)
+                        Text(stringResource(R.string.settings_clear_cover), color = colors.accent)
                     }
                 }
             }
             item {
-                SettingsCaption(
-                    "App 只在本机持久化音乐库元数据（歌曲、专辑、艺术家、流派、歌单、收藏与播放记录）。" +
-                        "封面与歌词按需从服务器加载，可随时清理后重新缓存。" +
-                        "Android 播放为直连流式，无临时音频流缓存（与 Apple 的本地缓存模型差异已在文档记录）。"
-                )
+                SettingsCaption(stringResource(R.string.settings_data_note))
             }
             item { Spacer(Modifier.height(AuralisSpacing.large)) }
         }
@@ -517,16 +523,16 @@ private fun DataAndBackupPage(
     if (confirmClearArtwork) {
         AlertDialog(
             onDismissRequest = { confirmClearArtwork = false },
-            title = { Text("清理封面缓存？") },
-            text = { Text("将删除本机已缓存的全部封面图片。今后封面只按需从服务器加载，不删除任何音乐库元数据。") },
+            title = { Text(stringResource(R.string.settings_clear_cover_confirm)) },
+            text = { Text(stringResource(R.string.settings_clear_cover_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmClearArtwork = false
                     clearArtwork()
-                }) { Text("清理", color = colors.error) }
+                }) { Text(stringResource(R.string.settings_clear), color = colors.error) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmClearArtwork = false }) { Text("取消") }
+                TextButton(onClick = { confirmClearArtwork = false }) { Text(stringResource(AuralisR.string.cancel)) }
             },
         )
     }
@@ -552,7 +558,7 @@ private fun ThemeSettingsPage(
 
     SettingsPageContainer(modifier = modifier) {
         Column(Modifier.fillMaxSize()) {
-            SettingsDetailTopBar(title = "主题", onBack = onBack)
+            SettingsDetailTopBar(title = stringResource(R.string.settings_theme_title), onBack = onBack)
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 110.dp),
                 horizontalArrangement = Arrangement.spacedBy(AuralisSpacing.medium),
@@ -575,7 +581,7 @@ private fun ThemeSettingsPage(
                     )
                 }
             }
-            SettingsCaption("已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。")
+            SettingsCaption(stringResource(R.string.settings_theme_note))
             Spacer(Modifier.height(AuralisSpacing.large))
         }
     }
@@ -632,7 +638,7 @@ private fun ThemeSwatchCard(
                 ) {
                     androidx.compose.material3.Icon(
                         Icons.Filled.Check,
-                        contentDescription = "已选择",
+                        contentDescription = stringResource(R.string.settings_theme_selected),
                         tint = androidx.compose.ui.graphics.Color.Black,
                         modifier = Modifier.size(10.dp),
                     )

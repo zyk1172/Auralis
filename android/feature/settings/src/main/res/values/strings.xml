@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5e：feature:settings 独有文案（默认=中文；英文见 values-en）。key 一律 settings_ 前缀。
+     跨模块通用词（返回/取消/保存/测试连接/服务器/歌曲计数等）放 core:designsystem 共享层经
+     AuralisR 引用；此处只放设置各页模块特有词。 -->
+<resources>
+    <!-- 根页 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_ai_title">AI 助手</string>
+    <string name="settings_ai_subtitle_default">大模型、推荐索引与隐私</string>
+    <string name="settings_ai_off">已关闭</string>
+    <string name="settings_ai_not_configured">未配置模型接口</string>
+    <string name="settings_ai_caption">模型接口、API Key 与外发授权。</string>
+    <string name="settings_quality_title">播放与音质</string>
+    <string name="settings_quality_subtitle">网络音质与 ReplayGain</string>
+    <string name="settings_data_title">数据与备份</string>
+    <string name="settings_data_subtitle">本地缓存管理</string>
+    <string name="settings_server_connect_hint">连接音乐服务器与下载服务</string>
+    <string name="settings_server_sync_format">%1$s · %2$d 首歌曲</string>
+    <string name="settings_server_connected_format">%1$s · 已连接</string>
+    <string name="settings_server_connected">已连接服务器</string>
+    <string name="settings_appearance">外观</string>
+    <string name="settings_home_layout">首页布局</string>
+    <string name="settings_home_layout_subtitle">模块显示与排序</string>
+    <string name="settings_theme_title">主题</string>
+    <string name="settings_about">关于</string>
+    <string name="settings_version">版本</string>
+    <!-- 播放与音质页 -->
+    <string name="settings_network_quality">网络音质</string>
+    <string name="settings_wifi_original">Wi-Fi 优先原始音质</string>
+    <string name="settings_wifi_original_note">Wi-Fi 下不做转码，优先服务器原始音质</string>
+    <string name="settings_cellular_transcode">蜂窝网络允许转码</string>
+    <string name="settings_cellular_transcode_note">蜂窝网络下行受限时可允许服务器转码（码率上限按服务器配置）</string>
+    <string name="settings_replaygain_mode">模式</string>
+    <string name="settings_replaygain_off">关闭</string>
+    <string name="settings_replaygain_track">曲目增益</string>
+    <string name="settings_replaygain_album">专辑增益</string>
+    <string name="settings_preamp_format">前级：%1$s dB</string>
+    <string name="settings_peak_protection">峰值保护</string>
+    <string name="settings_peak_protection_note">启用后按专辑/曲目峰值限制增益，避免削波</string>
+    <string name="settings_replaygain_default_note">默认关闭 ReplayGain。启用后优先使用服务器返回的真实 Track/Album Gain；缺少标签时不做普通音量归一化。</string>
+    <!-- 数据与备份页 -->
+    <string name="settings_local_cache">本地缓存</string>
+    <string name="settings_metadata_title">音乐库元数据</string>
+    <string name="settings_downloads_title">离线下载</string>
+    <string name="settings_downloads_note">离线下载的歌曲在「音乐库 → 下载」中管理，不会被缓存清理删除。</string>
+    <string name="settings_lyric_cache_title">歌词缓存</string>
+    <string name="settings_count_lyrics_format">%1$d 条</string>
+    <string name="settings_clear_lyrics">清理歌词缓存</string>
+    <string name="settings_cover_cache_title">封面缓存</string>
+    <string name="settings_clear_cover">清理封面缓存</string>
+    <string name="settings_clear_cover_confirm">清理封面缓存？</string>
+    <string name="settings_clear_cover_message">将删除本机已缓存的全部封面图片。今后封面只按需从服务器加载，不删除任何音乐库元数据。</string>
+    <string name="settings_clear">清理</string>
+    <string name="settings_data_note">App 只在本机持久化音乐库元数据（歌曲、专辑、艺术家、流派、歌单、收藏与播放记录）。封面与歌词按需从服务器加载，可随时清理后重新缓存。Android 播放为直连流式，无临时音频流缓存（与 Apple 的本地缓存模型差异已在文档记录）。</string>
+    <!-- 主题页 -->
+    <string name="settings_theme_note">已合并视觉结构重复的主题；旧主题选择会自动迁移到最接近的新主题。</string>
+    <string name="settings_theme_selected">已选择</string>
+    <!-- AI 助手页 -->
+    <string name="settings_ai_saved_notice">已保存到本机。</string>
+    <string name="settings_ai_incomplete">接口地址/接口路径/模型不完整，无法测试。</string>
+    <string name="settings_ai_openai_compatible">OpenAI 兼容</string>
+    <string name="settings_ai_diagnostics_format">流式:%1$s 原生工具:%2$s</string>
+    <string name="settings_ai_connect_success">连接成功：模型 %1$s · 延迟 %2$dms。%3$s</string>
+    <string name="settings_ai_error_auth">鉴权失败（API Key 无效？）</string>
+    <string name="settings_ai_error_routing">模型或上游路由问题（检查模型名/地址）</string>
+    <string name="settings_ai_error_rate_limited">已被限流</string>
+    <string name="settings_ai_error_incompatible">请求不兼容：%1$s</string>
+    <string name="settings_ai_error_unavailable">服务不可用或网络异常</string>
+    <string name="settings_ai_error_unknown">未知错误：%1$s</string>
+    <string name="settings_ai_test_failed">测试失败</string>
+    <string name="settings_ai_connect_failed">连接失败：%1$s</string>
+    <string name="settings_ai_enable">启用 AI 助手</string>
+    <string name="settings_ai_consent_granted_subtitle">已授权外发；可在下方撤销</string>
+    <string name="settings_ai_consent_pending_subtitle">首次对话需确认内容外发</string>
+    <string name="settings_ai_api_section">模型接口</string>
+    <string name="settings_ai_base_url_label">接口地址 baseURL</string>
+    <string name="settings_ai_api_path_label">接口路径 apiPath</string>
+    <string name="settings_ai_model_label">模型 model</string>
+    <string name="settings_ai_key_placeholder_saved">已保存（留空则不修改）</string>
+    <string name="settings_ai_key_placeholder_new">输入 API Key</string>
+    <string name="settings_ai_key_caption">API Key 仅保存在系统安全存储（Keystore），不写入偏好设置。留空保存不会覆盖已存 Key。</string>
+    <string name="settings_ai_advanced_section">高级</string>
+    <string name="settings_ai_context_label">上下文窗口（tokens）</string>
+    <string name="settings_ai_output_label">单次输出上限（tokens）</string>
+    <string name="settings_ai_tool_title">原生工具调用</string>
+    <string name="settings_ai_tool_note">关闭后 AI 只能问答，不能执行播放/收藏/歌单等操作</string>
+    <string name="settings_ai_consent_title">外发授权</string>
+    <string name="settings_ai_consent_granted_note">已允许把内容发送到模型服务商（本机记住）</string>
+    <string name="settings_ai_consent_pending_note">尚未授权外发（首次对话会询问）</string>
+    <string name="settings_ai_consent_revoked_notice">已撤销外发授权；下次对话将重新询问。</string>
+    <string name="settings_ai_revoke">撤销授权</string>
+    <string name="settings_ai_about_section">说明</string>
+    <string name="settings_ai_privacy_note">在助手页对话时，内容会发送到你配置的模型服务商。只读查询与播放不依赖模型；写操作（播放/收藏/评分/歌单）会在对话中说明后执行，删除类操作会逐次请你批准。</string>
+</resources>

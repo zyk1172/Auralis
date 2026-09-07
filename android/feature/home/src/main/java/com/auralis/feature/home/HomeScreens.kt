@@ -315,7 +315,7 @@ private fun ModuleHeader(
 }
 
 private fun moduleCountLabelRes(module: HomeModuleSnapshot): Int = when {
-    module.tracks.isNotEmpty() -> R.string.home_count_tracks
+    module.tracks.isNotEmpty() -> AuralisR.string.count_songs
     module.artists.isNotEmpty() -> R.string.home_count_artists
     else -> R.string.home_count_albums
 }
