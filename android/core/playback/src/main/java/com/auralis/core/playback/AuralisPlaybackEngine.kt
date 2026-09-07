@@ -295,6 +295,31 @@ class AuralisPlaybackEngine(
         refreshWindowPreservingPosition()
     }
 
+    /**
+     * 下一首播放（对齐 Swift `playNext(tracks:)`）：把 [entries] 按序插到当前项之后，
+     * 重复曲目创建独立 occurrence；尚未起播（currentLogical = -1）时插入队首。
+     * 不改变当前曲目与播放进度——插入点若落在已物化窗口内则重建窗口（保位置），
+     * 否则只更新逻辑队列与快照。
+     */
+    fun insertNext(entries: List<QueueEntry>) {
+        if (entries.isEmpty()) return
+        val insertAt = currentLogical + 1
+        logicalQueue.addAll(insertAt, entries)
+        // addAll 的插入点 ≥ currentLogical+1，当前项下标不受影响。
+        if (player.mediaItemCount > 0) {
+            refreshWindowPreservingPosition()
+        } else {
+            publishAll()
+        }
+    }
+
+    /** 加入队列（对齐 Swift `appendToQueue`）：追加到逻辑队列末尾，不自动起播、不打断播放。 */
+    fun appendToQueue(entries: List<QueueEntry>) {
+        if (entries.isEmpty()) return
+        logicalQueue.addAll(entries)
+        publishAll()
+    }
+
     /** 清空队列并停止。 */
     fun clearQueue() {
         logicalQueue.clear()

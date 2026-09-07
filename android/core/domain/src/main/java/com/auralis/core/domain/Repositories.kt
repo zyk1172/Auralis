@@ -30,6 +30,7 @@ interface CatalogRepository {
 
     suspend fun albumTracks(albumGlobalId: GlobalId): List<Track>
     suspend fun artistAlbums(artistGlobalId: GlobalId): List<Album>
+    suspend fun artistTracks(artistGlobalId: GlobalId): List<Track>
     suspend fun playlistTracks(playlistGlobalId: GlobalId): List<Track>
 
     suspend fun favoriteTracks(serverId: ServerId?): List<Track>
@@ -50,6 +51,9 @@ interface CatalogRepository {
     suspend fun setDisliked(globalId: GlobalId, disliked: Boolean)
 
     suspend fun isFavorite(globalId: GlobalId): Boolean
+
+    /** 按实体类型查收藏（专辑/艺术家菜单动态 label 用）。 */
+    suspend fun isFavorite(globalId: GlobalId, kind: FavoriteKind): Boolean
 
     /** 歌曲页/首页派生数据：从未播放、很久没听、最近添加等。 */
     suspend fun neverPlayed(serverId: ServerId?, limit: Int): List<Track>
@@ -80,6 +84,24 @@ interface CatalogRepository {
 
     /** 常听专辑：语义同上。 */
     suspend fun homeTopAlbums(serverId: ServerId?, limit: Int): List<Pair<Album, Int>>
+
+    // ---- Library（S4）专用：收藏曲目观察 / 流派筛选 / 歌单本地落盘 ----
+
+    /** 收藏曲目（kind='Track' 且 value=1），收藏表变化即重发。 */
+    fun observeFavoriteTracks(serverId: ServerId?): Flow<List<Track>>
+
+    /** 本地按曲目 genres 筛选（对齐 Swift `tracks(for:)`：大小写不敏感；不在内存遍历一万首之外另做全表解码则无用——一次性查询）。 */
+    suspend fun genreTracks(serverId: ServerId?, genreName: String): List<Track>
+
+    /**
+     * 歌单详情落盘（对齐 Swift `store.setPlaylistTracks` + 更新歌单头）：
+     * 单事务 upsert 歌单行（name/modifiedAt/payload）并整体替换 playlist_tracks。
+     * 只在远端操作成功后被 [PlaylistCoordinator] 调用，绝不把服务器没确认的列表写本地。
+     */
+    suspend fun upsertPlaylist(playlist: Playlist)
+
+    /** 删除歌单本地行及其曲目关联（单事务；远端已确认删除后调用）。 */
+    suspend fun deletePlaylistLocally(globalId: GlobalId)
 }
 
 enum class FavoriteKind { Track, Album, Artist }

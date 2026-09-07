@@ -167,6 +167,16 @@ class AuralisGraph(context: Context) {
 
     // ------------------------------------------------------ 依赖装配
 
+    /** 收藏/评分协调器（远端先行，成功后落本地）。 */
+    val libraryActions by lazy {
+        com.auralis.core.data.connector.LibraryActionCoordinator(registry, catalogRepository)
+    }
+
+    /** 歌单动作协调器（远端先行；rename/add/remove 后用服务器最新详情整表替换本地）。 */
+    val playlistActions by lazy {
+        com.auralis.core.data.connector.PlaylistCoordinator(registry, catalogRepository)
+    }
+
     /** 播放历史/scrobble 协调器：由 App 注入到播放引擎的 historySink。 */
     val historyCoordinator: com.auralis.core.data.connector.PlaybackHistoryCoordinator =
         com.auralis.core.data.connector.PlaybackHistoryCoordinator(registry, catalogRepository)

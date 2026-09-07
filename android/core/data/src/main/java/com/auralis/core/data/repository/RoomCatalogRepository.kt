@@ -47,6 +47,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import com.auralis.core.domain.SearchResults
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
@@ -166,6 +168,9 @@ class RoomCatalogRepository(
     override suspend fun artistAlbums(artistGlobalId: GlobalId) =
         albumDao.byArtist(artistGlobalId.serialized).map { decode<Album>(it.payload) }
 
+    override suspend fun artistTracks(artistGlobalId: GlobalId) =
+        trackDao.byArtist(artistGlobalId.serialized).map { decode<Track>(it.payload) }
+
     override suspend fun playlistTracks(playlistGlobalId: GlobalId): List<Track> {
         val trackGids = playlistDao.tracks(playlistGlobalId.serialized).map { it.trackGid }
         if (trackGids.isEmpty()) return emptyList()
@@ -276,7 +281,10 @@ class RoomCatalogRepository(
     }
 
     override suspend fun isFavorite(globalId: GlobalId): Boolean =
-        annotationDao.isFavorite(globalId.serialized, FavoriteKind.Track.name) ?: false
+        isFavorite(globalId, FavoriteKind.Track)
+
+    override suspend fun isFavorite(globalId: GlobalId, kind: FavoriteKind): Boolean =
+        annotationDao.isFavorite(globalId.serialized, kind.name) ?: false
 
     override suspend fun neverPlayed(serverId: ServerId?, limit: Int) =
         trackDao.neverPlayed(serverId?.value, limit).map { decode<Track>(it.payload) }
@@ -347,6 +355,90 @@ class RoomCatalogRepository(
         return rows.mapNotNull { row ->
             albumDao.get(row.ownerId)?.let { decode<Album>(it.payload) to row.total }
         }
+    }
+
+    // ------------------------------------------------------------ Library（S4）
+
+    /** 收藏曲目：计数信号（收藏表增删即发）驱动重新查询，不监听全表解码。 */
+    @kotlinx.coroutines.ExperimentalCoroutinesApi
+    override fun observeFavoriteTracks(serverId: ServerId?): Flow<List<Track>> {
+        val sid = serverId?.value
+        return annotationDao.observeFavoriteTrackCount(sid).flatMapLatest {
+            flow { emit(resolveTrackGids(annotationDao.favoriteTrackIds(sid))) }
+        }
+    }
+
+    /** 流派筛选：对齐 Swift `tracks(for:)` 的内存过滤语义（track.genres，大小写不敏感）。 */
+    override suspend fun genreTracks(serverId: ServerId?, genreName: String): List<Track> {
+        if (genreName.isBlank()) return emptyList()
+        return trackDao.observeAll(serverId?.value).first()
+            .asSequence()
+            .mapNotNull { runCatching { decode<Track>(it.payload) }.getOrNull() }
+            .filter { track -> track.genres.any { it.equals(genreName, ignoreCase = true) } }
+            .toList()
+    }
+
+    /** 歌单详情落盘：单事务更新歌单头并整体替换其曲目关联。 */
+    override suspend fun upsertPlaylist(playlist: Playlist) {
+        val sid = playlist.serverId.value
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            playlistDao.upsertAll(
+                listOf(
+                    PlaylistEntity(
+                        globalId = playlist.globalId.serialized,
+                        serverId = sid,
+                        remoteId = playlist.id.value,
+                        name = playlist.name,
+                        isReadOnly = playlist.isReadOnly,
+                        modifiedAt = playlist.modifiedAtMillis,
+                        payload = json.encodeToString(playlist),
+                        updatedAt = now,
+                    ),
+                ),
+            )
+            val gids = playlist.trackIds.mapNotNull { tid ->
+                trackDao.get("$sid:${tid.value}")?.globalId
+            }
+            playlistDao.deleteTracks(playlist.globalId.serialized)
+            if (gids.isNotEmpty()) {
+                playlistDao.insertTracks(
+                    gids.mapIndexed { index, gid -> PlaylistTrackEntity(playlist.globalId.serialized, index, gid) },
+                )
+            }
+        }
+    }
+
+    /** 删除歌单本地行与曲目关联（单事务；远端删除确认后调用）。 */
+    override suspend fun deletePlaylistLocally(globalId: GlobalId) {
+        database.withTransaction {
+            playlistDao.deleteTracks(globalId.serialized)
+            playlistDao.delete(globalId.serialized)
+        }
+    }
+
+    /**
+     * 流派刷新（对齐 Swift `mergeServerGenres`，R15）：只在服务器返回非空时并入，
+     * 服务器为空**不**把本地已有流派伪装成「无流派」。genreDao 按 (global_id) upsert，
+     * 同名流派（global_id = "server:name.lowercase()"）覆盖 songCount 与 payload。
+     */
+    suspend fun mergeGenres(serverId: ServerId, genres: List<Genre>) {
+        if (genres.isEmpty()) return
+        val sid = serverId.value
+        val now = System.currentTimeMillis()
+        genreDao.upsertAll(
+            genres.map {
+                GenreEntity(
+                    globalId = "$sid:${it.id}",
+                    serverId = sid,
+                    remoteId = it.id,
+                    name = it.name,
+                    songCount = it.songCount,
+                    payload = json.encodeToString(it),
+                    updatedAt = now,
+                )
+            },
+        )
     }
 
     /**

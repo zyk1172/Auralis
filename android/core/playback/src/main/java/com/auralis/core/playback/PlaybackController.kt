@@ -34,6 +34,13 @@ interface PlaybackController {
     fun configureReplayGain(settings: com.auralis.core.domain.ReplayGainSettings)
     fun removeOccurrence(entryId: QueueEntryId)
     fun moveOccurrence(entryId: QueueEntryId, toLogicalIndex: Int)
+
+    /** 下一首播放（对齐 Swift `playNext(tracks:)`）：按序插到当前项之后；未播时插队首；不打断当前曲目。 */
+    fun insertNext(entries: List<QueueEntry>)
+
+    /** 加入队列（对齐 Swift `appendToQueue`）：追加到队尾；不自动起播、不打断当前播放。 */
+    fun appendToQueue(entries: List<QueueEntry>)
+
     fun clearQueue()
 
     /** 由播放服务生命周期调用（跨 Activity/页面共享同一引擎）。 */
@@ -110,6 +117,10 @@ private class EnginePlaybackController(
 
     override fun moveOccurrence(entryId: QueueEntryId, toLogicalIndex: Int) =
         requireEngine().moveOccurrence(entryId, toLogicalIndex)
+
+    override fun insertNext(entries: List<QueueEntry>) = requireEngine().insertNext(entries)
+
+    override fun appendToQueue(entries: List<QueueEntry>) = requireEngine().appendToQueue(entries)
 
     override fun clearQueue() = requireEngine().clearQueue()
 
