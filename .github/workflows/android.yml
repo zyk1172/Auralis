@@ -1,0 +1,71 @@
+name: Android CI
+
+# R2（第三方审查 P0-2）：Android 正式成为合并门禁。
+# 现状背景：原 ci.yml 仅覆盖 Swift/iOS/macOS，Android 改动可带着编译坏进 main 而
+# Apple CI 无感知。本 workflow 在 android/** 变更时跑：
+#   1) 全模块 JVM 单元测试（testDebugUnitTest，逐模块聚合）
+#   2) app-mobile assembleDebug + app-tv assembleDebug（含 Leanback APK）
+# 任一失败即阻止合并。
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-build:
+    name: Unit tests + assembleDebug (mobile & tv)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle (cached)
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Accept Android SDK licenses & ensure platform/build-tools
+        run: |
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/bin/sdkmanager"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0" >/dev/null 2>&1 || echo "sdkmanager 安装组件失败（runner 镜像可能已含所需版本，继续）"
+
+      - name: Unit tests (all modules)
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Build app-mobile debug APK
+        run: ./gradlew :app-mobile:assembleDebug --stacktrace
+
+      - name: Build app-tv debug APK (Leanback)
+        run: ./gradlew :app-tv:assembleDebug --stacktrace
+
+      - name: Upload APK artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auralis-android-debug-apks
+          path: |
+            android/app-mobile/build/outputs/apk/debug/*.apk
+            android/app-tv/build/outputs/apk/debug/*.apk
+          if-no-files-found: ignore
