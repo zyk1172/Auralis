@@ -228,4 +228,23 @@ class AuralisGraph(context: Context) {
     }
 
     suspend fun trackFor(globalId: GlobalId): Track? = catalogRepository.track(globalId)
+
+    // ------------------------------------------------------------ 服务器在线搜索
+
+    /**
+     * 在线搜索（OpenSubsonic `search3`，对齐 Apple `AuralisAppModel.searchOnServer`：
+     * 服务器搜索结果只取歌曲，本地无结果时作为兜底播放源）。
+     * 无该服务器的可用客户端时抛 [IllegalStateException]，由 UI 如实呈现，不伪装空结果。
+     */
+    suspend fun serverSearch(serverId: ServerId, query: String, limit: Int): List<Track> {
+        val client = registry.client(serverId)
+            ?: throw IllegalStateException("服务器尚未就绪（无可用客户端）")
+        val container = client.search(
+            query = query,
+            artistCount = 0,
+            albumCount = 0,
+            songCount = limit.coerceIn(1, 100),
+        )
+        return container.song.map { com.auralis.core.opensubsonic.OpenSubsonicMapper.track(it, serverId) }
+    }
 }
