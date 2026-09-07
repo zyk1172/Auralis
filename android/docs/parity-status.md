@@ -118,6 +118,21 @@
 | 歌词页：同步歌词按位置高亮自动滚动、空态、加载失败重试 | NowPlaying lyrics + LyricsIndexResolver | LyricsContent + lyricsService.lyricsFor | Done（S5） |
 | Android 裁剪（非本阶段）：不喜欢/歌曲鉴赏/由此继续播放（AI，S8）、Music Haptics、AirPlay 输出选择 | — | 未移植（文档记录） | N/A |
 
+## 5e. 搜索（SearchView 规格；S6）
+
+| 能力 | Swift 基准 | Android 实现 | 状态 |
+|---|---|---|---|
+| 统一搜索：歌曲/专辑/艺术家/歌单四类本地结果（离线可用） | SearchView.localResults + LocalResults | feature:search SearchScreen + catalogRepository.search | Done（S6） |
+| 150ms 输入防抖（避免逐键全表扫描；清空立即生效） | .task(id: query) + debouncedQuery | LaunchedEffect(query) + debounced | Done（S6） |
+| 本地搜索真查询（Room FTS 曲目 + 索引 contains 专辑/艺人/歌单），非内存全表遍历 | LocalCatalogStore filter | RoomCatalogRepository.search（FTS4/searchFts） | Done（S6） |
+| 搜索历史：最近在前/去重/最多 10 条 + 一键清空 + 点击回填立即搜索 | model.recentSearches + recordSearch/clearSearchHistory | AuralisPreferences recentSearchesFlow/recordSearch/clearSearchHistory | Done（S6，DataStore） |
+| 无历史引导空态 / 空查询回历史 | SearchView content 分支 | RecentSearchesContent + SearchMessageCard | Done（S6） |
+| 结果行动作：歌曲→recordSearch+播放；专辑/艺术家/歌单→recordSearch+详情 | selectAndPlay / browseDestination | onPlayTracks(=playShelf) / onBrowse(=openBrowse) | Done（S6） |
+| 本地无结果空态 + 「在线搜索服务器」（search3 只返回歌曲） | searchOnServer + AuralisEmptyState | graph.serverSearch + OutlinedButton | Done（S6） |
+| 服务器结果查询词绑定 + 失败如实呈现（R15：不伪装空结果）+ 进行中 | serverSearchQuery/generation + isServerSearching | serverQuery/hasServerSongs/serverError/serverSearching | Done（S6） |
+| 入口：Assistant 顶栏放大镜 →「搜索音乐库」（Swift：搜索是助手内兜底，非一级 Tab） | AssistantView header → sheet | ShellPages AssistantPlaceholderPage 放大镜 → MobileShell 全屏覆盖 SearchScreen | Done（S6 提前启用；S8 助手主体保留） |
+| 输入提交/结果点击记录搜索历史 | onSubmit/recordSearch | recordSearch（submit + 结果点击 + 历史 chip） | Done（S6） |
+
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
 | 能力 | Android 实现 | 状态 |
@@ -144,9 +159,9 @@
 3. ~~Home 页~~ ✅ S3 完成（模块注册表 + 布局编辑 + 真实数据 + 播放/浏览接线；APK 已打包）
 4. ~~Library + Browse Detail~~ ✅ S4 完成（Library 7 scope + BrowseDetail 17 目的地 + 歌单远端先行管理 + 播放动作接线；APK 已打包）
 5. ~~Mini Player / Now Playing / Queue / Lyrics~~ ✅ S5 完成（Mini 展开 + NowPlaying 三页 + 队列编辑 + 同步歌词高亮 + 位置节拍；APK 已打包）
-6. Search ← 当前阶段
-7. Settings
+6. ~~Search~~ ✅ S6 完成（本地四类 FTS 搜索 + 防抖 + 历史/清空 + 在线 search3 兜底 + Assistant 顶栏放大镜入口；APK 已打包）
+7. Settings ← 当前阶段
 8. Assistant
 9. Android TV（app-tv）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1 + S2 + S3 + S4 + S5 完成，S6 待开始）
+> 最后更新：2026-09-07（P0 Core 九项 + S1–S6 完成，S7 Settings 待开始）

@@ -64,8 +64,10 @@
 
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| 搜索（sheet 拉起、FTS 中文） | SearchView.swift | Not Started | ☐ 输入防抖 ☐ 结果点击→播放 |
-| 搜索历史/清空 | — | Not Started | ☐ |
+| 搜索（Assistant 放大镜拉起、FTS 中文、离线可用） | SearchView.swift | Done（S6） | ☑ 输入 150ms 防抖 ☑ 清除搜索 ☑ 键盘搜索键 ☑ 空查询回最近搜索 |
+| 搜索结果（歌曲/专辑/艺术家/歌单分段） | SearchView resultList | Done（S6） | ☑ 歌曲行→recordSearch+整组从该行起播 ☑ 专辑/艺术家/歌单→详情 ☑ 行封面/字标真实 |
+| 搜索历史/清空 | SearchView recentSearches | Done（S6） | ☑ 最近在前去重 10 条（DataStore）☑ 点击回填立即搜索 ☑ 一键清除 ☑ 无历史引导空态 |
+| 服务器在线搜索（本地无结果兜底，search3 只返回歌曲） | searchOnServer + 服务器在线结果 | Done（S6） | ☑ 「在线搜索服务器」按钮 ☑ 进行中「正在服务器搜索…」☑ 查询词绑定防串扰 ☑ 失败如实呈现可重试 ☑ 未连接服务器提示 |
 
 ## Settings
 
@@ -80,7 +82,7 @@
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
 | Assistant 对话页（含工具授权 UI） | AgentKit/App 侧 | Not Started | ☐ 副作用确认绑定 run ☐ |
-| 搜索音乐库 sheet | — | Not Started | ☐ |
+| 搜索音乐库入口（顶栏放大镜 → 搜索页） | AssistantView header → sheet | Done（S6 提前启用；对话主体待 S8） | ☑ 放大镜按钮 → 全屏 SearchScreen ☑ 返回/系统返回关闭 |
 
 ## Android TV
 
@@ -96,5 +98,8 @@
 > BrowseDetail 覆盖路由 + 歌单远端先行管理 + insertNext/appendToQueue 接线；APK 已打包）。
 > **S5 播放器 UI 完成**（feature:player NowPlaying 三页：hero/同步歌词/队列编辑 + Mini
 > Player 展开/切歌 + engine 250ms 位置节拍 + 音量/收藏/下载/加歌单真实动作；APK 已打包）。
-> 下一步：S6 Search。
+> **S6 搜索完成**（feature:search：本地四类 FTS 搜索 + 150ms 防抖 + 历史/清空 + 服务器
+> search3 在线兜底；入口对齐 Swift 语义：Assistant 顶栏放大镜 →「搜索音乐库」，非一级 Tab；
+> APK 已打包）。
+> 下一步：S7 Settings。
 > 最后更新：2026-09-07

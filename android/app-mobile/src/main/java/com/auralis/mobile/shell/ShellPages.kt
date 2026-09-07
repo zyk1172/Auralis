@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -107,7 +108,10 @@ internal fun BrowseDestination.titleZh(): String = when (this) {
 }
 
 @Composable
-fun AssistantPlaceholderPage(modifier: Modifier = Modifier) {
+fun AssistantPlaceholderPage(
+    onOpenSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = LocalAuralisTheme.current.colors
     Column(
         modifier = modifier
@@ -117,10 +121,25 @@ fun AssistantPlaceholderPage(modifier: Modifier = Modifier) {
             .padding(horizontal = AuralisSpacing.large),
     ) {
         Spacer(Modifier.height(AuralisSpacing.medium))
-        Text("AI 助手", style = MaterialTheme.typography.headlineMedium, color = colors.primaryText)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "AI 助手",
+                style = MaterialTheme.typography.headlineMedium,
+                color = colors.primaryText,
+                modifier = Modifier.weight(1f),
+            )
+            // 对齐 Swift AssistantView header：搜索是「助手内的兜底能力」，从这里以
+            // sheet 拉起「搜索音乐库」。S6 提前启用真实搜索页；S8 重做助手主体时保留。
+            IconButton(onClick = onOpenSearch) {
+                Icon(Icons.Filled.Search, contentDescription = "搜索音乐库", tint = colors.primaryText)
+            }
+        }
         Spacer(Modifier.height(AuralisSpacing.large))
         Text(
-            "AI 助手（对话与工具授权）将在 Assistant 阶段接入。",
+            "AI 助手（对话与工具授权）将在 Assistant 阶段接入。搜索音乐库已可用。",
             style = MaterialTheme.typography.bodyMedium,
             color = colors.secondaryText,
         )

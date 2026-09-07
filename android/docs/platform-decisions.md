@@ -279,3 +279,25 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
   播放（AI 工具链，S8 Assistant 接）、Music Haptics（平台特性）、AirPlay 输出选择
   （Android 无对应）；播放模式/音量/下载/加歌单/收藏全部真实。
 
+## 2k. 搜索（S6，2026-09-07）
+
+- **入口 = Assistant 顶栏放大镜**（对齐 Swift `AppSection.compactDockSections`：Search 不是
+  一级 Tab，注释明确“搜索保留为助手内的兜底能力”）：S6 在 AssistantPlaceholderPage 顶栏
+  提前启用真实放大镜按钮 → MobileShell 全屏覆盖 SearchScreen（sheet 语义的 Android 近似）；
+  S8 重做 Assistant 主体时保留同一入口，不加 Swift 没有的其它搜索入口（Home/Library 不加）。
+- **本地优先 + 服务器兜底**：本地四类结果走 `catalogRepository.search`（曲目 FTS4 unicode61
+  真查询、专辑/艺人/歌单索引 contains——绝不在内存过滤一万首）；本地空时才可点
+  “在线搜索服务器”走 OpenSubsonic `search3`（新增 `AuralisGraph.serverSearch`：artistCount/
+  albumCount=0、只映射歌曲为 Track，对齐 Swift serverSearch 只返回 [Track]）。
+- **150ms 防抖**：query 变化立即清服务器结果（对齐 `.task(id: query)` 的 clearServerSearch），
+  停顿后才更新 debounced 触发本地查询；点历史 chip 直接置 debounced 跳过防抖（对齐 Swift）。
+- **R15 失败语义**：在线搜索“进行中 / 有结果 / 失败”三态分离，失败显示错误与重试入口，
+  不把网络失败伪装成“无结果”；无激活服务器时按钮给出明确提示（不静默）。
+- **搜索历史已就绪**：DataStore（`auralis.recent-searches`，分隔符 \u001f）在 P0 阶段已建，
+  S6 直接消费；recordSearch 时机 = 键盘提交 / 点任意结果 / 点历史 chip（对齐 Swift）。
+- **结果动作**：歌曲行 → `playQueue([track], 0)` 单曲播放（对齐 Swift selectAndPlay(track)
+  的“单曲播放”语义；Swift 保留旧队列并插到队首，Android 无该引擎 API，S6 采用单曲开新队列，
+  文档记录差异）；专辑/艺术家/歌单 → Shell.openBrowse 切 Library 打开 BrowseDetail。
+- **本地结果当前曲高亮裁剪**：Swift TrackRow 的 isCurrent 指示依赖全局播放游标，S6 未做
+  （文档记录；后续如需可经 Shell 传入 playback 快照实现）。
+
