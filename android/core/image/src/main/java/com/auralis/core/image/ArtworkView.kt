@@ -73,7 +73,7 @@ fun AuralisArtwork(
     val provider = ArtworkUrl.provider
 
     val url by produceState<String?>(
-        initialValue = null,
+        null,
         serverId,
         artworkKey,
         requestSize,
