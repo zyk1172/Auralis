@@ -201,6 +201,25 @@ class AssistantCoordinator(
         }
     }
 
+    /**
+     * R4：播放页引导会话（由此继续播放 / 歌曲鉴赏）。
+     *
+     * 对齐 Swift `newSession() + cancelAssistant + send(intent)` 的组合语义：
+     * 1. 若正在运行先停止；
+     * 2. 创建**干净**新会话并激活（避免污染用户当前对话）；
+     * 3. 立刻把 [seed] 作为用户消息发送。
+     *
+     * 调用方（Shell）应先把界面切到 Assistant 分区，使 consent / 确认对话框可见。
+     * 内部用 [runSend] 同一路径，AI 关闭/未配置时错误照常落入 lastError。
+     */
+    fun startGuidedSession(seed: String) {
+        if (isRunning) stop()
+        scope.launch {
+            createSessionFor(seed) // 同步在内存创建并激活；房间落盘
+            runSend(seed)
+        }
+    }
+
     fun clearLastError() {
         _lastError.value = null
     }

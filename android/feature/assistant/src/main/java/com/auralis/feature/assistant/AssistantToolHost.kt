@@ -361,6 +361,41 @@ class AssistantToolHost(
             }.toString()
         }
 
+        // ---- R4：「由此继续播放」链路（对齐 Swift AgentToolkit 同名工具）----
+
+        ro("library_get_similar_songs", "以指定歌曲为种子，从服务器查找相似歌曲（OpenSubsonic getSimilarSongs2），去重并排除不喜欢的曲目，供生成相似队列。", """{"properties":{"globalID":{"type":"object","description":"种子歌曲"},"count":{"type":"integer","description":"期望返回数量，默认 20"}},"required":["globalID"],"type":"object"}""") { args ->
+            val gid = args.globalId()
+            val seed = graph.catalogRepository.track(gid)
+                ?: throw IllegalArgumentException("本地目录中找不到种子歌曲（可能未同步该服务器）")
+            val target = args.int("count")?.coerceIn(1, 60) ?: 20
+            val disliked = graph.catalogRepository.dislikedIds(gid.serverId)
+            val similar = graph.similarSongs(gid.serverId, gid.remoteId, count = 60)
+                .filter { it.globalId != gid && it.globalId !in disliked }
+                .distinctBy { it.id.value }
+                .take(target)
+            buildJsonObject {
+                put("ok", true)
+                put("seed", "${seed.title} — ${seed.artistName}")
+                put("requested", target)
+                put("returned", similar.size)
+                put("tracks", trackSummaries(similar, target))
+                if (similar.isEmpty()) put("hint", "服务器没有返回相似歌曲；可改用 searchTracks/playAlbum 兜底")
+            }.toString()
+        }
+
+        write("queue_replace", "用给定歌曲列表替换当前播放队列并开始播放（只调用一次即完成整个替换；列表顺序即播放顺序）。", """{"properties":{"globalIDs":{"type":"array","items":{"type":"object"},"description":"目标队列歌曲 globalID（顺序即播放顺序）"},"startIndex":{"type":"integer","description":"从第几首开始播放，默认 0"}},"required":["globalIDs"],"type":"object"}""") { args ->
+            val gids = args.globalIdList("globalIDs")
+            if (gids.isEmpty()) throw IllegalArgumentException("globalIDs 不能为空")
+            val tracks = gids.map { gid ->
+                graph.catalogRepository.track(gid)
+                    ?: throw IllegalArgumentException("本地目录中找不到 ${gid.serialized}（可能未同步该服务器）")
+            }
+            val controller = requireEngine()
+            val start = (args.int("startIndex") ?: 0).coerceIn(0, tracks.lastIndex)
+            controller.playQueue(tracks.map { QueueEntry.of(it) }, start)
+            "已替换播放队列：共 ${tracks.size} 首，从《${tracks[start].title}》开始播放。"
+        }
+
         ro("server_list", "列出已连接的服务器。", emptyParams()) {
             val servers = graph.catalogRepository.servers()
             val activeId = activeServerId()?.value
@@ -708,6 +743,8 @@ class AssistantToolHost(
             "deletePlaylist" -> "删除歌单"
             "queue_remove" -> "移除队列条目"
             "queue_save_as_playlist" -> "队列存为歌单"
+            "library_get_similar_songs" -> "查找相似歌曲"
+            "queue_replace" -> "替换播放队列"
             "server_search" -> "在线搜索"
             "searchTracks" -> "搜索歌曲"
             "searchAlbums" -> "搜索专辑"

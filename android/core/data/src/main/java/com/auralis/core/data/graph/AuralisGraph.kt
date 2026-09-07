@@ -258,4 +258,14 @@ class AuralisGraph(context: Context) {
         )
         return container.song.map { com.auralis.core.opensubsonic.OpenSubsonicMapper.track(it, serverId) }
     }
+
+    /**
+     * 服务器相似歌曲（OpenSubsonic `getSimilarSongs2`，R4：AI「由此继续播放」数据源）。
+     * 与 [serverSearch] 同样：无该服务器可用客户端时抛 [IllegalStateException]。
+     */
+    suspend fun similarSongs(serverId: ServerId, trackId: String, count: Int = 30): List<Track> {
+        val client = registry.client(serverId)
+            ?: throw IllegalStateException("服务器尚未就绪（无可用客户端）")
+        return client.similarSongs(trackId = trackId, count = count.coerceIn(1, 100))
+    }
 }
