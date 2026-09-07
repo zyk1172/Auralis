@@ -32,7 +32,7 @@
 | 忘记服务器全量清理 | deleteServer（单事务） | Done |
 | 收藏/评分/播放标记远端先行 | LibraryActionCoordinator | Done |
 | 播放历史 occurrence 语义 | PlaybackHistoryCoordinator | Done |
-| 播放计数/最近播放统计 | annotationDao | Partial（统计查询待 UI 验证） |
+| 播放计数/最近播放统计 | annotationDao + homeTopArtists/homeTopAlbums 聚合 | Done（S3 起被 Home 消费，SQL 聚合有测试） |
 
 ## 3. 播放（audit 04）
 
@@ -61,9 +61,23 @@
 | 服务器列表/添加/编辑/删除/切换（UI） | feature:server（已接入 Shell 覆盖路由） | Done（S1） |
 | 连接测试（不落库）+ URL 策略前置 | ProductionServerConnector.testConnection + ServerURLPolicy | Done |
 | Bottom Dock（3 分区：Home/Library/Assistant 圆钮） | app-mobile/shell（≤760dp 居中 overlay） | Done（S2） |
-| 分区根切换 + 顶栏大标题结构 | MobileShell / ShellPages 占位 | Partial（页面实体待 S3/S4/S8） |
+| 分区根切换 + 顶栏大标题结构 | MobileShell / ShellPages | Partial（Home 已真实页，Library/Assistant 待 S4/S8） |
 | Mini Player（真实绑定 playback） | app-mobile/shell MiniPlayerBar | Partial（展开/进度待 S5） |
 | Settings 齿轮入口 → 设置占位（服务器行可用） | LibraryPlaceholderPage 齿轮 | Partial（S7 完善） |
+
+## 5b. Home 首页（audit 06 首页规格）
+
+| 能力 | Swift 基准 | Android 实现 | 状态 |
+|---|---|---|---|
+| 模块注册表（3 快捷入口 + 9 内容模块含 Downloads） | HomeModule.swift | core:domain/Home.kt | Done（S3） |
+| 布局有序 JSON v2 + v1 Set 迁移 + 读写归一化 | HomeLayoutStore.swift | HomeLayoutPreference.normalized + prefs | Done（S3，单测覆盖） |
+| 模块可见性过滤（关闭不渲染不查数据、空模块配置保持） | HomeSnapshotBuilder.swift | HomeState.buildQuick/ContentModules | Done（S3） |
+| 数据快照真实 SQL 派生（随机/最近播放/未播放/最近添加/下载/常听聚合） | HomeSnapshotBuilder.swift | RoomCatalogRepository home* 查询 | Done（S3，5 单测覆盖） |
+| 「换一批」本地重采样（样本 18，不发网络） | HomeView reshuffle | HomeState.reshuffle + ORDER BY RANDOM() | Done（S3） |
+| 目录变化自动刷新（计数信号免全表解码） | AppModel regenerate | homeChangeSignals combine 5 observeCount | Done（S3） |
+| 首页 UI（快捷入口 3 列、140dp shelf、模块标题行） | HomeView.swift | feature:home/HomeScreens.kt | Done（S3） |
+| 布局编辑（隐藏/排序/恢复默认） | HomeLayoutEditView.swift | feature:home/HomeLayoutEditScreen.kt | Done（S3；排序用上移/下移按钮替代拖拽） |
+| 播放/浏览动作接线（playQueue、pendingBrowse→Library） | HomeView onTap | MobileShell.playShelf/openBrowse | Done（S3） |
 
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
@@ -88,12 +102,12 @@
 
 1. ~~Server 添加/恢复 UI（feature:server）~~ ✅ S1 完成
 2. ~~Mobile Shell + Bottom Dock~~ ✅ S2 完成（Dock/分区根/MiniPlayer 绑定/设置入口占位）
-3. Home 页 ← 当前阶段
-4. Library + Browse Detail
+3. ~~Home 页~~ ✅ S3 完成（模块注册表 + 布局编辑 + 真实数据 + 播放/浏览接线；APK 已打包）
+4. Library + Browse Detail ← 当前阶段
 5. Mini Player / Now Playing / Queue / Lyrics
 6. Search
 7. Settings
 8. Assistant
 9. Android TV（app-tv）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1 服务器链路 + S2 Mobile Shell 完成，S3 Home 进行中）
+> 最后更新：2026-09-07（P0 Core 九项 + S1 + S2 完成，S3 Home 完成，S4 待开始）

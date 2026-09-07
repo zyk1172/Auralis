@@ -20,6 +20,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,10 +30,15 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.PlaybackState
+import com.auralis.core.domain.QueueEntry
+import com.auralis.core.domain.Track
 import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
+import com.auralis.feature.home.HomeScreen
+import kotlinx.coroutines.launch
 
 /**
  * 移动端 Shell（对齐 Apple IOSMusicShell）：
@@ -40,16 +46,25 @@ import com.auralis.core.playback.PlaybackSnapshot
  * - Bottom Dock 与 Mini Player 作为 **overlay** 固定在底部，宽屏最大约 760dp 居中；
  * - Mini Player 只在 Home / Library 显示（Assistant 分区由自身附件持有底部空间）；
  * - 无正在播放内容时 Mini Player 隐藏，Dock 保持。
+ *
+ * S3：Home 分区已接入真实首页（模块注册表驱动 + 真实数据 + 播放/换一批/编辑入口）。
+ * Home 内的浏览跳转（快捷入口 / 数量 › / 艺人·专辑卡）切换到 Library 分区并携带
+ * BrowseDestination —— 完整浏览页在 S4（Library + Browse Detail）实现，在此之前
+ * Library 分区显示该目标对应的占位（非假数据，是阶段过渡）。
  */
 @Composable
 fun MobileShell(
     graph: AuralisGraph,
     onOpenServers: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenEditHomeLayout: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
     var section by rememberSaveable { mutableStateOf(AppSection.Home) }
+    // 从 Home 进入的浏览目的地（快捷入口/数量›/艺人·专辑卡）。Library 分区承接。
+    var pendingBrowse by remember { mutableStateOf<BrowseDestination?>(null) }
+    val scope = rememberCoroutineScope()
 
     // ---- 播放状态（真实绑定；引擎由 AuralisPlaybackService 创建后 available=true）----
     val engineAvailable by LocalPlaybackHost.available.collectAsState()
@@ -63,11 +78,41 @@ fun MobileShell(
         }
     }
 
+    /** 把货架作为新队列并从点中的那首开始播放（真实动作）。 */
+    fun playShelf(tracks: List<Track>, startIndex: Int) {
+        if (!engineAvailable) {
+            // 引擎未就绪：先启动播放服务（幂等），引擎就绪后用户再点即播——不假装已播放。
+            graph.startPlaybackService()
+            return
+        }
+        scope.launch {
+            runCatching {
+                controller.playQueue(tracks.map { QueueEntry.of(it) }, startIndex.coerceIn(0, tracks.lastIndex))
+            }
+        }
+    }
+
+    /** Home 内的浏览请求 → 切 Library 分区并携带目的地（页面内容在 S4 实现）。 */
+    fun openBrowse(destination: BrowseDestination) {
+        pendingBrowse = destination
+        section = AppSection.Library
+    }
+
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
         // 一级分区内容。
         when (section) {
-            AppSection.Home -> HomePlaceholderPage(graph = graph, onManageServers = onOpenServers)
-            AppSection.Library -> LibraryPlaceholderPage(onOpenSettings = onOpenSettings)
+            AppSection.Home -> HomeScreen(
+                graph = graph,
+                onPlayTracks = ::playShelf,
+                onBrowse = ::openBrowse,
+                onManageServers = onOpenServers,
+            )
+
+            AppSection.Library -> LibraryPlaceholderPage(
+                browseTarget = pendingBrowse,
+                onOpenSettings = onOpenSettings,
+            )
+
             AppSection.Assistant -> AssistantPlaceholderPage()
         }
 

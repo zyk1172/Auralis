@@ -12,9 +12,10 @@
 |---|---|---|---|
 | Bottom Dock（3 Tab：Home/Library/Assistant 圆钮） | AuralisRootView.swift BottomDock | app-mobile/shell | Done（S2：宽屏居中 ≤760dp、图标对齐 house/square.stack/sparkles、悬浮 overlay） |
 | Mini Player（Dock 上方胶囊） | AuralisRootView MiniPlayerContent | app-mobile/shell | Partial（S2：真实绑定 playback StateFlow；封面/标题/艺人/播放暂停；展开 Now Playing 待 S5） |
-| 分区内容根 + 切换回根 | IOSMusicShell / SectionContent | MobileShell | Done（占位页；S3/S4/S8 逐个替换真实页面） |
+| 分区内容根 + 切换回根 | IOSMusicShell / SectionContent | MobileShell | Partial（S3 已替换 Home 为真实页；Library/Assistant 占位待 S4/S8） |
 | 服务器选择/切换入口 | SettingsView「服务器」行 | SettingsPlaceholderPage → ServerList | Partial（S2 起真实可用；完整设置页待 S7） |
 | 设置齿轮入口（Library 顶栏） | AppShell Library 顶栏 | LibraryPlaceholderPage 齿轮 | Partial（打开设置占位；S4/S7 完善） |
+| 「首页布局」编辑入口（设置→外观） | SettingsView「首页布局」 | SettingsPlaceholderPage → HomeLayoutEdit | Done（S3：入口已接，编辑页真实持久化） |
 
 ## 服务器
 
@@ -31,9 +32,14 @@
 
 | 模块 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| 首页内容区（顺序 JSON 驱动） | HomeView/HomeModule.swift | Not Started | ☐ 模块顺序尊重 HomeLayoutPreference ☐ 每模块 reshuffle 按钮 |
-| 快捷入口行（Playlists/Favorites/MostPlayed） | — | Not Started | ☐ |
-| 布局编辑（隐藏/排序/恢复默认） | HomeLayoutStore.swift | Not Started | ☐ |
+| 首页内容区（顺序 JSON 驱动 + 加载/无服务器/错误/空态） | HomeView/HomeModule.swift | Done（S3：feature:home，模块注册表驱动） | ☑ 模块顺序尊重 HomeLayoutPreference（读写归一化） ☑ 各模块真实数据（SQL 派生） ☑ 目录变化自动刷新 ☑ 模块关闭不渲染不查数据 |
+| 「换一批」（random/favoriteRandom 本地重采样） | HomeView reshuffle | Done（S3） | ☑ 点击即换（样本 18，不发网络） ☑ loading/无数据态 |
+| 快捷入口行（Playlists/Favorites/MostPlayed，3 列 icon+count） | HomeQuickEntry | Done（S3） | ☑ 点击 → 切 Library 携带 BrowseDestination ☑ 无数据模块暂不渲染（配置保持） |
+| 内容 shelf（曲目/艺人/专辑 140dp 卡） | HomeShelfView | Done（S3） | ☑ 曲目卡点击 → playQueue(startIndex) 真播放 ☑ 引擎未就绪先起服务幂等，不假装播放 ☑ 艺人/专辑卡 → BrowseDestination |
+| 「数量 ›」整组入口 + 库统计摘要 | HomeView | Done（S3） | ☑ 点击携带对应 BrowseDestination（Downloads 映射 Home 专属） |
+| 无服务器/加载失败可见反馈 | HomeView 错误态 | Done（S3） | ☑ 无服务器 → 引导管理服务器入口 ☑ 出错 → 显示错误 + 可重试 |
+| 布局编辑（隐藏/排序/恢复默认） | HomeLayoutEditView.swift | Done（S3：HomeLayoutEditScreen） | ☑ 每行 Switch 即时持久化 ☑ 上移/下移排序（按钮替代拖拽） ☑ 恢复默认 → AlertDialog 二次确认 ☑ 「完成」返回 |
+| 编辑入口（设置→首页布局） | SettingsView 外观 | Done（S3） | ☑ Library 齿轮 → 设置 → 首页布局行 → 编辑页 |
 
 ## Library / Browse
 
@@ -80,7 +86,9 @@
 |---|---|---|---|
 | TV 壳（Leanback，无 Assistant） | — | Not Started | ☐ |
 
-> 当前状态：**P0 Core 九项（数据/播放/下载/歌词链路）已 Done**；S1 服务器添加/恢复链路
-> （feature:server）已落地并接入 app-mobile 路由（Boot→列表/添加→主界面占位）；
-> 待 Mobile Shell（S2）接入后替换占位主界面。
+> 当前状态：**P0 Core 九项（数据/播放/下载/歌词链路）已 Done**；S1 服务器链路
+> （feature:server）已接入 app-mobile 路由；S2 Mobile Shell + Bottom Dock 完成；
+> **S3 Home 完成**（feature:home 注册表驱动 + HomeLayoutEditScreen + MobileShell 接线，
+> Home 分区已是真实页，播放/浏览动作真实；app-mobile-debug.apk 已打包）。
+> 下一步：S4 Library + Browse Detail。
 > 最后更新：2026-09-07

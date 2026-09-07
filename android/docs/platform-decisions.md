@@ -187,3 +187,33 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
   艺人/播放暂停），仅 Home/Library 分区显示，无播放内容时隐藏；展开 Now Playing 属 S5。
 - **服务器/设置入口**：服务器管理按 iOS 语义放在 **Settings**（Library 顶栏齿轮 →
   设置占位，含真实「服务器」行 → feature:server 列表）；首页摘要卡也提供真实入口。
+
+## 2h. Home 首页（S3，2026-09-07）
+
+- **模块注册表驱动**：`core:domain/Home.kt` 三枚举（`HomeQuickEntry` 3 个 +
+  `HomeModuleId` 9 个含 downloads 无 playHistory + `HomeLayoutPreference` v2）对齐
+  Swift `HomeModule.swift`/`HomeLayoutStore.swift`。布局有序 JSON 存 DataStore
+  （key `auralis.home-layout.v2`，v1 Set 迁移保留）。
+- **读写一律归一化**：`HomeLayoutPreference.normalized()`（丢弃未知 ID / 数组顺序为
+  权威 / 去重 / 补齐注册表新模块按默认可见性追加末尾）在 `homeLayoutFlow` 读路径与
+  `setHomeLayout` 写路径都执行——防旧版本/未来版本数据污染 UI 与注册表不一致。
+- **首页数据快照全部真实 SQL 派生**（对齐 Swift `HomeSnapshotBuilder` 语义，不做
+  内存全表遍历）：random/favoriteRandom = `ORDER BY RANDOM()`；recentlyPlayed =
+  play_history 倒序；longUnplayed/neverPlayed = 排除窗口内/从未播放；recentlyAdded =
+  30 天窗口（dateAdded）；downloads = JOIN downloads state='Downloaded' 倒序；
+  topArtists/topAlbums = JOIN tracks + play_history 按真实播放量聚合降序。
+- **「换一批」= 本地重采样**：仅 random/favoriteRandom 显示，SQL 本地重取
+  （`RESHUFFLE_SAMPLE=18` 对齐 Apple 取 18），**不发网络**。
+- **目录变化自动刷新**：`RoomCatalogRepository.homeChangeSignals` combine 5 路
+  Room `observeCount` Flow（曲目/专辑/收藏/播放/下载计数）→ `distinctUntilChanged`，
+  避免监听后全表解码；关闭模块不渲染**也不查数据**，开启但无数据暂不渲染但配置保持。
+- **UI 布局**：快捷入口 3 列（icon+count，不显示长文字主体）；内容模块标题行
+  「换一批」/「数量 ›」；曲目/艺人/专辑 shelf 卡片固定 140dp（对齐
+  `AuralisChrome.homeCardWidth`）；`BrowseDestination` 已含 Downloads（Home 独有）。
+- **布局编辑**：上移/下移 IconButton 排序（SwiftUI onMove 拖拽在 Android 用按钮
+  替代，语义对齐：本地数组为唯一数据源，改动即时持久化）；「恢复默认布局」走
+  AlertDialog 二次确认；Home 入口在 设置 →「首页布局」行（S3 已接 Settings 占位）。
+- **播放/浏览真实动作**：货架点击 = `playQueue(entry 序列, startIndex)`；引擎未就绪
+  先 `startPlaybackService()`（幂等）并停手——**不假装已播放**；首页浏览请求
+  （快捷入口/数量›/艺人专辑卡）切 Library 分区携带 `BrowseDestination`
+  （pendingBrowse，完整浏览页 S4 实现，占位非假数据）。

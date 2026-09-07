@@ -22,6 +22,7 @@ import com.auralis.core.designsystem.AuralisTheme
 import com.auralis.core.designsystem.AuralisThemeController
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.domain.ServerAccount
+import com.auralis.feature.home.HomeLayoutEditScreen
 import com.auralis.feature.server.ServerFormScreen
 import com.auralis.feature.server.ServerListScreen
 import com.auralis.mobile.shell.MobileShell
@@ -56,8 +57,11 @@ private sealed interface Route {
     data class AddServer(val fromManage: Boolean) : Route
     data class EditServer(val account: ServerAccount, val fromManage: Boolean) : Route
 
-    /** 设置（S2 占位：仅「服务器」行真实可用）。 */
+    /** 设置（S3：含「首页布局」编辑入口；其余项在 S7 接入）。 */
     data object Settings : Route
+
+    /** 首页布局编辑（对齐 Apple HomeLayoutEditView；入口在 设置 → 首页布局）。 */
+    data object HomeLayoutEdit : Route
 
     /** Mobile Shell：三一级分区 + Dock + Mini Player。 */
     data object Shell : Route
@@ -99,13 +103,20 @@ private fun AppRoot(graph: AuralisGraph) {
 
         Route.Settings -> SettingsPlaceholderPage(
             onOpenServers = { route = Route.ManageServers(showBack = true) },
+            onEditHomeLayout = { route = Route.HomeLayoutEdit },
             onBack = { route = Route.Shell },
+        )
+
+        Route.HomeLayoutEdit -> HomeLayoutEditScreen(
+            graph = graph,
+            onBack = { route = Route.Settings },
         )
 
         Route.Shell -> MobileShell(
             graph = graph,
             onOpenServers = { route = Route.ManageServers(showBack = true) },
             onOpenSettings = { route = Route.Settings },
+            onOpenEditHomeLayout = { route = Route.HomeLayoutEdit },
         )
     }
 }
