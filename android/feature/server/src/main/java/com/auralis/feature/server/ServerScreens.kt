@@ -47,6 +47,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -55,6 +57,7 @@ import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.designsystem.LocalAuralisTheme
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.ServerAccount
 import kotlinx.coroutines.launch
 
@@ -77,8 +80,9 @@ fun ServerListScreen(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val state = remember(graph) {
-        ServerListState(scope, graph, onAdd, onEdit, onEnter)
+        ServerListState(context, scope, graph, onAdd, onEdit, onEnter)
     }
     androidx.compose.runtime.LaunchedEffect(graph) { state.load() }
 
@@ -89,13 +93,13 @@ fun ServerListScreen(
             .imePadding(),
     ) {
         HeaderRow(
-            title = "服务器",
+            title = stringResource(R.string.server_title),
             onBack = onBack,
             action = {
                 Button(onClick = { state.add() }) {
                     Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(AuralisSpacing.small))
-                    Text("添加 OpenSubsonic 服务器")
+                    Text(stringResource(R.string.server_add_header_button))
                 }
             },
         )
@@ -148,7 +152,7 @@ private fun HeaderRow(
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回",
+                    contentDescription = stringResource(AuralisR.string.back),
                     tint = colors.primaryText,
                 )
             }
@@ -173,16 +177,16 @@ private fun EmptyServers(state: ServerListState) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("尚未添加服务器", style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
+        Text(stringResource(R.string.server_empty_title), style = MaterialTheme.typography.titleMedium, color = colors.primaryText)
         Spacer(Modifier.height(AuralisSpacing.small))
         Text(
-            "Auralis 通过 OpenSubsonic 协议连接你的私有曲库。",
+            stringResource(R.string.server_empty_desc_1),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.secondaryText,
         )
         Spacer(Modifier.height(AuralisSpacing.medium))
         Text(
-            "添加后，服务器上的音乐与收藏会同步到本机。",
+            stringResource(R.string.server_empty_desc_2),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.secondaryText,
         )
@@ -190,7 +194,7 @@ private fun EmptyServers(state: ServerListState) {
         Button(onClick = { state.add() }) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(AuralisSpacing.small))
-            Text("添加服务器")
+            Text(stringResource(R.string.server_add_button))
         }
     }
 }
@@ -234,16 +238,16 @@ private fun ServerRow(
             Spacer(Modifier.width(AuralisSpacing.small))
             Icon(
                 Icons.Filled.CheckCircle,
-                contentDescription = "当前服务器",
+                contentDescription = stringResource(R.string.server_active_icon),
                 tint = colors.accent,
                 modifier = Modifier.size(18.dp),
             )
         }
         IconButton(onClick = onEdit) {
-            Icon(Icons.Filled.Edit, contentDescription = "编辑服务器", tint = colors.secondaryText)
+            Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.server_edit_icon), tint = colors.secondaryText)
         }
         IconButton(onClick = onDelete) {
-            Icon(Icons.Filled.Delete, contentDescription = "删除服务器", tint = colors.error)
+            Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.server_delete_icon), tint = colors.error)
         }
     }
     HorizontalDivider(color = colors.separator)
@@ -258,20 +262,20 @@ private fun DeleteServerDialog(
     val colors = LocalAuralisTheme.current.colors
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("删除服务器？", color = colors.primaryText) },
+        title = { Text(stringResource(R.string.server_delete_title), color = colors.primaryText) },
         text = {
             Text(
-                "将删除本机保存的登录凭据、离线目录与缓存；服务器上的音乐、歌单与收藏不会被删除。",
+                stringResource(R.string.server_delete_message),
                 color = colors.secondaryText,
             )
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text("删除", color = colors.error, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(AuralisR.string.delete), color = colors.error, fontWeight = FontWeight.SemiBold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = colors.primaryText) }
+            TextButton(onClick = onDismiss) { Text(stringResource(AuralisR.string.cancel), color = colors.primaryText) }
         },
         containerColor = colors.surface,
     )
@@ -292,8 +296,10 @@ fun ServerFormScreen(
 ) {
     val colors = LocalAuralisTheme.current.colors
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val state = remember(graph, existing) {
         ServerFormState(
+            context = context,
             scope = scope,
             graph = graph,
             existing = existing,
@@ -309,10 +315,10 @@ fun ServerFormScreen(
             .imePadding(),
     ) {
         HeaderRow(
-            title = if (existing != null) "编辑服务器" else "添加服务器",
+            title = stringResource(if (existing != null) R.string.server_edit_title else R.string.server_add_button),
             action = {
                 TextButton(onClick = { state.cancel() }, enabled = !state.busy && !state.isTesting) {
-                    Text("取消", color = colors.secondaryText)
+                    Text(stringResource(AuralisR.string.cancel), color = colors.secondaryText)
                 }
             },
         )
@@ -328,7 +334,7 @@ fun ServerFormScreen(
             OutlinedTextField(
                 value = state.displayName,
                 onValueChange = { state.displayName = it },
-                label = { Text("显示名称") },
+                label = { Text(stringResource(R.string.server_form_display_label)) },
                 singleLine = true,
                 enabled = !state.busy,
                 modifier = Modifier.fillMaxWidth(),
@@ -336,7 +342,7 @@ fun ServerFormScreen(
             OutlinedTextField(
                 value = state.serverUrl,
                 onValueChange = { state.serverUrl = it },
-                label = { Text("服务器地址") },
+                label = { Text(stringResource(R.string.server_form_url_label)) },
                 placeholder = { Text("http://192.168.1.10:4533") },
                 singleLine = true,
                 enabled = !state.busy,
@@ -346,7 +352,7 @@ fun ServerFormScreen(
             OutlinedTextField(
                 value = state.username,
                 onValueChange = { state.username = it },
-                label = { Text("用户名") },
+                label = { Text(stringResource(R.string.server_form_username_label)) },
                 singleLine = true,
                 enabled = !state.busy,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
@@ -355,7 +361,14 @@ fun ServerFormScreen(
             OutlinedTextField(
                 value = state.password,
                 onValueChange = { state.password = it },
-                label = { if (existing != null) Text("新密码（留空则不修改）") else Text("密码") },
+                label = {
+                    Text(
+                        stringResource(
+                            if (existing != null) R.string.server_form_password_new_label
+                            else R.string.server_form_password_label,
+                        )
+                    )
+                },
                 singleLine = true,
                 enabled = !state.busy,
                 visualTransformation = PasswordVisualTransformation(),
@@ -365,7 +378,7 @@ fun ServerFormScreen(
             OutlinedTextField(
                 value = state.externalUrl,
                 onValueChange = { state.externalUrl = it },
-                label = { Text("外网地址（可选）") },
+                label = { Text(stringResource(R.string.server_form_external_label)) },
                 placeholder = { Text("https://music.example.com") },
                 singleLine = true,
                 enabled = !state.busy,
@@ -374,13 +387,13 @@ fun ServerFormScreen(
             )
 
             Text(
-                "内网和外网会同时探测。内网在 30 秒内可达时优先使用；只有内网确认不可达时才使用外网。",
+                stringResource(R.string.server_url_probe_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.secondaryText,
             )
             if (existing != null) {
                 Text(
-                    "修改地址不会新建重复服务器，也不会删除本机已同步的音乐库。",
+                    stringResource(R.string.server_edit_url_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.secondaryText,
                 )
@@ -390,12 +403,12 @@ fun ServerFormScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.Key, contentDescription = null, tint = colors.secondaryText, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(AuralisSpacing.small))
-                Text("凭据安全存储在系统 Keystore 中。", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                Text(stringResource(R.string.server_security_keystore), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.Lock, contentDescription = null, tint = colors.secondaryText, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(AuralisSpacing.small))
-                Text("公网服务器建议使用 HTTPS。", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                Text(stringResource(R.string.server_security_https), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
             }
 
             // 本地校验错误：仅在无测试结果时展示。
@@ -416,7 +429,11 @@ fun ServerFormScreen(
                         color = colors.accent,
                     )
                     Spacer(Modifier.width(AuralisSpacing.small))
-                    Text("正在${state.busyLabel}…", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+                    Text(
+                        stringResource(R.string.server_busy_format, state.busyLabel!!),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.secondaryText,
+                    )
                 }
             }
 
@@ -427,19 +444,19 @@ fun ServerFormScreen(
                         ServerTestUi.Success -> {
                             Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = colors.success, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(AuralisSpacing.small))
-                            Text("连接成功", style = MaterialTheme.typography.bodySmall, color = colors.success)
+                            Text(stringResource(R.string.server_test_ok), style = MaterialTheme.typography.bodySmall, color = colors.success)
                         }
 
                         ServerTestUi.AuthenticationFailed -> {
                             Icon(Icons.Filled.Info, contentDescription = null, tint = colors.error, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(AuralisSpacing.small))
-                            Text("用户名或密码错误", style = MaterialTheme.typography.bodySmall, color = colors.error)
+                            Text(stringResource(R.string.server_test_auth_failed), style = MaterialTheme.typography.bodySmall, color = colors.error)
                         }
 
                         ServerTestUi.Unreachable -> {
                             Icon(Icons.Filled.Info, contentDescription = null, tint = colors.warning, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(AuralisSpacing.small))
-                            Text("无法连接服务器", style = MaterialTheme.typography.bodySmall, color = colors.warning)
+                            Text(stringResource(R.string.server_test_unreachable), style = MaterialTheme.typography.bodySmall, color = colors.warning)
                         }
 
                         is ServerTestUi.Failed -> {
@@ -461,10 +478,13 @@ fun ServerFormScreen(
                     verticalArrangement = Arrangement.spacedBy(AuralisSpacing.xSmall),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("连接失败", style = MaterialTheme.typography.bodyMedium, color = colors.error, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.server_failed_title), style = MaterialTheme.typography.bodyMedium, color = colors.error, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = { state.showErrorDetails = !state.showErrorDetails }) {
-                            Text(if (state.showErrorDetails) "收起详情" else "详情", color = colors.error)
+                            Text(
+                                stringResource(if (state.showErrorDetails) R.string.server_details_collapse else R.string.server_details_expand),
+                                color = colors.error,
+                            )
                         }
                     }
                     val shown = if (state.showErrorDetails) message else message.take(60) + if (message.length > 60) "…" else ""
@@ -487,9 +507,9 @@ fun ServerFormScreen(
                 if (state.isTesting) {
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = colors.accent)
                     Spacer(Modifier.width(AuralisSpacing.small))
-                    Text("正在测试连接…")
+                    Text(stringResource(R.string.server_testing))
                 } else {
-                    Text("测试连接")
+                    Text(stringResource(R.string.server_test_action))
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -497,7 +517,7 @@ fun ServerFormScreen(
                 onClick = { state.save() },
                 enabled = state.canSave(),
             ) {
-                Text(if (state.busy) "保存中…" else "保存")
+                Text(stringResource(if (state.busy) R.string.server_saving else R.string.server_save))
             }
         }
     }

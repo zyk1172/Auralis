@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5：feature:server 文案（默认=中文；英文见 values-en）。key 一律 server_ 前缀。 -->
+<resources>
+    <!-- 列表页 -->
+    <string name="server_title">服务器</string>
+    <string name="server_add_header_button">添加 OpenSubsonic 服务器</string>
+    <string name="server_empty_title">尚未添加服务器</string>
+    <string name="server_empty_desc_1">Auralis 通过 OpenSubsonic 协议连接你的私有曲库。</string>
+    <string name="server_empty_desc_2">添加后，服务器上的音乐与收藏会同步到本机。</string>
+    <string name="server_add_button">添加服务器</string>
+    <string name="server_active_icon">当前服务器</string>
+    <string name="server_edit_icon">编辑服务器</string>
+    <string name="server_delete_icon">删除服务器</string>
+    <string name="server_route_internal">内网</string>
+    <string name="server_route_external">外网</string>
+    <string name="server_load_failed">无法读取服务器列表：%1$s</string>
+    <!-- 删除确认 -->
+    <string name="server_delete_title">删除服务器？</string>
+    <string name="server_delete_message">将删除本机保存的登录凭据、离线目录与缓存；服务器上的音乐、歌单与收藏不会被删除。</string>
+    <!-- 表单 -->
+    <string name="server_edit_title">编辑服务器</string>
+    <string name="server_form_display_label">显示名称</string>
+    <string name="server_form_url_label">服务器地址</string>
+    <string name="server_form_username_label">用户名</string>
+    <string name="server_form_password_new_label">新密码（留空则不修改）</string>
+    <string name="server_form_password_label">密码</string>
+    <string name="server_form_external_label">外网地址（可选）</string>
+    <string name="server_url_probe_note">内网和外网会同时探测。内网在 30 秒内可达时优先使用；只有内网确认不可达时才使用外网。</string>
+    <string name="server_edit_url_note">修改地址不会新建重复服务器，也不会删除本机已同步的音乐库。</string>
+    <string name="server_security_keystore">凭据安全存储在系统 Keystore 中。</string>
+    <string name="server_security_https">公网服务器建议使用 HTTPS。</string>
+    <string name="server_url_invalid">服务器地址无效，请包含 http:// 或 https://。</string>
+    <string name="server_busy_format">正在%1$s…</string>
+    <string name="server_test_ok">连接成功</string>
+    <string name="server_test_auth_failed">用户名或密码错误</string>
+    <string name="server_test_unreachable">无法连接服务器</string>
+    <string name="server_failed_title">连接失败</string>
+    <string name="server_failed_connect">连接未完成：%1$s</string>
+    <string name="server_details_collapse">收起详情</string>
+    <string name="server_details_expand">详情</string>
+    <string name="server_testing">正在测试连接…</string>
+    <string name="server_test_action">测试连接</string>
+    <string name="server_saving">保存中…</string>
+    <string name="server_save">保存</string>
+    <!-- 连接阶段 -->
+    <string name="server_stage_idle">就绪</string>
+    <string name="server_stage_validating">检查地址</string>
+    <string name="server_stage_storing_credential">保护凭据</string>
+    <string name="server_stage_authenticating">验证服务器</string>
+    <string name="server_stage_capabilities">检测能力</string>
+    <string name="server_stage_loading_library">读取音乐库</string>
+    <string name="server_stage_saving_library">保存资料库</string>
+    <string name="server_stage_done">完成</string>
+</resources>

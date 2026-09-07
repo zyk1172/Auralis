@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R5 English overlay for feature:server. -->
+<resources>
+    <string name="server_title">Servers</string>
+    <string name="server_add_header_button">Add OpenSubsonic Server</string>
+    <string name="server_empty_title">No servers yet</string>
+    <string name="server_empty_desc_1">Auralis connects to your private music library over the OpenSubsonic protocol.</string>
+    <string name="server_empty_desc_2">Once added, the music and favorites on the server sync to this device.</string>
+    <string name="server_add_button">Add Server</string>
+    <string name="server_active_icon">Current server</string>
+    <string name="server_edit_icon">Edit server</string>
+    <string name="server_delete_icon">Delete server</string>
+    <string name="server_route_internal">LAN</string>
+    <string name="server_route_external">WAN</string>
+    <string name="server_load_failed">Could not read servers: %1$s</string>
+    <string name="server_delete_title">Delete this server?</string>
+    <string name="server_delete_message">This removes the locally stored credentials, offline library and caches. Music, playlists and favorites on the server are not deleted.</string>
+    <string name="server_edit_title">Edit Server</string>
+    <string name="server_form_display_label">Display name</string>
+    <string name="server_form_url_label">Server address</string>
+    <string name="server_form_username_label">Username</string>
+    <string name="server_form_password_new_label">New password (leave blank to keep)</string>
+    <string name="server_form_password_label">Password</string>
+    <string name="server_form_external_label">External address (optional)</string>
+    <string name="server_url_probe_note">Both LAN and WAN are probed. LAN is preferred when reachable within 30 seconds; WAN is used only after LAN is confirmed unreachable.</string>
+    <string name="server_edit_url_note">Changing the address does not create a duplicate server or delete the synced library on this device.</string>
+    <string name="server_security_keystore">Credentials are stored securely in the system Keystore.</string>
+    <string name="server_security_https">HTTPS is recommended for public servers.</string>
+    <string name="server_url_invalid">Invalid server address — include http:// or https://.</string>
+    <string name="server_busy_format">Working on %1$s…</string>
+    <string name="server_test_ok">Connected</string>
+    <string name="server_test_auth_failed">Wrong username or password</string>
+    <string name="server_test_unreachable">Cannot reach server</string>
+    <string name="server_failed_title">Connection failed</string>
+    <string name="server_failed_connect">Connection incomplete: %1$s</string>
+    <string name="server_details_collapse">Hide details</string>
+    <string name="server_details_expand">Details</string>
+    <string name="server_testing">Testing connection…</string>
+    <string name="server_test_action">Test Connection</string>
+    <string name="server_saving">Saving…</string>
+    <string name="server_save">Save</string>
+    <string name="server_stage_idle">Idle</string>
+    <string name="server_stage_validating">Checking address</string>
+    <string name="server_stage_storing_credential">Securing credentials</string>
+    <string name="server_stage_authenticating">Verifying server</string>
+    <string name="server_stage_capabilities">Detecting capabilities</string>
+    <string name="server_stage_loading_library">Reading library</string>
+    <string name="server_stage_saving_library">Saving library</string>
+    <string name="server_stage_done">Done</string>
+</resources>

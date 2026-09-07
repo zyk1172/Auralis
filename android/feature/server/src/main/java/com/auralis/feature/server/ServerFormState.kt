@@ -1,5 +1,6 @@
 package com.auralis.feature.server
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -19,8 +20,10 @@ import kotlinx.coroutines.launch
  * - 「测试连接」= core `testConnection`：**不保存凭据、不同步**，只回一行状态；
  * - 「保存」= 新增走 `connect`，编辑走 `edit`（身份稳定、密码留空沿用旧凭据），
  *   成功回调后由导航层关闭页面；失败显示分类错误并可展开详情。
+ * 模型层文案经 [context] 从资源解析（R5：UI 文案不硬编码中文）。
  */
 class ServerFormState(
+    private val context: Context,
     private val scope: CoroutineScope,
     private val graph: AuralisGraph,
     /** 非 null = 编辑既有服务器（身份保持稳定）。 */
@@ -71,12 +74,12 @@ class ServerFormState(
     private fun policyError(): String? {
         val urlTrimmed = serverUrl.trim()
         if (urlTrimmed.isEmpty() || !isUrlParseable(urlTrimmed)) {
-            return "服务器地址无效，请包含 http:// 或 https://。"
+            return context.getString(R.string.server_url_invalid)
         }
         ServerURLPolicy.validate(urlTrimmed)?.let { return it.message }
         val extTrimmed = externalUrl.trim()
         if (extTrimmed.isNotEmpty()) {
-            if (!isUrlParseable(extTrimmed)) return "服务器地址无效，请包含 http:// 或 https://。"
+            if (!isUrlParseable(extTrimmed)) return context.getString(R.string.server_url_invalid)
             ServerURLPolicy.validate(extTrimmed)?.let { return it.message }
         }
         return null
@@ -116,7 +119,7 @@ class ServerFormState(
         failureMessage = null
         testUi = null
         stageJob = scope.launch {
-            graph.connector.stage.collect { busyLabel = it.titleZh() }
+            graph.connector.stage.collect { busyLabel = context.getString(it.titleRes()) }
         }
         scope.launch {
             try {
@@ -164,7 +167,10 @@ class ServerFormState(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failureMessage = "连接未完成：${e.message ?: "未知错误"}"
+                failureMessage = context.getString(
+                    R.string.server_failed_connect,
+                    e.message ?: context.getString(com.auralis.core.designsystem.R.string.unknown_error),
+                )
                 finishBusy()
             }
         }

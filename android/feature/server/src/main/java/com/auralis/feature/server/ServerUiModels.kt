@@ -1,5 +1,6 @@
 package com.auralis.feature.server
 
+import androidx.annotation.StringRes
 import com.auralis.core.data.connector.ConnectionStage
 import com.auralis.core.data.connector.TestConnectionResult
 
@@ -11,16 +12,16 @@ sealed interface ServerTestUi {
     data class Failed(val message: String) : ServerTestUi
 }
 
-/** 连接进度阶段的可读标题（对齐 Swift ServerConnectionStage.title）。 */
-fun ConnectionStage.titleZh(): String = when (this) {
-    ConnectionStage.Idle -> "就绪"
-    ConnectionStage.Validating -> "检查地址"
-    ConnectionStage.StoringCredential -> "保护凭据"
-    ConnectionStage.Authenticating -> "验证服务器"
-    ConnectionStage.DetectingCapabilities -> "检测能力"
-    ConnectionStage.LoadingLibrary -> "读取音乐库"
-    ConnectionStage.SavingLibrary -> "保存资料库"
-    ConnectionStage.Done -> "完成"
+/** 连接进度阶段标题资源（对齐 Swift ServerConnectionStage.title；由持有 Context 方解析）。 */
+fun ConnectionStage.titleRes(): Int = when (this) {
+    ConnectionStage.Idle -> R.string.server_stage_idle
+    ConnectionStage.Validating -> R.string.server_stage_validating
+    ConnectionStage.StoringCredential -> R.string.server_stage_storing_credential
+    ConnectionStage.Authenticating -> R.string.server_stage_authenticating
+    ConnectionStage.DetectingCapabilities -> R.string.server_stage_capabilities
+    ConnectionStage.LoadingLibrary -> R.string.server_stage_loading_library
+    ConnectionStage.SavingLibrary -> R.string.server_stage_saving_library
+    ConnectionStage.Done -> R.string.server_stage_done
 }
 
 /** core 测试结果 → UI 可读分类。 */

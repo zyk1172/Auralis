@@ -1,5 +1,6 @@
 package com.auralis.feature.server
 
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -14,8 +15,10 @@ import kotlinx.coroutines.launch
  * - 已保存服务器摘要（显示名 + 脱敏地址 + 当前激活勾选 + 实际路由端点标签）；
  * - 点行 = 切换当前服务器；行内 编辑 / 删除（删除需二次确认，且只删本地）；
  * - 空状态引导添加第一台服务器。
+ * 模型层文案经 [context] 从资源解析（R5：UI 文案不硬编码中文）。
  */
 class ServerListState(
+    private val context: Context,
     private val scope: CoroutineScope,
     private val graph: AuralisGraph,
     private val onAdd: () -> Unit,
@@ -38,15 +41,17 @@ class ServerListState(
             runCatching {
                 servers = graph.catalogRepository.servers()
                 activeServerId = graph.preferences.activeServerIdValue()
-            }.onFailure { lastError = "无法读取服务器列表：${it.message}" }
+            }.onFailure {
+                lastError = context.getString(R.string.server_load_failed, it.message ?: "")
+            }
             loaded = true
         }
     }
 
     /** 该服务器当前实际路由到的端点标签（内网/外网/未连接）。 */
     fun routeLabel(account: ServerAccount): String? = when (graph.connector.registry.kind(account.id)) {
-        EndpointKind.Internal -> "内网"
-        EndpointKind.External -> "外网"
+        EndpointKind.Internal -> context.getString(R.string.server_route_internal)
+        EndpointKind.External -> context.getString(R.string.server_route_external)
         null -> null
     }
 
