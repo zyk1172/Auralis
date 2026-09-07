@@ -82,6 +82,10 @@ private fun AppRoot(graph: AuralisGraph) {
     val assistantCoordinator = remember(graph, scope) { AssistantCoordinator(graph, scope) }
 
     LaunchedEffect(graph) {
+        // Application 同时在后台恢复；这里用幂等本地 bootstrap 作为 Shell 的确定性屏障，
+        // 防止“Room 已有服务器但 Registry 尚为空”时首页/搜索/封面/首播先执行而失败。
+        runCatching { graph.bootstrapFromLocal() }
+
         // 冷启动恢复上次选择的主题（DataStore 已持久化；S7 前未应用导致重启回默认）。
         val savedTheme = runCatching { graph.preferences.selectedThemeId() }.getOrNull()
         AuralisThemeController.current = BuiltInThemes.byId(savedTheme)
