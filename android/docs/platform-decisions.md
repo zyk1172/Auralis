@@ -326,3 +326,48 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
   versionCode）；Swift 的 Git commit/branch/build 信息无 Android 等价（Debug BuildConfig
   字段未开启）→ 文档记录不移植。
 
+## 2m. AI 助手（S8，2026-09-07）
+
+- **分层**：feature:assistant 独立模块（依赖 core:data/playback/lyrics/security/opensubsonic/ai）；
+  core:data 存 AI 连接偏好（键 `auralis.ai.*`，默认 baseURL https://api.openai.com /
+  apiPath /v1/chat/completions / model gpt-4o-mini）；core:ai 提供 OpenAiCompatibleProvider +
+  AgentToolLoop + AgentToolRegistry（P0 已建）。
+- **Key 存储**：只进 KeystoreCredentialVault（MasterKey AES256 + EncryptedSharedPreferences），
+  reference 固定 `ai.provider.api-key`（对齐 Swift Keychain credentialID）；DataStore 零敏感字段。
+- **工具子集（fail-closed 形态）**：只注册真实可执行的 canonical 工具（读 17 / 可逆写 22 /
+  破坏性 1=deletePlaylist 逐次确认），Swift 有而 Android 无对应能力的工具**不注册即不可调用**。
+- **授权模型有意分歧**：Swift 按 NLU 语句 lineage 授权；Android 无 NLU 解析 → 首次外发按
+  「会话级」consent 授权全部写工具（允许一次/允许并记住/取消），破坏性工具仍逐次二次确认绑
+  runID；未授权 → ToolExecutionDenied（fail closed）。
+- **非流式**：复用 P0 AgentToolLoop 整段返回；UI 以阶段行（连接/思考/执行/回复）+ 工具状态行
+  （进行/成功/被拒）呈现；reasoning 仅瞬态不持久化。
+- **持久化**：会话与操作日志落 `filesDir/assistant/agent-sessions.json` / `agent-actions.json`
+  （文件名对齐 Swift）；reversible 操作可经 INVERSE_TOOL 映射真实撤销。
+- **显式保存 + 不伪装本地模式**：AI 设置页显式「保存」（避免半输入脏配置）；错误红字如实
+  呈现（401/路由/拒绝），本地搜索/播放不依赖模型照常可用；文档与审计见 audit/09。
+
+## 2n. Android TV（S9，2026-09-07）
+
+- **Swift 无 tvOS target**：xcodeproj 仅 Auralis(iOS) / AuralisMac 两个 application target
+  （SDKROOT iphoneos/macosx），无 tvOS 变体目录或 `#if os(tvOS)` 代码 → **Leanback 壳不直接
+  对齐 Swift 界面**；基准 = 移动端核心能力 + Android TV 惯例（审计 audit/10）。
+- **复用策略**：Shell 层重写（TV 观感），页面层零改动复用 feature Composable（全部
+  graph+回调自包含）；不引入 androidx.leanback（legacy Fragment 体系）与 tv-material，
+  纯 Compose。播放单引擎复用 LocalPlaybackHost + AuralisPlaybackService（MediaSessionService
+  已注册，TV 系统媒体面板可接管）；未就绪时 startPlaybackService 幂等、不假装播放（同移动端）。
+- **D-pad 焦点体系**（Compose 1.7 新 indication API）：复用页面 clickable 默认读
+  LocalIndication → 根部 CompositionLocal 替换为 TvIndication（IndicationNodeFactory，
+  节点 = Modifier.Node + DrawModifierNode 观察 Focus/Press interaction 画 accent 描边环，
+  工厂需实现 equals/hashCode）；自有控件用 tvFocusVisual（onFocusChanged + graphicsLayer
+  聚焦放大 + Modifier.border）配 tvClick（indication=null）防止双焦点环。
+- **分区差异**：TV 无 Assistant（feature:assistant/core:ai 不进 app-tv 依赖）→ 搜索从
+  「Assistant 内兜底 sheet」提为一级分区（Swift SearchView 实体本就存在）；设置内 AI 行
+  保留并打开 AiSettingsPage（连接/API Key/外发授权属账户安全配置面，不等于装 Assistant UI）。
+- **Boot/覆盖语义同移动端**：无服务器 → ServerList（add/edit/form）；Browse 详情在音乐库
+  分区上覆盖；正在播放全屏覆盖整壳；BackHandler 优先级 = 正在播放 > Browse 详情。
+- **TV 分发**：LEANBACK_LAUNCHER + uses-feature（leanback required=false、
+  touchscreen required=false）+ 本地 banner/icon vector + landscape。
+- **验证边界（如实）**：本机 Android SDK 无 emulator/system-image/AVD，无法实机/TV 模拟器
+  冒烟；交付 `:app-tv:assembleDebug` 成功产物 app-tv-debug.apk，文档附 adb 冒烟步骤，
+  明确未实机跑通（待具备 TV 镜像环境后补）。
+

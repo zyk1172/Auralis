@@ -94,9 +94,18 @@
 
 ## Android TV
 
+> Swift 无 tvOS target → Leanback 壳不直接对齐 Swift 界面（审计 10）；基准 = 移动端核心能力 + Android TV 惯例。
+
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| TV 壳（Leanback，无 Assistant） | — | Not Started | ☐ |
+| TV 壳顶栏导航（Auralis TV 标识 + 首页/音乐库/搜索分区 + 设置） | —（移动端 Dock 语义，无 Assistant） | Done（S9） | ☑ D-pad 初始焦点在「首页」☑ 分区切换关闭覆盖层 ☑ 选中分区 accent 高亮 ☑ 设置 → Route.Settings ☑ 自有控件 tvFocusVisual 聚焦放大+accent 描边 |
+| 首页分区（复用 HomeScreen） | 移动端核心能力 | Done（S9） | ☑ 快捷入口/模块货架/换一批 ☑ onManageServers → 服务器管理 ☑ 点击行/卡触发播放或浏览 |
+| 音乐库分区 + Browse 覆盖（复用 Library/BrowseDetail） | 移动端核心能力 | Done（S9） | ☑ 7 scope 切换 ☑ 行菜单/播放/下一首/加入队列 ☑ Browse 覆盖页 BackHandler 关闭 |
+| 搜索分区（复用 SearchScreen；TV 无 Assistant → 提为一级） | SearchView | Done（S9） | ☑ 本地/服务器搜索 ☑ 页内返回 → 回首页 ☑ 结果播放/浏览动作真实 |
+| 正在播放条（封面/标题 + 上一首/播放暂停/下一首，常驻底栏） | MiniPlayer 语义 | Done（S9） | ☑ 条身点击 → 全屏 NowPlayingScreen ☑ 缓冲态如实显示 ☑ 无播放内容时不显示 |
+| 正在播放全屏（复用 NowPlayingScreen：播放/队列/歌词三页） | PlayerViews | Done（S9） | ☑ 覆盖整个壳 ☑ 关闭/浏览跳转/队列编辑/同步歌词真实 |
+| 服务器管理 / 添加 / 编辑（Boot 无服务器引导 + 设置入口） | 移动端核心能力 | Done（S9） | ☑ 表单/测试连接/保存真实 ☑ 返回栈与移动端一致 |
+| 设置（复用 SettingsScreen：服务器/播放与音质/数据/主题/首页布局/AI 连接配置） | 移动端核心能力 | Done（S9） | ☑ AI 助手行 → AiSettingsPage（仅连接配置，无 Assistant 会话 UI）☑ HomeLayoutEdit 可编辑 |
 
 > 当前状态：**P0 Core 九项（数据/播放/下载/歌词链路）已 Done**；S1 服务器链路
 > （feature:server）已接入 app-mobile 路由；S2 Mobile Shell + Bottom Dock 完成；
@@ -115,5 +124,8 @@
 > **S8 Assistant 完成**（feature:assistant：会话持久化 + 对话/工具执行 UI + 首次外发
 > 授权 + 破坏性确认 + canonical 工具子集真实执行 + 操作日志/撤销；feature:settings
 > AiSettingsPage + 设置 AI 行启用；AI 配置/不可用/失败均如实呈现；APK 已打包）。
-> 下一步：S9 Android TV。
+> **S9 Android TV 完成**（app-tv：Swift 无 tvOS target → Leanback 壳对齐移动端核心能力 +
+> Android TV 惯例；TvShell 顶栏分区 + D-pad 焦点体系（全局 indication 环 + 自有控件
+> tvFocusVisual）+ 正在播放条 + feature 页面零改动复用 + 服务器/设置覆盖路由；本机无 TV
+> 模拟器镜像/设备，交付产物 app-tv-debug.apk 并附 adb 冒烟指引）。
 > 最后更新：2026-09-07

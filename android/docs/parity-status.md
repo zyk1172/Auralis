@@ -193,6 +193,6 @@
 6. ~~Search~~ ✅ S6 完成（本地四类 FTS 搜索 + 防抖 + 历史/清空 + 在线 search3 兜底 + Assistant 顶栏放大镜入口；APK 已打包）
 7. ~~Settings~~ ✅ S7 完成（真实设置页：服务器/播放与音质/数据与备份/首页布局/主题即时应用/关于；冷启动主题恢复修复；APK 已打包）
 8. ~~Assistant~~ ✅ S8 完成（会话持久化 + 对话/工具执行 UI + 外发授权/破坏性确认 + canonical 工具子集真实执行 + 操作日志/撤销 + AI 配置页 + 设置 AI 行启用；APK 已打包）
-9. Android TV（app-tv）
+9. ~~Android TV（app-tv）~~ ✅ S9 完成（Swift 无 tvOS target，Leanback 壳对齐移动端核心能力 + TV 惯例：TvShell 顶栏分区 + D-pad 焦点体系 + 正在播放条 + feature 页面零改动复用 + 服务器/设置覆盖路由；app-tv-debug.apk 已打包）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1–S8 完成，S9 Android TV 待开始）
+> 最后更新：2026-09-07（P0 Core 九项 + S1–S9 全部完成；Android TV 作为 Leanback 壳已交付，Swift 侧无 tvOS 对应 target）
