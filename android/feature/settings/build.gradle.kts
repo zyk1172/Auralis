@@ -20,7 +20,11 @@ android {
 
 dependencies {
     implementation(project(":core:domain"))
+    implementation(project(":core:data"))
+    implementation(project(":core:opensubsonic"))
     implementation(project(":core:designsystem"))
+    implementation(project(":core:image"))
+    implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
