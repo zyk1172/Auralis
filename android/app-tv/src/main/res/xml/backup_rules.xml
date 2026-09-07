@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- EncryptedSharedPreferences 的密文不能脱离本机 Android Keystore 主密钥恢复。 -->
+    <exclude domain="sharedpref" path="auralis_credentials.xml" />
+</full-backup-content>
