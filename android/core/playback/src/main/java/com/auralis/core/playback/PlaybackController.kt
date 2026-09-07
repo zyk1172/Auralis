@@ -7,6 +7,9 @@ import com.auralis.core.domain.QueueEntryId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 
 /**
  * 播放控制器（UI 侧唯一入口）。
@@ -48,6 +51,32 @@ interface PlaybackController {
 
     /** 由播放服务生命周期调用（跨 Activity/页面共享同一引擎）。 */
     fun release()
+}
+
+/**
+ * P0-1（审查 R1）：获取引擎就绪的 [PlaybackController] —— **统一入口**。
+ *
+ * 背景：UI 层若写成「引擎未就绪 → startPlaybackService() 并 return」，会把用户第一次
+ * 点击的播放意图吞掉（服务刚起、引擎未 ready，用户要再点一次才播）。
+ * 本函数保证：任何一次用户操作经 [startService] 启动播放服务后**等待引擎可用**，
+ * 再返回 controller 继续执行原意图 —— 第一次点击即对应第一次播放。
+ *
+ * @param startService 幂等启动 AuralisPlaybackService 的动作（由组合根注入，避免
+ *   core:playback 依赖 appContext / core:data）。
+ * @param timeoutMs 等待引擎就绪超时（默认 8s）。超时抛 [kotlinx.coroutines.TimeoutCancellationException]，
+ *   调用方必须把失败如实反馈给用户（Toast/错误行），不得静默丢弃意图。
+ */
+suspend fun awaitPlaybackController(
+    startService: () -> Unit,
+    timeoutMs: Long = 8_000,
+): PlaybackController {
+    if (!LocalPlaybackHost.available.value) {
+        startService()
+        withTimeout(timeoutMs) {
+            LocalPlaybackHost.available.filter { it }.first()
+        }
+    }
+    return LocalPlaybackHost.controller()
 }
 
 /**
