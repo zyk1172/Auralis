@@ -45,9 +45,11 @@
 
 | 页面 | Swift 基准 | 状态 | 按钮级核对 |
 |---|---|---|---|
-| 库总览（歌曲/专辑/艺人/播放列表/收藏） | LibraryView.swift | Not Started | ☐ |
-| 列表页（分页/加载态/错误态） | — | Not Started | ☐ |
-| Browse Detail（专辑/艺人详情、收藏/评分、播放） | BrowseDetail*.swift | Not Started | ☐ 收藏按钮 action/loading ☐ 播放全部 ☐ 队列加入反馈 |
+| 库总览（7 scope 分段：专辑/歌曲/艺人/歌单/收藏/流派/分类） | LibraryView.swift | Done（S4） | ☑ scope 切换真实数据 ☑ 空态引导 ☑ 分类=能力说明 |
+| 专辑/艺人/歌单/流派列表与网格 | LibraryView.swift | Done（S4） | ☑ ⋮ 播放全部/收藏/下载 ☑ 行尾 ⋯ 菜单全部动作真实 ☑ 只读歌单禁用写操作 |
+| 列表页（加载态/错误态重试/空态） | — | Done（S4） | ☑ Loading/Error+重试/Empty |
+| Browse Detail 17 目的地（专辑/艺人/歌单/收藏/各统计列表/流派/常听/下载/推荐分类） | BrowseDetailSheet | Done（S4） | ☑ 头图 88+标题 ☑ 播放全部/下载(确认弹窗) ☑ 换一批 ☑ 点行整组从该行起播 ☑ 错误重试 ☑ 推荐分类=能力说明 |
+| 歌单详情（排序总览/管理菜单/行移除） | PlaylistTracksView + AuralisAppModel | Done（S4） | ☑ 重命名/复制/去重/删除二次确认 ☑ 从歌单移除二次确认 ☑ 远端先行+失败反馈 |
 
 ## 播放器
 
@@ -90,5 +92,7 @@
 > （feature:server）已接入 app-mobile 路由；S2 Mobile Shell + Bottom Dock 完成；
 > **S3 Home 完成**（feature:home 注册表驱动 + HomeLayoutEditScreen + MobileShell 接线，
 > Home 分区已是真实页，播放/浏览动作真实；app-mobile-debug.apk 已打包）。
-> 下一步：S4 Library + Browse Detail。
+> **S4 Library + Browse Detail 完成**（feature:library：7 scope 音乐库 + 17 目的地
+> BrowseDetail 覆盖路由 + 歌单远端先行管理 + insertNext/appendToQueue 接线；APK 已打包）。
+> 下一步：S5 Mini Player / Now Playing / Queue / Lyrics。
 > 最后更新：2026-09-07

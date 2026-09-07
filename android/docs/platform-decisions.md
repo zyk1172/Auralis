@@ -217,3 +217,39 @@ Android `AgentToolLoop` 保留了审计 §5.2/5.3 的**三条不变式**：
   先 `startPlaybackService()`（幂等）并停手——**不假装已播放**；首页浏览请求
   （快捷入口/数量›/艺人专辑卡）切 Library 分区携带 `BrowseDestination`
   （pendingBrowse，完整浏览页 S4 实现，占位非假数据）。
+
+## 2i. Library + Browse Detail（S4，2026-09-07）
+
+- **音乐库 7 scope 分段**（albums 默认 → tracks/artists/playlists/favorites/genres/
+  categories，横向滚动胶囊近似 Swift segmented picker）：每个 scope 内容全部来自真实
+  本地目录（Room Flow 观察 / 一次查询），无任何伪造数据；`categories`（AI 推荐索引）
+  Android 第一版无数据源 → 显示能力说明（`Categories.NOT_PORTED_MESSAGE`），空态承接、
+  不渲染假列表。
+- **流派语义**（对齐 Swift `tracks(for:)` 过滤）：`genreTracks(serverId, name)` 内存
+  过滤 track.genres（大小写不敏感），空流派 scope 不显示。
+- **Browse 覆盖路由**：Home 内浏览请求切 Library 分区并在其内容上方覆盖
+  `BrowseDetailScreen`（页面自带内部返回栈：常听 → 专辑/艺术家详情）；顶栏返回回库根、
+  再点 Library Dock 回库根、系统返回键关闭覆盖页。
+- **BrowseDetail 17 目的地全部承接**：album/artist 按 GlobalId 解析实体；playlist 先
+  `playlistActions.refreshPlaylist`（服务器单数拉取落本地，失败降级展示本地曲目）；
+  favorites/mostPlayed/recentlyPlayed/recentlyAdded/longUnplayed/neverPlayed/random/
+  favoriteRandom/downloads/genre 全走本地 SQL 派生（`DETAIL_TRACK_CAP=1000`）；
+  topArtists/topAlbums 按真实播放量降序。
+- **多服务器隔离**：目的地未显式携带 serverId（列表类）时在加载期解析
+  `preferences.activeServerIdFlow.first()` 落到当前激活服务器，绝不跨服务器合并；
+  专辑/艺术家/歌单详情按 GlobalId（内含 serverId）直接查询。
+- **详情动作**：头图 88 + 播放全部 + 下载（确认弹窗估算体积，enqueue 幂等跳过已下载）；
+  点行 = 整组作新队列从该行起播；random/favoriteRandom 右上「换一批」= reloadKey 驱动
+  本地重采样重载；歌单顶栏 ⋯ 管理菜单（重命名/复制「原名 副本」/去重/删除，全部远端
+  先行、成功落本地并刷新详情标题与曲目）。
+- **歌单行级「从歌单移除」**：行尾 ⋯ 追加槽位（`additionalMenuItems(close)`，关闭行菜单
+  回调），二次确认后 `playlistActions.removeAt`（服务器 removeIndex 语义）成功刷新整表。
+- **播放动作接线**：Shell 新增 `playNextShelf`（`insertNext` 插当前曲后）与
+  `appendQueueShelf`（`appendToQueue` 队尾追加不打断）；引擎未就绪一律先
+  `startPlaybackService()` 再停手，不假装成功。
+- **歌单写操作集中在 `PlaylistCoordinator`**（`PlaylistRemoteOperationException` 统一
+  包装远端失败）：rename/addTracks/removeAt 远端成功后用 getPlaylist 单数拉最新整表替换
+  本地（对齐 loadPlaylistTracks），不做本地猜测；只读歌单禁止修改/删除但可复制。
+- **行徽标实时驱动**：行内已下载/已收藏徽标分别由 downloads 表行级 observe 与
+  favorites 计数信号（`observeFavoriteTracks` flatMapLatest 重查）驱动，非静态快照。
+

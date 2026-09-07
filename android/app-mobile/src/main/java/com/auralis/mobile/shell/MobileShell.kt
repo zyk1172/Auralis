@@ -1,5 +1,6 @@
 package com.auralis.mobile.shell
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +39,8 @@ import com.auralis.core.playback.LocalPlaybackHost
 import com.auralis.core.playback.PlaybackController
 import com.auralis.core.playback.PlaybackSnapshot
 import com.auralis.feature.home.HomeScreen
+import com.auralis.feature.library.BrowseDetailScreen
+import com.auralis.feature.library.LibraryScreen
 import kotlinx.coroutines.launch
 
 /**
@@ -48,9 +51,9 @@ import kotlinx.coroutines.launch
  * - 无正在播放内容时 Mini Player 隐藏，Dock 保持。
  *
  * S3：Home 分区已接入真实首页（模块注册表驱动 + 真实数据 + 播放/换一批/编辑入口）。
- * Home 内的浏览跳转（快捷入口 / 数量 › / 艺人·专辑卡）切换到 Library 分区并携带
- * BrowseDestination —— 完整浏览页在 S4（Library + Browse Detail）实现，在此之前
- * Library 分区显示该目标对应的占位（非假数据，是阶段过渡）。
+ * S4：Library 分区接入真实音乐库（scope 切换 + Browse 详情覆盖路由）。Home 内浏览跳转
+ * （快捷入口 / 数量 › / 艺人·专辑卡）→ 切到 Library 分区并在其上打开 BrowseDetailScreen
+ * 覆盖页；页面内部自带返回栈（常听 → 专辑/艺术家）。
  */
 @Composable
 fun MobileShell(
@@ -62,8 +65,8 @@ fun MobileShell(
 ) {
     val colors = LocalAuralisTheme.current.colors
     var section by rememberSaveable { mutableStateOf(AppSection.Home) }
-    // 从 Home 进入的浏览目的地（快捷入口/数量›/艺人·专辑卡）。Library 分区承接。
-    var pendingBrowse by remember { mutableStateOf<BrowseDestination?>(null) }
+    // 浏览详情（S4）：非 null 时在 Library 分区内容上方覆盖真实浏览页。
+    var browseDestination by remember { mutableStateOf<BrowseDestination?>(null) }
     val scope = rememberCoroutineScope()
 
     // ---- 播放状态（真实绑定；引擎由 AuralisPlaybackService 创建后 available=true）----
@@ -92,11 +95,36 @@ fun MobileShell(
         }
     }
 
-    /** Home 内的浏览请求 → 切 Library 分区并携带目的地（页面内容在 S4 实现）。 */
+    /** 「下一首播放」：整组插到当前曲之后（引擎已就绪时真实执行）。 */
+    fun playNextShelf(tracks: List<Track>) {
+        if (!engineAvailable) {
+            graph.startPlaybackService()
+            return
+        }
+        scope.launch {
+            runCatching { controller.insertNext(tracks.map { QueueEntry.of(it) }) }
+        }
+    }
+
+    /** 「加入队列」：整组追加到队尾，不打断当前播放。 */
+    fun appendQueueShelf(tracks: List<Track>) {
+        if (!engineAvailable) {
+            graph.startPlaybackService()
+            return
+        }
+        scope.launch {
+            runCatching { controller.appendToQueue(tracks.map { QueueEntry.of(it) }) }
+        }
+    }
+
+    /** 浏览请求 → 切 Library 分区并打开覆盖浏览页。 */
     fun openBrowse(destination: BrowseDestination) {
-        pendingBrowse = destination
+        browseDestination = destination
         section = AppSection.Library
     }
+
+    // 覆盖浏览页时系统返回键回到库根（返回栈内部页面由 BrowseDetailScreen 自管）。
+    BackHandler(enabled = browseDestination != null) { browseDestination = null }
 
     Box(modifier = modifier.fillMaxSize().background(colors.background)) {
         // 一级分区内容。
@@ -108,10 +136,27 @@ fun MobileShell(
                 onManageServers = onOpenServers,
             )
 
-            AppSection.Library -> LibraryPlaceholderPage(
-                browseTarget = pendingBrowse,
-                onOpenSettings = onOpenSettings,
-            )
+            AppSection.Library -> Box(Modifier.fillMaxSize()) {
+                LibraryScreen(
+                    graph = graph,
+                    onOpenSettings = onOpenSettings,
+                    onPlayTracks = ::playShelf,
+                    onPlayNext = ::playNextShelf,
+                    onAppendToQueue = ::appendQueueShelf,
+                    onBrowse = ::openBrowse,
+                )
+                browseDestination?.let { destination ->
+                    BrowseDetailScreen(
+                        graph = graph,
+                        initial = destination,
+                        onBack = { browseDestination = null },
+                        onPlayTracks = ::playShelf,
+                        onPlayNext = ::playNextShelf,
+                        onAppendToQueue = ::appendQueueShelf,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
 
             AppSection.Assistant -> AssistantPlaceholderPage()
         }
@@ -161,7 +206,18 @@ fun MobileShell(
             ) {
                 BottomDock(
                     selected = section,
-                    onSelect = { section = it },
+                    onSelect = { sel ->
+                        if (sel == AppSection.Library) {
+                            if (section == AppSection.Library && browseDestination != null) {
+                                browseDestination = null // 再点 Library：回到库根
+                            } else {
+                                section = sel
+                            }
+                        } else {
+                            browseDestination = null
+                            section = sel
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

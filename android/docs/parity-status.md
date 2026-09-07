@@ -61,9 +61,9 @@
 | 服务器列表/添加/编辑/删除/切换（UI） | feature:server（已接入 Shell 覆盖路由） | Done（S1） |
 | 连接测试（不落库）+ URL 策略前置 | ProductionServerConnector.testConnection + ServerURLPolicy | Done |
 | Bottom Dock（3 分区：Home/Library/Assistant 圆钮） | app-mobile/shell（≤760dp 居中 overlay） | Done（S2） |
-| 分区根切换 + 顶栏大标题结构 | MobileShell / ShellPages | Partial（Home 已真实页，Library/Assistant 待 S4/S8） |
+| 分区根切换 + 顶栏大标题结构 | MobileShell / ShellPages | Partial（Home/Library 已真实页，Assistant 待 S8） |
 | Mini Player（真实绑定 playback） | app-mobile/shell MiniPlayerBar | Partial（展开/进度待 S5） |
-| Settings 齿轮入口 → 设置占位（服务器行可用） | LibraryPlaceholderPage 齿轮 | Partial（S7 完善） |
+| Settings 齿轮入口 → 设置占位（服务器行可用） | LibraryScreen 顶栏齿轮 | Partial（S7 完善） |
 
 ## 5b. Home 首页（audit 06 首页规格）
 
@@ -78,6 +78,24 @@
 | 首页 UI（快捷入口 3 列、140dp shelf、模块标题行） | HomeView.swift | feature:home/HomeScreens.kt | Done（S3） |
 | 布局编辑（隐藏/排序/恢复默认） | HomeLayoutEditView.swift | feature:home/HomeLayoutEditScreen.kt | Done（S3；排序用上移/下移按钮替代拖拽） |
 | 播放/浏览动作接线（playQueue、pendingBrowse→Library） | HomeView onTap | MobileShell.playShelf/openBrowse | Done（S3） |
+
+## 5c. Library + Browse Detail（audit 06 Library/BrowseDetail 规格）
+
+| 能力 | Swift 基准 | Android 实现 | 状态 |
+|---|---|---|---|
+| 音乐库 7 scope（albums/tracks/artists/playlists/favorites/genres/categories，默认 albums） | LibraryView scope | feature/library LibraryScreen + ScopeSelector | Done（S4） |
+| scope 列表数据全部真实（Room Flow / SQL 派生；Genre 无曲目不显示；Categories 无数据源→能力说明不伪造） | LibraryViewModel | LibraryScreen 各 Scope | Done（S4） |
+| 专辑 48 网格 / 艺术家行 / 歌单卡 / 流派按歌曲数降序 | LibraryView | AlbumGrid/ArtistRows/PlaylistGrid/GenreGrid | Done（S4） |
+| 行/卡尾 ⋯ = 真实动作（立即播放/下一首/加队列/添加到歌单/下载·取消·删缓存/收藏切换） | contextMenu | LibraryTrackRow + TrackRowMenu | Done（S4） |
+| Browse 覆盖路由（Home 跳转→Library 上方打开；顶栏返回；再点 Library 回根） | BrowseDetailSheet | MobileShell browseDestination + BrowseDetailScreen | Done（S4） |
+| 17 BrowseDestination 承接（album/artist/playlist/收藏/各列表/genre/常听/下载/推荐分类） | BrowseDetailSheet 17 case | BrowseDetailScreen + loadDetail | Done（S4） |
+| 详情头图 88 + 标题/副标题 + 播放全部 + 下载（确认弹窗，跳过已下载） | BrowseDetailSheet | TrackListWithHeader | Done（S4） |
+| 点行 = 整组作队列从该行起播；随机类「换一批」= 本地重采样 | BrowseDetailSheet | onPlayRow + reloadKey 重载 | Done（S4） |
+| 歌单总览排序 + 单行删除（二次确认） | PlaylistOverview + PlaylistSortOrder | PlaylistOverview | Done（S4） |
+| 歌单管理（重命名/复制副本/去重/删除，只读禁止；远端先行落本地） | AuralisAppModel + PlaylistTracksView ellipsis | PlaylistCoordinator + PlaylistManageMenu | Done（S4） |
+| 歌单行「从歌单移除」（二次确认，曲目保留） | removeFromPlaylist | LibraryTrackRow additionalMenuItems + removeAt | Done（S4） |
+| 常听艺术家/专辑（按真实播放次数降序，点行推详情） | BrowseDetailSheet topArtists/topAlbums | TopArtistList/TopAlbumList（homeTopArtists/homeTopAlbums） | Done（S4） |
+| 播放动作全接线：playQueue / insertNext（下一首）/ appendToQueue（加队列） | selectAndPlay/playNext/appendToQueue | MobileShell playShelf/playNextShelf/appendQueueShelf | Done（S4） |
 
 ## 6. 离线 / 歌词 / 封面（audit 07）
 
@@ -103,11 +121,11 @@
 1. ~~Server 添加/恢复 UI（feature:server）~~ ✅ S1 完成
 2. ~~Mobile Shell + Bottom Dock~~ ✅ S2 完成（Dock/分区根/MiniPlayer 绑定/设置入口占位）
 3. ~~Home 页~~ ✅ S3 完成（模块注册表 + 布局编辑 + 真实数据 + 播放/浏览接线；APK 已打包）
-4. Library + Browse Detail ← 当前阶段
-5. Mini Player / Now Playing / Queue / Lyrics
+4. ~~Library + Browse Detail~~ ✅ S4 完成（Library 7 scope + BrowseDetail 17 目的地 + 歌单远端先行管理 + 播放动作接线；APK 已打包）
+5. Mini Player / Now Playing / Queue / Lyrics ← 当前阶段
 6. Search
 7. Settings
 8. Assistant
 9. Android TV（app-tv）
 
-> 最后更新：2026-09-07（P0 Core 九项 + S1 + S2 完成，S3 Home 完成，S4 待开始）
+> 最后更新：2026-09-07（P0 Core 九项 + S1 + S2 + S3 + S4 完成，S5 待开始）
