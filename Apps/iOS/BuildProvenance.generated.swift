@@ -2,7 +2,7 @@
 import AppShell
 
 enum BuildProvenanceGenerated {
-    static let gitCommit = "5a2aa30f"
+    static let gitCommit = "96f53841"
     static let gitBranch = "main"
     static let buildConfiguration = "Release"
     static let appVersion = "1.1.0"
