@@ -1,5 +1,6 @@
 package com.auralis.feature.assistant
 
+import androidx.annotation.StringRes
 import com.auralis.core.ai.AgentRunEvent
 import com.auralis.core.ai.AgentToolLoop
 import com.auralis.core.ai.AiProvider
@@ -10,6 +11,7 @@ import com.auralis.core.ai.OpenAiCompatibleProvider
 import com.auralis.core.ai.ToolSideEffect
 import com.auralis.core.data.graph.AuralisGraph
 import com.auralis.core.data.prefs.AiConnectionSettings
+import com.auralis.core.designsystem.R as AuralisR
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -50,6 +52,14 @@ class AssistantCoordinator(
     private val host = AssistantToolHost(graph)
     private val vault get() = graph.vault
     private val prefs get() = graph.preferences
+
+    /** 模块资源取值（非 Composable / 协程上下文统一入口）。 */
+    private fun stringRes(@StringRes res: Int, vararg args: Any): String =
+        graph.appContext.getString(res, *args)
+
+    /** 工具显示名（UI 工具行 / 操作日志摘要）；未知工具回退原名。 */
+    private fun toolLabel(name: String): String =
+        AssistantToolHost.toolLabelRes(name)?.let { stringRes(it) } ?: name
 
     private val writeToolNames: Set<String> =
         host.registry().descriptors().filter { it.sideEffect == ToolSideEffect.Write }.map { it.name }.toSet()
@@ -229,20 +239,20 @@ class AssistantCoordinator(
         val status = _aiStatus.value
         val settings = prefs.aiConnectionValue()
         if (!status.enabled) {
-            _lastError.value = "AI 助手已关闭：请到 设置 → AI 助手 开启。"
+            _lastError.value = stringRes(R.string.assistant_err_disabled)
             return
         }
         if (!settings.isComplete) {
-            _lastError.value = "模型接口未配置完整：请到 设置 → AI 助手 填写接口地址/模型。"
+            _lastError.value = stringRes(R.string.assistant_err_config_incomplete)
             return
         }
 
         // ---- 首次外发确认（允许一次 / 允许并记住 / 取消）----
         if (!prefs.aiConsentGivenValue()) {
-            val choice = requestConsent(ConsentRequest(modelName = settings.model, detail = "首次对话会把本次内容发送到模型服务商处理。"))
+            val choice = requestConsent(ConsentRequest(modelName = settings.model, detail = stringRes(R.string.assistant_consent_detail)))
             when (choice) {
                 ConsentChoice.Cancel -> {
-                    _lastError.value = "未获得发送许可，本次已取消。"
+                    _lastError.value = stringRes(R.string.assistant_err_no_permission)
                     return
                 }
                 ConsentChoice.AllowAndRemember -> prefs.setAiConsentGiven(true)
@@ -297,7 +307,7 @@ class AssistantCoordinator(
         } catch (e: AiProviderException) {
             _lastError.value = describeProviderFailure(e)
         } catch (e: Exception) {
-            _lastError.value = e.message ?: "AI 请求失败"
+            _lastError.value = e.message ?: stringRes(R.string.assistant_err_request_failed)
         } finally {
             if (currentRunId == runId) {
                 currentRunId = null
@@ -336,7 +346,7 @@ class AssistantCoordinator(
                     phase = AssistantRunPhase.Working,
                     liveItems = current.liveItems + AssistantLiveItem.ToolStatus(
                         toolName = event.call.name,
-                        label = AssistantToolHost.toolLabel(event.call.name),
+                        label = toolLabel(event.call.name),
                         state = AssistantLiveItem.ToolStatus.State.Running,
                     ),
                 )
@@ -366,7 +376,7 @@ class AssistantCoordinator(
             AssistantActionRecord(
                 id = UUID.randomUUID().toString(),
                 operation = call.name,
-                summary = AssistantToolHost.toolLabel(call.name),
+                summary = toolLabel(call.name),
                 createdAtMillis = System.currentTimeMillis(),
                 reversible = call.name in AssistantToolHost.INVERSE_TOOL,
                 argumentsJson = call.rawArguments,
@@ -442,7 +452,7 @@ class AssistantCoordinator(
                 }
                 pushActiveMessages()
             }.onFailure { e ->
-                _lastError.value = "撤销失败：${e.message ?: "未知错误"}"
+                _lastError.value = stringRes(R.string.assistant_undo_failed, e.message ?: stringRes(AuralisR.string.unknown_error))
             }
         }
     }
@@ -471,15 +481,15 @@ class AssistantCoordinator(
 
     private fun describeProviderFailure(e: AiProviderException): String {
         val label = when (e.kind) {
-            AiProviderFailureKind.Authentication -> "鉴权失败"
-            AiProviderFailureKind.ModelRouting, AiProviderFailureKind.UpstreamRouting -> "模型或上游路由问题"
-            AiProviderFailureKind.RateLimited -> "请求过于频繁，已被限流"
-            AiProviderFailureKind.IncompatibleRequest -> "请求与接口不兼容"
-            AiProviderFailureKind.ProviderUnavailable -> "AI 服务不可用或网络异常"
-            AiProviderFailureKind.Unknown -> "AI 请求失败"
+            AiProviderFailureKind.Authentication -> stringRes(R.string.assistant_provider_error_auth)
+            AiProviderFailureKind.ModelRouting, AiProviderFailureKind.UpstreamRouting -> stringRes(R.string.assistant_provider_error_routing)
+            AiProviderFailureKind.RateLimited -> stringRes(R.string.assistant_provider_error_rate_limited)
+            AiProviderFailureKind.IncompatibleRequest -> stringRes(R.string.assistant_provider_error_incompatible)
+            AiProviderFailureKind.ProviderUnavailable -> stringRes(R.string.assistant_provider_error_unavailable)
+            AiProviderFailureKind.Unknown -> stringRes(R.string.assistant_provider_error_unknown)
         }
-        val detail = e.message?.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""
-        return "$label$detail。请检查 设置 → AI 助手 中的接口地址、模型与 API Key。"
+        val detail = e.message?.takeIf { it.isNotBlank() }?.let { stringRes(R.string.assistant_error_detail_colon, it) } ?: ""
+        return stringRes(R.string.assistant_provider_error_fmt, label, detail)
     }
 
     companion object {

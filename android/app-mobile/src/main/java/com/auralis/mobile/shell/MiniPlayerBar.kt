@@ -27,14 +27,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.Track
 import com.auralis.core.image.AuralisArtwork
+import com.auralis.mobile.R
 
 /**
  * 迷你播放条（对齐 Apple MiniPlayerContent：56dp 胶囊，封面 + 曲目信息 + 上一首/
@@ -76,7 +79,7 @@ fun MiniPlayerBar(
             AuralisArtwork(
                 serverId = track.serverId,
                 artworkKey = track.artworkKey,
-                contentDescription = "封面",
+                contentDescription = stringResource(R.string.mobile_artwork_cover),
                 titleForFallback = track.title,
                 targetSizeDp = 40,
                 modifier = Modifier.size(40.dp),
@@ -108,7 +111,7 @@ fun MiniPlayerBar(
         IconButton(onClick = onPrevious, enabled = canGoPrevious) {
             Icon(
                 Icons.Filled.SkipPrevious,
-                contentDescription = "上一首",
+                contentDescription = stringResource(AuralisR.string.previous),
                 tint = if (canGoPrevious) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f),
                 modifier = Modifier.size(22.dp),
             )
@@ -125,7 +128,7 @@ fun MiniPlayerBar(
             IconButton(onClick = onTogglePlayPause) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "暂停" else "播放",
+                    contentDescription = if (isPlaying) stringResource(AuralisR.string.pause) else stringResource(AuralisR.string.play),
                     tint = colors.primaryText,
                     modifier = Modifier.size(26.dp),
                 )
@@ -134,7 +137,7 @@ fun MiniPlayerBar(
         IconButton(onClick = onNext, enabled = canGoNext) {
             Icon(
                 Icons.Filled.SkipNext,
-                contentDescription = "下一首",
+                contentDescription = stringResource(AuralisR.string.next),
                 tint = if (canGoNext) colors.primaryText else colors.secondaryText.copy(alpha = 0.35f),
                 modifier = Modifier.size(22.dp),
             )

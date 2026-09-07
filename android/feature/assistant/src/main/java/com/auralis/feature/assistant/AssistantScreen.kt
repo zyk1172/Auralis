@@ -39,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisSpacing
@@ -115,7 +116,7 @@ fun AssistantScreen(
                     Icon(Icons.Filled.Warning, contentDescription = null, tint = colors.warning, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(AuralisSpacing.small))
                     Text(
-                        if (aiStatus.enabled) "未配置模型接口" else "AI 助手已关闭",
+                        if (aiStatus.enabled) stringResource(R.string.assistant_not_configured) else stringResource(R.string.assistant_disabled),
                         style = MaterialTheme.typography.titleMedium,
                         color = colors.primaryText,
                         fontWeight = FontWeight.Medium,
@@ -124,14 +125,14 @@ fun AssistantScreen(
                 }
                 if (!aiStatus.isLive) {
                     IconButton(onClick = onOpenAiSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "配置", tint = colors.primaryText)
+                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.assistant_configure), tint = colors.primaryText)
                     }
                 }
                 IconButton(onClick = onOpenSearch) {
-                    Icon(Icons.Filled.Search, contentDescription = "搜索音乐库", tint = colors.primaryText)
+                    Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.assistant_search_library), tint = colors.primaryText)
                 }
                 IconButton(onClick = { sessionsOpen = true }) {
-                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = "会话列表", tint = colors.primaryText)
+                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.assistant_sessions), tint = colors.primaryText)
                 }
             }
 
@@ -172,17 +173,17 @@ fun AssistantScreen(
                 if (run.isRunning) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            "运行中 · ${run.phase.displayText}",
+                            stringResource(R.string.assistant_running_with_phase, stringResource(run.phase.labelRes)),
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.secondaryText,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = { coordinator.stop() }) { Text("停止") }
+                        TextButton(onClick = { coordinator.stop() }) { Text(stringResource(R.string.assistant_stop)) }
                     }
                 }
                 if (!aiStatus.isLive) {
                     Text(
-                        if (aiStatus.enabled) "请先到「设置 → AI 助手」配置模型接口，开启后即可对话。搜索音乐库不受影响。" else "AI 助手已关闭：到「设置 → AI 助手」开启。",
+                        if (aiStatus.enabled) stringResource(R.string.assistant_need_config_guide) else stringResource(R.string.assistant_disabled_guide),
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.secondaryText,
                         modifier = Modifier.padding(bottom = AuralisSpacing.small),
@@ -192,7 +193,7 @@ fun AssistantScreen(
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
-                        placeholder = { Text("问点什么，或让我播放/收藏/管理歌单…") },
+                        placeholder = { Text(stringResource(R.string.assistant_input_placeholder)) },
                         modifier = Modifier.weight(1f),
                         minLines = 1,
                         maxLines = 4,
@@ -201,7 +202,7 @@ fun AssistantScreen(
                     Spacer(Modifier.width(AuralisSpacing.small))
                     if (run.isRunning) {
                         IconButton(onClick = { coordinator.stop() }) {
-                            Icon(Icons.Filled.Stop, contentDescription = "停止", tint = colors.error, modifier = Modifier.size(28.dp))
+                            Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.assistant_stop), tint = colors.error, modifier = Modifier.size(28.dp))
                         }
                     } else {
                         IconButton(
@@ -213,7 +214,7 @@ fun AssistantScreen(
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,
-                                contentDescription = "发送",
+                                contentDescription = stringResource(R.string.assistant_send),
                                 tint = if (canSend) colors.accent else colors.secondaryText.copy(alpha = 0.4f),
                                 modifier = Modifier.size(28.dp),
                             )
@@ -271,18 +272,13 @@ private fun EmptyState(isLive: Boolean, modifier: Modifier = Modifier) {
     val colors = LocalAuralisTheme.current.colors
     Column(modifier = modifier.fillMaxWidth().padding(top = AuralisSpacing.huge)) {
         Text(
-            "AI 助手",
+            stringResource(R.string.assistant_empty_title),
             style = MaterialTheme.typography.titleLarge,
             color = colors.primaryText,
         )
         Spacer(Modifier.height(AuralisSpacing.small))
         Text(
-            if (isLive) {
-                "我可以帮你搜索音乐库、播放歌曲/专辑/歌单、收藏与评分、管理歌单。" +
-                    "首次发送内容前会先请你确认；写操作会说明后执行，删除类操作需逐次批准。"
-            } else {
-                "配置模型接口后即可对话。搜索音乐库与本地播放不依赖 AI，随时可用。"
-            },
+            if (isLive) stringResource(R.string.assistant_empty_live_hint) else stringResource(R.string.assistant_empty_offline_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.secondaryText,
         )

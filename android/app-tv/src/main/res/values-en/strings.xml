@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Auralis TV</string>
+
+    <!-- ============ Top-level sections (top-bar navigation) ============ -->
+    <string name="tv_home">Home</string>
+    <string name="tv_library">Library</string>
+    <string name="tv_search">Search</string>
+    <string name="tv_settings">Settings</string>
+
+    <!-- ============ Now-playing strip / Toast ============ -->
+    <string name="tv_artwork_cover">Cover art</string>
+    <string name="tv_buffering">Buffering…</string>
+    <string name="tv_playback_timeout">Playback service failed to start. Please try again.</string>
+</resources>

@@ -27,12 +27,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.mobile.R
 
 /**
  * 一级图标（对齐 Apple AppSection.symbol）：
@@ -76,7 +78,7 @@ fun BottomDock(
                 )
             } else {
                 DockItem(
-                    label = section.title,
+                    label = stringResource(section.labelRes),
                     icon = section.symbol(),
                     selected = selected == section,
                     onClick = { onSelect(section) },
@@ -138,7 +140,7 @@ private fun AssistantDockButton(
         ) {
             Icon(
                 Icons.Filled.AutoAwesome,
-                contentDescription = "AI 助手",
+                contentDescription = stringResource(R.string.mobile_ai_assistant),
                 tint = tint,
                 modifier = Modifier.size(22.dp),
             )

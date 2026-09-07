@@ -27,11 +27,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -46,15 +48,15 @@ internal fun ConsentDialog(
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("允许发送以下内容到「${request.modelName}」？") },
+        title = { Text(stringResource(R.string.assistant_consent_title, request.modelName)) },
         text = { Text(request.detail) },
         confirmButton = {
-            TextButton(onClick = onAllowAndRemember) { Text("允许并记住") }
+            TextButton(onClick = onAllowAndRemember) { Text(stringResource(R.string.assistant_allow_and_remember)) }
         },
         dismissButton = {
             Row {
-                TextButton(onClick = onCancel) { Text("取消") }
-                TextButton(onClick = onAllowOnce) { Text("允许一次") }
+                TextButton(onClick = onCancel) { Text(stringResource(AuralisR.string.cancel)) }
+                TextButton(onClick = onAllowOnce) { Text(stringResource(R.string.assistant_allow_once)) }
             }
         },
     )
@@ -74,11 +76,14 @@ internal fun OperationConfirmDialog(
         text = { Text(request.detail) },
         confirmButton = {
             TextButton(onClick = onApprove) {
-                Text(if (request.destructive) "批准并执行" else "执行", color = colors.error)
+                Text(
+                    if (request.destructive) stringResource(R.string.assistant_approve_and_run) else stringResource(R.string.assistant_execute),
+                    color = colors.error,
+                )
             }
         },
         dismissButton = {
-            TextButton(onClick = onReject) { Text("取消") }
+            TextButton(onClick = onReject) { Text(stringResource(AuralisR.string.cancel)) }
         },
     )
 }
@@ -112,20 +117,20 @@ internal fun SessionsDialog(
         ) {
             Column(modifier = Modifier.padding(AuralisSpacing.medium)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("会话", style = MaterialTheme.typography.titleLarge, color = colors.primaryText, modifier = Modifier.weight(1f))
-                    TextButton(onClick = onOpenActionLog) { Text("操作日志") }
+                    Text(stringResource(R.string.assistant_sessions), style = MaterialTheme.typography.titleLarge, color = colors.primaryText, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onOpenActionLog) { Text(stringResource(R.string.assistant_action_log)) }
                     Spacer(Modifier.width(AuralisSpacing.small))
-                    TextButton(onClick = onNew) { Text("新建") }
+                    TextButton(onClick = onNew) { Text(stringResource(R.string.assistant_new)) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("显示已归档", style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText, modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.assistant_show_archived), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText, modifier = Modifier.weight(1f))
                     Switch(checked = showArchived, onCheckedChange = { onToggleShowArchived() })
                 }
                 Spacer(Modifier.height(AuralisSpacing.medium))
                 HorizontalDivider(color = colors.separator)
                 if (sessions.isEmpty()) {
                     Text(
-                        "还没有会话。点「新建」或直接在输入框提问。",
+                        stringResource(R.string.assistant_no_sessions_yet),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.secondaryText,
                         modifier = Modifier.padding(vertical = AuralisSpacing.large),
@@ -140,27 +145,25 @@ internal fun SessionsDialog(
                                         .fillMaxWidth()
                                         .padding(vertical = AuralisSpacing.small),
                                 ) {
+                                    val sessionTitle = session.title.ifBlank { stringResource(R.string.assistant_new_session) }
                                     Text(
-                                        text = buildString {
-                                            append(session.displayTitle)
-                                            if (session.isPinned) append(" 📌")
-                                        },
+                                        text = if (session.isPinned) "$sessionTitle 📌" else sessionTitle,
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = colors.primaryText,
                                         maxLines = 1,
                                         modifier = Modifier.weight(1f).clickable { onSelect(session.id) },
                                     )
-                                    TextButton(onClick = { onTogglePin(session.id) }) { Text(if (session.isPinned) "取消置顶" else "置顶") }
+                                    TextButton(onClick = { onTogglePin(session.id) }) { Text(if (session.isPinned) stringResource(R.string.assistant_unpin) else stringResource(R.string.assistant_pin)) }
                                     TextButton(onClick = {
                                         renamingId = session.id
                                         renameText = session.title
-                                    }) { Text("改名") }
+                                    }) { Text(stringResource(R.string.assistant_rename)) }
                                     if (session.messages.isNotEmpty()) {
-                                        TextButton(onClick = { onClearMessages(session.id) }) { Text("清空") }
+                                        TextButton(onClick = { onClearMessages(session.id) }) { Text(stringResource(R.string.assistant_clear)) }
                                     }
                                     TextButton(onClick = {
                                         confirmingDeleteId = session.id
-                                    }) { Text("删除", color = colors.error) }
+                                    }) { Text(stringResource(AuralisR.string.delete), color = colors.error) }
                                 }
                                 HorizontalDivider(color = colors.separator.copy(alpha = 0.5f))
                             }
@@ -174,7 +177,7 @@ internal fun SessionsDialog(
     renamingId?.let { id ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { renamingId = null },
-            title = { Text("重命名会话") },
+            title = { Text(stringResource(R.string.assistant_rename_session)) },
             text = {
                 androidx.compose.material3.OutlinedTextField(
                     value = renameText,
@@ -186,10 +189,10 @@ internal fun SessionsDialog(
                 TextButton(onClick = {
                     onRename(id, renameText)
                     renamingId = null
-                }) { Text("保存") }
+                }) { Text(stringResource(AuralisR.string.save)) }
             },
             dismissButton = {
-                TextButton(onClick = { renamingId = null }) { Text("取消") }
+                TextButton(onClick = { renamingId = null }) { Text(stringResource(AuralisR.string.cancel)) }
             },
         )
     }
@@ -198,16 +201,19 @@ internal fun SessionsDialog(
         val session = sessions.firstOrNull { it.id == id }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmingDeleteId = null },
-            title = { Text("删除会话？") },
-            text = { Text("将永久删除「${session?.displayTitle ?: ""}」及其全部消息，此操作不可恢复。") },
+            title = { Text(stringResource(R.string.assistant_delete_session)) },
+            text = {
+                val titleText = session?.title?.ifBlank { stringResource(R.string.assistant_new_session) } ?: ""
+                Text(stringResource(R.string.assistant_delete_session_body, titleText))
+            },
             confirmButton = {
                 TextButton(onClick = {
                     onDelete(id)
                     confirmingDeleteId = null
-                }) { Text("删除", color = colors.error) }
+                }) { Text(stringResource(AuralisR.string.delete), color = colors.error) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingDeleteId = null }) { Text("取消") }
+                TextButton(onClick = { confirmingDeleteId = null }) { Text(stringResource(AuralisR.string.cancel)) }
             },
         )
     }
@@ -228,12 +234,12 @@ internal fun ActionLogDialog(
             modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
         ) {
             Column(modifier = Modifier.padding(AuralisSpacing.medium)) {
-                Text("操作日志", style = MaterialTheme.typography.titleLarge, color = colors.primaryText)
+                Text(stringResource(R.string.assistant_action_log), style = MaterialTheme.typography.titleLarge, color = colors.primaryText)
                 Spacer(Modifier.height(AuralisSpacing.medium))
                 HorizontalDivider(color = colors.separator)
                 if (records.isEmpty()) {
                     Text(
-                        "暂无记录。AI 执行写操作（播放/收藏/歌单等）后会记录在这里。",
+                        stringResource(R.string.assistant_action_log_empty),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.secondaryText,
                         modifier = Modifier.padding(vertical = AuralisSpacing.large),
@@ -254,7 +260,7 @@ internal fun ActionLogDialog(
                                     )
                                 }
                                 if (record.isReversible) {
-                                    OutlinedButton(onClick = { onUndo(record) }) { Text("撤销") }
+                                    OutlinedButton(onClick = { onUndo(record) }) { Text(stringResource(R.string.assistant_undo)) }
                                 }
                             }
                             HorizontalDivider(color = colors.separator.copy(alpha = 0.5f))

@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,6 +51,7 @@ import com.auralis.core.designsystem.AuralisChrome
 import com.auralis.core.designsystem.AuralisRadius
 import com.auralis.core.designsystem.AuralisSpacing
 import com.auralis.core.designsystem.LocalAuralisTheme
+import com.auralis.core.designsystem.R as AuralisR
 import com.auralis.core.domain.BrowseDestination
 import com.auralis.core.domain.PlaybackState
 import com.auralis.core.domain.QueueEntry
@@ -65,6 +67,7 @@ import com.auralis.feature.library.BrowseDetailScreen
 import com.auralis.feature.library.LibraryScreen
 import com.auralis.feature.player.NowPlayingScreen
 import com.auralis.feature.search.SearchScreen
+import com.auralis.tv.R
 import kotlinx.coroutines.launch
 
 /**
@@ -124,7 +127,7 @@ fun TvShell(
             .onFailure {
                 android.widget.Toast.makeText(
                     context,
-                    "播放服务启动超时，请重试",
+                    context.getString(R.string.tv_playback_timeout),
                     android.widget.Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -321,7 +324,7 @@ private fun TvTopBar(
                             modifier = Modifier.size(22.dp),
                         )
                         Text(
-                            text = entry.title,
+                            text = stringResource(entry.labelRes),
                             style = MaterialTheme.typography.labelLarge,
                             color = if (selected) colors.primaryText else colors.secondaryText,
                         )
@@ -339,7 +342,7 @@ private fun TvTopBar(
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Filled.Settings,
-                    contentDescription = "设置",
+                    contentDescription = stringResource(R.string.tv_settings),
                     tint = colors.primaryText,
                     modifier = Modifier.size(28.dp),
                 )
@@ -385,7 +388,7 @@ private fun TvNowPlayingStrip(
             AuralisArtwork(
                 serverId = track.serverId,
                 artworkKey = track.artworkKey,
-                contentDescription = "封面",
+                contentDescription = stringResource(R.string.tv_artwork_cover),
                 titleForFallback = track.title,
                 targetSizeDp = 48,
                 shape = RoundedCornerShape(AuralisRadius.small),
@@ -411,7 +414,7 @@ private fun TvNowPlayingStrip(
         }
         Spacer(Modifier.width(AuralisSpacing.small))
         TvTransportButton(
-            icon = { tint -> Icon(Icons.Filled.SkipPrevious, contentDescription = "上一首", tint = tint, modifier = Modifier.size(30.dp)) },
+            icon = { tint -> Icon(Icons.Filled.SkipPrevious, contentDescription = stringResource(AuralisR.string.previous), tint = tint, modifier = Modifier.size(30.dp)) },
             enabled = canGoPrevious,
             onClick = onPrevious,
         )
@@ -419,7 +422,7 @@ private fun TvNowPlayingStrip(
             icon = { tint ->
                 Icon(
                     imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "暂停" else "播放",
+                    contentDescription = if (isPlaying) stringResource(AuralisR.string.pause) else stringResource(AuralisR.string.play),
                     tint = tint,
                     modifier = Modifier.size(36.dp),
                 )
@@ -429,14 +432,14 @@ private fun TvNowPlayingStrip(
             onClick = onTogglePlayPause,
         )
         TvTransportButton(
-            icon = { tint -> Icon(Icons.Filled.SkipNext, contentDescription = "下一首", tint = tint, modifier = Modifier.size(30.dp)) },
+            icon = { tint -> Icon(Icons.Filled.SkipNext, contentDescription = stringResource(AuralisR.string.next), tint = tint, modifier = Modifier.size(30.dp)) },
             enabled = canGoNext,
             onClick = onNext,
         )
         if (isBuffering) {
             Spacer(Modifier.width(AuralisSpacing.small))
             Text(
-                text = "缓冲中",
+                text = stringResource(R.string.tv_buffering),
                 style = MaterialTheme.typography.labelMedium,
                 color = colors.secondaryText,
             )

@@ -50,6 +50,7 @@ import com.auralis.feature.library.LibraryScreen
 import com.auralis.feature.player.NowPlayingScreen
 import com.auralis.feature.player.PlayerTrackAction
 import com.auralis.feature.search.SearchScreen
+import com.auralis.mobile.R
 import kotlinx.coroutines.launch
 
 /**
@@ -115,7 +116,7 @@ fun MobileShell(
             .onFailure {
                 android.widget.Toast.makeText(
                     context,
-                    "播放服务启动超时，请重试",
+                    context.getString(R.string.mobile_playback_timeout),
                     android.widget.Toast.LENGTH_SHORT,
                 ).show()
             }

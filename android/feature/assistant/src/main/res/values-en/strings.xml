@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ============ Common buttons / dialogs (used within assistant module) ============ -->
+    <string name="assistant_copy">Copy</string>
+    <string name="assistant_configure">Configure</string>
+    <string name="assistant_search_library">Search music library</string>
+    <string name="assistant_sessions">Sessions</string>
+    <string name="assistant_action_log">Action log</string>
+    <string name="assistant_new">New</string>
+    <string name="assistant_show_archived">Show archived</string>
+    <string name="assistant_no_sessions_yet">No sessions yet. Tap “New” or just type a message below.</string>
+    <string name="assistant_pin">Pin</string>
+    <string name="assistant_unpin">Unpin</string>
+    <string name="assistant_rename">Rename</string>
+    <string name="assistant_clear">Clear</string>
+    <string name="assistant_rename_session">Rename session</string>
+    <string name="assistant_delete_session">Delete session?</string>
+    <string name="assistant_delete_session_body">“%1$s” and all of its messages will be permanently deleted. This cannot be undone.</string>
+    <string name="assistant_action_log_empty">No records yet. After the AI performs write operations (playback, favorites, playlists, etc.), they will be listed here.</string>
+    <string name="assistant_undo">Undo</string>
+    <string name="assistant_new_session">New chat</string>
+    <string name="assistant_allow_once">Allow once</string>
+    <string name="assistant_allow_and_remember">Allow and remember</string>
+    <string name="assistant_consent_title">Allow sending the following to “%1$s”?</string>
+    <string name="assistant_consent_detail">On your first conversation, the content will be sent to the model provider for processing.</string>
+    <string name="assistant_approve_and_run">Approve and run</string>
+    <string name="assistant_execute">Run</string>
+
+    <!-- ============ Header / input / empty state ============ -->
+    <string name="assistant_not_configured">Model interface not configured</string>
+    <string name="assistant_disabled">AI Assistant is off</string>
+    <string name="assistant_running_with_phase">Running · %1$s</string>
+    <string name="assistant_stop">Stop</string>
+    <string name="assistant_need_config_guide">Configure the model interface under “Settings → AI Assistant” first. Once enabled, you can chat. Searching the music library is not affected.</string>
+    <string name="assistant_disabled_guide">AI Assistant is off: enable it under “Settings → AI Assistant”.</string>
+    <string name="assistant_input_placeholder">Ask me something, or let me play, favorite, or manage playlists…</string>
+    <string name="assistant_send">Send</string>
+    <string name="assistant_empty_title">AI Assistant</string>
+    <string name="assistant_empty_live_hint">I can search your music library, play songs/albums/playlists, favorite and rate tracks, and manage playlists. Before sending content the first time, I will ask for your consent; write operations are explained before they run, and destructive operations require approval each time.</string>
+    <string name="assistant_empty_offline_hint">Once the model interface is configured, you can chat. Searching the music library and local playback do not depend on AI and are always available.</string>
+
+    <!-- ============ Run phases (enum labelRes) ============ -->
+    <string name="assistant_phase_connecting">Connecting to model…</string>
+    <string name="assistant_phase_thinking">Thinking…</string>
+    <string name="assistant_phase_working">Working…</string>
+    <string name="assistant_phase_responding">Replying…</string>
+
+    <!-- ============ Errors / guidance messages (visible error row / dialogs) ============ -->
+    <string name="assistant_err_disabled">AI Assistant is off: go to Settings → AI Assistant to enable it.</string>
+    <string name="assistant_err_config_incomplete">Model interface is not fully configured: fill in the API address/model under Settings → AI Assistant.</string>
+    <string name="assistant_err_no_permission">No permission to send; this attempt was cancelled.</string>
+    <string name="assistant_err_request_failed">AI request failed</string>
+    <string name="assistant_undo_failed">Undo failed: %1$s</string>
+    <string name="assistant_provider_error_auth">Authentication failed</string>
+    <string name="assistant_provider_error_routing">Model or upstream routing issue</string>
+    <string name="assistant_provider_error_rate_limited">Too many requests; rate limited</string>
+    <string name="assistant_provider_error_incompatible">Request is incompatible with the interface</string>
+    <string name="assistant_provider_error_unavailable">AI service unavailable or network error</string>
+    <string name="assistant_provider_error_unknown">AI request failed</string>
+    <string name="assistant_error_detail_colon">: %1$s</string>
+    <string name="assistant_provider_error_fmt">%1$s%2$s. Check the API address, model, and API key under Settings → AI Assistant.</string>
+
+    <!-- ============ Tool display names (UI tool row label / action log summary) ============ -->
+    <string name="assistant_tool_play_track">Play track</string>
+    <string name="assistant_tool_play_album">Play album</string>
+    <string name="assistant_tool_play_playlist">Play playlist</string>
+    <string name="assistant_tool_add_to_queue">Add to queue</string>
+    <string name="assistant_tool_play_next">Play next</string>
+    <string name="assistant_tool_pause">Pause</string>
+    <string name="assistant_tool_resume">Resume</string>
+    <string name="assistant_tool_seek">Seek</string>
+    <string name="assistant_tool_next">Next track</string>
+    <string name="assistant_tool_previous">Previous track</string>
+    <string name="assistant_tool_like_track">Favorite track</string>
+    <string name="assistant_tool_unlike_track">Remove favorite</string>
+    <string name="assistant_tool_favorite_album">Favorite album</string>
+    <string name="assistant_tool_unfavorite_album">Remove album favorite</string>
+    <string name="assistant_tool_set_rating">Rate</string>
+    <string name="assistant_tool_clear_rating">Clear rating</string>
+    <string name="assistant_tool_create_playlist">Create playlist</string>
+    <string name="assistant_tool_rename_playlist">Rename playlist</string>
+    <string name="assistant_tool_add_to_playlist">Add to playlist</string>
+    <string name="assistant_tool_remove_from_playlist">Remove from playlist</string>
+    <string name="assistant_tool_delete_playlist">Delete playlist</string>
+    <string name="assistant_tool_remove_queue_item">Remove queue item</string>
+    <string name="assistant_tool_save_queue_as_playlist">Save queue as playlist</string>
+    <string name="assistant_tool_find_similar">Find similar songs</string>
+    <string name="assistant_tool_replace_queue">Replace playback queue</string>
+    <string name="assistant_tool_online_search">Search online</string>
+    <string name="assistant_tool_search_tracks">Search tracks</string>
+    <string name="assistant_tool_search_albums">Search albums</string>
+    <string name="assistant_tool_search_artists">Search artists</string>
+    <string name="assistant_tool_get_lyrics">Get lyrics</string>
+    <string name="assistant_tool_view_queue">View queue</string>
+</resources>

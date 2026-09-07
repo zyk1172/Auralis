@@ -1,5 +1,6 @@
 package com.auralis.feature.assistant
 
+import androidx.annotation.StringRes
 import kotlinx.serialization.Serializable
 
 // ---------------------------------------------------------------------------
@@ -16,7 +17,8 @@ data class AssistantSession(
     val isPinned: Boolean = false,
     val isArchived: Boolean = false,
 ) {
-    val displayTitle: String get() = title.ifBlank { "新会话" }
+    // 展示标题（可能为空）：空标题的本地化占位（如「新会话」）由 UI 层负责。
+    val displayTitle: String get() = title
 }
 
 /** 落盘消息 = 角色 + 纯文本。reasoning/toolProgress/error 等 transient 内容不写盘（对齐 Swift）。 */
@@ -39,11 +41,11 @@ internal data class AssistantStoreFile(
 // 运行呈现状态（对齐 Swift AssistantRunPresentationState；transient 仅内存）
 // ---------------------------------------------------------------------------
 
-enum class AssistantRunPhase(val displayText: String) {
-    Connecting("正在连接模型…"),
-    Thinking("思考中…"),
-    Working("执行操作…"),
-    Responding("正在回复…"),
+enum class AssistantRunPhase(@StringRes val labelRes: Int) {
+    Connecting(R.string.assistant_phase_connecting),
+    Thinking(R.string.assistant_phase_thinking),
+    Working(R.string.assistant_phase_working),
+    Responding(R.string.assistant_phase_responding),
 }
 
 /** 运行中会瞬态展示的一条内容。 */

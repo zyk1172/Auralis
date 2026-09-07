@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Auralis</string>
+
+    <!-- ============ Top-level sections (bottom dock / section title) ============ -->
+    <string name="mobile_home">Home</string>
+    <string name="mobile_library">Library</string>
+    <string name="mobile_ai_assistant">AI Assistant</string>
+    <string name="mobile_settings">Settings</string>
+
+    <!-- ============ Mini Player / Toast ============ -->
+    <string name="mobile_artwork_cover">Cover art</string>
+    <string name="mobile_playback_timeout">Playback service failed to start. Please try again.</string>
+
+    <!-- ============ Library placeholder page (S2/S3 leftover, unwired) ============ -->
+    <string name="mobile_browse_full_list_coming">The full “%1$s” list will be wired up in the Library milestone (S4).</string>
+    <string name="mobile_library_stage_coming">The music library (songs/albums/artists/playlists) will be wired up in the Library milestone.</string>
+    <string name="mobile_dest_artist">Artists</string>
+    <string name="mobile_dest_most_played">Most Played</string>
+    <string name="mobile_dest_genre">Genre: %1$s</string>
+    <string name="mobile_dest_recommendation">Recommendation</string>
+    <string name="mobile_dest_random">Random</string>
+    <string name="mobile_dest_recently_played">Recently Played</string>
+    <string name="mobile_dest_recently_added">Recently Added</string>
+    <string name="mobile_dest_long_unplayed">Long Unplayed</string>
+    <string name="mobile_dest_favorite_random">Favorite Shuffle</string>
+    <string name="mobile_dest_never_played">Never Played</string>
+    <string name="mobile_dest_top_artists">Top Artists</string>
+    <string name="mobile_dest_top_albums">Top Albums</string>
+    <string name="mobile_dest_downloads">Downloads</string>
+</resources>

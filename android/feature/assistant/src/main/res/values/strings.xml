@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ============ 通用按钮 / 弹窗（assistant 模块内使用） ============ -->
+    <string name="assistant_copy">复制</string>
+    <string name="assistant_configure">配置</string>
+    <string name="assistant_search_library">搜索音乐库</string>
+    <string name="assistant_sessions">会话</string>
+    <string name="assistant_action_log">操作日志</string>
+    <string name="assistant_new">新建</string>
+    <string name="assistant_show_archived">显示已归档</string>
+    <string name="assistant_no_sessions_yet">还没有会话。点「新建」或直接在输入框提问。</string>
+    <string name="assistant_pin">置顶</string>
+    <string name="assistant_unpin">取消置顶</string>
+    <string name="assistant_rename">改名</string>
+    <string name="assistant_clear">清空</string>
+    <string name="assistant_rename_session">重命名会话</string>
+    <string name="assistant_delete_session">删除会话？</string>
+    <string name="assistant_delete_session_body">将永久删除「%1$s」及其全部消息，此操作不可恢复。</string>
+    <string name="assistant_action_log_empty">暂无记录。AI 执行写操作（播放/收藏/歌单等）后会记录在这里。</string>
+    <string name="assistant_undo">撤销</string>
+    <string name="assistant_new_session">新会话</string>
+    <string name="assistant_allow_once">允许一次</string>
+    <string name="assistant_allow_and_remember">允许并记住</string>
+    <string name="assistant_consent_title">允许发送以下内容到「%1$s」？</string>
+    <string name="assistant_consent_detail">首次对话会把本次内容发送到模型服务商处理。</string>
+    <string name="assistant_approve_and_run">批准并执行</string>
+    <string name="assistant_execute">执行</string>
+
+    <!-- ============ 页头 / 输入区 / 空态 ============ -->
+    <string name="assistant_not_configured">未配置模型接口</string>
+    <string name="assistant_disabled">AI 助手已关闭</string>
+    <string name="assistant_running_with_phase">运行中 · %1$s</string>
+    <string name="assistant_stop">停止</string>
+    <string name="assistant_need_config_guide">请先到「设置 → AI 助手」配置模型接口，开启后即可对话。搜索音乐库不受影响。</string>
+    <string name="assistant_disabled_guide">AI 助手已关闭：到「设置 → AI 助手」开启。</string>
+    <string name="assistant_input_placeholder">问点什么，或让我播放/收藏/管理歌单…</string>
+    <string name="assistant_send">发送</string>
+    <string name="assistant_empty_title">AI 助手</string>
+    <string name="assistant_empty_live_hint">我可以帮你搜索音乐库、播放歌曲/专辑/歌单、收藏与评分、管理歌单。首次发送内容前会先请你确认；写操作会说明后执行，删除类操作需逐次批准。</string>
+    <string name="assistant_empty_offline_hint">配置模型接口后即可对话。搜索音乐库与本地播放不依赖 AI，随时可用。</string>
+
+    <!-- ============ 运行阶段（枚举 labelRes） ============ -->
+    <string name="assistant_phase_connecting">正在连接模型…</string>
+    <string name="assistant_phase_thinking">思考中…</string>
+    <string name="assistant_phase_working">执行操作…</string>
+    <string name="assistant_phase_responding">正在回复…</string>
+
+    <!-- ============ 错误 / 引导消息（UI 红字 / 弹窗可见） ============ -->
+    <string name="assistant_err_disabled">AI 助手已关闭：请到 设置 → AI 助手 开启。</string>
+    <string name="assistant_err_config_incomplete">模型接口未配置完整：请到 设置 → AI 助手 填写接口地址/模型。</string>
+    <string name="assistant_err_no_permission">未获得发送许可，本次已取消。</string>
+    <string name="assistant_err_request_failed">AI 请求失败</string>
+    <string name="assistant_undo_failed">撤销失败：%1$s</string>
+    <string name="assistant_provider_error_auth">鉴权失败</string>
+    <string name="assistant_provider_error_routing">模型或上游路由问题</string>
+    <string name="assistant_provider_error_rate_limited">请求过于频繁，已被限流</string>
+    <string name="assistant_provider_error_incompatible">请求与接口不兼容</string>
+    <string name="assistant_provider_error_unavailable">AI 服务不可用或网络异常</string>
+    <string name="assistant_provider_error_unknown">AI 请求失败</string>
+    <string name="assistant_error_detail_colon">：%1$s</string>
+    <string name="assistant_provider_error_fmt">%1$s%2$s。请检查 设置 → AI 助手 中的接口地址、模型与 API Key。</string>
+
+    <!-- ============ 工具显示名（UI 工具行标签 / 操作日志摘要） ============ -->
+    <string name="assistant_tool_play_track">播放歌曲</string>
+    <string name="assistant_tool_play_album">播放专辑</string>
+    <string name="assistant_tool_play_playlist">播放歌单</string>
+    <string name="assistant_tool_add_to_queue">加入队列</string>
+    <string name="assistant_tool_play_next">下一首播放</string>
+    <string name="assistant_tool_pause">暂停</string>
+    <string name="assistant_tool_resume">继续播放</string>
+    <string name="assistant_tool_seek">跳转进度</string>
+    <string name="assistant_tool_next">下一首</string>
+    <string name="assistant_tool_previous">上一首</string>
+    <string name="assistant_tool_like_track">收藏歌曲</string>
+    <string name="assistant_tool_unlike_track">取消收藏</string>
+    <string name="assistant_tool_favorite_album">收藏专辑</string>
+    <string name="assistant_tool_unfavorite_album">取消收藏专辑</string>
+    <string name="assistant_tool_set_rating">评分</string>
+    <string name="assistant_tool_clear_rating">清除评分</string>
+    <string name="assistant_tool_create_playlist">新建歌单</string>
+    <string name="assistant_tool_rename_playlist">重命名歌单</string>
+    <string name="assistant_tool_add_to_playlist">加入歌单</string>
+    <string name="assistant_tool_remove_from_playlist">移除歌单歌曲</string>
+    <string name="assistant_tool_delete_playlist">删除歌单</string>
+    <string name="assistant_tool_remove_queue_item">移除队列条目</string>
+    <string name="assistant_tool_save_queue_as_playlist">队列存为歌单</string>
+    <string name="assistant_tool_find_similar">查找相似歌曲</string>
+    <string name="assistant_tool_replace_queue">替换播放队列</string>
+    <string name="assistant_tool_online_search">在线搜索</string>
+    <string name="assistant_tool_search_tracks">搜索歌曲</string>
+    <string name="assistant_tool_search_albums">搜索专辑</string>
+    <string name="assistant_tool_search_artists">搜索艺人</string>
+    <string name="assistant_tool_get_lyrics">获取歌词</string>
+    <string name="assistant_tool_view_queue">查看队列</string>
+</resources>

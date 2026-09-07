@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.auralis.core.designsystem.AuralisRadius
@@ -81,7 +82,7 @@ internal fun AssistantBubble(
             Spacer(Modifier.width(AuralisSpacing.small))
             Icon(
                 imageVector = Icons.Filled.ContentCopy,
-                contentDescription = "复制",
+                contentDescription = stringResource(R.string.assistant_copy),
                 tint = colors.secondaryText,
                 modifier = Modifier
                     .size(18.dp)
@@ -146,7 +147,7 @@ internal fun ToolStatusRow(item: AssistantLiveItem.ToolStatus, modifier: Modifie
 internal fun RunningStatusRow(phase: AssistantRunPhase, modifier: Modifier = Modifier) {
     val colors = LocalAuralisTheme.current.colors
     Text(
-        text = phase.displayText,
+        text = stringResource(phase.labelRes),
         style = MaterialTheme.typography.bodyMedium,
         color = colors.secondaryText,
         modifier = modifier

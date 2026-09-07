@@ -1,5 +1,6 @@
 package com.auralis.feature.assistant
 
+import androidx.annotation.StringRes
 import com.auralis.core.ai.AgentToolDescriptor
 import com.auralis.core.ai.AgentToolRegistry
 import com.auralis.core.ai.SideEffectAuthorizationContext
@@ -718,40 +719,41 @@ class AssistantToolHost(
             "unfavoriteAlbum" to "favoriteAlbum",
         )
 
-        /** 工具显示名（UI 工具行标签）。 */
-        fun toolLabel(name: String): String = when (name) {
-            "playTrack" -> "播放歌曲"
-            "playAlbum" -> "播放专辑"
-            "playPlaylist" -> "播放歌单"
-            "addToQueue" -> "加入队列"
-            "playNext" -> "下一首播放"
-            "pause" -> "暂停"
-            "resume" -> "继续播放"
-            "seek" -> "跳转进度"
-            "next" -> "下一首"
-            "previous" -> "上一首"
-            "likeTrack" -> "收藏歌曲"
-            "unlikeTrack" -> "取消收藏"
-            "favoriteAlbum" -> "收藏专辑"
-            "unfavoriteAlbum" -> "取消收藏专辑"
-            "setRating" -> "评分"
-            "clearRating" -> "清除评分"
-            "createPlaylist" -> "新建歌单"
-            "renamePlaylist" -> "重命名歌单"
-            "addTracksToPlaylist" -> "加入歌单"
-            "removeTracksFromPlaylist" -> "移除歌单歌曲"
-            "deletePlaylist" -> "删除歌单"
-            "queue_remove" -> "移除队列条目"
-            "queue_save_as_playlist" -> "队列存为歌单"
-            "library_get_similar_songs" -> "查找相似歌曲"
-            "queue_replace" -> "替换播放队列"
-            "server_search" -> "在线搜索"
-            "searchTracks" -> "搜索歌曲"
-            "searchAlbums" -> "搜索专辑"
-            "searchArtists" -> "搜索艺人"
-            "lyrics_get" -> "获取歌词"
-            "getCurrentQueue" -> "查看队列"
-            else -> name
+        /** 工具显示名（UI 工具行标签 / 操作日志摘要）；未知工具返回 null（调用方回退工具原名）。 */
+        @StringRes
+        fun toolLabelRes(name: String): Int? = when (name) {
+            "playTrack" -> R.string.assistant_tool_play_track
+            "playAlbum" -> R.string.assistant_tool_play_album
+            "playPlaylist" -> R.string.assistant_tool_play_playlist
+            "addToQueue" -> R.string.assistant_tool_add_to_queue
+            "playNext" -> R.string.assistant_tool_play_next
+            "pause" -> R.string.assistant_tool_pause
+            "resume" -> R.string.assistant_tool_resume
+            "seek" -> R.string.assistant_tool_seek
+            "next" -> R.string.assistant_tool_next
+            "previous" -> R.string.assistant_tool_previous
+            "likeTrack" -> R.string.assistant_tool_like_track
+            "unlikeTrack" -> R.string.assistant_tool_unlike_track
+            "favoriteAlbum" -> R.string.assistant_tool_favorite_album
+            "unfavoriteAlbum" -> R.string.assistant_tool_unfavorite_album
+            "setRating" -> R.string.assistant_tool_set_rating
+            "clearRating" -> R.string.assistant_tool_clear_rating
+            "createPlaylist" -> R.string.assistant_tool_create_playlist
+            "renamePlaylist" -> R.string.assistant_tool_rename_playlist
+            "addTracksToPlaylist" -> R.string.assistant_tool_add_to_playlist
+            "removeTracksFromPlaylist" -> R.string.assistant_tool_remove_from_playlist
+            "deletePlaylist" -> R.string.assistant_tool_delete_playlist
+            "queue_remove" -> R.string.assistant_tool_remove_queue_item
+            "queue_save_as_playlist" -> R.string.assistant_tool_save_queue_as_playlist
+            "library_get_similar_songs" -> R.string.assistant_tool_find_similar
+            "queue_replace" -> R.string.assistant_tool_replace_queue
+            "server_search" -> R.string.assistant_tool_online_search
+            "searchTracks" -> R.string.assistant_tool_search_tracks
+            "searchAlbums" -> R.string.assistant_tool_search_albums
+            "searchArtists" -> R.string.assistant_tool_search_artists
+            "lyrics_get" -> R.string.assistant_tool_get_lyrics
+            "getCurrentQueue" -> R.string.assistant_tool_view_queue
+            else -> null
         }
     }
 
