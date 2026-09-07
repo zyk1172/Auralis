@@ -72,11 +72,19 @@ suspend fun awaitPlaybackController(
 ): PlaybackController {
     if (!LocalPlaybackHost.available.value) {
         startService()
-        withTimeout(timeoutMs) {
-            LocalPlaybackHost.available.filter { it }.first()
-        }
+        awaitAvailableFlow(LocalPlaybackHost.available, timeoutMs)
     }
     return LocalPlaybackHost.controller()
+}
+
+/**
+ * 等待 [available] 变为 true（引擎就绪）。
+ * R3：拆出以便纯 JVM 单测覆盖「冷启动等待 → 就绪返回 / 超时抛异常」语义。
+ */
+internal suspend fun awaitAvailableFlow(available: StateFlow<Boolean>, timeoutMs: Long) {
+    withTimeout(timeoutMs) {
+        available.filter { it }.first()
+    }
 }
 
 /**

@@ -239,7 +239,7 @@ class AuralisPlaybackEngine(
     fun previous() {
         scope.launch {
             val position = player.currentPosition
-            if (position > PREVIOUS_RESTART_THRESHOLD_MS) {
+            if (PlaybackLogic.shouldRestartInsteadOfPrevious(position)) {
                 player.seekTo(0)
                 publishPlaybackState()
                 return@launch
@@ -282,7 +282,9 @@ class AuralisPlaybackEngine(
         val index = logicalIndexOf(entryId) ?: return
         val removedWasCurrent = index == currentLogical
         logicalQueue.removeAt(index)
-        if (index < currentLogical) currentLogical -= 1
+        if (!removedWasCurrent) {
+            currentLogical = PlaybackLogic.currentAfterRemove(index, currentLogical)
+        }
         if (logicalQueue.isEmpty()) {
             player.stop()
             player.clearMediaItems()
@@ -306,9 +308,7 @@ class AuralisPlaybackEngine(
         val entry = logicalQueue.removeAt(from)
         val target = toIndexLogical.coerceIn(0, logicalQueue.size)
         logicalQueue.add(target, entry)
-        if (from == currentLogical) currentLogical = target
-        else if (from < currentLogical && target >= currentLogical) currentLogical -= 1
-        else if (from > currentLogical && target <= currentLogical) currentLogical += 1
+        currentLogical = PlaybackLogic.currentAfterMove(from, target, currentLogical)
         refreshWindowPreservingPosition()
     }
 
@@ -576,30 +576,11 @@ class AuralisPlaybackEngine(
         }
     }
 
-    /** 用户主动 next / shuffle / 失败自动下一首。 */
+    /** 用户主动 next / shuffle / 失败自动下一首（目标决策见 [PlaybackLogic.nextTarget]）。 */
     private suspend fun advanceUser(force: Boolean = false) {
         val total = logicalQueue.size
         if (total == 0) return
-        val target = when (playMode) {
-            PlayMode.Shuffle -> {
-                val played = HashSet<Int>()
-                val candidates = (0 until total).filter { it != currentLogical && it !in played }
-                if (candidates.isEmpty()) {
-                    if (playMode == PlayMode.Shuffle && !force) return
-                    (0 until total).filter { it != currentLogical }.randomOrNull() ?: currentLogical
-                } else {
-                    candidates.random()
-                }
-            }
-
-            PlayMode.RepeatOne -> currentLogical
-
-            else -> {
-                val next = (currentLogical ?: -1) + 1
-                if (next < total) next
-                else if (playMode == PlayMode.RepeatAll) 0 else return
-            }
-        }
+        val target = PlaybackLogic.nextTarget(playMode, currentLogical ?: -1, total, force) ?: return
         if (target == currentLogical && playMode == PlayMode.RepeatOne) {
             player.seekTo(0)
             player.play()
@@ -613,8 +594,7 @@ class AuralisPlaybackEngine(
     private suspend fun backUser() {
         val total = logicalQueue.size
         if (total == 0) return
-        val previous = (currentLogical ?: 0) - 1
-        val target = if (previous >= 0) previous else if (playMode == PlayMode.RepeatAll) total - 1 else return
+        val target = PlaybackLogic.previousTarget(playMode, currentLogical ?: 0, total) ?: return
         currentLogical = target
         awaitPlayAt(target, 0L, seekMode = true)
     }
@@ -644,8 +624,7 @@ class AuralisPlaybackEngine(
                 state = PlaybackState.Failed(PlaybackError.EngineFailure("流地址失效，已重试仍无法播放")),
             )
             scope.launch {
-                val canGoNext = playMode != PlayMode.RepeatOne &&
-                    (currentLogical ?: -1) < logicalQueue.size - 1
+                val canGoNext = PlaybackLogic.canAutoAdvanceAfterFailure(playMode, currentLogical, logicalQueue.size)
                 if (canGoNext) advanceUser() else pause()
             }
             return
@@ -744,7 +723,6 @@ class AuralisPlaybackEngine(
     companion object {
         private const val STALL_TIMEOUT_MS = 15_000L
         const val MAX_STREAM_RETRY_ATTEMPTS = 2
-        const val PREVIOUS_RESTART_THRESHOLD_MS = 3_000L
 
         private fun defaultOkHttpClient(): OkHttpClient =
             OkHttpClient.Builder()
