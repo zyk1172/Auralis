@@ -47,6 +47,8 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.ThumbDown
+import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -117,6 +119,7 @@ fun NowPlayingScreen(
     controller: PlaybackController,
     onClose: () -> Unit,
     onOpenBrowse: (BrowseDestination) -> Unit,
+    onTrackAction: PlayerTrackActionHandler? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalAuralisTheme.current.colors
@@ -214,6 +217,7 @@ fun NowPlayingScreen(
                     dragging = false
                 },
                 onOpenBrowse = onOpenBrowse,
+                onTrackAction = onTrackAction,
             )
             Spacer(Modifier.height(AuralisSpacing.small))
         }
@@ -519,6 +523,7 @@ private fun PlaybackControlsArea(
     onDragFraction: (Float) -> Unit,
     onDragEnd: () -> Unit,
     onOpenBrowse: (BrowseDestination) -> Unit,
+    onTrackAction: PlayerTrackActionHandler?,
 ) {
     val colors = LocalAuralisTheme.current.colors
     val state = playback.state
@@ -534,6 +539,14 @@ private fun PlaybackControlsArea(
         }
     }
     val isFavorite = favIds?.contains(track.globalId) == true
+    // R4：不喜欢集合（本地状态，Room 表信号驱动；与收藏镜像）。
+    var dislikedIds by remember { mutableStateOf<Set<GlobalId>?>(null) }
+    LaunchedEffect(track.serverId) {
+        graph.catalogRepository.observeDislikedIds(track.serverId).collect { ids ->
+            dislikedIds = ids.toSet()
+        }
+    }
+    val isDisliked = dislikedIds?.contains(track.globalId) == true
     val scope = rememberCoroutineScope()
     var menuOpen by remember { mutableStateOf(false) }
     var addToPlaylist by remember { mutableStateOf(false) }
@@ -554,11 +567,26 @@ private fun PlaybackControlsArea(
             .fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 标题 + 收藏（对齐 Swift：标题/艺人整行 + 右侧收藏）。
+        // 标题 + 不喜欢（左）/ 收藏（右）严格镜像（对齐 Swift：dislike ↔ favorite 两端对称）。
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            IconButton(
+                onClick = {
+                    scope.launch {
+                        runCatching { graph.libraryActions.toggleDisliked(track) }
+                            .onFailure { message = "操作失败：${it.message}" }
+                    }
+                },
+            ) {
+                Icon(
+                    if (isDisliked) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown,
+                    contentDescription = if (isDisliked) "取消不喜欢" else "不喜欢",
+                    tint = if (isDisliked) colors.accent else colors.secondaryText,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
             Column(Modifier.weight(1f)) {
                 AutoMarqueeText(
                     text = track.title,
@@ -722,6 +750,21 @@ private fun PlaybackControlsArea(
                             if (gid != null) onOpenBrowse(BrowseDestination.Artist(gid))
                         },
                     )
+                    // R4（对齐 Swift moreMenu）：由此继续播放 → 相似队列引导会话；
+                    // 歌曲鉴赏 → 干净新会话鉴赏。壳层提供 onTrackAction 时才显示（TV 无助理则隐藏）。
+                    if (onTrackAction != null) {
+                        HorizontalDivider(color = colors.separator)
+                        DropdownMenuItem(
+                            text = { Text("由此继续播放") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) },
+                            onClick = { menuOpen = false; onTrackAction(track, PlayerTrackAction.PlaySimilar) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("歌曲鉴赏") },
+                            leadingIcon = { Icon(Icons.Filled.GraphicEq, null) },
+                            onClick = { menuOpen = false; onTrackAction(track, PlayerTrackAction.Appreciate) },
+                        )
+                    }
                 }
             }
         }

@@ -43,10 +43,12 @@ import com.auralis.core.playback.QueueSnapshot
 import com.auralis.core.playback.awaitPlaybackController
 import com.auralis.feature.assistant.AssistantCoordinator
 import com.auralis.feature.assistant.AssistantScreen
+import com.auralis.feature.assistant.GuidedSessions
 import com.auralis.feature.home.HomeScreen
 import com.auralis.feature.library.BrowseDetailScreen
 import com.auralis.feature.library.LibraryScreen
 import com.auralis.feature.player.NowPlayingScreen
+import com.auralis.feature.player.PlayerTrackAction
 import com.auralis.feature.search.SearchScreen
 import kotlinx.coroutines.launch
 
@@ -151,6 +153,23 @@ fun MobileShell(
         searchOpen = false
         browseDestination = destination
         section = AppSection.Library
+    }
+
+    /**
+     * R4 播放页转交动作：关闭播放页 → 切到 Assistant 分区 → 干净新会话并自动发送引导文案。
+     * （Swift「由此继续播放」留在播放页后台跑；Android 的 consent/确认对话框只渲染在
+     * Assistant 页，故统一先切页再运行，避免引导会话静默挂起等待授权——R8 记录此差异。）
+     */
+    fun openGuidedAssistant(track: Track, action: PlayerTrackAction) {
+        nowPlayingOpen = false
+        searchOpen = false
+        browseDestination = null
+        section = AppSection.Assistant
+        val seed = when (action) {
+            PlayerTrackAction.PlaySimilar -> GuidedSessions.playSimilarSeed(track)
+            PlayerTrackAction.Appreciate -> GuidedSessions.appreciateSeed(track)
+        }
+        assistantCoordinator.startGuidedSession(seed)
     }
 
     // 系统返回：正在播放全屏页 > 搜索覆盖页 > 浏览详情（单处理器保证正确优先级）。
@@ -279,6 +298,7 @@ fun MobileShell(
                 controller = controller,
                 onClose = { nowPlayingOpen = false },
                 onOpenBrowse = ::openBrowse,
+                onTrackAction = ::openGuidedAssistant,
                 modifier = Modifier.fillMaxSize().background(colors.background),
             )
         }
